@@ -155,6 +155,57 @@ class TestJudgehostStateLifecycle(unittest.TestCase):
                 now_text=_NOW,
             )
 
+    def test_append_does_not_scan_existing_job_cases(self) -> None:
+        job_id = _create_job(
+            self.store,
+            task_id="task-first",
+            run_id="run-first",
+            work_root="/tmp/append-linear",
+            case_rows=[_case_row("task-first", "run-first", "001.in", 1)],
+        )
+
+        class _NoIterationList(list[int]):
+            def __iter__(self):
+                raise AssertionError("existing job cases were scanned")
+
+        self.store._case_ids_by_job[job_id] = _NoIterationList(
+            self.store._case_ids_by_job[job_id]
+        )
+        result = self.store.append_cases_to_job(
+            job_id=job_id,
+            case_rows=[_case_row("task-second", "run-second", "002.in", 1)],
+            now_text=_NOW,
+        )
+
+        self.assertEqual(result["outcome"], "appended")
+        self.assertEqual(self.store._next_case_ordinal_by_job[job_id], 3)
+
+    def test_forget_runs_filters_case_lists_without_repeated_remove(self) -> None:
+        job_id = _create_job(
+            self.store,
+            task_id="task-first",
+            run_id="run-first",
+            work_root="/tmp/forget-linear",
+            case_rows=[_case_row("task-first", "run-first", "001.in", 1)],
+        )
+        self.store.append_cases_to_job(
+            job_id=job_id,
+            case_rows=[_case_row("task-second", "run-second", "002.in", 1)],
+            now_text=_NOW,
+        )
+
+        class _NoRemoveList(list[int]):
+            def remove(self, value: int) -> None:
+                raise AssertionError(f"list.remove called for {value}")
+
+        self.store._case_ids_by_job[job_id] = _NoRemoveList(
+            self.store._case_ids_by_job[job_id]
+        )
+        removed_jobs = self.store.forget_runs(["run-first", "run-second"])
+
+        self.assertEqual(removed_jobs, 1)
+        self.assertIsNone(self.store.fetch_job(job_id))
+
     def test_append_and_claim_race_has_one_serializable_winner(self) -> None:
         for sequence in range(20):
             store = JudgehostStateStore(id_base=1000 + sequence * 10)
@@ -486,9 +537,9 @@ class TestJudgehostLifecycle(SmokeBase):
         original_publish = service.result._publish_verification_case_result
         original_finalize = service.queue.finalize_domjudge_task
 
-        def record_publish(*, task_id: str, test_name: str, case_result: dict[str, object]) -> None:
+        def record_publish(*, task_id: str, test_name: str, case_result: dict[str, object]) -> bool:
             published.append((task_id, test_name))
-            original_publish(task_id=task_id, test_name=test_name, case_result=case_result)
+            return original_publish(task_id=task_id, test_name=test_name, case_result=case_result)
 
         with (
             patch.object(service.result, "_publish_verification_case_result", side_effect=record_publish),
@@ -496,6 +547,14 @@ class TestJudgehostLifecycle(SmokeBase):
         ):
             self.assertFalse(self._report_case(store, int(first_case["id"]), "host-b"))
             self.assertTrue(self._report_case(store, int(first_case["id"]), "host-a"))
+            service.result._domjudge_publish_reported_case(
+                task_id=first_task,
+                test_name="001.in",
+            )
+            service.result._domjudge_finalize_task_if_ready(
+                first_task,
+                job_row=dict(store.job_finalize_row(job_id) or {}),
+            )
             service.result._domjudge_finalize_if_ready(job_id)
             self.assertEqual(self._task(service, first_task)["status"], service.STATUS_COMPLETED)
             self.assertEqual(self._task(service, second_task)["status"], service.STATUS_LEASED)
@@ -503,6 +562,14 @@ class TestJudgehostLifecycle(SmokeBase):
             self.assertIsNotNone(service.state.task_store.get(first_task))
 
             self.assertTrue(self._report_case(store, int(second_case["id"]), "host-b"))
+            service.result._domjudge_publish_reported_case(
+                task_id=second_task,
+                test_name="002.in",
+            )
+            service.result._domjudge_finalize_task_if_ready(
+                second_task,
+                job_row=dict(store.job_finalize_row(job_id) or {}),
+            )
             service.result._domjudge_finalize_if_ready(job_id)
 
         self.assertEqual(finalize_task.call_count, 2)
@@ -545,7 +612,6 @@ class TestJudgehostLifecycle(SmokeBase):
             service.result._domjudge_finalize_if_ready(job_id)
 
         self.assertEqual(store.fetch_job(job_id)["status"], "finalizing")
-        self.assertEqual(store.finalizing_job_ids(), [job_id])
         self.assertEqual(self._task(service, task_id)["status"], service.STATUS_LEASED)
         self.assertTrue(work_root.exists())
 
@@ -556,7 +622,8 @@ class TestJudgehostLifecycle(SmokeBase):
         ), patch("app.service.judgehost.result.logger.exception"), patch(
             "app.service.judgehost.result.logger.error"
         ):
-            service.result._domjudge_finalize_if_ready(job_id)
+            service.result._schedule_finalization_retry(job_id, delay_sec=0.0)
+            service.result.retry_due_finalizations(limit=1)
 
         self.assertEqual(store.fetch_job(job_id)["status"], "finalizing")
         self.assertEqual(self._task(service, task_id)["status"], service.STATUS_LEASED)

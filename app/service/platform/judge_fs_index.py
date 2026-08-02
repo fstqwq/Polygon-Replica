@@ -3,12 +3,12 @@ from __future__ import annotations
 import os
 import re
 import shutil
-import threading
 from pathlib import Path
 from typing import TypedDict
 
 from app.db import now_iso
 from app.service.platform.hashing import canonical_json, sha256_hex_bytes, sha256_hex_of_hashes, sha256_hex_text
+from app.service.platform.rwlock import WriterPriorityRWLock
 
 
 _HEX_64_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -46,7 +46,7 @@ class JudgeFsIndexService:
     def __init__(self, cache_root: Path) -> None:
         self._root = (Path(cache_root).resolve() / "judge-fs-index").resolve()
         self._root.mkdir(parents=True, exist_ok=True)
-        self._lock = threading.RLock()
+        self._lock = WriterPriorityRWLock()
         self._entries: dict[tuple[str, str, str], _JudgeFsIndexEntry] = {}
 
     @staticmethod
@@ -128,20 +128,26 @@ class JudgeFsIndexService:
             file_index[name] = {"size": len(payload), "sha256": sha}
         return (file_index, sha256_hex_of_hashes(file_hashes))
 
-    def _compute_disk_file_index(self, files_dir: Path) -> tuple[dict[str, _JudgeFsIndexFileMeta], str] | None:
+    def _disk_files_match(
+        self,
+        files_dir: Path,
+        expected_files: dict[str, _JudgeFsIndexFileMeta],
+    ) -> bool:
         if (not files_dir.exists()) or (not files_dir.is_dir()) or files_dir.is_symlink():
-            return None
-        file_index: dict[str, _JudgeFsIndexFileMeta] = {}
-        file_hashes: list[str] = []
+            return False
+        disk_sizes: dict[str, int] = {}
         for child in sorted(files_dir.iterdir(), key=lambda item: item.name):
             if (not child.is_file()) or child.is_symlink():
-                return None
+                return False
             name = self._normalize_name(child.name)
-            blob = child.read_bytes()
-            sha = sha256_hex_bytes(blob)
-            file_hashes.append(sha)
-            file_index[name] = {"size": len(blob), "sha256": sha}
-        return (file_index, sha256_hex_of_hashes(file_hashes))
+            try:
+                disk_sizes[name] = child.stat().st_size
+            except OSError:
+                return False
+        return disk_sizes == {
+            name: int(meta["size"])
+            for name, meta in expected_files.items()
+        }
 
     @staticmethod
     def _clear_integrity_marker_files(entry_dir: Path) -> None:
@@ -202,7 +208,7 @@ class JudgeFsIndexService:
             normalized_files[self._normalize_name(raw_name)] = bytes(raw_payload)
 
         now_text = now_iso()
-        with self._lock:
+        with self._lock.write_lock():
             entry_dir = self._entry_dir(kind=safe_kind, key_hash=safe_key, signature=safe_sig)
             files_dir = self._files_dir(kind=safe_kind, key_hash=safe_key, signature=safe_sig)
             entry_dir.mkdir(parents=True, exist_ok=True)
@@ -236,41 +242,39 @@ class JudgeFsIndexService:
     def get(self, *, kind: str, key_hash: str, signature: str) -> dict[str, object] | None:
         safe_kind, safe_key, safe_sig = self._entry_key(kind=kind, key_hash=key_hash, signature=signature)
         key = (safe_kind, safe_key, safe_sig)
-        with self._lock:
+        invalid = False
+        with self._lock.read_lock():
             row = self._entries.get(key)
             if row is None:
                 return None
             entry_dir = self._entry_dir(kind=safe_kind, key_hash=safe_key, signature=safe_sig)
             files_dir = self._files_dir(kind=safe_kind, key_hash=safe_key, signature=safe_sig)
             marker_hash = self._read_integrity_marker(entry_dir)
-            disk_tuple = self._compute_disk_file_index(files_dir)
-            if (not marker_hash) or (disk_tuple is None):
-                self.delete(kind=safe_kind, key_hash=safe_key, signature=safe_sig)
-                return None
-            disk_files, disk_hash = disk_tuple
             expected_files = row["files"]
-            if set(disk_files.keys()) != set(expected_files.keys()):
-                self.delete(kind=safe_kind, key_hash=safe_key, signature=safe_sig)
-                return None
-            for name, meta in expected_files.items():
-                disk_meta = disk_files[name]
-                if meta["size"] != disk_meta["size"] or meta["sha256"] != disk_meta["sha256"]:
-                    self.delete(kind=safe_kind, key_hash=safe_key, signature=safe_sig)
-                    return None
-            if marker_hash != disk_hash:
-                self.delete(kind=safe_kind, key_hash=safe_key, signature=safe_sig)
-                return None
-            return {
-                "schema": row["schema"],
-                "kind": safe_kind,
-                "key_hash": safe_key,
-                "signature": safe_sig,
-                "value": dict(row["value"]),
-                "tags": dict(row["tags"]),
-                "files": dict(expected_files),
-                "created_at": row["created_at"],
-                "updated_at": row["updated_at"],
-            }
+            # Cache hits must not re-hash user-sized blobs. The immutable in-memory
+            # index was content-hashed at put time; consumers detect unreadable blobs.
+            invalid = marker_hash != row["integrity_hash"] or not self._disk_files_match(
+                files_dir,
+                expected_files,
+            )
+            if not invalid:
+                return {
+                    "schema": row["schema"],
+                    "kind": safe_kind,
+                    "key_hash": safe_key,
+                    "signature": safe_sig,
+                    "value": dict(row["value"]),
+                    "tags": dict(row["tags"]),
+                    "files": {
+                        name: dict(meta)
+                        for name, meta in expected_files.items()
+                    },
+                    "created_at": row["created_at"],
+                    "updated_at": row["updated_at"],
+                }
+        if invalid:
+            self.delete(kind=safe_kind, key_hash=safe_key, signature=safe_sig)
+        return None
 
     def read_blob(self, *, kind: str, key_hash: str, signature: str, name: str) -> bytes | None:
         safe_kind, safe_key, safe_sig = self._entry_key(kind=kind, key_hash=key_hash, signature=signature)
@@ -279,16 +283,17 @@ class JudgeFsIndexService:
         target = (files_dir / safe_name).resolve()
         if target.parent != files_dir:
             return None
-        if (not target.exists()) or (not target.is_file()) or target.is_symlink():
-            return None
-        try:
-            return target.read_bytes()
-        except OSError:
-            return None
+        with self._lock.read_lock():
+            if (not target.exists()) or (not target.is_file()) or target.is_symlink():
+                return None
+            try:
+                return target.read_bytes()
+            except OSError:
+                return None
 
     def delete(self, *, kind: str, key_hash: str, signature: str) -> None:
         safe_kind, safe_key, safe_sig = self._entry_key(kind=kind, key_hash=key_hash, signature=signature)
-        with self._lock:
+        with self._lock.write_lock():
             self._entries.pop((safe_kind, safe_key, safe_sig), None)
             target = self._entry_dir(kind=safe_kind, key_hash=safe_key, signature=safe_sig)
             try:
@@ -302,18 +307,19 @@ class JudgeFsIndexService:
         root = (self._root / safe_kind).resolve()
         if (not root.exists()) or (not root.is_dir()) or root.is_symlink():
             return 0
-        total = 0
-        for files_dir in root.rglob("files"):
-            if (not files_dir.exists()) or (not files_dir.is_dir()) or files_dir.is_symlink():
-                continue
-            entry_dir = files_dir.parent
-            marker = self._read_integrity_marker(entry_dir)
-            if marker:
-                total += 1
-        return total
+        with self._lock.read_lock():
+            total = 0
+            for files_dir in root.rglob("files"):
+                if (not files_dir.exists()) or (not files_dir.is_dir()) or files_dir.is_symlink():
+                    continue
+                entry_dir = files_dir.parent
+                marker = self._read_integrity_marker(entry_dir)
+                if marker:
+                    total += 1
+            return total
 
     def clear_all(self) -> None:
-        with self._lock:
+        with self._lock.write_lock():
             self._entries.clear()
             try:
                 if self._root.exists() and self._root.is_dir() and (not self._root.is_symlink()):

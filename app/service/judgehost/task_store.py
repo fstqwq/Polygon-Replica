@@ -52,6 +52,7 @@ class JudgehostTaskStore:
         self._tasks_by_problem: dict[str, set[str]] = defaultdict(set)
         self._tasks_by_verification: dict[str, set[str]] = defaultdict(set)
         self._tasks_by_group: dict[str, set[str]] = defaultdict(set)
+        self._queued_counts_by_group: dict[str, int] = defaultdict(int)
         self._status_counts: dict[str, int] = defaultdict(int)
         self._sequence = itertools.count()
         self._changed = threading.Condition(threading.Lock())
@@ -136,6 +137,12 @@ class JudgehostTaskStore:
             raise RuntimeError(f"invalid judgehost task transition: {previous} -> {status}")
         self._status_counts[previous] -= 1
         self._status_counts[status] += 1
+        group_key = self._group_key(row)
+        if group_key:
+            if previous == "queued":
+                self._queued_counts_by_group[group_key] -= 1
+            if status == "queued":
+                self._queued_counts_by_group[group_key] += 1
         row["status"] = status
 
     def insert(self, row: dict[str, object]) -> None:
@@ -157,6 +164,8 @@ class JudgehostTaskStore:
                 self._tasks_by_group[group_key].add(task_id)
             self._status_counts[str(stored["status"])] += 1
             if stored["status"] == "queued":
+                if group_key:
+                    self._queued_counts_by_group[group_key] += 1
                 self._push_ready(stored)
         self._notify()
 
@@ -220,11 +229,7 @@ class JudgehostTaskStore:
 
     def _maybe_rebuild_ready(self, heap: list[tuple[int, int, str, int]], *, group_key: str) -> None:
         live_count = (
-            sum(
-                self._tasks[task_id]["status"] == "queued"
-                for task_id in self._tasks_by_group.get(group_key, ())
-                if task_id in self._tasks
-            )
+            self._queued_counts_by_group[group_key]
             if group_key
             else self._status_counts["queued"]
         )
@@ -440,6 +445,9 @@ class JudgehostTaskStore:
             self._status_counts[str(restored["status"])] += 1
             restored["updated_at"] = now_text
             if restored["status"] == "queued":
+                group_key = self._group_key(restored)
+                if group_key:
+                    self._queued_counts_by_group[group_key] += 1
                 self._push_ready(restored)
             elif restored["status"] == "leased":
                 expires = parse_iso_utc(restored.get("lease_expires_at"))
@@ -482,6 +490,8 @@ class JudgehostTaskStore:
             group_key = self._group_key(row)
             if group_key:
                 self._tasks_by_group[group_key].discard(task_id)
+                if row["status"] == "queued":
+                    self._queued_counts_by_group[group_key] -= 1
             self._status_counts[str(row["status"])] -= 1
             snapshot = self._copy(row)
         self._notify()
@@ -511,5 +521,6 @@ class JudgehostTaskStore:
             self._tasks_by_problem.clear()
             self._tasks_by_verification.clear()
             self._tasks_by_group.clear()
+            self._queued_counts_by_group.clear()
             self._status_counts.clear()
         self._notify()

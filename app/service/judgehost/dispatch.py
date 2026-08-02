@@ -714,6 +714,35 @@ class DispatchHandler:
                     compare_config_hash=compare_config_hash,
                     toolchain_cmd_digest=toolchain_cmd_digest,
                 )
+                if shortcut is not None:
+                    required_refs = [
+                        domjudge_text(shortcut[key])
+                        for key in (
+                            "output_error_rel",
+                            "output_diff_rel",
+                            "compare_metadata_rel",
+                            "team_message_rel",
+                        )
+                        if domjudge_text(shortcut.get(key))
+                    ]
+                    verification_source = domjudge_lower_text(job_row["verification_source"])
+                    if (
+                        verification_source == "main-correct"
+                        or "generate-input" in verification_source
+                    ):
+                        output_ref = domjudge_text(shortcut.get("output_run_rel"))
+                        if output_ref:
+                            required_refs.append(output_ref)
+                    if any(
+                        self._toolkit.read_artifact_blob(work_root, ref) is None
+                        for ref in required_refs
+                    ):
+                        self._toolkit.cache_delete(
+                            self.CASE_CACHE_KIND,
+                            cache_key_hash,
+                            cache_signature,
+                        )
+                        shortcut = None
             if shortcut is None:
                 pending_rows += 1
                 continue
@@ -785,6 +814,21 @@ class DispatchHandler:
                     "failed to publish cached DOMjudge case job_id=%s case_id=%s",
                     int(job_id),
                     int(cached["case_id"]),
+                )
+        for task_id in dict.fromkeys(
+            domjudge_text(cached["task_id"])
+            for cached in cached_case_updates
+        ):
+            try:
+                self._result._domjudge_finalize_task_if_ready(
+                    task_id,
+                    job_row=dict(job_row),
+                )
+            except Exception:
+                logger.exception(
+                    "failed to finalize cached DOMjudge task task_id=%s job_id=%s",
+                    task_id,
+                    int(job_id),
                 )
         self._result._domjudge_finalize_if_ready(job_id)
         return pending_rows
@@ -965,8 +1009,7 @@ class DispatchHandler:
         if not self._queue._host_enabled_conn(hostname=safe_host):
             self._queue._record_host_event_conn(hostname=safe_host, action="disabled")
             return []
-        for finalizing_job_id in self._s.judgehost_state_store.finalizing_job_ids():
-            self._result._domjudge_finalize_if_ready(finalizing_job_id)
+        self._result.retry_due_finalizations(limit=1)
         cap = self._s.fetch_batch_size if max_batchsize is None else max(1, min(256, int(max_batchsize)))
         active = self._s.judgehost_state_store.active_job_for_host(safe_host)
         if active is not None:

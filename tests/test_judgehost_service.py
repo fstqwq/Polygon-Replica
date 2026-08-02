@@ -221,7 +221,6 @@ class TestJudgehostService(SmokeBase):
             publish_task=lambda _row: (_ for _ in ()).throw(RuntimeError("unexpected publish")),
             resolve_case_result=lambda queued_task_id, test_name: service.poll_task_case_result(queued_task_id, test_name),
             cancel_queued_tasks=lambda _reason: None,
-            persist_state=lambda: {},
         )
         coordinator = VerificationRuntimeCoordinator(
             verification_id,
@@ -3293,10 +3292,26 @@ class TestJudgehostService(SmokeBase):
         host = "judgehost-compile-only-extra-cache"
         verification_id = f"b-jh-compile-only-extra-cache-{uuid.uuid4().hex[:8]}"
         self._seed_build_verification(verification_id)
-        extra_testlib = base64.b64encode(b"// testlib\n").decode("ascii")
-        prepared = {"extra_sources_b64": {"testlib.h": extra_testlib}}
-
         run_a = f"r-jh-compile-only-extra-a-{uuid.uuid4().hex[:8]}"
+        extra_testlib = base64.b64encode(b"// testlib\n").decode("ascii")
+        prepared = service.prepare_enqueue_payload(
+            problem=self.problem,
+            username=self.user,
+            artifact_verification_id=verification_id,
+            mode="pass-fail",
+            submission_path=None,
+            upload_content=b"int main(){return 0;}\n",
+            upload_filename="checker.cpp",
+            run_id=run_a,
+            selected_tests=[],
+            verification_id="inv-jh-compile-only-extra-a",
+            verification_run_ids=[run_a],
+            expected_behavior="compile",
+            verification_source="build.compile",
+            compile_only=True,
+        )
+        prepared["extra_sources_b64"] = {"testlib.h": extra_testlib}
+
         task_a = service.enqueue_task(
             problem=self.problem,
             username=self.user,
@@ -3453,7 +3468,7 @@ class TestJudgehostService(SmokeBase):
         self.assertIsNotNone(run_row_b)
         self.assertEqual(str(run_row_b["status"] or "").strip().lower(), "ok")
 
-    def test_enqueue_task_merges_prepared_payload_with_base_payload(self) -> None:
+    def test_enqueue_task_uses_prepared_payload_without_collecting_fallback(self) -> None:
         service = config.judgehost_task_service
         old_enabled = service.state.enabled
         old_token = service.state.api_token
@@ -3472,8 +3487,7 @@ class TestJudgehostService(SmokeBase):
         run_id = f"r-jh-prepared-merge-{uuid.uuid4().hex[:8]}"
         self._seed_build_verification(verification_id)
         extra_testlib = base64.b64encode(b"// testlib\n").decode("ascii")
-
-        task_id = service.enqueue_task(
+        prepared = service.prepare_enqueue_payload(
             problem=self.problem,
             username=self.user,
             artifact_verification_id=verification_id,
@@ -3488,8 +3502,31 @@ class TestJudgehostService(SmokeBase):
             expected_behavior="compile",
             verification_source="build.compile",
             compile_only=True,
-            prepared_payload={"extra_sources_b64": {"testlib.h": extra_testlib}},
         )
+        prepared["extra_sources_b64"] = {"testlib.h": extra_testlib}
+
+        with patch.object(
+            service._enqueue,
+            "_collect_verification_payload",
+            side_effect=AssertionError("prepared enqueue collected fallback payload"),
+        ):
+            task_id = service.enqueue_task(
+                problem=self.problem,
+                username=self.user,
+                artifact_verification_id=verification_id,
+                mode="pass-fail",
+                submission_path=None,
+                upload_content=b"int main(){return 0;}\n",
+                upload_filename="gen.cpp",
+                run_id=run_id,
+                selected_tests=[],
+                verification_id="inv-jh-prepared-merge",
+                verification_run_ids=[run_id],
+                expected_behavior="compile",
+                verification_source="build.compile",
+                compile_only=True,
+                prepared_payload=prepared,
+            )
         task = service.core.task_by_id(task_id)
         self.assertIsNotNone(task)
         payload = task.get("payload") if isinstance(task, dict) else {}
@@ -3520,6 +3557,23 @@ class TestJudgehostService(SmokeBase):
         run_id = f"r-jh-extra-src-{uuid.uuid4().hex[:8]}"
         self._seed_build_verification(verification_id)
         extra_testlib = base64.b64encode(b"// testlib helper\n").decode("ascii")
+        prepared = service.prepare_enqueue_payload(
+            problem=self.problem,
+            username=self.user,
+            artifact_verification_id=verification_id,
+            mode="pass-fail",
+            submission_path=None,
+            upload_content=b'#include "testlib.h"\nint main(){return 0;}\n',
+            upload_filename="gen.cpp",
+            run_id=run_id,
+            selected_tests=[],
+            verification_id="inv-jh-extra-src",
+            verification_run_ids=[run_id],
+            expected_behavior="compile",
+            verification_source="build.compile",
+            compile_only=True,
+        )
+        prepared["extra_sources_b64"] = {"testlib.h": extra_testlib}
 
         _task_id = service.enqueue_task(
             problem=self.problem,
@@ -3536,7 +3590,7 @@ class TestJudgehostService(SmokeBase):
             expected_behavior="compile",
             verification_source="build.compile",
             compile_only=True,
-            prepared_payload={"extra_sources_b64": {"testlib.h": extra_testlib}},
+            prepared_payload=prepared,
         )
         service.domjudge_register_host("judgehost-extra-src")
         work_rows = service.domjudge_fetch_work("judgehost-extra-src", max_batchsize=16)
@@ -5059,7 +5113,7 @@ class TestJudgehostService(SmokeBase):
         self.assertEqual(len(tasks_b), 1)
         self.assertFalse(target_entry_dir.exists())
 
-    def test_domjudge_cache_blob_sha_mismatch_is_deleted_and_treated_as_miss(self) -> None:
+    def test_domjudge_cache_blob_size_mismatch_is_deleted_and_treated_as_miss(self) -> None:
         service = config.judgehost_task_service
         old_enabled = service.state.enabled
         old_token = service.state.api_token

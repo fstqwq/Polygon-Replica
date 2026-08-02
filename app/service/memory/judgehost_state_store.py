@@ -72,6 +72,7 @@ class JudgehostCaseRow(TypedDict):
     team_message_rel: str
     score_text: str
     debug_text: str
+    verification_published: bool
     created_at: str
     updated_at: str
 
@@ -150,6 +151,7 @@ class _CaseRecord:
     team_message_rel: str | None
     score_text: str | None
     debug_text: str
+    verification_published: bool
     created_at: str
     updated_at: str
 
@@ -212,11 +214,11 @@ class JudgehostStateStore:
         self._job_ids_by_host: dict[str, set[int]] = defaultdict(set)
         self._leased_case_ids_by_host: dict[str, set[int]] = defaultdict(set)
         self._active_job_ids: set[int] = set()
-        self._finalizing_job_ids: set[int] = set()
         self._empty_job_ids: set[int] = set()
         self._shared_pending_job_ids_by_priority: dict[int, set[int]] = defaultdict(set)
         self._job_counts: dict[int, _StatusCounts] = {}
         self._run_counts: dict[str, _StatusCounts] = defaultdict(_StatusCounts)
+        self._next_case_ordinal_by_job: dict[int, int] = {}
 
     def ensure_schema(self) -> None:
         """Retained as a no-op because this store is no longer SQLite-backed."""
@@ -239,11 +241,11 @@ class JudgehostStateStore:
             self._job_ids_by_host.clear()
             self._leased_case_ids_by_host.clear()
             self._active_job_ids.clear()
-            self._finalizing_job_ids.clear()
             self._empty_job_ids.clear()
             self._shared_pending_job_ids_by_priority.clear()
             self._job_counts.clear()
             self._run_counts.clear()
+            self._next_case_ordinal_by_job.clear()
 
     @staticmethod
     def _priority(job: _JobRecord) -> int:
@@ -279,7 +281,6 @@ class JudgehostStateStore:
 
     def _remove_job_runtime_indexes_locked(self, job: _JobRecord) -> None:
         self._active_job_ids.discard(job.job_id)
-        self._finalizing_job_ids.discard(job.job_id)
         if job.lease_owner:
             self._job_ids_by_host[job.lease_owner].discard(job.job_id)
         for ids in self._shared_pending_job_ids_by_priority.values():
@@ -292,8 +293,6 @@ class JudgehostStateStore:
                 self._job_ids_by_host[job.lease_owner].add(job.job_id)
             if self._shared_eligible_locked(job):
                 self._shared_pending_job_ids_by_priority[self._priority(job)].add(job.job_id)
-        elif job.status == "finalizing":
-            self._finalizing_job_ids.add(job.job_id)
 
     def _mutate_job_locked(self, job: _JobRecord, **changes: object) -> None:
         self._remove_job_runtime_indexes_locked(job)
@@ -374,6 +373,7 @@ class JudgehostStateStore:
             team_message_rel="" if compiler_error else None,
             score_text="" if compiler_error else None,
             debug_text="",
+            verification_published=False,
             created_at=created_at,
             updated_at=created_at,
         )
@@ -388,6 +388,10 @@ class JudgehostStateStore:
         self._job_ids_by_run[run_id].add(job_id)
         self._adjust_counts(self._job_counts[job_id], case.status, 1)
         self._adjust_counts(self._run_counts[run_id], case.status, 1)
+        self._next_case_ordinal_by_job[job_id] = max(
+            self._next_case_ordinal_by_job.get(job_id, 1),
+            ordinal + 1,
+        )
         self._empty_job_ids.discard(job_id)
         return case
 
@@ -594,13 +598,6 @@ class JudgehostStateStore:
             job = self._jobs.get(int(job_id))
             return None if job is None else {field: getattr(job, field) for field in fields}
 
-    def finalizing_job_ids(self) -> list[int]:
-        with self._lock.read_lock():
-            return sorted(
-                self._finalizing_job_ids,
-                key=lambda job_id: (self._jobs[job_id].updated_at, job_id),
-            )
-
     def claim_job_finalization(
         self,
         job_id: int,
@@ -802,6 +799,17 @@ class JudgehostStateStore:
             case.score_text = score_text
             return True
 
+    def mark_case_verification_published(self, task_id: str, test_name: str) -> bool:
+        with self._lock.write_lock():
+            case_id = self._latest_case_id_by_task_test.get((task_id, test_name))
+            if case_id is None:
+                return False
+            case = self._cases[case_id]
+            if case.status not in self._TERMINAL_CASE_STATUSES:
+                return False
+            case.verification_published = True
+            return True
+
     def case_debug_context(self, case_id: int) -> dict[str, object] | None:
         with self._lock.read_lock():
             case = self._cases.get(int(case_id))
@@ -914,6 +922,7 @@ class JudgehostStateStore:
             )
             self._jobs[job_id] = job
             self._job_counts[job_id] = _StatusCounts()
+            self._next_case_ordinal_by_job[job_id] = 1
             self._primary_job_id_by_task[task_id] = job_id
             self._primary_job_id_by_run[run_id] = job_id
             self._job_id_by_submit[job.submit_id] = job_id
@@ -978,14 +987,6 @@ class JudgehostStateStore:
                 existing = sorted((self._case_identity(row) for row in existing_rows), key=repr)
                 if requested != existing:
                     raise RuntimeError("judgehost task case set is immutable")
-            existing_pairs = {
-                (self._cases[case_id].task_id, self._cases[case_id].test_name)
-                for case_id in self._case_ids_by_job[job.job_id]
-            }
-            next_ordinal = 1 + max(
-                (self._cases[case_id].ordinal for case_id in self._case_ids_by_job[job.job_id]),
-                default=0,
-            )
             inserted = 0
             self._remove_job_runtime_indexes_locked(job)
             for row in case_rows:
@@ -993,21 +994,24 @@ class JudgehostStateStore:
                 case_run_id = str(row.get("run_id") or "")
                 test_name = str(row.get("test_name") or "")
                 pair = (case_task_id, test_name)
-                if not case_task_id or not case_run_id or not test_name or pair in existing_pairs:
+                if not case_task_id or not case_run_id or not test_name:
+                    continue
+                existing_case_id = self._latest_case_id_by_task_test.get(pair)
+                if existing_case_id is not None:
+                    if self._cases[existing_case_id].job_id != job.job_id:
+                        raise RuntimeError("judgehost task cases already belong to another job")
                     continue
                 self._insert_case_locked(
                     job_id=job.job_id,
                     task_id=case_task_id,
                     run_id=case_run_id,
                     test_name=test_name,
-                    ordinal=next_ordinal,
+                    ordinal=self._next_case_ordinal_by_job[job.job_id],
                     source=row,
                     status=str(row.get("status") or "pending"),
                     created_at=now_text,
                     compiler_error=job.compile_success == 0,
                 )
-                existing_pairs.add(pair)
-                next_ordinal += 1
                 inserted += 1
             self._add_job_runtime_indexes_locked(job)
             return {
@@ -1202,42 +1206,83 @@ class JudgehostStateStore:
                 )
             return len(job_ids)
 
-    def _remove_case_locked(self, case: _CaseRecord) -> None:
-        if case.status == "leased" and case.lease_owner:
-            self._leased_case_ids_by_host[case.lease_owner].discard(case.id)
-        self._adjust_counts(self._job_counts[case.job_id], case.status, -1)
-        self._adjust_counts(self._run_counts[case.run_id], case.status, -1)
-        self._case_ids_by_job[case.job_id].remove(case.id)
-        self._case_ids_by_task[case.task_id].remove(case.id)
-        self._case_ids_by_run[case.run_id].remove(case.id)
-        if case.testcase_id is not None:
-            self._case_ids_by_testcase[case.testcase_id].discard(case.id)
-        self._cases.pop(case.id)
-        pair = (case.task_id, case.test_name)
-        if self._latest_case_id_by_task_test.get(pair) == case.id:
-            remaining = [
+    def _remove_cases_locked(self, case_ids: set[int]) -> None:
+        cases = [self._cases[case_id] for case_id in case_ids if case_id in self._cases]
+        if not cases:
+            return
+        affected_job_ids = {case.job_id for case in cases}
+        affected_task_ids = {case.task_id for case in cases}
+        affected_run_ids = {case.run_id for case in cases}
+        affected_pairs = {(case.task_id, case.test_name) for case in cases}
+
+        for case in cases:
+            if case.status == "leased" and case.lease_owner:
+                self._leased_case_ids_by_host[case.lease_owner].discard(case.id)
+            self._adjust_counts(self._job_counts[case.job_id], case.status, -1)
+            self._adjust_counts(self._run_counts[case.run_id], case.status, -1)
+            if case.testcase_id is not None:
+                testcase_cases = self._case_ids_by_testcase[case.testcase_id]
+                testcase_cases.discard(case.id)
+                if not testcase_cases:
+                    self._case_ids_by_testcase.pop(case.testcase_id, None)
+
+        for job_id in affected_job_ids:
+            retained = [
                 case_id
-                for case_id in self._case_ids_by_task[case.task_id]
-                if self._cases[case_id].test_name == case.test_name
+                for case_id in self._case_ids_by_job[job_id]
+                if case_id not in case_ids
             ]
-            if remaining:
-                self._latest_case_id_by_task_test[pair] = max(remaining)
+            self._case_ids_by_job[job_id] = retained
+            if retained:
+                self._empty_job_ids.discard(job_id)
             else:
-                self._latest_case_id_by_task_test.pop(pair, None)
-        if not self._case_ids_by_task[case.task_id]:
-            self._case_ids_by_task.pop(case.task_id, None)
-            self._job_id_by_task.pop(case.task_id, None)
-        if not self._case_ids_by_run[case.run_id]:
-            self._case_ids_by_run.pop(case.run_id, None)
-            self._job_ids_by_run.pop(case.run_id, None)
-            self._run_counts.pop(case.run_id, None)
-        elif not any(
-            self._cases[case_id].job_id == case.job_id
-            for case_id in self._case_ids_by_run[case.run_id]
-        ):
-            self._job_ids_by_run[case.run_id].discard(case.job_id)
-        if not self._case_ids_by_job[case.job_id]:
-            self._empty_job_ids.add(case.job_id)
+                self._empty_job_ids.add(job_id)
+
+        for task_id in affected_task_ids:
+            retained = [
+                case_id
+                for case_id in self._case_ids_by_task[task_id]
+                if case_id not in case_ids
+            ]
+            if retained:
+                self._case_ids_by_task[task_id] = retained
+                self._job_id_by_task[task_id] = self._cases[retained[0]].job_id
+            else:
+                self._case_ids_by_task.pop(task_id, None)
+                self._job_id_by_task.pop(task_id, None)
+                self._primary_job_id_by_task.pop(task_id, None)
+
+        for run_id in affected_run_ids:
+            retained = [
+                case_id
+                for case_id in self._case_ids_by_run[run_id]
+                if case_id not in case_ids
+            ]
+            if retained:
+                self._case_ids_by_run[run_id] = retained
+                self._job_ids_by_run[run_id] = {
+                    self._cases[case_id].job_id
+                    for case_id in retained
+                }
+            else:
+                self._case_ids_by_run.pop(run_id, None)
+                self._job_ids_by_run.pop(run_id, None)
+                self._run_counts.pop(run_id, None)
+                self._primary_job_id_by_run.pop(run_id, None)
+
+        for pair in affected_pairs:
+            self._latest_case_id_by_task_test.pop(pair, None)
+        for task_id in affected_task_ids:
+            for case_id in self._case_ids_by_task.get(task_id, ()):
+                case = self._cases[case_id]
+                pair = (case.task_id, case.test_name)
+                if pair in affected_pairs:
+                    self._latest_case_id_by_task_test[pair] = max(
+                        case_id,
+                        self._latest_case_id_by_task_test.get(pair, 0),
+                    )
+        for case in cases:
+            self._cases.pop(case.id, None)
 
     def _remove_job_locked(self, job_id: int) -> None:
         job = self._jobs.pop(job_id)
@@ -1248,6 +1293,7 @@ class JudgehostStateStore:
         self._job_ids_by_group[job.group_key].discard(job_id)
         self._case_ids_by_job.pop(job_id, None)
         self._job_counts.pop(job_id, None)
+        self._next_case_ordinal_by_job.pop(job_id, None)
         self._empty_job_ids.discard(job_id)
 
     def forget_runs(self, run_ids: list[str]) -> int:
@@ -1262,13 +1308,16 @@ class JudgehostStateStore:
             }
             for job_id in affected_jobs:
                 self._remove_job_runtime_indexes_locked(self._jobs[job_id])
-            for run_id in safe_run_ids:
-                for case_id in tuple(self._case_ids_by_run.get(run_id, ())):
-                    self._remove_case_locked(self._cases[case_id])
+            case_ids = {
+                case_id
+                for run_id in safe_run_ids
+                for case_id in self._case_ids_by_run.get(run_id, ())
+            }
+            self._remove_cases_locked(case_ids)
             for job_id in affected_jobs:
                 if job_id in self._jobs:
                     self._add_job_runtime_indexes_locked(self._jobs[job_id])
-            empty_jobs = tuple(self._empty_job_ids)
+            empty_jobs = tuple(job_id for job_id in affected_jobs if job_id in self._empty_job_ids)
             for job_id in empty_jobs:
                 self._remove_job_locked(job_id)
             return len(empty_jobs)

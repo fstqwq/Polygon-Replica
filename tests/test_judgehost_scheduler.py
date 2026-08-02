@@ -1,14 +1,24 @@
 from __future__ import annotations
 
 import threading
+import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from unittest.mock import patch
 
 from app.service.judgehost.cleanup import JudgehostTerminalCleanup
 from app.service.judgehost.task_store import JudgehostTaskStore
+from app.service.platform.judge_fs_index import JudgeFsIndexService
 
 
-def _task_row(index: int, *, verification_id: str = "verification", priority: str = "solution-run") -> dict[str, object]:
+def _task_row(
+    index: int,
+    *,
+    verification_id: str = "verification",
+    priority: str = "solution-run",
+    group_key: str = "",
+) -> dict[str, object]:
     now_text = datetime.now(timezone.utc).isoformat()
     return {
         "id": f"task-{index}",
@@ -23,6 +33,7 @@ def _task_row(index: int, *, verification_id: str = "verification", priority: st
             "task_kind": priority,
             "verification_source": "compile.only" if priority == "compile-only" else "run.execute",
             "compile_only": priority == "compile-only",
+            "domjudge_group_key": group_key,
         },
         "result": {},
         "persist_verification_run": False,
@@ -88,6 +99,48 @@ class TestJudgehostTaskScheduler(unittest.TestCase):
         self.assertEqual(len(set(leased)), task_count)
         self.assertEqual(store.status_counts()["queued"], 0)
         self.assertEqual(store.status_counts()["leased"], task_count)
+
+    def test_group_claim_uses_queued_count_without_scanning_members(self) -> None:
+        store = JudgehostTaskStore()
+        for index in range(64):
+            store.insert(_task_row(index, group_key="shared"))
+
+        class _NoIterationSet(set[str]):
+            def __iter__(self):
+                raise AssertionError("group members were scanned")
+
+        store._tasks_by_group["shared"] = _NoIterationSet(store._tasks_by_group["shared"])
+        lease = store.claim_ready(
+            hostname="host-a",
+            lease_until=(datetime.now(timezone.utc) + timedelta(minutes=1)).isoformat(),
+            now_text=datetime.now(timezone.utc).isoformat(),
+            group_key="shared",
+        )
+
+        self.assertIsNotNone(lease)
+        self.assertEqual(store._queued_counts_by_group["shared"], 63)
+
+    def test_case_cache_metadata_hit_does_not_read_payload_files(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="judge-fs-index-") as temp_dir:
+            cache = JudgeFsIndexService(Path(temp_dir))
+            key_hash = "1" * 64
+            signature = "2" * 64
+            cache.put(
+                kind=JudgeFsIndexService.KIND_CASE,
+                key_hash=key_hash,
+                signature=signature,
+                value={"manifest": []},
+                files={"program.out": b"large output"},
+            )
+
+            with patch.object(Path, "read_bytes", side_effect=AssertionError("payload was read")):
+                entry = cache.get(
+                    kind=JudgeFsIndexService.KIND_CASE,
+                    key_hash=key_hash,
+                    signature=signature,
+                )
+
+            self.assertIsNotNone(entry)
 
     def test_terminal_cleanup_removes_runtime_identity_but_not_cache(self) -> None:
         store = JudgehostTaskStore()

@@ -376,6 +376,7 @@ class TestVerificationTaskScheduler(SmokeBase):
             snapshot_root=layout.root,
             uploaded_sources_root=layout.uploaded_sources,
             source_file_by_path={"solutions/std.cpp": source_path},
+            source_bytes_by_path={},
             test_plan_by_name={"001.in": _sanity_test_plan()},
             run_verification_payload_base={},
             generate_verification_payload_base={},
@@ -960,7 +961,6 @@ class TestVerificationTaskScheduler(SmokeBase):
             edges=[("vt-generate", "vt-main")],
         )
         publish_order: list[str] = []
-        persist_counts: list[int] = []
         final_result = TaskExecutionResult(
             task_id="vt-generate",
             status=VerificationTaskStore.TASK_DONE,
@@ -987,31 +987,10 @@ class TestVerificationTaskScheduler(SmokeBase):
                 judgehost_task_id=f"jt-{task_id}",
             )
 
-        def _persist() -> dict[str, object]:
-            persist_counts.append(len(persist_counts))
-            rows = store.list_rows("ver-runtime")
-            total = len(rows)
-            pending = sum(1 for row in rows if str(row["status"]) == VerificationTaskStore.TASK_PENDING)
-            queued = sum(1 for row in rows if str(row["status"]) == VerificationTaskStore.TASK_QUEUED)
-            running = sum(1 for row in rows if str(row["status"]) == VerificationTaskStore.TASK_LEASED)
-            done = sum(1 for row in rows if str(row["status"]) == VerificationTaskStore.TASK_DONE)
-            failed = sum(1 for row in rows if str(row["status"]) == VerificationTaskStore.TASK_FAILED)
-            cancelled = sum(1 for row in rows if str(row["status"]) == VerificationTaskStore.TASK_CANCELLED)
-            return {
-                "total": total,
-                "pending": pending,
-                "queued": queued,
-                "running": running,
-                "done": done,
-                "failed": failed,
-                "cancelled": cancelled,
-            }
-
         callbacks = VerificationRuntimeCallbacks(
             publish_task=_publish,
             resolve_case_result=lambda _task_id, _test_name: None,
             cancel_queued_tasks=lambda _reason: None,
-            persist_state=_persist,
         )
         coordinator = VerificationRuntimeCoordinator(
             "ver-runtime",
@@ -1081,7 +1060,6 @@ class TestVerificationTaskScheduler(SmokeBase):
             publish_task=_publish,
             resolve_case_result=lambda _task_id, _test_name: None,
             cancel_queued_tasks=lambda _reason: None,
-            persist_state=lambda: {},
         )
         coordinator = VerificationRuntimeCoordinator(
             "ver-large-batch",
@@ -1382,7 +1360,6 @@ class TestVerificationTaskScheduler(SmokeBase):
             publish_task=_publish,
             resolve_case_result=lambda _task_id, _test_name: None,
             cancel_queued_tasks=lambda _reason: None,
-            persist_state=lambda: {},
         )
         coordinator = VerificationRuntimeCoordinator(
             "ver-validator-stop",
@@ -1431,71 +1408,6 @@ class TestVerificationTaskScheduler(SmokeBase):
             thread.join(timeout=2.0)
             self.assertFalse(thread.is_alive())
 
-    def test_runtime_coordinator_idle_waits_for_events_without_polling(self) -> None:
-        store = _InMemoryTaskStore(
-            rows=[
-                _task_row(
-                    "vt-generate",
-                    task_kind="generate-input",
-                    status=VerificationTaskStore.TASK_PENDING,
-                    queue_index=1,
-                    source_path="generators/gen.cpp",
-                )
-            ],
-            edges=[],
-        )
-        persist_calls = 0
-
-        def _publish(row: dict[str, object]) -> TaskPublishResult:
-            return TaskPublishResult(
-                task_id=str(row["id"]),
-                run_id="r-generate",
-                judgehost_task_id="jt-generate",
-            )
-
-        def _persist() -> dict[str, object]:
-            nonlocal persist_calls
-            persist_calls += 1
-            rows = store.list_rows("ver-runtime-idle")
-            return {
-                "total": len(rows),
-                "pending": sum(1 for row in rows if str(row["status"]) == VerificationTaskStore.TASK_PENDING),
-                "queued": sum(1 for row in rows if str(row["status"]) == VerificationTaskStore.TASK_QUEUED),
-                "running": sum(1 for row in rows if str(row["status"]) == VerificationTaskStore.TASK_LEASED),
-                "done": sum(1 for row in rows if str(row["status"]) == VerificationTaskStore.TASK_DONE),
-                "failed": sum(1 for row in rows if str(row["status"]) == VerificationTaskStore.TASK_FAILED),
-                "cancelled": sum(1 for row in rows if str(row["status"]) == VerificationTaskStore.TASK_CANCELLED),
-            }
-
-        callbacks = VerificationRuntimeCallbacks(
-            publish_task=_publish,
-            resolve_case_result=lambda _task_id, _test_name: None,
-            cancel_queued_tasks=lambda _reason: None,
-            persist_state=_persist,
-        )
-        coordinator = VerificationRuntimeCoordinator(
-            "ver-runtime-idle",
-            task_store=store,
-            callbacks=callbacks,
-            edges=[],
-        )
-        thread = threading.Thread(target=coordinator.run, daemon=True)
-        thread.start()
-        try:
-            self._wait_until(
-                lambda: persist_calls >= 1,
-                timeout=2.0,
-                interval=0.01,
-                message="bootstrap persist did not run",
-            )
-            baseline = persist_calls
-            time.sleep(0.2)
-            self.assertEqual(persist_calls, baseline)
-        finally:
-            coordinator.enqueue_cancel("test shutdown")
-            thread.join(timeout=2.0)
-            self.assertFalse(thread.is_alive())
-
     def test_runtime_coordinator_cancel_releases_worker_without_finalizing_leased_rows(self) -> None:
         store = _InMemoryTaskStore(
             rows=[
@@ -1531,7 +1443,6 @@ class TestVerificationTaskScheduler(SmokeBase):
             publish_task=lambda _row: (_ for _ in ()).throw(RuntimeError("unexpected publish")),
             resolve_case_result=lambda _task_id, _test_name: None,
             cancel_queued_tasks=lambda reason: queued_cancel_reasons.append(reason),
-            persist_state=lambda: {},
         )
         coordinator = VerificationRuntimeCoordinator(
             "ver-runtime-cancel",
@@ -2047,7 +1958,6 @@ class TestVerificationTaskScheduler(SmokeBase):
                 publish_task=_publish,
                 resolve_case_result=lambda _task_id, _test_name: None,
                 cancel_queued_tasks=lambda _reason: None,
-                persist_state=lambda: {},
             ),
             edges=list(zip(task_ids, task_ids[1:])),
         )
@@ -2126,7 +2036,6 @@ class TestVerificationTaskScheduler(SmokeBase):
                 publish_task=_publish,
                 resolve_case_result=lambda _task_id, _test_name: {"status": "ok"},
                 cancel_queued_tasks=lambda _reason: None,
-                persist_state=lambda: {},
             ),
             edges=[("vt-parent-a", "vt-child"), ("vt-parent-b", "vt-child")],
         )

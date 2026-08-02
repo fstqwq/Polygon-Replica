@@ -84,6 +84,7 @@ class TaskExecutionContext:
     snapshot_root: Path
     uploaded_sources_root: Path
     source_file_by_path: dict[str, Path]
+    source_bytes_by_path: dict[str, tuple[str, bytes]]
     test_plan_by_name: dict[str, VerificationTestPlan]
     run_verification_payload_base: dict[str, object]
     generate_verification_payload_base: dict[str, object]
@@ -615,10 +616,15 @@ def _sanity_plan_for_verification_kind(kind: str, test_plans: list[VerificationT
 
 
 def _source_bytes_for_path(execution: TaskExecutionContext, source_path: str) -> tuple[str, bytes]:
+    cached = execution.source_bytes_by_path.get(source_path)
+    if cached is not None:
+        return cached
     source_file = execution.source_file_by_path.get(source_path)
     if source_file is None:
         raise RuntimeError(f"verification source is missing: {source_path}")
-    return (source_file.name, source_file.read_bytes())
+    loaded = (source_file.name, source_file.read_bytes())
+    execution.source_bytes_by_path[source_path] = loaded
+    return loaded
 
 
 def _empty_task_result(
@@ -983,13 +989,21 @@ def run_workspace_verification_dag(
             snapshot_root=execution_plan.snapshot_root,
             uploaded_sources_root=uploaded_sources_root,
             source_file_by_path=source_file_by_path,
+            source_bytes_by_path={},
             test_plan_by_name=execution_plan.test_plan_by_name,
             run_verification_payload_base=execution_plan.run_verification_payload_base,
             generate_verification_payload_base=execution_plan.generate_verification_payload_base,
             force_recompile=bool(force_recompile),
         )
 
-        def _refresh_state() -> dict[str, object]:
+        def _refresh_state() -> tuple[
+            str,
+            dict[str, object],
+            dict[str, object],
+            list[VerificationTaskRow],
+            bool,
+            str,
+        ]:
             rows = task_store.list_rows(verification_id)
             fail_flag, fail_reason = task_store.fail_state(verification_id)
             task_status, summary, counts = _verification_summary_from_tasks(
@@ -1020,7 +1034,7 @@ def run_workspace_verification_dag(
                 fail_reason=str(summary.get("error") or ""),
                 finished=finished,
             )
-            return counts
+            return task_status, summary, counts, rows, fail_flag, fail_reason
 
         def _cancel_queued_tasks(reason: str) -> None:
             statuses_by_run: dict[str, set[str]] = {}
@@ -1070,7 +1084,6 @@ def run_workspace_verification_dag(
                 test_name,
             ),
             cancel_queued_tasks=_cancel_queued_tasks,
-            persist_state=_refresh_state,
         )
         coordinator = VerificationRuntimeCoordinator(
             verification_id,
@@ -1089,28 +1102,20 @@ def run_workspace_verification_dag(
             raise
         finally:
             unregister_verification_runtime_coordinator(verification_id)
-        _refresh_state()
+        _status, summary, _counts, rows, fail_flag, fail_reason = _refresh_state()
         record = config.verification_service.verification_record(verification_id) or {}
         detail = config.verification_service.verification_detail(verification_id)
-        rows = task_store.list_rows(verification_id)
-        fail_flag, fail_reason = task_store.fail_state(verification_id)
-        _status, summary, _counts = _verification_summary_from_tasks(
-            verification_id=verification_id,
-            artifact_verification_id=verification_id,
-            mode=normalize_problem_mode(detail.get("mode"), verification_mode),
-            pass_limit=normalize_pass_limit(detail.get("pass_limit"), verification_pass_limit),
-            logical_runs=graph.logical_runs,
-            rows=rows,
-            test_names=test_names,
-            fail_flag=fail_flag,
-            fail_reason=fail_reason,
-        )
         if _status == Status.OK.value and sanity_checks:
             sanity_status = SANITY_RUNNING
             updated_detail = dict(detail)
             updated_detail["sanity_status"] = sanity_status
             config.verification_service.persist_verification_detail(verification_id, updated_detail)
             accepted_source_file = source_file_by_path.get(execution_plan.accepted_source_path)
+            accepted_source_bytes = (
+                _source_bytes_for_path(execution, execution_plan.accepted_source_path)[1]
+                if accepted_source_file is not None
+                else b""
+            )
             sanity_result = run_verification_sanity_checks(
                 problem=problem,
                 user=user,
@@ -1120,7 +1125,7 @@ def run_workspace_verification_dag(
                 test_plans=selected_test_plans,
                 accepted_source_label=execution_plan.accepted_source_path,
                 accepted_source_name=accepted_source_file.name if accepted_source_file is not None else "",
-                accepted_source_bytes=accepted_source_file.read_bytes() if accepted_source_file is not None else b"",
+                accepted_source_bytes=accepted_source_bytes,
                 run_verification_payload_base=execution_plan.run_verification_payload_base,
                 generate_feedback_by_test=_generate_feedback_by_test(rows),
                 runtime_columns=_runtime_threshold_columns_from_tasks(

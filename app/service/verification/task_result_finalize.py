@@ -256,13 +256,20 @@ def finalize_verification_task_result(task_row: VerificationTaskRow, *, result: 
     error_text = summary_error_text or result_error_text
     missing_case_result = bool(result.get("missing_case_result"))
     parts = _summary_parts(result_summary, run_status=result_status, error_text=error_text)
-    materialized_output_ref, materialized_output_blob = _materialize_run_output(
-        verification_id=verification_id,
-        artifact_run_id=artifact_run_id,
-        judgehost_task_id=judgehost_task_id,
-        test_name=test_name,
-        output_ref=parts.output_ref,
+    cache_ref_only = (
+        task_kind not in {TASK_GENERATE_INPUT, TASK_MAIN_CORRECT}
+        and parts.output_ref.startswith("cache://")
     )
+    if cache_ref_only:
+        materialized_output_ref, materialized_output_blob = (parts.output_ref, None)
+    else:
+        materialized_output_ref, materialized_output_blob = _materialize_run_output(
+            verification_id=verification_id,
+            artifact_run_id=artifact_run_id,
+            judgehost_task_id=judgehost_task_id,
+            test_name=test_name,
+            output_ref=parts.output_ref,
+        )
 
     if missing_case_result:
         fail_reason = error_text or f"judgehost case result missing for {test_name}"

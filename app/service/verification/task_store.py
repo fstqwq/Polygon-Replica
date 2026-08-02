@@ -105,6 +105,9 @@ class VerificationTaskStore:
         self._runtime_lock = WriterPriorityRWLock()
         self._runtime_by_task_id: dict[str, _RuntimeTaskState] = {}
         self._logical_run_id_by_task_id: dict[str, str] = {}
+        self._test_name_by_task_id: dict[str, str] = {}
+        self._task_id_by_judgehost_case: dict[tuple[str, str], str] = {}
+        self._task_ids_by_judgehost_task: dict[str, set[str]] = {}
         self._fail_reason_by_verification_id: dict[str, str] = {}
 
     @staticmethod
@@ -133,6 +136,17 @@ class VerificationTaskStore:
         predecessor_by_child = {child_id: parent_id for parent_id, child_id in edges}
         runtime_initial: dict[str, _RuntimeTaskState] = {}
         logical_run_ids: dict[str, str] = {}
+        test_names = {
+            str(item["id"]): str(item.get("test_name") or "")
+            for item in tasks
+        }
+        previous_task_ids = {
+            str(row["id"])
+            for row in self.db.fetch_all(
+                "SELECT id FROM verification_tasks WHERE verification_id=?",
+                [verification_id],
+            )
+        }
 
         def _tx(conn: sqlite3.Connection) -> None:
             conn.execute("DELETE FROM verification_tasks WHERE verification_id=?", [verification_id])
@@ -196,12 +210,39 @@ class VerificationTaskStore:
         self.db.write_transaction(_tx)
         task_ids = {str(item["id"]) for item in tasks}
         with self._runtime_lock.write_lock():
-            for task_id in task_ids:
+            for task_id in previous_task_ids | task_ids:
+                self._remove_judgehost_indexes_locked(task_id)
                 self._runtime_by_task_id.pop(task_id, None)
                 self._logical_run_id_by_task_id.pop(task_id, None)
+                self._test_name_by_task_id.pop(task_id, None)
             self._runtime_by_task_id.update(runtime_initial)
             self._logical_run_id_by_task_id.update(logical_run_ids)
+            self._test_name_by_task_id.update(test_names)
+            for task_id, runtime in runtime_initial.items():
+                self._add_judgehost_indexes_locked(task_id, runtime)
             self._fail_reason_by_verification_id.pop(verification_id, None)
+
+    def _remove_judgehost_indexes_locked(self, task_id: str) -> None:
+        runtime = self._runtime_by_task_id.get(task_id)
+        if runtime is None or not runtime.judgehost_task_id:
+            return
+        test_name = self._test_name_by_task_id.get(task_id, "")
+        if test_name:
+            self._task_id_by_judgehost_case.pop((runtime.judgehost_task_id, test_name), None)
+        task_ids = self._task_ids_by_judgehost_task.get(runtime.judgehost_task_id)
+        if task_ids is None:
+            return
+        task_ids.discard(task_id)
+        if not task_ids:
+            self._task_ids_by_judgehost_task.pop(runtime.judgehost_task_id, None)
+
+    def _add_judgehost_indexes_locked(self, task_id: str, runtime: _RuntimeTaskState) -> None:
+        if not runtime.judgehost_task_id:
+            return
+        test_name = self._test_name_by_task_id.get(task_id, "")
+        if test_name:
+            self._task_id_by_judgehost_case[(runtime.judgehost_task_id, test_name)] = task_id
+        self._task_ids_by_judgehost_task.setdefault(runtime.judgehost_task_id, set()).add(task_id)
 
     def _runtime_status(self, row: dict[str, object]) -> _RuntimeTaskState | None:
         with self._runtime_lock.read_lock():
@@ -317,33 +358,18 @@ class VerificationTaskStore:
         if (not safe_task_id) or (not safe_test_name):
             return None
         with self._runtime_lock.read_lock():
-            candidate_ids = [
-                task_id
-                for task_id, runtime in self._runtime_by_task_id.items()
-                if runtime.judgehost_task_id == safe_task_id
-            ]
-        if not candidate_ids:
+            candidate_id = self._task_id_by_judgehost_case.get((safe_task_id, safe_test_name))
+        if candidate_id is None:
             return None
-        rows = self.db.fetch_all(
-            f"SELECT * FROM verification_tasks WHERE id IN ({','.join('?' for _ in candidate_ids)})",
-            candidate_ids,
-        )
-        for row in sorted((dict(item) for item in rows), key=self._row_order):
-            if str(row["test_name"] or "") != safe_test_name:
-                continue
-            return self._decorate_row(1, row)
-        return None
+        row = self.db.fetch_one("SELECT * FROM verification_tasks WHERE id=?", [candidate_id])
+        return None if row is None else self._decorate_row(1, dict(row))
 
     def find_runtime_rows_by_judgehost_task_id(self, judgehost_task_id: str) -> list[VerificationTaskRow]:
         safe_task_id = str(judgehost_task_id or "")
         if not safe_task_id:
             return []
         with self._runtime_lock.read_lock():
-            candidate_ids = [
-                task_id
-                for task_id, runtime in self._runtime_by_task_id.items()
-                if runtime.judgehost_task_id == safe_task_id
-            ]
+            candidate_ids = list(self._task_ids_by_judgehost_task.get(safe_task_id, ()))
         if not candidate_ids:
             return []
         rows = self.db.fetch_all(
@@ -361,12 +387,15 @@ class VerificationTaskStore:
 
     def set_task_queued(self, task_id: str, *, run_id: str, judgehost_task_id: str) -> None:
         with self._runtime_lock.write_lock():
-            self._runtime_by_task_id[task_id] = _RuntimeTaskState(
+            self._remove_judgehost_indexes_locked(task_id)
+            runtime = _RuntimeTaskState(
                 status=self.TASK_QUEUED,
                 run_id=run_id,
                 judgehost_task_id=judgehost_task_id,
                 started_at="",
             )
+            self._runtime_by_task_id[task_id] = runtime
+            self._add_judgehost_indexes_locked(task_id, runtime)
 
     def set_task_leased(self, task_id: str) -> None:
         with self._runtime_lock.write_lock():

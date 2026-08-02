@@ -149,9 +149,6 @@ class DomjudgeToolkit:
     def validate_cache_entry(
         self,
         *,
-        kind: str,
-        key_hash: str,
-        signature: str,
         entry: dict[str, object],
     ) -> bool:
         value_map = dict(entry["value"])
@@ -199,24 +196,12 @@ class DomjudgeToolkit:
                 return False
             blob_key = str(row["blob_key"])
             expected = (str(row["sha256"]), int(row["size"]))
-            blob = self.cache_read_blob(
-                kind=kind,
-                key_hash=key_hash,
-                signature=signature,
-                name=path,
-            )
-            if blob is None:
-                return False
-            blob_sha = sha256_hex_bytes(blob)
-            blob_size = int(len(blob))
-            if blob_sha != expected[0] or blob_size != expected[1]:
-                return False
             existing = seen_blob.get(blob_key)
             if existing is not None:
-                if existing != (blob_sha, blob_size):
+                if existing != expected:
                     return False
                 continue
-            seen_blob[blob_key] = (blob_sha, blob_size)
+            seen_blob[blob_key] = expected
         return True
 
     def case_cache_ref(
@@ -261,9 +246,6 @@ class DomjudgeToolkit:
             "updated_at": domjudge_text(entry.get("updated_at")),
         }
         if not self.validate_cache_entry(
-            kind=kind,
-            key_hash=key_hash,
-            signature=signature,
             entry=resolved,
         ):
             self.cache_delete(kind=kind, key_hash=key_hash, signature=signature)

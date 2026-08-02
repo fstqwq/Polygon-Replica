@@ -44,7 +44,6 @@ class VerificationRuntimeCallbacks:
     publish_task: Callable[[VerificationTaskRow], TaskPublishResult]
     resolve_case_result: Callable[[str, str], dict[str, object] | None]
     cancel_queued_tasks: Callable[[str], None]
-    persist_state: Callable[[], dict[str, object]]
 
 
 @dataclass(frozen=True)
@@ -303,6 +302,8 @@ class VerificationRuntimeCoordinator:
                 return
 
     def _handle_terminal_events(self, events: list[_VerificationEvent]) -> bool:
+        from .task_result_finalize import finalize_verification_task_result
+
         prepared: list[tuple[str, TaskExecutionResult]] = []
         prepared_task_ids: set[str] = set()
         for event in events:
@@ -318,12 +319,10 @@ class VerificationRuntimeCoordinator:
                     or self._dag.status_by_id[task_id] in _TERMINAL_TASK_STATUSES
                 ):
                     continue
-                result = cast(
-                    TaskExecutionResult,
-                    event.result["final_result"]
-                    if "final_result" in event.result
-                    else event.result,
-                )
+                if "final_result" in event.result:
+                    result = cast(TaskExecutionResult, event.result["final_result"])
+                else:
+                    result = finalize_verification_task_result(row, result=event.result)
                 prepared.append((task_id, result))
                 prepared_task_ids.add(task_id)
                 continue
@@ -344,8 +343,6 @@ class VerificationRuntimeCoordinator:
                 )
                 if result is None:
                     continue
-                from .task_result_finalize import finalize_verification_task_result
-
                 prepared.append((task_id, finalize_verification_task_result(row, result=result)))
                 prepared_task_ids.add(task_id)
         if not prepared:
@@ -359,18 +356,15 @@ class VerificationRuntimeCoordinator:
             self._dag.transition(task_id, result.status)
         self._publish_ready_rows()
         self._apply_fail_flag()
-        self._callbacks.persist_state()
         if self._is_terminal():
-            self._callbacks.persist_state()
             return True
         return False
 
     def _handle_event(self, event: _VerificationEvent) -> bool:
-        changed = False
         if event.kind == "bootstrap":
-            changed = self._publish_ready_rows()
+            self._publish_ready_rows()
         elif event.kind == "case_leased":
-            changed = self._mark_case_leased(event.judgehost_task_id, event.test_name)
+            self._mark_case_leased(event.judgehost_task_id, event.test_name)
         elif event.kind == "case_reported":
             changed = self._finalize_case_result(
                 event.judgehost_task_id,
@@ -387,12 +381,8 @@ class VerificationRuntimeCoordinator:
             self._cancel_reason = event.reason or "verification cancelled by user"
             self._task_store.set_fail_flag(self.verification_id, reason=self._cancel_reason)
             return True
-        if self._apply_fail_flag():
-            changed = True
-        if changed:
-            self._callbacks.persist_state()
+        self._apply_fail_flag()
         if self._is_terminal():
-            self._callbacks.persist_state()
             return True
         return False
 
@@ -563,7 +553,7 @@ def notify_verification_case_reported(
     verification_id: str,
     judgehost_task_id: str,
     test_name: str,
-    result: TaskExecutionResult,
+    result: dict[str, object],
 ) -> bool:
     coordinator = _runtime_coordinator(verification_id)
     if coordinator is None:
@@ -571,7 +561,7 @@ def notify_verification_case_reported(
     coordinator.enqueue_case_reported(
         judgehost_task_id,
         test_name,
-        {"final_result": result},
+        result,
     )
     return True
 

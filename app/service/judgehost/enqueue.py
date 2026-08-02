@@ -521,6 +521,7 @@ class TaskEnqueue:
         task_kind: str = "",
         force_recompile: bool = False,
         compile_only: bool = False,
+        verification_payload_override: dict[str, object] | None = None,
     ) -> dict[str, object]:
         ctx = self._s.workspace_service.workspace_context(problem, username, include_recent=False)
         workspace = Path(ctx["workspace"]["path"])
@@ -546,12 +547,16 @@ class TaskEnqueue:
             source_bytes=source_bytes,
         )
 
-        verification_payload = self._collect_verification_payload(
-            problem=problem,
-            artifact_verification_id=artifact_verification_id,
-            workspace=workspace,
-            mode=mode,
-            selected_tests=selected_tests,
+        verification_payload = (
+            self._collect_verification_payload(
+                problem=problem,
+                artifact_verification_id=artifact_verification_id,
+                workspace=workspace,
+                mode=mode,
+                selected_tests=selected_tests,
+            )
+            if verification_payload_override is None
+            else dict(verification_payload_override)
         )
         safe_task_kind = self._toolkit.task_kind(
             {
@@ -943,6 +948,11 @@ class TaskEnqueue:
         verification_run_id_list = self._normalize_list(verification_run_ids, matcher=_RUN_ID_RE)
         if not verification_run_id_list:
             verification_run_id_list = [safe_run_id]
+        verification_payload_override = None
+        if prepared_payload is not None:
+            verification_payload_override = dict(
+                cast(dict[str, object], prepared_payload["verification_payload"])
+            )
         payload = self._build_task_payload(
             problem=problem,
             username=username,
@@ -960,6 +970,7 @@ class TaskEnqueue:
             run_id=safe_run_id,
             force_recompile=bool(force_recompile),
             compile_only=bool(compile_only),
+            verification_payload_override=verification_payload_override,
         )
         if prepared_payload is not None:
             payload.update(dict(prepared_payload))

@@ -3,10 +3,10 @@ from __future__ import annotations
 import json
 import os
 import re
-import threading
 from pathlib import Path
 
 from app.service.platform.hashing import sha256_hex_bytes
+from app.service.platform.rwlock import WriterPriorityRWLock
 
 
 _EXECUTABLE_KIND_RE = re.compile(r"^(compile|run|compare)$")
@@ -18,7 +18,7 @@ class DomjudgeExecutableCache:
     def __init__(self, root: Path) -> None:
         self._root = Path(root).resolve()
         self._root.mkdir(parents=True, exist_ok=True)
-        self._lock = threading.RLock()
+        self._lock = WriterPriorityRWLock()
 
     @staticmethod
     def _normalize_kind(kind: str) -> str:
@@ -86,7 +86,7 @@ class DomjudgeExecutableCache:
             name = self._normalize_name(raw_name)
             content_by_name[name] = (bytes(raw_content or b""), bool(raw_is_exec))
         manifest_path = (entry_dir / "manifest.json").resolve()
-        with self._lock:
+        with self._lock.write_lock():
             files_dir.mkdir(parents=True, exist_ok=True)
             for child in list(files_dir.iterdir()):
                 if child.is_file() and (not child.is_symlink()):
@@ -114,7 +114,7 @@ class DomjudgeExecutableCache:
         entry_dir = self._entry_dir(kind=safe_kind, executable_hash=safe_hash)
         files_dir = (entry_dir / "files").resolve()
         manifest_path = (entry_dir / "manifest.json").resolve()
-        with self._lock:
+        with self._lock.read_lock():
             if (not manifest_path.exists()) or (not files_dir.exists()):
                 return None
             try:

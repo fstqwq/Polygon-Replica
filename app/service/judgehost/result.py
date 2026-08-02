@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import base64
 import contextlib
+import heapq
 import logging
 import json
 import re
 import shutil
 import threading
+import time
 from collections.abc import Iterator
 from pathlib import Path
 from typing import cast
@@ -68,6 +70,9 @@ class ResultProcessor:
         self._toolkit = toolkit
         self._job_activity_guard = threading.Lock()
         self._job_activity_locks: dict[int, tuple[threading.RLock, int]] = {}
+        self._finalization_retry_guard = threading.Lock()
+        self._finalization_retry_heap: list[tuple[float, int]] = []
+        self._finalization_retry_deadlines: dict[int, float] = {}
 
     @contextlib.contextmanager
     def _job_activity(self, job_id: int) -> Iterator[None]:
@@ -377,19 +382,25 @@ class ResultProcessor:
         _ = domjudge_text(runner)
         return {}
 
-    def _domjudge_publish_reported_case(self, *, task_id: str, test_name: str) -> None:
+    def _domjudge_publish_reported_case(self, *, task_id: str, test_name: str) -> bool:
         safe_task_id = domjudge_text(task_id)
         safe_test_name = domjudge_text(test_name)
         if (not safe_task_id) or (not safe_test_name):
-            return
+            return False
         case_result = self._queue.poll_task_case_result(safe_task_id, safe_test_name)
         if case_result is None:
-            return
-        self._publish_verification_case_result(
+            return False
+        published = self._publish_verification_case_result(
             task_id=safe_task_id,
             test_name=safe_test_name,
             case_result=case_result,
         )
+        if published:
+            self._s.judgehost_state_store.mark_case_verification_published(
+                safe_task_id,
+                safe_test_name,
+            )
+        return published
 
     def _publish_verification_case_result(
         self,
@@ -397,44 +408,51 @@ class ResultProcessor:
         task_id: str,
         test_name: str,
         case_result: dict[str, object],
-    ) -> None:
+    ) -> bool:
         verification_task_store = self._s.verification_task_store
+        judgehost_task_row = self._s.task_store.get(task_id)
+        verification_id = (
+            ""
+            if judgehost_task_row is None
+            else domjudge_text(judgehost_task_row["verification_id"])
+        )
+        if verification_id and notify_verification_case_reported(
+            verification_id,
+            task_id,
+            test_name,
+            case_result,
+        ):
+            return True
         verification_task_row = verification_task_store.find_runtime_row_by_judgehost_case(
             task_id,
             test_name,
         )
         if verification_task_row is None:
-            return
+            return True
         final_result = finalize_verification_task_result(verification_task_row, result=case_result)
-        notified = notify_verification_case_reported(
-            str(verification_task_row["verification_id"] or ""),
-            task_id,
-            test_name,
-            final_result,
+        verification_task_store.save_task_result(
+            final_result.task_id,
+            status=final_result.status,
+            verdict=final_result.verdict,
+            run_id=final_result.run_id,
+            judgehost_task_id=final_result.judgehost_task_id,
+            runtime_sec=final_result.runtime_sec,
+            cpu_sec=final_result.cpu_sec,
+            wall_sec=final_result.wall_sec,
+            memory_kb=final_result.memory_kb,
+            compile_log=final_result.compile_log,
+            diagnostics_json=final_result.diagnostics_json,
+            error_text=final_result.error_text,
+            feedback_text=final_result.feedback_text,
+            output_ref=final_result.output_ref,
+            answer_correct=final_result.answer_correct,
         )
-        if notified is False:
-            verification_task_store.save_task_result(
-                final_result.task_id,
-                status=final_result.status,
-                verdict=final_result.verdict,
-                run_id=final_result.run_id,
-                judgehost_task_id=final_result.judgehost_task_id,
-                runtime_sec=final_result.runtime_sec,
-                cpu_sec=final_result.cpu_sec,
-                wall_sec=final_result.wall_sec,
-                memory_kb=final_result.memory_kb,
-                compile_log=final_result.compile_log,
-                diagnostics_json=final_result.diagnostics_json,
-                error_text=final_result.error_text,
-                feedback_text=final_result.feedback_text,
-                output_ref=final_result.output_ref,
-                answer_correct=final_result.answer_correct,
+        if final_result.fail_flag_reason:
+            verification_task_store.set_fail_flag(
+                str(verification_task_row["verification_id"] or ""),
+                reason=final_result.fail_flag_reason,
             )
-            if final_result.fail_flag_reason:
-                verification_task_store.set_fail_flag(
-                    str(verification_task_row["verification_id"] or ""),
-                    reason=final_result.fail_flag_reason,
-                )
+        return True
 
     def _domjudge_task_result_payload(
         self,
@@ -652,11 +670,18 @@ class ResultProcessor:
         for case_row in cases:
             if domjudge_lower_text(case_row["status"]) != "cancelled":
                 continue
-            self._publish_verification_case_result(
+            if bool(case_row["verification_published"]):
+                continue
+            published = self._publish_verification_case_result(
                 task_id=safe_task_id,
                 test_name=domjudge_text(case_row["test_name"]),
                 case_result=cancelled_case_result,
             )
+            if published:
+                self._s.judgehost_state_store.mark_case_verification_published(
+                    safe_task_id,
+                    domjudge_text(case_row["test_name"]),
+                )
         self._queue.finalize_domjudge_task(task_id=safe_task_id, payload=payload)
         return True
 
@@ -671,6 +696,8 @@ class ResultProcessor:
     ) -> bool:
         for row in cases:
             if domjudge_lower_text(row["status"]) != "reported":
+                continue
+            if bool(row["verification_published"]):
                 continue
             try:
                 self._domjudge_publish_reported_case(
@@ -707,6 +734,36 @@ class ResultProcessor:
                 return False
         return True
 
+    def _schedule_finalization_retry(self, job_id: int, *, delay_sec: float = 0.25) -> None:
+        safe_job_id = int(job_id)
+        deadline = time.monotonic() + max(0.0, delay_sec)
+        with self._finalization_retry_guard:
+            current = self._finalization_retry_deadlines.get(safe_job_id)
+            if current is not None and current <= deadline:
+                return
+            self._finalization_retry_deadlines[safe_job_id] = deadline
+            heapq.heappush(self._finalization_retry_heap, (deadline, safe_job_id))
+
+    def retry_due_finalizations(self, *, limit: int = 1) -> None:
+        due_job_ids: list[int] = []
+        now = time.monotonic()
+        with self._finalization_retry_guard:
+            while self._finalization_retry_heap and len(due_job_ids) < max(0, limit):
+                deadline, job_id = self._finalization_retry_heap[0]
+                if deadline > now:
+                    break
+                heapq.heappop(self._finalization_retry_heap)
+                if self._finalization_retry_deadlines.get(job_id) != deadline:
+                    continue
+                self._finalization_retry_deadlines.pop(job_id, None)
+                due_job_ids.append(job_id)
+        for job_id in due_job_ids:
+            self._domjudge_finalize_if_ready(job_id)
+
+    def _clear_finalization_retry(self, job_id: int) -> None:
+        with self._finalization_retry_guard:
+            self._finalization_retry_deadlines.pop(int(job_id), None)
+
     def _domjudge_finalize_if_ready(
         self,
         job_id: int,
@@ -721,23 +778,6 @@ class ResultProcessor:
                 force_runresult="internal-error" if force_failed else "",
             )
             if claim is None:
-                current_job = self._s.judgehost_state_store.job_finalize_row(int(job_id))
-                if current_job is None or domjudge_lower_text(current_job["status"]) not in {
-                    "queued",
-                    "leased",
-                }:
-                    return
-                active_cases = [
-                    dict(row)
-                    for row in self._s.judgehost_state_store.cases_for_job(int(job_id))
-                ]
-                self._domjudge_publish_and_finalize_ready_tasks(
-                    job_id=int(job_id),
-                    job_row=dict(current_job),
-                    cases=active_cases,
-                    force_failed=force_failed,
-                    error_text=error_text,
-                )
                 return
             job_row = dict(claim["job"])
             cases = [dict(row) for row in claim["cases"]]
@@ -753,6 +793,7 @@ class ResultProcessor:
                 force_failed=force_failed,
                 error_text=error_text,
             ):
+                self._schedule_finalization_retry(int(job_id))
                 return
             task_rows = {task_id: self._s.task_store.get(task_id) for task_id in task_ids}
             unfinished_task_ids = [
@@ -783,6 +824,7 @@ class ResultProcessor:
                     int(job_id),
                     unfinished_statuses,
                 )
+                self._schedule_finalization_retry(int(job_id))
                 return
             compile_success = job_row["compile_success"]
             compile_failed = compile_success is not None and int(compile_success) == 0
@@ -809,7 +851,9 @@ class ResultProcessor:
             )
             if not updated:
                 logger.error("DOMjudge job finalization claim disappeared job_id=%s", int(job_id))
+                self._schedule_finalization_retry(int(job_id))
                 return
+            self._clear_finalization_retry(int(job_id))
             shutil.rmtree(Path(domjudge_text(job_row["work_root"])).resolve(), ignore_errors=True)
 
     def domjudge_update_judging(self, hostname: str, judgetask_id: int, payload: dict[str, object]) -> None:
@@ -1189,6 +1233,19 @@ class ResultProcessor:
                 safe_task_id,
                 case_id,
             )
+        job_row = self._s.judgehost_state_store.job_finalize_row(job_id)
+        if job_row is not None:
+            try:
+                self._domjudge_finalize_task_if_ready(
+                    safe_task_id,
+                    job_row=dict(job_row),
+                )
+            except Exception:
+                logger.exception(
+                    "failed to finalize DOMjudge task task_id=%s job_id=%s",
+                    safe_task_id,
+                    job_id,
+                )
         self._domjudge_finalize_if_ready(job_id)
         return 1
 
