@@ -28,7 +28,6 @@ class JudgehostCore:
             self._s.api_token = str(constants.JUDGEHOST_API_TOKEN or "").strip()
             self._s.api_username = str(getattr(constants, "JUDGEHOST_API_USERNAME", "judgehost") or "judgehost").strip()
             self._s.fetch_batch_size = max(1, min(128, int(constants.JUDGEHOST_FETCH_BATCH_SIZE)))
-            self._s.lease_sec = max(5, min(86400, int(constants.JUDGEHOST_LEASE_SEC)))
             self._s.wait_timeout_sec = max(5, min(86400, int(constants.JUDGEHOST_WAIT_TIMEOUT_SEC)))
             self._s.wait_poll_sec = max(0.05, min(30.0, float(constants.JUDGEHOST_WAIT_POLL_SEC)))
             self._s.online_window_sec = max(5, min(86400, int(constants.JUDGEHOST_ONLINE_WINDOW_SEC)))
@@ -79,10 +78,10 @@ class JudgehostCore:
         return token
 
     def task_status_counts(self) -> dict[str, int]:
-        return self._s.task_store.status_counts()
+        return self._s.task_registry.status_counts()
 
     def task_by_id(self, task_id: str) -> dict[str, object] | None:
-        return self._s.task_store.get(task_id.strip())
+        return self._s.task_registry.get(task_id.strip())
 
     def task_payload(self, task_id: str) -> dict[str, object]:
         row = self.task_by_id(task_id)

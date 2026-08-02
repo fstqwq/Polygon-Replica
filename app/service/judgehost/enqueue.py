@@ -25,6 +25,7 @@ from .toolkit import DomjudgeToolkit
 class TaskEnqueue:
     STATUS_QUEUED = "queued"
     STATUS_ENQUEUING = "enqueuing"
+    STATUS_FAILED = "failed"
     _TASK_KIND_COMPILE_ONLY = "compile-only"
 
     def __init__(
@@ -640,7 +641,10 @@ class TaskEnqueue:
         compile_mem_mb = max(64, int(getattr(self._s.constants, "TOOLCHAIN_COMPILE_MEMORY_MB", 2048) or 2048))
         compile_output_limit_kb = compile_output_kb(self._s.constants)
         run_output_limit_kb = run_output_kb(self._s.constants)
-        run_process_limit = max(1, int(getattr(self._s.constants, "RUN_EXEC_PROCESS_LIMIT", 64) or 64))
+        run_process_limit = max(
+            1,
+            int(getattr(self._s.constants, "RUN_EXEC_PROCESS_LIMIT", 1024) or 1024),
+        )
         default_cfg = getattr(self._s.constants, "GENERAL_CONFIG_DEFAULTS", {}) or {}
         run_tl_ms = domjudge_parse_int(
             run_cfg_obj.get("time_limit_ms"),
@@ -939,6 +943,7 @@ class TaskEnqueue:
         compile_only: bool = False,
         persist_verification_run: bool = False,
         prepared_payload: dict[str, object] | None = None,
+        service_class: str = "background",
     ) -> str:
         safe_run_id = self._core.normalize_run_id(run_id if run_id else verification_id)
         safe_verification_id = TaskEnqueue._normalize_text(
@@ -991,6 +996,10 @@ class TaskEnqueue:
         payload["task_kind"] = safe_task_kind
         payload["force_recompile"] = bool(force_recompile)
         payload["compile_only"] = bool(safe_task_kind == self._TASK_KIND_COMPILE_ONLY)
+        safe_service_class = service_class.strip().lower()
+        if safe_service_class not in {"foreground", "background"}:
+            raise RuntimeError("invalid judgehost service class")
+        payload["service_class"] = safe_service_class
         safe_verification_id_source = (
             self._verification_id(safe_run_id, safe_verification_id)
             if not verification_id
@@ -1003,7 +1012,7 @@ class TaskEnqueue:
         task_id = ""
         summary: dict[str, object] | None = None
         while True:
-            existing_task = self._s.task_store.get_for_run(safe_run_id)
+            existing_task = self._s.task_registry.get_for_run(safe_run_id)
             if existing_task is not None:
                 existing_fingerprint = str(existing_task.get("enqueue_fingerprint") or "")
                 if existing_fingerprint != enqueue_fingerprint:
@@ -1012,8 +1021,8 @@ class TaskEnqueue:
                 existing_status = TaskEnqueue._normalize_status(existing_task["status"])
                 if existing_status != self.STATUS_ENQUEUING:
                     return existing_task_id
-                generation = self._s.task_store.change_generation()
-                self._s.task_store.wait_for_change(generation, 0.05)
+                generation = self._s.task_registry.change_generation()
+                self._s.task_registry.wait_for_change(generation, 0.05)
                 continue
             task_id = f"jt-{uuid.uuid4().hex[:12]}"
             source_label_obj = payload.get("source_label")
@@ -1057,17 +1066,14 @@ class TaskEnqueue:
                 "result": {},
                 "persist_verification_run": bool(persist_verification_run),
                 "error_text": "",
-                "lease_owner": "",
-                "lease_expires_at": "",
                 "created_at": now_text,
                 "updated_at": now_text,
                 "completed_at": "",
-                "attempt_count": 0,
                 "summary": dict(summary),
                 "enqueue_fingerprint": enqueue_fingerprint,
             }
             try:
-                self._s.task_store.insert(task_row)
+                self._s.task_registry.insert(task_row)
             except RuntimeError as exc:
                 if str(exc) != "judgehost task already exists":
                     raise
@@ -1077,18 +1083,59 @@ class TaskEnqueue:
         if summary is None or not task_id:
             raise RuntimeError("failed to allocate judgehost task")
 
-        if not self._toolkit.is_grouped_verification_task(payload):
-            self._dispatch._domjudge_try_prequeue_cache_finalize(
-                task_id=task_id,
-                run_id=safe_run_id,
-                payload=dict(payload),
+        job_id = 0
+        try:
+            job_id = self._dispatch.stage_task(
+                {"task_id": task_id, "run_id": safe_run_id, "payload": dict(payload)}
             )
-        self._s.task_store.transition(
+        except Exception as exc:
+            finished_at = now_iso()
+            self._s.task_registry.transition(
+                task_id,
+                expected={self.STATUS_ENQUEUING},
+                status=self.STATUS_FAILED,
+                updates={
+                    "result": {"run_status": "failed", "error": str(exc)},
+                    "error_text": str(exc),
+                    "updated_at": finished_at,
+                    "completed_at": finished_at,
+                },
+            )
+            raise
+        queued = self._s.task_registry.transition(
             task_id,
             expected={self.STATUS_ENQUEUING},
             status=self.STATUS_QUEUED,
             updates={"updated_at": now_iso()},
         )
+        if queued is None:
+            self._s.job_scheduler.cancel_staged_task_cases(
+                task_id,
+                now_text=now_iso(),
+            )
+            self._dispatch.finalize_job_if_ready(
+                job_id,
+                error_text="judgehost task staging lost its queued transition",
+            )
+            raise RuntimeError("judgehost task staging lost its queued transition")
+        if not self._dispatch.activate_task_cases(task_id):
+            finished_at = now_iso()
+            self._s.task_registry.transition(
+                task_id,
+                expected={self.STATUS_QUEUED},
+                status=self.STATUS_FAILED,
+                updates={
+                    "result": {"run_status": "failed", "error": "judgehost task staged no cases"},
+                    "error_text": "judgehost task staged no cases",
+                    "updated_at": finished_at,
+                    "completed_at": finished_at,
+                },
+            )
+            self._dispatch.finalize_job_if_ready(
+                job_id,
+                error_text="judgehost task staged no cases",
+            )
+            raise RuntimeError("judgehost task staged no cases")
         return task_id
 
     def enqueue_compile_only_task(
@@ -1124,4 +1171,5 @@ class TaskEnqueue:
             compile_only=True,
             persist_verification_run=False,
             prepared_payload=None if prepared_payload is None else dict(prepared_payload),
+            service_class="foreground",
         )

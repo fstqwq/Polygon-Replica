@@ -276,6 +276,75 @@ class JudgeFsIndexService:
             self.delete(kind=safe_kind, key_hash=safe_key, signature=safe_sig)
         return None
 
+    def get_with_blobs(
+        self,
+        *,
+        kind: str,
+        key_hash: str,
+        signature: str,
+        names: list[str],
+    ) -> tuple[dict[str, object], dict[str, bytes]] | None:
+        safe_kind, safe_key, safe_sig = self._entry_key(
+            kind=kind,
+            key_hash=key_hash,
+            signature=signature,
+        )
+        requested_names = {self._normalize_name(name) for name in names}
+        key = (safe_kind, safe_key, safe_sig)
+        invalid = False
+        result: tuple[dict[str, object], dict[str, bytes]] | None = None
+        with self._lock.read_lock():
+            row = self._entries.get(key)
+            if row is None:
+                return None
+            entry_dir = self._entry_dir(kind=safe_kind, key_hash=safe_key, signature=safe_sig)
+            files_dir = self._files_dir(kind=safe_kind, key_hash=safe_key, signature=safe_sig)
+            marker_hash = self._read_integrity_marker(entry_dir)
+            expected_files = row["files"]
+            invalid = marker_hash != row["integrity_hash"] or not self._disk_files_match(
+                files_dir,
+                expected_files,
+            )
+            blobs: dict[str, bytes] = {}
+            if not invalid:
+                # Result-cache consumers need several small artifacts together;
+                # keep validation and reads under one stable index snapshot.
+                for name in sorted(requested_names.intersection(expected_files)):
+                    target = (files_dir / name).resolve()
+                    if target.parent != files_dir:
+                        invalid = True
+                        break
+                    try:
+                        payload = target.read_bytes()
+                    except OSError:
+                        invalid = True
+                        break
+                    if len(payload) != int(expected_files[name]["size"]):
+                        invalid = True
+                        break
+                    blobs[name] = payload
+            if not invalid:
+                result = (
+                    {
+                        "schema": row["schema"],
+                        "kind": safe_kind,
+                        "key_hash": safe_key,
+                        "signature": safe_sig,
+                        "value": dict(row["value"]),
+                        "tags": dict(row["tags"]),
+                        "files": {
+                            name: dict(meta)
+                            for name, meta in expected_files.items()
+                        },
+                        "created_at": row["created_at"],
+                        "updated_at": row["updated_at"],
+                    },
+                    blobs,
+                )
+        if invalid:
+            self.delete(kind=safe_kind, key_hash=safe_key, signature=safe_sig)
+        return result
+
     def read_blob(self, *, kind: str, key_hash: str, signature: str, name: str) -> bytes | None:
         safe_kind, safe_key, safe_sig = self._entry_key(kind=kind, key_hash=key_hash, signature=signature)
         safe_name = self._normalize_name(name)

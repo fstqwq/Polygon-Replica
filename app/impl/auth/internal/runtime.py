@@ -178,10 +178,6 @@ def _startup_clear_all_caches() -> None:
             root.mkdir(parents=True, exist_ok=True)
         except Exception as exc:
             warnings.warn(f"startup {label} recreate failed: {exc}", RuntimeWarning)
-    try:
-        config.judgehost_task_service.clear_testcase_registry()
-    except Exception as exc:
-        warnings.warn(f"startup testcase registry reset failed: {exc}", RuntimeWarning)
     durable_log_raw = str(_C.WORKER_QUEUE_DURABLE_LOG or "").strip()
     durable_log = (config.fs_manager.runtime_root / "worker-queue-events.jsonl").resolve()
     if durable_log_raw:

@@ -57,8 +57,8 @@ class Judgehost:
         self._dispatch = DispatchHandler(self._state, self._core, self._queue, self._result, self._toolkit)
         self._enqueue = TaskEnqueue(self._state, self._core, self._dispatch, self._toolkit)
         self._terminal_cleanup = JudgehostTerminalCleanup(
-            self._state.task_store,
-            self._state.judgehost_state_store,
+            self._state.task_registry,
+            self._state.job_scheduler,
         )
         self._state.touch_verification_runtime = self._terminal_cleanup.touch
         self.apply_runtime_values(constants)
@@ -128,12 +128,6 @@ class Judgehost:
     def domjudge_runs_with_leased_cases(self, *args, **kwargs):
         return self._queue.domjudge_runs_with_leased_cases(*args, **kwargs)
 
-    def fetch_work(self, *args, **kwargs):
-        return self._queue.fetch_work(*args, **kwargs)
-
-    def renew_lease(self, *args, **kwargs):
-        return self._queue.renew_lease(*args, **kwargs)
-
     def report_result(self, *args, **kwargs):
         return self._queue.report_result(*args, **kwargs)
 
@@ -190,9 +184,6 @@ class Judgehost:
 
     def resolve_artifact_blob(self, *args, **kwargs):
         return self._toolkit.resolve_artifact_blob(*args, **kwargs)
-
-    def clear_testcase_registry(self, *args, **kwargs):
-        return self._toolkit.clear_testcase_registry(*args, **kwargs)
 
     def domjudge_config(self, *args, **kwargs):
         return self._toolkit.config(*args, **kwargs)
@@ -280,6 +271,7 @@ class Judgehost:
             task_kind=str(task_kind or ""),
             force_recompile=bool(force_recompile),
             prepared_payload=None if prepared_payload is None else dict(prepared_payload),
+            service_class="foreground",
         )
         return self.wait_for_task(task_id, timeout_sec=None)
 
@@ -318,7 +310,7 @@ class Judgehost:
         return self.wait_for_task_result(task_id, timeout_sec=None)
 
     def domjudge_case_output_for_task(self, task_id: str, test_name: str) -> tuple[str, Path | None, int]:
-        row = self._state.judgehost_state_store.case_output_for_task(task_id, test_name)
+        row = self._state.job_scheduler.case_output_for_task(task_id, test_name)
         if row is None:
             return ("", None, 0)
         work_root = str(row["work_root"])
@@ -329,7 +321,7 @@ class Judgehost:
         return (output_ref, Path(work_root).resolve(), case_id)
 
     def domjudge_case_feedback_blob_for_task(self, task_id: str, test_name: str) -> bytes | None:
-        row = self._state.judgehost_state_store.case_for_task(task_id, test_name)
+        row = self._state.job_scheduler.case_for_task(task_id, test_name)
         if row is None:
             return None
         output_diff_ref = str(row["output_diff_rel"] or "")
@@ -341,12 +333,10 @@ class Judgehost:
         return self.resolve_artifact_blob(output_diff_ref)
 
     def reset_runtime_state(self) -> None:
-        self._state.task_store.reset()
+        self._state.task_registry.reset()
         with self._state.state_lock:
             self._state.hosts_state.clear()
             self._state.peer_hostname_by_client_addr.clear()
             self._state.host_judged_case_events.clear()
             self._state.host_last_judging.clear()
-        with self._state.testcase_registry_lock:
-            self._state.testcase_registry_by_hash.clear()
-        self._state.judgehost_state_store.reset()
+        self._state.job_scheduler.reset()

@@ -9,13 +9,13 @@ from typing import Callable
 from app.db import DB
 from app.runtime_value import RuntimeValues
 from app.service.disk.verification_store import VerificationStore
-from app.service.memory.judgehost_state_store import JudgehostStateStore
 from app.service.platform.fs.layout import FsManager
 from app.service.platform.judge_fs_index import JudgeFsIndexService
 from app.service.repository.workspace import WorkspaceService
 from app.service.verification.task_store import VerificationTaskStore
 
-from .task_store import JudgehostTaskStore
+from .task_registry import JudgehostTaskRegistry
+from .job_scheduler import JobScheduler
 
 
 @dataclass
@@ -30,14 +30,11 @@ class JudgehostState:
 
     lock: threading.Lock = field(default_factory=threading.Lock)
     state_lock: threading.RLock = field(default_factory=threading.RLock)
-    testcase_registry_lock: threading.RLock = field(default_factory=threading.RLock)
-    lease_requeue_lock: threading.Lock = field(default_factory=threading.Lock)
 
     enabled: bool = False
     api_token: str = ""
     api_username: str = "judgehost"
-    fetch_batch_size: int = 1
-    lease_sec: int = 120
+    fetch_batch_size: int = 2
     wait_timeout_sec: int = 900
     wait_poll_sec: float = 0.5
     online_window_sec: int = 120
@@ -46,8 +43,7 @@ class JudgehostState:
     include_build_payload: bool = True
     max_binary_payload_bytes: int = 8388608
 
-    lease_requeue_next_ts: float = 0.0
-    task_store: JudgehostTaskStore = field(init=False)
+    task_registry: JudgehostTaskRegistry = field(init=False)
     touch_verification_runtime: Callable[[str], None] = field(
         init=False,
         default=lambda _verification_id: None,
@@ -56,10 +52,8 @@ class JudgehostState:
     peer_hostname_by_client_addr: dict[str, str] = field(default_factory=dict)
     host_judged_case_events: dict[str, deque[float]] = field(default_factory=dict)
     host_last_judging: dict[str, dict[str, str]] = field(default_factory=dict)
-    testcase_registry_by_hash: dict[str, dict[str, object]] = field(default_factory=dict)
-
-    judgehost_state_store: JudgehostStateStore = field(default_factory=JudgehostStateStore)
+    job_scheduler: JobScheduler = field(default_factory=JobScheduler)
 
     def __post_init__(self) -> None:
         self.verification_store = VerificationStore(self.db)
-        self.task_store = JudgehostTaskStore()
+        self.task_registry = JudgehostTaskRegistry()

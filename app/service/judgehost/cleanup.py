@@ -5,11 +5,13 @@ import threading
 import time
 from typing import Protocol
 
-from .task_store import JudgehostTaskStore
+from .task_registry import JudgehostTaskRegistry
 
 
 class _RuntimeCaseStore(Protocol):
     def forget_runs(self, run_ids: list[str]) -> int: ...
+
+    def forget_scope(self, verification_id: str) -> None: ...
 
 
 class JudgehostTerminalCleanup:
@@ -24,13 +26,13 @@ class JudgehostTerminalCleanup:
 
     def __init__(
         self,
-        task_store: JudgehostTaskStore,
-        state_store: _RuntimeCaseStore,
+        task_registry: JudgehostTaskRegistry,
+        case_store: _RuntimeCaseStore,
         *,
         quiet_sec: float = 60.0,
     ) -> None:
-        self._task_store = task_store
-        self._state_store = state_store
+        self._task_registry = task_registry
+        self._case_store = case_store
         self._quiet_sec = max(1.0, float(quiet_sec))
         self._condition = threading.Condition(threading.Lock())
         self._deadlines: list[tuple[float, int, str]] = []
@@ -91,12 +93,13 @@ class JudgehostTerminalCleanup:
                 and self._generation_by_verification.get(verification_id) != expected_generation
             ):
                 return True
-            rows = self._task_store.terminal_tasks_for_verification(verification_id)
+            rows = self._task_registry.terminal_tasks_for_verification(verification_id)
             if rows is None:
                 return False
             run_ids = [str(row["run_id"]) for row in rows]
-            self._state_store.forget_runs(run_ids)
+            self._case_store.forget_runs(run_ids)
+            self._case_store.forget_scope(verification_id)
             for row in rows:
-                self._task_store.remove(str(row["id"]))
+                self._task_registry.remove(str(row["id"]))
             self._generation_by_verification.pop(verification_id, None)
         return True

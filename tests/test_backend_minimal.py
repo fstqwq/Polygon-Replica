@@ -64,10 +64,7 @@ class TestBackendMinimal(SmokeBase):
         runtime_file.write_text("ok\n", encoding="utf-8")
         durable_log.write_text("event\n", encoding="utf-8")
 
-        with (
-            patch.object(config.judge_fs_index_service, "clear_all", return_value=None),
-            patch.object(config.judgehost_task_service, "clear_testcase_registry", return_value=None),
-        ):
+        with patch.object(config.judge_fs_index_service, "clear_all", return_value=None):
             _startup_clear_all_caches()
 
         self.assertTrue(config.fs_manager.cache_artifacts_root.exists())

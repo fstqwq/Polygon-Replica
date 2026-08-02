@@ -5,14 +5,12 @@ import tempfile
 import threading
 import time
 import unittest
-import uuid
 from pathlib import Path
 from unittest.mock import patch
 
 from app.service.judgehost.api import Judgehost
-from app.service.memory.judgehost_state_store import JudgehostCaseRow
-from app.service.memory.judgehost_state_store import JudgehostJobRow
-from app.service.memory.judgehost_state_store import JudgehostStateStore
+from app.service.judgehost.job_scheduler import JobScheduler
+from app.service.judgehost.job_scheduler_models import JobSpec, JudgehostCaseRow, JudgehostJobRow
 from app.service.platform.rwlock import WriterPriorityRWLock
 
 from .common import SmokeBase, config
@@ -35,6 +33,7 @@ def _case_row(
         "run_id": run_id,
         "test_name": test_name,
         "ordinal": ordinal,
+        "scope_sequence": 1,
         "testcase_id": None,
         "testcase_hash": _HASH,
         "testcase_input_hash": _HASH,
@@ -46,7 +45,7 @@ def _case_row(
 
 
 def _create_job(
-    store: JudgehostStateStore,
+    store: JobScheduler,
     *,
     task_id: str,
     run_id: str,
@@ -58,7 +57,6 @@ def _create_job(
         task_id=task_id,
         run_id=run_id,
         group_key=group_key,
-        submit_id=f"pending-{uuid.uuid4().hex}",
         contest_id="default",
         mode="pass-fail",
         source_name="solution.cpp",
@@ -74,8 +72,8 @@ def _create_job(
         expected_behavior="accepted",
         verification_source="run.execute",
         force_recompile=0,
-        lease_owner="",
-        status="queued",
+        service_class="background",
+        job_spec=JobSpec(),
         created_at=_NOW,
         case_rows=case_rows,
     )
@@ -83,7 +81,7 @@ def _create_job(
 
 class TestJudgehostStateLifecycle(unittest.TestCase):
     def setUp(self) -> None:
-        self.store = JudgehostStateStore(id_base=100)
+        self.store = JobScheduler(id_base=100)
 
     def test_append_and_finalization_claim_are_serializable(self) -> None:
         append_first_job = _create_job(
@@ -93,12 +91,15 @@ class TestJudgehostStateLifecycle(unittest.TestCase):
             work_root="/tmp/append-first",
             case_rows=[_case_row("task-append-first", "run-append-first", "001.in", 1, status="reported")],
         )
+        later_case = _case_row("task-later", "run-later", "002.in", 1)
+        later_case.pop("scope_sequence")
         appended = self.store.append_cases_to_job(
             job_id=append_first_job,
-            case_rows=[_case_row("task-later", "run-later", "002.in", 1)],
+            case_rows=[later_case],
             now_text=_NOW,
         )
         self.assertEqual(appended["outcome"], "appended")
+        self.assertEqual(self.store.cases_for_task("task-later")[0]["scope_sequence"], 1)
         self.assertIsNone(self.store.claim_job_finalization(append_first_job, now_text=_NOW))
 
         claim_first_job = _create_job(
@@ -106,9 +107,12 @@ class TestJudgehostStateLifecycle(unittest.TestCase):
             task_id="task-claim-first",
             run_id="run-claim-first",
             work_root="/tmp/claim-first",
+            group_key="claim-group",
             case_rows=[_case_row("task-claim-first", "run-claim-first", "001.in", 1, status="reported")],
         )
+        self.assertEqual(self.store.job_for_group_key("claim-group")["job_id"], claim_first_job)
         self.assertIsNotNone(self.store.claim_job_finalization(claim_first_job, now_text=_NOW))
+        self.assertIsNone(self.store.job_for_group_key("claim-group"))
         closed = self.store.append_cases_to_job(
             job_id=claim_first_job,
             case_rows=[_case_row("task-too-late", "run-too-late", "002.in", 1)],
@@ -145,6 +149,13 @@ class TestJudgehostStateLifecycle(unittest.TestCase):
             now_text=_NOW,
         )
         self.assertEqual(duplicate["outcome"], "duplicate")
+        reordered = _case_row("task-first-job", "run-first-job", "001.in", 2)
+        with self.assertRaisesRegex(RuntimeError, "case set is immutable"):
+            self.store.append_cases_to_job(
+                job_id=first_job,
+                case_rows=[reordered],
+                now_text=_NOW,
+            )
         with self.assertRaisesRegex(RuntimeError, "case set is immutable"):
             self.store.append_cases_to_job(
                 job_id=first_job,
@@ -154,31 +165,6 @@ class TestJudgehostStateLifecycle(unittest.TestCase):
                 ],
                 now_text=_NOW,
             )
-
-    def test_append_does_not_scan_existing_job_cases(self) -> None:
-        job_id = _create_job(
-            self.store,
-            task_id="task-first",
-            run_id="run-first",
-            work_root="/tmp/append-linear",
-            case_rows=[_case_row("task-first", "run-first", "001.in", 1)],
-        )
-
-        class _NoIterationList(list[int]):
-            def __iter__(self):
-                raise AssertionError("existing job cases were scanned")
-
-        self.store._case_ids_by_job[job_id] = _NoIterationList(
-            self.store._case_ids_by_job[job_id]
-        )
-        result = self.store.append_cases_to_job(
-            job_id=job_id,
-            case_rows=[_case_row("task-second", "run-second", "002.in", 1)],
-            now_text=_NOW,
-        )
-
-        self.assertEqual(result["outcome"], "appended")
-        self.assertEqual(self.store._next_case_ordinal_by_job[job_id], 3)
 
     def test_forget_runs_filters_case_lists_without_repeated_remove(self) -> None:
         job_id = _create_job(
@@ -208,7 +194,7 @@ class TestJudgehostStateLifecycle(unittest.TestCase):
 
     def test_append_and_claim_race_has_one_serializable_winner(self) -> None:
         for sequence in range(20):
-            store = JudgehostStateStore(id_base=1000 + sequence * 10)
+            store = JobScheduler(id_base=1000 + sequence * 10)
             job_id = _create_job(
                 store,
                 task_id=f"task-race-{sequence}",
@@ -396,8 +382,8 @@ class TestJudgehostLifecycle(SmokeBase):
         return root
 
     @staticmethod
-    def _add_task(service: Judgehost, task_id: str, run_id: str, *, lease_owner: str) -> None:
-        service.state.task_store.insert(
+    def _add_task(service: Judgehost, task_id: str, run_id: str) -> None:
+        service.state.task_registry.insert(
             {
                 "id": task_id,
                 "run_id": run_id,
@@ -415,12 +401,9 @@ class TestJudgehostLifecycle(SmokeBase):
                 "result": {},
                 "persist_verification_run": False,
                 "error_text": "",
-                "lease_owner": lease_owner,
-                "lease_expires_at": "",
                 "created_at": _NOW,
                 "updated_at": _NOW,
                 "completed_at": "",
-                "attempt_count": 1,
                 "summary": {
                     "source": "solutions/ac.cpp",
                     "tests": [],
@@ -432,12 +415,12 @@ class TestJudgehostLifecycle(SmokeBase):
 
     @staticmethod
     def _task(service: Judgehost, task_id: str) -> dict[str, object]:
-        row = service.state.task_store.get(task_id)
+        row = service.state.task_registry.get(task_id)
         assert row is not None
         return row
 
     @staticmethod
-    def _report_case(store: JudgehostStateStore, case_id: int, hostname: str) -> bool:
+    def _report_case(store: JobScheduler, case_id: int, hostname: str) -> bool:
         return store.report_case_result(
             case_id,
             lease_owner=hostname,
@@ -459,9 +442,9 @@ class TestJudgehostLifecycle(SmokeBase):
 
     def test_task_waits_for_all_own_cases_before_job_cleanup(self) -> None:
         service = self._service()
-        store = service.state.judgehost_state_store
+        store = service.state.job_scheduler
         task_id, run_id = "task-two-cases", "run-two-cases"
-        self._add_task(service, task_id, run_id, lease_owner="host-a")
+        self._add_task(service, task_id, run_id)
         work_root = self._work_root()
         job_id = _create_job(
             store,
@@ -486,7 +469,7 @@ class TestJudgehostLifecycle(SmokeBase):
         self.assertTrue(self._report_case(store, int(cases[0]["id"]), "host-a"))
         service.result._domjudge_finalize_if_ready(job_id)
         self.assertEqual(self._task(service, task_id)["status"], service.STATUS_LEASED)
-        self.assertEqual(store.fetch_job(job_id)["status"], "leased")
+        self.assertEqual(store.fetch_job(job_id)["status"], "open")
         self.assertTrue(work_root.is_dir())
 
         self.assertTrue(self._report_case(store, int(cases[1]["id"]), "host-a"))
@@ -497,11 +480,11 @@ class TestJudgehostLifecycle(SmokeBase):
 
     def test_grouped_job_finalizes_each_task_once_across_hosts(self) -> None:
         service = self._service()
-        store = service.state.judgehost_state_store
+        store = service.state.job_scheduler
         first_task, first_run = "task-group-a", "run-group-a"
         second_task, second_run = "task-group-b", "run-group-b"
-        self._add_task(service, first_task, first_run, lease_owner="host-a")
-        self._add_task(service, second_task, second_run, lease_owner="host-b")
+        self._add_task(service, first_task, first_run)
+        self._add_task(service, second_task, second_run)
         work_root = self._work_root()
         job_id = _create_job(
             store,
@@ -517,6 +500,9 @@ class TestJudgehostLifecycle(SmokeBase):
             now_text=_NOW,
         )
         self.assertEqual(appended["outcome"], "appended")
+        self.assertTrue(store.activate_task_cases(second_task, now_text=_NOW))
+        second_case_id = int(store.cases_for_task(second_task)[0]["id"])
+        self.assertEqual(store.mark_cache_misses([second_case_id], now_text=_NOW), 1)
         self.assertEqual(store.job_for_task(second_task)["job_id"], job_id)
         store.record_compile_result(
             job_id,
@@ -528,10 +514,9 @@ class TestJudgehostLifecycle(SmokeBase):
         )
         first_case = store.lease_cases(job_id, hostname="host-a", limit=1, now_text=_NOW)[0]
         second_case = store.lease_cases(job_id, hostname="host-b", limit=1, now_text=_NOW)[0]
-        service.state.task_store.update(second_task, {"lease_expires_at": "2000-01-01T00:00:00+00:00"})
-        service.queue._requeue_expired_leases(force=True)
+        self.assertEqual(store.case_execution_row(int(first_case["id"]))["run_id"], first_run)
+        self.assertEqual(store.case_execution_row(int(second_case["id"]))["run_id"], second_run)
         self.assertEqual(self._task(service, second_task)["status"], service.STATUS_LEASED)
-        self.assertEqual(self._task(service, second_task)["lease_owner"], "host-b")
 
         published: list[tuple[str, str]] = []
         original_publish = service.result._publish_verification_case_result
@@ -559,7 +544,7 @@ class TestJudgehostLifecycle(SmokeBase):
             self.assertEqual(self._task(service, first_task)["status"], service.STATUS_COMPLETED)
             self.assertEqual(self._task(service, second_task)["status"], service.STATUS_LEASED)
             self.assertTrue(work_root.exists())
-            self.assertIsNotNone(service.state.task_store.get(first_task))
+            self.assertIsNotNone(service.state.task_registry.get(first_task))
 
             self.assertTrue(self._report_case(store, int(second_case["id"]), "host-b"))
             service.result._domjudge_publish_reported_case(
@@ -581,8 +566,6 @@ class TestJudgehostLifecycle(SmokeBase):
                 if self._task(service, task_id)["status"] == service.STATUS_COMPLETED
             },
         )
-        self.assertEqual(self._task(service, first_task)["lease_owner"], "")
-        self.assertEqual(self._task(service, second_task)["lease_owner"], "")
         self.assertNotIn("internal-finalizer", service.state.hosts_state)
         self.assertTrue({(first_task, "001.in"), (second_task, "002.in")}.issubset(set(published)))
         self.assertEqual(store.fetch_job(job_id)["status"], "completed")
@@ -590,9 +573,9 @@ class TestJudgehostLifecycle(SmokeBase):
 
     def test_finalizing_job_retries_incomplete_steps_before_cleanup(self) -> None:
         service = self._service()
-        store = service.state.judgehost_state_store
+        store = service.state.job_scheduler
         task_id, run_id = "task-finalize-retry", "run-finalize-retry"
-        self._add_task(service, task_id, run_id, lease_owner="host-a")
+        self._add_task(service, task_id, run_id)
         work_root = self._work_root()
         job_id = _create_job(
             store,
@@ -639,9 +622,9 @@ class TestJudgehostLifecycle(SmokeBase):
         for scenario in ("cache", "compile-failure", "cancel"):
             with self.subTest(scenario=scenario):
                 service = self._service()
-                store = service.state.judgehost_state_store
+                store = service.state.job_scheduler
                 task_id, run_id = f"task-{scenario}", f"run-{scenario}"
-                self._add_task(service, task_id, run_id, lease_owner="host-a")
+                self._add_task(service, task_id, run_id)
                 work_root = self._work_root()
                 job_id = _create_job(
                     store,
@@ -649,7 +632,13 @@ class TestJudgehostLifecycle(SmokeBase):
                     run_id=run_id,
                     work_root=str(work_root),
                     case_rows=[
-                        _case_row(task_id, run_id, "001.in", 1),
+                        _case_row(
+                            task_id,
+                            run_id,
+                            "001.in",
+                            1,
+                            status="cache-pending" if scenario == "cache" else "pending",
+                        ),
                         *(
                             [_case_row(task_id, run_id, "002.in", 2)]
                             if scenario == "cancel"
@@ -768,8 +757,8 @@ class TestJudgehostLifecycle(SmokeBase):
                 "_domjudge_precomputed_fields_from_payload",
                 return_value={"run_config": {"pass_limit": 1}},
             ),
-            patch.object(service.toolkit, "group_key", return_value=""),
-            patch.object(service.dispatch, "_domjudge_try_prequeue_cache_finalize", return_value=None),
+            patch.object(service.dispatch, "stage_task", return_value=123),
+            patch.object(service.state.job_scheduler, "activate_task_cases", return_value=1),
         ):
             task_id = service.enqueue_task(**args)
             self.assertEqual(service.enqueue_task(**args), task_id)

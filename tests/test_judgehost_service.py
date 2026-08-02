@@ -27,7 +27,8 @@ from starlette.formparsers import MultiPartParser
 
 from app.impl.workspace.verification_dag import _prepared_payload_for_uploaded_source
 from app.impl.workspace.verification_dag_plan import VerificationTestPlan
-from app.service.memory.judgehost_state_store import JudgehostStateStore
+from app.service.judgehost.job_scheduler import JobScheduler
+from app.service.judgehost.job_scheduler_models import JobSpec
 from app.service.judgehost.api import Judgehost
 from app.service.judgehost.runtime import domjudge_rewrite_untrusted_runresult
 from app.service.platform.hashing import domjudge_executable_hash
@@ -64,7 +65,7 @@ class TestJudgehostService(SmokeBase):
             return None
         safe_verification_id = str(verification_id or "").strip()
         service = config.judgehost_task_service
-        task_row = service.state.task_store.get_for_run(safe_run_id)
+        task_row = service.state.task_registry.get_for_run(safe_run_id)
         if task_row is not None and safe_verification_id:
             if str(task_row.get("verification_id") or "") != safe_verification_id:
                 task_row = None
@@ -345,7 +346,7 @@ class TestJudgehostService(SmokeBase):
         service.reset_runtime_state()
 
     def _lease_only_case(self, service, job_id: int, hostname: str) -> int:
-        rows = service.state.judgehost_state_store.lease_cases(
+        rows = service.state.job_scheduler.lease_cases(
             job_id,
             hostname=hostname,
             limit=1,
@@ -353,6 +354,47 @@ class TestJudgehostService(SmokeBase):
         )
         self.assertEqual(len(rows), 1)
         return int(rows[0]["id"])
+
+    @staticmethod
+    def _insert_task_receipt(
+        service,
+        *,
+        task_id: str,
+        run_id: str,
+        verification_id: str,
+        task_kind: str = "main-correct",
+    ) -> None:
+        service.state.task_registry.insert(
+            {
+                "id": task_id,
+                "run_id": run_id,
+                "problem_slug": "owner/problem",
+                "username": "owner",
+                "artifact_verification_id": verification_id,
+                "verification_id": verification_id,
+                "mode": "pass-fail",
+                "status": service.STATUS_LEASED,
+                "payload": {
+                    "task_kind": task_kind,
+                    "verification_source": "run.execute",
+                    "source_path": "solutions/std.cpp",
+                },
+                "result": {},
+                "persist_verification_run": False,
+                "error_text": "",
+                "created_at": "2026-04-14T00:00:00+00:00",
+                "updated_at": "2026-04-14T00:00:00+00:00",
+                "completed_at": "",
+                "summary": {
+                    "mode": "pass-fail",
+                    "source": "solutions/std.cpp",
+                    "tests": [],
+                    "compile_diagnostics": [],
+                    "error": "",
+                },
+                "enqueue_fingerprint": "",
+            }
+        )
 
     def test_domjudge_executable_hash_uses_md5_contract(self) -> None:
         files: list[tuple[str, bytes, bool]] = [
@@ -371,12 +413,11 @@ class TestJudgehostService(SmokeBase):
         self.assertRegex(got, r"^[0-9a-f]{32}$")
 
     def test_domjudge_state_store_seeds_ids_above_process_base(self) -> None:
-        store = JudgehostStateStore(id_base=123456)
+        store = JobScheduler(id_base=123456)
         job_id = store.create_job_with_cases(
             task_id=f"jt-id-base-{uuid.uuid4().hex[:8]}",
             run_id=f"r-id-base-{uuid.uuid4().hex[:8]}",
             group_key="",
-            submit_id="seed-submit",
             contest_id="local",
             mode="pass-fail",
             source_name="main.cpp",
@@ -392,8 +433,8 @@ class TestJudgehostService(SmokeBase):
             expected_behavior="accepted",
             verification_source="run.execute",
             force_recompile=0,
-            lease_owner="judgehost-id-base",
-            status="leased",
+            service_class="background",
+            job_spec=JobSpec(),
             created_at="2026-05-08T00:00:00+00:00",
             case_rows=[
                 {
@@ -426,7 +467,7 @@ class TestJudgehostService(SmokeBase):
         service.state.enabled = True
         service.state.api_token = "host-shape-token"
 
-        service.fetch_work("judgehost-shape-check")
+        service.domjudge_register_host("judgehost-shape-check")
         before = service.status()
         before_hosts = before.get("hosts") if isinstance(before, dict) else []
         self.assertTrue(any(str(item.get("hostname") or "") == "judgehost-shape-check" for item in before_hosts))
@@ -439,213 +480,6 @@ class TestJudgehostService(SmokeBase):
         host = next((item for item in after_hosts if str(item.get("hostname") or "") == "judgehost-shape-check"), None)
         self.assertIsNotNone(host)
         self.assertFalse(bool(host.get("enabled")))
-
-    def test_report_result_tolerates_non_dict_cached_summary(self) -> None:
-        service = config.judgehost_task_service
-        self._reset_task_queue_state(service)
-        verification_id = f"ver-jh-nondict-summary-{uuid.uuid4().hex[:8]}"
-        run_id = f"r-jh-nondict-summary-{uuid.uuid4().hex[:8]}"
-        self._seed_build_verification(verification_id)
-
-        task_id = service.enqueue_task(
-            problem=self.problem,
-            username=self.user,
-            artifact_verification_id=verification_id,
-            mode="pass-fail",
-            submission_path="solutions/ac.cpp",
-            upload_content=None,
-            upload_filename=None,
-            run_id=run_id,
-            selected_tests=["001.in"],
-            verification_id=verification_id,
-            verification_run_ids=[run_id],
-            expected_behavior="accepted",
-            verification_source="run.execute",
-        )
-        fetched = service.fetch_work("judgehost-nondict-summary")
-        self.assertEqual(len(fetched), 1)
-        row = service.core.task_by_id(task_id)
-        self.assertIsNotNone(row)
-        assert row is not None
-        row["summary"] = "corrupted"
-
-        result = service.report_result(
-            task_id=task_id,
-            hostname="judgehost-nondict-summary",
-            payload={
-                "run_status": "ok",
-                "summary": {
-                    "mode": "pass-fail",
-                    "source": "solutions/ac.cpp",
-                    "tests": [],
-                },
-            },
-        )
-        self.assertEqual(str(result.get("status") or ""), "ok")
-
-    def test_report_result_is_idempotent_after_terminal_state(self) -> None:
-        service = config.judgehost_task_service
-        self._reset_task_queue_state(service)
-        verification_id = f"ver-jh-idempotent-report-{uuid.uuid4().hex[:8]}"
-        run_id = f"r-jh-idempotent-report-{uuid.uuid4().hex[:8]}"
-        self._seed_build_verification(verification_id)
-
-        task_id = service.enqueue_task(
-            problem=self.problem,
-            username=self.user,
-            artifact_verification_id=verification_id,
-            mode="pass-fail",
-            submission_path="solutions/ac.cpp",
-            upload_content=None,
-            upload_filename=None,
-            run_id=run_id,
-            selected_tests=["001.in"],
-            verification_id=verification_id,
-            verification_run_ids=[run_id],
-            expected_behavior="accepted",
-            verification_source="run.execute",
-        )
-        service.fetch_work("judgehost-idempotent-report")
-        first = service.report_result(
-            task_id=task_id,
-            hostname="judgehost-idempotent-report",
-            payload={
-                "run_status": "ok",
-                "summary": {
-                    "mode": "pass-fail",
-                    "source": "solutions/ac.cpp",
-                    "tests": [],
-                },
-            },
-        )
-        second = service.report_result(
-            task_id=task_id,
-            hostname="judgehost-idempotent-report",
-            payload={
-                "run_status": "failed",
-                "error": "duplicate stale report",
-                "summary": {"error": "duplicate stale report"},
-            },
-        )
-
-        self.assertEqual(str(first.get("status") or ""), "ok")
-        self.assertEqual(str(second.get("status") or ""), "ok")
-        row = service.state.task_store.get(task_id)
-        self.assertIsNotNone(row)
-        assert row is not None
-        self.assertEqual(str(row.get("status") or ""), service.STATUS_COMPLETED)
-        self.assertEqual(str(row.get("error_text") or ""), "")
-
-    def test_domjudge_prepare_job_compacts_retained_payload(self) -> None:
-        service = config.judgehost_task_service
-        self._reset_task_queue_state(service)
-        verification_id = f"ver-jh-compact-payload-{uuid.uuid4().hex[:8]}"
-        run_id = f"r-jh-compact-payload-{uuid.uuid4().hex[:8]}"
-        host = "judgehost-compact-payload"
-        self._seed_build_verification(verification_id)
-        self._seed_verification_test_artifacts(
-            verification_id,
-            [("001.in", "large input\n" * 128, "large answer\n" * 128)],
-        )
-
-        with patch.object(service.dispatch, "_domjudge_try_prequeue_cache_finalize", lambda *args, **kwargs: None):
-            task_id = service.enqueue_task(
-                problem=self.problem,
-                username=self.user,
-                artifact_verification_id=verification_id,
-                mode="pass-fail",
-                submission_path="solutions/ac.cpp",
-                upload_content=None,
-                upload_filename=None,
-                run_id=run_id,
-                selected_tests=["001.in"],
-                verification_id=verification_id,
-                verification_run_ids=[run_id],
-                expected_behavior="accepted",
-                verification_source="run.execute",
-            )
-
-        row = service.state.task_store.get(task_id)
-        self.assertIsNotNone(row)
-        assert row is not None
-        payload = dict(row.get("payload") or {})
-        self.assertIn("source_b64", payload)
-        self.assertIn("domjudge_precomputed", payload)
-        verification_payload = dict(payload.get("verification_payload") or {})
-        self.assertIn("binaries_b64", verification_payload)
-        original_tests = list(verification_payload.get("tests") or [])
-        self.assertEqual(len(original_tests), 1)
-        self.assertIn("input_b64", dict(original_tests[0]))
-
-        leased = service.fetch_work(host)
-        self.assertEqual(len(leased), 1)
-        job_id = service.dispatch._domjudge_prepare_job(host, leased[0])
-        self.assertGreater(job_id, 0)
-
-        row = service.state.task_store.get(task_id)
-        self.assertIsNotNone(row)
-        assert row is not None
-        retained_payload = dict(row.get("payload") or {})
-        self.assertNotIn("source_b64", retained_payload)
-        self.assertNotIn("domjudge_precomputed", retained_payload)
-        retained_verification_payload = dict(retained_payload.get("verification_payload") or {})
-        self.assertNotIn("binaries_b64", retained_verification_payload)
-        self.assertNotIn("sources_b64", retained_verification_payload)
-        retained_tests = list(retained_verification_payload.get("tests") or [])
-        self.assertEqual([dict(item).get("name") for item in retained_tests], ["001.in"])
-        self.assertNotIn("input_b64", dict(retained_tests[0]))
-        self.assertNotIn("answer_b64", dict(retained_tests[0]))
-
-    def test_report_result_compacts_payload_and_report_body(self) -> None:
-        service = config.judgehost_task_service
-        self._reset_task_queue_state(service)
-        verification_id = f"ver-jh-compact-report-{uuid.uuid4().hex[:8]}"
-        run_id = f"r-jh-compact-report-{uuid.uuid4().hex[:8]}"
-        host = "judgehost-compact-report"
-        self._seed_build_verification(verification_id)
-
-        with patch.object(service.dispatch, "_domjudge_try_prequeue_cache_finalize", lambda *args, **kwargs: None):
-            task_id = service.enqueue_task(
-                problem=self.problem,
-                username=self.user,
-                artifact_verification_id=verification_id,
-                mode="pass-fail",
-                submission_path="solutions/ac.cpp",
-                upload_content=None,
-                upload_filename=None,
-                run_id=run_id,
-                selected_tests=["001.in"],
-                verification_id=verification_id,
-                verification_run_ids=[run_id],
-                expected_behavior="accepted",
-                verification_source="run.execute",
-            )
-
-        leased = service.fetch_work(host)
-        self.assertEqual(len(leased), 1)
-        service.report_result(
-            task_id=task_id,
-            hostname=host,
-            payload={
-                "run_status": "ok",
-                "large_blob": "x" * 10000,
-                "summary": {
-                    "mode": "pass-fail",
-                    "source": "solutions/ac.cpp",
-                    "tests": [],
-                },
-            },
-        )
-
-        row = service.state.task_store.get(task_id)
-        self.assertIsNotNone(row)
-        assert row is not None
-        retained_payload = dict(row.get("payload") or {})
-        self.assertNotIn("source_b64", retained_payload)
-        self.assertNotIn("domjudge_precomputed", retained_payload)
-        retained_result = dict(row.get("result") or {})
-        self.assertEqual(str(retained_result.get("run_status") or ""), "ok")
-        self.assertNotIn("large_blob", retained_result)
 
     def test_domjudge_work_root_uses_transient_cache_root(self) -> None:
         service = config.judgehost_task_service
@@ -677,12 +511,12 @@ class TestJudgehostService(SmokeBase):
             verification_source="verification.start",
             persist_verification_run=False,
         )
-        service.state.task_store.transition(
+        service.state.task_registry.transition(
             task_id,
             expected={service.STATUS_QUEUED},
             status=service.STATUS_REPORTING,
         )
-        service.state.task_store.transition(
+        service.state.task_registry.transition(
             task_id,
             expected={service.STATUS_REPORTING},
             status=service.STATUS_COMPLETED,
@@ -701,41 +535,6 @@ class TestJudgehostService(SmokeBase):
         self.assertEqual(str(result.get("artifact_path") or ""), "")
         self.assertFalse((self._verification_artifact_root(verification_id) / "runs" / run_id).exists())
 
-    def test_load_run_summary_falls_back_to_in_memory_task_without_recursing(self) -> None:
-        service = config.judgehost_task_service
-        self._reset_task_queue_state(service)
-        verification_id = f"b-jh-recursion-{uuid.uuid4().hex[:8]}"
-        run_id = f"r-jh-recursion-{uuid.uuid4().hex[:8]}"
-        verification_id = f"ver-jh-recursion-{uuid.uuid4().hex[:8]}"
-        self._seed_build_verification(verification_id)
-
-        task_id = service.enqueue_task(
-            problem=self.problem,
-            username=self.user,
-            artifact_verification_id=verification_id,
-            mode="pass-fail",
-            submission_path="solutions/ac.cpp",
-            upload_content=None,
-            upload_filename=None,
-            run_id=run_id,
-            selected_tests=["001.in"],
-            verification_id=verification_id,
-            verification_run_ids=[run_id],
-            expected_behavior="accepted",
-            verification_source="run.execute",
-            persist_verification_run=False,
-        )
-        fetched = service.fetch_work("judgehost-recursion")
-        self.assertEqual(len(fetched), 1)
-        self.assertEqual(str(fetched[0].get("task_id") or ""), task_id)
-
-        # No persisted verification run exists for this task; summary must come
-        # from the in-memory task row instead of recursively reloading itself.
-        summary = service.queue.load_run_summary(run_id, verification_id)
-        self.assertIsInstance(summary, dict)
-        self.assertEqual(str(summary.get("source") or ""), "solutions/ac.cpp")
-        self.assertEqual(str(summary.get("mode") or ""), "pass-fail")
-
     def test_judgehost_run_submission_uses_queue_service(self) -> None:
         service = config.judgehost_task_service
         with patch.object(service, "enabled", return_value=True), patch.object(
@@ -753,6 +552,50 @@ class TestJudgehostService(SmokeBase):
         self.assertEqual(run_id, "r-x")
         self.assertEqual(mocked_enqueue.call_count, 1)
         self.assertEqual(mocked_wait.call_count, 1)
+
+    def test_domjudge_fetch_uses_two_case_default_and_honors_explicit_one(self) -> None:
+        service = self._fresh_judgehost_service()
+        self.addCleanup(service.reset_runtime_state)
+        service.state.fetch_batch_size = 2
+        verification_id = f"b-jh-default-batch-{uuid.uuid4().hex[:8]}"
+        run_id = f"r-jh-default-batch-{uuid.uuid4().hex[:8]}"
+        self._seed_build_verification(verification_id)
+        self._seed_verification_test_artifacts(
+            verification_id,
+            [
+                ("001.in", "one\n", "one\n"),
+                ("002.in", "two\n", "two\n"),
+                ("003.in", "three\n", "three\n"),
+                ("004.in", "four\n", "four\n"),
+            ],
+        )
+        service.enqueue_task(
+            problem=self.problem,
+            username=self.user,
+            artifact_verification_id=verification_id,
+            mode="pass-fail",
+            submission_path="solutions/ac.cpp",
+            upload_content=None,
+            upload_filename=None,
+            run_id=run_id,
+            selected_tests=["001.in", "002.in", "003.in", "004.in"],
+            verification_id=f"inv-{verification_id}",
+            verification_run_ids=[run_id],
+            expected_behavior="accepted",
+            verification_source="run.execute",
+        )
+        host = "judgehost-default-batch"
+        service.domjudge_register_host(host)
+
+        leader = service.domjudge_fetch_work(host)
+        self.assertEqual(len(leader), 1)
+        service.domjudge_update_judging(
+            host,
+            int(leader[0]["judgetaskid"]),
+            {"compile_success": "1", "output_compile": "", "compile_metadata": ""},
+        )
+        self.assertEqual(len(service.domjudge_fetch_work(host, max_batchsize=1)), 1)
+        self.assertEqual(len(service.domjudge_fetch_work(host)), 2)
 
     def test_domjudge_endpoints_finalize_run(self) -> None:
         service = config.judgehost_task_service
@@ -1081,7 +924,7 @@ class TestJudgehostService(SmokeBase):
             case_id,
             {"compile_success": "1", "output_compile": "", "compile_metadata": ""},
         )
-        job_row = service.state.judgehost_state_store.job_for_task(task_id)
+        job_row = service.state.job_scheduler.job_for_task(task_id)
         self.assertIsNotNone(job_row)
         assert job_row is not None
         compare_hash = str(job_row["compare_hash"] or "")
@@ -1243,6 +1086,13 @@ class TestJudgehostService(SmokeBase):
 
         service.domjudge_register_host("judgehost-notrunc")
         rows = service.domjudge_fetch_work("judgehost-notrunc", max_batchsize=8)
+        self.assertEqual(len(rows), 1)
+        service.domjudge_update_judging(
+            "judgehost-notrunc",
+            int(rows[0]["judgetaskid"]),
+            {"compile_success": "1", "output_compile": "", "compile_metadata": ""},
+        )
+        rows += service.domjudge_fetch_work("judgehost-notrunc", max_batchsize=8)
         self.assertEqual(len(rows), 2)
         inputs_seen: set[str] = set()
         for row in rows:
@@ -1642,10 +1492,14 @@ class TestJudgehostService(SmokeBase):
         self.assertEqual(second_rows, [])
 
         job_row = judgehost_fetch_job(service, job_id)
+        case_row = judgehost_fetch_case(service, int(first["judgetaskid"]))
         self.assertIsNotNone(job_row)
-        assert job_row is not None
-        self.assertEqual(str(job_row["lease_owner"] or ""), "judgehost-reconnect")
-        self.assertEqual(str(job_row["status"] or ""), "leased")
+        self.assertIsNotNone(case_row)
+        assert job_row is not None and case_row is not None
+        self.assertEqual(str(job_row["compile_owner"] or ""), "judgehost-reconnect")
+        self.assertEqual(str(job_row["status"] or ""), "open")
+        self.assertEqual(str(case_row["lease_owner"] or ""), "judgehost-reconnect")
+        self.assertEqual(str(case_row["status"] or ""), "leased")
 
     def test_domjudge_fetch_work_refreshes_heartbeat_for_active_idle_job(self) -> None:
         service = config.judgehost_task_service
@@ -1690,7 +1544,7 @@ class TestJudgehostService(SmokeBase):
         self.assertTrue(host_rows[host].get("online"))
         self.assertEqual(host_rows[host].get("last_action"), "fetch")
 
-    def test_domjudge_fetch_work_skips_invalid_payload_task(self) -> None:
+    def test_enqueue_rejects_invalid_payload_before_scheduling(self) -> None:
         service = config.judgehost_task_service
         old_enabled = service.state.enabled
         old_token = service.state.api_token
@@ -1708,21 +1562,22 @@ class TestJudgehostService(SmokeBase):
         run_bad = f"r-jh-dom-bad-{uuid.uuid4().hex[:8]}"
         self._seed_build_verification(build_bad)
         service.state.include_build_payload = False
-        bad_task = service.enqueue_task(
-            problem=self.problem,
-            username=self.user,
-            artifact_verification_id=build_bad,
-            mode="pass-fail",
-            submission_path="solutions/ac.cpp",
-            upload_content=None,
-            upload_filename=None,
-            run_id=run_bad,
-            selected_tests=["001.in"],
-            verification_id="inv-domjudge-bad",
-            verification_run_ids=[run_bad],
-            expected_behavior="accepted",
-            verification_source="run.execute",
-        )
+        with self.assertRaisesRegex(RuntimeError, "no tests in judgehost payload"):
+            service.enqueue_task(
+                problem=self.problem,
+                username=self.user,
+                artifact_verification_id=build_bad,
+                mode="pass-fail",
+                submission_path="solutions/ac.cpp",
+                upload_content=None,
+                upload_filename=None,
+                run_id=run_bad,
+                selected_tests=["001.in"],
+                verification_id="inv-domjudge-bad",
+                verification_run_ids=[run_bad],
+                expected_behavior="accepted",
+                verification_source="run.execute",
+            )
 
         build_good = f"b-jh-dom-good-{uuid.uuid4().hex[:8]}"
         run_good = f"r-jh-dom-good-{uuid.uuid4().hex[:8]}"
@@ -1749,14 +1604,10 @@ class TestJudgehostService(SmokeBase):
         self.assertTrue(tasks)
         self.assertEqual(str(tasks[0].get("uuid") or ""), good_task)
 
-        bad_task_row = service.core.task_by_id(bad_task)
+        bad_task_row = service.state.task_registry.get_for_run(run_bad)
         self.assertIsNotNone(bad_task_row)
         self.assertEqual(str(bad_task_row.get("status") or ""), service.STATUS_FAILED)
         self.assertIn("no tests in judgehost payload", str(bad_task_row.get("error_text") or ""))
-
-        bad_run_row = self._verification_run_row(run_bad)
-        self.assertIsNotNone(bad_run_row)
-        self.assertEqual(str(bad_run_row["status"] or ""), "failed")
 
     def test_domjudge_reuses_cached_test_hash_but_exposes_real_test_number_as_testcase_id(self) -> None:
         service = config.judgehost_task_service
@@ -3355,31 +3206,53 @@ class TestJudgehostService(SmokeBase):
             },
         )
         self.assertEqual(service.wait_for_task(task_a, timeout_sec=2.0), run_a)
+        run_row_a = self._verification_run_row(run_a)
+        self.assertIsNotNone(run_row_a)
 
         run_b = f"r-jh-compile-only-extra-b-{uuid.uuid4().hex[:8]}"
-        task_b = service.enqueue_task(
-            problem=self.problem,
-            username=self.user,
-            artifact_verification_id=verification_id,
-            mode="pass-fail",
-            submission_path=None,
-            upload_content=b"int main(){return 0;}\n",
-            upload_filename="checker.cpp",
-            run_id=run_b,
-            selected_tests=[],
-            verification_id="inv-jh-compile-only-extra-b",
-            verification_run_ids=[run_b],
-            expected_behavior="compile",
-            verification_source="build.compile",
-            compile_only=True,
-            prepared_payload=prepared,
-        )
-        rows_b = service.domjudge_fetch_work(host, max_batchsize=16)
-        self.assertFalse(any((str(row.get("uuid") or "") == task_b for row in rows_b)))
+        with (
+            patch.object(
+                service.queue,
+                "poll_task_case_result",
+                side_effect=AssertionError("cache shortcut polled persisted case result"),
+            ),
+            patch.object(
+                service.toolkit,
+                "cache_get_with_blobs",
+                wraps=service.toolkit.cache_get_with_blobs,
+            ) as cache_bundle_read,
+            patch.object(
+                service.result,
+                "_domjudge_update_verification_run_case_progress_batch",
+                wraps=service.result._domjudge_update_verification_run_case_progress_batch,
+            ) as summary_update,
+        ):
+            task_b = service.enqueue_task(
+                problem=self.problem,
+                username=self.user,
+                artifact_verification_id=verification_id,
+                mode="pass-fail",
+                submission_path=None,
+                upload_content=b"int main(){return 0;}\n",
+                upload_filename="checker.cpp",
+                run_id=run_b,
+                selected_tests=[],
+                verification_id="inv-jh-compile-only-extra-b",
+                verification_run_ids=[run_b],
+                expected_behavior="compile",
+                verification_source="build.compile",
+                compile_only=True,
+                prepared_payload=prepared,
+            )
+            rows_b = service.domjudge_fetch_work(host, max_batchsize=16)
+            self.assertFalse(any((str(row.get("uuid") or "") == task_b for row in rows_b)))
+            self.assertEqual(cache_bundle_read.call_count, 1)
+            self.assertEqual(summary_update.call_count, 1)
         self.assertEqual(service.wait_for_task(task_b, timeout_sec=2.0), run_b)
         run_row_b = self._verification_run_row(run_b)
         self.assertIsNotNone(run_row_b)
         self.assertEqual(str(run_row_b["status"] or "").strip().lower(), "ok")
+        self.assertEqual(run_row_b["summary"]["tests"], run_row_a["summary"]["tests"])
 
     def test_domjudge_compile_only_cache_hit_without_build_payload_tests(self) -> None:
         service = config.judgehost_task_service
@@ -4398,6 +4271,7 @@ class TestJudgehostService(SmokeBase):
         self.assertAlmostEqual(float(run_config.get("time_limit") or 0.0), 6.0, places=3)
         self.assertAlmostEqual(float(run_config.get("overshoot") or 0.0), 0.0, places=3)
         self.assertEqual(int(run_config.get("memory_limit") or 0), 1024 * 1024)
+        self.assertEqual(int(run_config.get("process_limit") or 0), 1024)
         self.assertEqual(
             int(run_config.get("output_limit") or 0),
             int(getattr(service.state.constants, "RUN_EXEC_OUTPUT_KB", 65536) or 65536),
@@ -4625,7 +4499,7 @@ class TestJudgehostService(SmokeBase):
         run_config = json.loads(run_config_raw)
         self.assertEqual(int(run_config.get("pass_limit") or 0), 3)
 
-    def test_domjudge_prequeue_cache_consumes_per_case_and_leases_only_misses(self) -> None:
+    def test_domjudge_lazy_cache_consumes_per_case_and_leases_only_misses(self) -> None:
         service = config.judgehost_task_service
         old_enabled = service.state.enabled
         old_token = service.state.api_token
@@ -4712,10 +4586,16 @@ class TestJudgehostService(SmokeBase):
 
         rows = judgehost_cases_for_run(service, run_id_target)
         self.assertEqual(len(rows), 2)
+        self.assertEqual({str(row["status"]) for row in rows}, {"cache-pending"})
+
+        leased = service.domjudge_fetch_work("judgehost-partial-cache", max_batchsize=8)
+        self.assertEqual(len(leased), 1)
+
+        rows = judgehost_cases_for_run(service, run_id_target)
         self.assertEqual(str(rows[0]["test_name"] or ""), "001.in")
         self.assertEqual(str(rows[0]["status"] or ""), "reported")
         self.assertEqual(str(rows[1]["test_name"] or ""), "002.in")
-        self.assertEqual(str(rows[1]["status"] or ""), "pending")
+        self.assertEqual(str(rows[1]["status"] or ""), "leased")
         run_row = self._verification_run_row(run_id_target)
         self.assertIsNotNone(run_row)
         run_summary = dict(run_row["summary"])
@@ -4733,187 +4613,7 @@ class TestJudgehostService(SmokeBase):
         self.assertIsInstance(pass_rows, list)
         self.assertEqual(str((pass_rows[0] or {}).get("verdict") or ""), "OK")
         expected_case_id = int(rows[1]["id"])
-
-        leased = service.domjudge_fetch_work("judgehost-partial-cache", max_batchsize=8)
-        self.assertEqual(len(leased), 1)
         self.assertEqual(int(leased[0].get("judgetaskid") or 0), expected_case_id)
-
-    def test_enqueue_task_keeps_distinct_hidden_run_ids_within_one_verification(self) -> None:
-        service = config.judgehost_task_service
-        old_enabled = service.state.enabled
-        old_token = service.state.api_token
-        old_username = service.state.api_username
-        old_include_build_payload = service.state.include_build_payload
-        self.addCleanup(setattr, service.state, "enabled", old_enabled)
-        self.addCleanup(setattr, service.state, "api_token", old_token)
-        self.addCleanup(setattr, service.state, "api_username", old_username)
-        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
-        service.state.enabled = True
-        service.state.api_token = "test-token"
-        service.state.api_username = "judgehost"
-        service.state.include_build_payload = True
-
-        verification_id = f"ver-jh-hidden-{uuid.uuid4().hex[:8]}"
-        self._seed_build_verification(verification_id)
-
-        first_run_id = f"r-jh-hidden-{uuid.uuid4().hex[:8]}"
-        second_run_id = f"r-jh-hidden-{uuid.uuid4().hex[:8]}"
-        first_task_id = service.enqueue_task(
-            problem=self.problem,
-            username=self.user,
-            artifact_verification_id=verification_id,
-            mode="pass-fail",
-            submission_path="solutions/ac.cpp",
-            upload_content=None,
-            upload_filename=None,
-            run_id=first_run_id,
-            selected_tests=["001.in"],
-            verification_id=verification_id,
-            verification_run_ids=[first_run_id],
-            expected_behavior="accepted",
-            verification_source="verification.generate-input",
-            persist_verification_run=False,
-        )
-        second_task_id = service.enqueue_task(
-            problem=self.problem,
-            username=self.user,
-            artifact_verification_id=verification_id,
-            mode="pass-fail",
-            submission_path="solutions/ac.cpp",
-            upload_content=None,
-            upload_filename=None,
-            run_id=second_run_id,
-            selected_tests=["002.in"],
-            verification_id=verification_id,
-            verification_run_ids=[second_run_id],
-            expected_behavior="accepted",
-            verification_source="verification.generate-input",
-            persist_verification_run=False,
-        )
-
-        self.assertNotEqual(first_task_id, second_task_id)
-        first_row = service.core.task_by_id(first_task_id)
-        second_row = service.core.task_by_id(second_task_id)
-        self.assertIsNotNone(first_row)
-        self.assertIsNotNone(second_row)
-        self.assertEqual(str(first_row["run_id"]), first_run_id)
-        self.assertEqual(str(second_row["run_id"]), second_run_id)
-
-    def test_domjudge_shared_pending_job_ignores_prequeue_owned_job(self) -> None:
-        service = config.judgehost_task_service
-        old_enabled = service.state.enabled
-        old_token = service.state.api_token
-        old_username = service.state.api_username
-        old_include_build_payload = service.state.include_build_payload
-        self.addCleanup(setattr, service.state, "enabled", old_enabled)
-        self.addCleanup(setattr, service.state, "api_token", old_token)
-        self.addCleanup(setattr, service.state, "api_username", old_username)
-        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
-        service.state.enabled = True
-        service.state.api_token = "test-token"
-        service.state.api_username = "judgehost"
-        service.state.include_build_payload = True
-
-        verification_id = f"b-jh-prequeue-owned-{uuid.uuid4().hex[:8]}"
-        run_id = f"r-jh-prequeue-owned-{uuid.uuid4().hex[:8]}"
-        self._seed_build_verification(verification_id)
-        payload = service.prepare_enqueue_payload(
-            problem=self.problem,
-            username=self.user,
-            artifact_verification_id=verification_id,
-            mode="pass-fail",
-            submission_path="solutions/ac.cpp",
-            upload_content=None,
-            upload_filename=None,
-            run_id=run_id,
-            selected_tests=["001.in"],
-            verification_id="inv-jh-prequeue-owned",
-            verification_run_ids=[run_id],
-            expected_behavior="accepted",
-            verification_source="run.execute",
-        )
-
-        task_id = f"t-jh-prequeue-owned-{uuid.uuid4().hex[:8]}"
-        job_id = int(
-            service.dispatch._domjudge_prepare_job(
-                "prequeue-cache",
-                {
-                    "task_id": task_id,
-                    "run_id": run_id,
-                    "payload": payload,
-                },
-            )
-        )
-        job_row = judgehost_fetch_job(service, job_id)
-        self.assertIsNotNone(job_row)
-        self.assertEqual(str(job_row["lease_owner"] or ""), "prequeue-cache")
-        self.assertEqual(str(job_row["status"] or ""), "leased")
-
-        service.domjudge_register_host("judgehost-prequeue-owned")
-        leased = service.domjudge_fetch_work("judgehost-prequeue-owned", max_batchsize=8)
-        self.assertEqual(leased, [])
-
-    def test_domjudge_release_prepared_job_preserves_real_host_lease(self) -> None:
-        service = config.judgehost_task_service
-        old_enabled = service.state.enabled
-        old_token = service.state.api_token
-        old_username = service.state.api_username
-        old_include_build_payload = service.state.include_build_payload
-        self.addCleanup(setattr, service.state, "enabled", old_enabled)
-        self.addCleanup(setattr, service.state, "api_token", old_token)
-        self.addCleanup(setattr, service.state, "api_username", old_username)
-        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
-        service.state.enabled = True
-        service.state.api_token = "test-token"
-        service.state.api_username = "judgehost"
-        service.state.include_build_payload = True
-
-        verification_id = f"b-jh-prequeue-release-{uuid.uuid4().hex[:8]}"
-        run_id = f"r-jh-prequeue-release-{uuid.uuid4().hex[:8]}"
-        self._seed_build_verification(verification_id)
-        payload = service.prepare_enqueue_payload(
-            problem=self.problem,
-            username=self.user,
-            artifact_verification_id=verification_id,
-            mode="pass-fail",
-            submission_path="solutions/ac.cpp",
-            upload_content=None,
-            upload_filename=None,
-            run_id=run_id,
-            selected_tests=["001.in"],
-            verification_id="inv-jh-prequeue-release",
-            verification_run_ids=[run_id],
-            expected_behavior="accepted",
-            verification_source="run.execute",
-        )
-
-        task_id = f"t-jh-prequeue-release-{uuid.uuid4().hex[:8]}"
-        job_id = int(
-            service.dispatch._domjudge_prepare_job(
-                "prequeue-cache",
-                {
-                    "task_id": task_id,
-                    "run_id": run_id,
-                    "payload": payload,
-                },
-            )
-        )
-        leased = service.dispatch._domjudge_lease_cases(job_id, "judgehost-prequeue-release", 8)
-        self.assertEqual(len(leased), 1)
-        case_id = int(leased[0].get("judgetaskid") or 0)
-        self.assertGreater(case_id, 0)
-
-        service.dispatch._domjudge_release_prepared_job_for_queue(job_id)
-
-        case_row = judgehost_fetch_case(service, case_id)
-        self.assertIsNotNone(case_row)
-        self.assertEqual(str(case_row["status"] or ""), "leased")
-        self.assertEqual(str(case_row["lease_owner"] or ""), "judgehost-prequeue-release")
-
-        job_row = judgehost_fetch_job(service, job_id)
-        self.assertIsNotNone(job_row)
-        self.assertEqual(str(job_row["status"] or ""), "leased")
-        self.assertEqual(str(job_row["lease_owner"] or ""), "judgehost-prequeue-release")
 
     def test_domjudge_cache_shortcut_requires_output_blob_for_ok_result(self) -> None:
         service = config.judgehost_task_service
@@ -5780,6 +5480,13 @@ class TestJudgehostService(SmokeBase):
             verification_source="run.execute",
         )
         leased = service.domjudge_fetch_work("judgehost-compare-job-debug", max_batchsize=8)
+        self.assertEqual(len(leased), 1)
+        service.domjudge_update_judging(
+            "judgehost-compare-job-debug",
+            int(leased[0]["judgetaskid"]),
+            {"compile_success": "1", "output_compile": "", "compile_metadata": ""},
+        )
+        leased += service.domjudge_fetch_work("judgehost-compare-job-debug", max_batchsize=8)
         self.assertEqual(len(leased), 2)
         case_ids = sorted(int(item.get("judgetaskid") or 0) for item in leased)
         self.assertGreater(case_ids[0], 0)
@@ -5789,15 +5496,6 @@ class TestJudgehostService(SmokeBase):
         self.assertIsNotNone(row)
         job_id = int(row["job_id"])
 
-        service.domjudge_update_judging(
-            "judgehost-compare-job-debug",
-            target_case,
-            {
-                "compile_success": "1",
-                "output_compile": "",
-                "compile_metadata": "",
-            },
-        )
         service.domjudge_add_debug_info(
             hostname="judgehost-compare-job-debug",
             judgetask_id=job_id,
@@ -6232,70 +5930,6 @@ class TestJudgehostService(SmokeBase):
         self.assertEqual(str(case_row_a["lease_owner"] or ""), "judgehost-share-a")
         self.assertEqual(str(case_row_b["lease_owner"] or ""), "judgehost-share-b")
 
-    def test_domjudge_fetch_work_prioritizes_generate_input_before_solution_run(self) -> None:
-        service = config.judgehost_task_service
-        self._reset_task_queue_state(service)
-        old_enabled = service.state.enabled
-        old_token = service.state.api_token
-        old_username = service.state.api_username
-        old_include_build_payload = service.state.include_build_payload
-        self.addCleanup(setattr, service.state, "enabled", old_enabled)
-        self.addCleanup(setattr, service.state, "api_token", old_token)
-        self.addCleanup(setattr, service.state, "api_username", old_username)
-        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
-        service.state.enabled = True
-        service.state.api_token = "test-token"
-        service.state.api_username = "judgehost"
-        service.state.include_build_payload = True
-
-        verification_id = f"b-jh-priority-queue-{uuid.uuid4().hex[:8]}"
-        self._seed_build_verification(verification_id)
-        self._seed_verification_test_artifacts(
-            verification_id,
-            [("001.in", "ok\n", "ok\n")],
-        )
-
-        low_task_id = service.enqueue_task(
-            problem=self.problem,
-            username=self.user,
-            artifact_verification_id=verification_id,
-            mode="pass-fail",
-            submission_path="solutions/ac.cpp",
-            upload_content=None,
-            upload_filename=None,
-            run_id=f"r-jh-priority-low-{uuid.uuid4().hex[:8]}",
-            selected_tests=["001.in"],
-            verification_id="inv-jh-priority-low",
-            verification_run_ids=[],
-            expected_behavior="accepted",
-            verification_source="run.execute",
-            task_kind="solution-run",
-        )
-        high_task_id = service.enqueue_task(
-            problem=self.problem,
-            username=self.user,
-            artifact_verification_id=verification_id,
-            mode="pass-fail",
-            submission_path=None,
-            upload_content=b"#include <bits/stdc++.h>\nint main(){return 0;}\n",
-            upload_filename="gen.cpp",
-            run_id=f"r-jh-priority-high-{uuid.uuid4().hex[:8]}",
-            selected_tests=["001.in"],
-            verification_id="inv-jh-priority-high",
-            verification_run_ids=[],
-            expected_behavior="accepted",
-            verification_source="generate-input",
-            task_kind="generate-input",
-        )
-        self.assertTrue(low_task_id.startswith("jt-"))
-        self.assertTrue(high_task_id.startswith("jt-"))
-
-        host = "judgehost-priority-queue"
-        service.domjudge_register_host(host)
-        tasks = service.domjudge_fetch_work(host, max_batchsize=1)
-        self.assertEqual(len(tasks), 1)
-        self.assertEqual(str(tasks[0].get("uuid") or ""), high_task_id)
-
     def test_domjudge_fetch_work_defers_preemption_until_inflight_case_reports(self) -> None:
         service = config.judgehost_task_service
         self._reset_task_queue_state(service)
@@ -6356,6 +5990,7 @@ class TestJudgehostService(SmokeBase):
             expected_behavior="accepted",
             verification_source="generate-input",
             task_kind="generate-input",
+            service_class="foreground",
         )
         second_tasks = service.domjudge_fetch_work(host, max_batchsize=1)
         self.assertEqual(second_tasks, [])
@@ -6420,7 +6055,7 @@ class TestJudgehostService(SmokeBase):
             verification_source="run.execute",
             persist_verification_run=False,
         )
-        service.state.task_store.transition(
+        service.state.task_registry.transition(
             task_id,
             expected={service.STATUS_QUEUED},
             status=service.STATUS_FAILED,
@@ -6454,25 +6089,15 @@ class TestJudgehostService(SmokeBase):
         run_id = f"r-jh-case-feedback-{uuid.uuid4().hex[:8]}"
         self._seed_build_verification(verification_id)
 
-        task_id = service.enqueue_task(
-            problem=self.problem,
-            username=self.user,
-            artifact_verification_id=verification_id,
-            mode="pass-fail",
-            submission_path="solutions/ac.cpp",
-            upload_content=None,
-            upload_filename=None,
+        task_id = f"jt-feedback-{uuid.uuid4().hex[:8]}"
+        self._insert_task_receipt(
+            service,
+            task_id=task_id,
             run_id=run_id,
-            selected_tests=["016.in"],
             verification_id=verification_id,
-            verification_run_ids=[run_id],
-            expected_behavior="accepted",
-            verification_source="run.execute",
-            task_kind="main-correct",
-            persist_verification_run=False,
         )
 
-        service.state.task_store.update(
+        service.state.task_registry.update(
             task_id,
             {"summary": {
                 "mode": "pass-fail",
@@ -6489,19 +6114,18 @@ class TestJudgehostService(SmokeBase):
         feedback_text = "Unexpected character #10, but ' ' expected (testdata.in)"
         (work_root / "feedback" / "judgemessage.txt").write_text(feedback_text, encoding="utf-8")
 
-        job_id = service.state.judgehost_state_store.create_job_with_cases(
+        job_id = service.state.job_scheduler.create_job_with_cases(
             task_id=task_id,
             run_id=run_id,
             group_key="group-case-feedback",
-            submit_id="sub-case-feedback",
             contest_id="",
             mode="pass-fail",
             source_name="std.cpp",
             source_path="solutions/std.cpp",
             work_root=str(work_root),
-            compile_hash="a" * 64,
-            run_hash="b" * 64,
-            compare_hash="c" * 64,
+            compile_hash="a" * 32,
+            run_hash="b" * 32,
+            compare_hash="c" * 32,
             source_hash="d" * 64,
             compile_config_json="{}",
             run_config_json="{}",
@@ -6509,8 +6133,8 @@ class TestJudgehostService(SmokeBase):
             expected_behavior="accepted",
             verification_source="run.execute",
             force_recompile=0,
-            lease_owner="judgehost-feedback",
-            status="leased",
+            service_class="background",
+            job_spec=JobSpec(),
             created_at="2026-04-14T00:00:00+00:00",
             case_rows=[
                 {
@@ -6530,7 +6154,7 @@ class TestJudgehostService(SmokeBase):
         )
         self.assertGreater(job_id, 0)
         case_id = self._lease_only_case(service, job_id, "judgehost-feedback")
-        updated = service.state.judgehost_state_store.report_case_result(
+        updated = service.state.job_scheduler.report_case_result(
             case_id,
             lease_owner="judgehost-feedback",
             runresult="checker-fail",
@@ -6569,25 +6193,15 @@ class TestJudgehostService(SmokeBase):
         run_id = f"r-jh-case-debug-{uuid.uuid4().hex[:8]}"
         self._seed_build_verification(verification_id)
 
-        task_id = service.enqueue_task(
-            problem=self.problem,
-            username=self.user,
-            artifact_verification_id=verification_id,
-            mode="pass-fail",
-            submission_path="solutions/ac.cpp",
-            upload_content=None,
-            upload_filename=None,
+        task_id = f"jt-debug-{uuid.uuid4().hex[:8]}"
+        self._insert_task_receipt(
+            service,
+            task_id=task_id,
             run_id=run_id,
-            selected_tests=["016.in"],
             verification_id=verification_id,
-            verification_run_ids=[run_id],
-            expected_behavior="accepted",
-            verification_source="run.execute",
-            task_kind="main-correct",
-            persist_verification_run=False,
         )
 
-        service.state.task_store.update(
+        service.state.task_registry.update(
             task_id,
             {"summary": {
                 "mode": "pass-fail",
@@ -6601,19 +6215,18 @@ class TestJudgehostService(SmokeBase):
         work_root = Path(tempfile.mkdtemp(prefix="polygon-case-debug-")).resolve()
         self.addCleanup(shutil.rmtree, work_root, ignore_errors=True)
 
-        job_id = service.state.judgehost_state_store.create_job_with_cases(
+        job_id = service.state.job_scheduler.create_job_with_cases(
             task_id=task_id,
             run_id=run_id,
             group_key="group-case-debug",
-            submit_id="sub-case-debug",
             contest_id="",
             mode="pass-fail",
             source_name="std.cpp",
             source_path="solutions/std.cpp",
             work_root=str(work_root),
-            compile_hash="a" * 64,
-            run_hash="b" * 64,
-            compare_hash="c" * 64,
+            compile_hash="a" * 32,
+            run_hash="b" * 32,
+            compare_hash="c" * 32,
             source_hash="d" * 64,
             compile_config_json="{}",
             run_config_json="{}",
@@ -6621,8 +6234,8 @@ class TestJudgehostService(SmokeBase):
             expected_behavior="accepted",
             verification_source="run.execute",
             force_recompile=0,
-            lease_owner="judgehost-debug",
-            status="leased",
+            service_class="background",
+            job_spec=JobSpec(),
             created_at="2026-04-14T00:00:00+00:00",
             case_rows=[
                 {
@@ -6642,7 +6255,7 @@ class TestJudgehostService(SmokeBase):
         )
         self.assertGreater(job_id, 0)
         case_id = self._lease_only_case(service, job_id, "judgehost-debug")
-        updated = service.state.judgehost_state_store.report_case_result(
+        updated = service.state.job_scheduler.report_case_result(
             case_id,
             lease_owner="judgehost-debug",
             runresult="checker-fail",
@@ -6662,7 +6275,7 @@ class TestJudgehostService(SmokeBase):
         )
         self.assertTrue(updated)
         feedback_text = "Unexpected character #10, but ' ' expected (testdata.in)"
-        service.state.judgehost_state_store.append_debug_text(
+        service.state.job_scheduler.append_debug_text(
             case_id=case_id,
             job_id=job_id,
             debug_text=feedback_text,
@@ -6688,24 +6301,14 @@ class TestJudgehostService(SmokeBase):
         run_id = f"r-jh-late-debug-{uuid.uuid4().hex[:8]}"
         self._seed_build_verification(verification_id)
 
-        task_id = service.enqueue_task(
-            problem=self.problem,
-            username=self.user,
-            artifact_verification_id=verification_id,
-            mode="pass-fail",
-            submission_path="solutions/ac.cpp",
-            upload_content=None,
-            upload_filename=None,
+        task_id = f"jt-late-debug-{uuid.uuid4().hex[:8]}"
+        self._insert_task_receipt(
+            service,
+            task_id=task_id,
             run_id=run_id,
-            selected_tests=["016.in"],
             verification_id=verification_id,
-            verification_run_ids=[run_id],
-            expected_behavior="accepted",
-            verification_source="run.execute",
-            task_kind="main-correct",
-            persist_verification_run=False,
         )
-        service.state.task_store.update(
+        service.state.task_registry.update(
             task_id,
             {"summary": {
                 "mode": "pass-fail",
@@ -6736,19 +6339,18 @@ class TestJudgehostService(SmokeBase):
 
         work_root = Path(tempfile.mkdtemp(prefix="polygon-late-debug-")).resolve()
         self.addCleanup(shutil.rmtree, work_root, ignore_errors=True)
-        job_id = service.state.judgehost_state_store.create_job_with_cases(
+        job_id = service.state.job_scheduler.create_job_with_cases(
             task_id=task_id,
             run_id=run_id,
             group_key="group-late-debug",
-            submit_id="sub-late-debug",
             contest_id="",
             mode="pass-fail",
             source_name="std.cpp",
             source_path="solutions/std.cpp",
             work_root=str(work_root),
-            compile_hash="a" * 64,
-            run_hash="b" * 64,
-            compare_hash="c" * 64,
+            compile_hash="a" * 32,
+            run_hash="b" * 32,
+            compare_hash="c" * 32,
             source_hash="d" * 64,
             compile_config_json="{}",
             run_config_json="{}",
@@ -6756,8 +6358,8 @@ class TestJudgehostService(SmokeBase):
             expected_behavior="accepted",
             verification_source="run.execute",
             force_recompile=0,
-            lease_owner="judgehost-late-debug",
-            status="leased",
+            service_class="background",
+            job_spec=JobSpec(),
             created_at="2026-04-14T00:00:00+00:00",
             case_rows=[
                 {
@@ -6777,7 +6379,7 @@ class TestJudgehostService(SmokeBase):
         )
         self.assertGreater(job_id, 0)
         case_id = self._lease_only_case(service, job_id, "judgehost-late-debug")
-        updated = service.state.judgehost_state_store.report_case_result(
+        updated = service.state.job_scheduler.report_case_result(
             case_id,
             lease_owner="judgehost-late-debug",
             runresult="checker-fail",
@@ -7025,7 +6627,7 @@ class TestJudgehostService(SmokeBase):
             },
         )
 
-        case_rows = service.state.judgehost_state_store.cases_for_job(job_id)
+        case_rows = service.state.job_scheduler.cases_for_job(job_id)
         self.assertEqual([str(row["test_name"] or "") for row in case_rows], ["001.in", "002.in"])
         self.assertEqual([str(row["task_id"] or "") for row in case_rows], [task_id, second_task_id])
         self.assertEqual(

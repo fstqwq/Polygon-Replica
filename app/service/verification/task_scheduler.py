@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-import heapq
 import queue
 import threading
 import time
+from collections import deque
 from dataclasses import dataclass
 from typing import Callable, cast
 
@@ -71,6 +71,10 @@ _TERMINAL_TASK_STATUSES = frozenset(
 class _IncrementalDagState:
     def __init__(self, rows: list[VerificationTaskRow], edges: list[tuple[str, str]]) -> None:
         ordered_rows = sorted(rows, key=lambda row: (int(row["queue_index"]), str(row["id"])))
+        self.plan_index_by_id = {
+            str(row["id"]): index
+            for index, row in enumerate(ordered_rows)
+        }
         self.rows_by_id = {
             str(row["id"]): cast(VerificationTaskRow, dict(row))
             for row in ordered_rows
@@ -88,12 +92,14 @@ class _IncrementalDagState:
                 self.remaining_parents[child_id] += 1
             if parent_id in self.rows_by_id:
                 self.dependents_by_parent.setdefault(parent_id, []).append(child_id)
+        for child_ids in self.dependents_by_parent.values():
+            child_ids.sort(key=self.plan_index_by_id.__getitem__)
 
-        self.ready: list[tuple[int, str]] = []
+        self.ready: deque[str] = deque()
         self.ready_ids: set[str] = set()
         for task_id, row in self.rows_by_id.items():
             if self.status_by_id[task_id] == VerificationTaskStore.TASK_PENDING:
-                self._enqueue_if_ready(task_id, int(row["queue_index"]))
+                self._enqueue_if_ready(task_id)
 
         self.task_ids_by_judgehost_id: dict[str, list[str]] = {}
         self.task_id_by_case: dict[tuple[str, str], str] = {}
@@ -104,17 +110,15 @@ class _IncrementalDagState:
             for status in self.status_by_id.values()
         )
 
-    def _enqueue_if_ready(self, task_id: str, queue_index: int | None = None) -> None:
+    def _enqueue_if_ready(self, task_id: str) -> None:
         if self.remaining_parents[task_id] != 0 or task_id in self.ready_ids:
             return
-        row = self.rows_by_id[task_id]
-        ready_order = int(row["queue_index"]) if queue_index is None else queue_index
-        heapq.heappush(self.ready, (ready_order, task_id))
+        self.ready.append(task_id)
         self.ready_ids.add(task_id)
 
     def pop_ready(self) -> VerificationTaskRow | None:
         while self.ready:
-            _queue_index, task_id = heapq.heappop(self.ready)
+            task_id = self.ready.popleft()
             self.ready_ids.discard(task_id)
             if self.status_by_id[task_id] != VerificationTaskStore.TASK_PENDING:
                 continue

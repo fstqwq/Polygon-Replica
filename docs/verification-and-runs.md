@@ -158,17 +158,18 @@ The runtime keeps four distinct lifecycle layers:
 
 - `verification_tasks` rows are durable per-case product results. A case report updates its matching row immediately and only once.
 - A judgehost task has an immutable case set. It becomes terminal only after all of its own cases are `reported` or `cancelled`.
-- A DOMjudge case is leased independently. A disconnected host may release `leased` back to `pending`; a result moves it to `reported`.
+- A DOMjudge case is leased independently. Explicitly disabling a host releases
+  its `leased` cases back to `pending`; a result moves a case to `reported`.
 - A DOMjudge job is a temporary execution batch. Grouped jobs may contain several tasks, but they are not verification boundaries.
 
 Cancellation moves both pending and leased cases for the cancelled run directly
 to `cancelled`; late judgedaemon callbacks are acknowledged without reviving
 the case.
 
-Job closure is an atomic claim. The state store rechecks all job cases and changes
-`queued/leased` to `finalizing` under the same writer lock used by case
-append. A task arriving after that claim receives a new grouped job instead of
-reopening the old one.
+Job closure is an atomic claim. The scheduler rechecks all job cases and changes
+the job from `open` to `finalizing` under the same writer lock used by case
+append. A task arriving after that claim receives a new rolling grouped job
+instead of reopening the old one.
 
 Later judgehost polls and duplicate result callbacks retry jobs already in
 `finalizing`. A transient publication failure therefore retains the work root
@@ -179,14 +180,43 @@ before the job becomes `completed/failed`. Only then is the job work root remove
 Executable scripts have a different lifetime: they remain runtime-scoped and are
 cleared at service startup, not when an individual job or verification finishes.
 
-Task dispatch uses indexed ready/group/deadline heaps and a writer-priority RWLock.
-Fetch, lease expiry, and status counts do not sort or scan historical tasks. Job
-and case state is also held in typed indexed memory records rather than a shared
-in-memory SQLite connection. The verification runtime overlay is one
-`RuntimeConfig`-owned store protected by the same lock policy; task store instances
-do not share class-level dictionaries. Verification dependency indegrees and
-dependents are built once, so each DAG edge is processed once. Terminal case results
-are persisted in batches of at most 256 rows or 5 ms before successors are released.
+The verification DAG uses a preordered ready deque and processes every dependency
+edge once. The judgehost Task Registry stores only identity, immutable request
+fingerprints, result receipts, wait conditions, and terminal cleanup metadata; it
+does not schedule work.
+
+Execution scheduling uses one global ready-Job heap plus one cache-pending heap and
+one runnable Case heap per Job. Heap entries carry generations and are rebuilt only
+when their local stale ratio crosses a threshold. Fetch does not scan or sort all
+Tasks, Jobs, or Cases. A writer-priority RWLock protects scheduler indexes; cache,
+filesystem, SQLite, and Coordinator notifications are never accessed while that
+lock is held. Batch Case transitions refresh the global Job heap once per affected
+Job. Executable callbacks use a lifecycle-maintained script-ID index rather than
+scanning open Jobs.
+
+Cases enter a Job as `staged`, atomically activate as `cache-pending`, and cannot be
+leased until their exact result-cache probe misses. A full cache hit reaches
+`reported` without creating a work root. Source files and executable scripts are
+materialized lazily only after at least one miss. Before compilation succeeds, one
+smallest-ordinal Case is the compile leader; successful compilation opens the
+remaining Cases to other hosts.
+
+Only two service classes exist: foreground direct/compile-only work and background
+verification work. Foreground work cooperatively preempts between fetch batches;
+already leased Cases are never cancelled. Within a Job, ready Cases are leased by
+numeric test ordinal. Across Jobs, the scheduler prefers service class, earliest
+verification scope, next test ordinal, and admission order while retaining active
+Job affinity.
+
+There is no automatic Case lease timeout. Judgehost registration is also a
+heartbeat and therefore cannot safely distinguish a restart from a live daemon.
+Operators must disable an unresponsive host to return its Cases to `pending` before
+re-enabling or replacing it. This avoids duplicate delivery caused by treating
+periodic registration as reconnect recovery.
+
+Job and Case state is held in typed indexed memory records rather than a shared
+in-memory SQLite connection. Terminal verification results are persisted through
+the existing Coordinator batch path before successors are released.
 
 After a verification's final detail and status are durable, one process-wide
 deadline scheduler starts a 60-second quiet window. Late result, internal-error,
@@ -205,9 +235,10 @@ idempotent; reusing the same `run_id` with a different payload is rejected.
 Current cache behavior for execution results:
 - only exact case cache remains
 - solve-output cache has been removed
-- cache lookup happens inside the judgehost adapter before work is sent to judgedaemon
+- cache lookup happens lazily during `fetch-work`, before work is sent to judgedaemon
 - same-key cache reads/materialization are serialized without blocking unrelated keys
 - cache-hit results still update `verification_tasks` and artifact refs through the normal batched finalize path
+- testcase input/answer registration uses metadata-only hits and does not rewrite an existing valid blob
 
 ## Worker Queue
 

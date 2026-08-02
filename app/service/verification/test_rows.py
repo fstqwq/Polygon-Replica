@@ -162,19 +162,30 @@ def upsert_verification_test_row(
     tests_total: int = 0,
     selected_tests_count: int = 0,
 ) -> dict[str, object]:
-    existing_tests = canonicalize_verification_test_rows(list(summary.get("tests") or []))
-    updated_tests: list[VerificationTestRow] = []
-    test_name = str(test_row.get("test") or "")
-    replaced = False
-    for item in existing_tests:
-        if str(item.get("test") or "") == test_name:
-            updated_tests.append(test_row)
-            replaced = True
-            continue
-        updated_tests.append(item)
-    if not replaced:
-        updated_tests.append(test_row)
-    updated_tests.sort(key=lambda item: str(item.get("test") or ""))
+    return upsert_verification_test_rows(
+        summary,
+        test_rows=[test_row],
+        tests_total=tests_total,
+        selected_tests_count=selected_tests_count,
+    )
+
+
+def upsert_verification_test_rows(
+    summary: dict[str, object],
+    *,
+    test_rows: list[VerificationTestRow],
+    tests_total: int = 0,
+    selected_tests_count: int = 0,
+) -> dict[str, object]:
+    rows_by_name = {
+        str(item.get("test") or ""): item
+        for item in canonicalize_verification_test_rows(list(summary.get("tests") or []))
+    }
+    for test_row in test_rows:
+        test_name = str(test_row.get("test") or "")
+        if test_name:
+            rows_by_name[test_name] = test_row
+    updated_tests = [rows_by_name[name] for name in sorted(rows_by_name)]
     summary["tests"] = updated_tests
     summary["tests_total"] = max(
         len(updated_tests),
@@ -183,11 +194,23 @@ def upsert_verification_test_row(
         max(0, int(selected_tests_count)),
     )
     usage = dict(summary.get("usage") or {})
+    time_user_ms = max(
+        [int(row.get("time_user_ms") or 0) for row in test_rows]
+        + [int(usage.get("time_user_ms_total") or 0)]
+    )
+    time_wall_ms = max(
+        [int(row.get("time_wall_ms") or 0) for row in test_rows]
+        + [int(usage.get("time_wall_ms_total") or 0)]
+    )
+    memory_kb = max(
+        [int(row.get("memory_kb") or 0) for row in test_rows]
+        + [int(usage.get("memory_kb_peak") or 0)]
+    )
     summary["usage"] = {
         "tests": len(updated_tests),
-        "time_ms_total": max(int(test_row.get("time_user_ms") or 0), int(usage.get("time_ms_total") or 0)),
-        "time_user_ms_total": max(int(test_row.get("time_user_ms") or 0), int(usage.get("time_user_ms_total") or 0)),
-        "time_wall_ms_total": max(int(test_row.get("time_wall_ms") or 0), int(usage.get("time_wall_ms_total") or 0)),
-        "memory_kb_peak": max(int(test_row.get("memory_kb") or 0), int(usage.get("memory_kb_peak") or 0)),
+        "time_ms_total": max(time_user_ms, int(usage.get("time_ms_total") or 0)),
+        "time_user_ms_total": time_user_ms,
+        "time_wall_ms_total": time_wall_ms,
+        "memory_kb_peak": memory_kb,
     }
     return summary

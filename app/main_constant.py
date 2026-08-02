@@ -112,8 +112,7 @@ DB_SQL_TRACE_ENABLED = False
 JUDGEHOST_ENABLE = False
 JUDGEHOST_API_TOKEN = ""
 JUDGEHOST_API_USERNAME = "judgehost"
-JUDGEHOST_FETCH_BATCH_SIZE = 1
-JUDGEHOST_LEASE_SEC = 120
+JUDGEHOST_FETCH_BATCH_SIZE = 2
 JUDGEHOST_WAIT_TIMEOUT_SEC = 7200
 JUDGEHOST_WAIT_POLL_SEC = 0.5
 JUDGEHOST_ONLINE_WINDOW_SEC = 120
@@ -134,7 +133,7 @@ TOOLCHAIN_CACHE_MAX_ENTRIES = 0
 VERIFICATION_EXEC_MEMORY_MB = 1024
 VERIFICATION_EXEC_PROCESS_LIMIT = 64
 RUN_EXEC_MEMORY_MB = 1024
-RUN_EXEC_PROCESS_LIMIT = 64
+RUN_EXEC_PROCESS_LIMIT = 1024
 # Judgehost run-stage stdout cap in KiB. Compile/compare script file caps use
 # TOOLCHAIN_COMPILE_OUTPUT_KB instead.
 RUN_EXEC_OUTPUT_KB = 65536
@@ -877,12 +876,6 @@ ADMIN_CONFIG_SPECS: dict[str, dict[str, object]] = {
         "min": 1,
         "max": 128,
         "description": "Default max tasks returned per judgehost fetch.",
-    },
-    "JUDGEHOST_LEASE_SEC": {
-        "type": "int",
-        "min": 5,
-        "max": 86400,
-        "description": "Task lease duration for judgehost workers (seconds).",
     },
     "JUDGEHOST_WAIT_TIMEOUT_SEC": {
         "type": "int",

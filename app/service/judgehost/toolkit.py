@@ -11,7 +11,6 @@ import uuid
 from collections.abc import Iterator
 from pathlib import Path
 
-from app.db import now_iso
 from app.service.judgehost.artifact import domjudge_read_artifact_blob, resolve_artifact_blob
 from app.service.judgehost.domjudge.cache import (
     domjudge_cache_blob_ref,
@@ -252,6 +251,40 @@ class DomjudgeToolkit:
             return None
         return resolved
 
+    def cache_get_with_blobs(
+        self,
+        kind: str,
+        key_hash: str,
+        signature: str,
+        *,
+        names: list[str],
+    ) -> tuple[dict[str, object], dict[str, bytes]] | None:
+        service = self._s.judge_fs_index_service
+        if service is None:
+            return None
+        result = service.get_with_blobs(
+            kind=kind,
+            key_hash=key_hash,
+            signature=signature,
+            names=names,
+        )
+        if result is None:
+            return None
+        entry, blobs = result
+        resolved = {
+            "key_hash": key_hash,
+            "signature": signature,
+            "value": dict(entry["value"]),
+            "tags": dict(entry["tags"]),
+            "files": dict(entry["files"]),
+            "created_at": domjudge_text(entry.get("created_at")),
+            "updated_at": domjudge_text(entry.get("updated_at")),
+        }
+        if not self.validate_cache_entry(entry=resolved):
+            self.cache_delete(kind=kind, key_hash=key_hash, signature=signature)
+            return None
+        return (resolved, blobs)
+
     def cache_put(
         self,
         kind: str,
@@ -469,59 +502,79 @@ class DomjudgeToolkit:
             name=name,
         )
 
-    def clear_testcase_registry(self) -> None:
-        with self._s.testcase_registry_lock:
-            self._s.testcase_registry_by_hash.clear()
-
     def register_cached_testcase(
         self,
         *,
         testcase_hash: str,
+        testcase_signature: str,
+        input_hash: str,
+        answer_hash: str,
         in_bytes: bytes,
         ans_bytes: bytes,
     ) -> tuple[str, str]:
         safe_hash = domjudge_lower_text(testcase_hash)
-        if not re.fullmatch(r"[0-9a-f]{64}", safe_hash):
-            safe_hash = domjudge_set_hash_from_blobs([in_bytes, ans_bytes])
-        testcase_signature = domjudge_set_hash_from_blobs([in_bytes, ans_bytes])
-        if not self.cache_put(
-            self.CASE_CACHE_KIND,
-            safe_hash,
-            testcase_signature,
-            {
-                "schema": "testcase-artifact",
-                "testcase_hash": safe_hash,
-                "input_sha256": sha256_hex_bytes(in_bytes),
-                "answer_sha256": sha256_hex_bytes(ans_bytes),
-            },
-            files={
-                "input.in": in_bytes,
-                "answer.ans": ans_bytes,
-            },
-            tags={
-                "testcase_hash": safe_hash,
-                "artifact_kind": "domjudge-testcase",
-            },
+        safe_signature = domjudge_lower_text(testcase_signature)
+        safe_input_hash = domjudge_lower_text(input_hash)
+        safe_answer_hash = domjudge_lower_text(answer_hash)
+        if any(
+            re.fullmatch(r"[0-9a-f]{64}", token) is None
+            for token in (safe_hash, safe_signature, safe_input_hash, safe_answer_hash)
         ):
-            raise RuntimeError("judge fs index testcase store is unavailable")
-        now_text = now_iso()
+            raise RuntimeError("invalid testcase artifact hash")
         input_ref = self.testcase_blob_ref(
             testcase_hash=safe_hash,
-            signature=testcase_signature,
+            signature=safe_signature,
             name="input.in",
         )
         answer_ref = self.testcase_blob_ref(
             testcase_hash=safe_hash,
-            signature=testcase_signature,
+            signature=safe_signature,
             name="answer.ans",
         )
-        with self._s.testcase_registry_lock:
-            self._s.testcase_registry_by_hash[safe_hash] = {
-                "hash": safe_hash,
-                "input_ref": input_ref,
-                "answer_ref": answer_ref,
-                "updated_at": now_text,
-            }
+        service = self._s.judge_fs_index_service
+        if service is None:
+            raise RuntimeError("judge fs index testcase store is unavailable")
+        expected_value = {
+            "schema": "testcase-artifact",
+            "testcase_hash": safe_hash,
+            "input_sha256": safe_input_hash,
+            "answer_sha256": safe_answer_hash,
+        }
+        # Grouped tasks repeatedly register identical tests. Keep a valid hit
+        # metadata-only so warm verifications do not rewrite large payloads.
+        with self.cache_key_lock(self.CASE_CACHE_KIND, safe_hash, safe_signature):
+            entry = service.get(
+                kind=self.CASE_CACHE_KIND,
+                key_hash=safe_hash,
+                signature=safe_signature,
+            )
+            if entry is not None:
+                files = dict(entry["files"])
+                if (
+                    dict(entry["value"]) == expected_value
+                    and set(files) == {"input.in", "answer.ans"}
+                    and int(files["input.in"]["size"]) == len(in_bytes)
+                    and str(files["input.in"]["sha256"]) == safe_input_hash
+                    and int(files["answer.ans"]["size"]) == len(ans_bytes)
+                    and str(files["answer.ans"]["sha256"]) == safe_answer_hash
+                ):
+                    return (input_ref, answer_ref)
+                service.delete(
+                    kind=self.CASE_CACHE_KIND,
+                    key_hash=safe_hash,
+                    signature=safe_signature,
+                )
+            service.put(
+                kind=self.CASE_CACHE_KIND,
+                key_hash=safe_hash,
+                signature=safe_signature,
+                value=expected_value,
+                files={"input.in": in_bytes, "answer.ans": ans_bytes},
+                tags={
+                    "testcase_hash": safe_hash,
+                    "artifact_kind": "domjudge-testcase",
+                },
+            )
         return (input_ref, answer_ref)
 
     @staticmethod

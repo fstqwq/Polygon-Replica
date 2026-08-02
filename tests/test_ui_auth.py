@@ -1551,7 +1551,7 @@ class TestUIAuth(UIBaseSuite):
         self.addCleanup(setattr, service.state, "api_token", old_token)
         service.state.enabled = True
         service.state.api_token = "admin-snapshot-token"
-        service.fetch_work("judgehost-admin-snapshot")
+        service.domjudge_register_host("judgehost-admin-snapshot")
         resp = settings_judgehost_snapshot(user="alice")
         self.assertEqual(resp.status_code, 200)
         payload = json.loads(resp.body.decode("utf-8", errors="replace"))
