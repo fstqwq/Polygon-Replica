@@ -159,6 +159,7 @@ def _create_ready_batch(
     ordinals: list[int],
     service_class: str = "background",
     scope: int = 1,
+    verification_id: str = "ver-1",
 ) -> int:
     batch_id, now_text = _create_staged_batch(
         scheduler,
@@ -167,6 +168,7 @@ def _create_ready_batch(
         ordinals=ordinals,
         service_class=service_class,
         scope=scope,
+        verification_id=verification_id,
     )
     scheduler.activate_task_cases(task_id, now_text=now_text)
     claims = scheduler.claim_cache_cases(
@@ -288,6 +290,73 @@ class TestJudgehostScheduler(unittest.TestCase):
             now_text=datetime.now(timezone.utc).isoformat(),
         )
         self.assertEqual([row["ordinal"] for row in background], [1, 2, 10])
+
+    def test_ready_batch_spreads_first_claims_within_verification(self) -> None:
+        scheduler = BatchScheduler(id_base=125)
+        first_id = _create_ready_batch(
+            scheduler,
+            task_id="spread-first",
+            run_id="run-spread-first",
+            ordinals=[1],
+        )
+        second_id = _create_ready_batch(
+            scheduler,
+            task_id="spread-second",
+            run_id="run-spread-second",
+            ordinals=[2],
+        )
+
+        self.assertEqual(scheduler.select_ready_batch("host-a")["batch_id"], first_id)
+        self.assertEqual(scheduler.select_ready_batch("host-b")["batch_id"], second_id)
+        self.assertEqual(scheduler.select_ready_batch("host-c")["batch_id"], first_id)
+        self.assertEqual(scheduler.select_ready_batch("host-a")["batch_id"], first_id)
+
+    def test_ready_batch_claim_does_not_reorder_verification_scopes(self) -> None:
+        scheduler = BatchScheduler(id_base=140)
+        older_id = _create_ready_batch(
+            scheduler,
+            task_id="older-claimed",
+            run_id="run-older-claimed",
+            ordinals=[1],
+            scope=1,
+            verification_id="ver-1",
+        )
+        _create_ready_batch(
+            scheduler,
+            task_id="newer-unclaimed",
+            run_id="run-newer-unclaimed",
+            ordinals=[1],
+            scope=2,
+            verification_id="ver-2",
+        )
+
+        self.assertEqual(scheduler.select_ready_batch("host-a")["batch_id"], older_id)
+        self.assertEqual(scheduler.select_ready_batch("host-b")["batch_id"], older_id)
+
+    def test_direct_case_lease_marks_batch_claimed(self) -> None:
+        scheduler = BatchScheduler(id_base=155)
+        first_id = _create_ready_batch(
+            scheduler,
+            task_id="direct-claimed",
+            run_id="run-direct-claimed",
+            ordinals=[1, 2],
+        )
+        second_id = _create_ready_batch(
+            scheduler,
+            task_id="direct-unclaimed",
+            run_id="run-direct-unclaimed",
+            ordinals=[3],
+        )
+
+        leased = scheduler.lease_cases(
+            first_id,
+            hostname="direct-host",
+            limit=1,
+            now_text=datetime.now(timezone.utc).isoformat(),
+        )
+
+        self.assertEqual([row["ordinal"] for row in leased], [1])
+        self.assertEqual(scheduler.select_ready_batch("other-host")["batch_id"], second_id)
 
     def test_batch_and_case_ids_share_one_collision_free_namespace(self) -> None:
         scheduler = BatchScheduler(id_base=150)

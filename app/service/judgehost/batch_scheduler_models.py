@@ -154,6 +154,7 @@ class ExecutionBatchRecord:
     compile_owner: str | None
     materialization_state: str
     service_class: str
+    has_been_claimed: bool
     admission_sequence: int
     generation: int
     compile_output_b64: str | None

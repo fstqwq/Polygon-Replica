@@ -62,7 +62,7 @@ class BatchScheduler(BatchSchedulerResultMixin):
         self._batch_ids_by_compile_key: dict[str, set[int]] = defaultdict(set)
         self._batch_ids_by_verification: dict[str, set[int]] = defaultdict(set)
         self._verification_by_domjudge_job_id: dict[int, str] = {}
-        self._ready_batches: list[tuple[int, int, int, int, int, int]] = []
+        self._ready_batches: list[tuple[int, int, int, int, int, int, int]] = []
         self._cache_heaps_by_batch: dict[int, list[tuple[int, int, int, int]]] = defaultdict(list)
         self._runnable_heaps_by_batch: dict[int, list[tuple[int, int, int, int]]] = defaultdict(list)
         self._active_batch_by_host: dict[str, int] = {}
@@ -134,6 +134,7 @@ class BatchScheduler(BatchSchedulerResultMixin):
         row = asdict(batch)
         row.pop("admission_sequence")
         row.pop("generation")
+        row.pop("has_been_claimed")
         return row  # type: ignore[return-value]
 
     @staticmethod
@@ -242,13 +243,17 @@ class BatchScheduler(BatchSchedulerResultMixin):
             return None
         return pending
 
-    def _batch_heap_key_locked(self, batch: ExecutionBatchRecord) -> tuple[int, int, int, int, int, int] | None:
+    def _batch_heap_key_locked(
+        self,
+        batch: ExecutionBatchRecord,
+    ) -> tuple[int, int, int, int, int, int, int] | None:
         case = self._batch_next_case_locked(batch)
         if case is None:
             return None
         return (
             self._priority(batch),
             case.scope_sequence,
+            int(batch.has_been_claimed),
             case.ordinal,
             batch.admission_sequence,
             batch.batch_id,
@@ -461,7 +466,15 @@ class BatchScheduler(BatchSchedulerResultMixin):
 
     def _peek_ready_batch_locked(self) -> ExecutionBatchRecord | None:
         while self._ready_batches:
-            _service, _scope, _ordinal, _admission, batch_id, generation = self._ready_batches[0]
+            (
+                _service,
+                _scope,
+                _claimed,
+                _ordinal,
+                _admission,
+                batch_id,
+                generation,
+            ) = self._ready_batches[0]
             batch = self._batches.get(batch_id)
             key = None if batch is None else self._batch_heap_key_locked(batch)
             if key is not None and batch is not None and batch.generation == generation and key == self._ready_batches[0]:
@@ -493,10 +506,12 @@ class BatchScheduler(BatchSchedulerResultMixin):
                 if active_case is None:
                     self._active_batch_by_host.pop(hostname, None)
                 return None
-            # Claiming selects work but does not change readiness. The first
-            # Case/Batch transition invalidates this generation; keeping the key
-            # here also makes a failed cache setup naturally retryable.
             self._active_batch_by_host[hostname] = global_batch.batch_id
+            if not global_batch.has_been_claimed:
+                # Keep later hosts on unclaimed batches in the same verification
+                # before sharing one that another host has already selected.
+                global_batch.has_been_claimed = True
+                self._touch_batch_locked(global_batch)
             return self._batch_row(global_batch)
 
     def host_leased_case_count(self, hostname: str) -> int:
@@ -806,6 +821,7 @@ class BatchScheduler(BatchSchedulerResultMixin):
                     "ready" if source_path and work_root else "unmaterialized"
                 ),
                 service_class=service_class,
+                has_been_claimed=False,
                 admission_sequence=next(self._sequence),
                 generation=1,
                 compile_output_b64=None,
@@ -1025,6 +1041,7 @@ class BatchScheduler(BatchSchedulerResultMixin):
             first = self._peek_case_heap_locked(batch.batch_id, status="pending")
             if first is None:
                 return []
+            batch.has_been_claimed = True
             if batch.compile_state == "unknown":
                 cap = 1
                 batch.compile_owner = hostname
