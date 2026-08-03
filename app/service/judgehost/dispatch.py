@@ -27,9 +27,9 @@ from .core import JudgehostCore
 from .dispatch_cache import (
     DispatchCacheMixin,
     _DomjudgeCacheEntry,
-    _DomjudgeCachedCaseBundle,
 )
-from .job_scheduler_models import JobSpec
+from .case_result import build_case_result
+from .job_scheduler_models import CaseResult, JobSpec
 from .result import ResultProcessor
 from .state import JudgehostState
 from .task_queue import TaskQueue
@@ -110,6 +110,9 @@ class DispatchHandler(DispatchCacheMixin):
     CASE_CACHE_KIND = DomjudgeToolkit.CASE_CACHE_KIND
     _TASK_KIND_COMPILE_ONLY = "compile-only"
     _TASK_KIND_MAIN_CORRECT = "main-correct"
+    _CACHE_PROBE_LIMIT = 512
+    _CACHE_PROBE_CLAIM_SIZE = 32
+    _CACHE_PROBE_BUDGET_SEC = 0.25
 
     def __init__(self, state: JudgehostState, core: JudgehostCore, queue: TaskQueue, result: ResultProcessor, toolkit: DomjudgeToolkit) -> None:
         self._s = state
@@ -371,7 +374,7 @@ class DispatchHandler(DispatchCacheMixin):
         blobs: dict[str, bytes],
         cache_key_hash: str,
         cache_signature: str,
-    ) -> _DomjudgeCachedCaseBundle:
+    ) -> CaseResult:
         output_run_rel = domjudge_text(built.get("output_run_rel"))
         output_error_rel = domjudge_text(built.get("output_error_rel")) or None
         output_diff_rel = domjudge_text(built.get("output_diff_rel")) or None
@@ -404,38 +407,26 @@ class DispatchHandler(DispatchCacheMixin):
         wall_sec = domjudge_parse_float(built.get("wall_sec"), 0.0)
         memory_kb = domjudge_parse_int(built.get("memory_kb"), 0)
         answer_correct = compare_exit_code == 42
-        test_row = self._result._domjudge_verification_test_row(
+        return build_case_result(
             test_name=test_name,
+            runresult=runresult,
             verdict=domjudge_verdict_from_runresult(runresult),
             runtime_sec=runtime_sec,
             cpu_sec=cpu_sec,
             wall_sec=wall_sec,
             memory_kb=memory_kb,
+            score_text=domjudge_text(built.get("score_text")),
+            output_run_rel=output_run_rel,
+            output_error_rel=output_error_rel or "",
+            output_system_rel=domjudge_text(built.get("output_system_rel")),
+            output_diff_rel=output_diff_rel or "",
+            metadata_rel=domjudge_text(built.get("metadata_rel")),
+            compare_metadata_rel=domjudge_text(built.get("compare_metadata_rel")),
+            team_message_rel=team_message_rel or "",
             feedback_text=feedback_text,
-            output_ref=output_run_rel,
-            runresult=runresult,
             feedback_files=feedback_files,
             answer_correct=answer_correct,
         )
-        return {
-            "runresult": runresult,
-            "runtime_sec": runtime_sec,
-            "cpu_sec": cpu_sec,
-            "wall_sec": wall_sec,
-            "memory_kb": memory_kb,
-            "output_run_rel": output_run_rel,
-            "output_error_rel": output_error_rel,
-            "output_system_rel": domjudge_text(built.get("output_system_rel")) or None,
-            "output_diff_rel": output_diff_rel,
-            "metadata_rel": domjudge_text(built.get("metadata_rel")) or None,
-            "compare_metadata_rel": domjudge_text(built.get("compare_metadata_rel")) or None,
-            "team_message_rel": team_message_rel,
-            "score_text": domjudge_text(built.get("score_text")) or None,
-            "feedback_text": feedback_text,
-            "feedback_files": feedback_files,
-            "answer_correct": answer_correct,
-            "test_row": test_row,
-        }
 
 
     def _domjudge_stage_task(self, task: dict[str, object], *, group_key: str = "") -> int:
@@ -669,16 +660,23 @@ class DispatchHandler(DispatchCacheMixin):
             return []
         self._result.retry_due_finalizations(limit=1)
         cap = self._s.fetch_batch_size if max_batchsize is None else max(1, min(256, int(max_batchsize)))
-        for _attempt in range(256):
-            job_row = self._s.job_scheduler.claim_ready_job(safe_host)
+        cache_remaining = self._CACHE_PROBE_LIMIT
+        deadline = time.monotonic() + self._CACHE_PROBE_BUDGET_SEC
+        first_transition = True
+        while first_transition or time.monotonic() < deadline:
+            first_transition = False
+            job_row = self._s.job_scheduler.select_ready_job(safe_host)
             if job_row is None:
                 self._queue._record_host_event_conn(hostname=safe_host, action="fetch")
                 return []
             job_id = int(job_row["job_id"])
-            self._domjudge_apply_cache_shortcuts_for_job(
+            processed = self._domjudge_apply_cache_shortcuts_for_job(
                 job_id,
                 hostname=safe_host,
+                limit=min(cache_remaining, self._CACHE_PROBE_CLAIM_SIZE),
+                deadline=deadline,
             )
+            cache_remaining -= processed
             refreshed = self._s.job_scheduler.fetch_job(job_id)
             if refreshed is None or domjudge_lower_text(refreshed["status"]) != "open":
                 continue
@@ -687,10 +685,11 @@ class DispatchHandler(DispatchCacheMixin):
                 and self._s.job_scheduler.job_case_count(job_id, status="pending") > 0
             )
             if needs_materialization and not self._domjudge_materialize_job(job_id):
-                continue
+                return []
             leased_cases = self._domjudge_lease_cases(job_id, safe_host, cap)
             if leased_cases:
                 return leased_cases
             self._result._domjudge_finalize_if_ready(job_id)
-        logger.error("judgehost fetch exceeded transition bound host=%s", safe_host)
+            if processed == 0 or cache_remaining <= 0:
+                break
         return []

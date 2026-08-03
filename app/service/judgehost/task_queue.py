@@ -2,25 +2,16 @@ from __future__ import annotations
 
 import time
 from datetime import datetime, timezone
-from pathlib import Path
 
 from app.db import now_iso
-from app.service.judgehost.runtime import (
-    domjudge_feedback_text_and_files,
-    domjudge_feedback_text_from_text,
-    domjudge_parse_int,
-    domjudge_parse_meta_text,
-    domjudge_verdict_from_runresult,
-    parse_iso_utc,
-)
+from app.service.judgehost.runtime import parse_iso_utc
 from app.service.verification.task_scheduler import notify_verification_task_terminal
-from app.service.verification.test_rows import build_verification_test_pass_row, build_verification_test_row
 
+from .case_result import decode_case_test_row
 from .core import JudgehostCore
 from .payload_retention import compact_payload_for_retention
 from .payload_retention import compact_task_row_payload
 from .state import JudgehostState
-from .toolkit import DomjudgeToolkit
 
 
 class TaskQueue:
@@ -32,10 +23,9 @@ class TaskQueue:
     STATUS_REPORTING = "reporting"
     _TASK_KIND_MAIN_CORRECT = "main-correct"
 
-    def __init__(self, state: JudgehostState, core: JudgehostCore, toolkit: DomjudgeToolkit) -> None:
+    def __init__(self, state: JudgehostState, core: JudgehostCore) -> None:
         self._s = state
         self._core = core
-        self._toolkit = toolkit
 
     @staticmethod
     def compact_payload_for_retention(payload: object) -> dict[str, object]:
@@ -150,39 +140,6 @@ class TaskQueue:
             if message:
                 return message
         return summary.get("error") or ""
-
-    def _case_feedback_text_and_files(self, case_row: dict[str, object]) -> tuple[str, list[str]]:
-        work_root_token = str(case_row.get("work_root") or "")
-        work_root = Path(work_root_token).resolve() if work_root_token else None
-        feedback_text, feedback_files = domjudge_feedback_text_and_files(
-            read_blob=(
-                (lambda token: self._toolkit.read_artifact_blob(work_root, token))
-                if work_root is not None
-                else (lambda _token: None)
-            ),
-            runresult=str(case_row.get("runresult") or ""),
-            output_error_rel=str(case_row.get("output_error_rel") or ""),
-            output_diff_rel=str(case_row.get("output_diff_rel") or ""),
-            team_message_rel=str(case_row.get("team_message_rel") or ""),
-        )
-        if feedback_text:
-            return feedback_text, feedback_files
-        debug_text = domjudge_feedback_text_from_text(str(case_row.get("debug_text") or ""))
-        if debug_text:
-            return debug_text, feedback_files
-        return "", feedback_files
-
-    def _case_answer_correct(self, case_row: dict[str, object]) -> bool:
-        work_root_token = str(case_row.get("work_root") or "")
-        compare_metadata_rel = str(case_row.get("compare_metadata_rel") or "")
-        if not work_root_token or not compare_metadata_rel:
-            return False
-        work_root = Path(work_root_token).resolve()
-        compare_meta_blob = self._toolkit.read_artifact_blob(work_root, compare_metadata_rel)
-        if not compare_meta_blob:
-            return False
-        compare_meta = domjudge_parse_meta_text(compare_meta_blob.decode("utf-8", errors="replace"))
-        return domjudge_parse_int(compare_meta.get("exitcode"), -1) == 42
 
     def report_result(
         self,
@@ -388,74 +345,22 @@ class TaskQueue:
         row = self._core.task_by_id(task_id)
         if row is None:
             raise RuntimeError("judgehost task disappeared")
-        case_row = self._s.job_scheduler.case_for_task(task_id, test_name)
-        if case_row is not None and str(case_row["status"] or "") == "reported":
+        case_result = self._s.job_scheduler.case_result_for_task(task_id, test_name)
+        if case_result is not None:
             verification_id = str(row["verification_id"] or "")
             run_id = str(row["run_id"] or "")
             task_kind = str((row.get("payload") or {}).get("task_kind") or "")
-            runresult = str(case_row["runresult"] or "")
-            verdict = domjudge_verdict_from_runresult(runresult)
+            runresult = case_result.runresult
+            verdict = case_result.verdict
             summary = self._task_summary_for_row(
                 row,
                 run_id=run_id,
                 verification_id=verification_id,
             )
-            tests = summary.get("tests")
-            selected_test_row = None
-            if isinstance(tests, list):
-                for item in tests:
-                    if isinstance(item, dict) and str(item.get("test") or "") == test_name:
-                        selected_test_row = dict(item)
-                        break
-            if selected_test_row is None:
-                answer_correct = self._case_answer_correct(case_row)
-                cpu_ms = max(0, int(round(float(case_row["cpu_sec"] or case_row["runtime_sec"] or 0.0) * 1000.0)))
-                wall_ms = max(0, int(round(float(case_row["wall_sec"] or case_row["cpu_sec"] or case_row["runtime_sec"] or 0.0) * 1000.0)))
-                memory_kb = max(0, int(case_row["memory_kb"] or 0))
-                feedback_text, feedback_files = self._case_feedback_text_and_files(case_row)
-                selected_test_row = build_verification_test_row(
-                    test_name=test_name,
-                    verdict=domjudge_verdict_from_runresult(str(case_row["runresult"] or "")),
-                    time_ms=cpu_ms,
-                    time_user_ms=cpu_ms,
-                    time_wall_ms=wall_ms,
-                    memory_kb=memory_kb,
-                    message=feedback_text,
-                    output_ref=str(case_row["output_run_rel"] or ""),
-                    feedback_files=feedback_files,
-                    passes=[
-                        build_verification_test_pass_row(
-                            verdict=domjudge_verdict_from_runresult(str(case_row["runresult"] or "")),
-                            time_ms=cpu_ms,
-                            time_user_ms=cpu_ms,
-                            time_wall_ms=wall_ms,
-                            memory_kb=memory_kb,
-                            feedback=feedback_text,
-                            output_ref=str(case_row["output_run_rel"] or ""),
-                            runresult=str(case_row["runresult"] or ""),
-                            answer_correct=answer_correct,
-                        )
-                    ],
-                    runresult=str(case_row["runresult"] or ""),
-                    answer_correct=answer_correct,
-                )
-                recovered_error = feedback_text
-            else:
-                selected_test_row["answer_correct"] = bool(
-                    selected_test_row.get("answer_correct") or self._case_answer_correct(case_row)
-                )
-                recovered_error = str(selected_test_row.get("message") or "")
-                if not recovered_error:
-                    feedback_text, feedback_files = self._case_feedback_text_and_files(case_row)
-                    if feedback_text:
-                        selected_test_row["message"] = feedback_text
-                        recovered_error = feedback_text
-                    if feedback_files and not list(selected_test_row.get("feedback_files") or []):
-                        selected_test_row["feedback_files"] = feedback_files
-                    if (not str(selected_test_row.get("output_ref") or "")) and str(case_row.get("output_run_rel") or ""):
-                        selected_test_row["output_ref"] = str(case_row.get("output_run_rel") or "")
+            selected_test_row = decode_case_test_row(case_result)
+            recovered_error = case_result.feedback_text
             summary_error = str(summary.get("error") or "")
-            if (not summary_error) and recovered_error and str(case_row["runresult"] or "") in {
+            if (not summary_error) and recovered_error and runresult in {
                 "checker-fail",
                 "compare-error",
                 "internal-error",

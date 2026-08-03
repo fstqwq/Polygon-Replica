@@ -7,36 +7,21 @@ import time
 from collections import defaultdict
 from contextlib import contextmanager
 from dataclasses import asdict
-from collections.abc import Iterator
-
-from app.service.platform.rwlock import WriterPriorityRWLock
+from collections.abc import Iterable, Iterator
 
 from .domjudge.client import domjudge_script_id
 from .job_scheduler_models import (
     JudgehostCaseRow,
     JudgehostJobAppendResult,
     JudgehostJobRow,
+    CaseResult,
     CaseRecord,
     JobSpec,
     JobRecord,
     StatusCounts,
+    TaskCaseCounts,
 )
 from .job_scheduler_results import JobSchedulerResultMixin
-
-
-class _ExclusiveLockAdapter:
-    def __init__(self, lock: threading.RLock) -> None:
-        self._lock = lock
-
-    @contextmanager
-    def read_lock(self) -> Iterator[None]:
-        with self._lock:
-            yield
-
-    @contextmanager
-    def write_lock(self) -> Iterator[None]:
-        with self._lock:
-            yield
 
 
 class JobScheduler(JobSchedulerResultMixin):
@@ -46,14 +31,14 @@ class JobScheduler(JobSchedulerResultMixin):
     _TERMINAL_CASE_STATUSES = frozenset({"reported", "cancelled"})
 
     def __init__(self, lock: threading.RLock | None = None, *, id_base: int | None = None):
-        self._lock = WriterPriorityRWLock() if lock is None else _ExclusiveLockAdapter(lock)
+        self._lock = threading.RLock() if lock is None else lock
         self._id_base = max(1, int(id_base if id_base is not None else time.time() * 1000))
         self._entity_ids = itertools.count(self._id_base + 1)
         self._jobs: dict[int, JobRecord] = {}
         self._cases: dict[int, CaseRecord] = {}
-        self._case_ids_by_job: dict[int, list[int]] = defaultdict(list)
-        self._case_ids_by_task: dict[str, list[int]] = defaultdict(list)
-        self._case_ids_by_run: dict[str, list[int]] = defaultdict(list)
+        self._case_ids_by_job: dict[int, set[int]] = defaultdict(set)
+        self._case_ids_by_task: dict[str, set[int]] = defaultdict(set)
+        self._case_ids_by_run: dict[str, set[int]] = defaultdict(set)
         self._case_ids_by_testcase: dict[int, set[int]] = defaultdict(set)
         self._latest_case_id_by_task_test: dict[tuple[str, str], int] = {}
         self._job_id_by_task: dict[str, int] = {}
@@ -66,6 +51,7 @@ class JobScheduler(JobSchedulerResultMixin):
         self._empty_job_ids: set[int] = set()
         self._job_counts: dict[int, StatusCounts] = {}
         self._run_counts: dict[str, StatusCounts] = defaultdict(StatusCounts)
+        self._task_case_counts: dict[str, TaskCaseCounts] = defaultdict(TaskCaseCounts)
         self._sequence = itertools.count()
         self._scope_sequence_by_verification: dict[str, int] = {}
         self._job_specs: dict[int, JobSpec] = {}
@@ -74,6 +60,8 @@ class JobScheduler(JobSchedulerResultMixin):
         self._runnable_heaps_by_job: dict[int, list[tuple[int, int, int, int]]] = defaultdict(list)
         self._active_job_by_host: dict[str, int] = {}
         self._ready_job_ids: set[int] = set()
+        self._finalization_retry_heap: list[tuple[float, int]] = []
+        self._finalization_retry_deadlines: dict[int, float] = {}
         self._group_activity_guard = threading.Lock()
         self._group_activity_locks: dict[str, tuple[threading.RLock, int]] = {}
 
@@ -96,7 +84,7 @@ class JobScheduler(JobSchedulerResultMixin):
                     self._group_activity_locks[token] = (current_lock, current_users - 1)
 
     def reset(self) -> None:
-        with self._lock.write_lock():
+        with self._lock:
             self._jobs.clear()
             self._cases.clear()
             self._case_ids_by_job.clear()
@@ -114,6 +102,7 @@ class JobScheduler(JobSchedulerResultMixin):
             self._empty_job_ids.clear()
             self._job_counts.clear()
             self._run_counts.clear()
+            self._task_case_counts.clear()
             self._scope_sequence_by_verification.clear()
             self._job_specs.clear()
             self._ready_jobs.clear()
@@ -121,6 +110,8 @@ class JobScheduler(JobSchedulerResultMixin):
             self._runnable_heaps_by_job.clear()
             self._active_job_by_host.clear()
             self._ready_job_ids.clear()
+            self._finalization_retry_heap.clear()
+            self._finalization_retry_deadlines.clear()
 
     @staticmethod
     def _priority(job: JobRecord) -> int:
@@ -137,6 +128,22 @@ class JobScheduler(JobSchedulerResultMixin):
     def _case_row(case: CaseRecord) -> JudgehostCaseRow:
         row = asdict(case)
         row.pop("heap_generation")
+        result = row.pop("result")
+        row.pop("cancel_requested")
+        row.pop("terminal_result")
+        row.pop("requeue_on_abort")
+        row.pop("claim_generation")
+        result_fields = (
+            "runresult", "runtime_sec", "cpu_sec", "wall_sec", "memory_kb",
+            "output_run_rel", "output_error_rel", "output_system_rel", "output_diff_rel",
+            "metadata_rel", "compare_metadata_rel", "team_message_rel", "score_text",
+        )
+        if result is None:
+            for field in result_fields:
+                row[field] = None
+        else:
+            for field in result_fields:
+                row[field] = result[field]
         return row  # type: ignore[return-value]
 
     @staticmethod
@@ -254,6 +261,16 @@ class JobScheduler(JobSchedulerResultMixin):
             setattr(job, field, value)
         self._touch_job_locked(job)
 
+    def _close_job_locked(self, job: JobRecord, *, updated_at: str) -> None:
+        if job.status != "open":
+            return
+        self._index_job_scripts_locked(job, -1)
+        if job.group_key and self._appendable_job_id_by_group.get(job.group_key) == job.job_id:
+            self._appendable_job_id_by_group.pop(job.group_key, None)
+        job.status = "finalize-pending"
+        job.updated_at = updated_at
+        self._touch_job_locked(job)
+
     def _index_job_scripts_locked(self, job: JobRecord, delta: int) -> None:
         for kind, script_hash in (
             ("compile", job.compile_hash),
@@ -295,13 +312,23 @@ class JobScheduler(JobSchedulerResultMixin):
         refresh_job: bool = True,
     ) -> None:
         old_status = case.status
+        if old_status == status:
+            return
         old_owner = case.lease_owner
         job = self._jobs[case.job_id]
         self._adjust_counts(self._job_counts[case.job_id], old_status, -1)
         self._adjust_counts(self._job_counts[case.job_id], status, 1)
         self._adjust_counts(self._run_counts[case.run_id], old_status, -1)
         self._adjust_counts(self._run_counts[case.run_id], status, 1)
-        if old_status == "leased" and old_owner:
+        task_counts = self._task_case_counts[case.task_id]
+        if (
+            old_status not in self._TERMINAL_CASE_STATUSES
+            and status in self._TERMINAL_CASE_STATUSES
+        ):
+            task_counts.remaining -= 1
+            if task_counts.remaining < 0:
+                raise RuntimeError("judgehost task remaining case count underflow")
+        if old_status in {"leased", "reporting"} and old_owner:
             leased_ids = self._leased_case_ids_by_host[old_owner]
             leased_ids.discard(case.id)
             if not leased_ids:
@@ -310,10 +337,18 @@ class JobScheduler(JobSchedulerResultMixin):
         case.lease_owner = lease_owner
         case.heap_generation += 1
         case.updated_at = updated_at
-        if status == "leased" and lease_owner:
+        if status in {"leased", "reporting"} and lease_owner:
             self._leased_case_ids_by_host[lease_owner].add(case.id)
             self._active_job_by_host[lease_owner] = case.job_id
         self._push_case_locked(case)
+        counts = self._job_counts[case.job_id]
+        if (
+            job.status == "open"
+            and counts.total > 0
+            and counts.terminal == counts.total
+            and job.materialization_state != "materializing"
+        ):
+            self._close_job_locked(job, updated_at=updated_at)
         if refresh_job:
             self._refresh_jobs_locked({job.job_id})
 
@@ -345,7 +380,6 @@ class JobScheduler(JobSchedulerResultMixin):
         source: dict[str, object],
         status: str,
         created_at: str,
-        compiler_error: bool = False,
     ) -> CaseRecord:
         case_id = next(self._entity_ids)
         case = CaseRecord(
@@ -363,30 +397,22 @@ class JobScheduler(JobSchedulerResultMixin):
             testcase_answer_hash=str(source["testcase_answer_hash"]),
             input_ref=str(source["input_ref"]),
             answer_ref=str(source["answer_ref"]),
-            status="reported" if compiler_error else status,
+            status=status,
             lease_owner=None,
-            runresult="compiler-error" if compiler_error else None,
-            runtime_sec=0.0 if compiler_error else None,
-            cpu_sec=0.0 if compiler_error else None,
-            wall_sec=0.0 if compiler_error else None,
-            memory_kb=0 if compiler_error else None,
-            output_run_rel="" if compiler_error else None,
-            output_error_rel="" if compiler_error else None,
-            output_system_rel="" if compiler_error else None,
-            output_diff_rel="" if compiler_error else None,
-            metadata_rel="" if compiler_error else None,
-            compare_metadata_rel="" if compiler_error else None,
-            team_message_rel="" if compiler_error else None,
-            score_text="" if compiler_error else None,
+            result=None,
             debug_text="",
             verification_published=False,
+            cancel_requested=False,
+            terminal_result=None,
+            requeue_on_abort=False,
+            claim_generation=0,
             created_at=created_at,
             updated_at=created_at,
         )
         self._cases[case_id] = case
-        self._case_ids_by_job[job_id].append(case_id)
-        self._case_ids_by_task[task_id].append(case_id)
-        self._case_ids_by_run[run_id].append(case_id)
+        self._case_ids_by_job[job_id].add(case_id)
+        self._case_ids_by_task[task_id].add(case_id)
+        self._case_ids_by_run[run_id].add(case_id)
         if case.testcase_id is not None:
             self._case_ids_by_testcase[case.testcase_id].add(case_id)
         self._latest_case_id_by_task_test[(task_id, test_name)] = case_id
@@ -394,18 +420,22 @@ class JobScheduler(JobSchedulerResultMixin):
         self._job_ids_by_run[run_id].add(job_id)
         self._adjust_counts(self._job_counts[job_id], case.status, 1)
         self._adjust_counts(self._run_counts[run_id], case.status, 1)
+        task_counts = self._task_case_counts[task_id]
+        task_counts.total += 1
+        if case.status not in self._TERMINAL_CASE_STATUSES:
+            task_counts.remaining += 1
         self._empty_job_ids.discard(job_id)
         self._push_case_locked(case)
         return case
 
-    def _sorted_cases_locked(self, case_ids: list[int]) -> list[CaseRecord]:
+    def _sorted_cases_locked(self, case_ids: Iterable[int]) -> list[CaseRecord]:
         return sorted(
             (self._cases[case_id] for case_id in case_ids if case_id in self._cases),
             key=lambda row: (row.ordinal, row.id),
         )
 
     def active_job_for_host(self, hostname: str) -> JudgehostJobRow | None:
-        with self._lock.read_lock():
+        with self._lock:
             job_id = self._active_job_by_host.get(hostname)
             job = None if job_id is None else self._jobs.get(job_id)
             return None if job is None or job.status != "open" else self._job_row(job)
@@ -420,8 +450,8 @@ class JobScheduler(JobSchedulerResultMixin):
             heapq.heappop(self._ready_jobs)
         return None
 
-    def claim_ready_job(self, hostname: str) -> JudgehostJobRow | None:
-        with self._lock.write_lock():
+    def select_ready_job(self, hostname: str) -> JudgehostJobRow | None:
+        with self._lock:
             active_id = self._active_job_by_host.get(hostname)
             active = None if active_id is None else self._jobs.get(active_id)
             global_job = self._peek_ready_job_locked()
@@ -451,17 +481,17 @@ class JobScheduler(JobSchedulerResultMixin):
             return self._job_row(global_job)
 
     def host_leased_case_count(self, hostname: str) -> int:
-        with self._lock.read_lock():
+        with self._lock:
             return len(self._leased_case_ids_by_host.get(hostname, ()))
 
     def job_case_count(self, job_id: int, *, status: str) -> int:
         """Return a case-state count without scanning a job's cases."""
-        with self._lock.read_lock():
+        with self._lock:
             counts = self._job_counts.get(int(job_id))
             return 0 if counts is None else int(getattr(counts, self._status_attr(status)))
 
     def active_lease_counts(self) -> dict[str, int]:
-        with self._lock.read_lock():
+        with self._lock:
             return {
                 hostname: len(case_ids)
                 for hostname, case_ids in self._leased_case_ids_by_host.items()
@@ -469,27 +499,39 @@ class JobScheduler(JobSchedulerResultMixin):
             }
 
     def cases_for_job(self, job_id: int, *, status: str | None = None) -> list[JudgehostCaseRow]:
-        with self._lock.read_lock():
+        with self._lock:
             rows = self._sorted_cases_locked(self._case_ids_by_job.get(int(job_id), []))
             if status:
                 rows = [row for row in rows if row.status == status]
             return [self._case_row(row) for row in rows]
 
     def cases_for_task(self, task_id: str) -> list[JudgehostCaseRow]:
-        with self._lock.read_lock():
+        with self._lock:
             return [
                 self._case_row(row)
                 for row in self._sorted_cases_locked(self._case_ids_by_task.get(task_id, []))
             ]
 
+    def task_cases_terminal(self, task_id: str) -> bool:
+        with self._lock:
+            counts = self._task_case_counts.get(task_id)
+            return bool(counts is not None and counts.total > 0 and counts.remaining == 0)
+
+    def task_case_results(self, task_id: str) -> list[tuple[JudgehostCaseRow, CaseResult | None]]:
+        with self._lock:
+            return [
+                (self._case_row(case), case.result)
+                for case in self._sorted_cases_locked(self._case_ids_by_task.get(task_id, ()))
+            ]
+
     def fetch_job(self, job_id: int) -> JudgehostJobRow | None:
-        with self._lock.read_lock():
+        with self._lock:
             job = self._jobs.get(int(job_id))
             return None if job is None else self._job_row(job)
 
     def scope_sequence(self, verification_id: str) -> int:
         token = verification_id or "__direct__"
-        with self._lock.write_lock():
+        with self._lock:
             sequence = self._scope_sequence_by_verification.get(token)
             if sequence is None:
                 sequence = next(self._sequence)
@@ -498,15 +540,15 @@ class JobScheduler(JobSchedulerResultMixin):
 
     def forget_scope(self, verification_id: str) -> None:
         token = verification_id or "__direct__"
-        with self._lock.write_lock():
+        with self._lock:
             self._scope_sequence_by_verification.pop(token, None)
 
     def job_spec(self, job_id: int) -> JobSpec | None:
-        with self._lock.read_lock():
+        with self._lock:
             return self._job_specs.get(int(job_id))
 
     def claim_materialization(self, job_id: int, *, now_text: str) -> bool:
-        with self._lock.write_lock():
+        with self._lock:
             job = self._jobs.get(int(job_id))
             if job is None or job.status != "open" or job.materialization_state != "unmaterialized":
                 return False
@@ -522,7 +564,7 @@ class JobScheduler(JobSchedulerResultMixin):
         success: bool,
         now_text: str,
     ) -> bool:
-        with self._lock.write_lock():
+        with self._lock:
             job = self._jobs.get(int(job_id))
             if job is None or job.status != "open" or job.materialization_state != "materializing":
                 return False
@@ -536,22 +578,25 @@ class JobScheduler(JobSchedulerResultMixin):
                 materialization_state="ready" if success else "failed",
                 updated_at=now_text,
             )
+            counts = self._job_counts[job.job_id]
+            if counts.total > 0 and counts.terminal == counts.total:
+                self._close_job_locked(job, updated_at=now_text)
             return True
 
     def job_for_task(self, task_id: str) -> JudgehostJobRow | None:
-        with self._lock.read_lock():
+        with self._lock:
             job_id = self._job_id_by_task.get(task_id)
             return None if job_id is None else self._job_row(self._jobs[job_id])
 
     def job_for_run(self, run_id: str) -> JudgehostJobRow | None:
-        with self._lock.read_lock():
+        with self._lock:
             job_ids = self._job_ids_by_run.get(run_id)
             if not job_ids:
                 return None
             return self._job_row(self._jobs[max(job_ids)])
 
     def job_for_group_key(self, group_key: str) -> JudgehostJobRow | None:
-        with self._lock.read_lock():
+        with self._lock:
             job_id = self._appendable_job_id_by_group.get(group_key)
             if job_id is None:
                 return None
@@ -559,12 +604,12 @@ class JobScheduler(JobSchedulerResultMixin):
             return self._job_row(job)
 
     def fetch_case(self, case_id: int) -> JudgehostCaseRow | None:
-        with self._lock.read_lock():
+        with self._lock:
             case = self._cases.get(int(case_id))
             return None if case is None else self._case_row(case)
 
     def cases_for_run(self, run_id: str) -> list[JudgehostCaseRow]:
-        with self._lock.read_lock():
+        with self._lock:
             return [
                 self._case_row(row)
                 for row in self._sorted_cases_locked(self._case_ids_by_run.get(run_id, []))
@@ -576,7 +621,7 @@ class JobScheduler(JobSchedulerResultMixin):
         *,
         contest_id: str | None = None,
     ) -> dict[str, object] | None:
-        with self._lock.read_lock():
+        with self._lock:
             job = self._jobs.get(int(submit_id)) if submit_id.isdigit() else None
             if job is None:
                 return None
@@ -592,7 +637,7 @@ class JobScheduler(JobSchedulerResultMixin):
     ) -> tuple[dict[str, object] | None, str]:
         safe_host = str(hostname or "").strip()
         token = int(testcase_id)
-        with self._lock.read_lock():
+        with self._lock:
             direct = self._cases.get(token)
             if direct is not None and direct.status == "leased":
                 return (
@@ -618,7 +663,7 @@ class JobScheduler(JobSchedulerResultMixin):
     def active_script_hashes(self, kind: str, script_id: int) -> set[str]:
         if kind not in {"compile", "run", "compare"}:
             return set()
-        with self._lock.read_lock():
+        with self._lock:
             return set(self._script_hashes_by_id.get((kind, int(script_id)), ()))
 
     def create_job_with_cases(
@@ -653,7 +698,7 @@ class JobScheduler(JobSchedulerResultMixin):
         for script_hash in (compile_hash, run_hash, compare_hash):
             if script_hash:
                 domjudge_script_id(script_hash)
-        with self._lock.write_lock():
+        with self._lock:
             if group_key:
                 existing_job_id = self._appendable_job_id_by_group.get(group_key)
                 if existing_job_id is not None:
@@ -767,7 +812,7 @@ class JobScheduler(JobSchedulerResultMixin):
             if testcase_id is not None:
                 int(testcase_id)
             status = str(row.get("status") or "staged")
-            if status not in {"staged", "cache-pending", "pending", "leased", "reported", "cancelled"}:
+            if status not in {"staged", "cache-pending", "pending"}:
                 raise RuntimeError("invalid judgehost case status")
 
     @staticmethod
@@ -792,7 +837,7 @@ class JobScheduler(JobSchedulerResultMixin):
         case_rows: list[dict[str, object]],
         now_text: str,
     ) -> JudgehostJobAppendResult:
-        with self._lock.write_lock():
+        with self._lock:
             job = self._jobs.get(int(job_id))
             if job is None:
                 return {"job_id": 0, "outcome": "closed", "inserted": 0}
@@ -845,7 +890,6 @@ class JobScheduler(JobSchedulerResultMixin):
                     source=row,
                     status="staged",
                     created_at=now_text,
-                    compiler_error=job.compile_state == "failed",
                 )
                 inserted += 1
             return {
@@ -855,7 +899,7 @@ class JobScheduler(JobSchedulerResultMixin):
             }
 
     def activate_task_cases(self, task_id: str, *, now_text: str) -> bool:
-        with self._lock.write_lock():
+        with self._lock:
             case_ids = tuple(self._case_ids_by_task.get(task_id, ()))
             if not case_ids:
                 return False
@@ -875,7 +919,7 @@ class JobScheduler(JobSchedulerResultMixin):
             return True
 
     def cancel_staged_task_cases(self, task_id: str, *, now_text: str) -> None:
-        with self._lock.write_lock():
+        with self._lock:
             affected_job_ids: set[int] = set()
             for case_id in tuple(self._case_ids_by_task.get(task_id, ())):
                 case = self._cases[case_id]
@@ -890,70 +934,6 @@ class JobScheduler(JobSchedulerResultMixin):
                     affected_job_ids.add(case.job_id)
             self._refresh_jobs_locked(affected_job_ids)
 
-    def apply_cached_case_results(
-        self,
-        *,
-        cached_rows: list[dict[str, object]],
-        lease_owner: str,
-        now_text: str,
-    ) -> list[int]:
-        applied_case_ids: list[int] = []
-        with self._lock.write_lock():
-            affected_job_ids: set[int] = set()
-            for cached in cached_rows:
-                case = self._cases.get(int(cached["case_id"]))
-                if case is None or case.status != "cache-pending":
-                    continue
-                self._transition_case_locked(
-                    case,
-                    "reported",
-                    lease_owner=lease_owner,
-                    updated_at=now_text,
-                    refresh_job=False,
-                )
-                for field in (
-                    "runresult", "runtime_sec", "cpu_sec", "wall_sec", "memory_kb",
-                    "output_run_rel", "output_error_rel", "output_system_rel", "output_diff_rel",
-                    "metadata_rel", "compare_metadata_rel", "team_message_rel", "score_text",
-                ):
-                    setattr(case, field, cached[field])
-                applied_case_ids.append(case.id)
-                affected_job_ids.add(case.job_id)
-            self._refresh_jobs_locked(affected_job_ids)
-        return applied_case_ids
-
-    def cache_pending_cases(self, job_id: int) -> list[JudgehostCaseRow]:
-        rows: list[JudgehostCaseRow] = []
-        with self._lock.write_lock():
-            heap = self._cache_heaps_by_job[int(job_id)]
-            live_entries: list[tuple[int, int, int, int]] = []
-            while (case := self._peek_case_heap_locked(int(job_id), status="cache-pending")) is not None:
-                live_entries.append(heapq.heappop(heap))
-                rows.append(self._case_row(case))
-            heap[:] = live_entries
-            heapq.heapify(heap)
-        return rows
-
-    def mark_cache_misses(self, case_ids: list[int], *, now_text: str) -> int:
-        changed = 0
-        with self._lock.write_lock():
-            affected_job_ids: set[int] = set()
-            for case_id in dict.fromkeys(int(value) for value in case_ids):
-                case = self._cases.get(case_id)
-                if case is None or case.status != "cache-pending":
-                    continue
-                self._transition_case_locked(
-                    case,
-                    "pending",
-                    lease_owner=None,
-                    updated_at=now_text,
-                    refresh_job=False,
-                )
-                changed += 1
-                affected_job_ids.add(case.job_id)
-            self._refresh_jobs_locked(affected_job_ids)
-        return changed
-
     def lease_cases(
         self,
         job_id: int,
@@ -963,7 +943,7 @@ class JobScheduler(JobSchedulerResultMixin):
         now_text: str,
     ) -> list[JudgehostCaseRow]:
         cap = max(1, min(256, int(limit)))
-        with self._lock.write_lock():
+        with self._lock:
             job = self._jobs.get(int(job_id))
             if (
                 job is None

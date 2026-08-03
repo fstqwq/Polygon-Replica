@@ -13,6 +13,28 @@ class JobSpec:
     compare_files: tuple[tuple[str, bytes, bool], ...] = ()
 
 
+@dataclass(frozen=True)
+class CaseResult:
+    runresult: str
+    verdict: str
+    runtime_sec: float
+    cpu_sec: float
+    wall_sec: float
+    memory_kb: int
+    score_text: str
+    output_run_rel: str
+    output_error_rel: str
+    output_system_rel: str
+    output_diff_rel: str
+    metadata_rel: str
+    compare_metadata_rel: str
+    team_message_rel: str
+    feedback_text: str
+    feedback_files: tuple[str, ...]
+    answer_correct: bool
+    test_row_json: str
+
+
 class JudgehostJobRow(TypedDict):
     job_id: int
     task_id: str
@@ -150,21 +172,13 @@ class CaseRecord:
     answer_ref: str
     status: str
     lease_owner: str | None
-    runresult: str | None
-    runtime_sec: float | None
-    cpu_sec: float | None
-    wall_sec: float | None
-    memory_kb: int | None
-    output_run_rel: str | None
-    output_error_rel: str | None
-    output_system_rel: str | None
-    output_diff_rel: str | None
-    metadata_rel: str | None
-    compare_metadata_rel: str | None
-    team_message_rel: str | None
-    score_text: str | None
+    result: CaseResult | None
     debug_text: str
     verification_published: bool
+    cancel_requested: bool
+    terminal_result: CaseResult | None
+    requeue_on_abort: bool
+    claim_generation: int
     created_at: str
     updated_at: str
 
@@ -173,15 +187,45 @@ class CaseRecord:
 class StatusCounts:
     staged: int = 0
     cache_pending: int = 0
+    cache_probing: int = 0
     pending: int = 0
     leased: int = 0
+    reporting: int = 0
     reported: int = 0
     cancelled: int = 0
 
     @property
     def total(self) -> int:
-        return self.staged + self.cache_pending + self.pending + self.leased + self.reported + self.cancelled
+        return (
+            self.staged
+            + self.cache_pending
+            + self.cache_probing
+            + self.pending
+            + self.leased
+            + self.reporting
+            + self.reported
+            + self.cancelled
+        )
 
     @property
     def terminal(self) -> int:
         return self.reported + self.cancelled
+
+
+@dataclass
+class TaskCaseCounts:
+    total: int = 0
+    remaining: int = 0
+
+
+@dataclass(frozen=True)
+class CaseClaim:
+    case_id: int
+    generation: int
+    job_id: int
+    task_id: str
+    test_name: str
+
+
+class CaseClaimBusy(RuntimeError):
+    """A duplicate callback arrived while the first callback still owns the Case."""

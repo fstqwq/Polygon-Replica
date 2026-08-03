@@ -159,24 +159,27 @@ The runtime keeps four distinct lifecycle layers:
 - `verification_tasks` rows are durable per-case product results. A case report updates its matching row immediately and only once.
 - A judgehost task has an immutable case set. It becomes terminal only after all of its own cases are `reported` or `cancelled`.
 - A DOMjudge case is leased independently. Explicitly disabling a host releases
-  its `leased` cases back to `pending`; a result moves a case to `reported`.
+  its `leased` cases back to `pending`; result and cache I/O first claim the Case
+  as `reporting` or `cache-probing`, then commit a terminal result.
 - A DOMjudge job is a temporary execution batch. Grouped jobs may contain several tasks, but they are not verification boundaries.
 
-Cancellation moves both pending and leased cases for the cancelled run directly
-to `cancelled`; late judgedaemon callbacks are acknowledged without reviving
-the case.
+Cancellation moves idle cases directly to `cancelled`. An in-flight
+`reporting/cache-probing` Case records a deferred cancellation, which takes effect
+when the current claim commits or aborts. Late judgedaemon callbacks are
+acknowledged without reviving the case.
 
-Job closure is an atomic claim. The scheduler rechecks all job cases and changes
-the job from `open` to `finalizing` under the same writer lock used by case
-append. A task arriving after that claim receives a new rolling grouped job
-instead of reopening the old one.
+The last terminal Case atomically changes its Job from `open` to
+`finalize-pending` and removes it from the appendable group index. Exactly one
+finalizer can claim `finalize-pending -> finalizing`; failure returns the Job to
+`finalize-pending` for indexed retry. A task arriving after closure receives a
+new rolling grouped job instead of reopening the old one.
 
-Later judgehost polls and duplicate result callbacks retry jobs already in
-`finalizing`. A transient publication failure therefore retains the work root
-instead of stranding an unresumable job.
+Later judgehost polls service the finalization retry heap. Duplicate result
+callbacks are idempotent after the first reporting claim. A transient publication
+failure therefore retains the work root instead of stranding an unresumable job.
 
 Case publication, task result aggregation, and task-terminal notification finish
-before the job becomes `completed/failed`. Only then is the job work root removed.
+before work-root removal and the final `completed/failed` transition.
 Executable scripts have a different lifetime: they remain runtime-scoped and are
 cleared at service startup, not when an individual job or verification finishes.
 
@@ -188,11 +191,10 @@ does not schedule work.
 Execution scheduling uses one global ready-Job heap plus one cache-pending heap and
 one runnable Case heap per Job. Heap entries carry generations and are rebuilt only
 when their local stale ratio crosses a threshold. Fetch does not scan or sort all
-Tasks, Jobs, or Cases. A writer-priority RWLock protects scheduler indexes; cache,
-filesystem, SQLite, and Coordinator notifications are never accessed while that
-lock is held. Batch Case transitions refresh the global Job heap once per affected
-Job. Executable callbacks use a lifecycle-maintained script-ID index rather than
-scanning open Jobs.
+Tasks, Jobs, or Cases. One ordinary reentrant lock protects only in-memory
+dictionaries, counters, sets, and heaps; cache, filesystem, SQLite, and Coordinator
+notifications are never accessed while it is held. Executable callbacks use a
+lifecycle-maintained script-ID index rather than scanning open Jobs.
 
 Cases enter a Job as `staged`, atomically activate as `cache-pending`, and cannot be
 leased until their exact result-cache probe misses. A full cache hit reaches
@@ -200,6 +202,17 @@ leased until their exact result-cache probe misses. A full cache hit reaches
 materialized lazily only after at least one miss. Before compilation succeeds, one
 smallest-ordinal Case is the compile leader; successful compilation opens the
 remaining Cases to other hosts.
+
+Every reported Case owns one immutable canonical `CaseResult`. Cache hits and cold
+callbacks build the same object, including feedback and the verification test row.
+The Scheduler decrements a per-Task remaining counter in constant time; only the
+last Case sorts that Task's Cases once and writes its final summary. Case polling is
+an indexed lookup and never reconstructs feedback from artifacts.
+
+JudgeFS entries are synchronized per `(kind, key, signature)` and published from a
+temporary directory. Unrelated cache keys perform file I/O concurrently; the small
+global mutex only maintains ref-counted key locks. Fetch probes cache Cases with a
+fixed Case budget, a monotonic-time budget, and bounded claim chunks.
 
 Only two service classes exist: foreground direct/compile-only work and background
 verification work. Foreground work cooperatively preempts between fetch batches;

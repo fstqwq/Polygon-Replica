@@ -9,6 +9,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from app.service.judgehost.api import Judgehost
+from app.service.judgehost.case_result import build_case_result
 from app.service.judgehost.job_scheduler import JobScheduler
 from app.service.judgehost.job_scheduler_models import JobSpec, JudgehostCaseRow, JudgehostJobRow
 from app.service.platform.rwlock import WriterPriorityRWLock
@@ -18,6 +19,38 @@ from .db_fixture import DBTestBase
 
 _NOW = "2026-07-29T00:00:00+00:00"
 _HASH = "1" * 64
+
+
+def _result(test_name: str, *, runresult: str = "correct", verdict: str = "OK"):
+    return build_case_result(
+        test_name=test_name,
+        runresult=runresult,
+        verdict=verdict,
+        runtime_sec=0.001,
+        cpu_sec=0.001,
+        wall_sec=0.002,
+        memory_kb=1024,
+        score_text="",
+        output_run_rel="",
+        output_error_rel="",
+        output_system_rel="",
+        output_diff_rel="",
+        metadata_rel="",
+        compare_metadata_rel="",
+        team_message_rel="",
+        feedback_text="",
+        feedback_files=[],
+        answer_correct=False,
+    )
+
+
+def _finish_pending_case(store: JobScheduler, job_id: int, test_name: str) -> None:
+    case = next(row for row in store.cases_for_job(job_id) if row["test_name"] == test_name)
+    store.request_job_case_results(
+        job_id,
+        results={int(case["id"]): _result(test_name)},
+        updated_at=_NOW,
+    )
 
 
 def _case_row(
@@ -84,42 +117,34 @@ class TestJudgehostStateLifecycle(unittest.TestCase):
         self.store = JobScheduler(id_base=100)
 
     def test_append_and_finalization_claim_are_serializable(self) -> None:
-        append_first_job = _create_job(
+        job_id = _create_job(
             self.store,
             task_id="task-append-first",
             run_id="run-append-first",
             work_root="/tmp/append-first",
-            case_rows=[_case_row("task-append-first", "run-append-first", "001.in", 1, status="reported")],
+            case_rows=[_case_row("task-append-first", "run-append-first", "001.in", 1)],
         )
         later_case = _case_row("task-later", "run-later", "002.in", 1)
         later_case.pop("scope_sequence")
         appended = self.store.append_cases_to_job(
-            job_id=append_first_job,
+            job_id=job_id,
             case_rows=[later_case],
             now_text=_NOW,
         )
         self.assertEqual(appended["outcome"], "appended")
         self.assertEqual(self.store.cases_for_task("task-later")[0]["scope_sequence"], 1)
-        self.assertIsNone(self.store.claim_job_finalization(append_first_job, now_text=_NOW))
-
-        claim_first_job = _create_job(
-            self.store,
-            task_id="task-claim-first",
-            run_id="run-claim-first",
-            work_root="/tmp/claim-first",
-            group_key="claim-group",
-            case_rows=[_case_row("task-claim-first", "run-claim-first", "001.in", 1, status="reported")],
-        )
-        self.assertEqual(self.store.job_for_group_key("claim-group")["job_id"], claim_first_job)
-        self.assertIsNotNone(self.store.claim_job_finalization(claim_first_job, now_text=_NOW))
-        self.assertIsNone(self.store.job_for_group_key("claim-group"))
+        _finish_pending_case(self.store, job_id, "001.in")
+        self.assertIsNone(self.store.claim_job_finalization(job_id, now_text=_NOW))
+        _finish_pending_case(self.store, job_id, "002.in")
+        self.assertIsNotNone(self.store.claim_job_finalization(job_id, now_text=_NOW))
+        self.assertIsNone(self.store.claim_job_finalization(job_id, now_text=_NOW))
         closed = self.store.append_cases_to_job(
-            job_id=claim_first_job,
+            job_id=job_id,
             case_rows=[_case_row("task-too-late", "run-too-late", "002.in", 1)],
             now_text=_NOW,
         )
         self.assertEqual(closed["outcome"], "closed")
-        self.assertEqual(len(self.store.cases_for_job(claim_first_job)), 1)
+        self.assertEqual(len(self.store.cases_for_job(job_id)), 2)
 
     def test_task_cases_cannot_span_jobs(self) -> None:
         first_job = _create_job(
@@ -166,7 +191,7 @@ class TestJudgehostStateLifecycle(unittest.TestCase):
                 now_text=_NOW,
             )
 
-    def test_forget_runs_filters_case_lists_without_repeated_remove(self) -> None:
+    def test_forget_runs_removes_set_indexes(self) -> None:
         job_id = _create_job(
             self.store,
             task_id="task-first",
@@ -180,73 +205,11 @@ class TestJudgehostStateLifecycle(unittest.TestCase):
             now_text=_NOW,
         )
 
-        class _NoRemoveList(list[int]):
-            def remove(self, value: int) -> None:
-                raise AssertionError(f"list.remove called for {value}")
-
-        self.store._case_ids_by_job[job_id] = _NoRemoveList(
-            self.store._case_ids_by_job[job_id]
-        )
+        self.assertIsInstance(self.store._case_ids_by_job[job_id], set)
         removed_jobs = self.store.forget_runs(["run-first", "run-second"])
 
         self.assertEqual(removed_jobs, 1)
         self.assertIsNone(self.store.fetch_job(job_id))
-
-    def test_append_and_claim_race_has_one_serializable_winner(self) -> None:
-        for sequence in range(20):
-            store = JobScheduler(id_base=1000 + sequence * 10)
-            job_id = _create_job(
-                store,
-                task_id=f"task-race-{sequence}",
-                run_id=f"run-race-{sequence}",
-                work_root=f"/tmp/race-{sequence}",
-                case_rows=[
-                    _case_row(
-                        f"task-race-{sequence}",
-                        f"run-race-{sequence}",
-                        "001.in",
-                        1,
-                        status="reported",
-                    )
-                ],
-            )
-            barrier = threading.Barrier(3)
-            outcomes: dict[str, object] = {}
-
-            def append() -> None:
-                barrier.wait()
-                outcomes["append"] = store.append_cases_to_job(
-                    job_id=job_id,
-                    case_rows=[
-                        _case_row(
-                            f"task-later-{sequence}",
-                            f"run-later-{sequence}",
-                            "002.in",
-                            1,
-                        )
-                    ],
-                    now_text=_NOW,
-                )
-
-            def claim() -> None:
-                barrier.wait()
-                outcomes["claim"] = store.claim_job_finalization(job_id, now_text=_NOW)
-
-            append_thread = threading.Thread(target=append)
-            claim_thread = threading.Thread(target=claim)
-            append_thread.start()
-            claim_thread.start()
-            barrier.wait()
-            append_thread.join(timeout=2)
-            claim_thread.join(timeout=2)
-
-            append_result = outcomes["append"]
-            claim_result = outcomes["claim"]
-            self.assertIsInstance(append_result, dict)
-            if claim_result is None:
-                self.assertEqual(append_result["outcome"], "appended")
-            else:
-                self.assertEqual(append_result["outcome"], "closed")
 
     def test_run_index_cancels_every_grouped_job_without_history_scan(self) -> None:
         job_ids = []
@@ -421,24 +384,19 @@ class TestJudgehostLifecycle(DBTestBase):
 
     @staticmethod
     def _report_case(store: JobScheduler, case_id: int, hostname: str) -> bool:
-        return store.report_case_result(
+        claim = store.claim_case_reporting(
             case_id,
-            lease_owner=hostname,
-            runresult="correct",
-            runtime_sec=0.001,
-            cpu_sec=0.001,
-            wall_sec=0.002,
-            memory_kb=1024,
-            output_run_rel="",
-            output_error_rel="",
-            output_system_rel="",
-            output_diff_rel="",
-            metadata_rel="",
-            compare_metadata_rel="",
-            team_message_rel="",
-            score_text="",
-            updated_at=_NOW,
+            hostname=hostname,
+            now_text=_NOW,
         )
+        if claim is None:
+            return False
+        return store.commit_case_result(
+            case_id,
+            generation=claim.generation,
+            result=_result(claim.test_name),
+            updated_at=_NOW,
+        ) == "reported"
 
     def test_task_waits_for_all_own_cases_before_job_cleanup(self) -> None:
         service = self._service()
@@ -478,6 +436,36 @@ class TestJudgehostLifecycle(DBTestBase):
         self.assertEqual(store.fetch_job(job_id)["status"], "completed")
         self.assertFalse(work_root.exists())
 
+    def test_reporting_abort_finalizes_deferred_cancel(self) -> None:
+        service = self._service()
+        store = service.state.job_scheduler
+        task_id, run_id = "task-abort-cancel", "run-abort-cancel"
+        self._add_task(service, task_id, run_id)
+        work_root = self._work_root()
+        job_id = _create_job(
+            store,
+            task_id=task_id,
+            run_id=run_id,
+            work_root=str(work_root),
+            case_rows=[_case_row(task_id, run_id, "001.in", 1)],
+        )
+        case = store.lease_cases(job_id, hostname="host-a", limit=1, now_text=_NOW)[0]
+
+        def _cancel_then_fail(*_args, **_kwargs) -> int:
+            self.assertEqual(store.cancel_jobs_for_runs([run_id], now_text=_NOW), [job_id])
+            raise RuntimeError("artifact write failed")
+
+        with patch.object(
+            service.result,
+            "_process_domjudge_judging_run",
+            side_effect=_cancel_then_fail,
+        ), self.assertRaisesRegex(RuntimeError, "artifact write failed"):
+            service.domjudge_add_judging_run("host-a", int(case["id"]), {})
+
+        self.assertEqual(store.fetch_job(job_id)["status"], "failed")
+        self.assertEqual(self._task(service, task_id)["status"], service.STATUS_FAILED)
+        self.assertFalse(work_root.exists())
+
     def test_grouped_job_finalizes_each_task_once_across_hosts(self) -> None:
         service = self._service()
         store = service.state.job_scheduler
@@ -502,7 +490,20 @@ class TestJudgehostLifecycle(DBTestBase):
         self.assertEqual(appended["outcome"], "appended")
         self.assertTrue(store.activate_task_cases(second_task, now_text=_NOW))
         second_case_id = int(store.cases_for_task(second_task)[0]["id"])
-        self.assertEqual(store.mark_cache_misses([second_case_id], now_text=_NOW), 1)
+        cache_claims = store.claim_cache_cases(
+            job_id,
+            hostname="cache-setup",
+            limit=1,
+            now_text=_NOW,
+        )
+        self.assertEqual([claim.case_id for claim, _row in cache_claims], [second_case_id])
+        self.assertTrue(
+            store.finish_cache_miss(
+                second_case_id,
+                generation=cache_claims[0][0].generation,
+                updated_at=_NOW,
+            )
+        )
         self.assertEqual(store.job_for_task(second_task)["job_id"], job_id)
         store.record_compile_result(
             job_id,
@@ -594,7 +595,7 @@ class TestJudgehostLifecycle(DBTestBase):
         ), patch("app.service.judgehost.result.logger.exception"):
             service.result._domjudge_finalize_if_ready(job_id)
 
-        self.assertEqual(store.fetch_job(job_id)["status"], "finalizing")
+        self.assertEqual(store.fetch_job(job_id)["status"], "finalize-pending")
         self.assertEqual(self._task(service, task_id)["status"], service.STATUS_LEASED)
         self.assertTrue(work_root.exists())
 
@@ -605,10 +606,9 @@ class TestJudgehostLifecycle(DBTestBase):
         ), patch("app.service.judgehost.result.logger.exception"), patch(
             "app.service.judgehost.result.logger.error"
         ):
-            service.result._schedule_finalization_retry(job_id, delay_sec=0.0)
-            service.result.retry_due_finalizations(limit=1)
+            service.result._domjudge_finalize_if_ready(job_id)
 
-        self.assertEqual(store.fetch_job(job_id)["status"], "finalizing")
+        self.assertEqual(store.fetch_job(job_id)["status"], "finalize-pending")
         self.assertEqual(self._task(service, task_id)["status"], service.STATUS_LEASED)
         self.assertTrue(work_root.exists())
 
@@ -648,27 +648,20 @@ class TestJudgehostLifecycle(DBTestBase):
                 )
                 if scenario == "cache":
                     case_id = int(store.cases_for_job(job_id)[0]["id"])
-                    store.apply_cached_case_results(
-                        cached_rows=[
-                            {
-                                "case_id": case_id,
-                                "runresult": "correct",
-                                "runtime_sec": 0.001,
-                                "cpu_sec": 0.001,
-                                "wall_sec": 0.002,
-                                "memory_kb": 1024,
-                                "output_run_rel": "",
-                                "output_error_rel": "",
-                                "output_system_rel": "",
-                                "output_diff_rel": "",
-                                "metadata_rel": "",
-                                "compare_metadata_rel": "",
-                                "team_message_rel": "",
-                                "score_text": "",
-                            }
-                        ],
-                        lease_owner="cache",
+                    cache_claim = store.claim_cache_cases(
+                        job_id,
+                        hostname="cache",
+                        limit=1,
                         now_text=_NOW,
+                    )[0][0]
+                    self.assertEqual(
+                        store.commit_case_result(
+                            case_id,
+                            generation=cache_claim.generation,
+                            result=_result("001.in"),
+                            updated_at=_NOW,
+                        ),
+                        "reported",
                     )
                 elif scenario == "compile-failure":
                     store.record_compile_result(

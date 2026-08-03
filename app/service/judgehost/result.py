@@ -1,15 +1,11 @@
 from __future__ import annotations
 
 import base64
-import contextlib
-import heapq
 import logging
 import json
 import re
 import shutil
-import threading
 import time
-from collections.abc import Iterator
 from pathlib import Path
 from typing import cast
 
@@ -31,15 +27,12 @@ from app.service.judgehost.runtime import (
     domjudge_rewrite_untrusted_runresult,
     domjudge_verdict_from_runresult,
 )
-from app.service.verification.test_rows import (
-    build_verification_test_pass_row,
-    build_verification_test_row,
-    upsert_verification_test_rows,
-)
 from app.service.verification.task_result_finalize import finalize_verification_task_result
 from app.service.verification.task_scheduler import notify_verification_case_reported
 
+from .case_result import build_case_result, decode_case_test_row
 from .core import JudgehostCore
+from .job_scheduler_models import CaseResult
 from .state import JudgehostState
 from .task_queue import TaskQueue
 from .toolkit import DomjudgeToolkit
@@ -69,29 +62,6 @@ class ResultProcessor:
         self._core = core
         self._queue = queue
         self._toolkit = toolkit
-        self._job_activity_guard = threading.Lock()
-        self._job_activity_locks: dict[int, tuple[threading.RLock, int]] = {}
-        self._finalization_retry_guard = threading.Lock()
-        self._finalization_retry_heap: list[tuple[float, int]] = []
-        self._finalization_retry_deadlines: dict[int, float] = {}
-
-    @contextlib.contextmanager
-    def _job_activity(self, job_id: int) -> Iterator[None]:
-        safe_job_id = int(job_id)
-        with self._job_activity_guard:
-            lock, users = self._job_activity_locks.get(safe_job_id, (threading.RLock(), 0))
-            self._job_activity_locks[safe_job_id] = (lock, users + 1)
-        lock.acquire()
-        try:
-            yield
-        finally:
-            lock.release()
-            with self._job_activity_guard:
-                current_lock, current_users = self._job_activity_locks[safe_job_id]
-                if current_users == 1:
-                    self._job_activity_locks.pop(safe_job_id)
-                else:
-                    self._job_activity_locks[safe_job_id] = (current_lock, current_users - 1)
 
     def _touch_task_verification(self, task_id: str) -> None:
         task = self._s.task_registry.get(task_id)
@@ -126,120 +96,6 @@ class ResultProcessor:
             output_diff_rel=output_diff_rel,
             team_message_rel=team_message_rel,
         )
-
-    def _domjudge_update_verification_run_case_progress(
-        self,
-        *,
-        task_id: str,
-        source_path: str,
-        test_name: str,
-        verdict: str,
-        runtime_sec: float,
-        cpu_sec: float,
-        wall_sec: float,
-        memory_kb: int,
-        feedback_text: str,
-        output_ref: str,
-        run_status: str = "running",
-        runresult: str = "",
-        feedback_files: list[str] | None = None,
-        answer_correct: bool = False,
-    ) -> None:
-        test_row = self._domjudge_verification_test_row(
-            test_name=test_name,
-            verdict=verdict,
-            runtime_sec=runtime_sec,
-            cpu_sec=cpu_sec,
-            wall_sec=wall_sec,
-            memory_kb=memory_kb,
-            feedback_text=feedback_text,
-            output_ref=output_ref,
-            runresult=runresult,
-            feedback_files=feedback_files,
-            answer_correct=answer_correct,
-        )
-        self._domjudge_update_verification_run_case_progress_batch(
-            task_id=task_id,
-            source_path=source_path,
-            test_rows=[test_row],
-            run_status=run_status,
-        )
-
-    @staticmethod
-    def _domjudge_verification_test_row(
-        *,
-        test_name: str,
-        verdict: str,
-        runtime_sec: float,
-        cpu_sec: float,
-        wall_sec: float,
-        memory_kb: int,
-        feedback_text: str,
-        output_ref: str,
-        runresult: str,
-        feedback_files: list[str] | None,
-        answer_correct: bool,
-    ) -> dict[str, object]:
-        verdict_token = verdict.upper() or "FL"
-        time_ms = max(0, int(round(runtime_sec * 1000.0)))
-        time_user_ms = max(0, int(round((cpu_sec if cpu_sec > 0.0 else runtime_sec) * 1000.0)))
-        wall_fallback = cpu_sec if cpu_sec > 0.0 else runtime_sec
-        time_wall_ms = max(0, int(round((wall_sec if wall_sec > 0.0 else wall_fallback) * 1000.0)))
-        memory_kb_int = max(0, memory_kb)
-        return build_verification_test_row(
-            test_name=test_name,
-            verdict=verdict_token,
-            time_ms=time_ms,
-            time_user_ms=time_user_ms,
-            time_wall_ms=time_wall_ms,
-            memory_kb=memory_kb_int,
-            message=feedback_text,
-            output_ref=output_ref,
-            feedback_files=list(feedback_files or []),
-            passes=[
-                build_verification_test_pass_row(
-                    verdict=verdict_token,
-                    time_ms=time_ms,
-                    time_user_ms=time_user_ms,
-                    time_wall_ms=time_wall_ms,
-                    memory_kb=memory_kb_int,
-                    feedback=feedback_text,
-                    output_ref=output_ref,
-                    runresult=runresult,
-                    answer_correct=answer_correct,
-                )
-            ],
-            runresult=runresult,
-            answer_correct=answer_correct,
-        )
-
-    def _domjudge_update_verification_run_case_progress_batch(
-        self,
-        *,
-        task_id: str,
-        source_path: str,
-        test_rows: list[dict[str, object]],
-        run_status: str = "running",
-    ) -> None:
-        if not task_id:
-            return
-        task_row = self._core.task_by_id(task_id)
-        if task_row is None:
-            return
-        payload = cast(dict[str, object], task_row["payload"])
-        summary = dict(cast(dict[str, object], task_row.get("summary") or {}))
-        upsert_verification_test_rows(
-            summary,
-            test_rows=test_rows,
-            selected_tests_count=len(payload.get("selected_tests", [])),
-        )
-        summary["source"] = summary.get("source") or source_path
-        summary["verification_source"] = payload.get("verification_source") or summary.get("verification_source") or "verification.start"
-        summary["status"] = run_status
-        judgehost_block = dict(cast(dict[str, object], summary.get("judgehost") or {}))
-        judgehost_block["task_id"] = task_id
-        summary["judgehost"] = judgehost_block
-        self._s.task_registry.update(task_id, {"summary": summary, "updated_at": now_iso()})
 
     def domjudge_get_source_files(self, submit_id: str, contest_id: str | None = None) -> list[dict[str, object]]:
         safe_submit = domjudge_text(submit_id)
@@ -560,10 +416,9 @@ class ResultProcessor:
         *,
         task_id: str,
         job_row: dict[str, object],
-        cases: list[dict[str, object]],
+        case_results: list[tuple[dict[str, object], CaseResult | None]],
         force_failed: bool,
         error_text: str,
-        prepared_test_rows: dict[str, dict[str, object]] | None = None,
     ) -> dict[str, object]:
         task_row = self._core.task_by_id(task_id)
         if task_row is None:
@@ -579,95 +434,30 @@ class ResultProcessor:
         usage_time_user = 0
         usage_time_wall = 0
         usage_mem_peak = 0
-        work_root = Path(domjudge_text(job_row["work_root"])).resolve()
-        prepared_rows = prepared_test_rows or {}
 
-        for row in cases:
+        for row, case_result in case_results:
             if domjudge_lower_text(row["status"]) == "cancelled":
                 cancelled_cases += 1
                 continue
             test_name = domjudge_text(row["test_name"], default=f"{int(row['ordinal']):03}.in")
-            prepared_row = prepared_rows.get(test_name) if compile_success != 0 else None
-            if prepared_row is not None:
-                runresult = domjudge_text(prepared_row.get("runresult"))
-                verdict = domjudge_text(prepared_row.get("verdict"), default="FL")
-                cpu_ms = max(0, domjudge_parse_int(prepared_row.get("time_user_ms"), 0))
-                wall_ms = max(0, domjudge_parse_int(prepared_row.get("time_wall_ms"), cpu_ms))
-                memory_kb = max(0, domjudge_parse_int(prepared_row.get("memory_kb"), 0))
-                feedback_text = domjudge_text(prepared_row.get("message"))
-                feedback_files = list(cast(list[str], prepared_row.get("feedback_files") or []))
-                output_ref = domjudge_text(prepared_row.get("output_ref"))
-                answer_correct = bool(prepared_row.get("answer_correct"))
-            else:
-                runresult = domjudge_text(row["runresult"])
-                verdict = domjudge_verdict_from_runresult(runresult)
-                if compile_success == 0:
-                    verdict = "CE"
-                cpu_sec = domjudge_parse_float(
-                    row["cpu_sec"],
-                    domjudge_parse_float(row["runtime_sec"], 0.0),
+            if case_result is None:
+                internal_failure_error = (
+                    internal_failure_error
+                    or f"{test_name}: judgehost case result missing"
                 )
-                wall_sec = domjudge_parse_float(row["wall_sec"], cpu_sec)
-                memory_kb = max(0, domjudge_parse_int(row["memory_kb"], 0))
-                cpu_ms = max(0, int(round(cpu_sec * 1000)))
-                wall_ms = max(0, int(round(wall_sec * 1000)))
-                feedback_text, feedback_files = self._domjudge_feedback_text_and_files(
-                    work_root=work_root,
-                    runresult=runresult,
-                    output_error_rel=row["output_error_rel"],
-                    output_diff_rel=row["output_diff_rel"],
-                    team_message_rel=row["team_message_rel"],
-                )
-                if not feedback_text:
-                    debug_text = (
-                        domjudge_text(row["debug_text"])
-                        or domjudge_text(job_row["debug_text"])
-                    )
-                    feedback_text = domjudge_feedback_text_from_text(debug_text)
-                output_ref = domjudge_text(row["output_run_rel"])
-                compare_meta_blob = self._toolkit.read_artifact_blob(
-                    work_root,
-                    domjudge_text(row["compare_metadata_rel"]),
-                )
-                compare_exit_code = -1
-                if compare_meta_blob:
-                    compare_meta = domjudge_parse_meta_text(
-                        compare_meta_blob.decode("utf-8", errors="replace")
-                    )
-                    compare_exit_code = domjudge_parse_int(compare_meta.get("exitcode"), -1)
-                answer_correct = _answer_correct_from_compare_exit_code(compare_exit_code)
+                continue
+            test_row = decode_case_test_row(case_result)
+            runresult = case_result.runresult
+            verdict = case_result.verdict
+            cpu_ms = max(0, int(round(case_result.cpu_sec * 1000.0)))
+            wall_ms = max(0, int(round(case_result.wall_sec * 1000.0)))
+            memory_kb = case_result.memory_kb
+            feedback_text = case_result.feedback_text
             runresult_token = domjudge_lower_text(runresult)
             usage_time_user += cpu_ms
             usage_time_wall += wall_ms
             usage_mem_peak = max(usage_mem_peak, memory_kb)
-            tests.append(
-                build_verification_test_row(
-                    test_name=test_name,
-                    verdict=verdict,
-                    time_ms=cpu_ms,
-                    time_user_ms=cpu_ms,
-                    time_wall_ms=wall_ms,
-                    memory_kb=memory_kb,
-                    message=feedback_text,
-                    output_ref=output_ref,
-                    feedback_files=feedback_files,
-                    passes=[
-                        build_verification_test_pass_row(
-                            verdict=verdict,
-                            time_ms=cpu_ms,
-                            time_user_ms=cpu_ms,
-                            time_wall_ms=wall_ms,
-                            memory_kb=memory_kb,
-                            feedback=feedback_text,
-                            output_ref=output_ref,
-                            runresult=runresult,
-                            answer_correct=answer_correct,
-                        )
-                    ],
-                    runresult=runresult,
-                    answer_correct=answer_correct,
-                )
-            )
+            tests.append(test_row)
             if (
                 compile_success != 0
                 and (not internal_failure_error)
@@ -711,7 +501,7 @@ class ResultProcessor:
                 }
             )
 
-        run_status = "failed" if (force_failed or compile_success == 0) else "ok"
+        run_status = "failed" if (force_failed or compile_success == 0 or cancelled_cases) else "ok"
         if (not force_failed) and internal_failure_error:
             run_status = "failed"
         summary = self._queue.load_run_summary(domjudge_text(task_row["run_id"]))
@@ -756,13 +546,16 @@ class ResultProcessor:
         job_row: dict[str, object],
         force_failed: bool = False,
         error_text: str = "",
-        prepared_test_rows: dict[str, dict[str, object]] | None = None,
     ) -> bool:
         safe_task_id = domjudge_text(task_id)
-        cases = self._s.job_scheduler.cases_for_task(safe_task_id)
-        if not cases or any(
-            domjudge_lower_text(row["status"]) not in {"reported", "cancelled"}
-            for row in cases
+        if not self._s.job_scheduler.task_cases_terminal(safe_task_id):
+            return False
+        case_results = self._s.job_scheduler.task_case_results(safe_task_id)
+        cases = [row for row, _result in case_results]
+        if any(
+            domjudge_lower_text(case["status"]) == "reported"
+            and not bool(case["verification_published"])
+            for case in cases
         ):
             return False
         task_row = self._s.task_registry.get(safe_task_id)
@@ -776,10 +569,9 @@ class ResultProcessor:
         payload = self._domjudge_task_result_payload(
             task_id=safe_task_id,
             job_row=job_row,
-            cases=cases,
+            case_results=case_results,
             force_failed=force_failed,
             error_text=error_text,
-            prepared_test_rows=prepared_test_rows,
         )
         cancelled_case_result = {
             "task_id": safe_task_id,
@@ -859,35 +651,63 @@ class ResultProcessor:
                 return False
         return True
 
+    def _request_job_failure(self, job_id: int, *, runresult: str, error_text: str) -> None:
+        job_row = self._s.job_scheduler.fetch_job(int(job_id))
+        if job_row is None:
+            return
+        feedback = domjudge_text(error_text)
+        if runresult == "compiler-error" and not feedback:
+            compile_blob = self._toolkit.b64_decode(job_row["compile_output_b64"])
+            feedback = domjudge_feedback_text_from_text(
+                compile_blob.decode("utf-8", errors="replace")
+            ) or "compilation failed"
+        if not feedback:
+            feedback = runresult.replace("-", " ")
+        verdict = domjudge_verdict_from_runresult(runresult)
+        results: dict[int, CaseResult] = {}
+        for row in self._s.job_scheduler.cases_for_job(int(job_id)):
+            if domjudge_lower_text(row["status"]) in {"reported", "cancelled"}:
+                continue
+            results[int(row["id"])] = build_case_result(
+                test_name=domjudge_text(row["test_name"], default=f"{int(row['ordinal']):03}.in"),
+                runresult=runresult,
+                verdict=verdict,
+                runtime_sec=0.0,
+                cpu_sec=0.0,
+                wall_sec=0.0,
+                memory_kb=0,
+                score_text="",
+                output_run_rel="",
+                output_error_rel="",
+                output_system_rel="",
+                output_diff_rel="",
+                metadata_rel="",
+                compare_metadata_rel="",
+                team_message_rel="",
+                feedback_text=feedback,
+                feedback_files=[],
+                answer_correct=False,
+            )
+        if results:
+            self._s.job_scheduler.request_job_case_results(
+                int(job_id),
+                results=results,
+                updated_at=now_iso(),
+            )
+
     def _schedule_finalization_retry(self, job_id: int, *, delay_sec: float = 0.25) -> None:
-        safe_job_id = int(job_id)
-        deadline = time.monotonic() + max(0.0, delay_sec)
-        with self._finalization_retry_guard:
-            current = self._finalization_retry_deadlines.get(safe_job_id)
-            if current is not None and current <= deadline:
-                return
-            self._finalization_retry_deadlines[safe_job_id] = deadline
-            heapq.heappush(self._finalization_retry_heap, (deadline, safe_job_id))
+        self._s.job_scheduler.abort_job_finalization(
+            int(job_id),
+            now_text=now_iso(),
+            delay_sec=delay_sec,
+        )
 
     def retry_due_finalizations(self, *, limit: int = 1) -> None:
-        due_job_ids: list[int] = []
-        now = time.monotonic()
-        with self._finalization_retry_guard:
-            while self._finalization_retry_heap and len(due_job_ids) < max(0, limit):
-                deadline, job_id = self._finalization_retry_heap[0]
-                if deadline > now:
-                    break
-                heapq.heappop(self._finalization_retry_heap)
-                if self._finalization_retry_deadlines.get(job_id) != deadline:
-                    continue
-                self._finalization_retry_deadlines.pop(job_id, None)
-                due_job_ids.append(job_id)
-        for job_id in due_job_ids:
+        for job_id in self._s.job_scheduler.due_job_finalizations(limit=limit):
             self._domjudge_finalize_if_ready(job_id)
 
     def _clear_finalization_retry(self, job_id: int) -> None:
-        with self._finalization_retry_guard:
-            self._finalization_retry_deadlines.pop(int(job_id), None)
+        self._s.job_scheduler.clear_job_finalization_retry(int(job_id))
 
     def _domjudge_finalize_if_ready(
         self,
@@ -896,14 +716,32 @@ class ResultProcessor:
         force_failed: bool = False,
         error_text: str = "",
     ) -> None:
-        with self._job_activity(int(job_id)):
-            claim = self._s.job_scheduler.claim_job_finalization(
+        current = self._s.job_scheduler.fetch_job(int(job_id))
+        if current is None:
+            return
+        compile_failed = (
+            current["compile_success"] is not None
+            and int(current["compile_success"]) == 0
+        )
+        if force_failed:
+            self._request_job_failure(
                 int(job_id),
-                now_text=now_iso(),
-                force_runresult="internal-error" if force_failed else "",
+                runresult="internal-error",
+                error_text=error_text,
             )
-            if claim is None:
-                return
+        elif compile_failed:
+            self._request_job_failure(
+                int(job_id),
+                runresult="compiler-error",
+                error_text="",
+            )
+        claim = self._s.job_scheduler.claim_job_finalization(
+            int(job_id),
+            now_text=now_iso(),
+        )
+        if claim is None:
+            return
+        try:
             job_row = dict(claim["job"])
             cases = [dict(row) for row in claim["cases"]]
             task_ids = list(dict.fromkeys(
@@ -968,6 +806,9 @@ class ResultProcessor:
                 if force_failed or compile_failed or has_cancelled_cases or has_failed_tasks
                 else "completed"
             )
+            work_root_text = domjudge_text(job_row["work_root"])
+            if work_root_text:
+                shutil.rmtree(Path(work_root_text).resolve(), ignore_errors=True)
             updated = self._s.job_scheduler.set_job_terminal_status(
                 int(job_id),
                 status=terminal_status,
@@ -980,9 +821,9 @@ class ResultProcessor:
                 return
             self._s.host_telemetry.record_job_terminal(int(job_id))
             self._clear_finalization_retry(int(job_id))
-            work_root_text = domjudge_text(job_row["work_root"])
-            if work_root_text:
-                shutil.rmtree(Path(work_root_text).resolve(), ignore_errors=True)
+        except Exception:
+            self._schedule_finalization_retry(int(job_id))
+            raise
 
     def domjudge_update_judging(self, hostname: str, judgetask_id: int, payload: dict[str, object]) -> None:
         case_row = self._s.job_scheduler.fetch_case(int(judgetask_id))
@@ -990,10 +831,9 @@ class ResultProcessor:
             logger.info("ignoring update for unknown judging run id: %s", int(judgetask_id))
             return
         self._touch_task_verification(domjudge_text(case_row["task_id"]))
-        with self._job_activity(int(case_row["job_id"])):
-            self._domjudge_update_judging_locked(hostname, judgetask_id, payload)
+        self._process_domjudge_judging_update(hostname, judgetask_id, payload)
 
-    def _domjudge_update_judging_locked(
+    def _process_domjudge_judging_update(
         self,
         hostname: str,
         judgetask_id: int,
@@ -1057,6 +897,7 @@ class ResultProcessor:
     def domjudge_add_judging_run(self, hostname: str, judgetask_id: int, payload: dict[str, object]) -> int:
         reported_monotonic = time.monotonic()
         reported_at = now_iso()
+        safe_host = self._core.normalize_hostname(hostname)
         case_row = self._s.job_scheduler.fetch_case(int(judgetask_id))
         if case_row is None:
             logger.info(
@@ -1065,21 +906,47 @@ class ResultProcessor:
             )
             return int(judgetask_id)
         self._touch_task_verification(domjudge_text(case_row["task_id"]))
-        with self._job_activity(int(case_row["job_id"])):
-            return self._domjudge_add_judging_run_locked(
-                hostname,
+        claim = self._s.job_scheduler.claim_case_reporting(
+            int(judgetask_id),
+            hostname=safe_host,
+            now_text=reported_at,
+        )
+        if claim is None:
+            logger.info("ignoring stale add_judging_run result for case id: %s", int(judgetask_id))
+            return int(judgetask_id)
+
+        def _abort_unfinished_claim() -> None:
+            if self._s.job_scheduler.abort_case_claim(
+                claim.case_id,
+                generation=claim.generation,
+                updated_at=now_iso(),
+            ):
+                self._domjudge_finalize_if_ready(claim.job_id)
+
+        try:
+            result_id = self._process_domjudge_judging_run(
+                safe_host,
                 judgetask_id,
                 payload,
+                claim_generation=claim.generation,
                 reported_at=reported_at,
                 reported_monotonic=reported_monotonic,
             )
+        except Exception:
+            _abort_unfinished_claim()
+            raise
+        refreshed = self._s.job_scheduler.fetch_case(claim.case_id)
+        if refreshed is not None and domjudge_lower_text(refreshed["status"]) == "reporting":
+            _abort_unfinished_claim()
+        return result_id
 
-    def _domjudge_add_judging_run_locked(
+    def _process_domjudge_judging_run(
         self,
         hostname: str,
         judgetask_id: int,
         payload: dict[str, object],
         *,
+        claim_generation: int,
         reported_at: str,
         reported_monotonic: float,
     ) -> int:
@@ -1098,8 +965,8 @@ class ResultProcessor:
         if job_status != "open":
             logger.info("ignoring add_judging_run for terminal DOMjudge job id: %s", case_id)
             return case_id
-        if domjudge_lower_text(row["case_status"]) != "leased":
-            logger.info("ignoring add_judging_run for non-leased DOMjudge case id: %s", case_id)
+        if domjudge_lower_text(row["case_status"]) != "reporting":
+            logger.info("ignoring add_judging_run for non-reporting DOMjudge case id: %s", case_id)
             return case_id
         if domjudge_text(row["case_lease_owner"]) != safe_host:
             logger.info(
@@ -1109,9 +976,6 @@ class ResultProcessor:
             return case_id
         job_id = int(row["job_id"])
         safe_task_id = domjudge_text(row["task_id"])
-        if not self._domjudge_task_accepts_case_updates(safe_task_id):
-            logger.info("ignoring add_judging_run for cancelled DOMjudge task id: %s", case_id)
-            return case_id
         work_root = Path(domjudge_text(row["work_root"])).resolve()
         task_payload = self._core.task_payload(safe_task_id) if safe_task_id else {}
         verification_source = task_payload.get("verification_source", "")
@@ -1259,24 +1123,23 @@ class ResultProcessor:
         shortcut_eligible = verdict != "FL"
         if compile_only and verdict != "OK":
             shortcut_eligible = False
-        with self._toolkit.cache_key_lock(self.CASE_CACHE_KIND, case_key_hash, case_signature):
-            self._toolkit.store_case_cache(
-                key_parts={"key_hash": case_key_hash, "signature": case_signature},
-                tags={
-                    "source_hash": source_hash,
-                    "testcase_hash": testcase_hash,
-                    "verification_source": verification_source,
-                    "task_kind": task_kind,
-                },
-                runresult=runresult,
-                runtime_sec=runtime_sec,
-                cpu_sec=cpu_sec,
-                wall_sec=wall_sec,
-                memory_kb=memory_kb,
-                score_text=score_text,
-                files=cache_files,
-                shortcut_eligible=shortcut_eligible,
-            )
+        self._toolkit.store_case_cache(
+            key_parts={"key_hash": case_key_hash, "signature": case_signature},
+            tags={
+                "source_hash": source_hash,
+                "testcase_hash": testcase_hash,
+                "verification_source": verification_source,
+                "task_kind": task_kind,
+            },
+            runresult=runresult,
+            runtime_sec=runtime_sec,
+            cpu_sec=cpu_sec,
+            wall_sec=wall_sec,
+            memory_kb=memory_kb,
+            score_text=score_text,
+            files=cache_files,
+            shortcut_eligible=shortcut_eligible,
+        )
 
         use_case_cache_tokens = bool(self._s.judge_fs_index_service is not None)
 
@@ -1307,15 +1170,22 @@ class ResultProcessor:
         # Always persist result artifacts as cache refs so product and judgehost
         # readers do not depend on work_root/results materialization.
 
-        now_text = now_iso()
-        updated_case = self._s.job_scheduler.report_case_result(
-            case_id,
-            lease_owner=safe_host,
+        if not feedback_text:
+            debug_context = self._s.job_scheduler.case_debug_context(case_id)
+            if debug_context is not None:
+                debug_text = domjudge_text(debug_context["case_debug_text"])
+                if not debug_text:
+                    debug_text = domjudge_text(debug_context["job_debug_text"])
+                feedback_text = domjudge_feedback_text_from_text(debug_text)
+        case_result = build_case_result(
+            test_name=domjudge_text(row["test_name"]),
             runresult=runresult,
+            verdict=verdict,
             runtime_sec=runtime_sec,
             cpu_sec=cpu_sec,
             wall_sec=wall_sec,
             memory_kb=memory_kb,
+            score_text=score_text,
             output_run_rel=output_run_token,
             output_error_rel=output_err_token,
             output_system_rel=output_sys_token,
@@ -1323,10 +1193,18 @@ class ResultProcessor:
             metadata_rel=metadata_token,
             compare_metadata_rel=compare_meta_token,
             team_message_rel=team_message_token,
-            score_text=score_text,
+            feedback_text=feedback_text,
+            feedback_files=feedback_files,
+            answer_correct=answer_correct,
+        )
+        now_text = now_iso()
+        outcome = self._s.job_scheduler.commit_case_result(
+            case_id,
+            generation=claim_generation,
+            result=case_result,
             updated_at=now_text,
         )
-        if not updated_case:
+        if outcome != "reported":
             logger.info("ignoring stale add_judging_run result for case id: %s", case_id)
             return case_id
         logger.warning(
@@ -1343,30 +1221,6 @@ class ResultProcessor:
             reported_at=reported_at,
             reported_monotonic=reported_monotonic,
         )
-        if not compile_only:
-            try:
-                self._domjudge_update_verification_run_case_progress(
-                    task_id=safe_task_id,
-                    source_path=row["source_path"],
-                    test_name=row["test_name"],
-                    verdict=verdict,
-                    runtime_sec=runtime_sec,
-                    cpu_sec=cpu_sec,
-                    wall_sec=wall_sec,
-                    memory_kb=memory_kb,
-                    feedback_text=feedback_text,
-                    output_ref=output_run_token,
-                    run_status="running",
-                    runresult=runresult,
-                    feedback_files=feedback_files,
-                    answer_correct=answer_correct,
-                )
-            except Exception:
-                logger.exception(
-                    "failed to persist incremental verification case progress task_id=%s case_id=%s",
-                    safe_task_id,
-                    case_id,
-                )
         try:
             self._domjudge_publish_reported_case(
                 task_id=safe_task_id,

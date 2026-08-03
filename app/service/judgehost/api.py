@@ -52,7 +52,7 @@ class Judgehost:
         )
         self._toolkit = DomjudgeToolkit(self._state)
         self._core = JudgehostCore(self._state)
-        self._queue = TaskQueue(self._state, self._core, self._toolkit)
+        self._queue = TaskQueue(self._state, self._core)
         self._result = ResultProcessor(self._state, self._core, self._queue, self._toolkit)
         self._dispatch = DispatchHandler(self._state, self._core, self._queue, self._result, self._toolkit)
         self._enqueue = TaskEnqueue(self._state, self._core, self._dispatch, self._toolkit)

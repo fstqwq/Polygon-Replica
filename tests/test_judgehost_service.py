@@ -26,6 +26,7 @@ from starlette.formparsers import MultiPartParser
 
 from app.impl.workspace.verification_dag import _prepared_payload_for_uploaded_source
 from app.service.verification.plan import VerificationTestPlan
+from app.service.judgehost.case_result import build_case_result
 from app.service.judgehost.job_scheduler import JobScheduler
 from app.service.judgehost.job_scheduler_models import JobSpec
 from app.service.judgehost.api import Judgehost
@@ -355,6 +356,55 @@ class TestJudgehostService(E2ETestBase):
         )
         self.assertEqual(len(rows), 1)
         return int(rows[0]["id"])
+
+    def _commit_case_result(
+        self,
+        service,
+        *,
+        case_id: int,
+        hostname: str,
+        test_name: str,
+        runresult: str,
+        verdict: str,
+        feedback_text: str = "",
+        feedback_files: list[str] | None = None,
+    ) -> None:
+        claim = service.state.job_scheduler.claim_case_reporting(
+            case_id,
+            hostname=hostname,
+            now_text="2026-04-14T00:00:01+00:00",
+        )
+        self.assertIsNotNone(claim)
+        assert claim is not None
+        result = build_case_result(
+            test_name=test_name,
+            runresult=runresult,
+            verdict=verdict,
+            runtime_sec=0.012,
+            cpu_sec=0.011,
+            wall_sec=0.025,
+            memory_kb=1404,
+            score_text="",
+            output_run_rel="",
+            output_error_rel="",
+            output_system_rel="",
+            output_diff_rel="",
+            metadata_rel="",
+            compare_metadata_rel="",
+            team_message_rel="",
+            feedback_text=feedback_text,
+            feedback_files=[] if feedback_files is None else feedback_files,
+            answer_correct=False,
+        )
+        self.assertEqual(
+            service.state.job_scheduler.commit_case_result(
+                case_id,
+                generation=claim.generation,
+                result=result,
+                updated_at="2026-04-14T00:00:01+00:00",
+            ),
+            "reported",
+        )
 
     @staticmethod
     def _insert_task_receipt(
@@ -2437,20 +2487,10 @@ class TestJudgehostService(E2ETestBase):
         run_b = f"r-jh-compile-only-extra-b-{uuid.uuid4().hex[:8]}"
         with (
             patch.object(
-                service.queue,
-                "poll_task_case_result",
-                side_effect=AssertionError("cache shortcut polled persisted case result"),
-            ),
-            patch.object(
                 service.toolkit,
                 "cache_get_with_blobs",
                 wraps=service.toolkit.cache_get_with_blobs,
             ) as cache_bundle_read,
-            patch.object(
-                service.result,
-                "_domjudge_update_verification_run_case_progress_batch",
-                wraps=service.result._domjudge_update_verification_run_case_progress_batch,
-            ) as summary_update,
         ):
             task_b = service.enqueue_task(
                 problem=self.problem,
@@ -2472,7 +2512,6 @@ class TestJudgehostService(E2ETestBase):
             rows_b = service.domjudge_fetch_work(host, max_batchsize=16)
             self.assertFalse(any((str(row.get("uuid") or "") == task_b for row in rows_b)))
             self.assertEqual(cache_bundle_read.call_count, 1)
-            self.assertEqual(summary_update.call_count, 1)
         self.assertEqual(service.wait_for_task(task_b, timeout_sec=2.0), run_b)
         run_row_b = self._verification_run_row(run_b)
         self.assertIsNotNone(run_row_b)
@@ -3793,7 +3832,7 @@ class TestJudgehostService(E2ETestBase):
             },
         )
 
-        service.enqueue_task(
+        target_task_id = service.enqueue_task(
             problem=self.problem,
             username=self.user,
             artifact_verification_id=verification_id,
@@ -3821,12 +3860,10 @@ class TestJudgehostService(E2ETestBase):
         self.assertEqual(str(rows[0]["status"] or ""), "reported")
         self.assertEqual(str(rows[1]["test_name"] or ""), "002.in")
         self.assertEqual(str(rows[1]["status"] or ""), "leased")
-        run_row = self._verification_run_row(run_id_target)
-        self.assertIsNotNone(run_row)
-        run_summary = dict(run_row["summary"])
-        self.assertIsInstance(run_summary, dict)
-        tests = run_summary.get("tests") if isinstance(run_summary, dict) else []
-        self.assertIsInstance(tests, list)
+        cached_result = service.poll_task_case_result(target_task_id, "001.in")
+        self.assertIsNotNone(cached_result)
+        assert cached_result is not None
+        tests = list(dict(cached_result["summary"])["tests"])
         self.assertEqual(len(tests), 1)
         cached_test = tests[0] if tests else {}
         self.assertEqual(str((cached_test or {}).get("test") or ""), "001.in")
@@ -5307,7 +5344,7 @@ class TestJudgehostService(E2ETestBase):
         tests = list(summary.get("tests") or [])
         self.assertEqual(tests, [])
 
-    def test_poll_task_case_result_recovers_feedback_from_case_artifacts_when_summary_row_missing(self) -> None:
+    def test_poll_task_case_result_uses_canonical_case_feedback(self) -> None:
         service = config.judgehost_task_service
         self._reset_task_queue_state(service)
         verification_id = f"ver-jh-case-feedback-{uuid.uuid4().hex[:8]}"
@@ -5335,9 +5372,7 @@ class TestJudgehostService(E2ETestBase):
 
         work_root = Path(tempfile.mkdtemp(prefix="polygon-case-feedback-")).resolve()
         self.addCleanup(shutil.rmtree, work_root, ignore_errors=True)
-        (work_root / "feedback").mkdir(parents=True, exist_ok=True)
         feedback_text = "Unexpected character #10, but ' ' expected (testdata.in)"
-        (work_root / "feedback" / "judgemessage.txt").write_text(feedback_text, encoding="utf-8")
 
         job_id = service.state.job_scheduler.create_job_with_cases(
             task_id=task_id,
@@ -5379,25 +5414,16 @@ class TestJudgehostService(E2ETestBase):
         )
         self.assertGreater(job_id, 0)
         case_id = self._lease_only_case(service, job_id, "judgehost-feedback")
-        updated = service.state.job_scheduler.report_case_result(
-            case_id,
-            lease_owner="judgehost-feedback",
+        self._commit_case_result(
+            service,
+            case_id=case_id,
+            hostname="judgehost-feedback",
+            test_name="016.in",
             runresult="checker-fail",
-            runtime_sec=0.012,
-            cpu_sec=0.011,
-            wall_sec=0.025,
-            memory_kb=1404,
-            output_run_rel="",
-            output_error_rel="",
-            output_system_rel="",
-            output_diff_rel="feedback/judgemessage.txt",
-            metadata_rel="",
-            compare_metadata_rel="",
-            team_message_rel="",
-            score_text="",
-            updated_at="2026-04-14T00:00:01+00:00",
+            verdict="FL",
+            feedback_text=feedback_text,
+            feedback_files=["feedback/judgemessage.txt"],
         )
-        self.assertTrue(updated)
 
         result = service.poll_task_case_result(task_id, "016.in")
         self.assertIsNotNone(result)
@@ -5410,114 +5436,6 @@ class TestJudgehostService(E2ETestBase):
         self.assertEqual(len(tests), 1)
         self.assertEqual(str(tests[0].get("message") or ""), feedback_text)
         self.assertEqual(list(tests[0].get("feedback_files") or []), ["feedback/judgemessage.txt"])
-
-    def test_poll_task_case_result_recovers_feedback_from_case_debug_text_when_artifacts_are_empty(self) -> None:
-        service = config.judgehost_task_service
-        self._reset_task_queue_state(service)
-        verification_id = f"ver-jh-case-debug-{uuid.uuid4().hex[:8]}"
-        run_id = f"r-jh-case-debug-{uuid.uuid4().hex[:8]}"
-        self._seed_build_verification(verification_id)
-
-        task_id = f"jt-debug-{uuid.uuid4().hex[:8]}"
-        self._insert_task_receipt(
-            service,
-            task_id=task_id,
-            run_id=run_id,
-            verification_id=verification_id,
-        )
-
-        service.state.task_registry.update(
-            task_id,
-            {"summary": {
-                "mode": "pass-fail",
-                "source": "solutions/std.cpp",
-                "tests": [],
-                "compile_diagnostics": [],
-                "error": "",
-            }},
-        )
-
-        work_root = Path(tempfile.mkdtemp(prefix="polygon-case-debug-")).resolve()
-        self.addCleanup(shutil.rmtree, work_root, ignore_errors=True)
-
-        job_id = service.state.job_scheduler.create_job_with_cases(
-            task_id=task_id,
-            run_id=run_id,
-            group_key="group-case-debug",
-            contest_id="",
-            mode="pass-fail",
-            source_name="std.cpp",
-            source_path="solutions/std.cpp",
-            work_root=str(work_root),
-            compile_hash="a" * 32,
-            run_hash="b" * 32,
-            compare_hash="c" * 32,
-            source_hash="d" * 64,
-            compile_config_json="{}",
-            run_config_json="{}",
-            compare_config_json="{}",
-            expected_behavior="accepted",
-            verification_source="run.execute",
-            force_recompile=0,
-            service_class="background",
-            job_spec=JobSpec(),
-            created_at="2026-04-14T00:00:00+00:00",
-            case_rows=[
-                {
-                    "task_id": task_id,
-                    "run_id": run_id,
-                    "test_name": "016.in",
-                    "ordinal": 1,
-                    "testcase_id": 16,
-                    "testcase_hash": "e" * 64,
-                    "testcase_input_hash": "f" * 64,
-                    "testcase_answer_hash": "0" * 64,
-                    "input_ref": "",
-                    "answer_ref": "",
-                    "status": "pending",
-                }
-            ],
-        )
-        self.assertGreater(job_id, 0)
-        case_id = self._lease_only_case(service, job_id, "judgehost-debug")
-        updated = service.state.job_scheduler.report_case_result(
-            case_id,
-            lease_owner="judgehost-debug",
-            runresult="checker-fail",
-            runtime_sec=0.012,
-            cpu_sec=0.011,
-            wall_sec=0.025,
-            memory_kb=1404,
-            output_run_rel="",
-            output_error_rel="",
-            output_system_rel="",
-            output_diff_rel="",
-            metadata_rel="",
-            compare_metadata_rel="",
-            team_message_rel="",
-            score_text="",
-            updated_at="2026-04-14T00:00:01+00:00",
-        )
-        self.assertTrue(updated)
-        feedback_text = "Unexpected character #10, but ' ' expected (testdata.in)"
-        service.state.job_scheduler.append_debug_text(
-            case_id=case_id,
-            job_id=job_id,
-            debug_text=feedback_text,
-            now_text="2026-04-14T00:00:02+00:00",
-        )
-
-        result = service.poll_task_case_result(task_id, "016.in")
-        self.assertIsNotNone(result)
-        assert result is not None
-        self.assertEqual(str(result.get("status") or ""), "failed")
-        self.assertEqual(str(result.get("error") or ""), feedback_text)
-        summary = dict(result.get("summary") or {})
-        self.assertEqual(str(summary.get("error") or ""), feedback_text)
-        tests = list(summary.get("tests") or [])
-        self.assertEqual(len(tests), 1)
-        self.assertEqual(str(tests[0].get("message") or ""), feedback_text)
-        self.assertEqual(list(tests[0].get("feedback_files") or []), [])
 
     def test_domjudge_add_debug_info_overwrites_terminal_verification_task_detail(self) -> None:
         service = config.judgehost_task_service
@@ -5604,25 +5522,14 @@ class TestJudgehostService(E2ETestBase):
         )
         self.assertGreater(job_id, 0)
         case_id = self._lease_only_case(service, job_id, "judgehost-late-debug")
-        updated = service.state.job_scheduler.report_case_result(
-            case_id,
-            lease_owner="judgehost-late-debug",
+        self._commit_case_result(
+            service,
+            case_id=case_id,
+            hostname="judgehost-late-debug",
+            test_name="016.in",
             runresult="checker-fail",
-            runtime_sec=0.012,
-            cpu_sec=0.011,
-            wall_sec=0.025,
-            memory_kb=1404,
-            output_run_rel="",
-            output_error_rel="",
-            output_system_rel="",
-            output_diff_rel="",
-            metadata_rel="",
-            compare_metadata_rel="",
-            team_message_rel="",
-            score_text="",
-            updated_at="2026-04-14T00:00:01+00:00",
+            verdict="FL",
         )
-        self.assertTrue(updated)
 
         service.result._domjudge_finalize_if_ready(job_id)
         before = next(

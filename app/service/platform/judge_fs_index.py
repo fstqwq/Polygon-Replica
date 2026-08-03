@@ -1,16 +1,17 @@
 from __future__ import annotations
 
+import contextlib
 import os
 import re
 import shutil
+import threading
+import uuid
+from collections.abc import Iterator
 from pathlib import Path
 from typing import TypedDict
 
 from app.db import now_iso
 from app.service.platform.hashing import canonical_json, sha256_hex_bytes, sha256_hex_of_hashes, sha256_hex_text
-from app.service.platform.rwlock import WriterPriorityRWLock
-
-
 _HEX_64_RE = re.compile(r"^[0-9a-f]{64}$")
 _FILE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 
@@ -46,8 +47,29 @@ class JudgeFsIndexService:
     def __init__(self, cache_root: Path) -> None:
         self._root = (Path(cache_root).resolve() / "judge-fs-index").resolve()
         self._root.mkdir(parents=True, exist_ok=True)
-        self._lock = WriterPriorityRWLock()
+        self._entries_guard = threading.Lock()
+        self._key_locks_guard = threading.Lock()
+        self._key_locks: dict[tuple[str, str, str], tuple[threading.Lock, int]] = {}
         self._entries: dict[tuple[str, str, str], _JudgeFsIndexEntry] = {}
+
+    @contextlib.contextmanager
+    def _key_lock(self, key: tuple[str, str, str]) -> Iterator[None]:
+        # File I/O is serialized only for the immutable entry being accessed.
+        # Unrelated testcase and result-cache keys must never block each other.
+        with self._key_locks_guard:
+            lock, users = self._key_locks.get(key, (threading.Lock(), 0))
+            self._key_locks[key] = (lock, users + 1)
+        lock.acquire()
+        try:
+            yield
+        finally:
+            lock.release()
+            with self._key_locks_guard:
+                current_lock, current_users = self._key_locks[key]
+                if current_users == 1:
+                    self._key_locks.pop(key)
+                else:
+                    self._key_locks[key] = (current_lock, current_users - 1)
 
     @staticmethod
     def signature(payload: object) -> str:
@@ -104,17 +126,6 @@ class JudgeFsIndexService:
         finally:
             try:
                 tmp.unlink(missing_ok=True)
-            except OSError:
-                pass
-
-    @staticmethod
-    def _empty_dir_files(path: Path) -> None:
-        if (not path.exists()) or (not path.is_dir()) or path.is_symlink():
-            return
-        for child in list(path.iterdir()):
-            try:
-                if child.is_file() and (not child.is_symlink()):
-                    child.unlink(missing_ok=True)
             except OSError:
                 pass
 
@@ -208,25 +219,43 @@ class JudgeFsIndexService:
             normalized_files[self._normalize_name(raw_name)] = bytes(raw_payload)
 
         now_text = now_iso()
-        with self._lock.write_lock():
+        key = (safe_kind, safe_key, safe_sig)
+        file_index, integrity_hash = self._compute_payload_file_index(normalized_files)
+        with self._key_lock(key):
             entry_dir = self._entry_dir(kind=safe_kind, key_hash=safe_key, signature=safe_sig)
-            files_dir = self._files_dir(kind=safe_kind, key_hash=safe_key, signature=safe_sig)
-            entry_dir.mkdir(parents=True, exist_ok=True)
-            files_dir.mkdir(parents=True, exist_ok=True)
-            self._empty_dir_files(files_dir)
-            for name, payload in sorted(normalized_files.items(), key=lambda item: item[0]):
-                target = (files_dir / name).resolve()
-                if target.parent != files_dir:
-                    raise RuntimeError("invalid judge fs index file path")
-                self._atomic_write_bytes(target, payload)
+            files_dir = (entry_dir / "files").resolve()
+            with self._entries_guard:
+                old = self._entries.get(key)
+            if (
+                old is not None
+                and old["value"] == value_obj
+                and old["tags"] == tags_obj
+                and old["files"] == file_index
+                and old["integrity_hash"] == integrity_hash
+                and self._read_integrity_marker(entry_dir) == integrity_hash
+                and self._disk_files_match(files_dir, file_index)
+            ):
+                return
 
-            file_index, integrity_hash = self._compute_payload_file_index(normalized_files)
-            self._write_integrity_marker(entry_dir, integrity_hash)
-
-            key = (safe_kind, safe_key, safe_sig)
-            old = self._entries.get(key)
             created_at = now_text if old is None else old["created_at"]
-            self._entries[key] = {
+            replacement = (entry_dir.parent / f".{safe_sig}.{uuid.uuid4().hex}.tmp").resolve()
+            replacement_files = (replacement / "files").resolve()
+            replacement_files.mkdir(parents=True, exist_ok=False)
+            try:
+                for name, payload in sorted(normalized_files.items(), key=lambda item: item[0]):
+                    target = (replacement_files / name).resolve()
+                    if target.parent != replacement_files:
+                        raise RuntimeError("invalid judge fs index file path")
+                    self._atomic_write_bytes(target, payload)
+                self._write_integrity_marker(replacement, integrity_hash)
+                if entry_dir.exists() and entry_dir.is_dir() and not entry_dir.is_symlink():
+                    shutil.rmtree(entry_dir)
+                os.replace(replacement, entry_dir)
+            finally:
+                if replacement.exists() and replacement.is_dir() and not replacement.is_symlink():
+                    shutil.rmtree(replacement, ignore_errors=True)
+
+            row: _JudgeFsIndexEntry = {
                 "schema": "judge-fs-index-entry",
                 "kind": safe_kind,
                 "key_hash": safe_key,
@@ -238,13 +267,15 @@ class JudgeFsIndexService:
                 "created_at": created_at,
                 "updated_at": now_text,
             }
+            with self._entries_guard:
+                self._entries[key] = row
 
     def get(self, *, kind: str, key_hash: str, signature: str) -> dict[str, object] | None:
         safe_kind, safe_key, safe_sig = self._entry_key(kind=kind, key_hash=key_hash, signature=signature)
         key = (safe_kind, safe_key, safe_sig)
-        invalid = False
-        with self._lock.read_lock():
-            row = self._entries.get(key)
+        with self._key_lock(key):
+            with self._entries_guard:
+                row = self._entries.get(key)
             if row is None:
                 return None
             entry_dir = self._entry_dir(kind=safe_kind, key_hash=safe_key, signature=safe_sig)
@@ -272,8 +303,7 @@ class JudgeFsIndexService:
                     "created_at": row["created_at"],
                     "updated_at": row["updated_at"],
                 }
-        if invalid:
-            self.delete(kind=safe_kind, key_hash=safe_key, signature=safe_sig)
+            self._delete_locked(key, entry_dir)
         return None
 
     def get_with_blobs(
@@ -291,10 +321,10 @@ class JudgeFsIndexService:
         )
         requested_names = {self._normalize_name(name) for name in names}
         key = (safe_kind, safe_key, safe_sig)
-        invalid = False
         result: tuple[dict[str, object], dict[str, bytes]] | None = None
-        with self._lock.read_lock():
-            row = self._entries.get(key)
+        with self._key_lock(key):
+            with self._entries_guard:
+                row = self._entries.get(key)
             if row is None:
                 return None
             entry_dir = self._entry_dir(kind=safe_kind, key_hash=safe_key, signature=safe_sig)
@@ -341,8 +371,8 @@ class JudgeFsIndexService:
                     },
                     blobs,
                 )
-        if invalid:
-            self.delete(kind=safe_kind, key_hash=safe_key, signature=safe_sig)
+            if invalid:
+                self._delete_locked(key, entry_dir)
         return result
 
     def read_blob(self, *, kind: str, key_hash: str, signature: str, name: str) -> bytes | None:
@@ -352,7 +382,8 @@ class JudgeFsIndexService:
         target = (files_dir / safe_name).resolve()
         if target.parent != files_dir:
             return None
-        with self._lock.read_lock():
+        key = (safe_kind, safe_key, safe_sig)
+        with self._key_lock(key):
             if (not target.exists()) or (not target.is_file()) or target.is_symlink():
                 return None
             try:
@@ -362,37 +393,39 @@ class JudgeFsIndexService:
 
     def delete(self, *, kind: str, key_hash: str, signature: str) -> None:
         safe_kind, safe_key, safe_sig = self._entry_key(kind=kind, key_hash=key_hash, signature=signature)
-        with self._lock.write_lock():
-            self._entries.pop((safe_kind, safe_key, safe_sig), None)
+        key = (safe_kind, safe_key, safe_sig)
+        with self._key_lock(key):
             target = self._entry_dir(kind=safe_kind, key_hash=safe_key, signature=safe_sig)
-            try:
-                if target.exists() and target.is_dir() and (not target.is_symlink()):
-                    shutil.rmtree(target, ignore_errors=True)
-            except OSError:
-                pass
+            self._delete_locked(key, target)
+
+    def _delete_locked(self, key: tuple[str, str, str], target: Path) -> None:
+        with self._entries_guard:
+            self._entries.pop(key, None)
+        try:
+            if target.exists() and target.is_dir() and not target.is_symlink():
+                shutil.rmtree(target, ignore_errors=True)
+        except OSError:
+            pass
 
     def count_entries(self, *, kind: str) -> int:
         safe_kind = self._normalize_kind(kind)
-        root = (self._root / safe_kind).resolve()
-        if (not root.exists()) or (not root.is_dir()) or root.is_symlink():
-            return 0
-        with self._lock.read_lock():
-            total = 0
-            for files_dir in root.rglob("files"):
-                if (not files_dir.exists()) or (not files_dir.is_dir()) or files_dir.is_symlink():
-                    continue
-                entry_dir = files_dir.parent
-                marker = self._read_integrity_marker(entry_dir)
-                if marker:
-                    total += 1
-            return total
+        with self._entries_guard:
+            return sum(
+                1
+                for kind_token, _key, _signature in self._entries
+                if kind_token == safe_kind
+            )
 
     def clear_all(self) -> None:
-        with self._lock.write_lock():
+        # Startup/reset owns this operation; runtime maintenance must delete by key.
+        with self._key_locks_guard:
+            if self._key_locks:
+                raise RuntimeError("cannot clear judge fs index while entries are active")
+        with self._entries_guard:
             self._entries.clear()
-            try:
-                if self._root.exists() and self._root.is_dir() and (not self._root.is_symlink()):
-                    shutil.rmtree(self._root, ignore_errors=True)
-            except OSError:
-                pass
-            self._root.mkdir(parents=True, exist_ok=True)
+        try:
+            if self._root.exists() and self._root.is_dir() and not self._root.is_symlink():
+                shutil.rmtree(self._root, ignore_errors=True)
+        except OSError:
+            pass
+        self._root.mkdir(parents=True, exist_ok=True)

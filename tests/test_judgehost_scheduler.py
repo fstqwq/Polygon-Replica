@@ -10,14 +10,38 @@ from unittest.mock import patch
 
 from app.runtime_value import build_runtime_values
 from app.service.judgehost.cleanup import JudgehostTerminalCleanup
+from app.service.judgehost.case_result import build_case_result
 from app.service.judgehost.domjudge.cache import domjudge_hash_of_hashes
 from app.service.judgehost.domjudge.client import domjudge_script_id
 from app.service.judgehost.job_scheduler import JobScheduler
-from app.service.judgehost.job_scheduler_models import JobSpec
+from app.service.judgehost.job_scheduler_models import CaseClaimBusy, JobSpec
 from app.service.judgehost.task_registry import JudgehostTaskRegistry
 from app.service.judgehost.toolkit import DomjudgeToolkit
 from app.service.platform.hashing import sha256_hex_bytes
 from app.service.platform.judge_fs_index import JudgeFsIndexService
+
+
+def _case_result(test_name: str, *, runresult: str = "correct", verdict: str = "OK"):
+    return build_case_result(
+        test_name=test_name,
+        runresult=runresult,
+        verdict=verdict,
+        runtime_sec=0.001,
+        cpu_sec=0.001,
+        wall_sec=0.002,
+        memory_kb=1024,
+        score_text="",
+        output_run_rel="",
+        output_error_rel="",
+        output_system_rel="",
+        output_diff_rel="",
+        metadata_rel="",
+        compare_metadata_rel="",
+        team_message_rel="",
+        feedback_text="",
+        feedback_files=[],
+        answer_correct=False,
+    )
 
 
 def _task_row(index: int, *, verification_id: str = "verification") -> dict[str, object]:
@@ -121,8 +145,18 @@ def _create_ready_job(
         scope=scope,
     )
     scheduler.activate_task_cases(task_id, now_text=now_text)
-    cache_rows = scheduler.cache_pending_cases(job_id)
-    scheduler.mark_cache_misses([int(row["id"]) for row in cache_rows], now_text=now_text)
+    claims = scheduler.claim_cache_cases(
+        job_id,
+        hostname="cache-setup",
+        limit=len(ordinals),
+        now_text=now_text,
+    )
+    for claim, _row in claims:
+        scheduler.finish_cache_miss(
+            claim.case_id,
+            generation=claim.generation,
+            updated_at=now_text,
+        )
     scheduler.claim_materialization(job_id, now_text=now_text)
     scheduler.finish_materialization(
         job_id,
@@ -217,7 +251,7 @@ class TestJudgehostScheduler(unittest.TestCase):
             service_class="foreground",
             scope=2,
         )
-        self.assertEqual(scheduler.claim_ready_job("host-a")["job_id"], foreground_id)
+        self.assertEqual(scheduler.select_ready_job("host-a")["job_id"], foreground_id)
         foreground = scheduler.lease_cases(
             foreground_id,
             hostname="host-a",
@@ -225,7 +259,7 @@ class TestJudgehostScheduler(unittest.TestCase):
             now_text=datetime.now(timezone.utc).isoformat(),
         )
         self.assertEqual([row["ordinal"] for row in foreground], [3])
-        self.assertEqual(scheduler.claim_ready_job("host-b")["job_id"], background_id)
+        self.assertEqual(scheduler.select_ready_job("host-b")["job_id"], background_id)
         background = scheduler.lease_cases(
             background_id,
             hostname="host-b",
@@ -256,10 +290,69 @@ class TestJudgehostScheduler(unittest.TestCase):
             ordinals=[1],
         )
 
-        self.assertEqual(scheduler.claim_ready_job("host-a")["job_id"], job_id)
-        self.assertEqual(scheduler.claim_ready_job("host-b")["job_id"], job_id)
+        self.assertEqual(scheduler.select_ready_job("host-a")["job_id"], job_id)
+        self.assertEqual(scheduler.select_ready_job("host-b")["job_id"], job_id)
 
-    def test_bulk_case_transitions_refresh_job_heap_once(self) -> None:
+    def test_reporting_claim_serializes_duplicate_and_defers_cancel(self) -> None:
+        scheduler = JobScheduler(id_base=250)
+        job_id = _create_ready_job(
+            scheduler,
+            task_id="reporting",
+            run_id="run-reporting",
+            ordinals=[1],
+        )
+        case = scheduler.lease_cases(
+            job_id,
+            hostname="host-a",
+            limit=1,
+            now_text="2026-08-03T00:00:00+00:00",
+        )[0]
+        case_id = int(case["id"])
+        claim = scheduler.claim_case_reporting(
+            case_id,
+            hostname="host-a",
+            now_text="2026-08-03T00:00:01+00:00",
+        )
+        self.assertIsNotNone(claim)
+        assert claim is not None
+        with self.assertRaises(CaseClaimBusy):
+            scheduler.claim_case_reporting(
+                case_id,
+                hostname="host-a",
+                now_text="2026-08-03T00:00:02+00:00",
+            )
+        self.assertEqual(
+            scheduler.cancel_jobs_for_runs(
+                ["run-reporting"],
+                now_text="2026-08-03T00:00:03+00:00",
+            ),
+            [job_id],
+        )
+        self.assertFalse(scheduler.task_cases_terminal("reporting"))
+        scheduler.request_job_case_results(
+            job_id,
+            results={
+                case_id: _case_result(
+                    "001.in",
+                    runresult="internal-error",
+                    verdict="FL",
+                )
+            },
+            updated_at="2026-08-03T00:00:03+00:00",
+        )
+        self.assertEqual(
+            scheduler.commit_case_result(
+                case_id,
+                generation=claim.generation,
+                result=_case_result("001.in"),
+                updated_at="2026-08-03T00:00:04+00:00",
+            ),
+            "cancelled",
+        )
+        self.assertTrue(scheduler.task_cases_terminal("reporting"))
+        self.assertEqual(scheduler.fetch_job(job_id)["status"], "finalize-pending")
+
+    def test_cache_case_claims_are_exclusive_and_never_become_host_leases(self) -> None:
         scheduler = JobScheduler(id_base=300)
         job_id, now_text = _create_staged_job(
             scheduler,
@@ -269,18 +362,44 @@ class TestJudgehostScheduler(unittest.TestCase):
         )
 
         self.assertTrue(scheduler.activate_task_cases("bulk", now_text=now_text))
-        self.assertEqual(len(scheduler._ready_jobs), 1)
-        cache_rows = scheduler.cache_pending_cases(job_id)
-        retry_rows = scheduler.cache_pending_cases(job_id)
-        self.assertEqual(
-            [row["id"] for row in retry_rows],
-            [row["id"] for row in cache_rows],
-        )
-        scheduler.mark_cache_misses(
-            [int(row["id"]) for row in cache_rows],
+        claims = scheduler.claim_cache_cases(
+            job_id,
+            hostname="cache-a",
+            limit=256,
             now_text=now_text,
         )
-        self.assertLessEqual(len(scheduler._ready_jobs), 2)
+        self.assertEqual(len(claims), 256)
+        self.assertEqual(
+            scheduler.claim_cache_cases(
+                job_id,
+                hostname="cache-b",
+                limit=256,
+                now_text=now_text,
+            ),
+            [],
+        )
+        first_claim, _first_row = claims[0]
+        self.assertEqual(
+            scheduler.commit_case_result(
+                first_claim.case_id,
+                generation=first_claim.generation,
+                result=_case_result("001.in"),
+                updated_at=now_text,
+            ),
+            "reported",
+        )
+        reported = scheduler.fetch_case(first_claim.case_id)
+        self.assertEqual(reported["status"], "reported")
+        self.assertIsNone(reported["lease_owner"])
+        for claim, _row in claims[1:]:
+            self.assertTrue(
+                scheduler.finish_cache_miss(
+                    claim.case_id,
+                    generation=claim.generation,
+                    updated_at=now_text,
+                )
+            )
+        self.assertEqual(len(scheduler.cases_for_job(job_id, status="pending")), 255)
 
     def test_script_hash_index_tracks_open_job_references(self) -> None:
         scheduler = JobScheduler(id_base=400)
@@ -300,19 +419,33 @@ class TestJudgehostScheduler(unittest.TestCase):
         compile_id = int(domjudge_script_id(compile_hash))
 
         self.assertEqual(scheduler.active_script_hashes("compile", compile_id), {compile_hash})
+        for index, job_id in enumerate((first_job, second_job)):
+            case = scheduler.cases_for_job(job_id)[0]
+            scheduler.request_job_case_results(
+                job_id,
+                results={
+                    int(case["id"]): _case_result(
+                        str(case["test_name"]),
+                        runresult="internal-error",
+                        verdict="FL",
+                    )
+                },
+                updated_at=now_text,
+            )
+            self.assertEqual(
+                scheduler.active_script_hashes("compile", compile_id),
+                {compile_hash} if index == 0 else set(),
+            )
         self.assertIsNotNone(
             scheduler.claim_job_finalization(
                 first_job,
                 now_text=now_text,
-                force_runresult="internal-error",
             )
         )
-        self.assertEqual(scheduler.active_script_hashes("compile", compile_id), {compile_hash})
         self.assertIsNotNone(
             scheduler.claim_job_finalization(
                 second_job,
                 now_text=now_text,
-                force_runresult="internal-error",
             )
         )
         self.assertEqual(scheduler.active_script_hashes("compile", compile_id), set())
@@ -332,7 +465,7 @@ class TestJudgehostScheduler(unittest.TestCase):
         def _worker(worker: int) -> None:
             hostname = f"host-{worker}"
             barrier.wait(timeout=5)
-            job = scheduler.claim_ready_job(hostname)
+            job = scheduler.select_ready_job(hostname)
             if job is None:
                 return
             rows = scheduler.lease_cases(
@@ -401,6 +534,25 @@ class TestJudgehostScheduler(unittest.TestCase):
                 self._register_testcase(toolkit, input_blob, b"other answer\n"),
                 first_refs,
             )
+            input_hash = sha256_hex_bytes(input_blob)
+            answer_hash = sha256_hex_bytes(answer_blob)
+            signature = domjudge_hash_of_hashes([input_hash, answer_hash])
+            input_path = cache._files_dir(
+                kind=JudgeFsIndexService.KIND_CASE,
+                key_hash=signature,
+                signature=signature,
+            ) / "input.in"
+            input_path.write_bytes(b"truncated")
+            self.assertEqual(self._register_testcase(toolkit, input_blob, answer_blob), first_refs)
+            self.assertEqual(
+                cache.read_blob(
+                    kind=JudgeFsIndexService.KIND_CASE,
+                    key_hash=signature,
+                    signature=signature,
+                    name="input.in",
+                ),
+                input_blob,
+            )
 
     def test_concurrent_testcase_registration_writes_once(self) -> None:
         with tempfile.TemporaryDirectory(prefix="judge-testcase-concurrent-") as temp_dir:
@@ -412,7 +564,11 @@ class TestJudgehostScheduler(unittest.TestCase):
                 barrier.wait(timeout=5)
                 refs.append(self._register_testcase(toolkit, b"input\n", b"answer\n"))
 
-            with patch.object(cache, "put", wraps=cache.put) as cache_put:
+            with patch.object(
+                cache,
+                "_write_integrity_marker",
+                wraps=cache._write_integrity_marker,
+            ) as publish_entry:
                 threads = [threading.Thread(target=_register) for _ in range(8)]
                 for thread in threads:
                     thread.start()
@@ -420,7 +576,40 @@ class TestJudgehostScheduler(unittest.TestCase):
                     thread.join(timeout=5)
             self.assertTrue(all(not thread.is_alive() for thread in threads))
             self.assertEqual(len(set(refs)), 1)
-            self.assertEqual(cache_put.call_count, 1)
+            self.assertEqual(publish_entry.call_count, 1)
+
+    def test_different_cache_keys_publish_concurrently(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="judge-cache-parallel-") as temp_dir:
+            cache = JudgeFsIndexService(Path(temp_dir))
+            barrier = threading.Barrier(2)
+            errors: list[Exception] = []
+            original = cache._write_integrity_marker
+
+            def _publish(entry_dir: Path, integrity_hash: str) -> None:
+                barrier.wait(timeout=5)
+                original(entry_dir, integrity_hash)
+
+            def _put(token: str) -> None:
+                try:
+                    cache.put(
+                        kind=JudgeFsIndexService.KIND_CASE,
+                        key_hash=token * 64,
+                        signature=("f" if token == "1" else "e") * 64,
+                        value={"token": token},
+                        files={"program.out": token.encode("ascii")},
+                    )
+                except Exception as exc:  # pragma: no cover - asserted below
+                    errors.append(exc)
+
+            with patch.object(cache, "_write_integrity_marker", side_effect=_publish):
+                threads = [threading.Thread(target=_put, args=(token,)) for token in ("1", "2")]
+                for thread in threads:
+                    thread.start()
+                for thread in threads:
+                    thread.join(timeout=5)
+            self.assertEqual(errors, [])
+            self.assertTrue(all(not thread.is_alive() for thread in threads))
+            self.assertEqual(cache.count_entries(kind=JudgeFsIndexService.KIND_CASE), 2)
 
     def test_terminal_cleanup_removes_runtime_identity_but_not_cache(self) -> None:
         registry = JudgehostTaskRegistry()

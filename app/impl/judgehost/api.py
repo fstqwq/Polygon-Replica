@@ -14,6 +14,7 @@ from starlette.formparsers import MultiPartParser
 
 from app.impl.runtime.config import config
 from app.main_util import UPLOAD_MAX_BYTES, read_upload_bytes_limited
+from app.service.judgehost.job_scheduler_models import CaseClaimBusy
 from app.service.judgehost.limits import judgehost_form_part_limit_bytes
 
 
@@ -382,6 +383,8 @@ async def domjudge_add_judging_run(request: Request, hostname: str, judgetask_id
     payload = await _request_payload(request)
     try:
         result = await _run_service_call(service.domjudge_add_judging_run, hostname, judgetask_id, payload)
+    except CaseClaimBusy as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return JSONResponse(int(result))

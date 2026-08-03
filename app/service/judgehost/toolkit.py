@@ -1,14 +1,11 @@
 from __future__ import annotations
 
 import base64
-import contextlib
 import json
 import logging
 import re
 import shlex
-import threading
 import uuid
-from collections.abc import Iterator
 from pathlib import Path
 
 from app.service.judgehost.artifact import domjudge_read_artifact_blob, resolve_artifact_blob
@@ -47,26 +44,6 @@ class DomjudgeToolkit:
     def __init__(self, state: JudgehostState) -> None:
         self._s = state
         self._executable_cache = DomjudgeExecutableCache(self._s.fs_manager.judgehost_executables_root)
-        self._cache_key_guard = threading.Lock()
-        self._cache_key_locks: dict[str, tuple[threading.Lock, int]] = {}
-
-    @contextlib.contextmanager
-    def cache_key_lock(self, kind: str, key_hash: str, signature: str) -> Iterator[None]:
-        token = f"{kind}:{key_hash}:{signature}"
-        with self._cache_key_guard:
-            lock, users = self._cache_key_locks.get(token, (threading.Lock(), 0))
-            self._cache_key_locks[token] = (lock, users + 1)
-        lock.acquire()
-        try:
-            yield
-        finally:
-            lock.release()
-            with self._cache_key_guard:
-                current_lock, current_users = self._cache_key_locks[token]
-                if current_users == 1:
-                    self._cache_key_locks.pop(token)
-                else:
-                    self._cache_key_locks[token] = (current_lock, current_users - 1)
 
     _TASK_KIND_COMPILE_ONLY = "compile-only"
     _TASK_KIND_GENERATE_INPUT = "generate-input"
@@ -542,39 +519,33 @@ class DomjudgeToolkit:
         }
         # Grouped tasks repeatedly register identical tests. Keep a valid hit
         # metadata-only so warm verifications do not rewrite large payloads.
-        with self.cache_key_lock(self.CASE_CACHE_KIND, safe_hash, safe_signature):
-            entry = service.get(
-                kind=self.CASE_CACHE_KIND,
-                key_hash=safe_hash,
-                signature=safe_signature,
-            )
-            if entry is not None:
-                files = dict(entry["files"])
-                if (
-                    dict(entry["value"]) == expected_value
-                    and set(files) == {"input.in", "answer.ans"}
-                    and int(files["input.in"]["size"]) == len(in_bytes)
-                    and str(files["input.in"]["sha256"]) == safe_input_hash
-                    and int(files["answer.ans"]["size"]) == len(ans_bytes)
-                    and str(files["answer.ans"]["sha256"]) == safe_answer_hash
-                ):
-                    return (input_ref, answer_ref)
-                service.delete(
-                    kind=self.CASE_CACHE_KIND,
-                    key_hash=safe_hash,
-                    signature=safe_signature,
-                )
-            service.put(
-                kind=self.CASE_CACHE_KIND,
-                key_hash=safe_hash,
-                signature=safe_signature,
-                value=expected_value,
-                files={"input.in": in_bytes, "answer.ans": ans_bytes},
-                tags={
-                    "testcase_hash": safe_hash,
-                    "artifact_kind": "domjudge-testcase",
-                },
-            )
+        entry = service.get(
+            kind=self.CASE_CACHE_KIND,
+            key_hash=safe_hash,
+            signature=safe_signature,
+        )
+        if entry is not None:
+            files = dict(entry["files"])
+            if (
+                dict(entry["value"]) == expected_value
+                and set(files) == {"input.in", "answer.ans"}
+                and int(files["input.in"]["size"]) == len(in_bytes)
+                and str(files["input.in"]["sha256"]) == safe_input_hash
+                and int(files["answer.ans"]["size"]) == len(ans_bytes)
+                and str(files["answer.ans"]["sha256"]) == safe_answer_hash
+            ):
+                return (input_ref, answer_ref)
+        service.put(
+            kind=self.CASE_CACHE_KIND,
+            key_hash=safe_hash,
+            signature=safe_signature,
+            value=expected_value,
+            files={"input.in": in_bytes, "answer.ans": ans_bytes},
+            tags={
+                "testcase_hash": safe_hash,
+                "artifact_kind": "domjudge-testcase",
+            },
+        )
         return (input_ref, answer_ref)
 
     @staticmethod
