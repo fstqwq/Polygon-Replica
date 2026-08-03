@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import logging
 import unittest
 from pathlib import Path
 
@@ -57,6 +58,28 @@ def _is_db_handle(node: ast.AST) -> bool:
 
 
 class TestPublicContracts(unittest.TestCase):
+    def test_uvicorn_access_filter_only_suppresses_successful_fetch_poll(self) -> None:
+        from app.service.platform.http_logging import UvicornAccessFilter
+
+        access_filter = UvicornAccessFilter()
+
+        def access_record(method: str, path: str, status_code: int) -> logging.LogRecord:
+            return logging.LogRecord(
+                "uvicorn.access",
+                logging.INFO,
+                __file__,
+                1,
+                '%s - "%s %s HTTP/%s" %d',
+                ("127.0.0.1:1", method, path, "1.1", status_code),
+                None,
+            )
+
+        fetch_path = "/api/v4/judgehosts/fetch-work"
+        self.assertFalse(access_filter.filter(access_record("POST", fetch_path, 200)))
+        self.assertTrue(access_filter.filter(access_record("POST", fetch_path, 400)))
+        self.assertTrue(access_filter.filter(access_record("GET", fetch_path, 200)))
+        self.assertTrue(access_filter.filter(access_record("POST", "/login", 200)))
+
     def test_server_entrypoints_outlive_judgedaemon_fetch_interval(self) -> None:
         local_script = (ROOT / "scripts" / "start_local.sh").read_text(encoding="utf-8")
         docker_script = (ROOT / "scripts" / "docker-entrypoint.sh").read_text(encoding="utf-8")

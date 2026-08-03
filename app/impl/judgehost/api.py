@@ -109,7 +109,6 @@ _FORM_RAW_BINARY_KEYS = {
 _JUDGEHOST_FORM_PART_LIMIT_BYTES = 16 * 1024 * 1024
 _JUDGEHOST_FORM_PART_LIMIT_HEADROOM_BYTES = 1024 * 1024
 _logger = logging.getLogger(__name__)
-_diag_logger = logging.getLogger("uvicorn.error")
 
 
 def _judgehost_form_part_limit_bytes() -> int:
@@ -290,21 +289,6 @@ async def domjudge_fetch_work(request: Request):
         tasks = await _run_service_call(service.domjudge_fetch_work, hostname, max_batchsize=max_batchsize)
     except RuntimeError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    if tasks:
-        _diag_logger.warning(
-            "judgehost.fetch_work host=%s tasks=%s",
-            hostname,
-            [
-                {
-                    "type": task["type"],
-                    "jobid": task["jobid"],
-                    "submitid": task["submitid"],
-                    "judgetaskid": task["judgetaskid"],
-                    "testcase_id": task["testcase_id"],
-                }
-                for task in tasks
-            ],
-        )
     return JSONResponse(tasks)
 
 

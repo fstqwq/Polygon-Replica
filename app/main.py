@@ -22,6 +22,11 @@ from app.route import (
     root_auth_route,
     run_export_route,
 )
+from app.service.platform.http_logging import install_uvicorn_access_filter
+
+
+install_uvicorn_access_filter()
+
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):

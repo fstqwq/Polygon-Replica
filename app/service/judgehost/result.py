@@ -161,7 +161,7 @@ class ResultProcessor:
                 answer_ref,
             )
             raise RuntimeError("testcase files not found")
-        _diag_logger.warning(
+        logger.debug(
             "judgehost.get_testcase_files testcase_id=%s host=%s resolved=%s exists=%s input=%s answer=%s",
             token,
             safe_host,
@@ -1207,7 +1207,7 @@ class ResultProcessor:
         if outcome != "reported":
             logger.info("ignoring stale add_judging_run result for case id: %s", case_id)
             return case_id
-        logger.warning(
+        logger.debug(
             "domjudge add_judging_run host=%s job_id=%s case_id=%s runresult=%s",
             safe_host,
             job_id,
