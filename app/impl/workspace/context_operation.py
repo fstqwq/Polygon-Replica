@@ -78,7 +78,7 @@ def user_participating_problems(user_id: int, limit: int=_C.API_PROBLEMS_LIST_LI
         revision_local = row['revision_local']
         revision_upstream = row['revision_upstream']
         revision_display = _db_revision_display(revision_local, revision_upstream)
-        items.append({'slug': row['slug'], 'name': row['name'], 'role': role, 'workspace_id': row['workspace_id'], 'has_workspace': row['workspace_id'] is not None, 'workspace_path': workspace_path, 'branch': branch, 'head_commit': head, 'head_short': head[:8], 'dirty': dirty, 'revision_local': revision_local, 'revision_upstream': revision_upstream, 'revision_display': revision_display, 'revision_highlight': bool(row['revision_highlight']), 'revision_upstream_higher': bool(row['revision_upstream_higher']), 'revision_missing': bool(row['revision_missing']), 'updated_at': row['updated_at'], 'last_updated_at': row['last_updated_at']})
+        items.append({'slug': row['slug'], 'role': role, 'workspace_id': row['workspace_id'], 'has_workspace': row['workspace_id'] is not None, 'workspace_path': workspace_path, 'branch': branch, 'head_commit': head, 'head_short': head[:8], 'dirty': dirty, 'revision_local': revision_local, 'revision_upstream': revision_upstream, 'revision_display': revision_display, 'revision_highlight': bool(row['revision_highlight']), 'revision_upstream_higher': bool(row['revision_upstream_higher']), 'revision_missing': bool(row['revision_missing']), 'updated_at': row['updated_at'], 'last_updated_at': row['last_updated_at']})
     return items
 
 def normalize_contest_role(raw: str | None) -> str:

@@ -23,7 +23,7 @@
       {% for row in available_rows %}
       <tr>
         <td><input type="checkbox" name="problem_slugs" value="{{ row.problem_slug }}" /></td>
-        <td><code>{{ row.problem_slug }}</code> - {{ row.problem_name }}</td>
+        <td><code>{{ row.problem_slug }}</code> - {{ row.slug_leaf }}</td>
         <td>{{ row.role }}</td>
       </tr>
       {% endfor %}
@@ -54,7 +54,7 @@
           <input type="hidden" name="contest_problem_ids" value="{{ row.contest_problem_id }}" />
           <input name="contest_problem_indices" value="{{ row.idx }}" maxlength="16" />
         </td>
-        <td><code>{{ row.problem_slug }}</code> - {{ row.problem_name }}</td>
+        <td><code>{{ row.problem_slug }}</code> - {{ row.slug_leaf }}</td>
         <td>{{ row.time_limit_ms }}ms / {{ row.memory_limit_mb }}MB</td>
         <td><span class="{{ 'revision-alert' if row.revision_warn else '' }}">{{ row.revision_display }}</span></td>
       </tr>

@@ -8,6 +8,7 @@ from pathlib import Path
 
 from fastapi import HTTPException
 
+from app.main_util import problem_slug_leaf
 from app.impl.auth.shared import redirect_response
 from app.impl.runtime.config import config
 from .common import _contest_problem_slug_file_token
@@ -20,6 +21,7 @@ from app.service.sandbox.base import ExecResult
 from app.service.statement.constant import DEFAULT_OLYMP_STY
 from app.service.statement.context import normalize_statement_language
 from app.service.statement.render import render_statement_problem_assets_for_language
+from app.service.statement.title import statement_title_from_snapshot
 from app.service.platform.git_process import run_git
 from app.service.verification.runtime import coerce_int, normalize_problem_mode
 from app.impl.workspace.problem_config import read_problem_config
@@ -105,7 +107,7 @@ def _contest_problem_rows(contest_id: int, username: str, user_id: int) -> list[
     for row in rows:
         problem_id = int(row["problem_id"])
         problem_slug = str(row["problem_slug"])
-        problem_name = str(row["problem_name"])
+        slug_leaf = str(row["slug_leaf"])
         problem_access = workspace_access_context(problem_id, int(user_id))
         can_problem_write = bool(problem_access.get("can_write"))
         revision_display = "unavailable"
@@ -152,7 +154,7 @@ def _contest_problem_rows(contest_id: int, username: str, user_id: int) -> list[
                 "idx": str(row["idx"]),
                 "problem_id": problem_id,
                 "problem_slug": problem_slug,
-                "problem_name": problem_name,
+                "slug_leaf": slug_leaf,
                 "time_limit_ms": tl_ms,
                 "memory_limit_mb": ml_mb,
                 "mode": mode,
@@ -625,7 +627,6 @@ def _prepare_contest_pdf_problem(
     actor_username: str,
     problem_id: int,
     problem_slug: str,
-    problem_name: str,
     idx: str,
     source_folder: str,
     language: str,
@@ -681,7 +682,11 @@ def _prepare_contest_pdf_problem(
             snapshot_root,
             language,
             target_dir,
-            problem_title=problem_name,
+            problem_title=statement_title_from_snapshot(
+                snapshot_root,
+                fallback_title=problem_slug_leaf(problem_slug),
+                language=language,
+            ),
         )
         item["preamble_lines"] = _extract_latex_color_definition_lines(snapshot_root / "statement" / "olymp.sty")
         item["source_commit"] = head_commit
@@ -884,7 +889,6 @@ def _run_contest_pdf_job_worker(
             actor_username=actor_username,
             problem_id=int(entry["problem_id"]),
             problem_slug=str(entry["problem_slug"]),
-            problem_name=str(entry["problem_name"]),
             idx=str(entry["idx"]),
             source_folder=source_folder,
             language=language,
@@ -1107,6 +1111,7 @@ def _run_contest_package_job_worker(
                     "icpc",
                     workspace_id=workspace_id,
                     source_commit=head_commit,
+                    domjudge_short_name=idx,
                 )
             ).resolve()
             if not export_path.exists() or not export_path.is_file() or export_path.is_symlink():

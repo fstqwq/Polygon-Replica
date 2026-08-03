@@ -20,6 +20,7 @@ from app.service.problem.solution_metadata import infer_expected_behavior_from_n
 from app.service.statement.render import render_statement_main
 from app.service.statement.tex_compile import TexCompileService
 from app.service.statement.context import pick_statement_language, statement_languages
+from app.service.statement.title import statement_title_from_snapshot
 from app.service.platform.git_process import run_git
 from app.service.platform.workspace_path import (
     is_allowed_workspace_root_path,
@@ -515,24 +516,47 @@ class ExportService:
             lines.extend(limit_lines)
         lines.extend(
             [
-                f"name: {self._yaml_quote(str(problem_name or '').strip() or 'Problem')}",
+                f"name: {self._yaml_quote(problem_name)}",
                 f"validation: {validation}",
             ]
         )
         return "\n".join(lines) + "\n"
 
-    def _build_domjudge_problem_ini(self, *, slug: str, snapshot: Path) -> str:
+    @staticmethod
+    def _ini_value(value: str) -> str:
+        if re.fullmatch(r"[A-Za-z0-9 .,_/-]+", value):
+            return value
+        escaped = value.replace("\\", "\\\\").replace('"', r'\"')
+        return f'"{escaped}"'
+
+    @staticmethod
+    def _domjudge_short_name(value: str) -> str:
+        short_name = value.strip()
+        if not short_name:
+            raise ValueError("DOMjudge short-name is required")
+        if "\n" in short_name or "\r" in short_name:
+            raise ValueError("DOMjudge short-name must be a single line")
+        return short_name
+
+    def _build_domjudge_problem_ini(
+        self,
+        *,
+        problem_name: str,
+        external_id: str,
+        short_name: str,
+        snapshot: Path,
+    ) -> str:
         cfg = self._load_problem_config(snapshot)
         time_limit_ms = cfg.get("time_limit_ms")
         seconds = 2.0
         if isinstance(time_limit_ms, int) and time_limit_ms > 0:
             seconds = max(0.001, float(time_limit_ms) / 1000.0)
-        short_name = Path(str(slug or "problem")).name[:32] or "problem"
         return (
+            f"name = {self._ini_value(problem_name)}\n"
+            f"externalid = {external_id}\n"
             f"short-name = {short_name}\n"
             f"timelimit = {seconds:.3f}".rstrip("0").rstrip(".") + "\n"
-            f"color = {self._domjudge_color(slug)}\n"
-            f"externalid = {slug}\n"
+            f"color = {self._domjudge_color(external_id)}\n"
         )
 
     def _statement_export_languages(self, snapshot: Path) -> list[str]:
@@ -834,6 +858,7 @@ class ExportService:
         snapshot: Path,
         problem_name: str,
         problem_slug: str,
+        domjudge_short_name: str,
         verification_id: str,
         mode: str,
         pass_limit: int,
@@ -863,7 +888,9 @@ class ExportService:
         )
         (package_root / "domjudge-problem.ini").write_text(
             self._build_domjudge_problem_ini(
-                slug=self._public_problem_slug(problem_slug),
+                problem_name=problem_name,
+                external_id=self._public_problem_slug(problem_slug),
+                short_name=domjudge_short_name,
                 snapshot=snapshot,
             ),
             encoding="utf-8",
@@ -1009,6 +1036,7 @@ class ExportService:
         *,
         workspace_id: int | None = None,
         source_commit: str = "",
+        domjudge_short_name: str | None = None,
     ) -> Path:
         resolved_export_type = str(export_type or "").strip().lower() or "icpc"
         resolved_verification_id = str(verification_id or "").strip()
@@ -1058,11 +1086,20 @@ class ExportService:
                     tmp_root,
                 )
                 mode, pass_limit = self._problem_mode_and_pass_limit(snapshot)
+                public_slug = self._public_problem_slug(str(problem_row["slug"]))
+                problem_name = statement_title_from_snapshot(
+                    snapshot,
+                    fallback_title=public_slug,
+                )
+                resolved_short_name = self._domjudge_short_name(
+                    domjudge_short_name or public_slug
+                )
                 self._build_icpc_package(
                     package_root=package_root,
                     snapshot=snapshot,
-                    problem_name=problem_row["name"],
+                    problem_name=problem_name,
                     problem_slug=str(problem_row["slug"]),
+                    domjudge_short_name=resolved_short_name,
                     verification_id=resolved_verification_id,
                     mode=mode,
                     pass_limit=pass_limit,

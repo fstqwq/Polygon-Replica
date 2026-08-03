@@ -24,6 +24,7 @@ from app.impl.workspace.context_operation import (
 from app.main_util import (
     enforce_textarea_max_bytes,
     normalize_workspace_rel_path,
+    problem_slug_leaf,
     safe_workspace_path,
     sanitize_log_text_for_ui,
     write_upload_file_limited,
@@ -42,7 +43,11 @@ from app.service.statement.context import (
     pick_statement_language,
     statement_languages,
 )
-from app.service.statement.render import ensure_statement_language_sources, render_statement_problem_assets_for_language
+from app.service.statement.render import (
+    ensure_statement_language_sources,
+    render_statement_problem_assets_for_language,
+    statement_title_for_language,
+)
 from app.service.statement.signature import statement_sources_signature
 
 _C = config.constants
@@ -292,12 +297,16 @@ def preview_page(request: Request, problem: str, user: Annotated[str, Depends(re
     workspace_id = ctx['workspace']['id']
     problem_id = int(ctx['problem']['id'])
     workspace = Path(ctx['workspace']['path'])
-    problem_title = str(ctx["problem"]["name"])
+    available_languages = statement_languages(workspace)
+    current_language = resolve_statement_page_language(workspace, request.query_params.get("language", ""))
+    problem_title = statement_title_for_language(
+        workspace,
+        current_language or pick_statement_language(workspace),
+        fallback_title=problem_slug_leaf(problem),
+    )
     current_statement_signature = statement_sources_signature(workspace, problem_title=problem_title)
     workspace_head = str(ctx["workspace"].get("head_commit") or "")
     requested_preview_id = request.query_params.get("preview_id", "")
-    available_languages = statement_languages(workspace)
-    current_language = resolve_statement_page_language(workspace, request.query_params.get("language", ""))
     has_statement_language = bool(current_language)
     preview_id = requested_preview_id
     message = ''
@@ -557,11 +566,15 @@ def preview_status(problem: str, user: Annotated[str, Depends(require_session_us
     problem_id = int(ctx['problem']['id'])
     workspace_id = int(ctx['workspace']['id'])
     workspace = Path(ctx['workspace']['path'])
-    problem_title = str(ctx['problem']['name'])
     try:
         current_language = selected_statement_language(workspace, language)
     except ValueError:
         current_language = resolve_statement_page_language(workspace, language)
+    problem_title = statement_title_for_language(
+        workspace,
+        current_language or pick_statement_language(workspace),
+        fallback_title=problem_slug_leaf(problem),
+    )
     current_statement_signature = statement_sources_signature(workspace, problem_title=problem_title)
     workspace_head = str(ctx['workspace'].get('head_commit') or "")
     workspace_key = f'{problem_id}:{workspace_id}'
@@ -606,7 +619,11 @@ def statement_tex_source(problem: str, user: Annotated[str, Depends(require_sess
                 workspace,
                 current_language,
                 target_dir,
-                problem_title=str(ctx["problem"]["name"]),
+                problem_title=statement_title_for_language(
+                    workspace,
+                    current_language,
+                    fallback_title=problem_slug_leaf(problem),
+                ),
             )
             tex_text = tex_path.read_text(encoding='utf-8')
     except ValueError as exc:

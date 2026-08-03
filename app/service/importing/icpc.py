@@ -13,7 +13,6 @@ from app.service.importing.statement_assets import ImportedLegacyStatementAsset,
 from app.service.problem.build_config import dumps_build_config
 from app.service.problem.solution_metadata import normalize_expected_behavior, render_solution_desc
 from app.service.statement.constant import (
-    DEFAULT_PROBLEM_TITLE,
     DEFAULT_STATEMENT_PROBLEM_TEMPLATE,
     DEFAULT_STATEMENT_TEMPLATE,
     STATEMENT_MAIN_REL,
@@ -27,6 +26,7 @@ from app.service.statement.constant import (
     is_ignored_statement_section_entry,
 )
 from app.service.statement.render import default_olymp_sty_text
+from app.service.statement.title import normalize_problem_title
 from app.service.problem.test_spec import dumps_tests_spec
 
 
@@ -66,6 +66,7 @@ DomjudgeMeta = TypedDict(
     "DomjudgeMeta",
     {
         "time_limit_ms": int | None,
+        "name": str,
         "external_id": str,
         "short_name": str,
     },
@@ -233,8 +234,16 @@ def _yaml_unquote(raw: str) -> str:
     return text
 
 
+def _ini_unquote(raw: str) -> str:
+    text = raw.strip()
+    if len(text) >= 2 and text[0] == '"' and text[-1] == '"':
+        return text[1:-1].replace(r'\"', '"').replace(r"\\", "\\")
+    return text
+
+
 def _parse_domjudge_ini(text: str) -> DomjudgeMeta:
     time_limit_ms: int | None = None
+    name = ""
     external_id = ""
     short_name = ""
     for raw_line in text.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
@@ -245,9 +254,12 @@ def _parse_domjudge_ini(text: str) -> DomjudgeMeta:
             continue
         key, value = line.split("=", 1)
         key_norm = key.strip().lower().replace("-", "_")
-        token = value.strip()
+        token = _ini_unquote(value)
         if key_norm == "timelimit":
             time_limit_ms = _time_limit_ms_from_text(token)
+            continue
+        if key_norm == "name":
+            name = token
             continue
         if key_norm == "externalid":
             external_id = token
@@ -256,6 +268,7 @@ def _parse_domjudge_ini(text: str) -> DomjudgeMeta:
             short_name = token
     return {
         "time_limit_ms": time_limit_ms,
+        "name": name,
         "external_id": external_id,
         "short_name": short_name,
     }
@@ -387,8 +400,6 @@ class ICPCPackageImportService:
                 in_limits = True
 
         title = _yaml_unquote(top.get("name", ""))
-        if not title:
-            title = DEFAULT_PROBLEM_TITLE
         validation_tokens = [item for item in _yaml_unquote(top.get("validation", "")).strip().lower().split() if item]
         mode = "interactive" if "interactive" in validation_tokens else "pass-fail"
         if any(token in {"multi-pass", "multipass"} for token in validation_tokens):
@@ -504,8 +515,7 @@ class ICPCPackageImportService:
         title_text = str(_meta["title"] or "").strip()
         if title_text:
             title_path.parent.mkdir(parents=True, exist_ok=True)
-            if (not title_path.exists()) or (not title_path.read_text(encoding="utf-8").strip()):
-                title_path.write_text(title_text + "\n", encoding="utf-8")
+            title_path.write_text(title_text + "\n", encoding="utf-8")
         language_warning = ""
         if section_languages and selected_language != "english":
             language_warning = f"statement language english not found; defaulting to {selected_language}"
@@ -866,12 +876,25 @@ class ICPCPackageImportService:
             if yaml_info is None:
                 raise ValueError("problem.yaml not found in package")
             meta = self._parse_problem_yaml(_read_text_from_zip(zf, yaml_info))
-            domjudge_meta: DomjudgeMeta = {"time_limit_ms": None, "external_id": "", "short_name": ""}
+            domjudge_meta: DomjudgeMeta = {
+                "time_limit_ms": None,
+                "name": "",
+                "external_id": "",
+                "short_name": "",
+            }
             domjudge_info = entry_map.get("domjudge-problem.ini")
             if domjudge_info is not None:
                 domjudge_meta = _parse_domjudge_ini(_read_text_from_zip(zf, domjudge_info))
                 if meta["time_limit_ms"] is None:
                     meta["time_limit_ms"] = domjudge_meta["time_limit_ms"]
+            external_id = domjudge_meta["external_id"].replace("\\", "/")
+            public_slug = PurePosixPath(external_id).name
+            if not public_slug:
+                public_slug = Path(package_name).stem.strip() or "problem"
+            meta["title"] = normalize_problem_title(
+                meta["title"] or domjudge_meta["name"],
+                fallback_title=public_slug,
+            )
             statement_summary, statement_warnings = self._import_statement(zf, entry_map, workspace, meta)
             tests_summary = self._import_tests(
                 zf,

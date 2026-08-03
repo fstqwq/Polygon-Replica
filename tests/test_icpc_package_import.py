@@ -8,6 +8,11 @@ import zipfile
 from pathlib import Path
 
 from app.service.importing.icpc import ICPCPackageImportService
+from app.service.statement.title import (
+    PROBLEM_TITLE_MAX_LEN,
+    normalize_problem_title,
+    statement_title_from_snapshot,
+)
 
 
 class TestICPCPackageImport(unittest.TestCase):
@@ -20,6 +25,93 @@ class TestICPCPackageImport(unittest.TestCase):
 
     def _workspace_path(self) -> Path:
         return self.workspace
+
+    def _import_title_metadata(
+        self,
+        *,
+        yaml_name: str = "",
+        ini_name: str = "",
+        external_id: str = "two-sum",
+        package_name: str = "package.zip",
+    ) -> dict[str, object]:
+        payload = io.BytesIO()
+        yaml_lines = ["validation: default"]
+        if yaml_name:
+            yaml_lines.insert(0, f"name: {yaml_name}")
+        ini_lines = [f"externalid = {external_id}", "short-name = A"]
+        if ini_name:
+            ini_lines.insert(0, f"name = {ini_name}")
+        with zipfile.ZipFile(payload, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr("problem/problem.yaml", "\n".join(yaml_lines) + "\n")
+            zf.writestr(
+                "problem/domjudge-problem.ini",
+                "\n".join(ini_lines) + "\n",
+            )
+            zf.writestr("problem/data/secret/001.in", "1\n")
+        return ICPCPackageImportService().import_package(
+            self.workspace,
+            package_name,
+            payload.getvalue(),
+        )
+
+    def test_import_title_prefers_yaml_name(self) -> None:
+        result = self._import_title_metadata(
+            yaml_name="'YAML # = O''Brien \u4e2d\u6587'",
+            ini_name='"INI # = \\"\u4e2d\u6587\\""',
+        )
+        self.assertEqual(result["title"], "YAML # = O'Brien \u4e2d\u6587")
+        self.assertEqual(
+            (
+                self.workspace
+                / "statement-sections"
+                / "english"
+                / "name.tex"
+            ).read_text(encoding="utf-8"),
+            "YAML # = O'Brien \u4e2d\u6587\n",
+        )
+
+    def test_import_title_uses_domjudge_ini_name(self) -> None:
+        result = self._import_title_metadata(
+            ini_name='"INI # = \\"\u4e2d\u6587\\""',
+        )
+        self.assertEqual(result["title"], 'INI # = "\u4e2d\u6587"')
+
+    def test_import_title_falls_back_to_public_slug(self) -> None:
+        result = self._import_title_metadata(external_id="owner/two-sum")
+        self.assertEqual(result["title"], "two-sum")
+
+    def test_snapshot_title_uses_default_language_and_slug_fallback(self) -> None:
+        english = self.workspace / "statement-sections" / "english"
+        chinese = self.workspace / "statement-sections" / "chinese"
+        english.mkdir(parents=True)
+        chinese.mkdir(parents=True)
+        (english / "name.tex").write_text("\n", encoding="utf-8")
+        (chinese / "name.tex").write_text("Chinese Title\n", encoding="utf-8")
+        self.assertEqual(
+            statement_title_from_snapshot(
+                self.workspace,
+                fallback_title="two-sum",
+            ),
+            "two-sum",
+        )
+        (english / "name.tex").unlink()
+        english.rmdir()
+        self.assertEqual(
+            statement_title_from_snapshot(
+                self.workspace,
+                fallback_title="two-sum",
+            ),
+            "Chinese Title",
+        )
+
+    def test_problem_title_boundary_rejects_multiline_and_oversized_values(self) -> None:
+        with self.assertRaisesRegex(ValueError, "single line"):
+            normalize_problem_title("line one\nline two", fallback_title="two-sum")
+        with self.assertRaisesRegex(ValueError, "too long"):
+            normalize_problem_title(
+                "x" * (PROBLEM_TITLE_MAX_LEN + 1),
+                fallback_title="two-sum",
+            )
 
     def test_import_icpc_package_basic_layout(self) -> None:
         ws = self._workspace_path()

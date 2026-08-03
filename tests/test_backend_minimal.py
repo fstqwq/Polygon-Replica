@@ -35,7 +35,11 @@ from app.impl.workspace.context_ui import page_ctx
 from app.impl.workspace.context_job import _run_export_create_worker
 from app.service.verification.types import Kind, Status
 from app.main_util import TEXTAREA_MAX_BYTES
-from app.service.statement.render import default_statement_title_for_workspace, ensure_statement_language_sources
+from app.service.statement.render import (
+    default_statement_title_for_workspace,
+    ensure_statement_language_sources,
+    statement_title_for_language,
+)
 from app.service.statement.signature import statement_sources_signature
 from app.service.disk.verification_store import VerificationStore
 from app.service.platform.git_process import run_git
@@ -43,6 +47,13 @@ from app.service.platform.git_process import run_git
 
 class TestBackendMinimal(E2ETestBase):
     seed_default_workspace = True
+
+    def _statement_title(self, workspace: Path, language: str = "english") -> str:
+        return statement_title_for_language(
+            workspace,
+            language,
+            fallback_title=Path(self.problem).name,
+        )
 
     class _FakeUpload:
         def __init__(self, filename: str, data: bytes):
@@ -854,7 +865,7 @@ class TestBackendMinimal(E2ETestBase):
                         "pdf": "statement_preview/statement.pdf",
                         "statement_signature": statement_sources_signature(
                             ws,
-                            problem_title=str(ctx["problem"]["name"]),
+                            problem_title=self._statement_title(ws),
                         ),
                     }
                 ),
@@ -903,7 +914,7 @@ class TestBackendMinimal(E2ETestBase):
                         "language": "english",
                         "statement_signature": statement_sources_signature(
                             ws,
-                            problem_title=str(ctx["problem"]["name"]),
+                            problem_title=self._statement_title(ws),
                         ),
                     }
                 ),
@@ -972,7 +983,7 @@ class TestBackendMinimal(E2ETestBase):
                         "pdf": "statement_preview/statement.pdf",
                         "statement_signature": statement_sources_signature(
                             ws,
-                            problem_title=str(ctx["problem"]["name"]),
+                            problem_title=self._statement_title(ws),
                         ),
                     }
                 ),
@@ -1014,7 +1025,7 @@ class TestBackendMinimal(E2ETestBase):
                         "language": "chinese",
                         "statement_signature": statement_sources_signature(
                             ws,
-                            problem_title=str(ctx["problem"]["name"]),
+                            problem_title=self._statement_title(ws, "chinese"),
                         ),
                     }
                 ),
@@ -1049,7 +1060,7 @@ class TestBackendMinimal(E2ETestBase):
                         "pdf": "statement_preview/statement.pdf",
                         "statement_signature": statement_sources_signature(
                             ws,
-                            problem_title=str(ctx["problem"]["name"]),
+                            problem_title=self._statement_title(ws),
                         ),
                     }
                 ),

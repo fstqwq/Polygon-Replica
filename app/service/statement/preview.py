@@ -8,13 +8,17 @@ from pathlib import Path
 from typing import TYPE_CHECKING, TypedDict
 
 from app.db import DB
+from app.main_util import problem_slug_leaf
 from app.service.disk.verification_store import VerificationStore
 from app.service.platform.artifact import ArtifactService
 from app.service.disk.preview_store import PreviewArtifactRow, PreviewRow, PreviewStore
 from app.service.platform.fs.layout import FsManager
 from app.service.platform.hashing import sha256_hex_json
 from app.service.statement.tex_compile import TexCompileService
-from app.service.statement.render import render_statement_main
+from app.service.statement.render import (
+    render_statement_main,
+    statement_title_for_language,
+)
 from app.service.statement.signature import statement_sources_signature
 from app.service.problem.test_spec import (
     TESTS_SPEC_REL,
@@ -478,7 +482,6 @@ class PreviewService:
         safe_language = normalize_statement_language(language)
         if not safe_language:
             raise RuntimeError("preview language is required")
-        problem_title = str(ctx["problem"]["name"]).strip()
         problem_id = int(ctx["problem"]["id"])
         workspace_id = int(ctx["workspace"]["id"])
         source_commit = ""
@@ -492,6 +495,11 @@ class PreviewService:
         sample_verification_id: str | None = None
         preview_layout = None
         with self.workspace_service.workspace_lock(workspace):
+            problem_title = statement_title_for_language(
+                workspace,
+                safe_language,
+                fallback_title=problem_slug_leaf(problem),
+            )
             ws_status = self.workspace_service.read_workspace_status(workspace)
             head_obj = ws_status.get("head_commit")
             head = str(head_obj).strip() if head_obj is not None else ""

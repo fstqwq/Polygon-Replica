@@ -135,6 +135,25 @@ Current naming rules:
 
 The shared statement template is common across languages. The language-specific part is the content under `statement-sections/<language>/`.
 
+### Exported Problem Identity
+
+Problem identity and display metadata are separate values:
+
+- `problem_slug` is the internal repository identity, such as `alice/two-sum`.
+- `public_slug` is the exported identity, such as `two-sum`, and becomes the
+  DOMjudge `externalid`.
+- `problem_name` is the display title from
+  `statement-sections/<default-language>/name.tex` in the exact Git revision
+  being exported. It becomes both `problem.yaml.name` and the DOMjudge INI
+  `name`.
+- DOMjudge `short-name` is the contest label. Contest bundles pass their
+  configured `A`, `B`, and so on; standalone exports use `public_slug`.
+
+The default statement language order is `english`, then `chinese`, then the
+remaining languages alphabetically. Dirty workspace content is never used to
+derive export metadata. SQLite stores the problem slug and repository metadata,
+not a global problem name.
+
 ## Git Operations Exposed in the UI
 
 The workspace pages expose:

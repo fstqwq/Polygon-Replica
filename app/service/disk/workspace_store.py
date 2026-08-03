@@ -4,7 +4,6 @@ import json
 import sqlite3
 from typing import TypedDict
 
-from app.main_util import problem_slug_leaf
 from app.db import DB, now_iso
 from app.service.verification.task_store import VerificationTaskStore
 
@@ -19,7 +18,6 @@ class ProblemAclEntry(TypedDict):
 class ProblemRow(TypedDict):
     id: int
     slug: str
-    name: str
     repo_name: str
     created_at: str
 
@@ -65,7 +63,6 @@ class WorkspaceRecentVerificationRow(TypedDict):
 
 class UserProblemRow(TypedDict):
     slug: str
-    name: str
     role: str
     workspace_id: int | None
     path: str
@@ -120,11 +117,9 @@ class WorkspaceDiskStore:
         )
         if row is None:
             return None
-        safe_slug = str(row["slug"] or "")
         return {
             "id": int(row["id"]),
-            "slug": safe_slug,
-            "name": problem_slug_leaf(safe_slug),
+            "slug": str(row["slug"] or ""),
             "repo_name": str(row["repo_name"] or ""),
             "created_at": str(row["created_at"] or ""),
         }
@@ -136,11 +131,9 @@ class WorkspaceDiskStore:
         )
         if row is None:
             return None
-        safe_slug = str(row["slug"] or "")
         return {
             "id": int(row["id"]),
-            "slug": safe_slug,
-            "name": problem_slug_leaf(safe_slug),
+            "slug": str(row["slug"] or ""),
             "repo_name": str(row["repo_name"] or ""),
             "created_at": str(row["created_at"] or ""),
         }
@@ -387,7 +380,6 @@ class WorkspaceDiskStore:
             items.append(
                 {
                     "slug": safe_slug,
-                    "name": problem_slug_leaf(safe_slug),
                     "role": str(row["role"] or ""),
                     "workspace_id": None if workspace_id_raw is None else int(workspace_id_raw),
                     "path": str(row["path"] or ""),
@@ -429,7 +421,6 @@ class WorkspaceDiskStore:
             items.append(
                 {
                     "slug": safe_slug,
-                    "name": problem_slug_leaf(safe_slug),
                     "role": str(row["role"] or ""),
                     "workspace_id": None if workspace_id_raw is None else int(workspace_id_raw),
                     "path": str(row["path"] or ""),

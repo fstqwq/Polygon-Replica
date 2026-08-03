@@ -43,14 +43,14 @@ class ContestProblem(TypedDict):
     idx: str
     problem_id: int
     problem_slug: str
-    problem_name: str
+    slug_leaf: str
     created_at: str
 
 
 class ContestAvailableProblem(TypedDict):
     problem_id: int
     problem_slug: str
-    problem_name: str
+    slug_leaf: str
     role: str
 
 
@@ -58,7 +58,7 @@ class ContestProblemEntry(TypedDict):
     idx: str
     problem_id: int
     problem_slug: str
-    problem_name: str
+    slug_leaf: str
 
 
 class ContestContext(TypedDict):
@@ -72,7 +72,6 @@ class ContestContext(TypedDict):
 class ContestProblemLookup(TypedDict):
     id: int
     slug: str
-    name: str
 
 
 class ContestJob(TypedDict):
@@ -683,7 +682,7 @@ class ContestService:
                     "idx": str(row["idx"]),
                     "problem_id": int(row["problem_id"]),
                     "problem_slug": str(row["problem_slug"]),
-                    "problem_name": str(row["problem_name"]),
+                    "slug_leaf": str(row["slug_leaf"]),
                     "created_at": str(row["created_at"]),
                 }
             )
@@ -697,7 +696,7 @@ class ContestService:
                     "idx": row["idx"],
                     "problem_id": row["problem_id"],
                     "problem_slug": row["problem_slug"],
-                    "problem_name": row["problem_name"],
+                    "slug_leaf": row["slug_leaf"],
                 }
             )
         return result
@@ -707,14 +706,14 @@ class ContestService:
         result: list[ContestAvailableProblem] = []
         for row in self._store.available_problem_rows(int(contest_id), int(user_id), limit=max(1, int(limit))):
             slug = str(row["problem_slug"])
-            name = str(row["problem_name"])
-            if filter_text and filter_text not in f"{slug} {name}".lower():
+            slug_leaf = str(row["slug_leaf"])
+            if filter_text and filter_text not in f"{slug} {slug_leaf}".lower():
                 continue
             result.append(
                 {
                     "problem_id": int(row["problem_id"]),
                     "problem_slug": slug,
-                    "problem_name": name,
+                    "slug_leaf": slug_leaf,
                     "role": self._normalize_role(str(row["role"])),
                 }
             )
@@ -727,7 +726,7 @@ class ContestService:
         row = self._store.problem_by_slug(slug)
         if row is None:
             return None
-        return {"id": int(row["id"]), "slug": str(row["slug"]), "name": str(row["name"])}
+        return {"id": int(row["id"]), "slug": str(row["slug"])}
 
     def contest_has_problem(self, contest_id: int, problem_id: int) -> bool:
         return self._store.contest_has_problem(int(contest_id), int(problem_id))
@@ -766,7 +765,7 @@ class ContestService:
                     "idx": str(row["idx"]),
                     "problem_id": int(row["problem_id"]),
                     "problem_slug": str(row["problem_slug"]),
-                    "problem_name": str(row["problem_name"]),
+                    "slug_leaf": str(row["slug_leaf"]),
                 }
             )
         return result

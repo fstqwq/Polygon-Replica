@@ -299,6 +299,10 @@ class TestContestBuilds(ContestActionBase):
         workspace_service.grant_repo_access(problem_slug, "alice", "owner")
         ws = Path(workspace_service.ensure_workspace(problem_slug, "alice"))
         ensure_statement_language_sources(ws, "english")
+        (ws / "statement-sections" / "english" / "name.tex").write_text(
+            "Contest Snapshot Title\n",
+            encoding="utf-8",
+        )
         (ws / "README.problem.md").write_text("contest package test\n", encoding="utf-8")
         (ws / "statement" / "olymp.sty").write_text(
             "% problem style\n\\definecolor{gapfill}{RGB}{255,225,225}\n\\colorlet{gapline}{red!60!black}\n",
@@ -426,6 +430,7 @@ class TestContestBuilds(ContestActionBase):
             *,
             workspace_id: int,
             source_commit: str,
+            domjudge_short_name: str,
         ):
             self.assertEqual(str(export_type), "icpc")
             package_calls.append(
@@ -434,6 +439,7 @@ class TestContestBuilds(ContestActionBase):
                     "verification_id": verification_id,
                     "workspace_id": workspace_id,
                     "source_commit": source_commit,
+                    "domjudge_short_name": domjudge_short_name,
                 }
             )
             export_dir = (
@@ -517,6 +523,7 @@ class TestContestBuilds(ContestActionBase):
         self.assertEqual(str(package_prepare_calls[0]["source_commit"]), commit_id)
         self.assertGreater(int(package_calls[0]["workspace_id"]), 0)
         self.assertEqual(str(package_calls[0]["source_commit"]), commit_id)
+        self.assertEqual(str(package_calls[0]["domjudge_short_name"]), "A")
         package_summary = read_contest_job_summary(contest_id, package_job_id)
         package_result = list(package_summary["results"])[0]
         self.assertEqual(package_result["source_commit"], commit_id)
@@ -554,6 +561,7 @@ class TestContestBuilds(ContestActionBase):
         self.assertEqual((compile_root / "statements" / "english" / "olymp.sty").read_text(encoding="utf-8"), "% contest style\n")
         self.assertTrue((compile_root / "problems" / "src-problem" / "statements" / "english" / "problem.tex").is_file())
         rendered_problem_tex = (compile_root / "problems" / "src-problem" / "statements" / "english" / "problem.tex").read_text(encoding="utf-8")
+        self.assertIn(r"\begin{problem}{Contest Snapshot Title}", rendered_problem_tex)
         self.assertIn("\\Example", rendered_problem_tex)
         self.assertIn("sample.001.in", rendered_problem_tex)
         self.assertIn("sample.001.ans", rendered_problem_tex)

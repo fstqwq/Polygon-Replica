@@ -34,27 +34,26 @@ class ContestProblemRecord(TypedDict):
     problem_id: int
     created_at: str
     problem_slug: str
-    problem_name: str
+    slug_leaf: str
 
 
 class ContestAvailableProblemRecord(TypedDict):
     problem_id: int
     problem_slug: str
-    problem_name: str
+    slug_leaf: str
     role: str
 
 
 class ContestProblemLookupRecord(TypedDict):
     id: int
     slug: str
-    name: str
 
 
 class ContestSelectedProblemRecord(TypedDict):
     problem_id: int
     idx: str
     problem_slug: str
-    problem_name: str
+    slug_leaf: str
 
 
 class ContestJobRecord(TypedDict):
@@ -502,7 +501,7 @@ class ContestDiskStore:
                     "problem_id": int(row["problem_id"]),
                     "created_at": str(row["created_at"] or ""),
                     "problem_slug": safe_slug,
-                    "problem_name": problem_slug_leaf(safe_slug),
+                    "slug_leaf": problem_slug_leaf(safe_slug),
                 }
             )
         return items
@@ -550,7 +549,7 @@ class ContestDiskStore:
                 {
                     "problem_id": int(row["problem_id"]),
                     "problem_slug": safe_slug,
-                    "problem_name": problem_slug_leaf(safe_slug),
+                    "slug_leaf": problem_slug_leaf(safe_slug),
                     "role": str(row["role"] or ""),
                 }
             )
@@ -566,11 +565,9 @@ class ContestDiskStore:
         row = self.db.fetch_one("SELECT id,slug FROM problems WHERE slug=?", [slug])
         if row is None:
             return None
-        safe_slug = str(row["slug"] or "")
         return {
             "id": int(row["id"]),
-            "slug": safe_slug,
-            "name": problem_slug_leaf(safe_slug),
+            "slug": str(row["slug"] or ""),
         }
 
     def contest_has_problem(self, contest_id: int, problem_id: int) -> bool:
@@ -734,7 +731,7 @@ class ContestDiskStore:
                     "problem_id": int(row["problem_id"]),
                     "idx": str(row["idx"] or ""),
                     "problem_slug": safe_slug,
-                    "problem_name": problem_slug_leaf(safe_slug),
+                    "slug_leaf": problem_slug_leaf(safe_slug),
                 }
             )
         return items

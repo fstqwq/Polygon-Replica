@@ -510,6 +510,15 @@ class TestExport(E2ETestBase):
         self.assertEqual(target_problem, f"{self.user}/{target_slug}")
 
         imported_ws = Path(workspace_service.ensure_workspace(target_problem, self.user))
+        self.assertEqual(
+            (
+                imported_ws
+                / "statement-sections"
+                / "english"
+                / "name.tex"
+            ).read_text(encoding="utf-8"),
+            "Sample Problem\n",
+        )
         self.assertTrue((imported_ws / "tests" / "manual" / "001.in").is_file())
         self.assertEqual((imported_ws / "tests" / "manual" / "001.in").read_text(encoding="utf-8"), "1\n")
         imported_tests = json.loads((imported_ws / "tests" / "spec.json").read_text(encoding="utf-8"))["tests"]
@@ -606,6 +615,11 @@ class TestExport(E2ETestBase):
     def test_icpc_export_uses_domjudge_root_layout_and_separated_samples(self) -> None:
         ws = Path(self._workspace_path())
         token = uuid.uuid4().hex[:8]
+        committed_title = 'Two Sum\'s #1 = "\u7cbe\u9009"'
+        (ws / "statement-sections" / "english" / "name.tex").write_text(
+            committed_title + "\n",
+            encoding="utf-8",
+        )
         files = {
             "accepted": f"solutions/ac_icpc_layout_{token}.cpp",
             "validator": f"validators/validator_layout_{token}.cpp",
@@ -668,6 +682,10 @@ class TestExport(E2ETestBase):
             ],
             f"test icpc root layout {token}",
         )
+        (ws / "statement-sections" / "english" / "name.tex").write_text(
+            "Dirty workspace title\n",
+            encoding="utf-8",
+        )
         ctx = workspace_service.workspace_context(self.problem, self.user, include_recent=False)
         verification_id = f"ver-export-layout-{token}"
         config.verification_service.begin_verification_record(
@@ -723,10 +741,20 @@ class TestExport(E2ETestBase):
             self.assertIn(f"output_validators/checker/{Path(files['checker']).name}", names)
             self.assertIn("output_validators/checker/testlib.h", names)
             domjudge_ini = zf.read("domjudge-problem.ini").decode("utf-8", errors="replace")
-            self.assertIn(f"short-name = {public_slug[:32]}", domjudge_ini)
+            self.assertIn(
+                'name = "Two Sum\'s #1 = \\"\u7cbe\u9009\\""',
+                domjudge_ini,
+            )
+            self.assertIn(f"short-name = {public_slug}", domjudge_ini)
             self.assertRegex(domjudge_ini, r"(?m)^color = #[0-9a-f]{6}$")
             self.assertIn(f"externalid = {public_slug}", domjudge_ini)
             problem_yaml = zf.read("problem.yaml").decode("utf-8", errors="replace")
+            self.assertIn(
+                "name: 'Two Sum''s #1 = \"\u7cbe\u9009\"'",
+                problem_yaml,
+            )
+            self.assertNotIn("Dirty workspace title", problem_yaml)
+            self.assertNotIn("Dirty workspace title", domjudge_ini)
             self.assertNotIn("problem_format_version", problem_yaml)
         export_row = db_fetch_one("SELECT id FROM exports WHERE filename=?", [archive.name])
         self.assertIsNotNone(export_row)

@@ -10,6 +10,7 @@ from unittest.mock import patch
 from urllib.parse import parse_qs, urlparse
 
 from app.main_util import TEXTAREA_MAX_BYTES
+from app.service.statement.render import statement_title_for_language
 from app.service.statement.signature import statement_sources_signature
 from .common import E2ETestBase
 
@@ -5182,7 +5183,14 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         problem_id = int(ctx["problem"]["id"])
         workspace_id = int(ctx["workspace"]["id"])
         ws = Path(str(ctx["workspace"]["path"]))
-        statement_sig = statement_sources_signature(ws, problem_title=str(ctx["problem"]["name"]))
+        statement_sig = statement_sources_signature(
+            ws,
+            problem_title=statement_title_for_language(
+                ws,
+                "english",
+                fallback_title=Path(str(ctx["problem"]["slug"])).name,
+            ),
+        )
 
         preview_id = f"ui-previewctx-{uuid.uuid4().hex[:8]}"
         preview_root = self._artifact_root(preview_id)

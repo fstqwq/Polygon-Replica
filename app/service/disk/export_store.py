@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from typing import TypedDict
 
-from app.main_util import problem_slug_leaf
 from app.db import DB, now_iso
 
 
@@ -30,7 +29,6 @@ class WorkspaceExportContext(TypedDict):
 class ProblemExportRow(TypedDict):
     id: int
     slug: str
-    name: str
 
 
 class DuplicateExportRow(TypedDict):
@@ -199,11 +197,9 @@ class ExportStore:
         row = self.db.fetch_one("SELECT id,slug FROM problems WHERE slug=?", [slug])
         if row is None:
             return None
-        safe_slug = str(row["slug"] or "")
         return {
             "id": int(row["id"]),
-            "slug": safe_slug,
-            "name": problem_slug_leaf(safe_slug),
+            "slug": str(row["slug"] or ""),
         }
 
     def insert_export_record(
