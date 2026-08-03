@@ -64,7 +64,7 @@ class ExecutionBatchRow(TypedDict):
     compare_config_json: str
     expected_behavior: str
     verification_source: str
-    force_recompile: int
+    bypass_case_result_cache: int
     compile_success: int | None
     compile_state: str
     compile_owner: str
@@ -148,7 +148,7 @@ class ExecutionBatchRecord:
     compare_config_json: str
     expected_behavior: str
     verification_source: str
-    force_recompile: int
+    bypass_case_result_cache: int
     compile_success: int | None
     compile_state: str
     compile_owner: str | None

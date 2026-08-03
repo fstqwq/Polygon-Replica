@@ -44,7 +44,6 @@ class FsManager:
         self.preview_root = self.cache_artifacts_root / "previews"
         self.snapshot_root = self.runtime_root / "snapshots"
         self.judgehost_runs_root = self.runtime_root / "judgehost-runs"
-        self.judgehost_executables_root = self.runtime_root / "judgehost-executables"
 
     def resolve_verification_root(self, verification_id: str) -> Path:
         safe_verification_id = self._normalize_token(verification_id, field_name="verification_id")

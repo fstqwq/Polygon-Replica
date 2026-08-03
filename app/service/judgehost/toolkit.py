@@ -16,7 +16,6 @@ from app.service.judgehost.domjudge.cache import (
     domjudge_parse_cache_blob_ref,
     domjudge_set_hash_from_blobs,
 )
-from app.service.judgehost.domjudge.executable_cache import DomjudgeExecutableCache
 from app.service.judgehost.shared import (
     _DOMJUDGE_CACHE_NAME_RE,
     _DOMJUDGE_CONTEST_ID_RE,
@@ -40,10 +39,13 @@ logger = logging.getLogger(__name__)
 
 class DomjudgeToolkit:
     CASE_CACHE_KIND = JudgeFsIndexService.KIND_CASE
+    EXECUTABLE_CACHE_KIND = JudgeFsIndexService.KIND_EXECUTABLE
+    _EXECUTABLE_KINDS = frozenset({"compile", "run", "compare"})
+    _EXECUTABLE_HASH_RE = re.compile(r"^[0-9a-f]{32}$")
+    _EXECUTABLE_CACHE_SIGNATURE = sha256_hex_text("domjudge-executable-cache-v1")
 
     def __init__(self, state: JudgehostState) -> None:
         self._s = state
-        self._executable_cache = DomjudgeExecutableCache(self._s.fs_manager.judgehost_executables_root)
 
     _TASK_KIND_COMPILE_ONLY = "compile-only"
     _TASK_KIND_GENERATE_INPUT = "generate-input"
@@ -350,10 +352,30 @@ class DomjudgeToolkit:
         executable_hash: str,
         files: list[tuple[str, bytes, bool]],
     ) -> None:
-        self._executable_cache.put(
-            kind=kind,
-            executable_hash=executable_hash,
-            files=files,
+        safe_kind, safe_hash = self._executable_cache_identity(kind, executable_hash)
+        service = self._s.judge_fs_index_service
+        if service is None:
+            raise RuntimeError("judge fs index executable store is unavailable")
+        file_payloads: dict[str, bytes] = {}
+        manifest: list[dict[str, object]] = []
+        for name, content, is_executable in sorted(files, key=lambda item: item[0]):
+            safe_name = domjudge_path_name(name)
+            if not safe_name or safe_name in file_payloads:
+                raise RuntimeError("invalid executable cache file set")
+            file_payloads[safe_name] = bytes(content)
+            manifest.append({"filename": safe_name, "is_executable": bool(is_executable)})
+        service.put(
+            kind=self.EXECUTABLE_CACHE_KIND,
+            key_hash=self._executable_cache_key_hash(safe_kind, safe_hash),
+            signature=self._EXECUTABLE_CACHE_SIGNATURE,
+            value={
+                "schema": "domjudge-executable-cache-v1",
+                "kind": safe_kind,
+                "executable_hash": safe_hash,
+                "files": manifest,
+            },
+            files=file_payloads,
+            tags={"artifact_kind": "domjudge-executable", "executable_kind": safe_kind},
         )
 
     def read_executable_cache(
@@ -362,7 +384,58 @@ class DomjudgeToolkit:
         kind: str,
         executable_hash: str,
     ) -> list[dict[str, object]] | None:
-        return self._executable_cache.read(kind=kind, executable_hash=executable_hash)
+        safe_kind, safe_hash = self._executable_cache_identity(kind, executable_hash)
+        service = self._s.judge_fs_index_service
+        if service is None:
+            raise RuntimeError("judge fs index executable store is unavailable")
+        cached = service.get_with_blobs(
+            kind=self.EXECUTABLE_CACHE_KIND,
+            key_hash=self._executable_cache_key_hash(safe_kind, safe_hash),
+            signature=self._EXECUTABLE_CACHE_SIGNATURE,
+            names=None,
+        )
+        if cached is None:
+            return None
+        entry, blobs = cached
+        value = dict(entry["value"])
+        if (
+            value.get("schema") != "domjudge-executable-cache-v1"
+            or value.get("kind") != safe_kind
+            or value.get("executable_hash") != safe_hash
+        ):
+            return None
+        manifest = value.get("files")
+        if not isinstance(manifest, list):
+            return None
+        rows: list[dict[str, object]] = []
+        for raw_row in manifest:
+            if not isinstance(raw_row, dict):
+                return None
+            filename = domjudge_path_name(raw_row.get("filename"))
+            if not filename or filename not in blobs:
+                return None
+            rows.append(
+                {
+                    "filename": filename,
+                    "content": blobs[filename],
+                    "is_executable": bool(raw_row.get("is_executable")),
+                }
+            )
+        if len(rows) != len(blobs):
+            return None
+        return rows
+
+    @classmethod
+    def _executable_cache_identity(cls, kind: str, executable_hash: str) -> tuple[str, str]:
+        safe_kind = domjudge_lower_text(kind)
+        safe_hash = domjudge_lower_text(executable_hash)
+        if safe_kind not in cls._EXECUTABLE_KINDS or cls._EXECUTABLE_HASH_RE.fullmatch(safe_hash) is None:
+            raise RuntimeError("invalid executable cache identity")
+        return (safe_kind, safe_hash)
+
+    @staticmethod
+    def _executable_cache_key_hash(kind: str, executable_hash: str) -> str:
+        return sha256_hex_text(f"{kind}\0{executable_hash}")
 
     def read_artifact_blob(self, work_root: Path, token: str) -> bytes | None:
         return domjudge_read_artifact_blob(
@@ -771,7 +844,7 @@ class DomjudgeToolkit:
             "task_kind": task_kind,
             "verification_source": verification_source,
             "expected_behavior": domjudge_lower_text(payload_obj.get("expected_behavior")),
-            "force_recompile": domjudge_bool(payload_obj.get("force_recompile"), default=False),
+            "bypass_case_result_cache": domjudge_bool(payload_obj.get("bypass_case_result_cache"), default=False),
             "source_hash": source_hash,
             "compile_hash": compile_hash,
             "run_hash": run_hash,

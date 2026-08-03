@@ -896,6 +896,12 @@ class ResultProcessor:
         if claim is None:
             logger.info("ignoring stale add_judging_run result for case id: %s", int(judgetask_id))
             return int(judgetask_id)
+        self._s.batch_scheduler.observe_compile_success_from_case_claim(
+            claim.case_id,
+            generation=claim.generation,
+            lease_owner=safe_host,
+            updated_at=reported_at,
+        )
 
         def _abort_unfinished_claim() -> None:
             if self._s.batch_scheduler.abort_case_claim(

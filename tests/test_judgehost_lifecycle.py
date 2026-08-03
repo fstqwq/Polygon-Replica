@@ -125,7 +125,7 @@ def _create_batch(
         compare_config_json="{}",
         expected_behavior="accepted",
         verification_source="run.execute",
-        force_recompile=0,
+        bypass_case_result_cache=0,
         service_class="background",
         batch_spec=ExecutionBatchSpec(),
         created_at=_NOW,

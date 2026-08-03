@@ -82,7 +82,7 @@ def _run_verification_start_worker(
     source_commit: str = "",
     kind: str=Kind.ALL.value,
     selected_test_names: list[str] | None=None,
-    force_recompile: bool = False,
+    bypass_case_result_cache: bool = False,
 ) -> None:
     run_workspace_verification_dag(
         problem,
@@ -98,7 +98,7 @@ def _run_verification_start_worker(
         source_commit=source_commit,
         kind=kind,
         selected_test_names=selected_test_names or [],
-        force_recompile=force_recompile,
+        bypass_case_result_cache=bypass_case_result_cache,
     )
 
 
@@ -121,7 +121,7 @@ def start_verification_job(
     initial_summary: dict[str, object] | None=None,
     workspace_path: Path | str | None=None,
     selected_test_names: list[str] | None=None,
-    force_recompile: bool = False,
+    bypass_case_result_cache: bool = False,
     source_commit: str = "",
 ) -> bool:
     if initial_details is None and initial_summary is not None:
@@ -158,7 +158,7 @@ def start_verification_job(
         "pass_limit": int(initial_details.get("pass_limit") or 1) if initial_details is not None else 1,
         "source_paths": [str(item.get("path") or "") for item in targets if str(item.get("path") or "")],
         "selected_test_names": list(selected_test_names or []),
-        "force_recompile": bool(force_recompile),
+        "bypass_case_result_cache": bool(bypass_case_result_cache),
     }
     config.verification_service.begin_verification_record(
         verification_id=verification_id,
@@ -197,7 +197,7 @@ def start_verification_job(
                     source_commit=source_commit,
                     kind=kind,
                     selected_test_names=selected_test_names or [],
-                    force_recompile=force_recompile,
+                    bypass_case_result_cache=bypass_case_result_cache,
                 )
             except Exception as exc:
                 detail = dict(config.verification_service.verification_detail(verification_id))

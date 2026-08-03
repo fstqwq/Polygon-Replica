@@ -119,6 +119,9 @@ class Judgehost:
     def prepare_enqueue_payload(self, **kwargs) -> dict[str, object]:
         return self._enqueue.prepare_enqueue_payload(**kwargs)
 
+    def prepare_execution_template(self, **kwargs) -> dict[str, object]:
+        return self._enqueue.prepare_execution_template(**kwargs)
+
     def enqueue_task(self, **kwargs) -> str:
         return self._enqueue.enqueue_task(**kwargs)
 
@@ -200,6 +203,9 @@ class Judgehost:
     def domjudge_fetch_work(self, *args, **kwargs):
         return self._dispatch.domjudge_fetch_work(*args, **kwargs)
 
+    def probe_task_case_cache(self, task_ids: list[str], *, limit: int = 32) -> set[str]:
+        return self._dispatch.probe_task_case_cache(task_ids, limit=limit)
+
     def domjudge_get_source_files(self, *args, **kwargs):
         return self._result.domjudge_get_source_files(*args, **kwargs)
 
@@ -245,7 +251,7 @@ class Judgehost:
         verification_source: str = "run.execute",
         expected_behavior: str | None = None,
         task_kind: str = "",
-        force_recompile: bool = False,
+        bypass_case_result_cache: bool = False,
         prepared_payload: dict[str, object] | None = None,
     ) -> str:
         if not self.enabled():
@@ -269,7 +275,7 @@ class Judgehost:
             expected_behavior=str(expected_behavior or "unknown"),
             verification_source=str(verification_source or "run.execute"),
             task_kind=str(task_kind or ""),
-            force_recompile=bool(force_recompile),
+            bypass_case_result_cache=bool(bypass_case_result_cache),
             prepared_payload=None if prepared_payload is None else dict(prepared_payload),
             service_class="foreground",
         )

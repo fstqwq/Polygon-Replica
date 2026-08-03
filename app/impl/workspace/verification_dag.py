@@ -9,6 +9,7 @@ from typing import cast
 from app.db import now_iso
 from app.impl.runtime.config import config
 from app.service.problem.solution_metadata import normalize_expected_behavior
+from app.service.platform.hashing import sha256_hex_bytes
 from app.service.verification.source import resolve_source
 from app.service.verification.task_scheduler import (
     TaskExecutionResult,
@@ -86,10 +87,13 @@ class TaskExecutionContext:
     uploaded_sources_root: Path
     source_file_by_path: dict[str, Path]
     source_bytes_by_path: dict[str, tuple[str, bytes]]
+    source_sha256_by_content: dict[bytes, str]
+    artifact_bytes_by_test_ref: dict[tuple[str, str], bytes]
+    execution_template_by_key: dict[tuple[str, str, str, bool, str], dict[str, object]]
     test_plan_by_name: dict[str, VerificationTestPlan]
     run_verification_payload_base: dict[str, object]
     generate_verification_payload_base: dict[str, object]
-    force_recompile: bool
+    bypass_case_result_cache: bool
 
 
 def _workspace_mode_and_pass_limit(problem_id: int, workspace_id: int) -> tuple[str, int]:
@@ -121,15 +125,21 @@ def _verification_required_blob(
     ref_key: str,
     *,
     label: str,
+    cache: dict[tuple[str, str], bytes] | None = None,
     timeout_sec: float = _ARTIFACT_READY_TIMEOUT_SEC,
     interval_sec: float = _ARTIFACT_READY_INTERVAL_SEC,
 ) -> bytes:
+    cache_key = (test_name, ref_key)
+    if cache is not None and cache_key in cache:
+        return cache[cache_key]
     deadline = time.monotonic() + max(0.0, float(timeout_sec))
     while True:
         ref = config.verification_service.verification_artifact_ref(verification_id, test_name, ref_key)
         if ref:
             blob = config.verification_service.resolve_artifact_blob(ref)
             if blob is not None:
+                if cache is not None:
+                    cache[cache_key] = blob
                 return blob
         if time.monotonic() >= deadline:
             break
@@ -628,6 +638,52 @@ def _source_bytes_for_path(execution: TaskExecutionContext, source_path: str) ->
     return loaded
 
 
+def _execution_template(
+    execution: TaskExecutionContext,
+    *,
+    source_label: str,
+    source_name: str,
+    source_bytes: bytes,
+    task_kind: str,
+    expected_behavior: str,
+    verification_source: str,
+    verification_payload_base: dict[str, object],
+    extra_sources_b64: dict[str, str] | None = None,
+    manual_validate_only: bool = False,
+) -> dict[str, object]:
+    extra_sources_key = json.dumps(extra_sources_b64 or {}, sort_keys=True, separators=(",", ":"))
+    source_hash = execution.source_sha256_by_content.get(source_bytes)
+    if source_hash is None:
+        # Source bytes are immutable within one snapshot; hash each distinct source
+        # once rather than repeating source-sized work for every test Case.
+        source_hash = sha256_hex_bytes(source_bytes)
+        execution.source_sha256_by_content[source_bytes] = source_hash
+    key = (
+        source_label,
+        source_hash,
+        task_kind,
+        bool(manual_validate_only),
+        extra_sources_key,
+    )
+    cached = execution.execution_template_by_key.get(key)
+    if cached is not None:
+        return cached
+    prepared = config.judgehost_task_service.prepare_execution_template(
+        mode=execution.mode,
+        upload_content=source_bytes,
+        upload_filename=source_name,
+        verification_payload=verification_payload_base,
+        expected_behavior=expected_behavior,
+        verification_source=verification_source,
+        task_kind=task_kind,
+        extra_sources_b64=extra_sources_b64,
+        manual_validate_only=manual_validate_only,
+        compile_only=False,
+    )
+    execution.execution_template_by_key[key] = prepared
+    return prepared
+
+
 def _empty_task_result(
     *,
     task_id: str,
@@ -672,6 +728,18 @@ def _publish_generate_task(task_row: VerificationTaskRow, *, execution: TaskExec
             extra_sources_b64=test_plan.extra_sources_b64,
             manual_validate_only=test_plan.source_kind == "manual",
         )
+        execution_template = _execution_template(
+            execution,
+            source_label=test_plan.execution_source_name,
+            source_name=test_plan.execution_source_name,
+            source_bytes=test_plan.execution_source_bytes,
+            task_kind=TASK_GENERATE_INPUT,
+            expected_behavior="accepted",
+            verification_source=TASK_GENERATE_INPUT,
+            verification_payload_base=execution.generate_verification_payload_base,
+            extra_sources_b64=test_plan.extra_sources_b64,
+            manual_validate_only=test_plan.source_kind == "manual",
+        )
         judgehost_task_id = config.judgehost_task_service.enqueue_task(
             problem=execution.problem,
             username=execution.user,
@@ -687,10 +755,11 @@ def _publish_generate_task(task_row: VerificationTaskRow, *, execution: TaskExec
             expected_behavior="accepted",
             verification_source=TASK_GENERATE_INPUT,
             task_kind=TASK_GENERATE_INPUT,
-            force_recompile=execution.force_recompile,
+            bypass_case_result_cache=execution.bypass_case_result_cache,
             compile_only=False,
             persist_verification_run=False,
             prepared_payload=prepared,
+            execution_template=execution_template,
         )
         return TaskPublishResult(
             task_id=task_id,
@@ -728,6 +797,7 @@ def _publish_run_task(task_row: VerificationTaskRow, *, execution: TaskExecution
             test_name,
             "input_ref",
             label=f"verification test {test_name}",
+            cache=execution.artifact_bytes_by_test_ref,
         )
         if task_kind == TASK_MAIN_CORRECT:
             answer_bytes = b""
@@ -739,6 +809,7 @@ def _publish_run_task(task_row: VerificationTaskRow, *, execution: TaskExecution
                 test_name,
                 "answer_ref",
                 label=f"verification answer {test_name}",
+                cache=execution.artifact_bytes_by_test_ref,
             )
             verification_source = TASK_SOLUTION_RUN
             expected_behavior = normalize_expected_behavior(task_row["expected_behavior"])
@@ -749,6 +820,16 @@ def _publish_run_task(task_row: VerificationTaskRow, *, execution: TaskExecution
             test_name=test_name,
             input_bytes=input_bytes,
             answer_bytes=answer_bytes,
+            verification_payload_base=execution.run_verification_payload_base,
+        )
+        execution_template = _execution_template(
+            execution,
+            source_label=source_path,
+            source_name=source_name,
+            source_bytes=source_bytes,
+            task_kind=task_kind,
+            expected_behavior=expected_behavior,
+            verification_source=verification_source,
             verification_payload_base=execution.run_verification_payload_base,
         )
         judgehost_task_id = config.judgehost_task_service.enqueue_task(
@@ -766,10 +847,11 @@ def _publish_run_task(task_row: VerificationTaskRow, *, execution: TaskExecution
             expected_behavior=expected_behavior,
             verification_source=verification_source,
             task_kind=task_kind,
-            force_recompile=execution.force_recompile,
+            bypass_case_result_cache=execution.bypass_case_result_cache,
             compile_only=False,
             persist_verification_run=False,
             prepared_payload=prepared,
+            execution_template=execution_template,
         )
         return TaskPublishResult(task_id=task_id, run_id=run_id, judgehost_task_id=judgehost_task_id)
     except Exception as exc:
@@ -839,7 +921,7 @@ def run_workspace_verification_dag(
     sample_only: bool = False,
     snapshot_root_override: Path | None = None,
     selected_test_names: list[str] | None = None,
-    force_recompile: bool = False,
+    bypass_case_result_cache: bool = False,
     skip_sanity: bool = False,
 ) -> None:
     workspace_path_text = config.workspace_service.workspace_path(int(problem_id), int(workspace_id))
@@ -885,7 +967,7 @@ def run_workspace_verification_dag(
                 "pass_limit": verification_pass_limit,
                 "source_paths": [str(item.get("path") or "") for item in targets if str(item.get("path") or "")],
                 "selected_test_names": list(selected_test_names or []),
-                "force_recompile": bool(force_recompile),
+                "bypass_case_result_cache": bool(bypass_case_result_cache),
                 "error": str(exc),
             },
         )
@@ -973,7 +1055,7 @@ def run_workspace_verification_dag(
                 "pass_limit": verification_pass_limit,
                 "source_paths": [item.source_path for item in visible_logical_runs],
                 "selected_test_names": list(test_names),
-                "force_recompile": bool(force_recompile),
+                "bypass_case_result_cache": bool(bypass_case_result_cache),
                 "sanity_checks": list(sanity_checks),
                 "sanity_status": sanity_status,
                 "run_config_json": str(execution_plan.run_verification_payload_base.get("run_config_json") or ""),
@@ -991,10 +1073,13 @@ def run_workspace_verification_dag(
             uploaded_sources_root=uploaded_sources_root,
             source_file_by_path=source_file_by_path,
             source_bytes_by_path={},
+            source_sha256_by_content={},
+            artifact_bytes_by_test_ref={},
+            execution_template_by_key={},
             test_plan_by_name=execution_plan.test_plan_by_name,
             run_verification_payload_base=execution_plan.run_verification_payload_base,
             generate_verification_payload_base=execution_plan.generate_verification_payload_base,
-            force_recompile=bool(force_recompile),
+            bypass_case_result_cache=bool(bypass_case_result_cache),
         )
 
         def _refresh_state() -> tuple[
@@ -1080,6 +1165,10 @@ def run_workspace_verification_dag(
         _refresh_state()
         callbacks = VerificationRuntimeCallbacks(
             publish_task=lambda row: _publish_task(row, execution=execution),
+            probe_task_case_cache=lambda task_ids, limit: config.judgehost_task_service.probe_task_case_cache(
+                task_ids,
+                limit=limit,
+            ),
             resolve_case_result=lambda judgehost_task_id, test_name: config.judgehost_task_service.poll_task_case_result(
                 judgehost_task_id,
                 test_name,
@@ -1141,6 +1230,7 @@ def run_workspace_verification_dag(
                 time_limit_ms=time_limit_ms_from_run_config_json(
                     str(execution_plan.run_verification_payload_base.get("run_config_json") or ""),
                 ),
+                bypass_case_result_cache=execution.bypass_case_result_cache,
             )
             detail = config.verification_service.verification_detail(verification_id)
             updated_detail = dict(detail)

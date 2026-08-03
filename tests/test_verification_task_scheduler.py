@@ -198,7 +198,7 @@ class TestVerificationTaskScheduler(E2ETestBase):
             ],
         )
 
-    def test_task_publish_forwards_force_recompile_to_judgehost(self) -> None:
+    def test_task_publish_forwards_bypass_case_result_cache_to_judgehost(self) -> None:
         from app.impl.workspace.verification_dag import (
             TASK_GENERATE_INPUT,
             TASK_MAIN_CORRECT,
@@ -221,10 +221,13 @@ class TestVerificationTaskScheduler(E2ETestBase):
             uploaded_sources_root=layout.uploaded_sources,
             source_file_by_path={"solutions/std.cpp": source_path},
             source_bytes_by_path={},
+            source_sha256_by_content={},
             test_plan_by_name={"001.in": _sanity_test_plan()},
             run_verification_payload_base={},
             generate_verification_payload_base={},
-            force_recompile=True,
+            artifact_bytes_by_test_ref={},
+            execution_template_by_key={},
+            bypass_case_result_cache=True,
         )
         calls: list[dict[str, object]] = []
 
@@ -232,7 +235,11 @@ class TestVerificationTaskScheduler(E2ETestBase):
             calls.append(dict(kwargs))
             return f"jt-force-{len(calls)}"
 
-        with patch.object(config.judgehost_task_service, "enqueue_task", side_effect=_fake_enqueue_task), patch(
+        with patch.object(config.judgehost_task_service, "enqueue_task", side_effect=_fake_enqueue_task), patch.object(
+            config.judgehost_task_service,
+            "prepare_execution_template",
+            return_value={},
+        ) as prepare_template, patch(
             "app.impl.workspace.verification_dag._verification_required_blob",
             return_value=b"1\n",
         ):
@@ -257,8 +264,52 @@ class TestVerificationTaskScheduler(E2ETestBase):
                 ),
                 execution=execution,
             )
+            _publish_run_task(
+                _task_row(
+                    "vt-main-repeat",
+                    task_kind=TASK_MAIN_CORRECT,
+                    status=VerificationTaskStore.TASK_PENDING,
+                    queue_index=3,
+                    source_path="solutions/std.cpp",
+                    logical_run_id="main",
+                ),
+                execution=execution,
+            )
 
-        self.assertEqual([call["force_recompile"] for call in calls], [True, True])
+        self.assertEqual([call["bypass_case_result_cache"] for call in calls], [True, True, True])
+        self.assertEqual(prepare_template.call_count, 2)
+
+    def test_verification_artifact_bytes_are_cached_across_sources(self) -> None:
+        from app.impl.workspace.verification_dag import _verification_required_blob
+
+        cache: dict[tuple[str, str], bytes] = {}
+        with patch.object(
+            config.verification_service,
+            "verification_artifact_ref",
+            return_value="cache://verification/input",
+        ) as lookup_ref, patch.object(
+            config.verification_service,
+            "resolve_artifact_blob",
+            return_value=b"input\n",
+        ) as resolve_blob:
+            first = _verification_required_blob(
+                "ver-artifact-cache",
+                "001.in",
+                "input_ref",
+                label="test input",
+                cache=cache,
+            )
+            second = _verification_required_blob(
+                "ver-artifact-cache",
+                "001.in",
+                "input_ref",
+                label="test input",
+                cache=cache,
+            )
+        self.assertEqual(first, b"input\n")
+        self.assertEqual(second, first)
+        self.assertEqual(lookup_ref.call_count, 1)
+        self.assertEqual(resolve_blob.call_count, 1)
 
     def test_sanity_stability_probes_pass_on_non_ac_non_fl(self) -> None:
         from app.impl.workspace.sanity_checks import run_verification_sanity_checks
@@ -296,6 +347,7 @@ class TestVerificationTaskScheduler(E2ETestBase):
                 mode="pass-fail",
                 logs_dir=logs_dir,
                 test_plans=[_sanity_test_plan()],
+                bypass_case_result_cache=True,
             )
 
         self.assertEqual(result.status, "passed")
@@ -304,6 +356,7 @@ class TestVerificationTaskScheduler(E2ETestBase):
         self.assertTrue(all(call["persist_verification_run"] is False for call in calls))
         self.assertTrue(all(call["selected_tests"] == ["001.in"] for call in calls))
         self.assertTrue(all(call["expected_behavior"] == "unknown" for call in calls))
+        self.assertTrue(all(call["bypass_case_result_cache"] is True for call in calls))
         self.assertIn("empty_output_stability 001.in: ok - WA", (logs_dir / "stability.log").read_text(encoding="utf-8"))
 
     def test_sanity_boundary_coverage_warning_keeps_verification_ok(self) -> None:

@@ -253,6 +253,7 @@ class TestJudgehostService(E2ETestBase):
 
         callbacks = VerificationRuntimeCallbacks(
             publish_task=lambda _row: (_ for _ in ()).throw(RuntimeError("unexpected publish")),
+            probe_task_case_cache=lambda _task_ids, _limit: set(),
             resolve_case_result=lambda queued_task_id, test_name: service.poll_task_case_result(queued_task_id, test_name),
             cancel_queued_tasks=lambda _reason: None,
         )
@@ -517,7 +518,7 @@ class TestJudgehostService(E2ETestBase):
             compare_config_json="{}",
             expected_behavior="accepted",
             verification_source="run.execute",
-            force_recompile=0,
+            bypass_case_result_cache=0,
             service_class="background",
             batch_spec=ExecutionBatchSpec(),
             created_at="2026-05-08T00:00:00+00:00",
@@ -898,7 +899,7 @@ class TestJudgehostService(E2ETestBase):
             verification_run_ids=[run_id_a],
             expected_behavior="accepted",
             verification_source="run.execute",
-            force_recompile=True,
+            bypass_case_result_cache=True,
         )
         service.domjudge_register_host("judgehost-script-cache-a")
         leased_a = service.domjudge_fetch_work("judgehost-script-cache-a", max_batchsize=8)
@@ -943,7 +944,7 @@ class TestJudgehostService(E2ETestBase):
             verification_run_ids=[run_id_b],
             expected_behavior="accepted",
             verification_source="run.execute",
-            force_recompile=True,
+            bypass_case_result_cache=True,
         )
         service.domjudge_register_host("judgehost-script-cache-b")
         leased_b: list[dict[str, object]] = []
@@ -1020,16 +1021,13 @@ class TestJudgehostService(E2ETestBase):
         batch_row = service.state.batch_scheduler.batch_for_task(task_id)
         self.assertIsNotNone(batch_row)
         assert batch_row is not None
-        compare_hash = str(batch_row["compare_hash"] or "")
-        cache_dir = config.fs_manager.judgehost_executables_root / "compare" / compare_hash
-        shutil.rmtree(cache_dir, ignore_errors=True)
-
-        with self.assertRaises(RuntimeError):
-            service.domjudge_get_executable_files(
-                "compare",
-                compare_script_id,
-                hostname=host,
-            )
+        with patch.object(service.toolkit, "read_executable_cache", return_value=None):
+            with self.assertRaises(RuntimeError):
+                service.domjudge_get_executable_files(
+                    "compare",
+                    compare_script_id,
+                    hostname=host,
+                )
 
         failed_batch = judgehost_fetch_batch(service, int(batch_row["batch_id"] or 0))
         self.assertIsNotNone(failed_batch)
@@ -1120,7 +1118,7 @@ class TestJudgehostService(E2ETestBase):
             expected_behavior="accepted",
             verification_source="verification.generate-input",
             task_kind="generate",
-            force_recompile=False,
+            bypass_case_result_cache=False,
             compile_only=False,
             persist_verification_run=False,
             prepared_payload=prepared,
@@ -1247,7 +1245,7 @@ class TestJudgehostService(E2ETestBase):
             verification_run_ids=[run_id_b],
             expected_behavior="accepted",
             verification_source="run.execute",
-            force_recompile=True,
+            bypass_case_result_cache=True,
         )
 
         service.domjudge_register_host("judgehost-official-cache")
@@ -2706,6 +2704,10 @@ class TestJudgehostService(E2ETestBase):
             service._enqueue,
             "_collect_verification_payload",
             side_effect=AssertionError("prepared enqueue collected fallback payload"),
+        ), patch.object(
+            service._enqueue._s.workspace_service,
+            "workspace_context",
+            side_effect=AssertionError("prepared enqueue loaded workspace context"),
         ):
             task_id = service.enqueue_task(
                 problem=self.problem,
@@ -3823,7 +3825,7 @@ class TestJudgehostService(E2ETestBase):
         run_config = json.loads(run_config_raw)
         self.assertEqual(int(run_config.get("pass_limit") or 0), 3)
 
-    def test_domjudge_lazy_cache_consumes_per_case_and_leases_only_misses(self) -> None:
+    def test_domjudge_active_cache_probe_finishes_hits_and_leases_only_misses(self) -> None:
         service = config.judgehost_task_service
         old_enabled = service.state.enabled
         old_token = service.state.api_token
@@ -3840,6 +3842,7 @@ class TestJudgehostService(E2ETestBase):
 
         verification_id = f"b-jh-partial-cache-{uuid.uuid4().hex[:8]}"
         run_id_seed = f"r-jh-partial-seed-{uuid.uuid4().hex[:8]}"
+        run_id_hit = f"r-jh-full-hit-{uuid.uuid4().hex[:8]}"
         run_id_target = f"r-jh-partial-target-{uuid.uuid4().hex[:8]}"
         self._seed_build_verification(verification_id)
         self._seed_verification_test_artifacts(
@@ -3892,6 +3895,26 @@ class TestJudgehostService(E2ETestBase):
             },
         )
 
+        hit_task_id = service.enqueue_task(
+            problem=self.problem,
+            username=self.user,
+            artifact_verification_id=verification_id,
+            mode="pass-fail",
+            submission_path="solutions/ac.cpp",
+            upload_content=None,
+            upload_filename=None,
+            run_id=run_id_hit,
+            selected_tests=["001.in"],
+            verification_id=_canonical_verification_id("inv-jh-full-hit"),
+            verification_run_ids=[run_id_hit],
+            expected_behavior="accepted",
+            verification_source="run.execute",
+        )
+        self.assertEqual(service.probe_task_case_cache([hit_task_id], limit=32), set())
+        self.assertEqual(service.wait_for_task(hit_task_id, timeout_sec=2.0), run_id_hit)
+        hit_rows = judgehost_cases_for_run(service, run_id_hit)
+        self.assertEqual([str(row["status"]) for row in hit_rows], ["reported"])
+
         target_task_id = service.enqueue_task(
             problem=self.problem,
             username=self.user,
@@ -3911,6 +3934,13 @@ class TestJudgehostService(E2ETestBase):
         rows = judgehost_cases_for_run(service, run_id_target)
         self.assertEqual(len(rows), 2)
         self.assertEqual({str(row["status"]) for row in rows}, {"cache-pending"})
+
+        self.assertEqual(service.probe_task_case_cache([target_task_id], limit=32), set())
+        rows = judgehost_cases_for_run(service, run_id_target)
+        self.assertEqual(str(rows[0]["test_name"] or ""), "001.in")
+        self.assertEqual(str(rows[0]["status"] or ""), "reported")
+        self.assertEqual(str(rows[1]["test_name"] or ""), "002.in")
+        self.assertEqual(str(rows[1]["status"] or ""), "pending")
 
         leased = service.domjudge_fetch_work("judgehost-partial-cache", max_batchsize=8)
         self.assertEqual(len(leased), 1)
@@ -5084,7 +5114,7 @@ class TestJudgehostService(E2ETestBase):
         self.assertGreater(case_id_b, 0)
         self.assertNotEqual(case_id_a, case_id_b)
 
-    def test_domjudge_force_recompile_bypasses_case_cache(self) -> None:
+    def test_domjudge_bypass_case_result_cache_bypasses_case_cache(self) -> None:
         service = config.judgehost_task_service
         old_enabled = service.state.enabled
         old_token = service.state.api_token
@@ -5167,7 +5197,7 @@ class TestJudgehostService(E2ETestBase):
                 verification_run_ids=[run_id_b],
                 expected_behavior="accepted",
                 verification_source="run.execute",
-                force_recompile=True,
+                bypass_case_result_cache=True,
             )
             tasks_b = service.domjudge_fetch_work("judgehost-recompile", max_batchsize=8)
         self.assertEqual(len(tasks_b), 1)
@@ -5461,7 +5491,7 @@ class TestJudgehostService(E2ETestBase):
             compare_config_json="{}",
             expected_behavior="accepted",
             verification_source="run.execute",
-            force_recompile=0,
+            bypass_case_result_cache=0,
             service_class="background",
             batch_spec=ExecutionBatchSpec(),
             created_at="2026-04-14T00:00:00+00:00",
@@ -5572,7 +5602,7 @@ class TestJudgehostService(E2ETestBase):
             compare_config_json="{}",
             expected_behavior="accepted",
             verification_source="run.execute",
-            force_recompile=0,
+            bypass_case_result_cache=0,
             service_class="background",
             batch_spec=ExecutionBatchSpec(),
             created_at="2026-04-14T00:00:00+00:00",

@@ -42,6 +42,7 @@ class JudgeFsIndexService:
     """
 
     KIND_CASE = "case"
+    KIND_EXECUTABLE = "executable"
     KIND_VERIFICATION = "verification"
 
     def __init__(self, cache_root: Path) -> None:
@@ -78,7 +79,11 @@ class JudgeFsIndexService:
     @staticmethod
     def _normalize_kind(kind: str) -> str:
         token = kind.strip().lower()
-        if token not in {JudgeFsIndexService.KIND_CASE, JudgeFsIndexService.KIND_VERIFICATION}:
+        if token not in {
+            JudgeFsIndexService.KIND_CASE,
+            JudgeFsIndexService.KIND_EXECUTABLE,
+            JudgeFsIndexService.KIND_VERIFICATION,
+        }:
             raise RuntimeError("invalid judge fs index kind")
         return token
 
@@ -312,14 +317,14 @@ class JudgeFsIndexService:
         kind: str,
         key_hash: str,
         signature: str,
-        names: list[str],
+        names: list[str] | None,
     ) -> tuple[dict[str, object], dict[str, bytes]] | None:
         safe_kind, safe_key, safe_sig = self._entry_key(
             kind=kind,
             key_hash=key_hash,
             signature=signature,
         )
-        requested_names = {self._normalize_name(name) for name in names}
+        requested_names = None if names is None else {self._normalize_name(name) for name in names}
         key = (safe_kind, safe_key, safe_sig)
         result: tuple[dict[str, object], dict[str, bytes]] | None = None
         with self._key_lock(key):
@@ -339,7 +344,8 @@ class JudgeFsIndexService:
             if not invalid:
                 # Result-cache consumers need several small artifacts together;
                 # keep validation and reads under one stable index snapshot.
-                for name in sorted(requested_names.intersection(expected_files)):
+                selected_names = expected_files if requested_names is None else requested_names.intersection(expected_files)
+                for name in sorted(selected_names):
                     target = (files_dir / name).resolve()
                     if target.parent != files_dir:
                         invalid = True

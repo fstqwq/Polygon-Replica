@@ -867,12 +867,14 @@ class TestPreview(E2ETestBase):
                 accepted_source_name="std.cpp",
                 accepted_source_bytes=b"int main(){return 0;}\n",
                 run_verification_payload_base=payload_base,
+                bypass_case_result_cache=True,
             )
         self.assertEqual(result.status, "passed")
         self.assertEqual(result.validated_count, 1)
         self.assertEqual([str(call["upload_filename"]) for call in calls], ["std.cpp", "custom_sample_output.py"])
         self.assertEqual(str(calls[0]["verification_source"]), "main-correct")
         self.assertEqual(str(calls[0]["task_kind"]), "main-correct")
+        self.assertTrue(all(call["bypass_case_result_cache"] is True for call in calls))
         first_payload = dict(calls[0]["prepared_payload"])
         second_payload = dict(calls[1]["prepared_payload"])
         first_test = list(dict(first_payload["verification_payload"])["tests"])[0]

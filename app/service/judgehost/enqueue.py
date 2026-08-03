@@ -520,12 +520,14 @@ class TaskEnqueue:
         verification_source: str,
         run_id: str,
         task_kind: str = "",
-        force_recompile: bool = False,
+        bypass_case_result_cache: bool = False,
         compile_only: bool = False,
         verification_payload_override: dict[str, object] | None = None,
     ) -> dict[str, object]:
-        ctx = self._s.workspace_service.workspace_context(problem, username, include_recent=False)
-        workspace = Path(ctx["workspace"]["path"])
+        workspace: Path | None = None
+        if upload_content is None or verification_payload_override is None:
+            ctx = self._s.workspace_service.workspace_context(problem, username, include_recent=False)
+            workspace = Path(ctx["workspace"]["path"])
 
         source_bytes: bytes
         source_name: str
@@ -535,6 +537,8 @@ class TaskEnqueue:
             source_name = TaskEnqueue._normalize_text_with_default(upload_filename, default="submission.cpp")
             source_label = source_name
         else:
+            if workspace is None:
+                raise RuntimeError("workspace is required for submission source lookup")
             source_path = self._core.safe_workspace_source(workspace, TaskEnqueue._normalize_text(submission_path))
             source_bytes = self._core.safe_read_bytes(
                 source_path,
@@ -548,17 +552,18 @@ class TaskEnqueue:
             source_bytes=source_bytes,
         )
 
-        verification_payload = (
-            self._collect_verification_payload(
+        if verification_payload_override is None:
+            if workspace is None:
+                raise RuntimeError("workspace is required for verification payload collection")
+            verification_payload = self._collect_verification_payload(
                 problem=problem,
                 artifact_verification_id=artifact_verification_id,
                 workspace=workspace,
                 mode=mode,
                 selected_tests=selected_tests,
             )
-            if verification_payload_override is None
-            else dict(verification_payload_override)
-        )
+        else:
+            verification_payload = dict(verification_payload_override)
         safe_task_kind = self._toolkit.task_kind(
             {
                 "task_kind": task_kind,
@@ -585,11 +590,46 @@ class TaskEnqueue:
             "expected_behavior": expected_behavior,
             "verification_source": verification_source,
             "task_kind": safe_task_kind,
-            "force_recompile": bool(force_recompile),
+            "bypass_case_result_cache": bool(bypass_case_result_cache),
             "compile_only": bool(compile_only_flag),
             "verification_payload": verification_payload,
             "enqueued_at": now_iso(),
         }
+
+    def prepare_execution_template(
+        self,
+        *,
+        mode: str,
+        upload_content: bytes,
+        upload_filename: str,
+        verification_payload: dict[str, object],
+        expected_behavior: str,
+        verification_source: str,
+        task_kind: str,
+        extra_sources_b64: dict[str, str] | None = None,
+        manual_validate_only: bool = False,
+        compile_only: bool = False,
+    ) -> dict[str, object]:
+        source_name, entry_point = self._normalize_submission_source(
+            source_name=upload_filename,
+            source_bytes=bytes(upload_content),
+        )
+        payload: dict[str, object] = {
+            "mode": mode,
+            "source_name": source_name,
+            "source_b64": base64.b64encode(upload_content).decode("ascii"),
+            "entry_point": entry_point,
+            "verification_payload": dict(verification_payload),
+            "expected_behavior": expected_behavior,
+            "verification_source": verification_source,
+            "task_kind": task_kind,
+            "compile_only": bool(compile_only),
+        }
+        if extra_sources_b64:
+            payload["extra_sources_b64"] = dict(extra_sources_b64)
+        if manual_validate_only:
+            payload["manual_validate_only"] = True
+        return self._domjudge_precomputed_fields_from_payload(payload)
 
     def _domjudge_precomputed_fields_from_payload(self, payload: dict[str, object]) -> dict[str, object]:
         source_name = domjudge_path_name(payload.get("source_name"), default="submission.cpp")
@@ -854,7 +894,7 @@ class TaskEnqueue:
         expected_behavior: str,
         verification_source: str,
         task_kind: str = "",
-        force_recompile: bool = False,
+        bypass_case_result_cache: bool = False,
         compile_only: bool = False,
     ) -> dict[str, object]:
         selected = self._normalize_list(selected_tests, matcher=RUN_TEST_NAME_RE)
@@ -875,7 +915,7 @@ class TaskEnqueue:
             verification_source=verification_source,
             task_kind=task_kind,
             run_id=safe_run_id,
-            force_recompile=bool(force_recompile),
+            bypass_case_result_cache=bool(bypass_case_result_cache),
             compile_only=bool(compile_only),
         )
         payload["domjudge_precomputed"] = self._domjudge_precomputed_fields_from_payload(payload)
@@ -947,10 +987,11 @@ class TaskEnqueue:
         expected_behavior: str,
         verification_source: str,
         task_kind: str = "",
-        force_recompile: bool = False,
+        bypass_case_result_cache: bool = False,
         compile_only: bool = False,
         persist_verification_run: bool = False,
         prepared_payload: dict[str, object] | None = None,
+        execution_template: dict[str, object] | None = None,
         service_class: str = "background",
     ) -> str:
         safe_run_id = self._core.normalize_run_id(run_id if run_id else verification_id)
@@ -979,13 +1020,17 @@ class TaskEnqueue:
             verification_source=verification_source,
             task_kind=task_kind,
             run_id=safe_run_id,
-            force_recompile=bool(force_recompile),
+            bypass_case_result_cache=bool(bypass_case_result_cache),
             compile_only=bool(compile_only),
             verification_payload_override=verification_payload_override,
         )
         if prepared_payload is not None:
             payload.update(dict(prepared_payload))
-        payload["domjudge_precomputed"] = self._domjudge_precomputed_fields_from_payload(payload)
+        payload["domjudge_precomputed"] = (
+            self._domjudge_precomputed_fields_from_payload(payload)
+            if execution_template is None
+            else dict(execution_template)
+        )
         payload["domjudge_group_key"] = self._toolkit.group_key(payload)
         safe_task_kind = self._toolkit.task_kind(payload)
         payload["run_id"] = safe_run_id
@@ -1000,7 +1045,7 @@ class TaskEnqueue:
         payload["expected_behavior"] = expected_behavior
         payload["verification_source"] = verification_source
         payload["task_kind"] = safe_task_kind
-        payload["force_recompile"] = bool(force_recompile)
+        payload["bypass_case_result_cache"] = bool(bypass_case_result_cache)
         payload["compile_only"] = bool(safe_task_kind == self._TASK_KIND_COMPILE_ONLY)
         safe_service_class = service_class.strip().lower()
         if safe_service_class not in {"foreground", "background"}:

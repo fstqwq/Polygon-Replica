@@ -249,6 +249,37 @@ class BatchSchedulerResultMixin:
                 test_name=case.test_name,
             )
 
+    def observe_compile_success_from_case_claim(
+        self,
+        case_id: int,
+        *,
+        generation: int,
+        lease_owner: str,
+        updated_at: str,
+    ) -> bool:
+        """Treat a valid run callback as proof that compilation succeeded."""
+        with self._lock:
+            case = self._cases.get(int(case_id))
+            if (
+                case is None
+                or case.status != "reporting"
+                or case.claim_generation != int(generation)
+                or case.lease_owner != lease_owner
+            ):
+                return False
+            batch = self._batches.get(case.batch_id)
+            if batch is None or batch.status != "open" or batch.compile_state == "failed":
+                return False
+            if batch.compile_state == "unknown":
+                self._mutate_batch_locked(
+                    batch,
+                    compile_success=1,
+                    compile_state="succeeded",
+                    compile_owner=None,
+                    updated_at=updated_at,
+                )
+            return batch.compile_state == "succeeded"
+
     def claim_cache_cases(
         self,
         batch_id: int,

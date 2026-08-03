@@ -54,7 +54,7 @@ class DispatchCacheMixin:
         if not testcase_answer_hash:
             raise RuntimeError(f"missing testcase_answer_hash for DOMjudge case {int(case_row['id'])}")
 
-        force_recompile = domjudge_bool(batch_row["force_recompile"], default=False)
+        bypass_case_result_cache = domjudge_bool(batch_row["bypass_case_result_cache"], default=False)
         expected_behavior = domjudge_lower_text(batch_row["expected_behavior"], default="unknown")
         verification_source = domjudge_lower_text(batch_row["verification_source"])
         main_correct = verification_source == self._TASK_KIND_MAIN_CORRECT
@@ -71,7 +71,7 @@ class DispatchCacheMixin:
             toolchain_cmd_digest=toolchain_cmd_digest,
             testcase_hash=testcase_hash,
         )
-        if force_recompile:
+        if bypass_case_result_cache:
             self._toolkit.cache_delete(self.CASE_CACHE_KIND, case_key_hash, case_signature)
             return None
 
@@ -228,7 +228,7 @@ class DispatchCacheMixin:
         *,
         hostname: str,
         limit: int,
-        deadline: float,
+        deadline: float | None,
     ) -> int:
         batch_row = self._s.batch_scheduler.fetch_batch(int(batch_id))
         if batch_row is None:
@@ -254,7 +254,7 @@ class DispatchCacheMixin:
 
         processed = 0
         for claim, row in claims:
-            if processed > 0 and time.monotonic() >= deadline:
+            if deadline is not None and processed > 0 and time.monotonic() >= deadline:
                 self._s.batch_scheduler.abort_case_claim(
                     claim.case_id,
                     generation=claim.generation,

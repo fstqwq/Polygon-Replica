@@ -42,6 +42,7 @@ class TaskExecutionResult:
 @dataclass(frozen=True)
 class VerificationRuntimeCallbacks:
     publish_task: Callable[[VerificationTaskRow], TaskPublishResult]
+    probe_task_case_cache: Callable[[list[str], int], set[str]]
     resolve_case_result: Callable[[str, str], dict[str, object] | None]
     cancel_queued_tasks: Callable[[str], None]
 
@@ -57,7 +58,8 @@ class _VerificationEvent:
 
 _COORDINATOR_LOCK = threading.Lock()
 _COORDINATORS_BY_VERIFICATION_ID: dict[str, "VerificationRuntimeCoordinator"] = {}
-_PUBLISH_READY_BATCH_SIZE = 256
+_CACHE_PROBE_SLICE_SIZE = 32
+_RESULT_BATCH_MAX_SIZE = 256
 _RESULT_BATCH_MAX_WAIT_SEC = 0.005
 _TERMINAL_TASK_STATUSES = frozenset(
     {
@@ -237,6 +239,7 @@ class VerificationRuntimeCoordinator:
         self._callbacks = callbacks
         self._dag = _IncrementalDagState(task_store.list_rows(verification_id), edges)
         self._events: queue.Queue[_VerificationEvent] = queue.Queue()
+        self._cache_probe_task_ids: dict[str, None] = {}
         self._applied_fail_reason = ""
         self._cancel_reason = ""
 
@@ -290,7 +293,7 @@ class VerificationRuntimeCoordinator:
                 continue
             events = [event]
             deadline = time.monotonic() + _RESULT_BATCH_MAX_WAIT_SEC
-            while len(events) < _PUBLISH_READY_BATCH_SIZE:
+            while len(events) < _RESULT_BATCH_MAX_SIZE:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     break
@@ -426,7 +429,10 @@ class VerificationRuntimeCoordinator:
             return False
         changed = False
         published_count = 0
-        while True:
+        while (
+            published_count < _CACHE_PROBE_SLICE_SIZE
+            and len(self._cache_probe_task_ids) < _CACHE_PROBE_SLICE_SIZE
+        ):
             row = self._dag.pop_ready()
             if row is None:
                 break
@@ -444,6 +450,7 @@ class VerificationRuntimeCoordinator:
                     judgehost_task_id=published.judgehost_task_id,
                 )
                 self._dag.transition(task_id, VerificationTaskStore.TASK_QUEUED)
+                self._cache_probe_task_ids[published.judgehost_task_id] = None
             else:
                 _save_result(
                     verification_id=self.verification_id,
@@ -456,11 +463,24 @@ class VerificationRuntimeCoordinator:
                     judgehost_task_id=published.terminal_result.judgehost_task_id,
                 )
                 self._dag.transition(task_id, published.terminal_result.status)
-            changed = True
             published_count += 1
-            if published_count >= _PUBLISH_READY_BATCH_SIZE:
-                self.enqueue_bootstrap()
+            changed = True
+            if not self._events.empty():
                 return changed
+        if self._cache_probe_task_ids:
+            selected = list(self._cache_probe_task_ids)[:_CACHE_PROBE_SLICE_SIZE]
+            pending = self._callbacks.probe_task_case_cache(selected, _CACHE_PROBE_SLICE_SIZE)
+            for judgehost_task_id in selected:
+                if judgehost_task_id not in pending:
+                    self._cache_probe_task_ids.pop(judgehost_task_id, None)
+            if not self._events.empty():
+                return changed
+            if pending:
+                # Yield to queued result events between slices instead of publishing an
+                # unbounded ready graph in one coordinator turn.
+                self.enqueue_bootstrap()
+        if published_count == _CACHE_PROBE_SLICE_SIZE and self._events.empty():
+            self.enqueue_bootstrap()
         return changed
 
     def _mark_case_leased(self, judgehost_task_id: str, test_name: str) -> bool:

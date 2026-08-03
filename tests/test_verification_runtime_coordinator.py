@@ -257,6 +257,7 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
 
         callbacks = VerificationRuntimeCallbacks(
             publish_task=_publish,
+            probe_task_case_cache=lambda _task_ids, _limit: set(),
             resolve_case_result=lambda _task_id, _test_name: None,
             cancel_queued_tasks=lambda _reason: None,
         )
@@ -295,8 +296,8 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
             thread.join(timeout=2.0)
             self.assertFalse(thread.is_alive())
 
-    def test_runtime_coordinator_publishes_ready_batch_before_case_events(self) -> None:
-        total_tasks = 32
+    def test_runtime_coordinator_actively_probes_cached_cases_after_identity_registration(self) -> None:
+        total_tasks = 40
         store = _InMemoryTaskStore(
             rows=[
                 _task_row(
@@ -312,37 +313,42 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
             edges=[],
         )
         publish_order: list[str] = []
-        first_published = threading.Event()
+        probe_slices: list[list[str]] = []
+        identity_registered: list[bool] = []
+
         def _publish(row: dict[str, object]) -> TaskPublishResult:
             task_id = str(row["id"])
             publish_order.append(task_id)
-            if task_id == "vt-000":
-                first_published.set()
             return TaskPublishResult(
                 task_id=task_id,
                 run_id=f"r-{task_id}",
                 judgehost_task_id=f"jt-{task_id}",
             )
 
-        callbacks = VerificationRuntimeCallbacks(
-            publish_task=_publish,
-            resolve_case_result=lambda _task_id, _test_name: None,
-            cancel_queued_tasks=lambda _reason: None,
-        )
-        coordinator = VerificationRuntimeCoordinator(
-            "ver-large-batch",
-            task_store=store,
-            callbacks=callbacks,
-            edges=[],
-        )
-        thread = threading.Thread(target=coordinator.run, daemon=True)
-        thread.start()
-        try:
-            self.assertTrue(first_published.wait(timeout=2.0))
-            for index in range(total_tasks):
-                task_id = f"vt-{index:03}"
+        coordinator: VerificationRuntimeCoordinator
+
+        def _probe(task_ids: list[str], limit: int) -> set[str]:
+            probe_slices.append(list(task_ids))
+            rows_by_judgehost_id = {
+                str(row["judgehost_task_id"]): row
+                for row in store.list_rows("ver-large-batch")
+                if row["judgehost_task_id"]
+            }
+            identity_registered.append(
+                limit == 32
+                and len(task_ids) <= limit
+                and all(
+                    task_id in rows_by_judgehost_id
+                    and str(rows_by_judgehost_id[task_id]["status"])
+                    == VerificationTaskStore.TASK_QUEUED
+                    for task_id in task_ids
+                )
+            )
+            for judgehost_task_id in task_ids:
+                task_id = judgehost_task_id.removeprefix("jt-")
+                index = int(task_id.removeprefix("vt-"))
                 coordinator.enqueue_case_reported(
-                    f"jt-{task_id}",
+                    judgehost_task_id,
                     f"{index + 1:03}.in",
                     {
                         "final_result": TaskExecutionResult(
@@ -350,7 +356,7 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
                             status=VerificationTaskStore.TASK_DONE,
                             verdict="OK",
                             run_id=f"r-{task_id}",
-                            judgehost_task_id=f"jt-{task_id}",
+                            judgehost_task_id=judgehost_task_id,
                             runtime_sec=0.01,
                             cpu_sec=0.01,
                             wall_sec=0.01,
@@ -363,22 +369,34 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
                         )
                     },
                 )
-            self._wait_until(
-                lambda: len(publish_order) == total_tasks,
-                timeout=2.0,
-                interval=0.01,
-                message="ready batch was not fully published before handling case events",
-            )
-            self._wait_until(
-                lambda: all(
+            return set()
+
+        callbacks = VerificationRuntimeCallbacks(
+            publish_task=_publish,
+            probe_task_case_cache=_probe,
+            resolve_case_result=lambda _task_id, _test_name: None,
+            cancel_queued_tasks=lambda _reason: None,
+        )
+        coordinator = VerificationRuntimeCoordinator(
+            "ver-large-batch",
+            task_store=store,
+            callbacks=callbacks,
+            edges=[],
+        )
+        thread = threading.Thread(target=coordinator.run, daemon=True)
+        thread.start()
+        try:
+            thread.join(timeout=2.0)
+            self.assertFalse(thread.is_alive(), "active cache probes did not finish the graph")
+            self.assertEqual(len(publish_order), total_tasks)
+            self.assertEqual([len(task_ids) for task_ids in probe_slices], [32, 8])
+            self.assertTrue(all(identity_registered))
+            self.assertTrue(
+                all(
                     str(row["status"]) == VerificationTaskStore.TASK_DONE
                     for row in store.list_rows("ver-large-batch")
-                ),
-                timeout=2.0,
-                interval=0.01,
-                message="batched case results were not handled after publishing ready rows",
+                )
             )
-            self.assertEqual(len(publish_order), total_tasks)
             self.assertEqual(sum(store.save_batch_sizes), total_tasks)
             self.assertTrue(all(size <= 256 for size in store.save_batch_sizes))
             self.assertLess(len(store.save_batch_sizes), total_tasks)
@@ -439,6 +457,7 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
 
         callbacks = VerificationRuntimeCallbacks(
             publish_task=_publish,
+            probe_task_case_cache=lambda _task_ids, _limit: set(),
             resolve_case_result=lambda _task_id, _test_name: None,
             cancel_queued_tasks=lambda _reason: None,
         )
@@ -522,6 +541,7 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
         queued_cancel_reasons: list[str] = []
         callbacks = VerificationRuntimeCallbacks(
             publish_task=lambda _row: (_ for _ in ()).throw(RuntimeError("unexpected publish")),
+            probe_task_case_cache=lambda _task_ids, _limit: set(),
             resolve_case_result=lambda _task_id, _test_name: None,
             cancel_queued_tasks=lambda reason: queued_cancel_reasons.append(reason),
         )
@@ -602,6 +622,7 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
             task_store=store,
             callbacks=VerificationRuntimeCallbacks(
                 publish_task=_publish,
+                probe_task_case_cache=lambda _task_ids, _limit: set(),
                 resolve_case_result=lambda _task_id, _test_name: None,
                 cancel_queued_tasks=lambda _reason: None,
             ),
@@ -680,6 +701,7 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
             task_store=store,
             callbacks=VerificationRuntimeCallbacks(
                 publish_task=_publish,
+                probe_task_case_cache=lambda _task_ids, _limit: set(),
                 resolve_case_result=lambda _task_id, _test_name: {"status": "ok"},
                 cancel_queued_tasks=lambda _reason: None,
             ),

@@ -259,9 +259,9 @@ Known merge conflict:
   - Files: `app/impl/workspace/verification_dag.py`, `tests/test_verification_task_scheduler.py`.
   - Risk: low-to-medium; changes timeout behavior.
 
-- [x] Publish ready verification tasks in bounded batches before processing case events.
-  - Adds `_PUBLISH_READY_BATCH_SIZE` behavior.
-  - Prevents case events from starving publication of a large ready batch.
+- [x] Publish and actively probe ready verification tasks in 32-Case slices.
+  - Runtime identity is registered before cache-hit events are emitted.
+  - Removes the unrelated legacy publish-count cap while yielding between probe slices.
   - Files: `app/service/verification/task_scheduler.py`, tests.
   - Risk: scheduler behavior change; relevant to stuck generating cases.
 

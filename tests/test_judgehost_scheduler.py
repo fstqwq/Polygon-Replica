@@ -138,7 +138,7 @@ def _create_staged_batch(
         compare_config_json="{}",
         expected_behavior="accepted",
         verification_source="solution-run",
-        force_recompile=0,
+        bypass_case_result_cache=0,
         service_class=service_class,
         batch_spec=ExecutionBatchSpec(),
         created_at=now_text,
@@ -204,10 +204,7 @@ class TestJudgehostScheduler(unittest.TestCase):
     @staticmethod
     def _testcase_toolkit(temp_root: Path) -> tuple[DomjudgeToolkit, JudgeFsIndexService]:
         cache = JudgeFsIndexService(temp_root / "index")
-        state = SimpleNamespace(
-            fs_manager=SimpleNamespace(judgehost_executables_root=temp_root / "executables"),
-            judge_fs_index_service=cache,
-        )
+        state = SimpleNamespace(judge_fs_index_service=cache)
         return (DomjudgeToolkit(state), cache)
 
     @staticmethod
@@ -450,6 +447,145 @@ class TestJudgehostScheduler(unittest.TestCase):
         self.assertTrue(scheduler.task_cases_terminal("reporting"))
         self.assertEqual(scheduler.fetch_batch(batch_id)["status"], "finalize-pending")
 
+    def test_run_result_claim_opens_warm_compile_gate_without_compile_callback(self) -> None:
+        scheduler = BatchScheduler(id_base=275)
+        batch_id, now_text = _create_staged_batch(
+            scheduler,
+            task_id="warm-compile",
+            run_id="run-warm-compile",
+            ordinals=[1, 2, 3],
+        )
+        scheduler.activate_task_cases("warm-compile", now_text=now_text)
+        for cache_claim, _row in scheduler.claim_cache_cases(
+            batch_id,
+            hostname="cache",
+            limit=3,
+            now_text=now_text,
+        ):
+            scheduler.finish_cache_miss(
+                cache_claim.case_id,
+                generation=cache_claim.generation,
+                updated_at=now_text,
+            )
+        scheduler.claim_materialization(batch_id, now_text=now_text)
+        scheduler.finish_materialization(
+            batch_id,
+            source_path="/tmp/source.cpp",
+            work_root="/tmp/work",
+            success=True,
+            now_text=now_text,
+        )
+
+        leader = scheduler.lease_cases(
+            batch_id,
+            hostname="host-a",
+            limit=8,
+            now_text=now_text,
+        )
+        self.assertEqual(len(leader), 1)
+        case_id = int(leader[0]["id"])
+        claim = scheduler.claim_case_reporting(
+            case_id,
+            hostname="host-a",
+            now_text=now_text,
+        )
+        self.assertIsNotNone(claim)
+        assert claim is not None
+        self.assertTrue(
+            scheduler.observe_compile_success_from_case_claim(
+                case_id,
+                generation=claim.generation,
+                lease_owner="host-a",
+                updated_at=now_text,
+            )
+        )
+        self.assertEqual(scheduler.fetch_batch(batch_id)["compile_state"], "succeeded")
+        followers = scheduler.lease_cases(
+            batch_id,
+            hostname="host-b",
+            limit=8,
+            now_text=now_text,
+        )
+        self.assertEqual([int(row["ordinal"]) for row in followers], [2, 3])
+
+    def test_invalid_run_result_claim_cannot_change_compile_state(self) -> None:
+        scheduler = BatchScheduler(id_base=290)
+        batch_id, now_text = _create_staged_batch(
+            scheduler,
+            task_id="stale-compile",
+            run_id="run-stale-compile",
+            ordinals=[1],
+        )
+        scheduler.activate_task_cases("stale-compile", now_text=now_text)
+        cache_claim, _row = scheduler.claim_cache_cases(
+            batch_id,
+            hostname="cache",
+            limit=1,
+            now_text=now_text,
+        )[0]
+        scheduler.finish_cache_miss(
+            cache_claim.case_id,
+            generation=cache_claim.generation,
+            updated_at=now_text,
+        )
+        scheduler.claim_materialization(batch_id, now_text=now_text)
+        scheduler.finish_materialization(
+            batch_id,
+            source_path="/tmp/source.cpp",
+            work_root="/tmp/work",
+            success=True,
+            now_text=now_text,
+        )
+        case = scheduler.lease_cases(
+            batch_id,
+            hostname="host-a",
+            limit=1,
+            now_text=now_text,
+        )[0]
+        claim = scheduler.claim_case_reporting(
+            int(case["id"]),
+            hostname="host-a",
+            now_text=now_text,
+        )
+        self.assertIsNotNone(claim)
+        assert claim is not None
+        self.assertFalse(
+            scheduler.observe_compile_success_from_case_claim(
+                claim.case_id,
+                generation=claim.generation + 1,
+                lease_owner="host-a",
+                updated_at=now_text,
+            )
+        )
+        self.assertFalse(
+            scheduler.observe_compile_success_from_case_claim(
+                claim.case_id,
+                generation=claim.generation,
+                lease_owner="host-b",
+                updated_at=now_text,
+            )
+        )
+        self.assertEqual(scheduler.fetch_batch(batch_id)["compile_state"], "unknown")
+        self.assertTrue(
+            scheduler.record_compile_result(
+                batch_id,
+                compile_success=0,
+                compile_output_b64="",
+                compile_metadata_b64="",
+                lease_owner="host-a",
+                updated_at=now_text,
+            )
+        )
+        self.assertFalse(
+            scheduler.observe_compile_success_from_case_claim(
+                claim.case_id,
+                generation=claim.generation,
+                lease_owner="host-a",
+                updated_at=now_text,
+            )
+        )
+        self.assertEqual(scheduler.fetch_batch(batch_id)["compile_state"], "failed")
+
     def test_cache_case_claims_are_exclusive_and_never_become_host_leases(self) -> None:
         scheduler = BatchScheduler(id_base=300)
         batch_id, now_text = _create_staged_batch(
@@ -498,6 +634,7 @@ class TestJudgehostScheduler(unittest.TestCase):
                 )
             )
         self.assertEqual(len(scheduler.cases_for_batch(batch_id, status="pending")), 255)
+        self.assertEqual(scheduler.select_ready_batch("host-a")["batch_id"], batch_id)
 
     def test_script_hash_index_tracks_open_job_references(self) -> None:
         scheduler = BatchScheduler(id_base=400)
@@ -675,6 +812,49 @@ class TestJudgehostScheduler(unittest.TestCase):
             self.assertTrue(all(not thread.is_alive() for thread in threads))
             self.assertEqual(len(set(refs)), 1)
             self.assertEqual(publish_entry.call_count, 1)
+
+    def test_executable_cache_reuses_valid_entry_and_repairs_damage(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="judge-executable-cache-") as temp_dir:
+            toolkit, cache = self._testcase_toolkit(Path(temp_dir))
+            executable_hash = "a" * 32
+            files = [("run", b"#!/bin/sh\nexit 0\n", True)]
+            with patch.object(
+                cache,
+                "_write_integrity_marker",
+                wraps=cache._write_integrity_marker,
+            ) as publish_entry:
+                toolkit.store_executable_cache(
+                    kind="run",
+                    executable_hash=executable_hash,
+                    files=files,
+                )
+                toolkit.store_executable_cache(
+                    kind="run",
+                    executable_hash=executable_hash,
+                    files=files,
+                )
+            self.assertEqual(publish_entry.call_count, 1)
+            self.assertEqual(
+                toolkit.read_executable_cache(kind="run", executable_hash=executable_hash),
+                [{"filename": "run", "content": files[0][1], "is_executable": True}],
+            )
+
+            key_hash = toolkit._executable_cache_key_hash("run", executable_hash)
+            executable_path = cache._files_dir(
+                kind=JudgeFsIndexService.KIND_EXECUTABLE,
+                key_hash=key_hash,
+                signature=toolkit._EXECUTABLE_CACHE_SIGNATURE,
+            ) / "run"
+            executable_path.unlink()
+            self.assertIsNone(
+                toolkit.read_executable_cache(kind="run", executable_hash=executable_hash)
+            )
+            toolkit.store_executable_cache(
+                kind="run",
+                executable_hash=executable_hash,
+                files=files,
+            )
+            self.assertEqual(executable_path.read_bytes(), files[0][1])
 
     def test_different_cache_keys_publish_concurrently(self) -> None:
         with tempfile.TemporaryDirectory(prefix="judge-cache-parallel-") as temp_dir:

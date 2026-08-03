@@ -148,6 +148,7 @@ def _run_stability_probe(
     mode: str,
     plan: VerificationTestPlan,
     probe: _StabilityProbe,
+    bypass_case_result_cache: bool,
 ) -> tuple[str, str]:
     run_id = _stability_run_id(
         verification_id=verification_id,
@@ -168,7 +169,7 @@ def _run_stability_probe(
         verification_run_ids=[run_id],
         expected_behavior="unknown",
         verification_source="sanity-check",
-        force_recompile=False,
+        bypass_case_result_cache=bypass_case_result_cache,
         compile_only=False,
         persist_verification_run=False,
     )
@@ -183,6 +184,7 @@ def _run_stability_checks(
     mode: str,
     logs_dir: Path,
     test_plans: list[VerificationTestPlan],
+    bypass_case_result_cache: bool,
 ) -> list[VerificationSanityCheckResult]:
     probe_plan = next((plan for plan in test_plans if plan.test_name), None)
     if probe_plan is None:
@@ -203,6 +205,7 @@ def _run_stability_checks(
                 mode=mode,
                 plan=probe_plan,
                 probe=probe,
+                bypass_case_result_cache=bypass_case_result_cache,
             )
         except Exception as exc:
             detail = str(exc) or "judgehost stability probe failed"
@@ -306,6 +309,7 @@ def run_verification_sanity_checks(
     generate_feedback_by_test: dict[str, str] | None = None,
     runtime_columns: list[dict[str, object]] | None = None,
     time_limit_ms: int = 0,
+    bypass_case_result_cache: bool = False,
 ) -> VerificationSanityResult:
     checks = planned_sanity_checks(test_plans)
     if not checks:
@@ -323,6 +327,7 @@ def run_verification_sanity_checks(
         mode=mode,
         logs_dir=logs_dir,
         test_plans=test_plans,
+        bypass_case_result_cache=bypass_case_result_cache,
     )
     if SUMMARY_RUNTIME_THRESHOLD_CHECK in checks:
         runtime_checked_count = 0
@@ -396,6 +401,7 @@ def run_verification_sanity_checks(
             accepted_source_name=accepted_source_name,
             accepted_source_bytes=accepted_source_bytes,
             run_verification_payload_base=run_verification_payload_base,
+            bypass_case_result_cache=bypass_case_result_cache,
         )
         messages: tuple[VerificationSanityMessage, ...] = ()
         if result.status == SANITY_FAILED:

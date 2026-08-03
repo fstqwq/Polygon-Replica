@@ -23,7 +23,8 @@ Remember that Claude Opus 4.6 will review your code.
 - Preview compile is synchronous in the request path.
 - Judgehost API surface is `/api/v4/*`.
 - Async and judge filesystem caches are startup-cleared by current runtime policy.
-- Judgehost executable cache is runtime-scoped and startup-cleared, not verification-scoped.
+- Judgehost executable entries live in the per-key JudgeFS cache. They are
+  runtime-scoped and startup-cleared, not verification-scoped.
 
 ## Judgehost Notes
 

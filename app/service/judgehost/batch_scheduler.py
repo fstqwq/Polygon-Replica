@@ -225,15 +225,22 @@ class BatchScheduler(BatchSchedulerResultMixin):
         cached = self._peek_case_heap_locked(batch.batch_id, status="cache-pending")
         if cached is not None:
             return cached
-        if batch.materialization_state != "ready":
+        pending = self._peek_case_heap_locked(batch.batch_id, status="pending")
+        if pending is None:
             return None
         if batch.compile_state == "failed":
+            return None
+        if batch.materialization_state == "unmaterialized":
+            # A proactive cache probe can expose the first miss before any host has
+            # selected this Batch. Keep it schedulable so fetch-work can materialize it.
+            return pending
+        if batch.materialization_state != "ready":
             return None
         if batch.compile_state == "unknown" and batch.compile_owner not in {None, hostname or None}:
             return None
         if batch.compile_state == "unknown" and batch.compile_owner is not None and self._batch_counts[batch.batch_id].leased:
             return None
-        return self._peek_case_heap_locked(batch.batch_id, status="pending")
+        return pending
 
     def _batch_heap_key_locked(self, batch: ExecutionBatchRecord) -> tuple[int, int, int, int, int, int] | None:
         case = self._batch_next_case_locked(batch)
@@ -529,6 +536,14 @@ class BatchScheduler(BatchSchedulerResultMixin):
             counts = self._task_case_counts.get(task_id)
             return bool(counts is not None and counts.total > 0 and counts.remaining == 0)
 
+    def task_has_cache_pending_cases(self, task_id: str) -> bool:
+        with self._lock:
+            return any(
+                self._cases[case_id].status == "cache-pending"
+                for case_id in self._case_ids_by_task.get(task_id, ())
+                if case_id in self._cases
+            )
+
     def task_case_results(self, task_id: str) -> list[tuple[JudgehostCaseRow, CaseResult | None]]:
         with self._lock:
             return [
@@ -718,7 +733,7 @@ class BatchScheduler(BatchSchedulerResultMixin):
         compare_config_json: str,
         expected_behavior: str,
         verification_source: str,
-        force_recompile: int,
+        bypass_case_result_cache: int,
         service_class: str,
         batch_spec: ExecutionBatchSpec,
         created_at: str,
@@ -783,7 +798,7 @@ class BatchScheduler(BatchSchedulerResultMixin):
                 compare_config_json=compare_config_json,
                 expected_behavior=expected_behavior,
                 verification_source=verification_source,
-                force_recompile=int(force_recompile),
+                bypass_case_result_cache=int(bypass_case_result_cache),
                 compile_success=None,
                 compile_state="unknown",
                 compile_owner=None,

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import base64
-import copy
 from pathlib import Path
 
 
@@ -34,7 +33,7 @@ def prepared_payload_for_uploaded_source(
     extra_sources_b64: dict[str, str] | None = None,
     manual_validate_only: bool = False,
 ) -> dict[str, object]:
-    verification_payload = copy.deepcopy(verification_payload_base)
+    verification_payload = dict(verification_payload_base)
     verification_payload["tests"] = [
         test_payload_entry(test_name=test_name, input_bytes=input_bytes, answer_bytes=answer_bytes)
     ]

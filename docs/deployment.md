@@ -91,8 +91,9 @@ export POLYGON_REPLICA_ARTIFACTS_ROOT=/srv/polygon-replica/export
 export POLYGON_REPLICA_CACHE_ROOT=/tmp/polygon-replica
 ```
 
-DOMjudge executable scripts are cached under `cache_root/runtime/judgehost-executables`.
-They are runtime-scoped: verification completion does not clear them, and service startup clears them with the rest of the runtime cache.
+DOMjudge executable scripts are stored as executable entries under
+`cache_root/judge-fs-index`. They are runtime-scoped: verification completion does
+not clear them, and service startup clears them with the rest of the runtime cache.
 
 SMTP password storage uses reversible authenticated encryption. If administrators will configure
 SMTP in Settings, set a stable 32-byte base64url key:

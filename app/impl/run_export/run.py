@@ -320,7 +320,7 @@ def _start_run_verification(
     uploaded: bool = False,
     upload_filename: str = "",
     upload_content: bytes = b"",
-    force_recompile_flag: bool = False,
+    bypass_case_result_cache_flag: bool = False,
     audit_action: str = "run.execute",
     verification_source: str = "verification.start",
 ):
@@ -355,7 +355,7 @@ def _start_run_verification(
         "execution_model": "task-dag",
         "async": True,
         "status": Status.QUEUED.value,
-        "force_recompile": force_recompile_flag,
+        "bypass_case_result_cache": bypass_case_result_cache_flag,
         "task_graph": True,
         "verification_source": verification_source,
         "steps": ["gen", "val", "run", "check"],
@@ -376,7 +376,7 @@ def _start_run_verification(
             initial_summary=details,
             workspace_path=workspace,
             selected_test_names=selected_test_names,
-            force_recompile=force_recompile_flag,
+            bypass_case_result_cache=bypass_case_result_cache_flag,
         )
     except Exception as exc:
         failed_details = dict(details)
@@ -441,7 +441,7 @@ def run_rejudge(
         run_mode=general_cfg['mode'],
         selected_solution_paths=selected_solution_paths,
         selected_test_names=[],
-        force_recompile_flag=True,
+        bypass_case_result_cache_flag=True,
         audit_action="run.rejudge",
         verification_source="verification.rejudge",
     )
@@ -454,7 +454,7 @@ def run_execute(
     solution_paths: Annotated[list[str], Form()] = [],
     test_names: Annotated[list[str], Form()] = [],
     submission_upload: Annotated[UploadFile | None, File()] = None,
-    force_recompile: Annotated[str, Form()] = "",
+    bypass_case_result_cache: Annotated[str, Form()] = "",
 ):
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False, include_workspace_changes=False)
     require_write_access(ctx)
@@ -464,7 +464,7 @@ def run_execute(
     upload_content = None
     upload_filename = ''
     uploaded = False
-    force_recompile_flag = _truthy_form_token(force_recompile)
+    bypass_case_result_cache_flag = _truthy_form_token(bypass_case_result_cache)
     try:
         if submission_upload is not None:
             normalized_name = (submission_upload.filename or '').strip()
@@ -511,7 +511,7 @@ def run_execute(
             uploaded=uploaded,
             upload_filename=upload_filename,
             upload_content=bytes(upload_content or b""),
-            force_recompile_flag=force_recompile_flag,
+            bypass_case_result_cache_flag=bypass_case_result_cache_flag,
         )
     finally:
         if submission_upload is not None:

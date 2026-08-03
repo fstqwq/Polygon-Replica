@@ -225,8 +225,9 @@ an indexed lookup and never reconstructs feedback from artifacts.
 
 JudgeFS entries are synchronized per `(kind, key, signature)` and published from a
 temporary directory. Unrelated cache keys perform file I/O concurrently; the small
-global mutex only maintains ref-counted key locks. Fetch probes cache Cases with a
-fixed Case budget, a monotonic-time budget, and bounded claim chunks.
+global mutex only maintains ref-counted key locks. Fetch fallback probes cache Cases
+in 32-Case claim chunks until it finds runnable work, exhausts pending cache work,
+or reaches its monotonic-time budget.
 
 Only two service classes exist: foreground direct/compile-only work and background
 verification work. Foreground work cooperatively preempts between fetch batches;
@@ -262,10 +263,15 @@ idempotent; reusing the same `run_id` with a different payload is rejected.
 Current cache behavior for execution results:
 - only exact case cache remains
 - solve-output cache has been removed
-- cache lookup happens lazily during `fetch-work`, before work is sent to judgedaemon
+- after a runtime task identity is registered, the Verification Coordinator probes
+  cache-pending Cases in 32-Case slices
+- `fetch-work` retains a 250ms cache-probe fallback for work outside an active
+  Verification Coordinator or races with the proactive path
 - same-key cache reads/materialization are serialized without blocking unrelated keys
 - cache-hit results still update `verification_tasks` and artifact refs through the normal batched finalize path
 - testcase input/answer registration uses metadata-only hits and does not rewrite an existing valid blob
+- executable entries use the same per-key JudgeFS store and do not have an
+  independent global I/O lock
 
 ## Worker Queue
 
@@ -283,8 +289,8 @@ A single verification can write to these places:
 - `artifacts/verifications/<verification_id>/tests/`, `ans/`, `logs/`, `bin/`, `uploaded-sources/`
 - `runtime/snapshots/<snapshot_id>/src`
 - `runtime/judgehost-runs/<judgehost_task_id>/...`
-- `runtime/judgehost-executables/<kind>/<script_hash>/...`
 - `judge-fs-index/...`
 - `runtime/worker-queue-events.jsonl`
 
-By current runtime policy, cache-root data is startup-cleared. Judgehost executable cache is not cleared at verification completion.
+By current runtime policy, cache-root data is startup-cleared. JudgeFS executable
+entries are not cleared at verification completion.

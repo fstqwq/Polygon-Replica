@@ -94,7 +94,7 @@ _DomjudgePreparedPayload = TypedDict(
         "main_correct": bool,
         "verification_source": str,
         "expected_behavior": str,
-        "force_recompile": bool,
+        "bypass_case_result_cache": bool,
         "manual_validate_only": bool,
         "checker_bytes": bytes,
         "validator_bytes": bytes,
@@ -113,9 +113,9 @@ class DispatchHandler(DispatchCacheMixin):
     CASE_CACHE_KIND = DomjudgeToolkit.CASE_CACHE_KIND
     _TASK_KIND_COMPILE_ONLY = "compile-only"
     _TASK_KIND_MAIN_CORRECT = "main-correct"
-    _CACHE_PROBE_LIMIT = 512
     _CACHE_PROBE_CLAIM_SIZE = 32
     _CACHE_PROBE_BUDGET_SEC = 0.25
+    _COORDINATOR_CACHE_OWNER = "verification-coordinator-cache"
 
     def __init__(self, state: JudgehostState, core: JudgehostCore, queue: TaskQueue, result: ResultProcessor, toolkit: DomjudgeToolkit) -> None:
         self._s = state
@@ -348,7 +348,7 @@ class DispatchHandler(DispatchCacheMixin):
             "verification_source": domjudge_lower_text(payload.get("verification_source"))
             or self._toolkit.task_kind(payload),
             "expected_behavior": domjudge_lower_text(payload.get("expected_behavior")),
-            "force_recompile": domjudge_bool(payload.get("force_recompile"), default=False),
+            "bypass_case_result_cache": domjudge_bool(payload.get("bypass_case_result_cache"), default=False),
             "manual_validate_only": domjudge_bool(payload.get("manual_validate_only"), default=False),
             "checker_bytes": self._toolkit.b64_decode(binaries_payload.get("checker")),
             "validator_bytes": self._toolkit.b64_decode(binaries_payload.get("validator")),
@@ -463,7 +463,7 @@ class DispatchHandler(DispatchCacheMixin):
         tests_rows = prepared["tests_rows"]
         expected_behavior = prepared["expected_behavior"]
         verification_source = prepared["verification_source"]
-        force_recompile = prepared["force_recompile"]
+        bypass_case_result_cache = prepared["bypass_case_result_cache"]
         compile_files = prepared["compile_files"]
         run_files = prepared["run_files"]
         compare_files = prepared["compare_files"]
@@ -515,7 +515,7 @@ class DispatchHandler(DispatchCacheMixin):
             compare_config_json=json.dumps(compare_config, ensure_ascii=False, separators=(",", ":")),
             expected_behavior=expected_behavior,
             verification_source=verification_source,
-            force_recompile=1 if force_recompile else 0,
+            bypass_case_result_cache=1 if bypass_case_result_cache else 0,
             service_class=service_class,
             batch_spec=batch_spec,
             created_at=now_text,
@@ -679,7 +679,6 @@ class DispatchHandler(DispatchCacheMixin):
             return []
         self._result.retry_due_finalizations(limit=1)
         cap = self._s.fetch_batch_size if max_batchsize is None else max(1, min(256, int(max_batchsize)))
-        cache_remaining = self._CACHE_PROBE_LIMIT
         deadline = time.monotonic() + self._CACHE_PROBE_BUDGET_SEC
         first_transition = True
         while first_transition or time.monotonic() < deadline:
@@ -692,10 +691,9 @@ class DispatchHandler(DispatchCacheMixin):
             processed = self._domjudge_apply_cache_shortcuts_for_batch(
                 batch_id,
                 hostname=safe_host,
-                limit=min(cache_remaining, self._CACHE_PROBE_CLAIM_SIZE),
+                limit=self._CACHE_PROBE_CLAIM_SIZE,
                 deadline=deadline,
             )
-            cache_remaining -= processed
             refreshed = self._s.batch_scheduler.fetch_batch(batch_id)
             if refreshed is None or domjudge_lower_text(refreshed["status"]) != "open":
                 continue
@@ -709,6 +707,33 @@ class DispatchHandler(DispatchCacheMixin):
             if leased_cases:
                 return leased_cases
             self._result._domjudge_finalize_batch_if_ready(batch_id)
-            if processed == 0 or cache_remaining <= 0:
+            if processed == 0:
                 break
         return []
+
+    def probe_task_case_cache(self, task_ids: list[str], *, limit: int = 32) -> set[str]:
+        remaining = max(0, int(limit))
+        ordered_task_ids = list(dict.fromkeys(task_ids))
+        batch_ids: list[int] = []
+        for task_id in ordered_task_ids:
+            batch = self._s.batch_scheduler.batch_for_task(task_id)
+            if batch is None:
+                continue
+            batch_id = int(batch["batch_id"])
+            if batch_id not in batch_ids:
+                batch_ids.append(batch_id)
+        for batch_id in batch_ids:
+            if remaining <= 0:
+                break
+            processed = self._domjudge_apply_cache_shortcuts_for_batch(
+                batch_id,
+                hostname=self._COORDINATOR_CACHE_OWNER,
+                limit=remaining,
+                deadline=None,
+            )
+            remaining -= processed
+        return {
+            task_id
+            for task_id in ordered_task_ids
+            if self._s.batch_scheduler.task_has_cache_pending_cases(task_id)
+        }

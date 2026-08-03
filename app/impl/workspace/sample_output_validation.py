@@ -86,6 +86,7 @@ def _custom_input_expected_answer(
     accepted_source_name: str,
     accepted_source_bytes: bytes,
     run_verification_payload_base: dict[str, object],
+    bypass_case_result_cache: bool,
 ) -> bytes:
     if not accepted_source_label or not accepted_source_name or not accepted_source_bytes:
         raise RuntimeError("accepted solution source is required for custom sample input validation")
@@ -118,7 +119,7 @@ def _custom_input_expected_answer(
         expected_behavior="accepted",
         verification_source="main-correct",
         task_kind="main-correct",
-        force_recompile=False,
+        bypass_case_result_cache=bypass_case_result_cache,
         compile_only=False,
         persist_verification_run=False,
         prepared_payload=prepared,
@@ -152,6 +153,7 @@ def validate_custom_sample_outputs(
     accepted_source_name: str = "",
     accepted_source_bytes: bytes = b"",
     run_verification_payload_base: dict[str, object] | None = None,
+    bypass_case_result_cache: bool = False,
 ) -> SampleOutputValidationResult:
     log_path = logs_dir / "validate.log"
     lines: list[str] = []
@@ -183,6 +185,7 @@ def validate_custom_sample_outputs(
                     accepted_source_name=accepted_source_name,
                     accepted_source_bytes=accepted_source_bytes,
                     run_verification_payload_base=run_verification_payload_base,
+                    bypass_case_result_cache=bypass_case_result_cache,
                 )
                 prepared_payload = prepared_payload_for_uploaded_source(
                     source_label="custom_sample_output.py",
@@ -206,7 +209,7 @@ def validate_custom_sample_outputs(
                 verification_run_ids=[run_id],
                 expected_behavior="accepted",
                 verification_source="sanity-check",
-                force_recompile=False,
+                bypass_case_result_cache=bypass_case_result_cache,
                 compile_only=False,
                 persist_verification_run=False,
                 prepared_payload=prepared_payload,

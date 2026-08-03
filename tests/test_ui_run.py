@@ -1473,7 +1473,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
 
         self.assertEqual(response.status_code, 303)
         call_kwargs = start_job.call_args.kwargs
-        self.assertTrue(call_kwargs["force_recompile"])
+        self.assertTrue(call_kwargs["bypass_case_result_cache"])
         self.assertEqual(call_kwargs["selected_test_names"], [])
         self.assertEqual(
             [target["path"] for target in call_kwargs["targets"]],
