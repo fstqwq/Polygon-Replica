@@ -20,7 +20,7 @@ class JudgehostTerminalCleanup:
     Runtime records must survive judgedaemon's asynchronous result and error
     retries, but scanning all historical records on fetch/status creates the
     scheduler DoS this cleanup replaces. Deadlines are verification-scoped;
-    shared jobs disappear only after their final owner's cases are forgotten.
+    shared batches disappear only after their final owner's cases are forgotten.
     Content-addressed result and executable caches are deliberately untouched.
     """
 

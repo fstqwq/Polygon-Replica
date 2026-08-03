@@ -32,7 +32,7 @@ from app.service.verification.task_scheduler import notify_verification_case_rep
 
 from .case_result import build_case_result, decode_case_test_row
 from .core import JudgehostCore
-from .job_scheduler_models import CaseResult
+from .batch_scheduler_models import CaseResult
 from .state import JudgehostState
 from .task_queue import TaskQueue
 from .toolkit import DomjudgeToolkit
@@ -102,43 +102,25 @@ class ResultProcessor:
         if not safe_submit:
             raise RuntimeError("source files not found")
         safe_contest = None if contest_id is None else self._toolkit.contest_id(contest_id)
-        row = self._s.job_scheduler.source_file_job(safe_submit, contest_id=safe_contest)
-        if row is None:
+        submission = self._s.batch_scheduler.source_submission(safe_submit, contest_id=safe_contest)
+        if submission is None:
             raise RuntimeError("source files not found")
-        source_path = Path(domjudge_text(row["source_path"])).resolve()
-        if not source_path.exists() or not source_path.is_file():
-            raise RuntimeError("source files not found")
-        source_name = domjudge_text(row["source_name"], default=source_path.name)
-        files: list[Path] = []
-        try:
-            source_dir = source_path.parent.resolve()
-            if source_dir.exists() and source_dir.is_dir() and (not source_dir.is_symlink()):
-                candidates = sorted(
-                    [entry for entry in source_dir.iterdir() if entry.exists() and entry.is_file() and (not entry.is_symlink())],
-                    key=lambda entry: (0 if entry == source_path else 1, entry.name.lower(), entry.name),
-                )
-                files.extend(candidates)
-        except Exception:
-            files = []
-        if not files:
-            files = [source_path]
-
-        out: list[dict[str, object]] = []
-        seen_names: set[str] = set()
-        for file_path in files:
-            filename = domjudge_text(file_path.name)
-            if not filename or filename in seen_names:
-                continue
-            seen_names.add(filename)
-            out.append({"filename": filename, "content": base64.b64encode(file_path.read_bytes()).decode("ascii")})
-        if not out:
-            out = [{"filename": source_name, "content": base64.b64encode(source_path.read_bytes()).decode("ascii")}]
-        return out
+        source_files = (
+            (submission.source_name, submission.source_bytes),
+            *submission.extra_source_items,
+        )
+        return [
+            {
+                "filename": filename,
+                "content": base64.b64encode(content).decode("ascii"),
+            }
+            for filename, content in source_files
+        ]
 
     def domjudge_get_testcase_files(self, testcase_id: int, *, hostname: str) -> list[dict[str, object]]:
         token = int(testcase_id)
         safe_host = self._core.normalize_hostname(hostname)
-        row, resolution_source = self._s.job_scheduler.testcase_refs(token, hostname=safe_host)
+        row, resolution_source = self._s.batch_scheduler.testcase_refs(token, hostname=safe_host)
         if row is None:
             _diag_logger.warning(
                 "judgehost.get_testcase_files testcase_id=%s host=%s resolved=missing",
@@ -193,7 +175,7 @@ class ResultProcessor:
             for row in cached_rows
         ]
 
-    def _domjudge_active_job_script_hash(
+    def _domjudge_active_batch_script_hash(
         self,
         *,
         hostname: str,
@@ -203,37 +185,37 @@ class ResultProcessor:
         safe_host = self._core.normalize_hostname(hostname)
         if not safe_host:
             return None
-        job_row = self._s.job_scheduler.active_job_for_host(safe_host)
-        if job_row is None:
+        batch_row = self._s.batch_scheduler.active_batch_for_host(safe_host)
+        if batch_row is None:
             return None
         field = domjudge_script_hash_field(kind)
-        script_hash = domjudge_lower_text(job_row[field])
+        script_hash = domjudge_lower_text(batch_row[field])
         if not script_hash:
             return None
         if domjudge_script_id(script_hash) != requested_id:
             return None
-        return (int(job_row["job_id"]), script_hash)
+        return (int(batch_row["batch_id"]), script_hash)
 
     def _domjudge_shared_script_hash(self, *, kind: str, requested_id: int) -> str:
-        matching_hashes = self._s.job_scheduler.active_script_hashes(kind, requested_id)
+        matching_hashes = self._s.batch_scheduler.active_script_hashes(kind, requested_id)
         if not matching_hashes:
             raise RuntimeError("script files not found")
         if len(matching_hashes) > 1:
             raise RuntimeError("ambiguous script id")
         return next(iter(matching_hashes))
 
-    def _domjudge_fail_job_executable_lookup(self, *, job_id: int, error_text: str) -> None:
+    def _domjudge_fail_batch_executable_lookup(self, *, batch_id: int, error_text: str) -> None:
         safe_error = domjudge_text(error_text)
         if not safe_error:
             safe_error = "judgehost executable cache missing"
         now_text = now_iso()
-        self._s.job_scheduler.append_debug_text(
+        self._s.batch_scheduler.append_debug_text(
             case_id=None,
-            job_id=int(job_id),
+            batch_id=int(batch_id),
             debug_text=safe_error,
             now_text=now_text,
         )
-        self._domjudge_finalize_if_ready(int(job_id), force_failed=True, error_text=safe_error)
+        self._domjudge_finalize_batch_if_ready(int(batch_id), force_failed=True, error_text=safe_error)
 
     def domjudge_get_executable_files(
         self,
@@ -245,18 +227,18 @@ class ResultProcessor:
         requested_id = domjudge_parse_script_id(script_id)
         token = domjudge_lower_text(kind)
         _ = domjudge_script_hash_field(token)
-        active_match = None if not hostname else self._domjudge_active_job_script_hash(
+        active_match = None if not hostname else self._domjudge_active_batch_script_hash(
             hostname=hostname,
             kind=token,
             requested_id=requested_id,
         )
         if active_match is not None:
-            job_id, executable_hash = active_match
+            batch_id, executable_hash = active_match
             try:
                 return self._domjudge_executable_rows(kind=token, executable_hash=executable_hash)
             except RuntimeError:
-                self._domjudge_fail_job_executable_lookup(
-                    job_id=job_id,
+                self._domjudge_fail_batch_executable_lookup(
+                    batch_id=batch_id,
                     error_text=f"judgehost executable cache missing: {token}/{requested_id}",
                 )
                 raise
@@ -295,7 +277,7 @@ class ResultProcessor:
             case_result=case_result,
         )
         if published:
-            self._s.job_scheduler.mark_case_verification_published(
+            self._s.batch_scheduler.mark_case_verification_published(
                 safe_task_id,
                 safe_test_name,
             )
@@ -415,7 +397,7 @@ class ResultProcessor:
         self,
         *,
         task_id: str,
-        job_row: dict[str, object],
+        batch_row: dict[str, object],
         case_results: list[tuple[dict[str, object], CaseResult | None]],
         force_failed: bool,
         error_text: str,
@@ -426,7 +408,7 @@ class ResultProcessor:
         task_payload = self._core.task_payload(task_id)
         task_kind = self._toolkit.task_kind(task_payload)
         compile_only = task_kind == self._TASK_KIND_COMPILE_ONLY
-        compile_success_raw = job_row["compile_success"]
+        compile_success_raw = batch_row["compile_success"]
         compile_success = None if compile_success_raw is None else int(compile_success_raw)
         tests: list[dict[str, object]] = []
         internal_failure_error = ""
@@ -480,7 +462,7 @@ class ResultProcessor:
 
         compile_log = ""
         compile_diag: list[dict[str, object]] = []
-        compile_text = self._toolkit.b64_decode(job_row["compile_output_b64"]).decode("utf-8", errors="replace")
+        compile_text = self._toolkit.b64_decode(batch_row["compile_output_b64"]).decode("utf-8", errors="replace")
         compile_error_summary = ""
         compile_error_task = ""
         if compile_success == 0:
@@ -519,9 +501,9 @@ class ResultProcessor:
         }
         summary["judgehost"] = {
             "script_hashes": {
-                "compile": domjudge_lower_text(job_row["compile_hash"]),
-                "run": domjudge_lower_text(job_row["run_hash"]),
-                "compare": domjudge_lower_text(job_row["compare_hash"]),
+                "compile": domjudge_lower_text(batch_row["compile_hash"]),
+                "run": domjudge_lower_text(batch_row["run_hash"]),
+                "compare": domjudge_lower_text(batch_row["compare_hash"]),
             }
         }
         if force_failed and error_text:
@@ -543,14 +525,14 @@ class ResultProcessor:
         self,
         task_id: str,
         *,
-        job_row: dict[str, object],
+        batch_row: dict[str, object],
         force_failed: bool = False,
         error_text: str = "",
     ) -> bool:
         safe_task_id = domjudge_text(task_id)
-        if not self._s.job_scheduler.task_cases_terminal(safe_task_id):
+        if not self._s.batch_scheduler.task_cases_terminal(safe_task_id):
             return False
-        case_results = self._s.job_scheduler.task_case_results(safe_task_id)
+        case_results = self._s.batch_scheduler.task_case_results(safe_task_id)
         cases = [row for row, _result in case_results]
         if any(
             domjudge_lower_text(case["status"]) == "reported"
@@ -568,7 +550,7 @@ class ResultProcessor:
             return False
         payload = self._domjudge_task_result_payload(
             task_id=safe_task_id,
-            job_row=job_row,
+            batch_row=batch_row,
             case_results=case_results,
             force_failed=force_failed,
             error_text=error_text,
@@ -595,7 +577,7 @@ class ResultProcessor:
                 case_result=cancelled_case_result,
             )
             if published:
-                self._s.job_scheduler.mark_case_verification_published(
+                self._s.batch_scheduler.mark_case_verification_published(
                     safe_task_id,
                     domjudge_text(case_row["test_name"]),
                 )
@@ -605,8 +587,8 @@ class ResultProcessor:
     def _domjudge_publish_and_finalize_ready_tasks(
         self,
         *,
-        job_id: int,
-        job_row: dict[str, object],
+        batch_id: int,
+        batch_row: dict[str, object],
         cases: list[dict[str, object]],
         force_failed: bool,
         error_text: str,
@@ -623,8 +605,8 @@ class ResultProcessor:
                 )
             except Exception:
                 logger.exception(
-                    "failed to publish terminal DOMjudge case job_id=%s case_id=%s",
-                    int(job_id),
+                    "failed to publish terminal DOMjudge case batch_id=%s case_id=%s",
+                    int(batch_id),
                     int(row["id"]),
                 )
                 return False
@@ -638,26 +620,26 @@ class ResultProcessor:
             try:
                 self._domjudge_finalize_task_if_ready(
                     task_id,
-                    job_row=job_row,
+                    batch_row=batch_row,
                     force_failed=force_failed,
                     error_text=error_text,
                 )
             except Exception:
                 logger.exception(
-                    "failed to finalize DOMjudge task task_id=%s job_id=%s",
+                    "failed to finalize DOMjudge task task_id=%s batch_id=%s",
                     task_id,
-                    int(job_id),
+                    int(batch_id),
                 )
                 return False
         return True
 
-    def _request_job_failure(self, job_id: int, *, runresult: str, error_text: str) -> None:
-        job_row = self._s.job_scheduler.fetch_job(int(job_id))
-        if job_row is None:
+    def _request_batch_failure(self, batch_id: int, *, runresult: str, error_text: str) -> None:
+        batch_row = self._s.batch_scheduler.fetch_batch(int(batch_id))
+        if batch_row is None:
             return
         feedback = domjudge_text(error_text)
         if runresult == "compiler-error" and not feedback:
-            compile_blob = self._toolkit.b64_decode(job_row["compile_output_b64"])
+            compile_blob = self._toolkit.b64_decode(batch_row["compile_output_b64"])
             feedback = domjudge_feedback_text_from_text(
                 compile_blob.decode("utf-8", errors="replace")
             ) or "compilation failed"
@@ -665,7 +647,7 @@ class ResultProcessor:
             feedback = runresult.replace("-", " ")
         verdict = domjudge_verdict_from_runresult(runresult)
         results: dict[int, CaseResult] = {}
-        for row in self._s.job_scheduler.cases_for_job(int(job_id)):
+        for row in self._s.batch_scheduler.cases_for_batch(int(batch_id)):
             if domjudge_lower_text(row["status"]) in {"reported", "cancelled"}:
                 continue
             results[int(row["id"])] = build_case_result(
@@ -689,34 +671,34 @@ class ResultProcessor:
                 answer_correct=False,
             )
         if results:
-            self._s.job_scheduler.request_job_case_results(
-                int(job_id),
+            self._s.batch_scheduler.request_batch_case_results(
+                int(batch_id),
                 results=results,
                 updated_at=now_iso(),
             )
 
-    def _schedule_finalization_retry(self, job_id: int, *, delay_sec: float = 0.25) -> None:
-        self._s.job_scheduler.abort_job_finalization(
-            int(job_id),
+    def _schedule_finalization_retry(self, batch_id: int, *, delay_sec: float = 0.25) -> None:
+        self._s.batch_scheduler.abort_batch_finalization(
+            int(batch_id),
             now_text=now_iso(),
             delay_sec=delay_sec,
         )
 
     def retry_due_finalizations(self, *, limit: int = 1) -> None:
-        for job_id in self._s.job_scheduler.due_job_finalizations(limit=limit):
-            self._domjudge_finalize_if_ready(job_id)
+        for batch_id in self._s.batch_scheduler.due_batch_finalizations(limit=limit):
+            self._domjudge_finalize_batch_if_ready(batch_id)
 
-    def _clear_finalization_retry(self, job_id: int) -> None:
-        self._s.job_scheduler.clear_job_finalization_retry(int(job_id))
+    def _clear_finalization_retry(self, batch_id: int) -> None:
+        self._s.batch_scheduler.clear_batch_finalization_retry(int(batch_id))
 
-    def _domjudge_finalize_if_ready(
+    def _domjudge_finalize_batch_if_ready(
         self,
-        job_id: int,
+        batch_id: int,
         *,
         force_failed: bool = False,
         error_text: str = "",
     ) -> None:
-        current = self._s.job_scheduler.fetch_job(int(job_id))
+        current = self._s.batch_scheduler.fetch_batch(int(batch_id))
         if current is None:
             return
         compile_failed = (
@@ -724,25 +706,25 @@ class ResultProcessor:
             and int(current["compile_success"]) == 0
         )
         if force_failed:
-            self._request_job_failure(
-                int(job_id),
+            self._request_batch_failure(
+                int(batch_id),
                 runresult="internal-error",
                 error_text=error_text,
             )
         elif compile_failed:
-            self._request_job_failure(
-                int(job_id),
+            self._request_batch_failure(
+                int(batch_id),
                 runresult="compiler-error",
                 error_text="",
             )
-        claim = self._s.job_scheduler.claim_job_finalization(
-            int(job_id),
+        claim = self._s.batch_scheduler.claim_batch_finalization(
+            int(batch_id),
             now_text=now_iso(),
         )
         if claim is None:
             return
         try:
-            job_row = dict(claim["job"])
+            batch_row = dict(claim["batch"])
             cases = [dict(row) for row in claim["cases"]]
             task_ids = list(dict.fromkeys(
                 task_id
@@ -750,13 +732,13 @@ class ResultProcessor:
                 if (task_id := domjudge_text(row["task_id"]))
             ))
             if not self._domjudge_publish_and_finalize_ready_tasks(
-                job_id=int(job_id),
-                job_row=job_row,
+                batch_id=int(batch_id),
+                batch_row=batch_row,
                 cases=cases,
                 force_failed=force_failed,
                 error_text=error_text,
             ):
-                self._schedule_finalization_retry(int(job_id))
+                self._schedule_finalization_retry(int(batch_id))
                 return
             task_rows = {task_id: self._s.task_registry.get(task_id) for task_id in task_ids}
             unfinished_task_ids = [
@@ -782,14 +764,14 @@ class ResultProcessor:
                 }
                 log = logger.debug if transient_statuses else logger.error
                 log(
-                    "DOMjudge job remains finalizing because tasks are not terminal "
-                    "job_id=%s task_statuses=%s",
-                    int(job_id),
+                    "DOMjudge batch remains finalizing because tasks are not terminal "
+                    "batch_id=%s task_statuses=%s",
+                    int(batch_id),
                     unfinished_statuses,
                 )
-                self._schedule_finalization_retry(int(job_id))
+                self._schedule_finalization_retry(int(batch_id))
                 return
-            compile_success = job_row["compile_success"]
+            compile_success = batch_row["compile_success"]
             compile_failed = compile_success is not None and int(compile_success) == 0
             has_cancelled_cases = any(
                 domjudge_lower_text(row["status"]) == "cancelled"
@@ -806,27 +788,27 @@ class ResultProcessor:
                 if force_failed or compile_failed or has_cancelled_cases or has_failed_tasks
                 else "completed"
             )
-            work_root_text = domjudge_text(job_row["work_root"])
+            work_root_text = domjudge_text(batch_row["work_root"])
             if work_root_text:
                 shutil.rmtree(Path(work_root_text).resolve(), ignore_errors=True)
-            updated = self._s.job_scheduler.set_job_terminal_status(
-                int(job_id),
+            updated = self._s.batch_scheduler.set_batch_terminal_status(
+                int(batch_id),
                 status=terminal_status,
                 completed_at=finished_at,
                 updated_at=finished_at,
             )
             if not updated:
-                logger.error("DOMjudge job finalization claim disappeared job_id=%s", int(job_id))
-                self._schedule_finalization_retry(int(job_id))
+                logger.error("DOMjudge batch finalization claim disappeared batch_id=%s", int(batch_id))
+                self._schedule_finalization_retry(int(batch_id))
                 return
-            self._s.host_telemetry.record_job_terminal(int(job_id))
-            self._clear_finalization_retry(int(job_id))
+            self._s.host_telemetry.record_batch_terminal(int(batch_id))
+            self._clear_finalization_retry(int(batch_id))
         except Exception:
-            self._schedule_finalization_retry(int(job_id))
+            self._schedule_finalization_retry(int(batch_id))
             raise
 
     def domjudge_update_judging(self, hostname: str, judgetask_id: int, payload: dict[str, object]) -> None:
-        case_row = self._s.job_scheduler.fetch_case(int(judgetask_id))
+        case_row = self._s.batch_scheduler.fetch_case(int(judgetask_id))
         if case_row is None:
             logger.info("ignoring update for unknown judging run id: %s", int(judgetask_id))
             return
@@ -841,19 +823,19 @@ class ResultProcessor:
     ) -> None:
         safe_host = self._core.normalize_hostname(hostname)
         case_id = int(judgetask_id)
-        case_row = self._s.job_scheduler.case_execution_row(case_id)
+        case_row = self._s.batch_scheduler.case_execution_row(case_id)
         if case_row is None:
             # judgedaemon may still report progress for a case that was already
             # dropped by server-side cancellation/startup cleanup. Treat as
             # idempotent no-op so daemon can continue without fatal retries.
             logger.info("ignoring update for unknown judging run id: %s", case_id)
             return
-        job_status = domjudge_lower_text(case_row["job_status"])
-        if job_status == "finalizing":
-            self._domjudge_finalize_if_ready(int(case_row["job_id"]))
+        batch_status = domjudge_lower_text(case_row["batch_status"])
+        if batch_status == "finalizing":
+            self._domjudge_finalize_batch_if_ready(int(case_row["batch_id"]))
             return
-        if job_status != "open":
-            logger.info("ignoring update for terminal DOMjudge job case id: %s", case_id)
+        if batch_status != "open":
+            logger.info("ignoring update for terminal DOMjudge batch case id: %s", case_id)
             return
         if domjudge_lower_text(case_row["case_status"]) != "leased":
             logger.info("ignoring update for non-leased DOMjudge case id: %s", case_id)
@@ -865,7 +847,7 @@ class ResultProcessor:
         if not self._domjudge_task_accepts_case_updates(safe_task_id):
             logger.info("ignoring update for cancelled DOMjudge task case id: %s", case_id)
             return
-        job_id = int(case_row["job_id"])
+        batch_id = int(case_row["batch_id"])
         compile_success = None
         if "compile_success" in payload:
             compile_success = 1 if domjudge_bool(payload.get("compile_success"), default=False) else 0
@@ -880,8 +862,8 @@ class ResultProcessor:
         compile_meta = _payload_blob_as_b64(payload.get("compile_metadata"))
         if compile_success is not None:
             updated_at = now_iso()
-            updated = self._s.job_scheduler.record_compile_result(
-                job_id,
+            updated = self._s.batch_scheduler.record_compile_result(
+                batch_id,
                 compile_success=compile_success,
                 compile_output_b64=compile_output,
                 compile_metadata_b64=compile_meta,
@@ -889,16 +871,16 @@ class ResultProcessor:
                 updated_at=updated_at,
             )
             if not updated:
-                logger.info("ignoring compile update for terminal DOMjudge job case id: %s", case_id)
+                logger.info("ignoring compile update for terminal DOMjudge batch case id: %s", case_id)
                 return
             if compile_success == 0:
-                self._domjudge_finalize_if_ready(job_id)
+                self._domjudge_finalize_batch_if_ready(batch_id)
 
     def domjudge_add_judging_run(self, hostname: str, judgetask_id: int, payload: dict[str, object]) -> int:
         reported_monotonic = time.monotonic()
         reported_at = now_iso()
         safe_host = self._core.normalize_hostname(hostname)
-        case_row = self._s.job_scheduler.fetch_case(int(judgetask_id))
+        case_row = self._s.batch_scheduler.fetch_case(int(judgetask_id))
         if case_row is None:
             logger.info(
                 "ignoring add_judging_run for unknown judging run id: %s",
@@ -906,7 +888,7 @@ class ResultProcessor:
             )
             return int(judgetask_id)
         self._touch_task_verification(domjudge_text(case_row["task_id"]))
-        claim = self._s.job_scheduler.claim_case_reporting(
+        claim = self._s.batch_scheduler.claim_case_reporting(
             int(judgetask_id),
             hostname=safe_host,
             now_text=reported_at,
@@ -916,12 +898,12 @@ class ResultProcessor:
             return int(judgetask_id)
 
         def _abort_unfinished_claim() -> None:
-            if self._s.job_scheduler.abort_case_claim(
+            if self._s.batch_scheduler.abort_case_claim(
                 claim.case_id,
                 generation=claim.generation,
                 updated_at=now_iso(),
             ):
-                self._domjudge_finalize_if_ready(claim.job_id)
+                self._domjudge_finalize_batch_if_ready(claim.batch_id)
 
         try:
             result_id = self._process_domjudge_judging_run(
@@ -935,7 +917,7 @@ class ResultProcessor:
         except Exception:
             _abort_unfinished_claim()
             raise
-        refreshed = self._s.job_scheduler.fetch_case(claim.case_id)
+        refreshed = self._s.batch_scheduler.fetch_case(claim.case_id)
         if refreshed is not None and domjudge_lower_text(refreshed["status"]) == "reporting":
             _abort_unfinished_claim()
         return result_id
@@ -952,18 +934,18 @@ class ResultProcessor:
     ) -> int:
         safe_host = self._core.normalize_hostname(hostname)
         case_id = int(judgetask_id)
-        row = self._s.job_scheduler.case_execution_row(case_id)
+        row = self._s.batch_scheduler.case_execution_row(case_id)
         if row is None:
             # Same stale-callback case as domjudge_update_judging: acknowledge
             # gracefully to avoid hard-failing judgedaemon retries.
             logger.info("ignoring add_judging_run for unknown judging run id: %s", case_id)
             return case_id
-        job_status = domjudge_lower_text(row["job_status"])
-        if job_status == "finalizing":
-            self._domjudge_finalize_if_ready(int(row["job_id"]))
+        batch_status = domjudge_lower_text(row["batch_status"])
+        if batch_status == "finalizing":
+            self._domjudge_finalize_batch_if_ready(int(row["batch_id"]))
             return case_id
-        if job_status != "open":
-            logger.info("ignoring add_judging_run for terminal DOMjudge job id: %s", case_id)
+        if batch_status != "open":
+            logger.info("ignoring add_judging_run for terminal DOMjudge batch id: %s", case_id)
             return case_id
         if domjudge_lower_text(row["case_status"]) != "reporting":
             logger.info("ignoring add_judging_run for non-reporting DOMjudge case id: %s", case_id)
@@ -974,7 +956,7 @@ class ResultProcessor:
                 case_id,
             )
             return case_id
-        job_id = int(row["job_id"])
+        batch_id = int(row["batch_id"])
         safe_task_id = domjudge_text(row["task_id"])
         work_root = Path(domjudge_text(row["work_root"])).resolve()
         task_payload = self._core.task_payload(safe_task_id) if safe_task_id else {}
@@ -1171,11 +1153,11 @@ class ResultProcessor:
         # readers do not depend on work_root/results materialization.
 
         if not feedback_text:
-            debug_context = self._s.job_scheduler.case_debug_context(case_id)
+            debug_context = self._s.batch_scheduler.case_debug_context(case_id)
             if debug_context is not None:
                 debug_text = domjudge_text(debug_context["case_debug_text"])
                 if not debug_text:
-                    debug_text = domjudge_text(debug_context["job_debug_text"])
+                    debug_text = domjudge_text(debug_context["batch_debug_text"])
                 feedback_text = domjudge_feedback_text_from_text(debug_text)
         case_result = build_case_result(
             test_name=domjudge_text(row["test_name"]),
@@ -1198,7 +1180,7 @@ class ResultProcessor:
             answer_correct=answer_correct,
         )
         now_text = now_iso()
-        outcome = self._s.job_scheduler.commit_case_result(
+        outcome = self._s.batch_scheduler.commit_case_result(
             case_id,
             generation=claim_generation,
             result=case_result,
@@ -1208,15 +1190,15 @@ class ResultProcessor:
             logger.info("ignoring stale add_judging_run result for case id: %s", case_id)
             return case_id
         logger.debug(
-            "domjudge add_judging_run host=%s job_id=%s case_id=%s runresult=%s",
+            "domjudge add_judging_run host=%s batch_id=%s case_id=%s runresult=%s",
             safe_host,
-            job_id,
+            batch_id,
             case_id,
             runresult,
         )
         self._s.host_telemetry.record_case_reported(
             safe_host,
-            job_id,
+            batch_id,
             case_id,
             reported_at=reported_at,
             reported_monotonic=reported_monotonic,
@@ -1232,20 +1214,20 @@ class ResultProcessor:
                 safe_task_id,
                 case_id,
             )
-        job_row = self._s.job_scheduler.job_finalize_row(job_id)
-        if job_row is not None:
+        batch_row = self._s.batch_scheduler.batch_finalize_row(batch_id)
+        if batch_row is not None:
             try:
                 self._domjudge_finalize_task_if_ready(
                     safe_task_id,
-                    job_row=dict(job_row),
+                    batch_row=dict(batch_row),
                 )
             except Exception:
                 logger.exception(
-                    "failed to finalize DOMjudge task task_id=%s job_id=%s",
+                    "failed to finalize DOMjudge task task_id=%s batch_id=%s",
                     safe_task_id,
-                    job_id,
+                    batch_id,
                 )
-        self._domjudge_finalize_if_ready(job_id)
+        self._domjudge_finalize_batch_if_ready(batch_id)
         return 1
 
     def domjudge_internal_error(
@@ -1260,29 +1242,29 @@ class ResultProcessor:
             return 0
         case_id = int(judgetask_id)
         target_case_id: int | None = None
-        row = self._s.job_scheduler.case_debug_context(case_id)
+        row = self._s.batch_scheduler.case_debug_context(case_id)
         if row is not None:
-            job_id = int(row["job_id"])
+            batch_id = int(row["batch_id"])
             case_debug = domjudge_text(row["case_debug_text"])
-            job_debug = domjudge_text(row["job_debug_text"])
+            batch_debug = domjudge_text(row["batch_debug_text"])
             debug_text = case_debug
-            if job_debug and job_debug not in debug_text:
-                debug_text = job_debug if not debug_text else f"{debug_text}\n{job_debug}"
+            if batch_debug and batch_debug not in debug_text:
+                debug_text = batch_debug if not debug_text else f"{debug_text}\n{batch_debug}"
             result_id = case_id
             target_case_id = case_id
-            case_identity = self._s.job_scheduler.fetch_case(case_id)
+            case_identity = self._s.batch_scheduler.fetch_case(case_id)
             if case_identity is not None:
                 self._touch_task_verification(domjudge_text(case_identity["task_id"]))
         else:
-            job_row = self._s.job_scheduler.job_debug_context(case_id)
-            if job_row is None:
+            batch_row = self._s.batch_scheduler.batch_debug_context(case_id)
+            if batch_row is None:
                 return 0
-            job_id = int(job_row["job_id"])
-            debug_text = domjudge_text(job_row["debug_text"])
-            result_id = job_id
-            job_identity = self._s.job_scheduler.fetch_job(job_id)
-            if job_identity is not None:
-                self._touch_task_verification(domjudge_text(job_identity["task_id"]))
+            batch_id = int(batch_row["batch_id"])
+            debug_text = domjudge_text(batch_row["debug_text"])
+            result_id = batch_id
+            batch_identity = self._s.batch_scheduler.fetch_batch(batch_id)
+            if batch_identity is not None:
+                self._touch_task_verification(domjudge_text(batch_identity["task_id"]))
         payload_text = self._domjudge_debug_payload_text({} if payload is None else payload)
         if payload_text:
             debug_text = payload_text if not debug_text else f"{debug_text}\n{payload_text}"
@@ -1290,16 +1272,16 @@ class ResultProcessor:
                 debug_text = debug_text[-4000:]
         persisted_debug_text = debug_text or safe_desc
         if persisted_debug_text:
-            self._s.job_scheduler.append_debug_text(
+            self._s.batch_scheduler.append_debug_text(
                 case_id=target_case_id,
-                job_id=job_id,
+                batch_id=batch_id,
                 debug_text=persisted_debug_text,
                 now_text=now_iso(),
             )
         if debug_text:
             if debug_text.lower() not in safe_desc.lower():
                 safe_desc = f"{safe_desc}\n\n{debug_text}"
-        self._domjudge_finalize_if_ready(job_id, force_failed=True, error_text=safe_desc)
+        self._domjudge_finalize_batch_if_ready(batch_id, force_failed=True, error_text=safe_desc)
         return result_id
 
     def _domjudge_debug_payload_text(self, payload: dict[str, object]) -> str:
@@ -1464,21 +1446,21 @@ class ResultProcessor:
     def domjudge_add_debug_info(self, *, hostname: str, judgetask_id: int, payload: dict[str, object] | None = None) -> None:
         safe_host = self._core.normalize_hostname(hostname)
         case_id = int(judgetask_id)
-        case_row = self._s.job_scheduler.fetch_case(case_id)
-        job_row = self._s.job_scheduler.fetch_job(case_id)
+        case_row = self._s.batch_scheduler.fetch_case(case_id)
+        batch_row = self._s.batch_scheduler.fetch_batch(case_id)
         safe_task_id = ""
         safe_run_id = ""
         target_case_id: int | None = None
-        target_job_id: int | None = None
+        target_batch_id: int | None = None
         if case_row is not None:
             safe_task_id = domjudge_text(case_row["task_id"])
             safe_run_id = domjudge_text(case_row["run_id"])
             target_case_id = int(case_row["id"])
-            target_job_id = int(case_row["job_id"])
-        elif job_row is not None:
-            safe_task_id = domjudge_text(job_row["task_id"])
-            safe_run_id = domjudge_text(job_row["run_id"])
-            target_job_id = int(job_row["job_id"])
+            target_batch_id = int(case_row["batch_id"])
+        elif batch_row is not None:
+            safe_task_id = domjudge_text(batch_row["task_id"])
+            safe_run_id = domjudge_text(batch_row["run_id"])
+            target_batch_id = int(batch_row["batch_id"])
         self._touch_task_verification(safe_task_id)
         debug_payload = {} if payload is None else payload
         if debug_payload:
@@ -1490,9 +1472,9 @@ class ResultProcessor:
             )
         debug_text = self._domjudge_debug_payload_text(debug_payload)
         if debug_text:
-            self._s.job_scheduler.append_debug_text(
+            self._s.batch_scheduler.append_debug_text(
                 case_id=target_case_id,
-                job_id=target_job_id,
+                batch_id=target_batch_id,
                 debug_text=debug_text,
                 now_text=now_iso(),
             )

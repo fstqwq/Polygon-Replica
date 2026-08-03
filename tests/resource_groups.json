@@ -2,6 +2,7 @@
   "unit": [
     "test_build_config_format.py",
     "test_judgehost_host_telemetry.py",
+    "test_judgehost_identity.py",
     "test_judgehost_scheduler.py",
     "test_polygon_package_import.py",
     "test_polygon_package_rules.py",

@@ -14,7 +14,7 @@ from starlette.formparsers import MultiPartParser
 
 from app.impl.runtime.config import config
 from app.main_util import UPLOAD_MAX_BYTES, read_upload_bytes_limited
-from app.service.judgehost.job_scheduler_models import CaseClaimBusy
+from app.service.judgehost.batch_scheduler_models import CaseClaimBusy
 from app.service.judgehost.limits import judgehost_form_part_limit_bytes
 
 

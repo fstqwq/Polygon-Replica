@@ -35,7 +35,7 @@ class TestHostTelemetryStore(unittest.TestCase):
             reported_at="2026-08-03T01:00:07+00:00",
             reported_monotonic=23.0,
         )
-        store.record_job_terminal(1)
+        store.record_batch_terminal(1)
 
         row = store.snapshot()["host-a"]
         self.assertEqual(row["judged_case_count"], 3)
@@ -62,7 +62,7 @@ class TestHostTelemetryStore(unittest.TestCase):
                 reported_at="2026-08-03T01:00:09+00:00",
                 reported_monotonic=9.0,
             )
-        store.record_job_terminal(7)
+        store.record_batch_terminal(7)
 
         rows = store.snapshot()
         self.assertEqual(rows["host-a"]["recent_avg_per_case_sec"], 2.0)
@@ -70,16 +70,16 @@ class TestHostTelemetryStore(unittest.TestCase):
 
     def test_uses_the_median_of_only_the_last_ten_jobs(self) -> None:
         store = HostTelemetryStore()
-        for job_id in range(1, 12):
-            store.record_batch_leased("host-a", job_id, [job_id], leased_monotonic=0.0)
+        for batch_id in range(1, 12):
+            store.record_batch_leased("host-a", batch_id, [batch_id], leased_monotonic=0.0)
             store.record_case_reported(
                 "host-a",
-                job_id,
-                job_id,
-                reported_at=f"2026-08-03T01:00:{job_id:02d}+00:00",
-                reported_monotonic=float(job_id),
+                batch_id,
+                batch_id,
+                reported_at=f"2026-08-03T01:00:{batch_id:02d}+00:00",
+                reported_monotonic=float(batch_id),
             )
-            store.record_job_terminal(job_id)
+            store.record_batch_terminal(batch_id)
 
         row = store.snapshot()["host-a"]
         self.assertEqual(row["judged_case_count"], 11)
@@ -96,7 +96,7 @@ class TestHostTelemetryStore(unittest.TestCase):
             reported_monotonic=1.0,
         )
         store.release_host("host-a")
-        store.record_job_terminal(1)
+        store.record_batch_terminal(1)
 
         store.record_batch_leased("host-a", 2, [3], leased_monotonic=2.0)
         store.record_case_reported(
@@ -106,8 +106,8 @@ class TestHostTelemetryStore(unittest.TestCase):
             reported_at="2026-08-03T01:00:05+00:00",
             reported_monotonic=5.0,
         )
-        store.record_job_terminal(2)
-        store.record_job_terminal(2)
+        store.record_batch_terminal(2)
+        store.record_batch_terminal(2)
 
         row = store.snapshot()["host-a"]
         self.assertEqual(row["judged_case_count"], 2)

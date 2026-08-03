@@ -75,7 +75,7 @@ def _cancel_judgehost_tasks(run_ids: list[str], reason: str) -> int:
 
     if service is not None:
         try:
-            service.cancel_domjudge_jobs_for_runs(safe_ids)
+            service.cancel_domjudge_batches_for_runs(safe_ids)
         except Exception:
             pass
 

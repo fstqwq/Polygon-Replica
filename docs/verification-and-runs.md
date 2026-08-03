@@ -161,42 +161,56 @@ The runtime keeps four distinct lifecycle layers:
 - A DOMjudge case is leased independently. Explicitly disabling a host releases
   its `leased` cases back to `pending`; result and cache I/O first claim the Case
   as `reporting` or `cache-probing`, then commit a terminal result.
-- A DOMjudge job is a temporary execution batch. Grouped jobs may contain several tasks, but they are not verification boundaries.
+- An internal `ExecutionBatch` is a temporary scheduling and materialization
+  container. A grouped Batch may contain several tasks from one Verification,
+  but it is not a DOMjudge protocol identity.
+
+The existing DOMjudge fields have independent identities:
+
+- `jobid` is the canonical Verification hex number reduced modulo `2^63`.
+- `submitid` is the full compile-input SHA-256 reduced modulo `2^63`.
+- `uuid` is that full compile-input SHA-256.
+- `judgetaskid` is the internal Case ID.
+
+Consequently, rolling Batches inside one Verification reuse one `jobid`, while
+identical compile inputs reuse one `submitid` and `uuid`. The source endpoint
+resolves the immutable compile submission by `submitid`. Active-runtime numeric
+ID collisions fail enqueue instead of selecting a different protocol ID.
 
 Cancellation moves idle cases directly to `cancelled`. An in-flight
 `reporting/cache-probing` Case records a deferred cancellation, which takes effect
 when the current claim commits or aborts. Late judgedaemon callbacks are
 acknowledged without reviving the case.
 
-The last terminal Case atomically changes its Job from `open` to
+The last terminal Case atomically changes its Batch from `open` to
 `finalize-pending` and removes it from the appendable group index. Exactly one
-finalizer can claim `finalize-pending -> finalizing`; failure returns the Job to
+finalizer can claim `finalize-pending -> finalizing`; failure returns the Batch to
 `finalize-pending` for indexed retry. A task arriving after closure receives a
-new rolling grouped job instead of reopening the old one.
+new rolling grouped Batch instead of reopening the old one.
 
 Later judgehost polls service the finalization retry heap. Duplicate result
 callbacks are idempotent after the first reporting claim. A transient publication
-failure therefore retains the work root instead of stranding an unresumable job.
+failure therefore retains the work root instead of stranding an unresumable Batch.
 
 Case publication, task result aggregation, and task-terminal notification finish
 before work-root removal and the final `completed/failed` transition.
 Executable scripts have a different lifetime: they remain runtime-scoped and are
-cleared at service startup, not when an individual job or verification finishes.
+cleared at service startup, not when an individual Batch or Verification finishes.
 
 The verification DAG uses a preordered ready deque and processes every dependency
 edge once. The judgehost Task Registry stores only identity, immutable request
 fingerprints, result receipts, wait conditions, and terminal cleanup metadata; it
 does not schedule work.
 
-Execution scheduling uses one global ready-Job heap plus one cache-pending heap and
-one runnable Case heap per Job. Heap entries carry generations and are rebuilt only
+Execution scheduling uses one global ready-Batch heap plus one cache-pending heap and
+one runnable Case heap per Batch. Heap entries carry generations and are rebuilt only
 when their local stale ratio crosses a threshold. Fetch does not scan or sort all
-Tasks, Jobs, or Cases. One ordinary reentrant lock protects only in-memory
+Tasks, Batches, or Cases. One ordinary reentrant lock protects only in-memory
 dictionaries, counters, sets, and heaps; cache, filesystem, SQLite, and Coordinator
 notifications are never accessed while it is held. Executable callbacks use a
-lifecycle-maintained script-ID index rather than scanning open Jobs.
+lifecycle-maintained script-ID index rather than scanning open Batches.
 
-Cases enter a Job as `staged`, atomically activate as `cache-pending`, and cannot be
+Cases enter a Batch as `staged`, atomically activate as `cache-pending`, and cannot be
 leased until their exact result-cache probe misses. A full cache hit reaches
 `reported` without creating a work root. Source files and executable scripts are
 materialized lazily only after at least one miss. Before compilation succeeds, one

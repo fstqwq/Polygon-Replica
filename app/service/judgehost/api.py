@@ -58,7 +58,7 @@ class Judgehost:
         self._enqueue = TaskEnqueue(self._state, self._core, self._dispatch, self._toolkit)
         self._terminal_cleanup = JudgehostTerminalCleanup(
             self._state.task_registry,
-            self._state.job_scheduler,
+            self._state.batch_scheduler,
         )
         self._state.touch_verification_runtime = self._terminal_cleanup.touch
         self.apply_runtime_values(constants)
@@ -161,17 +161,17 @@ class Judgehost:
     def forget_problem_tasks(self, *args, **kwargs):
         return self._queue.forget_problem_tasks(*args, **kwargs)
 
-    def cancel_domjudge_jobs_for_runs(self, run_ids: list[str]) -> int:
-        job_ids = self._queue.cancel_domjudge_jobs_for_runs(run_ids)
-        for job_id in job_ids:
-            self._result._domjudge_finalize_if_ready(job_id)
-        return len(job_ids)
+    def cancel_domjudge_batches_for_runs(self, run_ids: list[str]) -> int:
+        batch_ids = self._queue.cancel_domjudge_batches_for_runs(run_ids)
+        for batch_id in batch_ids:
+            self._result._domjudge_finalize_batch_if_ready(batch_id)
+        return len(batch_ids)
 
-    def cancel_all_domjudge_inflight(self) -> int:
-        job_ids = self._queue.cancel_all_domjudge_inflight()
-        for job_id in job_ids:
-            self._result._domjudge_finalize_if_ready(job_id)
-        return len(job_ids)
+    def cancel_all_domjudge_batches(self) -> int:
+        batch_ids = self._queue.cancel_all_domjudge_batches()
+        for batch_id in batch_ids:
+            self._result._domjudge_finalize_batch_if_ready(batch_id)
+        return len(batch_ids)
 
     def forget_domjudge_runs(self, *args, **kwargs):
         return self._queue.forget_domjudge_runs(*args, **kwargs)
@@ -310,7 +310,7 @@ class Judgehost:
         return self.wait_for_task_result(task_id, timeout_sec=None)
 
     def domjudge_case_output_for_task(self, task_id: str, test_name: str) -> tuple[str, Path | None, int]:
-        row = self._state.job_scheduler.case_output_for_task(task_id, test_name)
+        row = self._state.batch_scheduler.case_output_for_task(task_id, test_name)
         if row is None:
             return ("", None, 0)
         work_root = str(row["work_root"])
@@ -321,7 +321,7 @@ class Judgehost:
         return (output_ref, Path(work_root).resolve(), case_id)
 
     def domjudge_case_feedback_blob_for_task(self, task_id: str, test_name: str) -> bytes | None:
-        row = self._state.job_scheduler.case_for_task(task_id, test_name)
+        row = self._state.batch_scheduler.case_for_task(task_id, test_name)
         if row is None:
             return None
         output_diff_ref = str(row["output_diff_rel"] or "")
@@ -338,4 +338,4 @@ class Judgehost:
             self._state.hosts_state.clear()
             self._state.peer_hostname_by_client_addr.clear()
         self._state.host_telemetry.reset()
-        self._state.job_scheduler.reset()
+        self._state.batch_scheduler.reset()

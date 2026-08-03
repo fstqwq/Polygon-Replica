@@ -5,7 +5,7 @@ from .db_helpers import (
     db_fetch_one,
     judgehost_cases_for_run,
     judgehost_fetch_case,
-    judgehost_fetch_job,
+    judgehost_fetch_batch,
 )
 
 import base64
@@ -27,8 +27,9 @@ from starlette.formparsers import MultiPartParser
 from app.impl.workspace.verification_dag import _prepared_payload_for_uploaded_source
 from app.service.verification.plan import VerificationTestPlan
 from app.service.judgehost.case_result import build_case_result
-from app.service.judgehost.job_scheduler import JobScheduler
-from app.service.judgehost.job_scheduler_models import JobSpec
+from app.service.judgehost.batch_scheduler import BatchScheduler
+from app.service.judgehost.batch_scheduler_models import CompileSubmission, ExecutionBatchSpec
+from app.service.judgehost.identity import domjudge_job_id, domjudge_submit_id
 from app.service.judgehost.api import Judgehost
 from app.service.judgehost.runtime import domjudge_rewrite_untrusted_runresult
 from app.service.platform.hashing import domjudge_executable_hash
@@ -42,8 +43,38 @@ from app.service.verification.task_store import VerificationTaskStore
 from .common import E2ETestBase, config
 
 
+def _canonical_verification_id(label: str) -> str:
+    return f"ver-{hashlib.sha256(label.encode('utf-8')).hexdigest()}"
+
+
 class TestJudgehostService(E2ETestBase):
     seed_default_workspace = True
+
+    @staticmethod
+    def _compile_submission(source_name: str, compile_key: str) -> CompileSubmission:
+        return CompileSubmission(
+            compile_key=compile_key,
+            submit_id=domjudge_submit_id(compile_key),
+            source_name=source_name,
+            source_bytes=b"int main() { return 0; }\n",
+            extra_source_items=(),
+            compile_files=(),
+        )
+
+    @staticmethod
+    def _work_rows_for_task(
+        service: Judgehost,
+        rows: list[dict[str, object]],
+        task_id: str,
+    ) -> list[dict[str, object]]:
+        return [
+            row
+            for row in rows
+            if (
+                (case := judgehost_fetch_case(service, int(row["judgetaskid"]))) is not None
+                and str(case["task_id"]) == task_id
+            )
+        ]
 
     def _fresh_judgehost_service(self) -> Judgehost:
         service = Judgehost(
@@ -154,7 +185,7 @@ class TestJudgehostService(E2ETestBase):
         service.state.include_build_payload = True
 
         ctx = config.workspace_service.workspace_context(self.problem, self.user, include_recent=False)
-        verification_id = f"ver-immediate-finalize-{uuid.uuid4().hex[:8]}"
+        verification_id = f"ver-{uuid.uuid4().hex}"
         verification_root = config.fs_manager.prepare_verification_root(verification_id).resolve()
         verification_root.mkdir(parents=True, exist_ok=True)
         config.verification_service.begin_verification_record(
@@ -252,7 +283,7 @@ class TestJudgehostService(E2ETestBase):
                     "compile_metadata": "",
                 },
             )
-            with patch.object(service.result, "_domjudge_finalize_if_ready", return_value=None):
+            with patch.object(service.result, "_domjudge_finalize_batch_if_ready", return_value=None):
                 service.domjudge_add_judging_run(
                     "judgehost-immediate-finalize",
                     case_id,
@@ -347,9 +378,9 @@ class TestJudgehostService(E2ETestBase):
     def _reset_task_queue_state(service) -> None:
         service.reset_runtime_state()
 
-    def _lease_only_case(self, service, job_id: int, hostname: str) -> int:
-        rows = service.state.job_scheduler.lease_cases(
-            job_id,
+    def _lease_only_case(self, service, batch_id: int, hostname: str) -> int:
+        rows = service.state.batch_scheduler.lease_cases(
+            batch_id,
             hostname=hostname,
             limit=1,
             now_text="2026-04-14T00:00:00+00:00",
@@ -369,7 +400,7 @@ class TestJudgehostService(E2ETestBase):
         feedback_text: str = "",
         feedback_files: list[str] | None = None,
     ) -> None:
-        claim = service.state.job_scheduler.claim_case_reporting(
+        claim = service.state.batch_scheduler.claim_case_reporting(
             case_id,
             hostname=hostname,
             now_text="2026-04-14T00:00:01+00:00",
@@ -397,7 +428,7 @@ class TestJudgehostService(E2ETestBase):
             answer_correct=False,
         )
         self.assertEqual(
-            service.state.job_scheduler.commit_case_result(
+            service.state.batch_scheduler.commit_case_result(
                 case_id,
                 generation=claim.generation,
                 result=result,
@@ -464,11 +495,14 @@ class TestJudgehostService(E2ETestBase):
         self.assertRegex(got, r"^[0-9a-f]{32}$")
 
     def test_domjudge_state_store_seeds_ids_above_process_base(self) -> None:
-        store = JobScheduler(id_base=123456)
-        job_id = store.create_job_with_cases(
+        store = BatchScheduler(id_base=123456)
+        batch_id = store.create_batch_with_cases(
             task_id=f"jt-id-base-{uuid.uuid4().hex[:8]}",
             run_id=f"r-id-base-{uuid.uuid4().hex[:8]}",
             group_key="",
+            verification_id="ver-1",
+            compile_key="8" * 64,
+            compile_submission=self._compile_submission("main.cpp", "8" * 64),
             contest_id="local",
             mode="pass-fail",
             source_name="main.cpp",
@@ -485,7 +519,7 @@ class TestJudgehostService(E2ETestBase):
             verification_source="run.execute",
             force_recompile=0,
             service_class="background",
-            job_spec=JobSpec(),
+            batch_spec=ExecutionBatchSpec(),
             created_at="2026-05-08T00:00:00+00:00",
             case_rows=[
                 {
@@ -503,8 +537,8 @@ class TestJudgehostService(E2ETestBase):
                 }
             ],
         )
-        self.assertGreater(job_id, 123456)
-        cases = store.cases_for_job(job_id)
+        self.assertGreater(batch_id, 123456)
+        cases = store.cases_for_batch(batch_id)
         self.assertEqual(len(cases), 1)
         self.assertGreater(int(cases[0]["id"]), 123456)
 
@@ -550,7 +584,7 @@ class TestJudgehostService(E2ETestBase):
     def test_wait_for_task_result_keeps_transient_runs_out_of_durable_artifact_paths(self) -> None:
         service = config.judgehost_task_service
         self._reset_task_queue_state(service)
-        verification_id = f"ver-jh-transient-{uuid.uuid4().hex[:8]}"
+        verification_id = f"ver-{uuid.uuid4().hex}"
         run_id = f"r-jh-transient-{uuid.uuid4().hex[:8]}"
         self._seed_build_verification(verification_id)
 
@@ -638,7 +672,7 @@ class TestJudgehostService(E2ETestBase):
             upload_filename=None,
             run_id=run_id,
             selected_tests=["001.in", "002.in", "003.in", "004.in"],
-            verification_id=f"inv-{verification_id}",
+            verification_id=_canonical_verification_id(f"inv-{verification_id}"),
             verification_run_ids=[run_id],
             expected_behavior="accepted",
             verification_source="run.execute",
@@ -685,7 +719,7 @@ class TestJudgehostService(E2ETestBase):
             upload_filename=None,
             run_id=run_id,
             selected_tests=["001.in"],
-            verification_id="inv-domjudge",
+            verification_id=_canonical_verification_id("inv-domjudge"),
             verification_run_ids=[run_id],
             expected_behavior="accepted",
             verification_source="run.execute",
@@ -814,14 +848,14 @@ class TestJudgehostService(E2ETestBase):
             upload_filename=None,
             run_id=run_id,
             selected_tests=["001.in"],
-            verification_id="inv-script-provider",
+            verification_id=_canonical_verification_id("inv-script-provider"),
             verification_run_ids=[run_id],
             expected_behavior="accepted",
             verification_source="run.execute",
         )
         service.domjudge_register_host("judgehost-script-provider")
         leased = service.domjudge_fetch_work("judgehost-script-provider", max_batchsize=8)
-        task_row = next((row for row in leased if str(row.get("uuid") or "") == task_id), None)
+        task_row = next(iter(self._work_rows_for_task(service, leased, task_id)), None)
         self.assertIsNotNone(task_row)
         assert task_row is not None
         compare_script_id = int(task_row.get("compare_script_id") or 0)
@@ -860,7 +894,7 @@ class TestJudgehostService(E2ETestBase):
             upload_filename=None,
             run_id=run_id_a,
             selected_tests=["001.in"],
-            verification_id="inv-script-cache-a",
+            verification_id=_canonical_verification_id("inv-script-cache-a"),
             verification_run_ids=[run_id_a],
             expected_behavior="accepted",
             verification_source="run.execute",
@@ -868,7 +902,7 @@ class TestJudgehostService(E2ETestBase):
         )
         service.domjudge_register_host("judgehost-script-cache-a")
         leased_a = service.domjudge_fetch_work("judgehost-script-cache-a", max_batchsize=8)
-        row_a = next((row for row in leased_a if str(row.get("uuid") or "") == task_id_a), None)
+        row_a = next(iter(self._work_rows_for_task(service, leased_a, task_id_a)), None)
         self.assertIsNotNone(row_a)
         assert row_a is not None
         case_id_a = int(row_a.get("judgetaskid") or 0)
@@ -905,7 +939,7 @@ class TestJudgehostService(E2ETestBase):
             upload_filename=None,
             run_id=run_id_b,
             selected_tests=["001.in"],
-            verification_id="inv-script-cache-b",
+            verification_id=_canonical_verification_id("inv-script-cache-b"),
             verification_run_ids=[run_id_b],
             expected_behavior="accepted",
             verification_source="run.execute",
@@ -916,7 +950,7 @@ class TestJudgehostService(E2ETestBase):
         row_b = None
         for _ in range(8):
             leased_b = service.domjudge_fetch_work("judgehost-script-cache-b", max_batchsize=8)
-            row_b = next((row for row in leased_b if str(row.get("uuid") or "") == task_id_b), None)
+            row_b = next(iter(self._work_rows_for_task(service, leased_b, task_id_b)), None)
             if row_b is not None:
                 break
         self.assertIsNotNone(row_b)
@@ -963,7 +997,7 @@ class TestJudgehostService(E2ETestBase):
             upload_filename=None,
             run_id=run_id,
             selected_tests=["001.in"],
-            verification_id="inv-script-miss",
+            verification_id=_canonical_verification_id("inv-script-miss"),
             verification_run_ids=[run_id],
             expected_behavior="accepted",
             verification_source="run.execute",
@@ -971,7 +1005,7 @@ class TestJudgehostService(E2ETestBase):
         host = "judgehost-script-miss"
         service.domjudge_register_host(host)
         leased = service.domjudge_fetch_work(host, max_batchsize=8)
-        row = next((item for item in leased if str(item.get("uuid") or "") == task_id), None)
+        row = next(iter(self._work_rows_for_task(service, leased, task_id)), None)
         self.assertIsNotNone(row)
         assert row is not None
         case_id = int(row.get("judgetaskid") or 0)
@@ -983,10 +1017,10 @@ class TestJudgehostService(E2ETestBase):
             case_id,
             {"compile_success": "1", "output_compile": "", "compile_metadata": ""},
         )
-        job_row = service.state.job_scheduler.job_for_task(task_id)
-        self.assertIsNotNone(job_row)
-        assert job_row is not None
-        compare_hash = str(job_row["compare_hash"] or "")
+        batch_row = service.state.batch_scheduler.batch_for_task(task_id)
+        self.assertIsNotNone(batch_row)
+        assert batch_row is not None
+        compare_hash = str(batch_row["compare_hash"] or "")
         cache_dir = config.fs_manager.judgehost_executables_root / "compare" / compare_hash
         shutil.rmtree(cache_dir, ignore_errors=True)
 
@@ -997,10 +1031,10 @@ class TestJudgehostService(E2ETestBase):
                 hostname=host,
             )
 
-        failed_job = judgehost_fetch_job(service, int(job_row["job_id"] or 0))
-        self.assertIsNotNone(failed_job)
-        assert failed_job is not None
-        self.assertEqual(str(failed_job["status"] or ""), "failed")
+        failed_batch = judgehost_fetch_batch(service, int(batch_row["batch_id"] or 0))
+        self.assertIsNotNone(failed_batch)
+        assert failed_batch is not None
+        self.assertEqual(str(failed_batch["status"] or ""), "failed")
 
         run_row = self._verification_run_row(run_id)
         self.assertIsNotNone(run_row)
@@ -1081,7 +1115,7 @@ class TestJudgehostService(E2ETestBase):
             upload_filename="gen.cpp",
             run_id=run_id,
             selected_tests=[],
-            verification_id="inv-generate-recompute",
+            verification_id=_canonical_verification_id("inv-generate-recompute"),
             verification_run_ids=[run_id],
             expected_behavior="accepted",
             verification_source="verification.generate-input",
@@ -1093,7 +1127,7 @@ class TestJudgehostService(E2ETestBase):
         )
         service.domjudge_register_host("judgehost-generate-recompute")
         leased = service.domjudge_fetch_work("judgehost-generate-recompute", max_batchsize=8)
-        task_row = next((row for row in leased if str(row.get("uuid") or "") == task_id), None)
+        task_row = next(iter(self._work_rows_for_task(service, leased, task_id)), None)
         self.assertIsNotNone(task_row)
         assert task_row is not None
         compare_files = service.domjudge_get_executable_files("compare", str(task_row.get("compare_script_id") or ""))
@@ -1137,7 +1171,7 @@ class TestJudgehostService(E2ETestBase):
             upload_filename=None,
             run_id=run_id,
             selected_tests=["001.in", "002.in"],
-            verification_id="inv-domjudge-notrunc",
+            verification_id=_canonical_verification_id("inv-domjudge-notrunc"),
             verification_run_ids=[run_id],
             expected_behavior="accepted",
             verification_source="build.solve",
@@ -1194,7 +1228,7 @@ class TestJudgehostService(E2ETestBase):
             upload_filename=None,
             run_id=run_id_a,
             selected_tests=["001.in"],
-            verification_id="inv-domjudge-cache",
+            verification_id=_canonical_verification_id("inv-domjudge-cache-b"),
             verification_run_ids=[run_id_a],
             expected_behavior="accepted",
             verification_source="run.execute",
@@ -1209,7 +1243,7 @@ class TestJudgehostService(E2ETestBase):
             upload_filename=None,
             run_id=run_id_b,
             selected_tests=["001.in"],
-            verification_id="inv-domjudge-cache",
+            verification_id=_canonical_verification_id("inv-domjudge-cache"),
             verification_run_ids=[run_id_b],
             expected_behavior="accepted",
             verification_source="run.execute",
@@ -1268,6 +1302,9 @@ class TestJudgehostService(E2ETestBase):
         run_id_num_b = int(row_b.get("run_script_id") or 0)
         compare_id_b = int(row_b.get("compare_script_id") or 0)
 
+        self.assertNotEqual(row_b["jobid"], row_a["jobid"])
+        self.assertEqual(row_b["submitid"], row_a["submitid"])
+        self.assertEqual(row_b["uuid"], row_a["uuid"])
         self.assertEqual(compile_id_b, compile_id_a)
         self.assertEqual(run_id_num_b, run_id_num_a)
         self.assertEqual(compare_id_b, compare_id_a)
@@ -1304,7 +1341,7 @@ class TestJudgehostService(E2ETestBase):
             upload_filename=None,
             run_id=run_id,
             selected_tests=["001.in"],
-            verification_id="inv-domjudge-mp",
+            verification_id=_canonical_verification_id("inv-domjudge-mp"),
             verification_run_ids=[run_id],
             expected_behavior="accepted",
             verification_source="run.execute",
@@ -1451,7 +1488,7 @@ class TestJudgehostService(E2ETestBase):
             upload_filename=None,
             run_id=run_id,
             selected_tests=["001.in"],
-            verification_id="inv-domjudge-wa2tl",
+            verification_id=_canonical_verification_id("inv-domjudge-wa2tl"),
             verification_run_ids=[run_id],
             expected_behavior="unknown",
             verification_source="run.execute",
@@ -1516,6 +1553,7 @@ class TestJudgehostService(E2ETestBase):
         service.state.include_build_payload = True
 
         verification_id = f"b-jh-dom-reconnect-{uuid.uuid4().hex[:8]}"
+        execution_verification_id = _canonical_verification_id("inv-domjudge-reconnect")
         run_id = f"r-jh-dom-reconnect-{uuid.uuid4().hex[:8]}"
         self._seed_build_verification(verification_id)
 
@@ -1529,7 +1567,7 @@ class TestJudgehostService(E2ETestBase):
             upload_filename=None,
             run_id=run_id,
             selected_tests=["001.in"],
-            verification_id="inv-domjudge-reconnect",
+            verification_id=execution_verification_id,
             verification_run_ids=[run_id],
             expected_behavior="accepted",
             verification_source="run.execute",
@@ -1540,9 +1578,30 @@ class TestJudgehostService(E2ETestBase):
         first_rows = service.domjudge_fetch_work("judgehost-reconnect", max_batchsize=8)
         self.assertEqual(len(first_rows), 1)
         first = first_rows[0]
-        job_id = int(first.get("jobid") or 0)
-        self.assertGreater(job_id, 0)
-        self.assertEqual(str(first.get("submitid") or ""), str(job_id))
+        self.assertEqual(
+            set(first),
+            {
+                "type",
+                "judgetaskid",
+                "jobid",
+                "uuid",
+                "submitid",
+                "contestid",
+                "compile_script_id",
+                "run_script_id",
+                "compare_script_id",
+                "testcase_id",
+                "testcase_hash",
+                "compile_config",
+                "run_config",
+                "compare_config",
+            },
+        )
+        protocol_job_id = int(first.get("jobid") or 0)
+        self.assertEqual(protocol_job_id, domjudge_job_id(execution_verification_id))
+        self.assertRegex(str(first.get("submitid") or ""), r"^[0-9]+$")
+        self.assertRegex(str(first.get("uuid") or ""), r"^[0-9a-f]{64}$")
+        self.assertEqual(int(first["submitid"]), domjudge_submit_id(str(first["uuid"])))
 
         unfinished = service.domjudge_register_host("judgehost-reconnect")
         self.assertEqual(unfinished, [])
@@ -1550,19 +1609,20 @@ class TestJudgehostService(E2ETestBase):
         second_rows = service.domjudge_fetch_work("judgehost-reconnect", max_batchsize=8)
         self.assertEqual(second_rows, [])
 
-        job_row = judgehost_fetch_job(service, job_id)
         case_row = judgehost_fetch_case(service, int(first["judgetaskid"]))
-        self.assertIsNotNone(job_row)
         self.assertIsNotNone(case_row)
-        assert job_row is not None and case_row is not None
-        self.assertEqual(str(job_row["compile_owner"] or ""), "judgehost-reconnect")
-        self.assertEqual(str(job_row["status"] or ""), "open")
+        assert case_row is not None
+        batch_row = judgehost_fetch_batch(service, int(case_row["batch_id"]))
+        self.assertIsNotNone(batch_row)
+        assert batch_row is not None
+        self.assertEqual(str(batch_row["compile_owner"] or ""), "judgehost-reconnect")
+        self.assertEqual(str(batch_row["status"] or ""), "open")
         self.assertEqual(str(case_row["lease_owner"] or ""), "judgehost-reconnect")
         self.assertEqual(str(case_row["status"] or ""), "leased")
 
     def test_domjudge_fetch_work_refreshes_heartbeat_for_active_idle_job(self) -> None:
         service = config.judgehost_task_service
-        verification_id = f"ver-active-idle-heartbeat-{uuid.uuid4().hex[:8]}"
+        verification_id = f"ver-{uuid.uuid4().hex}"
         run_id = f"r-active-idle-heartbeat-{uuid.uuid4().hex[:8]}"
         host = "judgehost-active-idle-heartbeat"
         self._seed_build_verification(verification_id)
@@ -1578,7 +1638,7 @@ class TestJudgehostService(E2ETestBase):
             upload_filename=None,
             run_id=run_id,
             selected_tests=["001.in"],
-            verification_id=f"ver-active-idle-heartbeat-job-{uuid.uuid4().hex[:8]}",
+            verification_id=f"ver-{uuid.uuid4().hex}",
             verification_run_ids=[run_id],
             expected_behavior="accepted",
             verification_source="run.execute",
@@ -1632,7 +1692,7 @@ class TestJudgehostService(E2ETestBase):
                 upload_filename=None,
                 run_id=run_bad,
                 selected_tests=["001.in"],
-                verification_id="inv-domjudge-bad",
+                verification_id=_canonical_verification_id("inv-domjudge-bad"),
                 verification_run_ids=[run_bad],
                 expected_behavior="accepted",
                 verification_source="run.execute",
@@ -1652,7 +1712,7 @@ class TestJudgehostService(E2ETestBase):
             upload_filename=None,
             run_id=run_good,
             selected_tests=["001.in"],
-            verification_id="inv-domjudge-good",
+            verification_id=_canonical_verification_id("inv-domjudge-good"),
             verification_run_ids=[run_good],
             expected_behavior="accepted",
             verification_source="run.execute",
@@ -1661,7 +1721,7 @@ class TestJudgehostService(E2ETestBase):
         service.domjudge_register_host("judgehost-skip-invalid")
         tasks = service.domjudge_fetch_work("judgehost-skip-invalid", max_batchsize=8)
         self.assertTrue(tasks)
-        self.assertEqual(str(tasks[0].get("uuid") or ""), good_task)
+        self.assertEqual(len(self._work_rows_for_task(service, tasks, good_task)), 1)
 
         bad_task_row = service.state.task_registry.get_for_run(run_bad)
         self.assertIsNotNone(bad_task_row)
@@ -1696,7 +1756,7 @@ class TestJudgehostService(E2ETestBase):
             upload_filename=None,
             run_id=run_a,
             selected_tests=["001.in"],
-            verification_id="inv-domjudge-cache-a",
+            verification_id=_canonical_verification_id("inv-domjudge-cache-a"),
             verification_run_ids=[run_a],
             expected_behavior="accepted",
             verification_source="run.execute",
@@ -1727,7 +1787,7 @@ class TestJudgehostService(E2ETestBase):
             upload_filename=None,
             run_id=run_b,
             selected_tests=["001.in"],
-            verification_id="inv-domjudge-cache-b",
+            verification_id=_canonical_verification_id("inv-domjudge-cache-b"),
             verification_run_ids=[run_b],
             expected_behavior="accepted",
             verification_source="run.execute",
@@ -1776,7 +1836,7 @@ class TestJudgehostService(E2ETestBase):
             upload_filename=None,
             run_id=run_a,
             selected_tests=["001.in"],
-            verification_id="inv-domjudge-host-a",
+            verification_id=_canonical_verification_id("inv-domjudge-host-a"),
             verification_run_ids=[run_a],
             expected_behavior="accepted",
             verification_source="run.execute",
@@ -1796,7 +1856,7 @@ class TestJudgehostService(E2ETestBase):
             upload_filename=None,
             run_id=run_b,
             selected_tests=["001.in"],
-            verification_id="inv-domjudge-host-b",
+            verification_id=_canonical_verification_id("inv-domjudge-host-b"),
             verification_run_ids=[run_b],
             expected_behavior="accepted",
             verification_source="run.execute",
@@ -1855,7 +1915,7 @@ class TestJudgehostService(E2ETestBase):
             upload_filename=None,
             run_id=run_id,
             selected_tests=["001.in"],
-            verification_id="inv-passlimit-interactive",
+            verification_id=_canonical_verification_id("inv-passlimit-interactive"),
             verification_run_ids=[run_id],
             expected_behavior="accepted",
             verification_source="run.execute",
@@ -1888,7 +1948,7 @@ class TestJudgehostService(E2ETestBase):
             upload_filename=None,
             run_id=run_id,
             selected_tests=["001.in"],
-            verification_id="inv-passlimit-pass-fail",
+            verification_id=_canonical_verification_id("inv-passlimit-pass-fail"),
             verification_run_ids=[run_id],
             expected_behavior="accepted",
             verification_source="run.execute",
@@ -1939,7 +1999,7 @@ class TestJudgehostService(E2ETestBase):
             upload_filename=None,
             run_id=run_id,
             selected_tests=["001.in"],
-            verification_id="inv-jh-interactor-source",
+            verification_id=_canonical_verification_id("inv-jh-interactor-source"),
             verification_run_ids=[run_id],
             expected_behavior="accepted",
             verification_source="run.execute",
@@ -1949,7 +2009,7 @@ class TestJudgehostService(E2ETestBase):
         host = "judgehost-interactor-source"
         service.domjudge_register_host(host)
         tasks = service.domjudge_fetch_work(host, max_batchsize=8)
-        task_row = next((row for row in tasks if str(row.get("uuid") or "") == task_id), None)
+        task_row = next(iter(self._work_rows_for_task(service, tasks, task_id)), None)
         self.assertIsNotNone(task_row)
 
         run_files = service.domjudge_get_executable_files("run", str(task_row.get("run_script_id") or ""))
@@ -2012,7 +2072,7 @@ class TestJudgehostService(E2ETestBase):
             upload_filename="java_translate.java",
             run_id=f"r-java-entry-{uuid.uuid4().hex[:8]}",
             selected_tests=[],
-            verification_id=f"ver-java-entry-{uuid.uuid4().hex[:8]}",
+            verification_id=f"ver-{uuid.uuid4().hex}",
             verification_run_ids=[],
             expected_behavior="accepted",
             verification_source="run.execute",
@@ -2025,7 +2085,7 @@ class TestJudgehostService(E2ETestBase):
 
     def test_domjudge_java_upload_is_sent_with_detected_entry_point_filename(self) -> None:
         service = self._fresh_judgehost_service()
-        verification_id = f"ver-java-upload-{uuid.uuid4().hex[:8]}"
+        verification_id = f"ver-{uuid.uuid4().hex}"
         run_id = f"r-java-upload-{uuid.uuid4().hex[:8]}"
         self._seed_build_verification(verification_id)
         task_id = service.enqueue_task(
@@ -2052,7 +2112,7 @@ class TestJudgehostService(E2ETestBase):
         leased = service.domjudge_fetch_work("judgehost-java-upload", max_batchsize=1)
         self.assertEqual(len(leased), 1)
         row = leased[0]
-        self.assertEqual(str(row.get("uuid") or ""), task_id)
+        self.assertEqual(len(self._work_rows_for_task(service, [row], task_id)), 1)
         submit_id = str(row.get("submitid") or "")
         contest_id = str(row.get("contestid") or "")
         source_files = service.domjudge_get_source_files(submit_id, contest_id=contest_id)
@@ -2072,7 +2132,7 @@ class TestJudgehostService(E2ETestBase):
                 upload_filename="helper.java",
                 run_id=f"r-java-missing-main-{uuid.uuid4().hex[:8]}",
                 selected_tests=[],
-                verification_id=f"ver-java-missing-main-{uuid.uuid4().hex[:8]}",
+                verification_id=f"ver-{uuid.uuid4().hex}",
                 verification_run_ids=[],
                 expected_behavior="accepted",
                 verification_source="run.execute",
@@ -2154,7 +2214,7 @@ class TestJudgehostService(E2ETestBase):
             upload_filename=None,
             run_id=run_id,
             selected_tests=["001.in"],
-            verification_id="inv-jh-generate-scripts",
+            verification_id=_canonical_verification_id("inv-jh-generate-scripts"),
             verification_run_ids=[run_id],
             expected_behavior="accepted",
             verification_source="generate-input",
@@ -2164,7 +2224,7 @@ class TestJudgehostService(E2ETestBase):
         host = "judgehost-generate-scripts"
         service.domjudge_register_host(host)
         tasks = service.domjudge_fetch_work(host, max_batchsize=8)
-        task_row = next((row for row in tasks if str(row.get("uuid") or "") == task_id), None)
+        task_row = next(iter(self._work_rows_for_task(service, tasks, task_id)), None)
         self.assertIsNotNone(task_row)
 
         run_files = service.domjudge_get_executable_files("run", str(task_row.get("run_script_id") or ""))
@@ -2214,7 +2274,7 @@ class TestJudgehostService(E2ETestBase):
             upload_filename=None,
             run_id=run_id,
             selected_tests=["001.in"],
-            verification_id="inv-jh-generate-interactive",
+            verification_id=_canonical_verification_id("inv-jh-generate-interactive"),
             verification_run_ids=[run_id],
             expected_behavior="accepted",
             verification_source="build.generate-input",
@@ -2223,7 +2283,7 @@ class TestJudgehostService(E2ETestBase):
         host = "judgehost-generate-interactive"
         service.domjudge_register_host(host)
         tasks = service.domjudge_fetch_work(host, max_batchsize=8)
-        task_row = next((row for row in tasks if str(row.get("uuid") or "") == task_id), None)
+        task_row = next(iter(self._work_rows_for_task(service, tasks, task_id)), None)
         self.assertIsNotNone(task_row)
 
         run_files = service.domjudge_get_executable_files("run", str(task_row.get("run_script_id") or ""))
@@ -2271,7 +2331,7 @@ class TestJudgehostService(E2ETestBase):
             upload_filename="checker.cpp",
             run_id=run_id,
             selected_tests=[],
-            verification_id="inv-jh-compile-only-virtual",
+            verification_id=_canonical_verification_id("inv-jh-compile-only-virtual"),
             verification_run_ids=[run_id],
             expected_behavior="compile",
             verification_source="build.compile",
@@ -2279,7 +2339,7 @@ class TestJudgehostService(E2ETestBase):
         )
         service.domjudge_register_host("judgehost-compile-only-virtual")
         tasks = service.domjudge_fetch_work("judgehost-compile-only-virtual", max_batchsize=16)
-        task_rows = [row for row in tasks if str(row.get("uuid") or "") == task_id]
+        task_rows = self._work_rows_for_task(service, tasks, task_id)
         self.assertEqual(len(task_rows), 1)
         case_id = int(task_rows[0].get("judgetaskid") or 0)
         testcase_id = int(task_rows[0].get("testcase_id") or 0)
@@ -2353,7 +2413,7 @@ class TestJudgehostService(E2ETestBase):
             upload_filename="checker.cpp",
             run_id=run_id,
             selected_tests=[],
-            verification_id="inv-jh-compile-only-multipass",
+            verification_id=_canonical_verification_id("inv-jh-compile-only-multipass"),
             verification_run_ids=[run_id],
             expected_behavior="compile",
             verification_source="build.compile",
@@ -2362,7 +2422,7 @@ class TestJudgehostService(E2ETestBase):
         host = "judgehost-compile-only-multipass"
         service.domjudge_register_host(host)
         tasks = service.domjudge_fetch_work(host, max_batchsize=8)
-        task_row = next((row for row in tasks if str(row.get("uuid") or "") == task_id), None)
+        task_row = next(iter(self._work_rows_for_task(service, tasks, task_id)), None)
         self.assertIsNotNone(task_row)
 
         compare_cfg = json.loads(str(task_row.get("compare_config") or "{}"))
@@ -2430,7 +2490,7 @@ class TestJudgehostService(E2ETestBase):
             upload_filename="checker.cpp",
             run_id=run_a,
             selected_tests=[],
-            verification_id="inv-jh-compile-only-extra-a",
+            verification_id=_canonical_verification_id("inv-jh-compile-only-extra-a"),
             verification_run_ids=[run_a],
             expected_behavior="compile",
             verification_source="build.compile",
@@ -2448,7 +2508,7 @@ class TestJudgehostService(E2ETestBase):
             upload_filename="checker.cpp",
             run_id=run_a,
             selected_tests=[],
-            verification_id="inv-jh-compile-only-extra-a",
+            verification_id=_canonical_verification_id("inv-jh-compile-only-extra-a"),
             verification_run_ids=[run_a],
             expected_behavior="compile",
             verification_source="build.compile",
@@ -2457,7 +2517,7 @@ class TestJudgehostService(E2ETestBase):
         )
         service.domjudge_register_host(host)
         rows_a = service.domjudge_fetch_work(host, max_batchsize=16)
-        task_rows_a = [row for row in rows_a if str(row.get("uuid") or "") == task_a]
+        task_rows_a = self._work_rows_for_task(service, rows_a, task_a)
         self.assertEqual(len(task_rows_a), 1)
         case_id_a = int(task_rows_a[0].get("judgetaskid") or 0)
         self.assertGreater(case_id_a, 0)
@@ -2502,7 +2562,7 @@ class TestJudgehostService(E2ETestBase):
                 upload_filename="checker.cpp",
                 run_id=run_b,
                 selected_tests=[],
-                verification_id="inv-jh-compile-only-extra-b",
+                verification_id=_canonical_verification_id("inv-jh-compile-only-extra-b"),
                 verification_run_ids=[run_b],
                 expected_behavior="compile",
                 verification_source="build.compile",
@@ -2510,7 +2570,7 @@ class TestJudgehostService(E2ETestBase):
                 prepared_payload=prepared,
             )
             rows_b = service.domjudge_fetch_work(host, max_batchsize=16)
-            self.assertFalse(any((str(row.get("uuid") or "") == task_b for row in rows_b)))
+            self.assertFalse(bool(self._work_rows_for_task(service, rows_b, task_b)))
             self.assertEqual(cache_bundle_read.call_count, 1)
         self.assertEqual(service.wait_for_task(task_b, timeout_sec=2.0), run_b)
         run_row_b = self._verification_run_row(run_b)
@@ -2548,7 +2608,7 @@ class TestJudgehostService(E2ETestBase):
             upload_filename="tmp.cpp",
             run_id=run_a,
             selected_tests=[],
-            verification_id="inv-jh-compile-only-empty-build-a",
+            verification_id=_canonical_verification_id("inv-jh-compile-only-empty-build-a"),
             verification_run_ids=[run_a],
             expected_behavior="compile",
             verification_source="problem.solution.save_source",
@@ -2556,7 +2616,7 @@ class TestJudgehostService(E2ETestBase):
         )
         service.domjudge_register_host(host)
         rows_a = service.domjudge_fetch_work(host, max_batchsize=16)
-        task_rows_a = [row for row in rows_a if str(row.get("uuid") or "") == task_a]
+        task_rows_a = self._work_rows_for_task(service, rows_a, task_a)
         self.assertEqual(len(task_rows_a), 1)
         case_id_a = int(task_rows_a[0].get("judgetaskid") or 0)
         self.assertGreater(case_id_a, 0)
@@ -2592,14 +2652,14 @@ class TestJudgehostService(E2ETestBase):
             upload_filename="tmp.cpp",
             run_id=run_b,
             selected_tests=[],
-            verification_id="inv-jh-compile-only-empty-build-b",
+            verification_id=_canonical_verification_id("inv-jh-compile-only-empty-build-b"),
             verification_run_ids=[run_b],
             expected_behavior="compile",
             verification_source="problem.solution.save_source",
             compile_only=True,
         )
         rows_b = service.domjudge_fetch_work(host, max_batchsize=16)
-        self.assertFalse(any((str(row.get("uuid") or "") == task_b for row in rows_b)))
+        self.assertFalse(bool(self._work_rows_for_task(service, rows_b, task_b)))
         self.assertEqual(service.wait_for_task(task_b, timeout_sec=2.0), run_b)
         run_row_b = self._verification_run_row(run_b)
         self.assertIsNotNone(run_row_b)
@@ -2634,7 +2694,7 @@ class TestJudgehostService(E2ETestBase):
             upload_filename="gen.cpp",
             run_id=run_id,
             selected_tests=[],
-            verification_id="inv-jh-prepared-merge",
+            verification_id=_canonical_verification_id("inv-jh-prepared-merge"),
             verification_run_ids=[run_id],
             expected_behavior="compile",
             verification_source="build.compile",
@@ -2657,7 +2717,7 @@ class TestJudgehostService(E2ETestBase):
                 upload_filename="gen.cpp",
                 run_id=run_id,
                 selected_tests=[],
-                verification_id="inv-jh-prepared-merge",
+                verification_id=_canonical_verification_id("inv-jh-prepared-merge"),
                 verification_run_ids=[run_id],
                 expected_behavior="compile",
                 verification_source="build.compile",
@@ -2704,7 +2764,7 @@ class TestJudgehostService(E2ETestBase):
             upload_filename="gen.cpp",
             run_id=run_id,
             selected_tests=[],
-            verification_id="inv-jh-extra-src",
+            verification_id=_canonical_verification_id("inv-jh-extra-src"),
             verification_run_ids=[run_id],
             expected_behavior="compile",
             verification_source="build.compile",
@@ -2722,7 +2782,7 @@ class TestJudgehostService(E2ETestBase):
             upload_filename="gen.cpp",
             run_id=run_id,
             selected_tests=[],
-            verification_id="inv-jh-extra-src",
+            verification_id=_canonical_verification_id("inv-jh-extra-src"),
             verification_run_ids=[run_id],
             expected_behavior="compile",
             verification_source="build.compile",
@@ -2732,7 +2792,7 @@ class TestJudgehostService(E2ETestBase):
         service.domjudge_register_host("judgehost-extra-src")
         work_rows = service.domjudge_fetch_work("judgehost-extra-src", max_batchsize=16)
         self.assertTrue(work_rows)
-        work_row = next((row for row in work_rows if str(row.get("uuid") or "") == _task_id), None)
+        work_row = next(iter(self._work_rows_for_task(service, work_rows, _task_id)), None)
         self.assertIsNotNone(work_row)
         submit_id = str(work_row.get("submitid") or "")
         contest_id = str(work_row.get("contestid") or "")
@@ -2797,7 +2857,7 @@ class TestJudgehostService(E2ETestBase):
             upload_filename="checker.cpp",
             run_id=run_id,
             selected_tests=[],
-            verification_id="inv-jh-compile-only-ok",
+            verification_id=_canonical_verification_id("inv-jh-compile-only-ok"),
             verification_run_ids=[run_id],
             expected_behavior="compile",
             verification_source="build.compile",
@@ -2873,7 +2933,7 @@ class TestJudgehostService(E2ETestBase):
             upload_filename="checker.cpp",
             run_id=run_id,
             selected_tests=[],
-            verification_id="inv-jh-compile-only-no-output",
+            verification_id=_canonical_verification_id("inv-jh-compile-only-no-output"),
             verification_run_ids=[run_id],
             expected_behavior="compile",
             verification_source="build.compile",
@@ -2950,7 +3010,7 @@ class TestJudgehostService(E2ETestBase):
             upload_filename="checker.cpp",
             run_id=run_id,
             selected_tests=[],
-            verification_id="inv-jh-compile-only-ce",
+            verification_id=_canonical_verification_id("inv-jh-compile-only-ce"),
             verification_run_ids=[run_id],
             expected_behavior="compile",
             verification_source="build.compile",
@@ -3012,7 +3072,7 @@ class TestJudgehostService(E2ETestBase):
             upload_filename="gen.cpp",
             run_id=run_id,
             selected_tests=[],
-            verification_id="inv-jh-extra-source",
+            verification_id=_canonical_verification_id("inv-jh-extra-source"),
             verification_run_ids=[run_id],
             expected_behavior="accepted",
             verification_source="build.generate-input",
@@ -3051,7 +3111,7 @@ class TestJudgehostService(E2ETestBase):
         service.domjudge_register_host("judgehost-extra-source")
         tasks = service.domjudge_fetch_work("judgehost-extra-source", max_batchsize=8)
         self.assertEqual(len(tasks), 1)
-        source_files = service.domjudge_get_source_files(str(tasks[0].get("jobid") or ""))
+        source_files = service.domjudge_get_source_files(str(tasks[0].get("submitid") or ""))
         source_names = {str(item.get("filename") or "") for item in source_files}
         self.assertIn("gen.cpp", source_names)
         self.assertIn("testlib.h", source_names)
@@ -3145,7 +3205,7 @@ class TestJudgehostService(E2ETestBase):
                 upload_filename=None,
                 run_id=run_id,
                 selected_tests=["001.in"],
-                verification_id="inv-domjudge-large",
+                verification_id=_canonical_verification_id("inv-domjudge-large"),
                 verification_run_ids=[run_id],
                 expected_behavior="accepted",
                 verification_source="run.execute",
@@ -3218,7 +3278,7 @@ class TestJudgehostService(E2ETestBase):
             upload_filename=None,
             run_id=run_id,
             selected_tests=["001.in"],
-            verification_id="inv-domjudge-compile-log",
+            verification_id=_canonical_verification_id("inv-domjudge-compile-log"),
             verification_run_ids=[run_id],
             expected_behavior="accepted",
             verification_source="run.execute",
@@ -3230,7 +3290,7 @@ class TestJudgehostService(E2ETestBase):
         case_row = judgehost_fetch_case(service, case_id)
         self.assertIsNotNone(case_row)
         assert case_row is not None
-        job_id = int(case_row["job_id"])
+        batch_id = int(case_row["batch_id"])
 
         limit = int(getattr(service.state.constants, "JUDGEHOST_STORED_LOG_LIMIT_BYTES", 65536) or 65536)
         service.domjudge_update_judging(
@@ -3243,11 +3303,11 @@ class TestJudgehostService(E2ETestBase):
             },
         )
 
-        job_row = judgehost_fetch_job(service, job_id)
-        self.assertIsNotNone(job_row)
-        assert job_row is not None
-        stored_compile_output = base64.b64decode(str(job_row["compile_output_b64"] or ""))
-        stored_compile_metadata = base64.b64decode(str(job_row["compile_metadata_b64"] or ""))
+        batch_row = judgehost_fetch_batch(service, batch_id)
+        self.assertIsNotNone(batch_row)
+        assert batch_row is not None
+        stored_compile_output = base64.b64decode(str(batch_row["compile_output_b64"] or ""))
+        stored_compile_metadata = base64.b64decode(str(batch_row["compile_metadata_b64"] or ""))
         self.assertLessEqual(len(stored_compile_output), limit)
         self.assertLessEqual(len(stored_compile_metadata), limit)
         self.assertIn(b"...[truncated]", stored_compile_output)
@@ -3314,7 +3374,7 @@ class TestJudgehostService(E2ETestBase):
                 upload_filename=None,
                 run_id=run_id,
                 selected_tests=["001.in"],
-                verification_id="inv-domjudge-peer",
+                verification_id=_canonical_verification_id("inv-domjudge-peer"),
                 verification_run_ids=[run_id],
                 expected_behavior="accepted",
                 verification_source="run.execute",
@@ -3369,7 +3429,7 @@ class TestJudgehostService(E2ETestBase):
                 upload_filename=None,
                 run_id=run_id,
                 selected_tests=["001.in"],
-                verification_id="inv-domjudge-peer-script",
+                verification_id=_canonical_verification_id("inv-domjudge-peer-script"),
                 verification_run_ids=[run_id],
                 expected_behavior="accepted",
                 verification_source="run.execute",
@@ -3429,7 +3489,7 @@ class TestJudgehostService(E2ETestBase):
             upload_filename=None,
             run_id=run_id,
             selected_tests=["001.in"],
-            verification_id="inv-domjudge-spool",
+            verification_id=_canonical_verification_id("inv-domjudge-spool"),
             verification_run_ids=[run_id],
             expected_behavior="accepted",
             verification_source="run.execute",
@@ -3798,7 +3858,7 @@ class TestJudgehostService(E2ETestBase):
             upload_filename=None,
             run_id=run_id_seed,
             selected_tests=["001.in"],
-            verification_id="inv-jh-partial-seed",
+            verification_id=_canonical_verification_id("inv-jh-partial-seed"),
             verification_run_ids=[run_id_seed],
             expected_behavior="accepted",
             verification_source="run.execute",
@@ -3842,7 +3902,7 @@ class TestJudgehostService(E2ETestBase):
             upload_filename=None,
             run_id=run_id_target,
             selected_tests=["001.in", "002.in"],
-            verification_id="inv-jh-partial-target",
+            verification_id=_canonical_verification_id("inv-jh-partial-target"),
             verification_run_ids=[run_id_target],
             expected_behavior="accepted",
             verification_source="run.execute",
@@ -3908,7 +3968,7 @@ class TestJudgehostService(E2ETestBase):
             upload_filename=None,
             run_id=run_id_a,
             selected_tests=["001.in"],
-            verification_id="inv-cache-blob-a",
+            verification_id=_canonical_verification_id("inv-cache-blob-a"),
             verification_run_ids=[run_id_a],
             expected_behavior="accepted",
             verification_source="run.execute",
@@ -3969,7 +4029,7 @@ class TestJudgehostService(E2ETestBase):
             upload_filename=None,
             run_id=run_id_b,
             selected_tests=["001.in"],
-            verification_id="inv-cache-blob-b",
+            verification_id=_canonical_verification_id("inv-cache-blob-b"),
             verification_run_ids=[run_id_b],
             expected_behavior="accepted",
             verification_source="run.execute",
@@ -4009,7 +4069,7 @@ class TestJudgehostService(E2ETestBase):
             upload_filename=None,
             run_id=run_id_a,
             selected_tests=["001.in"],
-            verification_id="inv-manifest-a",
+            verification_id=_canonical_verification_id("inv-manifest-a"),
             verification_run_ids=[run_id_a],
             expected_behavior="accepted",
             verification_source="run.execute",
@@ -4066,7 +4126,7 @@ class TestJudgehostService(E2ETestBase):
             upload_filename=None,
             run_id=run_id_b,
             selected_tests=["001.in"],
-            verification_id="inv-manifest-b",
+            verification_id=_canonical_verification_id("inv-manifest-b"),
             verification_run_ids=[run_id_b],
             expected_behavior="accepted",
             verification_source="run.execute",
@@ -4106,7 +4166,7 @@ class TestJudgehostService(E2ETestBase):
             upload_filename=None,
             run_id=run_id_a,
             selected_tests=["001.in"],
-            verification_id="inv-blobsha-a",
+            verification_id=_canonical_verification_id("inv-blobsha-a"),
             verification_run_ids=[run_id_a],
             expected_behavior="accepted",
             verification_source="run.execute",
@@ -4153,7 +4213,7 @@ class TestJudgehostService(E2ETestBase):
             upload_filename=None,
             run_id=run_id_b,
             selected_tests=["001.in"],
-            verification_id="inv-blobsha-b",
+            verification_id=_canonical_verification_id("inv-blobsha-b"),
             verification_run_ids=[run_id_b],
             expected_behavior="accepted",
             verification_source="run.execute",
@@ -4193,7 +4253,7 @@ class TestJudgehostService(E2ETestBase):
             upload_filename=None,
             run_id=run_id_a,
             selected_tests=["001.in"],
-            verification_id="inv-accepted-cache-a",
+            verification_id=_canonical_verification_id("inv-accepted-cache-a"),
             verification_run_ids=[run_id_a],
             expected_behavior="accepted",
             verification_source="run.execute",
@@ -4245,7 +4305,7 @@ class TestJudgehostService(E2ETestBase):
             upload_filename=None,
             run_id=run_id_b,
             selected_tests=["001.in"],
-            verification_id="inv-accepted-cache-b",
+            verification_id=_canonical_verification_id("inv-accepted-cache-b"),
             verification_run_ids=[run_id_b],
             expected_behavior="accepted",
             verification_source="run.execute",
@@ -4284,7 +4344,7 @@ class TestJudgehostService(E2ETestBase):
             upload_filename=None,
             run_id=run_id,
             selected_tests=["001.in"],
-            verification_id="inv-checker-fail",
+            verification_id=_canonical_verification_id("inv-checker-fail"),
             verification_run_ids=[run_id],
             expected_behavior="accepted",
             verification_source="run.execute",
@@ -4368,7 +4428,7 @@ class TestJudgehostService(E2ETestBase):
             upload_filename=None,
             run_id=run_id,
             selected_tests=["001.in"],
-            verification_id="inv-run-error",
+            verification_id=_canonical_verification_id("inv-run-error"),
             verification_run_ids=[run_id],
             expected_behavior="accepted",
             verification_source="run.execute",
@@ -4453,7 +4513,7 @@ class TestJudgehostService(E2ETestBase):
             upload_filename=None,
             run_id=run_id,
             selected_tests=["001.in"],
-            verification_id="inv-compare-neg-tl",
+            verification_id=_canonical_verification_id("inv-compare-neg-tl"),
             verification_run_ids=[run_id],
             expected_behavior="wrong-answer-or-time-limit",
             verification_source="run.execute",
@@ -4539,7 +4599,7 @@ class TestJudgehostService(E2ETestBase):
             upload_filename=None,
             run_id=run_id,
             selected_tests=["001.in"],
-            verification_id="inv-compare-internal",
+            verification_id=_canonical_verification_id("inv-compare-internal"),
             verification_run_ids=[run_id],
             expected_behavior="accepted",
             verification_source="run.execute",
@@ -4602,7 +4662,7 @@ class TestJudgehostService(E2ETestBase):
             upload_filename=None,
             run_id=run_id,
             selected_tests=["001.in"],
-            verification_id="inv-compare-debug",
+            verification_id=_canonical_verification_id("inv-compare-debug"),
             verification_run_ids=[run_id],
             expected_behavior="accepted",
             verification_source="run.execute",
@@ -4669,7 +4729,7 @@ class TestJudgehostService(E2ETestBase):
             upload_filename=None,
             run_id=run_id,
             selected_tests=["001.in"],
-            verification_id="inv-compare-payload",
+            verification_id=_canonical_verification_id("inv-compare-payload"),
             verification_run_ids=[run_id],
             expected_behavior="accepted",
             verification_source="run.execute",
@@ -4717,14 +4777,14 @@ class TestJudgehostService(E2ETestBase):
         service.state.api_username = "judgehost"
         service.state.include_build_payload = True
 
-        verification_id = f"b-jh-compare-job-debug-{uuid.uuid4().hex[:8]}"
-        run_id = f"r-jh-compare-job-debug-{uuid.uuid4().hex[:8]}"
+        verification_id = f"b-jh-compare-batch-debug-{uuid.uuid4().hex[:8]}"
+        run_id = f"r-jh-compare-batch-debug-{uuid.uuid4().hex[:8]}"
         self._seed_build_verification(verification_id)
         self._seed_verification_test_artifacts(
             verification_id,
             [("001.in", "ok\n", "ok\n"), ("002.in", "ok\n", "ok\n")],
         )
-        service.domjudge_register_host("judgehost-compare-job-debug")
+        service.domjudge_register_host("judgehost-compare-batch-debug")
 
         service.enqueue_task(
             problem=self.problem,
@@ -4736,19 +4796,19 @@ class TestJudgehostService(E2ETestBase):
             upload_filename=None,
             run_id=run_id,
             selected_tests=["001.in", "002.in"],
-            verification_id="inv-compare-job-debug",
+            verification_id=_canonical_verification_id("inv-compare-batch-debug"),
             verification_run_ids=[run_id],
             expected_behavior="accepted",
             verification_source="run.execute",
         )
-        leased = service.domjudge_fetch_work("judgehost-compare-job-debug", max_batchsize=8)
+        leased = service.domjudge_fetch_work("judgehost-compare-batch-debug", max_batchsize=8)
         self.assertEqual(len(leased), 1)
         service.domjudge_update_judging(
-            "judgehost-compare-job-debug",
+            "judgehost-compare-batch-debug",
             int(leased[0]["judgetaskid"]),
             {"compile_success": "1", "output_compile": "", "compile_metadata": ""},
         )
-        leased += service.domjudge_fetch_work("judgehost-compare-job-debug", max_batchsize=8)
+        leased += service.domjudge_fetch_work("judgehost-compare-batch-debug", max_batchsize=8)
         self.assertEqual(len(leased), 2)
         case_ids = sorted(int(item.get("judgetaskid") or 0) for item in leased)
         self.assertGreater(case_ids[0], 0)
@@ -4756,12 +4816,12 @@ class TestJudgehostService(E2ETestBase):
         target_case = case_ids[1]
         row = judgehost_fetch_case(service, target_case)
         self.assertIsNotNone(row)
-        job_id = int(row["job_id"])
+        batch_id = int(row["batch_id"])
 
         service.domjudge_add_debug_info(
-            hostname="judgehost-compare-job-debug",
-            judgetask_id=job_id,
-            payload={"message": "FAIL compare script output from job-level debug"},
+            hostname="judgehost-compare-batch-debug",
+            judgetask_id=batch_id,
+            payload={"message": "FAIL compare script output from batch-level debug"},
         )
         service.domjudge_internal_error(
             description="compare script 33 crashed with exit code 3, expected one of 42/43",
@@ -4774,7 +4834,7 @@ class TestJudgehostService(E2ETestBase):
         summary = dict(run_row["summary"])
         error_text = str(summary.get("error") or "")
         self.assertIn("compare script 33 crashed with exit code 3, expected one of 42/43", error_text)
-        self.assertIn("FAIL compare script output from job-level debug", error_text)
+        self.assertIn("FAIL compare script output from batch-level debug", error_text)
 
     def test_domjudge_internal_error_includes_judgehostlog_compare_output(self) -> None:
         service = config.judgehost_task_service
@@ -4806,7 +4866,7 @@ class TestJudgehostService(E2ETestBase):
             upload_filename=None,
             run_id=run_id,
             selected_tests=["001.in"],
-            verification_id="inv-compare-jhlog",
+            verification_id=_canonical_verification_id("inv-compare-jhlog"),
             verification_run_ids=[run_id],
             expected_behavior="accepted",
             verification_source="run.execute",
@@ -4874,7 +4934,7 @@ class TestJudgehostService(E2ETestBase):
             upload_filename=None,
             run_id=run_id,
             selected_tests=["001.in"],
-            verification_id="inv-compare-strip",
+            verification_id=_canonical_verification_id("inv-compare-strip"),
             verification_run_ids=[run_id],
             expected_behavior="accepted",
             verification_source="run.execute",
@@ -4956,7 +5016,7 @@ class TestJudgehostService(E2ETestBase):
             upload_filename=None,
             run_id=run_id_a,
             selected_tests=["001.in"],
-            verification_id="inv-fl-cache-a",
+            verification_id=_canonical_verification_id("inv-fl-cache-a"),
             verification_run_ids=[run_id_a],
             expected_behavior="accepted",
             verification_source="run.execute",
@@ -5013,7 +5073,7 @@ class TestJudgehostService(E2ETestBase):
             upload_filename=None,
             run_id=run_id_b,
             selected_tests=["001.in"],
-            verification_id="inv-fl-cache-b",
+            verification_id=_canonical_verification_id("inv-fl-cache-b"),
             verification_run_ids=[run_id_b],
             expected_behavior="accepted",
             verification_source="run.execute",
@@ -5054,7 +5114,7 @@ class TestJudgehostService(E2ETestBase):
             upload_filename=None,
             run_id=run_id_a,
             selected_tests=["001.in"],
-            verification_id="inv-recompile-a",
+            verification_id=_canonical_verification_id("inv-recompile-a"),
             verification_run_ids=[run_id_a],
             expected_behavior="accepted",
             verification_source="run.execute",
@@ -5103,7 +5163,7 @@ class TestJudgehostService(E2ETestBase):
                 upload_filename=None,
                 run_id=run_id_b,
                 selected_tests=["001.in"],
-                verification_id="inv-recompile-b",
+                verification_id=_canonical_verification_id("inv-recompile-b"),
                 verification_run_ids=[run_id_b],
                 expected_behavior="accepted",
                 verification_source="run.execute",
@@ -5152,7 +5212,7 @@ class TestJudgehostService(E2ETestBase):
             upload_filename=None,
             run_id=run_id,
             selected_tests=["001.in", "002.in"],
-            verification_id="inv-share-hosts",
+            verification_id=_canonical_verification_id("inv-share-hosts"),
             verification_run_ids=[run_id],
             expected_behavior="accepted",
             verification_source="run.execute",
@@ -5163,9 +5223,12 @@ class TestJudgehostService(E2ETestBase):
 
         tasks_a = service.domjudge_fetch_work("judgehost-share-a", max_batchsize=1)
         self.assertEqual(len(tasks_a), 1)
-        job_id = int(tasks_a[0].get("jobid") or 0)
+        protocol_job_id = int(tasks_a[0].get("jobid") or 0)
         case_id_a = int(tasks_a[0].get("judgetaskid") or 0)
-        self.assertGreater(job_id, 0)
+        case_a = judgehost_fetch_case(service, case_id_a)
+        assert case_a is not None
+        internal_batch_id = int(case_a["batch_id"])
+        self.assertGreaterEqual(protocol_job_id, 0)
         self.assertGreater(case_id_a, 0)
 
         service.domjudge_update_judging(
@@ -5180,10 +5243,13 @@ class TestJudgehostService(E2ETestBase):
 
         tasks_b = service.domjudge_fetch_work("judgehost-share-b", max_batchsize=1)
         self.assertEqual(len(tasks_b), 1)
-        self.assertEqual(int(tasks_b[0].get("jobid") or 0), job_id)
+        self.assertEqual(int(tasks_b[0].get("jobid") or 0), protocol_job_id)
         case_id_b = int(tasks_b[0].get("judgetaskid") or 0)
         self.assertGreater(case_id_b, 0)
         self.assertNotEqual(case_id_b, case_id_a)
+        case_b = judgehost_fetch_case(service, case_id_b)
+        assert case_b is not None
+        self.assertEqual(int(case_b["batch_id"]), internal_batch_id)
 
         case_row_a = judgehost_fetch_case(service, case_id_a)
         case_row_b = judgehost_fetch_case(service, case_id_b)
@@ -5225,7 +5291,7 @@ class TestJudgehostService(E2ETestBase):
             upload_filename=None,
             run_id=f"r-jh-preempt-low-{uuid.uuid4().hex[:8]}",
             selected_tests=["001.in", "002.in"],
-            verification_id="inv-jh-preempt-low",
+            verification_id=_canonical_verification_id("inv-jh-preempt-low"),
             verification_run_ids=[],
             expected_behavior="accepted",
             verification_source="run.execute",
@@ -5235,7 +5301,7 @@ class TestJudgehostService(E2ETestBase):
         service.domjudge_register_host(host)
         first_tasks = service.domjudge_fetch_work(host, max_batchsize=1)
         self.assertEqual(len(first_tasks), 1)
-        self.assertEqual(str(first_tasks[0].get("uuid") or ""), low_task_id)
+        self.assertEqual(len(self._work_rows_for_task(service, first_tasks, low_task_id)), 1)
 
         high_task_id = service.enqueue_task(
             problem=self.problem,
@@ -5247,7 +5313,7 @@ class TestJudgehostService(E2ETestBase):
             upload_filename="gen.cpp",
             run_id=f"r-jh-preempt-high-{uuid.uuid4().hex[:8]}",
             selected_tests=["001.in"],
-            verification_id="inv-jh-preempt-high",
+            verification_id=_canonical_verification_id("inv-jh-preempt-high"),
             verification_run_ids=[],
             expected_behavior="accepted",
             verification_source="generate-input",
@@ -5292,12 +5358,12 @@ class TestJudgehostService(E2ETestBase):
 
         second_tasks = service.domjudge_fetch_work(host, max_batchsize=1)
         self.assertEqual(len(second_tasks), 1)
-        self.assertEqual(str(second_tasks[0].get("uuid") or ""), high_task_id)
+        self.assertEqual(len(self._work_rows_for_task(service, second_tasks, high_task_id)), 1)
 
     def test_poll_task_case_result_reports_missing_shared_case_explicitly(self) -> None:
         service = config.judgehost_task_service
         self._reset_task_queue_state(service)
-        verification_id = f"ver-jh-missing-case-{uuid.uuid4().hex[:8]}"
+        verification_id = f"ver-{uuid.uuid4().hex}"
         run_id = f"r-jh-missing-case-{uuid.uuid4().hex[:8]}"
         self._seed_build_verification(verification_id)
 
@@ -5347,7 +5413,7 @@ class TestJudgehostService(E2ETestBase):
     def test_poll_task_case_result_uses_canonical_case_feedback(self) -> None:
         service = config.judgehost_task_service
         self._reset_task_queue_state(service)
-        verification_id = f"ver-jh-case-feedback-{uuid.uuid4().hex[:8]}"
+        verification_id = f"ver-{uuid.uuid4().hex}"
         run_id = f"r-jh-case-feedback-{uuid.uuid4().hex[:8]}"
         self._seed_build_verification(verification_id)
 
@@ -5374,10 +5440,13 @@ class TestJudgehostService(E2ETestBase):
         self.addCleanup(shutil.rmtree, work_root, ignore_errors=True)
         feedback_text = "Unexpected character #10, but ' ' expected (testdata.in)"
 
-        job_id = service.state.job_scheduler.create_job_with_cases(
+        batch_id = service.state.batch_scheduler.create_batch_with_cases(
             task_id=task_id,
             run_id=run_id,
             group_key="group-case-feedback",
+            verification_id=verification_id,
+            compile_key="8" * 64,
+            compile_submission=self._compile_submission("std.cpp", "8" * 64),
             contest_id="",
             mode="pass-fail",
             source_name="std.cpp",
@@ -5394,7 +5463,7 @@ class TestJudgehostService(E2ETestBase):
             verification_source="run.execute",
             force_recompile=0,
             service_class="background",
-            job_spec=JobSpec(),
+            batch_spec=ExecutionBatchSpec(),
             created_at="2026-04-14T00:00:00+00:00",
             case_rows=[
                 {
@@ -5412,8 +5481,8 @@ class TestJudgehostService(E2ETestBase):
                 }
             ],
         )
-        self.assertGreater(job_id, 0)
-        case_id = self._lease_only_case(service, job_id, "judgehost-feedback")
+        self.assertGreater(batch_id, 0)
+        case_id = self._lease_only_case(service, batch_id, "judgehost-feedback")
         self._commit_case_result(
             service,
             case_id=case_id,
@@ -5440,7 +5509,7 @@ class TestJudgehostService(E2ETestBase):
     def test_domjudge_add_debug_info_overwrites_terminal_verification_task_detail(self) -> None:
         service = config.judgehost_task_service
         self._reset_task_queue_state(service)
-        verification_id = f"ver-jh-late-debug-{uuid.uuid4().hex[:8]}"
+        verification_id = f"ver-{uuid.uuid4().hex}"
         run_id = f"r-jh-late-debug-{uuid.uuid4().hex[:8]}"
         self._seed_build_verification(verification_id)
 
@@ -5482,10 +5551,13 @@ class TestJudgehostService(E2ETestBase):
 
         work_root = Path(tempfile.mkdtemp(prefix="polygon-late-debug-")).resolve()
         self.addCleanup(shutil.rmtree, work_root, ignore_errors=True)
-        job_id = service.state.job_scheduler.create_job_with_cases(
+        batch_id = service.state.batch_scheduler.create_batch_with_cases(
             task_id=task_id,
             run_id=run_id,
             group_key="group-late-debug",
+            verification_id=verification_id,
+            compile_key="9" * 64,
+            compile_submission=self._compile_submission("std.cpp", "9" * 64),
             contest_id="",
             mode="pass-fail",
             source_name="std.cpp",
@@ -5502,7 +5574,7 @@ class TestJudgehostService(E2ETestBase):
             verification_source="run.execute",
             force_recompile=0,
             service_class="background",
-            job_spec=JobSpec(),
+            batch_spec=ExecutionBatchSpec(),
             created_at="2026-04-14T00:00:00+00:00",
             case_rows=[
                 {
@@ -5520,8 +5592,8 @@ class TestJudgehostService(E2ETestBase):
                 }
             ],
         )
-        self.assertGreater(job_id, 0)
-        case_id = self._lease_only_case(service, job_id, "judgehost-late-debug")
+        self.assertGreater(batch_id, 0)
+        case_id = self._lease_only_case(service, batch_id, "judgehost-late-debug")
         self._commit_case_result(
             service,
             case_id=case_id,
@@ -5531,7 +5603,7 @@ class TestJudgehostService(E2ETestBase):
             verdict="FL",
         )
 
-        service.result._domjudge_finalize_if_ready(job_id)
+        service.result._domjudge_finalize_batch_if_ready(batch_id)
         before = next(
             row for row in task_store.list_rows(verification_id)
             if str(row["task_kind"]) == "main-correct" and str(row["test_name"]) == "016.in"
@@ -5664,7 +5736,7 @@ class TestJudgehostService(E2ETestBase):
             upload_filename="gen.cpp",
             run_id=run_id_a,
             selected_tests=[],
-            verification_id="inv-shared-generate-a",
+            verification_id=_canonical_verification_id("shared-generate"),
             verification_run_ids=[run_id_a],
             expected_behavior="accepted",
             verification_source="generate-input",
@@ -5676,9 +5748,12 @@ class TestJudgehostService(E2ETestBase):
         service.domjudge_register_host("judgehost-shared-generate")
         tasks_a = service.domjudge_fetch_work("judgehost-shared-generate", max_batchsize=8)
         self.assertEqual(len(tasks_a), 1)
-        job_id = int(tasks_a[0].get("jobid") or 0)
+        protocol_job_id = int(tasks_a[0].get("jobid") or 0)
         case_id_a = int(tasks_a[0].get("judgetaskid") or 0)
-        self.assertGreater(job_id, 0)
+        case_a = judgehost_fetch_case(service, case_id_a)
+        assert case_a is not None
+        internal_batch_id = int(case_a["batch_id"])
+        self.assertGreaterEqual(protocol_job_id, 0)
         self.assertGreater(case_id_a, 0)
 
         service.domjudge_update_judging(
@@ -5710,7 +5785,7 @@ class TestJudgehostService(E2ETestBase):
             upload_filename="gen.cpp",
             run_id=run_id_b,
             selected_tests=[],
-            verification_id="inv-shared-generate-b",
+            verification_id=_canonical_verification_id("shared-generate"),
             verification_run_ids=[run_id_b],
             expected_behavior="accepted",
             verification_source="generate-input",
@@ -5722,12 +5797,15 @@ class TestJudgehostService(E2ETestBase):
 
         tasks_b = service.domjudge_fetch_work("judgehost-shared-generate", max_batchsize=8)
         self.assertEqual(len(tasks_b), 1)
-        self.assertEqual(int(tasks_b[0].get("jobid") or 0), job_id)
-        self.assertEqual(str(tasks_a[0].get("uuid") or ""), task_id)
-        self.assertEqual(str(tasks_b[0].get("uuid") or ""), task_id)
+        self.assertEqual(int(tasks_b[0].get("jobid") or 0), protocol_job_id)
+        self.assertRegex(str(tasks_a[0].get("uuid") or ""), r"^[0-9a-f]{64}$")
+        self.assertEqual(tasks_b[0]["uuid"], tasks_a[0]["uuid"])
         case_id_b = int(tasks_b[0].get("judgetaskid") or 0)
         self.assertGreater(case_id_b, 0)
         self.assertNotEqual(case_id_b, case_id_a)
+        case_b = judgehost_fetch_case(service, case_id_b)
+        assert case_b is not None
+        self.assertEqual(int(case_b["batch_id"]), internal_batch_id)
 
         meta_text = "cpu-time: 0.002\nwall-time: 0.003\nmemory-bytes: 4096\n"
         service.domjudge_add_judging_run(
@@ -5759,7 +5837,7 @@ class TestJudgehostService(E2ETestBase):
             },
         )
 
-        case_rows = service.state.job_scheduler.cases_for_job(job_id)
+        case_rows = service.state.batch_scheduler.cases_for_batch(internal_batch_id)
         self.assertEqual([str(row["test_name"] or "") for row in case_rows], ["001.in", "002.in"])
         self.assertEqual([str(row["task_id"] or "") for row in case_rows], [task_id, second_task_id])
         self.assertEqual(
@@ -5767,7 +5845,7 @@ class TestJudgehostService(E2ETestBase):
             [run_id_a, run_id_b],
         )
 
-    def test_domjudge_grouped_job_uses_stable_uuid_across_fetches(self) -> None:
+    def test_domjudge_grouped_batch_uses_stable_uuid_across_fetches(self) -> None:
         service = config.judgehost_task_service
         old_enabled = service.state.enabled
         old_token = service.state.api_token
@@ -5847,7 +5925,7 @@ class TestJudgehostService(E2ETestBase):
             upload_filename="gen.cpp",
             run_id=run_id_a,
             selected_tests=[],
-            verification_id="inv-grouped-batch-one-a",
+            verification_id=_canonical_verification_id("grouped-batch-one"),
             verification_run_ids=[run_id_a],
             expected_behavior="accepted",
             verification_source="generate-input",
@@ -5865,7 +5943,7 @@ class TestJudgehostService(E2ETestBase):
             upload_filename="gen.cpp",
             run_id=run_id_b,
             selected_tests=[],
-            verification_id="inv-grouped-batch-one-b",
+            verification_id=_canonical_verification_id("grouped-batch-one"),
             verification_run_ids=[run_id_b],
             expected_behavior="accepted",
             verification_source="generate-input",
@@ -5878,14 +5956,14 @@ class TestJudgehostService(E2ETestBase):
         service.domjudge_register_host("judgehost-grouped-batch-one")
         tasks_a = service.domjudge_fetch_work("judgehost-grouped-batch-one", max_batchsize=1)
         self.assertEqual(len(tasks_a), 1)
-        self.assertEqual(str(tasks_a[0].get("uuid") or ""), task_id_a)
+        self.assertRegex(str(tasks_a[0].get("uuid") or ""), r"^[0-9a-f]{64}$")
         case_id_a = int(tasks_a[0].get("judgetaskid") or 0)
         self.assertEqual(int(tasks_a[0].get("testcase_id") or 0), case_id_a)
         case_row_a = judgehost_fetch_case(service, case_id_a)
         self.assertIsNotNone(case_row_a)
         self.assertEqual(int(case_row_a["testcase_id"] or 0), 3)
-        job_id = int(tasks_a[0].get("jobid") or 0)
-        self.assertGreater(job_id, 0)
+        batch_id = int(tasks_a[0].get("jobid") or 0)
+        self.assertGreater(batch_id, 0)
 
         service.domjudge_update_judging(
             "judgehost-grouped-batch-one",
@@ -5899,8 +5977,8 @@ class TestJudgehostService(E2ETestBase):
 
         tasks_b = service.domjudge_fetch_work("judgehost-grouped-batch-one", max_batchsize=1)
         self.assertEqual(len(tasks_b), 1)
-        self.assertEqual(int(tasks_b[0].get("jobid") or 0), job_id)
-        self.assertEqual(str(tasks_b[0].get("uuid") or ""), task_id_a)
+        self.assertEqual(int(tasks_b[0].get("jobid") or 0), batch_id)
+        self.assertEqual(tasks_b[0]["uuid"], tasks_a[0]["uuid"])
         case_id_b = int(tasks_b[0].get("judgetaskid") or 0)
         self.assertEqual(int(tasks_b[0].get("testcase_id") or 0), case_id_b)
         case_row_b = judgehost_fetch_case(service, case_id_b)

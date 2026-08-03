@@ -1059,7 +1059,7 @@ def run_workspace_verification_dag(
             if not run_ids:
                 return
             config.judgehost_task_service.cancel_tasks_for_runs(run_ids, reason=reason)
-            config.judgehost_task_service.cancel_domjudge_jobs_for_runs(run_ids)
+            config.judgehost_task_service.cancel_domjudge_batches_for_runs(run_ids)
 
         def _cancel_active_tasks(reason: str) -> None:
             run_ids: list[str] = []
@@ -1075,7 +1075,7 @@ def run_workspace_verification_dag(
             if not run_ids:
                 return
             config.judgehost_task_service.cancel_tasks_for_runs(run_ids, reason=reason)
-            config.judgehost_task_service.cancel_domjudge_jobs_for_runs(run_ids)
+            config.judgehost_task_service.cancel_domjudge_batches_for_runs(run_ids)
 
         _refresh_state()
         callbacks = VerificationRuntimeCallbacks(

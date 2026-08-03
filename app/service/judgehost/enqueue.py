@@ -10,7 +10,8 @@ from pathlib import Path
 from app.db import now_iso
 from app.service.judgehost.domjudge.cache import domjudge_source_hash
 from app.service.judgehost.limits import compile_output_kb, run_output_kb
-from app.service.judgehost.shared import _RUN_ID_RE, _VERIFICATION_ID_RE, domjudge_lower_text, domjudge_path_name, domjudge_text
+from app.service.judgehost.identity import canonical_verification_id, compile_key
+from app.service.judgehost.shared import _RUN_ID_RE, domjudge_lower_text, domjudge_path_name, domjudge_text
 from app.service.judgehost.runtime import domjudge_bool, domjudge_parse_int
 from app.service.platform.hashing import domjudge_executable_hash, sha256_hex_json
 from app.service.run.runtime import RUN_TEST_NAME_RE
@@ -302,12 +303,11 @@ class TaskEnqueue:
         stable_payload.pop("domjudge_precomputed", None)
         return sha256_hex_json(stable_payload, ensure_ascii=False)
 
-    @staticmethod
-    def _verification_id(run_id: str, verification_id: str) -> str:
+    def _verification_id(self, verification_id: str) -> str:
         token = TaskEnqueue._normalize_text(verification_id)
-        if _VERIFICATION_ID_RE.fullmatch(token):
-            return token
-        return f"ver-{TaskEnqueue._normalize_text(run_id)}"
+        if not token:
+            token = self._s.verification_store.allocate_id()
+        return canonical_verification_id(token)
 
     def _collect_verification_payload(
         self,
@@ -804,6 +804,13 @@ class TaskEnqueue:
         }
         if source_name.lower().endswith(".java") and (not entry_point):
             run_config["entry_point"] = self._detect_java_entry_point(source_name, source_bytes)
+        full_compile_key = compile_key(
+            source_hash=source_hash,
+            compile_hash=compile_hash,
+            compile_config=compile_config,
+            entry_point=cast(str | None, run_config["entry_point"]),
+            memory_limit=int(run_config["memory_limit"]),
+        )
         compare_config = {
             "hash": compare_hash,
             "combined_run_compare": bool(interactive),
@@ -815,6 +822,7 @@ class TaskEnqueue:
             "script_filesize_limit": int(compile_output_limit_kb),
         }
         return {
+            "compile_key": full_compile_key,
             "source_hash": source_hash,
             "compile_hash": compile_hash,
             "run_hash": run_hash,
@@ -946,9 +954,7 @@ class TaskEnqueue:
         service_class: str = "background",
     ) -> str:
         safe_run_id = self._core.normalize_run_id(run_id if run_id else verification_id)
-        safe_verification_id = TaskEnqueue._normalize_text(
-            verification_id if verification_id else safe_run_id
-        )
+        safe_verification_id = self._verification_id(verification_id)
         selected = self._normalize_list(selected_tests, matcher=RUN_TEST_NAME_RE)
         verification_run_id_list = self._normalize_list(verification_run_ids, matcher=_RUN_ID_RE)
         if not verification_run_id_list:
@@ -1000,14 +1006,6 @@ class TaskEnqueue:
         if safe_service_class not in {"foreground", "background"}:
             raise RuntimeError("invalid judgehost service class")
         payload["service_class"] = safe_service_class
-        safe_verification_id_source = (
-            self._verification_id(safe_run_id, safe_verification_id)
-            if not verification_id
-            else verification_id
-        )
-        safe_verification_id = TaskEnqueue._normalize_text(safe_verification_id_source)
-        payload["verification_id"] = safe_verification_id
-        payload["run_id"] = safe_run_id
         enqueue_fingerprint = self._enqueue_fingerprint(payload)
         task_id = ""
         summary: dict[str, object] | None = None
@@ -1083,9 +1081,9 @@ class TaskEnqueue:
         if summary is None or not task_id:
             raise RuntimeError("failed to allocate judgehost task")
 
-        job_id = 0
+        batch_id = 0
         try:
-            job_id = self._dispatch.stage_task(
+            batch_id = self._dispatch.stage_task(
                 {"task_id": task_id, "run_id": safe_run_id, "payload": dict(payload)}
             )
         except Exception as exc:
@@ -1109,12 +1107,12 @@ class TaskEnqueue:
             updates={"updated_at": now_iso()},
         )
         if queued is None:
-            self._s.job_scheduler.cancel_staged_task_cases(
+            self._s.batch_scheduler.cancel_staged_task_cases(
                 task_id,
                 now_text=now_iso(),
             )
-            self._dispatch.finalize_job_if_ready(
-                job_id,
+            self._dispatch.finalize_batch_if_ready(
+                batch_id,
                 error_text="judgehost task staging lost its queued transition",
             )
             raise RuntimeError("judgehost task staging lost its queued transition")
@@ -1131,8 +1129,8 @@ class TaskEnqueue:
                     "completed_at": finished_at,
                 },
             )
-            self._dispatch.finalize_job_if_ready(
-                job_id,
+            self._dispatch.finalize_batch_if_ready(
+                batch_id,
                 error_text="judgehost task staged no cases",
             )
             raise RuntimeError("judgehost task staged no cases")

@@ -8,8 +8,6 @@ from app.service.judgehost.limits import compile_output_kb, run_output_kb
 
 _RUN_ID_RE = re.compile(r"^[A-Za-z0-9._-]{1,80}$")
 _HOSTNAME_RE = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
-_VERIFICATION_ID_RE = re.compile(r"^[A-Za-z0-9._-]{1,80}$")
-_DOMJUDGE_SUBMIT_ID_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 _DOMJUDGE_CONTEST_ID_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 _DOMJUDGE_PROTOCOL_TRACE_RE = re.compile(r"\[\s*[0-9]+(?:\.[0-9]+)?s/[0-9]+\]")
 _DOMJUDGE_PROTOCOL_TRACE_BYTES_RE = re.compile(rb"\[\s*[0-9]+(?:\.[0-9]+)?s/[0-9]+\]")

@@ -41,7 +41,7 @@ class TaskQueue:
         self._s.task_registry.update(task_id, {"payload": row["payload"]})
 
     def _run_ids_with_leased_cases(self, run_ids: list[str]) -> set[str]:
-        progress = self._s.job_scheduler.case_progress_for_runs(run_ids)
+        progress = self._s.batch_scheduler.case_progress_for_runs(run_ids)
         return {
             run_id
             for run_id, row in progress.items()
@@ -345,7 +345,7 @@ class TaskQueue:
         row = self._core.task_by_id(task_id)
         if row is None:
             raise RuntimeError("judgehost task disappeared")
-        case_result = self._s.job_scheduler.case_result_for_task(task_id, test_name)
+        case_result = self._s.batch_scheduler.case_result_for_task(task_id, test_name)
         if case_result is not None:
             verification_id = str(row["verification_id"] or "")
             run_id = str(row["run_id"] or "")
@@ -432,7 +432,7 @@ class TaskQueue:
 
     def _host_status_rows(self) -> tuple[list[dict[str, object]], int]:
         now_dt = datetime.now(timezone.utc)
-        active_by_host = self._s.job_scheduler.active_lease_counts()
+        active_by_host = self._s.batch_scheduler.active_lease_counts()
         telemetry_by_host = self._s.host_telemetry.snapshot()
         with self._s.state_lock:
             host_rows = sorted(
@@ -498,17 +498,17 @@ class TaskQueue:
                 "last_run_id": str(current_row.get("last_run_id") or ""),
                 "update_count": int(current_row.get("update_count") or 0) + 1,
             }
-        released_jobs = 0
+        released_batches = 0
         released_cases = 0
         if not enabled:
-            released_jobs, released_cases = self._s.job_scheduler.release_host_leases(
+            released_batches, released_cases = self._s.batch_scheduler.release_host_leases(
                 hostname,
                 now_text=now_text,
             )
             self._s.host_telemetry.release_host(hostname)
         return {
             "released_tasks": 0,
-            "released_jobs": released_jobs,
+            "released_batches": released_batches,
             "released_cases": released_cases,
         }
 
@@ -543,7 +543,7 @@ class TaskQueue:
             if row is None:
                 continue
             task_id = str(row["id"])
-            if self._s.job_scheduler.job_for_task(task_id) is not None:
+            if self._s.batch_scheduler.batch_for_task(task_id) is not None:
                 continue
             updated = self._s.task_registry.transition(
                 task_id,
@@ -583,7 +583,7 @@ class TaskQueue:
             if verification_id and run_id and entry_key not in seen:
                 seen.add(entry_key)
                 entries.append({"run_id": run_id, "verification_id": verification_id})
-            if self._s.job_scheduler.job_for_task(task_id) is not None:
+            if self._s.batch_scheduler.batch_for_task(task_id) is not None:
                 continue
             self._s.task_registry.transition(
                 task_id,
@@ -605,15 +605,15 @@ class TaskQueue:
         return self._s.task_registry.remove_problem(problem_slug)
 
 
-    def cancel_domjudge_jobs_for_runs(self, run_ids: list[str]) -> list[int]:
-        return self._s.job_scheduler.cancel_jobs_for_runs(
+    def cancel_domjudge_batches_for_runs(self, run_ids: list[str]) -> list[int]:
+        return self._s.batch_scheduler.cancel_batches_for_runs(
             run_ids=run_ids,
             now_text=now_iso(),
         )
 
 
-    def cancel_all_domjudge_inflight(self) -> list[int]:
-        return self._s.job_scheduler.cancel_all_inflight(now_text=now_iso())
+    def cancel_all_domjudge_batches(self) -> list[int]:
+        return self._s.batch_scheduler.cancel_all_inflight(now_text=now_iso())
 
     def forget_domjudge_runs(self, run_ids: list[str]) -> int:
-        return self._s.job_scheduler.forget_runs(run_ids)
+        return self._s.batch_scheduler.forget_runs(run_ids)

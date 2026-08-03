@@ -103,7 +103,7 @@ def _startup_cancel_judgehost_inflight(reason: str, *, now_text: str) -> None:
             warnings.warn(f"startup judgehost inflight scan failed: {exc}", RuntimeWarning)
     if service is not None:
         try:
-            service.cancel_all_domjudge_inflight()
+            service.cancel_all_domjudge_batches()
         except Exception as exc:
             warnings.warn(f"startup judgehost job/case cancel failed: {exc}", RuntimeWarning)
     if not inflight_entries:

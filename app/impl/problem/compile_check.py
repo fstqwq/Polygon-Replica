@@ -153,7 +153,7 @@ def judgehost_compile_check_error(
     source_bytes = source_content.encode("utf-8")
     source_name = Path(safe_source_path).name or "submission.cpp"
     run_id = f"r-cchk-{uuid.uuid4().hex[:12]}"
-    verification_id = f"ver-compilecheck-{uuid.uuid4().hex[:12]}"
+    verification_id = config.verification_service.allocate_verification_id()
     prepared_payload = _testlib_extra_sources(workspace, safe_source_path)
     backend_error = ""
     result_obj: dict[str, object] = {}
@@ -220,4 +220,3 @@ def judgehost_compile_check_error(
     if backend_error:
         return _with_path(bounded_display_text(backend_error) or "compile check failed")
     return ""
-

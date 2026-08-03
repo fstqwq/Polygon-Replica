@@ -767,6 +767,7 @@ class DomjudgeToolkit:
             json.dumps(compare_config, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
         )
         group_payload = {
+            "verification_id": domjudge_text(payload_obj.get("verification_id")),
             "task_kind": task_kind,
             "verification_source": verification_source,
             "expected_behavior": domjudge_lower_text(payload_obj.get("expected_behavior")),

@@ -5,10 +5,17 @@ from typing import TypedDict
 
 
 @dataclass(frozen=True)
-class JobSpec:
-    source_bytes: bytes = b""
-    extra_source_items: tuple[tuple[str, bytes], ...] = ()
-    compile_files: tuple[tuple[str, bytes, bool], ...] = ()
+class CompileSubmission:
+    compile_key: str
+    submit_id: int
+    source_name: str
+    source_bytes: bytes
+    extra_source_items: tuple[tuple[str, bytes], ...]
+    compile_files: tuple[tuple[str, bytes, bool], ...]
+
+
+@dataclass(frozen=True)
+class ExecutionBatchSpec:
     run_files: tuple[tuple[str, bytes, bool], ...] = ()
     compare_files: tuple[tuple[str, bytes, bool], ...] = ()
 
@@ -35,12 +42,14 @@ class CaseResult:
     test_row_json: str
 
 
-class JudgehostJobRow(TypedDict):
-    job_id: int
+class ExecutionBatchRow(TypedDict):
+    batch_id: int
     task_id: str
     run_id: str
     group_key: str
-    submit_id: str
+    verification_id: str
+    domjudge_job_id: int
+    compile_key: str
     contest_id: str
     mode: str
     source_name: str
@@ -72,7 +81,7 @@ class JudgehostJobRow(TypedDict):
 
 class JudgehostCaseRow(TypedDict):
     id: int
-    job_id: int
+    batch_id: int
     task_id: str
     run_id: str
     test_name: str
@@ -105,24 +114,26 @@ class JudgehostCaseRow(TypedDict):
     updated_at: str
 
 
-class JudgehostJobAppendResult(TypedDict):
-    job_id: int
+class ExecutionBatchAppendResult(TypedDict):
+    batch_id: int
     outcome: str
     inserted: int
 
 
-class JudgehostJobFinalizationClaim(TypedDict):
-    job: JudgehostJobRow
+class ExecutionBatchFinalizationClaim(TypedDict):
+    batch: ExecutionBatchRow
     cases: list[JudgehostCaseRow]
 
 
 @dataclass
-class JobRecord:
-    job_id: int
+class ExecutionBatchRecord:
+    batch_id: int
     task_id: str
     run_id: str
     group_key: str
-    submit_id: str
+    verification_id: str
+    domjudge_job_id: int
+    compile_key: str
     contest_id: str
     mode: str
     source_name: str
@@ -157,7 +168,7 @@ class JobRecord:
 @dataclass
 class CaseRecord:
     id: int
-    job_id: int
+    batch_id: int
     task_id: str
     run_id: str
     test_name: str
@@ -222,7 +233,7 @@ class TaskCaseCounts:
 class CaseClaim:
     case_id: int
     generation: int
-    job_id: int
+    batch_id: int
     task_id: str
     test_name: str
 

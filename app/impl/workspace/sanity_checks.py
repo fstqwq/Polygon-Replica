@@ -164,7 +164,7 @@ def _run_stability_probe(
         upload_filename=probe.upload_filename,
         run_id=run_id,
         selected_tests=[plan.test_name],
-        verification_id=f"{verification_id}-sanity",
+        verification_id=verification_id,
         verification_run_ids=[run_id],
         expected_behavior="unknown",
         verification_source="sanity-check",

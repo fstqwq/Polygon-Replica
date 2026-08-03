@@ -10,7 +10,7 @@ class JudgehostTaskRegistry:
     """Process-local task identities and result receipts.
 
     Cases are the execution units. This registry deliberately has no ready queue,
-    priority, host ownership, or lease deadline; those belong to JobScheduler.
+    priority, host ownership, or lease deadline; those belong to BatchScheduler.
     """
 
     TERMINAL_STATUSES = frozenset({"completed", "failed"})

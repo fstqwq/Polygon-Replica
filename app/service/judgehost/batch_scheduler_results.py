@@ -3,19 +3,19 @@ from __future__ import annotations
 import heapq
 import time
 
-from .job_scheduler_models import (
+from .batch_scheduler_models import (
     CaseClaim,
     CaseClaimBusy,
     CaseResult,
     JudgehostCaseRow,
-    JudgehostJobFinalizationClaim,
+    ExecutionBatchFinalizationClaim,
 )
 
 
-class JobSchedulerResultMixin:
+class BatchSchedulerResultMixin:
     """Apply callback, publication, cancellation, and terminal transitions."""
 
-    def job_finalize_row(self, job_id: int) -> dict[str, object] | None:
+    def batch_finalize_row(self, batch_id: int) -> dict[str, object] | None:
         fields = (
             "task_id", "run_id", "group_key", "status", "compile_success",
             "compile_output_b64", "compile_metadata_b64", "debug_text", "work_root",
@@ -23,105 +23,105 @@ class JobSchedulerResultMixin:
             "compare_hash", "materialization_state",
         )
         with self._lock:
-            job = self._jobs.get(int(job_id))
-            return None if job is None else {field: getattr(job, field) for field in fields}
+            batch = self._batches.get(int(batch_id))
+            return None if batch is None else {field: getattr(batch, field) for field in fields}
 
-    def claim_job_finalization(
+    def claim_batch_finalization(
         self,
-        job_id: int,
+        batch_id: int,
         *,
         now_text: str,
-    ) -> JudgehostJobFinalizationClaim | None:
+    ) -> ExecutionBatchFinalizationClaim | None:
         with self._lock:
-            job = self._jobs.get(int(job_id))
-            if job is None:
+            batch = self._batches.get(int(batch_id))
+            if batch is None:
                 return None
-            counts = self._job_counts[job.job_id]
+            counts = self._batch_counts[batch.batch_id]
             if (
-                job.status == "open"
+                batch.status == "open"
                 and counts.total > 0
                 and counts.terminal == counts.total
-                and job.materialization_state != "materializing"
+                and batch.materialization_state != "materializing"
             ):
-                self._close_job_locked(job, updated_at=now_text)
+                self._close_batch_locked(batch, updated_at=now_text)
             if (
-                job.status != "finalize-pending"
+                batch.status != "finalize-pending"
                 or counts.total == 0
                 or counts.terminal != counts.total
-                or job.materialization_state == "materializing"
+                or batch.materialization_state == "materializing"
             ):
                 return None
-            self._mutate_job_locked(job, status="finalizing", updated_at=now_text)
+            self._mutate_batch_locked(batch, status="finalizing", updated_at=now_text)
             cases = [
                 self._case_row(row)
-                for row in self._sorted_cases_locked(self._case_ids_by_job[job.job_id])
+                for row in self._sorted_cases_locked(self._case_ids_by_batch[batch.batch_id])
             ]
-            return {"job": self._job_row(job), "cases": cases}
+            return {"batch": self._batch_row(batch), "cases": cases}
 
-    def abort_job_finalization(
+    def abort_batch_finalization(
         self,
-        job_id: int,
+        batch_id: int,
         *,
         now_text: str,
         delay_sec: float = 0.25,
     ) -> bool:
         with self._lock:
-            job = self._jobs.get(int(job_id))
-            if job is None or job.status != "finalizing":
+            batch = self._batches.get(int(batch_id))
+            if batch is None or batch.status != "finalizing":
                 return False
-            self._mutate_job_locked(job, status="finalize-pending", updated_at=now_text)
+            self._mutate_batch_locked(batch, status="finalize-pending", updated_at=now_text)
             deadline = time.monotonic() + max(0.0, float(delay_sec))
-            current = self._finalization_retry_deadlines.get(job.job_id)
+            current = self._finalization_retry_deadlines.get(batch.batch_id)
             if current is None or deadline < current:
-                self._finalization_retry_deadlines[job.job_id] = deadline
-                heapq.heappush(self._finalization_retry_heap, (deadline, job.job_id))
+                self._finalization_retry_deadlines[batch.batch_id] = deadline
+                heapq.heappush(self._finalization_retry_heap, (deadline, batch.batch_id))
             return True
 
-    def due_job_finalizations(self, *, limit: int) -> list[int]:
+    def due_batch_finalizations(self, *, limit: int) -> list[int]:
         due: list[int] = []
         now = time.monotonic()
         with self._lock:
             while self._finalization_retry_heap and len(due) < max(0, int(limit)):
-                deadline, job_id = self._finalization_retry_heap[0]
+                deadline, batch_id = self._finalization_retry_heap[0]
                 if deadline > now:
                     break
                 heapq.heappop(self._finalization_retry_heap)
-                if self._finalization_retry_deadlines.get(job_id) != deadline:
+                if self._finalization_retry_deadlines.get(batch_id) != deadline:
                     continue
-                self._finalization_retry_deadlines.pop(job_id, None)
-                job = self._jobs.get(job_id)
-                if job is not None and job.status == "finalize-pending":
-                    due.append(job_id)
+                self._finalization_retry_deadlines.pop(batch_id, None)
+                batch = self._batches.get(batch_id)
+                if batch is not None and batch.status == "finalize-pending":
+                    due.append(batch_id)
         return due
 
-    def clear_job_finalization_retry(self, job_id: int) -> None:
+    def clear_batch_finalization_retry(self, batch_id: int) -> None:
         with self._lock:
-            self._finalization_retry_deadlines.pop(int(job_id), None)
+            self._finalization_retry_deadlines.pop(int(batch_id), None)
 
-    def set_job_terminal_status(
+    def set_batch_terminal_status(
         self,
-        job_id: int,
+        batch_id: int,
         *,
         status: str,
         completed_at: str,
         updated_at: str,
     ) -> bool:
         with self._lock:
-            job = self._jobs.get(int(job_id))
-            if job is None or job.status != "finalizing":
+            batch = self._batches.get(int(batch_id))
+            if batch is None or batch.status != "finalizing":
                 return False
-            self._mutate_job_locked(
-                job,
+            self._mutate_batch_locked(
+                batch,
                 status=status,
                 completed_at=completed_at,
                 updated_at=updated_at,
             )
-            self._finalization_retry_deadlines.pop(job.job_id, None)
+            self._finalization_retry_deadlines.pop(batch.batch_id, None)
             return True
 
     def record_compile_result(
         self,
-        job_id: int,
+        batch_id: int,
         *,
         compile_success: int,
         compile_output_b64: str,
@@ -130,16 +130,16 @@ class JobSchedulerResultMixin:
         updated_at: str,
     ) -> bool:
         with self._lock:
-            job = self._jobs.get(int(job_id))
-            if job is None or job.status != "open":
+            batch = self._batches.get(int(batch_id))
+            if batch is None or batch.status != "open":
                 return False
-            if job.compile_owner not in {None, lease_owner}:
+            if batch.compile_owner not in {None, lease_owner}:
                 return False
-            if compile_success != 1 and job.group_key:
-                if self._appendable_job_id_by_group.get(job.group_key) == job.job_id:
-                    self._appendable_job_id_by_group.pop(job.group_key, None)
-            self._mutate_job_locked(
-                job,
+            if compile_success != 1 and batch.group_key:
+                if self._appendable_batch_id_by_group.get(batch.group_key) == batch.batch_id:
+                    self._appendable_batch_id_by_group.pop(batch.group_key, None)
+            self._mutate_batch_locked(
+                batch,
                 compile_success=compile_success,
                 compile_state="succeeded" if compile_success == 1 else "failed",
                 compile_output_b64=compile_output_b64,
@@ -154,10 +154,10 @@ class JobSchedulerResultMixin:
             case = self._cases.get(int(case_id))
             if case is None:
                 return None
-            job = self._jobs[case.job_id]
+            batch = self._batches[case.batch_id]
             return {
                 "id": case.id,
-                "job_id": case.job_id,
+                "batch_id": case.batch_id,
                 "task_id": case.task_id,
                 "test_name": case.test_name,
                 "testcase_hash": case.testcase_hash,
@@ -168,20 +168,20 @@ class JobSchedulerResultMixin:
                 "case_status": case.status,
                 "case_lease_owner": case.lease_owner,
                 "run_id": case.run_id,
-                "work_root": job.work_root,
-                "mode": job.mode,
-                "source_name": job.source_name,
-                "source_path": job.source_path,
-                "job_status": job.status,
-                "group_key": job.group_key,
-                "source_hash": job.source_hash,
-                "compile_hash": job.compile_hash,
-                "run_hash": job.run_hash,
-                "compare_hash": job.compare_hash,
-                "compile_config_json": job.compile_config_json,
-                "run_config_json": job.run_config_json,
-                "compare_config_json": job.compare_config_json,
-                "compile_success": job.compile_success,
+                "work_root": batch.work_root,
+                "mode": batch.mode,
+                "source_name": batch.source_name,
+                "source_path": batch.source_path,
+                "batch_status": batch.status,
+                "group_key": batch.group_key,
+                "source_hash": batch.source_hash,
+                "compile_hash": batch.compile_hash,
+                "run_hash": batch.run_hash,
+                "compare_hash": batch.compare_hash,
+                "compile_config_json": batch.compile_config_json,
+                "run_config_json": batch.run_config_json,
+                "compare_config_json": batch.compare_config_json,
+                "compile_success": batch.compile_success,
             }
 
     def case_output_for_task(self, task_id: str, test_name: str) -> dict[str, object] | None:
@@ -194,7 +194,7 @@ class JobSchedulerResultMixin:
             return {
                 "id": case.id,
                 "output_run_rel": output_ref,
-                "work_root": self._jobs[case.job_id].work_root,
+                "work_root": self._batches[case.batch_id].work_root,
             }
 
     def case_for_task(self, task_id: str, test_name: str) -> dict[str, object] | None:
@@ -203,13 +203,13 @@ class JobSchedulerResultMixin:
             if case_id is None:
                 return None
             case = self._cases[case_id]
-            job = self._jobs[case.job_id]
+            batch = self._batches[case.batch_id]
             return {
                 **self._case_row(case),
-                "job_id": job.job_id,
-                "job_status": job.status,
-                "work_root": job.work_root,
-                "compile_success": job.compile_success,
+                "batch_id": batch.batch_id,
+                "batch_status": batch.status,
+                "work_root": batch.work_root,
+                "compile_success": batch.compile_success,
             }
 
     def case_result_for_task(self, task_id: str, test_name: str) -> CaseResult | None:
@@ -244,14 +244,14 @@ class JobSchedulerResultMixin:
             return CaseClaim(
                 case_id=case.id,
                 generation=case.claim_generation,
-                job_id=case.job_id,
+                batch_id=case.batch_id,
                 task_id=case.task_id,
                 test_name=case.test_name,
             )
 
     def claim_cache_cases(
         self,
-        job_id: int,
+        batch_id: int,
         *,
         hostname: str,
         limit: int,
@@ -259,31 +259,31 @@ class JobSchedulerResultMixin:
     ) -> list[tuple[CaseClaim, JudgehostCaseRow]]:
         claimed: list[tuple[CaseClaim, JudgehostCaseRow]] = []
         with self._lock:
-            job = self._jobs.get(int(job_id))
-            if job is None or job.status != "open":
+            batch = self._batches.get(int(batch_id))
+            if batch is None or batch.status != "open":
                 return claimed
             while len(claimed) < max(0, int(limit)):
-                case = self._peek_case_heap_locked(job.job_id, status="cache-pending")
+                case = self._peek_case_heap_locked(batch.batch_id, status="cache-pending")
                 if case is None:
                     break
-                heapq.heappop(self._cache_heaps_by_job[job.job_id])
+                heapq.heappop(self._cache_heaps_by_batch[batch.batch_id])
                 case.claim_generation += 1
                 self._transition_case_locked(
                     case,
                     "cache-probing",
                     lease_owner=hostname,
                     updated_at=now_text,
-                    refresh_job=False,
+                    refresh_batch=False,
                 )
                 claim = CaseClaim(
                     case_id=case.id,
                     generation=case.claim_generation,
-                    job_id=case.job_id,
+                    batch_id=case.batch_id,
                     task_id=case.task_id,
                     test_name=case.test_name,
                 )
                 claimed.append((claim, self._case_row(case)))
-            self._refresh_jobs_locked({job.job_id}, updated_at=now_text)
+            self._refresh_batches_locked({batch.batch_id}, updated_at=now_text)
         return claimed
 
     def _finish_claim_locked(
@@ -431,26 +431,26 @@ class JobSchedulerResultMixin:
             case.requeue_on_abort = False
             return True
 
-    def request_job_case_results(
+    def request_batch_case_results(
         self,
-        job_id: int,
+        batch_id: int,
         *,
         results: dict[int, CaseResult],
         updated_at: str,
     ) -> set[str]:
         affected_tasks: set[str] = set()
         with self._lock:
-            job = self._jobs.get(int(job_id))
-            if job is None:
+            batch = self._batches.get(int(batch_id))
+            if batch is None:
                 return affected_tasks
-            if job.group_key and self._appendable_job_id_by_group.get(job.group_key) == job.job_id:
-                self._appendable_job_id_by_group.pop(job.group_key, None)
+            if batch.group_key and self._appendable_batch_id_by_group.get(batch.group_key) == batch.batch_id:
+                self._appendable_batch_id_by_group.pop(batch.group_key, None)
             affected = False
             for case_id, result in results.items():
                 case = self._cases.get(int(case_id))
                 if (
                     case is None
-                    or case.job_id != job.job_id
+                    or case.batch_id != batch.batch_id
                     or case.status in self._TERMINAL_CASE_STATUSES
                 ):
                     continue
@@ -466,10 +466,10 @@ class JobSchedulerResultMixin:
                     "reported",
                     lease_owner=case.lease_owner,
                     updated_at=updated_at,
-                    refresh_job=False,
+                    refresh_batch=False,
                 )
             if affected:
-                self._refresh_jobs_locked({job.job_id}, updated_at=updated_at)
+                self._refresh_batches_locked({batch.batch_id}, updated_at=updated_at)
         return affected_tasks
 
     def mark_case_verification_published(self, task_id: str, test_name: str) -> bool:
@@ -501,21 +501,21 @@ class JobSchedulerResultMixin:
             if case is None:
                 return None
             return {
-                "job_id": case.job_id,
+                "batch_id": case.batch_id,
                 "case_debug_text": case.debug_text,
-                "job_debug_text": self._jobs[case.job_id].debug_text,
+                "batch_debug_text": self._batches[case.batch_id].debug_text,
             }
 
-    def job_debug_context(self, job_id: int) -> dict[str, object] | None:
+    def batch_debug_context(self, batch_id: int) -> dict[str, object] | None:
         with self._lock:
-            job = self._jobs.get(int(job_id))
-            return None if job is None else {"job_id": job.job_id, "debug_text": job.debug_text}
+            batch = self._batches.get(int(batch_id))
+            return None if batch is None else {"batch_id": batch.batch_id, "debug_text": batch.debug_text}
 
     def append_debug_text(
         self,
         *,
         case_id: int | None,
-        job_id: int | None,
+        batch_id: int | None,
         debug_text: str,
         now_text: str,
     ) -> None:
@@ -524,10 +524,10 @@ class JobSchedulerResultMixin:
                 case = self._cases[int(case_id)]
                 case.debug_text = self._merge_debug_text(case.debug_text, debug_text)
                 case.updated_at = now_text
-            if job_id is not None and int(job_id) in self._jobs:
-                job = self._jobs[int(job_id)]
-                job.debug_text = self._merge_debug_text(job.debug_text, debug_text)
-                job.updated_at = now_text
+            if batch_id is not None and int(batch_id) in self._batches:
+                batch = self._batches[int(batch_id)]
+                batch.debug_text = self._merge_debug_text(batch.debug_text, debug_text)
+                batch.updated_at = now_text
 
     @staticmethod
     def _merge_debug_text(current: str, incoming: str) -> str:
@@ -561,35 +561,35 @@ class JobSchedulerResultMixin:
             "cancelled",
             lease_owner=None,
             updated_at=now_text,
-            refresh_job=False,
+            refresh_batch=False,
         )
 
-    def cancel_jobs_for_runs(self, run_ids: list[str], *, now_text: str) -> list[int]:
+    def cancel_batches_for_runs(self, run_ids: list[str], *, now_text: str) -> list[int]:
         safe_run_ids = {run_id for run_id in run_ids if run_id}
         if not safe_run_ids:
             return []
         with self._lock:
-            job_ids = sorted({
-                job_id
+            batch_ids = sorted({
+                batch_id
                 for run_id in safe_run_ids
-                for job_id in self._job_ids_by_run.get(run_id, ())
-                if self._jobs[job_id].status in {"open", "finalize-pending", "finalizing"}
+                for batch_id in self._batch_ids_by_run.get(run_id, ())
+                if self._batches[batch_id].status in {"open", "finalize-pending", "finalizing"}
             })
             for run_id in safe_run_ids:
                 for case_id in tuple(self._case_ids_by_run.get(run_id, ())):
                     self._cancel_case_locked(self._cases[case_id], now_text=now_text)
-            self._refresh_jobs_locked(set(job_ids), updated_at=now_text)
-            return job_ids
+            self._refresh_batches_locked(set(batch_ids), updated_at=now_text)
+            return batch_ids
 
     def release_host_leases(self, hostname: str, *, now_text: str) -> tuple[int, int]:
         with self._lock:
-            active_job_id = self._active_job_by_host.pop(hostname, None)
-            job_ids = [] if active_job_id is None else [active_job_id]
-            affected_job_ids = set(job_ids)
-            for job_id in job_ids:
-                job = self._jobs.get(job_id)
-                if job is not None and job.status == "open" and job.compile_owner == hostname:
-                    job.compile_owner = None
+            active_batch_id = self._active_batch_by_host.pop(hostname, None)
+            batch_ids = [] if active_batch_id is None else [active_batch_id]
+            affected_batch_ids = set(batch_ids)
+            for batch_id in batch_ids:
+                batch = self._batches.get(batch_id)
+                if batch is not None and batch.status == "open" and batch.compile_owner == hostname:
+                    batch.compile_owner = None
             case_ids = list(self._leased_case_ids_by_host.get(hostname, ()))
             for case_id in case_ids:
                 case = self._cases[case_id]
@@ -601,17 +601,17 @@ class JobSchedulerResultMixin:
                         "pending",
                         lease_owner=None,
                         updated_at=now_text,
-                        refresh_job=False,
+                        refresh_batch=False,
                     )
-                affected_job_ids.add(case.job_id)
-            self._refresh_jobs_locked(affected_job_ids, updated_at=now_text)
-            return len(job_ids), len(case_ids)
+                affected_batch_ids.add(case.batch_id)
+            self._refresh_batches_locked(affected_batch_ids, updated_at=now_text)
+            return len(batch_ids), len(case_ids)
 
     def _remove_cases_locked(self, case_ids: set[int]) -> None:
         cases = [self._cases[case_id] for case_id in case_ids if case_id in self._cases]
         if not cases:
             return
-        affected_job_ids = {case.job_id for case in cases}
+        affected_batch_ids = {case.batch_id for case in cases}
         affected_task_ids = {case.task_id for case in cases}
         affected_run_ids = {case.run_id for case in cases}
         affected_pairs = {(case.task_id, case.test_name) for case in cases}
@@ -622,7 +622,7 @@ class JobSchedulerResultMixin:
                 leased_ids.discard(case.id)
                 if not leased_ids:
                     self._leased_case_ids_by_host.pop(case.lease_owner, None)
-            self._adjust_counts(self._job_counts[case.job_id], case.status, -1)
+            self._adjust_counts(self._batch_counts[case.batch_id], case.status, -1)
             self._adjust_counts(self._run_counts[case.run_id], case.status, -1)
             task_counts = self._task_case_counts[case.task_id]
             task_counts.total -= 1
@@ -636,35 +636,35 @@ class JobSchedulerResultMixin:
                 if not testcase_cases:
                     self._case_ids_by_testcase.pop(case.testcase_id, None)
 
-        for job_id in affected_job_ids:
-            retained = self._case_ids_by_job[job_id].difference(case_ids)
-            self._case_ids_by_job[job_id] = retained
+        for batch_id in affected_batch_ids:
+            retained = self._case_ids_by_batch[batch_id].difference(case_ids)
+            self._case_ids_by_batch[batch_id] = retained
             if retained:
-                self._empty_job_ids.discard(job_id)
+                self._empty_batch_ids.discard(batch_id)
             else:
-                self._empty_job_ids.add(job_id)
+                self._empty_batch_ids.add(batch_id)
 
         for task_id in affected_task_ids:
             retained = self._case_ids_by_task[task_id].difference(case_ids)
             if retained:
                 self._case_ids_by_task[task_id] = retained
-                self._job_id_by_task[task_id] = self._cases[next(iter(retained))].job_id
+                self._batch_id_by_task[task_id] = self._cases[next(iter(retained))].batch_id
             else:
                 self._case_ids_by_task.pop(task_id, None)
-                self._job_id_by_task.pop(task_id, None)
+                self._batch_id_by_task.pop(task_id, None)
                 self._task_case_counts.pop(task_id, None)
 
         for run_id in affected_run_ids:
             retained = self._case_ids_by_run[run_id].difference(case_ids)
             if retained:
                 self._case_ids_by_run[run_id] = retained
-                self._job_ids_by_run[run_id] = {
-                    self._cases[case_id].job_id
+                self._batch_ids_by_run[run_id] = {
+                    self._cases[case_id].batch_id
                     for case_id in retained
                 }
             else:
                 self._case_ids_by_run.pop(run_id, None)
-                self._job_ids_by_run.pop(run_id, None)
+                self._batch_ids_by_run.pop(run_id, None)
                 self._run_counts.pop(run_id, None)
 
         for pair in affected_pairs:
@@ -681,38 +681,49 @@ class JobSchedulerResultMixin:
         for case in cases:
             self._cases.pop(case.id, None)
 
-    def _remove_job_locked(self, job_id: int) -> None:
-        job = self._jobs.pop(job_id)
-        if job.status == "open":
-            self._index_job_scripts_locked(job, -1)
-        self._ready_job_ids.discard(job_id)
-        self._finalization_retry_deadlines.pop(job_id, None)
-        for hostname, active_job_id in tuple(self._active_job_by_host.items()):
-            if active_job_id == job_id:
-                self._active_job_by_host.pop(hostname, None)
-        if job.group_key:
-            group_jobs = self._job_ids_by_group[job.group_key]
-            group_jobs.discard(job_id)
-            if not group_jobs:
-                self._job_ids_by_group.pop(job.group_key, None)
-            if self._appendable_job_id_by_group.get(job.group_key) == job_id:
-                self._appendable_job_id_by_group.pop(job.group_key, None)
-        self._case_ids_by_job.pop(job_id, None)
-        self._job_counts.pop(job_id, None)
-        self._job_specs.pop(job_id, None)
-        self._cache_heaps_by_job.pop(job_id, None)
-        self._runnable_heaps_by_job.pop(job_id, None)
-        self._empty_job_ids.discard(job_id)
+    def _remove_batch_locked(self, batch_id: int) -> None:
+        batch = self._batches.pop(batch_id)
+        if batch.status == "open":
+            self._index_batch_scripts_locked(batch, -1)
+        self._ready_batch_ids.discard(batch_id)
+        self._finalization_retry_deadlines.pop(batch_id, None)
+        for hostname, active_batch_id in tuple(self._active_batch_by_host.items()):
+            if active_batch_id == batch_id:
+                self._active_batch_by_host.pop(hostname, None)
+        if batch.group_key:
+            group_batches = self._batch_ids_by_group[batch.group_key]
+            group_batches.discard(batch_id)
+            if not group_batches:
+                self._batch_ids_by_group.pop(batch.group_key, None)
+            if self._appendable_batch_id_by_group.get(batch.group_key) == batch_id:
+                self._appendable_batch_id_by_group.pop(batch.group_key, None)
+        self._case_ids_by_batch.pop(batch_id, None)
+        self._batch_counts.pop(batch_id, None)
+        self._batch_specs.pop(batch_id, None)
+        self._cache_heaps_by_batch.pop(batch_id, None)
+        self._runnable_heaps_by_batch.pop(batch_id, None)
+        self._empty_batch_ids.discard(batch_id)
+        compile_batches = self._batch_ids_by_compile_key[batch.compile_key]
+        compile_batches.discard(batch_id)
+        if not compile_batches:
+            self._batch_ids_by_compile_key.pop(batch.compile_key, None)
+            submission = self._compile_submissions_by_key.pop(batch.compile_key)
+            self._compile_key_by_submit_id.pop(submission.submit_id, None)
+        verification_batches = self._batch_ids_by_verification[batch.verification_id]
+        verification_batches.discard(batch_id)
+        if not verification_batches:
+            self._batch_ids_by_verification.pop(batch.verification_id, None)
+            self._verification_by_domjudge_job_id.pop(batch.domjudge_job_id, None)
 
     def forget_runs(self, run_ids: list[str]) -> int:
         safe_run_ids = {run_id for run_id in run_ids if run_id}
         if not safe_run_ids:
             return 0
         with self._lock:
-            affected_jobs = {
-                job_id
+            affected_batches = {
+                batch_id
                 for run_id in safe_run_ids
-                for job_id in self._job_ids_by_run.get(run_id, ())
+                for batch_id in self._batch_ids_by_run.get(run_id, ())
             }
             case_ids = {
                 case_id
@@ -720,23 +731,23 @@ class JobSchedulerResultMixin:
                 for case_id in self._case_ids_by_run.get(run_id, ())
             }
             self._remove_cases_locked(case_ids)
-            for job_id in affected_jobs:
-                if job_id in self._jobs:
-                    self._touch_job_locked(self._jobs[job_id])
-            empty_jobs = tuple(job_id for job_id in affected_jobs if job_id in self._empty_job_ids)
-            for job_id in empty_jobs:
-                self._remove_job_locked(job_id)
-            return len(empty_jobs)
+            for batch_id in affected_batches:
+                if batch_id in self._batches:
+                    self._touch_batch_locked(self._batches[batch_id])
+            empty_batches = tuple(batch_id for batch_id in affected_batches if batch_id in self._empty_batch_ids)
+            for batch_id in empty_batches:
+                self._remove_batch_locked(batch_id)
+            return len(empty_batches)
 
     def cancel_all_inflight(self, *, now_text: str) -> list[int]:
         with self._lock:
-            job_ids = sorted(
-                job_id
-                for job_id, job in self._jobs.items()
-                if job.status in {"open", "finalize-pending", "finalizing"}
+            batch_ids = sorted(
+                batch_id
+                for batch_id, batch in self._batches.items()
+                if batch.status in {"open", "finalize-pending", "finalizing"}
             )
-            for job_id in job_ids:
-                for case_id in tuple(self._case_ids_by_job[job_id]):
+            for batch_id in batch_ids:
+                for case_id in tuple(self._case_ids_by_batch[batch_id]):
                     self._cancel_case_locked(self._cases[case_id], now_text=now_text)
-            self._refresh_jobs_locked(set(job_ids), updated_at=now_text)
-            return job_ids
+            self._refresh_batches_locked(set(batch_ids), updated_at=now_text)
+            return batch_ids

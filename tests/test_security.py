@@ -315,7 +315,7 @@ class TestSecurity(E2ETestBase):
 
         with (
             patch.object(config.judgehost_task_service, "cancel_tasks_for_runs", return_value=1) as cancel_runs,
-            patch.object(config.judgehost_task_service, "cancel_domjudge_jobs_for_runs", return_value=1) as cancel_jobs,
+            patch.object(config.judgehost_task_service, "cancel_domjudge_batches_for_runs", return_value=1) as cancel_jobs,
         ):
             resp = run_cancel("alice/sample", "bob", verification_id=verification_id)
 

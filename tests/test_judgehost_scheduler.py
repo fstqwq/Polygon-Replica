@@ -13,8 +13,13 @@ from app.service.judgehost.cleanup import JudgehostTerminalCleanup
 from app.service.judgehost.case_result import build_case_result
 from app.service.judgehost.domjudge.cache import domjudge_hash_of_hashes
 from app.service.judgehost.domjudge.client import domjudge_script_id
-from app.service.judgehost.job_scheduler import JobScheduler
-from app.service.judgehost.job_scheduler_models import CaseClaimBusy, JobSpec
+from app.service.judgehost.batch_scheduler import BatchScheduler
+from app.service.judgehost.batch_scheduler_models import (
+    CaseClaimBusy,
+    CompileSubmission,
+    ExecutionBatchSpec,
+)
+from app.service.judgehost.identity import domjudge_submit_id
 from app.service.judgehost.task_registry import JudgehostTaskRegistry
 from app.service.judgehost.toolkit import DomjudgeToolkit
 from app.service.platform.hashing import sha256_hex_bytes
@@ -44,7 +49,21 @@ def _case_result(test_name: str, *, runresult: str = "correct", verdict: str = "
     )
 
 
-def _task_row(index: int, *, verification_id: str = "verification") -> dict[str, object]:
+_COMPILE_KEY = "5" * 64
+
+
+def _submission_for_key(compile_key: str) -> CompileSubmission:
+    return CompileSubmission(
+        compile_key=compile_key,
+        submit_id=domjudge_submit_id(compile_key),
+        source_name="main.cpp",
+        source_bytes=compile_key.encode("ascii"),
+        extra_source_items=(),
+        compile_files=(),
+    )
+
+
+def _task_row(index: int, *, verification_id: str = "ver-1") -> dict[str, object]:
     now_text = datetime.now(timezone.utc).isoformat()
     return {
         "id": f"task-{index}",
@@ -85,8 +104,8 @@ def _case_row(task_id: str, run_id: str, ordinal: int, scope: int) -> dict[str, 
     }
 
 
-def _create_staged_job(
-    scheduler: JobScheduler,
+def _create_staged_batch(
+    scheduler: BatchScheduler,
     *,
     task_id: str,
     run_id: str,
@@ -94,12 +113,17 @@ def _create_staged_job(
     service_class: str = "background",
     scope: int = 1,
     case_rows: list[dict[str, object]] | None = None,
+    verification_id: str = "ver-1",
+    compile_key: str = _COMPILE_KEY,
 ) -> tuple[int, str]:
     now_text = datetime.now(timezone.utc).isoformat()
-    job_id = scheduler.create_job_with_cases(
+    batch_id = scheduler.create_batch_with_cases(
         task_id=task_id,
         run_id=run_id,
         group_key=f"group-{task_id}",
+        verification_id=verification_id,
+        compile_key=compile_key,
+        compile_submission=_submission_for_key(compile_key),
         contest_id="local",
         mode="pass-fail",
         source_name="main.cpp",
@@ -116,7 +140,7 @@ def _create_staged_job(
         verification_source="solution-run",
         force_recompile=0,
         service_class=service_class,
-        job_spec=JobSpec(),
+        batch_spec=ExecutionBatchSpec(),
         created_at=now_text,
         case_rows=(
             [_case_row(task_id, run_id, ordinal, scope) for ordinal in ordinals]
@@ -124,11 +148,11 @@ def _create_staged_job(
             else case_rows
         ),
     )
-    return job_id, now_text
+    return batch_id, now_text
 
 
-def _create_ready_job(
-    scheduler: JobScheduler,
+def _create_ready_batch(
+    scheduler: BatchScheduler,
     *,
     task_id: str,
     run_id: str,
@@ -136,7 +160,7 @@ def _create_ready_job(
     service_class: str = "background",
     scope: int = 1,
 ) -> int:
-    job_id, now_text = _create_staged_job(
+    batch_id, now_text = _create_staged_batch(
         scheduler,
         task_id=task_id,
         run_id=run_id,
@@ -146,7 +170,7 @@ def _create_ready_job(
     )
     scheduler.activate_task_cases(task_id, now_text=now_text)
     claims = scheduler.claim_cache_cases(
-        job_id,
+        batch_id,
         hostname="cache-setup",
         limit=len(ordinals),
         now_text=now_text,
@@ -157,23 +181,23 @@ def _create_ready_job(
             generation=claim.generation,
             updated_at=now_text,
         )
-    scheduler.claim_materialization(job_id, now_text=now_text)
+    scheduler.claim_materialization(batch_id, now_text=now_text)
     scheduler.finish_materialization(
-        job_id,
+        batch_id,
         source_path="/tmp/source.cpp",
         work_root="/tmp/work",
         success=True,
         now_text=now_text,
     )
     scheduler.record_compile_result(
-        job_id,
+        batch_id,
         compile_success=1,
         compile_output_b64="",
         compile_metadata_b64="",
         lease_owner="host-setup",
         updated_at=now_text,
     )
-    return job_id
+    return batch_id
 
 
 class TestJudgehostScheduler(unittest.TestCase):
@@ -211,39 +235,39 @@ class TestJudgehostScheduler(unittest.TestCase):
         self.assertFalse(hasattr(registry, "claim_ready"))
         self.assertFalse(hasattr(registry, "renew"))
 
-    def test_invalid_case_spec_does_not_partially_create_job(self) -> None:
-        scheduler = JobScheduler(id_base=50)
+    def test_invalid_case_spec_does_not_partially_create_batch(self) -> None:
+        scheduler = BatchScheduler(id_base=50)
         invalid_case = _case_row("invalid", "run-invalid", 1, 1)
         invalid_case.pop("answer_ref")
         with self.assertRaisesRegex(RuntimeError, "missing answer_ref"):
-            _create_staged_job(
+            _create_staged_batch(
                 scheduler,
                 task_id="invalid",
                 run_id="run-invalid",
                 ordinals=[1],
                 case_rows=[invalid_case],
             )
-        self.assertIsNone(scheduler.fetch_job(51))
+        self.assertIsNone(scheduler.fetch_batch(51))
 
-        with patch("app.service.judgehost.job_scheduler.domjudge_script_id", side_effect=RuntimeError("invalid script hash")):
+        with patch("app.service.judgehost.batch_scheduler.domjudge_script_id", side_effect=RuntimeError("invalid script hash")):
             with self.assertRaisesRegex(RuntimeError, "invalid script hash"):
-                _create_staged_job(
+                _create_staged_batch(
                     scheduler,
                     task_id="invalid-script",
                     run_id="run-invalid-script",
                     ordinals=[1],
                 )
-        self.assertIsNone(scheduler.fetch_job(51))
+        self.assertIsNone(scheduler.fetch_batch(51))
 
-    def test_ready_job_prefers_foreground_then_numeric_test_order(self) -> None:
-        scheduler = JobScheduler(id_base=100)
-        background_id = _create_ready_job(
+    def test_ready_batch_prefers_foreground_then_numeric_test_order(self) -> None:
+        scheduler = BatchScheduler(id_base=100)
+        background_id = _create_ready_batch(
             scheduler,
             task_id="background",
             run_id="run-background",
             ordinals=[10, 2, 1],
         )
-        foreground_id = _create_ready_job(
+        foreground_id = _create_ready_batch(
             scheduler,
             task_id="foreground",
             run_id="run-foreground",
@@ -251,7 +275,7 @@ class TestJudgehostScheduler(unittest.TestCase):
             service_class="foreground",
             scope=2,
         )
-        self.assertEqual(scheduler.select_ready_job("host-a")["job_id"], foreground_id)
+        self.assertEqual(scheduler.select_ready_batch("host-a")["batch_id"], foreground_id)
         foreground = scheduler.lease_cases(
             foreground_id,
             hostname="host-a",
@@ -259,7 +283,7 @@ class TestJudgehostScheduler(unittest.TestCase):
             now_text=datetime.now(timezone.utc).isoformat(),
         )
         self.assertEqual([row["ordinal"] for row in foreground], [3])
-        self.assertEqual(scheduler.select_ready_job("host-b")["job_id"], background_id)
+        self.assertEqual(scheduler.select_ready_batch("host-b")["batch_id"], background_id)
         background = scheduler.lease_cases(
             background_id,
             hostname="host-b",
@@ -268,41 +292,115 @@ class TestJudgehostScheduler(unittest.TestCase):
         )
         self.assertEqual([row["ordinal"] for row in background], [1, 2, 10])
 
-    def test_job_and_case_ids_share_one_collision_free_namespace(self) -> None:
-        scheduler = JobScheduler(id_base=150)
-        job_id, _now_text = _create_staged_job(
+    def test_batch_and_case_ids_share_one_collision_free_namespace(self) -> None:
+        scheduler = BatchScheduler(id_base=150)
+        batch_id, _now_text = _create_staged_batch(
             scheduler,
             task_id="identity",
             run_id="run-identity",
             ordinals=[1],
         )
-        case_id = int(scheduler.cases_for_job(job_id)[0]["id"])
+        case_id = int(scheduler.cases_for_batch(batch_id)[0]["id"])
 
-        self.assertEqual(job_id, 151)
+        self.assertEqual(batch_id, 151)
         self.assertEqual(case_id, 152)
 
-    def test_ready_job_claim_does_not_consume_untransitioned_work(self) -> None:
-        scheduler = JobScheduler(id_base=200)
-        job_id = _create_ready_job(
+    def test_protocol_ids_follow_verification_and_compile_identity(self) -> None:
+        scheduler = BatchScheduler(id_base=175)
+        first_key = "1" * 64
+        second_key = "2" * 64
+        first_id, _ = _create_staged_batch(
+            scheduler,
+            task_id="identity-a",
+            run_id="run-identity-a",
+            ordinals=[1],
+            verification_id="ver-123",
+            compile_key=first_key,
+        )
+        second_id, _ = _create_staged_batch(
+            scheduler,
+            task_id="identity-b",
+            run_id="run-identity-b",
+            ordinals=[2],
+            verification_id="ver-123",
+            compile_key=second_key,
+        )
+        third_id, _ = _create_staged_batch(
+            scheduler,
+            task_id="identity-c",
+            run_id="run-identity-c",
+            ordinals=[3],
+            verification_id="ver-124",
+            compile_key=first_key,
+        )
+
+        first = scheduler.fetch_batch(first_id)
+        second = scheduler.fetch_batch(second_id)
+        third = scheduler.fetch_batch(third_id)
+        assert first is not None and second is not None and third is not None
+        self.assertEqual(first["domjudge_job_id"], 0x123)
+        self.assertEqual(second["domjudge_job_id"], first["domjudge_job_id"])
+        self.assertNotEqual(third["domjudge_job_id"], first["domjudge_job_id"])
+        self.assertEqual(first["compile_key"], third["compile_key"])
+        self.assertNotEqual(first["compile_key"], second["compile_key"])
+        first_submission = scheduler.compile_submission_for_batch(first_id)
+        third_submission = scheduler.compile_submission_for_batch(third_id)
+        assert first_submission is not None and third_submission is not None
+        self.assertEqual(first_submission.submit_id, third_submission.submit_id)
+
+    def test_protocol_id_collisions_fail_fast(self) -> None:
+        scheduler = BatchScheduler(id_base=190)
+        low_key = f"{1:064x}"
+        colliding_key = f"{(1 << 63) + 1:064x}"
+        _create_staged_batch(
+            scheduler,
+            task_id="collision-a",
+            run_id="run-collision-a",
+            ordinals=[1],
+            verification_id="ver-1",
+            compile_key=low_key,
+        )
+        with self.assertRaisesRegex(RuntimeError, "submit id collision"):
+            _create_staged_batch(
+                scheduler,
+                task_id="collision-b",
+                run_id="run-collision-b",
+                ordinals=[2],
+                verification_id="ver-2",
+                compile_key=colliding_key,
+            )
+        with self.assertRaisesRegex(RuntimeError, "batch id collision"):
+            _create_staged_batch(
+                scheduler,
+                task_id="collision-c",
+                run_id="run-collision-c",
+                ordinals=[3],
+                verification_id="ver-8000000000000001",
+                compile_key=low_key,
+            )
+
+    def test_ready_batch_claim_does_not_consume_untransitioned_work(self) -> None:
+        scheduler = BatchScheduler(id_base=200)
+        batch_id = _create_ready_batch(
             scheduler,
             task_id="retryable",
             run_id="run-retryable",
             ordinals=[1],
         )
 
-        self.assertEqual(scheduler.select_ready_job("host-a")["job_id"], job_id)
-        self.assertEqual(scheduler.select_ready_job("host-b")["job_id"], job_id)
+        self.assertEqual(scheduler.select_ready_batch("host-a")["batch_id"], batch_id)
+        self.assertEqual(scheduler.select_ready_batch("host-b")["batch_id"], batch_id)
 
     def test_reporting_claim_serializes_duplicate_and_defers_cancel(self) -> None:
-        scheduler = JobScheduler(id_base=250)
-        job_id = _create_ready_job(
+        scheduler = BatchScheduler(id_base=250)
+        batch_id = _create_ready_batch(
             scheduler,
             task_id="reporting",
             run_id="run-reporting",
             ordinals=[1],
         )
         case = scheduler.lease_cases(
-            job_id,
+            batch_id,
             hostname="host-a",
             limit=1,
             now_text="2026-08-03T00:00:00+00:00",
@@ -322,15 +420,15 @@ class TestJudgehostScheduler(unittest.TestCase):
                 now_text="2026-08-03T00:00:02+00:00",
             )
         self.assertEqual(
-            scheduler.cancel_jobs_for_runs(
+            scheduler.cancel_batches_for_runs(
                 ["run-reporting"],
                 now_text="2026-08-03T00:00:03+00:00",
             ),
-            [job_id],
+            [batch_id],
         )
         self.assertFalse(scheduler.task_cases_terminal("reporting"))
-        scheduler.request_job_case_results(
-            job_id,
+        scheduler.request_batch_case_results(
+            batch_id,
             results={
                 case_id: _case_result(
                     "001.in",
@@ -350,11 +448,11 @@ class TestJudgehostScheduler(unittest.TestCase):
             "cancelled",
         )
         self.assertTrue(scheduler.task_cases_terminal("reporting"))
-        self.assertEqual(scheduler.fetch_job(job_id)["status"], "finalize-pending")
+        self.assertEqual(scheduler.fetch_batch(batch_id)["status"], "finalize-pending")
 
     def test_cache_case_claims_are_exclusive_and_never_become_host_leases(self) -> None:
-        scheduler = JobScheduler(id_base=300)
-        job_id, now_text = _create_staged_job(
+        scheduler = BatchScheduler(id_base=300)
+        batch_id, now_text = _create_staged_batch(
             scheduler,
             task_id="bulk",
             run_id="run-bulk",
@@ -363,7 +461,7 @@ class TestJudgehostScheduler(unittest.TestCase):
 
         self.assertTrue(scheduler.activate_task_cases("bulk", now_text=now_text))
         claims = scheduler.claim_cache_cases(
-            job_id,
+            batch_id,
             hostname="cache-a",
             limit=256,
             now_text=now_text,
@@ -371,7 +469,7 @@ class TestJudgehostScheduler(unittest.TestCase):
         self.assertEqual(len(claims), 256)
         self.assertEqual(
             scheduler.claim_cache_cases(
-                job_id,
+                batch_id,
                 hostname="cache-b",
                 limit=256,
                 now_text=now_text,
@@ -399,17 +497,17 @@ class TestJudgehostScheduler(unittest.TestCase):
                     updated_at=now_text,
                 )
             )
-        self.assertEqual(len(scheduler.cases_for_job(job_id, status="pending")), 255)
+        self.assertEqual(len(scheduler.cases_for_batch(batch_id, status="pending")), 255)
 
     def test_script_hash_index_tracks_open_job_references(self) -> None:
-        scheduler = JobScheduler(id_base=400)
-        first_job, now_text = _create_staged_job(
+        scheduler = BatchScheduler(id_base=400)
+        first_batch, now_text = _create_staged_batch(
             scheduler,
             task_id="first-script-user",
             run_id="run-first-script-user",
             ordinals=[1],
         )
-        second_job, _ = _create_staged_job(
+        second_batch, _ = _create_staged_batch(
             scheduler,
             task_id="second-script-user",
             run_id="run-second-script-user",
@@ -419,10 +517,10 @@ class TestJudgehostScheduler(unittest.TestCase):
         compile_id = int(domjudge_script_id(compile_hash))
 
         self.assertEqual(scheduler.active_script_hashes("compile", compile_id), {compile_hash})
-        for index, job_id in enumerate((first_job, second_job)):
-            case = scheduler.cases_for_job(job_id)[0]
-            scheduler.request_job_case_results(
-                job_id,
+        for index, batch_id in enumerate((first_batch, second_batch)):
+            case = scheduler.cases_for_batch(batch_id)[0]
+            scheduler.request_batch_case_results(
+                batch_id,
                 results={
                     int(case["id"]): _case_result(
                         str(case["test_name"]),
@@ -437,22 +535,22 @@ class TestJudgehostScheduler(unittest.TestCase):
                 {compile_hash} if index == 0 else set(),
             )
         self.assertIsNotNone(
-            scheduler.claim_job_finalization(
-                first_job,
+            scheduler.claim_batch_finalization(
+                first_batch,
                 now_text=now_text,
             )
         )
         self.assertIsNotNone(
-            scheduler.claim_job_finalization(
-                second_job,
+            scheduler.claim_batch_finalization(
+                second_batch,
                 now_text=now_text,
             )
         )
         self.assertEqual(scheduler.active_script_hashes("compile", compile_id), set())
 
     def test_sixteen_hosts_never_lease_a_case_twice(self) -> None:
-        scheduler = JobScheduler(id_base=1000)
-        job_id = _create_ready_job(
+        scheduler = BatchScheduler(id_base=1000)
+        batch_id = _create_ready_batch(
             scheduler,
             task_id="shared",
             run_id="run-shared",
@@ -465,11 +563,11 @@ class TestJudgehostScheduler(unittest.TestCase):
         def _worker(worker: int) -> None:
             hostname = f"host-{worker}"
             barrier.wait(timeout=5)
-            job = scheduler.select_ready_job(hostname)
-            if job is None:
+            batch = scheduler.select_ready_batch(hostname)
+            if batch is None:
                 return
             rows = scheduler.lease_cases(
-                int(job["job_id"]),
+                int(batch["batch_id"]),
                 hostname=hostname,
                 limit=16,
                 now_text=datetime.now(timezone.utc).isoformat(),
@@ -486,7 +584,7 @@ class TestJudgehostScheduler(unittest.TestCase):
         self.assertEqual(len(leased_ids), 256)
         self.assertEqual(len(set(leased_ids)), 256)
         self.assertEqual(scheduler.host_leased_case_count("host-0") >= 0, True)
-        self.assertEqual(len(scheduler.cases_for_job(job_id, status="leased")), 256)
+        self.assertEqual(len(scheduler.cases_for_batch(batch_id, status="leased")), 256)
 
     def test_judgehost_runtime_defaults_and_overrides(self) -> None:
         defaults = build_runtime_values()
@@ -613,7 +711,7 @@ class TestJudgehostScheduler(unittest.TestCase):
 
     def test_terminal_cleanup_removes_runtime_identity_but_not_cache(self) -> None:
         registry = JudgehostTaskRegistry()
-        row = _task_row(1, verification_id="verification-cleanup")
+        row = _task_row(1, verification_id="ver-c1ea4")
         row["status"] = "completed"
         registry.insert(row)
 
@@ -631,10 +729,10 @@ class TestJudgehostScheduler(unittest.TestCase):
 
         cases = _CaseStore()
         cleanup = JudgehostTerminalCleanup(registry, cases)
-        cleanup._generation_by_verification["verification-cleanup"] = 2
-        self.assertTrue(cleanup._cleanup("verification-cleanup", expected_generation=2))
+        cleanup._generation_by_verification["ver-c1ea4"] = 2
+        self.assertTrue(cleanup._cleanup("ver-c1ea4", expected_generation=2))
         self.assertEqual(cases.forgotten_runs, ["run-1"])
-        self.assertEqual(cases.forgotten_scopes, ["verification-cleanup"])
+        self.assertEqual(cases.forgotten_scopes, ["ver-c1ea4"])
         self.assertIsNone(registry.get("task-1"))
 
 

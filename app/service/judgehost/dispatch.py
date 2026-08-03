@@ -10,6 +10,7 @@ from typing import TypedDict
 from app.db import now_iso
 from app.service.judgehost.domjudge.cache import domjudge_hash_of_hashes
 from app.service.judgehost.domjudge.client import domjudge_script_id
+from app.service.judgehost.identity import canonical_verification_id, domjudge_submit_id
 from app.service.judgehost.shared import domjudge_lower_text, domjudge_path_name, domjudge_text
 from app.service.judgehost.runtime import (
     domjudge_bool,
@@ -29,7 +30,7 @@ from .dispatch_cache import (
     _DomjudgeCacheEntry,
 )
 from .case_result import build_case_result
-from .job_scheduler_models import CaseResult, JobSpec
+from .batch_scheduler_models import CaseResult, CompileSubmission, ExecutionBatchSpec
 from .result import ResultProcessor
 from .state import JudgehostState
 from .task_queue import TaskQueue
@@ -52,6 +53,7 @@ _DomjudgePreparedTestRow = TypedDict(
 _DomjudgePrecomputedBundle = TypedDict(
     "_DomjudgePrecomputedBundle",
     {
+        "compile_key": str,
         "source_hash": str,
         "compile_hash": str,
         "run_hash": str,
@@ -78,6 +80,7 @@ _DomjudgePreparedPayload = TypedDict(
         "checker_args": list[str],
         "contest_id": str,
         "mode": str,
+        "compile_key": str,
         "source_hash": str,
         "compile_hash": str,
         "run_hash": str,
@@ -210,6 +213,7 @@ class DispatchHandler(DispatchCacheMixin):
         if raw_precomputed is None:
             return None
         compile_hash = domjudge_lower_text(raw_precomputed.get("compile_hash"))
+        full_compile_key = domjudge_lower_text(raw_precomputed.get("compile_key"))
         run_hash = domjudge_lower_text(raw_precomputed.get("run_hash"))
         compare_hash = domjudge_lower_text(raw_precomputed.get("compare_hash"))
         source_hash = domjudge_lower_text(raw_precomputed.get("source_hash"))
@@ -221,6 +225,8 @@ class DispatchHandler(DispatchCacheMixin):
         compare_files = cast(list[tuple[str, bytes, bool]] | None, raw_precomputed.get("compare_files"))
         main_correct = raw_precomputed.get("main_correct")
         if re.fullmatch(r"[0-9a-f]{32}", compile_hash) is None:
+            return None
+        if re.fullmatch(r"[0-9a-f]{64}", full_compile_key) is None:
             return None
         if re.fullmatch(r"[0-9a-f]{32}", run_hash) is None:
             return None
@@ -243,6 +249,7 @@ class DispatchHandler(DispatchCacheMixin):
         if not isinstance(main_correct, bool):
             return None
         return {
+            "compile_key": full_compile_key,
             "source_hash": source_hash,
             "compile_hash": compile_hash,
             "run_hash": run_hash,
@@ -326,6 +333,7 @@ class DispatchHandler(DispatchCacheMixin):
             "checker_args": checker_args,
             "contest_id": "local",
             "mode": domjudge_lower_text(payload.get("mode"), default="pass-fail"),
+            "compile_key": precomputed["compile_key"],
             "source_hash": precomputed["source_hash"],
             "compile_hash": precomputed["compile_hash"],
             "run_hash": precomputed["run_hash"],
@@ -445,6 +453,7 @@ class DispatchHandler(DispatchCacheMixin):
         contest_id = prepared["contest_id"]
         mode = prepared["mode"]
         compile_hash = prepared["compile_hash"]
+        full_compile_key = prepared["compile_key"]
         run_hash = prepared["run_hash"]
         compare_hash = prepared["compare_hash"]
         source_hash = prepared["source_hash"]
@@ -461,8 +470,8 @@ class DispatchHandler(DispatchCacheMixin):
         main_correct = prepared["main_correct"]
 
         now_text = now_iso()
-        verification_id = domjudge_text(payload.get("verification_id"))
-        scope_sequence = self._s.job_scheduler.scope_sequence(verification_id)
+        verification_id = canonical_verification_id(domjudge_text(payload.get("verification_id")))
+        scope_sequence = self._s.batch_scheduler.scope_sequence(verification_id)
         case_rows = self._domjudge_case_rows(
             task_id=task_id,
             run_id=run_id,
@@ -473,17 +482,25 @@ class DispatchHandler(DispatchCacheMixin):
         service_class = domjudge_lower_text(payload.get("service_class"), default="background")
         if service_class not in {"foreground", "background"}:
             raise RuntimeError("invalid judgehost service class")
-        job_spec = JobSpec(
+        compile_submission = CompileSubmission(
+            compile_key=full_compile_key,
+            submit_id=domjudge_submit_id(full_compile_key),
+            source_name=source_name,
             source_bytes=source_bytes,
             extra_source_items=tuple(extra_source_items),
             compile_files=tuple(compile_files),
+        )
+        batch_spec = ExecutionBatchSpec(
             run_files=tuple(run_files),
             compare_files=tuple(compare_files),
         )
-        return self._s.job_scheduler.create_job_with_cases(
+        return self._s.batch_scheduler.create_batch_with_cases(
             task_id=task_id,
             run_id=run_id,
             group_key=group_key,
+            verification_id=verification_id,
+            compile_key=full_compile_key,
+            compile_submission=compile_submission,
             contest_id=contest_id,
             mode=mode,
             source_name=source_name,
@@ -500,12 +517,12 @@ class DispatchHandler(DispatchCacheMixin):
             verification_source=verification_source,
             force_recompile=1 if force_recompile else 0,
             service_class=service_class,
-            job_spec=job_spec,
+            batch_spec=batch_spec,
             created_at=now_text,
             case_rows=case_rows,
         )
 
-    def _domjudge_append_task_to_job(self, job_id: int, task: dict[str, object]) -> str:
+    def _domjudge_append_task_to_batch(self, batch_id: int, task: dict[str, object]) -> str:
         task_id, run_id, payload = self._domjudge_task_payload(task)
         latest_task_row = self._core.task_by_id(task_id)
         if latest_task_row is not None:
@@ -520,12 +537,12 @@ class DispatchHandler(DispatchCacheMixin):
             run_id=run_id,
             tests_rows=prepared["tests_rows"],
             main_correct=prepared["main_correct"],
-            scope_sequence=self._s.job_scheduler.scope_sequence(
+            scope_sequence=self._s.batch_scheduler.scope_sequence(
                 domjudge_text(payload.get("verification_id"))
             ),
         )
-        append_result = self._s.job_scheduler.append_cases_to_job(
-            job_id=int(job_id),
+        append_result = self._s.batch_scheduler.append_cases_to_batch(
+            batch_id=int(batch_id),
             case_rows=case_rows,
             now_text=now_iso(),
         )
@@ -537,34 +554,34 @@ class DispatchHandler(DispatchCacheMixin):
         missing_names = [
             str(case_row.get("test_name") or "")
             for case_row in case_rows
-            if self._s.job_scheduler.case_for_task(task_id, str(case_row.get("test_name") or "")) is None
+            if self._s.batch_scheduler.case_for_task(task_id, str(case_row.get("test_name") or "")) is None
         ]
         if missing_names:
-            raise RuntimeError(f"grouped DOMjudge job append failed for {', '.join(missing_names)}")
+            raise RuntimeError(f"grouped DOMjudge batch append failed for {', '.join(missing_names)}")
         return outcome
 
     def stage_task(self, task: dict[str, object]) -> int:
         _task_id, _run_id, payload = self._domjudge_task_payload(task)
         group_key = domjudge_text(payload.get("domjudge_group_key"))
-        with self._s.job_scheduler.group_activity(group_key):
+        with self._s.batch_scheduler.group_activity(group_key):
             if group_key:
-                existing = self._s.job_scheduler.job_for_group_key(group_key)
+                existing = self._s.batch_scheduler.batch_for_group_key(group_key)
                 if existing is not None:
-                    outcome = self._domjudge_append_task_to_job(int(existing["job_id"]), task)
+                    outcome = self._domjudge_append_task_to_batch(int(existing["batch_id"]), task)
                     if outcome != "closed":
-                        return int(existing["job_id"])
-            job_id = self._domjudge_stage_task(task, group_key=group_key)
-            return job_id
+                        return int(existing["batch_id"])
+            batch_id = self._domjudge_stage_task(task, group_key=group_key)
+            return batch_id
 
-    def finalize_job_if_ready(self, job_id: int, *, error_text: str = "") -> None:
-        self._result._domjudge_finalize_if_ready(
-            int(job_id),
+    def finalize_batch_if_ready(self, batch_id: int, *, error_text: str = "") -> None:
+        self._result._domjudge_finalize_batch_if_ready(
+            int(batch_id),
             force_failed=bool(error_text),
             error_text=error_text,
         )
 
     def activate_task_cases(self, task_id: str) -> bool:
-        activated = self._s.job_scheduler.activate_task_cases(
+        activated = self._s.batch_scheduler.activate_task_cases(
             task_id,
             now_text=now_iso(),
         )
@@ -572,46 +589,48 @@ class DispatchHandler(DispatchCacheMixin):
             self._queue.compact_task_payload(task_id)
         return activated
 
-    def _domjudge_lease_cases(self, job_id: int, hostname: str, max_batchsize: int) -> list[dict[str, object]]:
+    def _domjudge_lease_cases(self, batch_id: int, hostname: str, max_batchsize: int) -> list[dict[str, object]]:
         now_text = now_iso()
-        job_row = self._s.job_scheduler.fetch_job(int(job_id))
-        if job_row is None:
+        batch_row = self._s.batch_scheduler.fetch_batch(int(batch_id))
+        if batch_row is None:
             return []
-        grouped_job = bool(domjudge_text(job_row["group_key"]))
         cap = max(1, min(256, int(max_batchsize)))
-        safe_task_id = domjudge_text(job_row["task_id"])
-        if domjudge_lower_text(job_row["status"]) != "open":
+        safe_task_id = domjudge_text(batch_row["task_id"])
+        if domjudge_lower_text(batch_row["status"]) != "open":
             return []
-        rows = self._s.job_scheduler.lease_cases(
-            int(job_id),
+        rows = self._s.batch_scheduler.lease_cases(
+            int(batch_id),
             hostname=hostname,
             limit=int(cap),
             now_text=now_text,
         )
         if not rows:
             return []
-        compile_hash = domjudge_lower_text(job_row["compile_hash"])
-        run_hash = domjudge_lower_text(job_row["run_hash"])
-        compare_hash = domjudge_lower_text(job_row["compare_hash"])
+        compile_hash = domjudge_lower_text(batch_row["compile_hash"])
+        run_hash = domjudge_lower_text(batch_row["run_hash"])
+        compare_hash = domjudge_lower_text(batch_row["compare_hash"])
         compile_id = int(domjudge_script_id(compile_hash))
         run_id_num = int(domjudge_script_id(run_hash))
         compare_id = int(domjudge_script_id(compare_hash))
-        safe_submit_id = str(int(job_row["submit_id"]))
-        contest_id = domjudge_text(job_row["contest_id"]) or "local"
-        compile_config_json = domjudge_text(job_row["compile_config_json"])
-        run_config_json = domjudge_text(job_row["run_config_json"])
-        compare_config_json = domjudge_text(job_row["compare_config_json"])
+        compile_submission = self._s.batch_scheduler.source_submission(
+            str(domjudge_submit_id(domjudge_text(batch_row["compile_key"])))
+        )
+        if compile_submission is None:
+            raise RuntimeError("compile submission disappeared")
+        contest_id = domjudge_text(batch_row["contest_id"]) or "local"
+        compile_config_json = domjudge_text(batch_row["compile_config_json"])
+        run_config_json = domjudge_text(batch_row["run_config_json"])
+        compare_config_json = domjudge_text(batch_row["compare_config_json"])
         out: list[dict[str, object]] = []
         for row in rows:
             case_id = int(row["id"])
-            case_task_id = domjudge_text(row["task_id"], default=safe_task_id)
             out.append(
                 {
                     "type": "judging_run",
                     "judgetaskid": case_id,
-                    "jobid": int(job_id),
-                    "uuid": safe_task_id if grouped_job else case_task_id,
-                    "submitid": safe_submit_id,
+                    "jobid": int(batch_row["domjudge_job_id"]),
+                    "uuid": domjudge_text(batch_row["compile_key"]),
+                    "submitid": str(compile_submission.submit_id),
                     "contestid": contest_id,
                     "compile_script_id": str(int(compile_id)),
                     "run_script_id": str(int(run_id_num)),
@@ -619,7 +638,7 @@ class DispatchHandler(DispatchCacheMixin):
                     # DOMjudge fetches testcase files back by this id without
                     # including the judgehost hostname. Use our unique case id
                     # instead of the public test number to avoid collisions
-                    # across concurrent jobs and NAT/proxy-shared judgehosts.
+                    # across concurrent batches and NAT/proxy-shared judgehosts.
                     "testcase_id": str(case_id),
                     "testcase_hash": domjudge_text(row["testcase_hash"]),
                     "compile_config": compile_config_json,
@@ -647,7 +666,7 @@ class DispatchHandler(DispatchCacheMixin):
                 )
         self._s.host_telemetry.record_batch_leased(
             hostname,
-            int(job_id),
+            int(batch_id),
             [int(row["id"]) for row in rows],
             leased_monotonic=time.monotonic(),
         )
@@ -665,31 +684,31 @@ class DispatchHandler(DispatchCacheMixin):
         first_transition = True
         while first_transition or time.monotonic() < deadline:
             first_transition = False
-            job_row = self._s.job_scheduler.select_ready_job(safe_host)
-            if job_row is None:
+            batch_row = self._s.batch_scheduler.select_ready_batch(safe_host)
+            if batch_row is None:
                 self._queue._record_host_event_conn(hostname=safe_host, action="fetch")
                 return []
-            job_id = int(job_row["job_id"])
-            processed = self._domjudge_apply_cache_shortcuts_for_job(
-                job_id,
+            batch_id = int(batch_row["batch_id"])
+            processed = self._domjudge_apply_cache_shortcuts_for_batch(
+                batch_id,
                 hostname=safe_host,
                 limit=min(cache_remaining, self._CACHE_PROBE_CLAIM_SIZE),
                 deadline=deadline,
             )
             cache_remaining -= processed
-            refreshed = self._s.job_scheduler.fetch_job(job_id)
+            refreshed = self._s.batch_scheduler.fetch_batch(batch_id)
             if refreshed is None or domjudge_lower_text(refreshed["status"]) != "open":
                 continue
             needs_materialization = (
                 domjudge_lower_text(refreshed["materialization_state"]) != "ready"
-                and self._s.job_scheduler.job_case_count(job_id, status="pending") > 0
+                and self._s.batch_scheduler.batch_case_count(batch_id, status="pending") > 0
             )
-            if needs_materialization and not self._domjudge_materialize_job(job_id):
+            if needs_materialization and not self._domjudge_materialize_batch(batch_id):
                 return []
-            leased_cases = self._domjudge_lease_cases(job_id, safe_host, cap)
+            leased_cases = self._domjudge_lease_cases(batch_id, safe_host, cap)
             if leased_cases:
                 return leased_cases
-            self._result._domjudge_finalize_if_ready(job_id)
+            self._result._domjudge_finalize_batch_if_ready(batch_id)
             if processed == 0 or cache_remaining <= 0:
                 break
         return []
