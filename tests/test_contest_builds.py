@@ -392,34 +392,32 @@ class TestContestBuilds(ContestActionBase):
             return ExecResult(backend="test", status="error", returncode=1, elapsed_ms=1, stdout="", stderr="unexpected command")
 
         package_calls: list[dict[str, object]] = []
+        package_prepare_calls: list[dict[str, object]] = []
 
-        def _fake_run_build(problem: str, username: str, commit: str | None = None, **_kwargs: object) -> str:
-            problem_row = db_fetch_one("SELECT id FROM problems WHERE slug=?", [problem])
-            self.assertIsNotNone(problem_row)
-            ws_ctx = workspace_service.workspace_context(problem, username, include_recent=False)
-            workspace_id = int(ws_ctx["workspace"]["id"])
-            self.assertEqual(commit, str(ws_ctx["workspace"]["head_commit"] or ""))
-            verification_id = f"ver-{uuid.uuid4().hex[:12]}"
-            artifact_root = config.fs_manager.prepare_verification_layout(verification_id).root
-            artifact_root.mkdir(parents=True, exist_ok=True)
-            db_execute(
-                """
-                INSERT INTO verifications(id,problem_id,workspace_id,signature,source_commit,kind,status,created_at,finished_at)
-                VALUES(?,?,?,?,?,?,?,?,?)
-                """,
-                [
-                    verification_id,
-                    int(problem_row["id"]),
-                    workspace_id,
-                    "committed-signature",
-                    commit,
-                    "all",
-                    "ok",
-                    "2026-02-28T00:00:00+00:00",
-                    "2026-02-28T00:00:00+00:00",
-                ],
+        def _fake_prepare_package_verification(
+            problem: str,
+            username: str,
+            *,
+            actor_user_id: int,
+            problem_id: int,
+            workspace_id: int,
+            source_commit: str,
+            requested_verification_id: str,
+            ok_only: bool,
+        ) -> str:
+            package_prepare_calls.append(
+                {
+                    "problem": problem,
+                    "username": username,
+                    "actor_user_id": actor_user_id,
+                    "problem_id": problem_id,
+                    "workspace_id": workspace_id,
+                    "source_commit": source_commit,
+                    "requested_verification_id": requested_verification_id,
+                    "ok_only": ok_only,
+                }
             )
-            return verification_id
+            return f"ver-{uuid.uuid4().hex[:12]}"
 
         def _fake_create_export(
             problem: str,
@@ -438,7 +436,12 @@ class TestContestBuilds(ContestActionBase):
                     "source_commit": source_commit,
                 }
             )
-            export_dir = Path(config.settings.artifacts_root) / problem / verification_id / "export"
+            export_dir = (
+                Path(config.settings.artifacts_root)
+                / "exports"
+                / problem.replace("/", "-")
+                / "e-package-test"
+            )
             export_dir.mkdir(parents=True, exist_ok=True)
             out = export_dir / f"{problem.replace('/', '-')}-v1.zip"
             out.write_bytes(b"PK\x03\x04mock export")
@@ -456,7 +459,10 @@ class TestContestBuilds(ContestActionBase):
         with (
             patch.object(config.tex_compile_service.sandbox, "run", side_effect=_fake_sandbox_run),
             patch.object(config.preview_service, "sync_sample_payloads_for_snapshot", side_effect=_fake_sync_sample_payloads),
-            patch.object(config.verification_service, "run_verification", side_effect=_fake_run_build),
+            patch(
+                "app.impl.contest.shared.prepare_icpc_export_verification",
+                side_effect=_fake_prepare_package_verification,
+            ),
             patch.object(config.export_service, "create_export", side_effect=_fake_create_export),
         ):
             preview_start = contest_packages_preview_start(
@@ -506,6 +512,9 @@ class TestContestBuilds(ContestActionBase):
         )
         self.assertIsNotNone(package_artifact)
         self.assertEqual(len(package_calls), 1)
+        self.assertEqual(len(package_prepare_calls), 1)
+        self.assertTrue(bool(package_prepare_calls[0]["ok_only"]))
+        self.assertEqual(str(package_prepare_calls[0]["source_commit"]), commit_id)
         self.assertGreater(int(package_calls[0]["workspace_id"]), 0)
         self.assertEqual(str(package_calls[0]["source_commit"]), commit_id)
         package_summary = read_contest_job_summary(contest_id, package_job_id)

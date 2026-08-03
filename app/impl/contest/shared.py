@@ -12,8 +12,8 @@ from app.impl.auth.shared import redirect_response
 from app.impl.runtime.config import config
 from .common import _contest_problem_slug_file_token
 from app.impl.workspace.context_operation import audit, normalize_contest_slug_required
+from app.impl.workspace.context_job import prepare_icpc_export_verification
 from app.impl.workspace.context import global_user_ctx
-from app.impl.workspace.context_verification import latest_workspace_source_commit_verification
 from app.impl.workspace.access import workspace_access_context
 from app.service.repository.revision import workspace_revision_info
 from app.service.sandbox.base import ExecResult
@@ -1087,37 +1087,19 @@ def _run_contest_package_job_worker(
             item["source_commit"] = head_commit
             if not head_commit:
                 raise RuntimeError("no committed revision; commit changes first")
-            committed_verification = latest_workspace_source_commit_verification(
-                problem_id,
-                workspace_id,
-                head_commit,
+            verification_id = prepare_icpc_export_verification(
+                problem_slug,
+                actor_username,
+                actor_user_id=actor_user_id,
+                problem_id=problem_id,
+                workspace_id=workspace_id,
+                source_commit=head_commit,
+                requested_verification_id="",
                 ok_only=True,
             )
-            verification_id = (
-                str(committed_verification["id"] or "").strip()
-                if committed_verification is not None
-                else ""
-            )
-            if not verification_id:
-                verification_id = str(
-                    config.verification_service.run_verification(
-                        problem_slug,
-                        actor_username,
-                        commit=head_commit,
-                    )
-                    or ""
-                ).strip()
             if not verification_id:
                 raise RuntimeError("failed to resolve verification")
-            verification_row = config.contest_service.verification_stage(problem_id, workspace_id, verification_id)
-            if verification_row is None:
-                raise RuntimeError(f"verification metadata not found: {verification_id}")
-            verification_status = str(verification_row["status"] or "").strip().lower()
-            recorded_source_commit = str(verification_row["source_commit"] or "").strip()
-            if verification_status != "ok":
-                raise RuntimeError(f"verification status is {verification_status}")
-            if recorded_source_commit != head_commit:
-                raise RuntimeError("verification is not from the workspace HEAD")
+            item["verification_id"] = verification_id
             export_path = Path(
                 config.export_service.create_export(
                     problem_slug,
@@ -1127,16 +1109,12 @@ def _run_contest_package_job_worker(
                     source_commit=head_commit,
                 )
             ).resolve()
-            problem_artifacts_root = (config.settings.artifacts_root / problem_slug).resolve()
-            if problem_artifacts_root not in export_path.parents:
-                raise RuntimeError("invalid package artifact path")
             if not export_path.exists() or not export_path.is_file() or export_path.is_symlink():
                 raise RuntimeError("package file missing")
             file_token = _contest_problem_slug_file_token(problem_slug)
             output_name = f"{idx}-{file_token}.zip" if idx else f"{file_token}.zip"
             target_package = (packages_dir / output_name).resolve()
             shutil.copy2(export_path, target_package)
-            item["verification_id"] = verification_id
             item["package_file"] = f"packages/{output_name}"
             item["status"] = "success"
         except Exception as exc:

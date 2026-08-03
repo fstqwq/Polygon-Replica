@@ -289,6 +289,7 @@ def _icpc_verification_has_complete_artifacts(
     workspace_id: int,
     source_commit: str,
     test_ids: list[str],
+    ok_only: bool = False,
 ) -> bool:
     safe_verification_id = normalize_run_id_token(verification_id)
     if not safe_verification_id or not test_ids:
@@ -301,6 +302,8 @@ def _icpc_verification_has_complete_artifacts(
     if int(record.get("workspace_id") or 0) != int(workspace_id):
         return False
     if str(record.get("source_commit") or "") != str(source_commit or ""):
+        return False
+    if ok_only and str(record.get("status") or "") != Status.OK.value:
         return False
     refs = _icpc_verification_artifact_refs_by_source_id(safe_verification_id)
     for test_id in test_ids:
@@ -336,6 +339,7 @@ def _find_reusable_icpc_verification(
     workspace_id: int,
     source_commit: str,
     test_ids: list[str],
+    ok_only: bool,
 ) -> str:
     for row in config.verification_service.list_workspace_verification_rows(
         int(problem_id),
@@ -352,6 +356,7 @@ def _find_reusable_icpc_verification(
             workspace_id=workspace_id,
             source_commit=source_commit,
             test_ids=test_ids,
+            ok_only=ok_only,
         ):
             return verification_id
     return ""
@@ -405,7 +410,7 @@ def _run_icpc_export_data_generation(
             shutil.rmtree(snapshot.parent, ignore_errors=True)
 
 
-def _prepare_icpc_export_verification(
+def prepare_icpc_export_verification(
     problem: str,
     user: str,
     *,
@@ -414,6 +419,7 @@ def _prepare_icpc_export_verification(
     workspace_id: int,
     source_commit: str,
     requested_verification_id: str,
+    ok_only: bool = False,
 ) -> str:
     test_ids = _icpc_required_test_ids_for_commit(problem_id, workspace_id, source_commit)
     safe_requested_verification_id = normalize_run_id_token(requested_verification_id)
@@ -423,6 +429,7 @@ def _prepare_icpc_export_verification(
         workspace_id=workspace_id,
         source_commit=source_commit,
         test_ids=test_ids,
+        ok_only=ok_only,
     ):
         return safe_requested_verification_id
     reusable_verification_id = _find_reusable_icpc_verification(
@@ -430,6 +437,7 @@ def _prepare_icpc_export_verification(
         workspace_id=workspace_id,
         source_commit=source_commit,
         test_ids=test_ids,
+        ok_only=ok_only,
     )
     if reusable_verification_id:
         return reusable_verification_id
@@ -450,6 +458,7 @@ def _prepare_icpc_export_verification(
         workspace_id=workspace_id,
         source_commit=source_commit,
         test_ids=test_ids,
+        ok_only=ok_only,
     ):
         verification_row = config.verification_service.workspace_verification_detail(
             int(problem_id),
@@ -478,7 +487,7 @@ def _run_export_create_worker(problem: str, user: str, *, actor_user_id: int, pr
         if not effective_source_commit:
             raise ValueError('no committed revision; commit changes first')
         if safe_export_type == "icpc":
-            safe_requested_verification_id = _prepare_icpc_export_verification(
+            safe_requested_verification_id = prepare_icpc_export_verification(
                 problem,
                 user,
                 actor_user_id=actor_user_id,
