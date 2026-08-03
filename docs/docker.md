@@ -96,13 +96,18 @@ sudo docker run -d --name judgehost-0 \
   --hostname judgehost-0 \
   --privileged \
   -e DAEMON_ID=0 \
+  -e RUN_USER_UID_GID=60706 \
   -e JUDGEDAEMON_USERNAME=judgehost \
   -e JUDGEDAEMON_PASSWORD=<token from Settings> \
   -e DOMSERVER_BASEURL=http://host.docker.internal:8001/ \
   domjudge/judgehost:latest
 ```
 
-The web UI's Settings page generates the exact command for your tokens.
+The web UI's Settings page generates the exact command for your tokens. It assigns each daemon a
+distinct submission UID/GID using a configurable `base + DAEMON_ID` mapping. The default base,
+60706, starts at the standard systemd unused UID/GID gap, but it is not portable to every host.
+Before starting a container, verify that identity is unused on the Docker host with
+`getent passwd <id>` and `getent group <id>`, and review subordinate ID ranges when applicable.
 
 ## Upgrade
 

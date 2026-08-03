@@ -240,6 +240,18 @@
             <p class="muted">Comma-separated IDs used as judgehost suffix / DAEMON_ID (for example: 2,4,6,8). See your cpuid using <code>cat /proc/cpuinfo</code>.</p>
           </div>
           <div class="form-row">
+            <label for="judgehost_gen_script_run_uid_base">RUN_USER_UID_GID base</label>
+            <input
+              id="judgehost_gen_script_run_uid_base"
+              type="number"
+              min="1"
+              max="65533"
+              value="60706"
+              data-gen-script-run-uid-base="1"
+            />
+            <p class="muted">Each command uses <code>base + DAEMON_ID</code>, so the default maps daemon 12 to 60718. On standard systemd hosts, 60706-61183 is left unused by the regular and dynamic user allocators; choose a site-specific base if a generated ID leaves that range. Always verify each ID with <code>getent passwd &lt;id&gt;</code> and <code>getent group &lt;id&gt;</code>.</p>
+          </div>
+          <div class="form-row">
             <label for="judgehost_gen_script_baseurl">DOMSERVER_BASEURL</label>
             <input
               id="judgehost_gen_script_baseurl"

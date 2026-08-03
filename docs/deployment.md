@@ -192,8 +192,19 @@ setup uses:
 http://host.docker.internal:8001/
 ```
 
-For multiple judgehosts, assign separate container names, hostnames, and CPU sets. Keep the
-`JUDGEDAEMON_USERNAME` and `JUDGEDAEMON_PASSWORD` values aligned with Settings.
+For multiple judgehosts, assign separate container names, hostnames, CPU sets, and
+`RUN_USER_UID_GID` values. There is no universally safe numeric range: local users, directory
+services, subordinate IDs, and dynamic service users are host-specific. The Settings command
+generator exposes a configurable base and uses `base + DAEMON_ID` to keep each daemon's identity
+stable. Its default base is 60706; on standard systemd hosts, 60706-61183 is intentionally left
+between other allocator ranges. Daemon 12 therefore defaults to UID/GID 60718. Choose another
+site-specific base if any generated ID leaves the host's reserved range.
+
+Verify every generated UID and GID is unused through NSS with `getent passwd <id>` and
+`getent group <id>`. Also review `/etc/subuid` and `/etc/subgid` when user namespaces are enabled.
+Distinct submission identities prevent host-level per-user process accounting from being shared
+across judgehost containers. Keep the `JUDGEDAEMON_USERNAME` and `JUDGEDAEMON_PASSWORD` values
+aligned with Settings.
 
 For consistent judgedaemon performance, consider isolating judgehost CPU cores with
 `isolcpus` and disabling turbo boost on hosts dedicated to judging.

@@ -323,6 +323,7 @@
     }
 
     var cpuidInput = document.querySelector("[data-gen-script-cpuids='1']");
+    var runUidBaseInput = document.querySelector("[data-gen-script-run-uid-base='1']");
     var baseurlInput = document.querySelector("[data-gen-script-baseurl='1']");
     var sudoInput = document.querySelector("[data-gen-script-sudo='1']");
     var output = document.querySelector("[data-gen-script-output='1']");
@@ -371,14 +372,31 @@
       return ids.length ? ids : fallback;
     }
 
+    function parseRunUidBase(raw) {
+      var value = Number(String(raw || "").trim());
+      if (!Number.isFinite(value)) return 60706;
+      var safe = Math.floor(value);
+      return safe >= 1 && safe <= 65533 ? safe : 60706;
+    }
+
     function renderJudgehostGenScript() {
       var cpuIds = parseCpuIds(cpuidInput.value);
+      var runUidBase = parseRunUidBase(runUidBaseInput ? runUidBaseInput.value : "");
       var baseurl = normalizeBaseurl(baseurlInput.value);
       var username = safeText(usernameInput ? usernameInput.value : "", "judgehost");
       var password = safeText(tokenInput ? tokenInput.value : "", "REPLACE_WITH_JUDGEHOST_API_TOKEN");
       var commandPrefix = sudoInput && sudoInput.checked ? "sudo " : "";
       var lines = [];
+      var largestRunUidGid = runUidBase + Math.max.apply(null, cpuIds);
+      if (largestRunUidGid > 65533) {
+        output.value = "RUN_USER_UID_GID base is too large for the selected daemon IDs.";
+        return;
+      }
+      if (runUidBase === 60706 && largestRunUidGid > 61183) {
+        lines.push("# WARNING: generated IDs leave systemd's default unused 60706-61183 range.");
+      }
       cpuIds.forEach(function (daemonId) {
+        var runUserUidGid = runUidBase + daemonId;
         lines.push(
           commandPrefix +
             "docker run -d --privileged --cgroupns=host --storage-opt size=10G -v /sys/fs/cgroup:/sys/fs/cgroup:rw --add-host=host.docker.internal:host-gateway --name judgehost-" +
@@ -387,6 +405,8 @@
             String(daemonId) +
             " -e DAEMON_ID=" +
             String(daemonId) +
+            " -e RUN_USER_UID_GID=" +
+            String(runUserUidGid) +
             " -e CONTAINER_TIMEZONE=Asia/Shanghai -e DOMSERVER_BASEURL=" +
             baseurl +
             " -e JUDGEDAEMON_USERNAME=" +
@@ -401,6 +421,10 @@
 
     cpuidInput.addEventListener("input", renderJudgehostGenScript);
     cpuidInput.addEventListener("change", renderJudgehostGenScript);
+    if (runUidBaseInput) {
+      runUidBaseInput.addEventListener("input", renderJudgehostGenScript);
+      runUidBaseInput.addEventListener("change", renderJudgehostGenScript);
+    }
     baseurlInput.addEventListener("input", renderJudgehostGenScript);
     baseurlInput.addEventListener("change", renderJudgehostGenScript);
     if (sudoInput) {
