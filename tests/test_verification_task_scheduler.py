@@ -746,6 +746,8 @@ class TestVerificationTaskScheduler(E2ETestBase):
         self.assertEqual(len(solution), 2)
         self.assertEqual(len(graph.edges), 4)
         self.assertEqual({str(row["source_path"]) for row in generate}, {"generators/gen.cpp"})
+        self.assertEqual(len({str(row["logical_run_id"]) for row in generate}), 1)
+        self.assertTrue(str(generate[0]["logical_run_id"]))
 
 
 

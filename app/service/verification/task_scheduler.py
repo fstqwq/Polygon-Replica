@@ -45,6 +45,7 @@ class VerificationRuntimeCallbacks:
     probe_task_case_cache: Callable[[list[str], int], set[str]]
     resolve_case_result: Callable[[str, str], dict[str, object] | None]
     cancel_queued_tasks: Callable[[str], None]
+    close_logical_runs: Callable[[list[str]], None]
 
 
 @dataclass(frozen=True)
@@ -85,6 +86,18 @@ class _IncrementalDagState:
             task_id: str(row["status"])
             for task_id, row in self.rows_by_id.items()
         }
+        self.logical_run_id_by_task_id: dict[str, str] = {}
+        self.remaining_tasks_by_logical_run: dict[str, int] = {}
+        for task_id, row in self.rows_by_id.items():
+            logical_run_id = str(row["logical_run_id"])
+            if not logical_run_id:
+                raise RuntimeError(f"verification task {task_id} is missing logical run identity")
+            self.logical_run_id_by_task_id[task_id] = logical_run_id
+            if self.status_by_id[task_id] not in _TERMINAL_TASK_STATUSES:
+                self.remaining_tasks_by_logical_run[logical_run_id] = (
+                    self.remaining_tasks_by_logical_run.get(logical_run_id, 0) + 1
+                )
+        self.completed_logical_run_ids: deque[str] = deque()
         self.dependents_by_parent: dict[str, list[str]] = {}
         self.remaining_parents = {task_id: 0 for task_id in self.rows_by_id}
         for parent_id, child_id in edges:
@@ -156,6 +169,15 @@ class _IncrementalDagState:
         if status not in _TERMINAL_TASK_STATUSES:
             return True
         self.terminal_count += 1
+        logical_run_id = self.logical_run_id_by_task_id[task_id]
+        remaining = self.remaining_tasks_by_logical_run[logical_run_id] - 1
+        if remaining < 0:
+            raise RuntimeError("verification logical run task count underflow")
+        if remaining == 0:
+            self.remaining_tasks_by_logical_run.pop(logical_run_id, None)
+            self.completed_logical_run_ids.append(logical_run_id)
+        else:
+            self.remaining_tasks_by_logical_run[logical_run_id] = remaining
         if status != VerificationTaskStore.TASK_DONE:
             return True
         for child_id in self.dependents_by_parent.get(task_id, []):
@@ -166,6 +188,11 @@ class _IncrementalDagState:
             if self.status_by_id[child_id] == VerificationTaskStore.TASK_PENDING:
                 self._enqueue_if_ready(child_id)
         return True
+
+    def take_completed_logical_runs(self) -> list[str]:
+        values = list(self.completed_logical_run_ids)
+        self.completed_logical_run_ids.clear()
+        return values
 
     def task_for_case(self, judgehost_task_id: str, test_name: str) -> VerificationTaskRow | None:
         task_id = self.task_id_by_case.get((judgehost_task_id, test_name))
@@ -288,7 +315,9 @@ class VerificationRuntimeCoordinator:
             event = self._events.get() if deferred is None else deferred
             deferred = None
             if event.kind not in {"case_reported", "task_terminal"}:
-                if self._handle_event(event):
+                terminal = self._handle_event(event)
+                self._close_completed_logical_runs()
+                if terminal:
                     return
                 continue
             events = [event]
@@ -305,8 +334,15 @@ class VerificationRuntimeCoordinator:
                     deferred = candidate
                     break
                 events.append(candidate)
-            if self._handle_terminal_events(events):
+            terminal = self._handle_terminal_events(events)
+            self._close_completed_logical_runs()
+            if terminal:
                 return
+
+    def _close_completed_logical_runs(self) -> None:
+        logical_run_ids = self._dag.take_completed_logical_runs()
+        if logical_run_ids:
+            self._callbacks.close_logical_runs(logical_run_ids)
 
     def _handle_terminal_events(self, events: list[_VerificationEvent]) -> bool:
         from app.service.verification.task_result_finalize import finalize_verification_task_result

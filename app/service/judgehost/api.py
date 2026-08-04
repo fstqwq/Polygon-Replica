@@ -188,6 +188,15 @@ class Judgehost:
             self._result._domjudge_finalize_batch_if_ready(batch_id)
         self._terminal_cleanup.schedule(verification_id)
 
+    def close_logical_runs(self, verification_id: str, logical_run_ids: list[str]) -> None:
+        ready_batch_ids = self._state.batch_scheduler.finish_logical_runs(
+            verification_id,
+            logical_run_ids,
+            now_text=now_iso(),
+        )
+        for batch_id in ready_batch_ids:
+            self._result._domjudge_finalize_batch_if_ready(batch_id)
+
     def touch_verification_runtime(self, verification_id: str) -> None:
         self._terminal_cleanup.touch(verification_id)
 

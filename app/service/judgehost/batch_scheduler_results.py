@@ -642,15 +642,12 @@ class BatchSchedulerResultMixin:
 
     def release_host_leases(self, hostname: str, *, now_text: str) -> tuple[int, int]:
         with self._lock:
-            active_batch_id = self._active_batch_by_host.pop(hostname, None)
-            batch_ids = [] if active_batch_id is None else [active_batch_id]
-            affected_batch_ids = set(batch_ids)
-            for batch_id in batch_ids:
-                batch = self._batches.get(batch_id)
-                if batch is not None and batch.status == "open":
-                    batch.has_affinity = False
-                    if batch.compile_owner == hostname:
-                        batch.compile_owner = None
+            affinity_ids = self._affinity_batches_by_host.pop(hostname, ())
+            stolen_id = self._stolen_batch_by_host.pop(hostname, None)
+            context_batch_ids = set(affinity_ids)
+            if stolen_id is not None:
+                context_batch_ids.add(stolen_id)
+            affected_batch_ids = set(context_batch_ids)
             case_ids = list(self._leased_case_ids_by_host.get(hostname, ()))
             for case_id in case_ids:
                 case = self._cases[case_id]
@@ -665,8 +662,12 @@ class BatchSchedulerResultMixin:
                         refresh_batch=False,
                     )
                 affected_batch_ids.add(case.batch_id)
+            for batch_id in affected_batch_ids:
+                batch = self._batches.get(batch_id)
+                if batch is not None and batch.compile_owner == hostname:
+                    batch.compile_owner = None
             self._refresh_batches_locked(affected_batch_ids, updated_at=now_text)
-            return len(batch_ids), len(case_ids)
+            return len(context_batch_ids), len(case_ids)
 
     def _remove_cases_locked(self, case_ids: set[int]) -> None:
         cases = [self._cases[case_id] for case_id in case_ids if case_id in self._cases]
@@ -746,14 +747,12 @@ class BatchSchedulerResultMixin:
         batch = self._batches.pop(batch_id)
         if batch.status == "open":
             self._index_batch_scripts_locked(batch, -1)
-        self._ready_batch_ids.discard(batch_id)
+        self._batch_ids_in_heap.discard(batch_id)
         self._finalization_retry_deadlines.pop(batch_id, None)
-        self._release_batch_affinity_locked(batch)
-        if batch.execution_signature:
-            self._batch_id_by_execution.pop(
-                (batch.verification_id, batch.execution_signature),
-                None,
-            )
+        self._refresh_prerequisite_index_locked(batch, ready=False)
+        logical_run_key = (batch.verification_id, batch.logical_run_id)
+        self._batch_id_by_logical_run.pop(logical_run_key, None)
+        self._closed_logical_run_keys.discard(logical_run_key)
         self._case_ids_by_batch.pop(batch_id, None)
         self._batch_counts.pop(batch_id, None)
         self._batch_specs.pop(batch_id, None)

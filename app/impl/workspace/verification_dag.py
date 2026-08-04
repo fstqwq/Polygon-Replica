@@ -178,21 +178,34 @@ def _build_graph(
                 task_kind=run_task_kind,
             )
         )
+    if not accepted_selected_run_id:
+        accepted_selected_run_id = allocate_run_id()
     tasks: list[dict[str, object]] = []
     edges: list[tuple[str, str]] = []
     queue_index = 1
     main_ids: dict[str, str] = {}
+    generator_run_ids: dict[tuple[str, str, str, str], str] = {}
     for test_name in test_names:
         test_plan = test_plan_by_name.get(test_name)
         if test_plan is None:
             raise RuntimeError(f"verification test plan missing for {test_name}")
+        generator_key = (
+            test_plan.source_kind,
+            test_plan.execution_source_name,
+            sha256_hex_bytes(test_plan.execution_source_bytes),
+            json.dumps(test_plan.extra_sources_b64, ensure_ascii=True, sort_keys=True, separators=(",", ":")),
+        )
+        generator_run_id = generator_run_ids.get(generator_key)
+        if generator_run_id is None:
+            generator_run_id = allocate_run_id()
+            generator_run_ids[generator_key] = generator_run_id
         generate_id = task_store.allocate_id()
         tasks.append(
             {
                 "id": generate_id,
                 "task_kind": TASK_GENERATE_INPUT,
                 "source_path": test_plan.display_source_path,
-                "logical_run_id": "",
+                "logical_run_id": generator_run_id,
                 "test_name": test_name,
                 "expected_behavior": "accepted",
                 "queue_index": queue_index,
@@ -720,6 +733,7 @@ def _empty_task_result(
 def _publish_generate_task(task_row: VerificationTaskRow, *, execution: TaskExecutionContext, test_plan: VerificationTestPlan) -> TaskPublishResult:
     task_id = str(task_row["id"])
     test_name = str(task_row["test_name"])
+    logical_run_id = str(task_row["logical_run_id"])
     run_id = allocate_run_id()
     try:
         prepared = prepared_payload_for_uploaded_source(
@@ -755,7 +769,8 @@ def _publish_generate_task(task_row: VerificationTaskRow, *, execution: TaskExec
             run_id=str(prepared.get("run_id") or run_id),
             selected_tests=[],
             verification_id=execution.verification_id,
-            verification_run_ids=[str(prepared.get("run_id") or run_id)],
+            verification_run_ids=[logical_run_id],
+            logical_run_id=logical_run_id,
             expected_behavior="accepted",
             verification_source=TASK_GENERATE_INPUT,
             task_kind=TASK_GENERATE_INPUT,
@@ -848,6 +863,7 @@ def _publish_run_task(task_row: VerificationTaskRow, *, execution: TaskExecution
             selected_tests=[test_name],
             verification_id=execution.verification_id,
             verification_run_ids=[logical_run_id or run_id],
+            logical_run_id=logical_run_id,
             expected_behavior=expected_behavior,
             verification_source=verification_source,
             task_kind=task_kind,
@@ -1178,6 +1194,10 @@ def run_workspace_verification_dag(
                 test_name,
             ),
             cancel_queued_tasks=_cancel_queued_tasks,
+            close_logical_runs=lambda logical_run_ids: config.judgehost_task_service.close_logical_runs(
+                verification_id,
+                logical_run_ids,
+            ),
         )
         coordinator = VerificationRuntimeCoordinator(
             verification_id,

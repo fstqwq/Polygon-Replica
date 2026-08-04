@@ -161,9 +161,10 @@ The runtime keeps four distinct lifecycle layers:
 - A DOMjudge case is leased independently. Explicitly disabling a host releases
   its `leased` cases back to `pending`; result and cache I/O first claim the Case
   as `reporting` or `cache-probing`, then commit a terminal result.
-- An internal `ExecutionBatch` is a temporary scheduling and materialization
-  container. A grouped Batch may contain several tasks from one Verification,
-  but it is not a DOMjudge protocol identity.
+- An internal `ExecutionBatch` is the scheduling and materialization container
+  for one logical run inside one Verification. Its unique identity is
+  `(verification_id, logical_run_id)`, and every appended task must have the
+  same execution signature. It is not a DOMjudge protocol identity.
 
 The existing DOMjudge fields have independent identities:
 
@@ -172,7 +173,7 @@ The existing DOMjudge fields have independent identities:
 - `uuid` is that full compile-input SHA-256.
 - `judgetaskid` is the internal Case ID.
 
-Consequently, rolling Batches inside one Verification reuse one `jobid`, while
+Consequently, all Batches inside one Verification reuse one `jobid`, while
 identical compile inputs reuse one `submitid` and `uuid`. The source endpoint
 resolves the immutable compile submission by `submitid`. Active-runtime numeric
 ID collisions fail enqueue instead of selecting a different protocol ID.
@@ -182,11 +183,15 @@ Cancellation moves idle cases directly to `cancelled`. An in-flight
 when the current claim commits or aborts. Late judgedaemon callbacks are
 acknowledged without reviving the case.
 
-The last terminal Case atomically changes its Batch from `open` to
-`finalize-pending` and removes it from the appendable group index. Exactly one
-finalizer can claim `finalize-pending -> finalizing`; failure returns the Batch to
-`finalize-pending` for indexed retry. A task arriving after closure receives a
-new rolling grouped Batch instead of reopening the old one.
+The Coordinator closes a logical run only after all of its planned task results
+are durable and their DAG transitions have been applied. The Batch may therefore
+remain open while it temporarily has no ready Cases. Once the logical run is
+closed and all of its Cases are terminal, the Scheduler atomically changes the
+Batch from `open` to `finalize-pending`; later appends are rejected rather than
+creating a rolling replacement. Exactly one finalizer can claim
+`finalize-pending -> finalizing`, and failure returns the Batch to
+`finalize-pending` for indexed retry. Verification cleanup closes any omitted
+logical runs as an idempotent fallback.
 
 Later judgehost polls service the finalization retry heap. Duplicate result
 callbacks are idempotent after the first reporting claim. A transient publication
@@ -202,13 +207,14 @@ edge once. The judgehost Task Registry stores only identity, immutable request
 fingerprints, result receipts, wait conditions, and terminal cleanup metadata; it
 does not schedule work.
 
-Execution scheduling uses one global ready-Batch heap plus one cache-pending heap and
-one runnable Case heap per Batch. Heap entries carry generations and are rebuilt only
-when their local stale ratio crosses a threshold. Fetch does not scan or sort all
-Tasks, Batches, or Cases. One ordinary reentrant lock protects only in-memory
-dictionaries, counters, sets, and heaps; cache, filesystem, SQLite, and Coordinator
-notifications are never accessed while it is held. Executable callbacks use a
-lifecycle-maintained script-ID index rather than scanning open Batches.
+Execution scheduling uses one global ready-Batch heap plus one cache-pending heap
+and one runnable Case heap per Batch. The global heap contains at most one entry
+per ready Batch and orders only by service class, first-dispatch state, Verification
+scope, and Batch ID. Fetch does not scan or sort all Tasks, Batches, or Cases. One
+ordinary reentrant lock protects only in-memory dictionaries, counters, sets, and
+heaps; cache, filesystem, SQLite, and Coordinator notifications are never accessed
+while it is held. Executable callbacks use a lifecycle-maintained script-ID index
+rather than scanning open Batches.
 
 Cases enter a Batch as `staged`, atomically activate as `cache-pending`, and cannot be
 leased until their exact result-cache probe misses. A full cache hit reaches
@@ -229,12 +235,21 @@ global mutex only maintains ref-counted key locks. Fetch fallback probes cache C
 in 32-Case claim chunks until it finds runnable work, exhausts pending cache work,
 or reaches its monotonic-time budget.
 
-Only two service classes exist: foreground direct/compile-only work and background
-verification work. Foreground work cooperatively preempts between fetch batches;
-already leased Cases are never cancelled. Within a Job, ready Cases are leased by
-numeric test ordinal. Across Jobs, the scheduler prefers service class, earliest
-verification scope, next test ordinal, and admission order while retaining active
-Job affinity.
+Only two global service classes exist: foreground direct/compile-only work and
+background verification work. Foreground work cooperatively preempts between fetch
+batches; already leased Cases are never cancelled. Within an ExecutionBatch, ready
+Cases are leased by numeric test ordinal.
+
+Each host keeps a FIFO warm queue of at most four Batches plus one stolen Batch.
+It first continues ready work from that queue, then its current stolen Batch. If
+all warm Batches are blocked, the host may help a ready `main-correct` or
+`generate-input` Batch from the same Verification because that work can unblock
+the queue; this prerequisite preference is local and never changes global ordering
+between Verifications. Otherwise the host selects from the global heap. A Batch
+selected from the heap is marked dispatched permanently, so undispatched Batches
+are spread before already-dispatched work is stolen. A full warm queue does not
+adopt another Batch: the host may keep only one stolen Batch until that Batch is
+blocked or closed.
 
 There is no automatic Case lease timeout. Judgehost registration is also a
 heartbeat and therefore cannot safely distinguish a restart from a live daemon.
@@ -250,7 +265,7 @@ After a verification's final detail and status are durable, one process-wide
 deadline scheduler starts a 60-second quiet window. Late result, internal-error,
 debug-info, or lease-return activity restarts that verification's window. At the
 deadline only that verification's indexed terminal task/case identities are
-removed; a shared job remains until its final owner is quiet. Unknown callbacks
+removed; content-addressed cache entries remain independent. Unknown callbacks
 after cleanup are acknowledged as idempotent no-ops. This cleanup never removes
 the exact case cache or executable cache, so it does not reduce cache hit rate and
 does not require a periodic full-store retention scan.

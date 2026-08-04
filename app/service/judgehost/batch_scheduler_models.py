@@ -44,7 +44,9 @@ class CaseResult:
 
 class ExecutionBatchRow(TypedDict):
     batch_id: int
+    logical_run_id: str
     execution_signature: str
+    task_kind: str
     verification_id: str
     domjudge_job_id: int
     compile_key: str
@@ -122,7 +124,9 @@ class ExecutionBatchFinalizationClaim(TypedDict):
 @dataclass
 class ExecutionBatchRecord:
     batch_id: int
+    logical_run_id: str
     execution_signature: str
+    task_kind: str
     verification_id: str
     domjudge_job_id: int
     compile_key: str
@@ -146,9 +150,7 @@ class ExecutionBatchRecord:
     compile_owner: str | None
     materialization_state: str
     service_class: str
-    has_affinity: bool
-    admission_sequence: int
-    generation: int
+    has_been_dispatched: bool
     compile_output_b64: str | None
     compile_metadata_b64: str | None
     debug_text: str

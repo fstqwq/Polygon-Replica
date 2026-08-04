@@ -167,13 +167,17 @@ def _run_stability_probe(
         selected_tests=[plan.test_name],
         verification_id=verification_id,
         verification_run_ids=[run_id],
+        logical_run_id=run_id,
         expected_behavior="unknown",
         verification_source="sanity-check",
         bypass_case_result_cache=bypass_case_result_cache,
         compile_only=False,
         persist_verification_run=False,
     )
-    return _result_verdict(config.judgehost_task_service.wait_for_task_case_result(task_id, plan.test_name))
+    try:
+        return _result_verdict(config.judgehost_task_service.wait_for_task_case_result(task_id, plan.test_name))
+    finally:
+        config.judgehost_task_service.close_logical_runs(verification_id, [run_id])
 
 
 def _run_stability_checks(

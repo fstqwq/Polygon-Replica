@@ -192,16 +192,18 @@ class ResultProcessor:
         )
         if leased_match is not None:
             return leased_match
-        batch_row = self._s.batch_scheduler.active_batch_for_host(safe_host)
-        if batch_row is None:
-            return None
         field = domjudge_script_hash_field(kind)
-        script_hash = domjudge_lower_text(batch_row[field])
-        if not script_hash:
+        matching: dict[int, str] = {}
+        for batch_row in self._s.batch_scheduler.host_context_batches(safe_host):
+            script_hash = domjudge_lower_text(batch_row[field])
+            if script_hash and domjudge_script_id(script_hash) == requested_id:
+                matching[int(batch_row["batch_id"])] = script_hash
+        matching_hashes = set(matching.values())
+        if len(matching_hashes) != 1:
             return None
-        if domjudge_script_id(script_hash) != requested_id:
-            return None
-        return (int(batch_row["batch_id"]), script_hash)
+        script_hash = next(iter(matching_hashes))
+        batch_id = next(batch_id for batch_id, value in matching.items() if value == script_hash)
+        return (batch_id, script_hash)
 
     def _domjudge_shared_script_hash(self, *, kind: str, requested_id: int) -> str:
         matching_hashes = self._s.batch_scheduler.active_script_hashes(kind, requested_id)

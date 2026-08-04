@@ -516,6 +516,7 @@ class TaskEnqueue:
         selected_tests: list[str],
         verification_id: str,
         verification_run_ids: list[str],
+        logical_run_id: str,
         expected_behavior: str,
         verification_source: str,
         run_id: str,
@@ -587,6 +588,7 @@ class TaskEnqueue:
             "selected_tests": list(selected_tests),
             "verification_id": verification_id,
             "verification_run_ids": list(verification_run_ids),
+            "logical_run_id": logical_run_id,
             "expected_behavior": expected_behavior,
             "verification_source": verification_source,
             "task_kind": safe_task_kind,
@@ -891,6 +893,7 @@ class TaskEnqueue:
         selected_tests: list[str] | None,
         verification_id: str,
         verification_run_ids: list[str] | None,
+        logical_run_id: str | None = None,
         expected_behavior: str,
         verification_source: str,
         task_kind: str = "",
@@ -900,6 +903,7 @@ class TaskEnqueue:
         selected = self._normalize_list(selected_tests, matcher=RUN_TEST_NAME_RE)
         verification_run_id_list = self._normalize_list(verification_run_ids, matcher=_RUN_ID_RE)
         safe_run_id = self._core.normalize_run_id(run_id)
+        safe_logical_run_id = self._core.normalize_run_id(logical_run_id or safe_run_id)
         payload = self._build_task_payload(
             problem=problem,
             username=username,
@@ -911,6 +915,7 @@ class TaskEnqueue:
             selected_tests=selected,
             verification_id=verification_id,
             verification_run_ids=verification_run_id_list,
+            logical_run_id=safe_logical_run_id,
             expected_behavior=expected_behavior,
             verification_source=verification_source,
             task_kind=task_kind,
@@ -984,6 +989,7 @@ class TaskEnqueue:
         selected_tests: list[str] | None,
         verification_id: str = "",
         verification_run_ids: list[str] | None = None,
+        logical_run_id: str | None = None,
         expected_behavior: str,
         verification_source: str,
         task_kind: str = "",
@@ -995,6 +1001,7 @@ class TaskEnqueue:
         service_class: str = "background",
     ) -> str:
         safe_run_id = self._core.normalize_run_id(run_id if run_id else verification_id)
+        safe_logical_run_id = self._core.normalize_run_id(logical_run_id or safe_run_id)
         safe_verification_id = self._verification_id(verification_id)
         selected = self._normalize_list(selected_tests, matcher=RUN_TEST_NAME_RE)
         verification_run_id_list = self._normalize_list(verification_run_ids, matcher=_RUN_ID_RE)
@@ -1016,6 +1023,7 @@ class TaskEnqueue:
             selected_tests=selected,
             verification_id=safe_verification_id,
             verification_run_ids=verification_run_id_list,
+            logical_run_id=safe_logical_run_id,
             expected_behavior=expected_behavior,
             verification_source=verification_source,
             task_kind=task_kind,
@@ -1042,6 +1050,7 @@ class TaskEnqueue:
         payload["selected_tests"] = list(selected)
         payload["verification_id"] = safe_verification_id
         payload["verification_run_ids"] = list(verification_run_id_list)
+        payload["logical_run_id"] = safe_logical_run_id
         payload["expected_behavior"] = expected_behavior
         payload["verification_source"] = verification_source
         payload["task_kind"] = safe_task_kind

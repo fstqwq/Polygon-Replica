@@ -104,6 +104,7 @@ def _create_batch(
     work_root: str,
     case_rows: list[dict[str, object]],
     execution_signature: str | None = None,
+    logical_run_id: str | None = None,
 ) -> int:
     signature = hashlib.sha256(
         (execution_signature or f"signature-{task_id}").encode("utf-8")
@@ -111,7 +112,9 @@ def _create_batch(
     return store.create_batch_with_cases(
         task_id=task_id,
         run_id=run_id,
+        logical_run_id=logical_run_id or run_id,
         execution_signature=signature,
+        task_kind="solution-run",
         verification_id="ver-1",
         compile_key=_COMPILE_KEY,
         compile_submission=_compile_submission(),
@@ -141,7 +144,7 @@ class TestJudgehostStateLifecycle(unittest.TestCase):
     def setUp(self) -> None:
         self.store = BatchScheduler(id_base=100)
 
-    def test_execution_batch_lives_until_verification_finishes(self) -> None:
+    def test_execution_batch_closes_when_logical_run_finishes(self) -> None:
         batch_id = _create_batch(
             self.store,
             task_id="task-append-first",
@@ -149,6 +152,7 @@ class TestJudgehostStateLifecycle(unittest.TestCase):
             work_root="/tmp/append-first",
             case_rows=[_case_row("task-append-first", "run-append-first", "001.in", 1)],
             execution_signature="shared-signature",
+            logical_run_id="logical-shared",
         )
         _finish_pending_case(self.store, batch_id, "001.in")
         self.assertEqual(self.store.fetch_batch(batch_id)["status"], "open")
@@ -161,15 +165,13 @@ class TestJudgehostStateLifecycle(unittest.TestCase):
             work_root="/tmp/ignored-for-existing-batch",
             case_rows=[_case_row("task-later", "run-later", "002.in", 1)],
             execution_signature="shared-signature",
+            logical_run_id="logical-shared",
         )
         self.assertEqual(same_batch_id, batch_id)
         _finish_pending_case(self.store, batch_id, "002.in")
         self.assertEqual(self.store.fetch_batch(batch_id)["status"], "open")
 
-        self.assertEqual(
-            self.store.finish_verification_execution("ver-1", now_text=_NOW),
-            [batch_id],
-        )
+        self.assertEqual(self.store.finish_logical_runs("ver-1", ["logical-shared"], now_text=_NOW), [batch_id])
         self.assertIsNotNone(self.store.claim_batch_finalization(batch_id, now_text=_NOW))
         self.assertIsNone(self.store.claim_batch_finalization(batch_id, now_text=_NOW))
         with self.assertRaisesRegex(RuntimeError, "execution is closed"):
@@ -180,8 +182,48 @@ class TestJudgehostStateLifecycle(unittest.TestCase):
                 work_root="/tmp/too-late",
                 case_rows=[_case_row("task-too-late", "run-too-late", "003.in", 1)],
                 execution_signature="shared-signature",
+                logical_run_id="logical-shared",
             )
         self.assertEqual(len(self.store.cases_for_batch(batch_id)), 2)
+
+    def test_batch_identity_is_logical_run_not_execution_signature(self) -> None:
+        first_batch = _create_batch(
+            self.store,
+            task_id="task-logical-first",
+            run_id="run-logical-first",
+            work_root="/tmp/logical-first",
+            case_rows=[_case_row("task-logical-first", "run-logical-first", "001.in", 1)],
+            execution_signature="shared-execution",
+            logical_run_id="logical-first",
+        )
+        second_batch = _create_batch(
+            self.store,
+            task_id="task-logical-second",
+            run_id="run-logical-second",
+            work_root="/tmp/logical-second",
+            case_rows=[_case_row("task-logical-second", "run-logical-second", "001.in", 1)],
+            execution_signature="shared-execution",
+            logical_run_id="logical-second",
+        )
+
+        self.assertNotEqual(first_batch, second_batch)
+        with self.assertRaisesRegex(RuntimeError, "execution identity changed"):
+            _create_batch(
+                self.store,
+                task_id="task-logical-first-later",
+                run_id="run-logical-first-later",
+                work_root="/tmp/logical-first-later",
+                case_rows=[
+                    _case_row(
+                        "task-logical-first-later",
+                        "run-logical-first-later",
+                        "002.in",
+                        2,
+                    )
+                ],
+                execution_signature="changed-execution",
+                logical_run_id="logical-first",
+            )
 
     def test_task_cases_cannot_span_batches(self) -> None:
         first_batch = _create_batch(
@@ -207,6 +249,7 @@ class TestJudgehostStateLifecycle(unittest.TestCase):
                 work_root="/tmp/second-batch",
                 case_rows=[_case_row("task-first-batch", "run-first-batch", "002.in", 2)],
                 execution_signature="signature-task-second-batch",
+                logical_run_id="new-logical-run",
             )
         duplicate = _create_batch(
             self.store,
@@ -215,6 +258,7 @@ class TestJudgehostStateLifecycle(unittest.TestCase):
             work_root="/tmp/first-batch",
             case_rows=[_case_row("task-first-batch", "run-first-batch", "001.in", 1)],
             execution_signature="signature-task-first-batch",
+            logical_run_id="run-first-batch",
         )
         self.assertEqual(duplicate, first_batch)
         reordered = _case_row("task-first-batch", "run-first-batch", "001.in", 2)
@@ -226,6 +270,7 @@ class TestJudgehostStateLifecycle(unittest.TestCase):
                 work_root="/tmp/first-batch",
                 case_rows=[reordered],
                 execution_signature="signature-task-first-batch",
+                logical_run_id="run-first-batch",
             )
         with self.assertRaisesRegex(RuntimeError, "case set is immutable"):
             _create_batch(
@@ -238,6 +283,7 @@ class TestJudgehostStateLifecycle(unittest.TestCase):
                     _case_row("task-first-batch", "run-first-batch", "002.in", 2),
                 ],
                 execution_signature="signature-task-first-batch",
+                logical_run_id="run-first-batch",
             )
 
     def test_forget_runs_removes_set_indexes(self) -> None:
@@ -255,6 +301,7 @@ class TestJudgehostStateLifecycle(unittest.TestCase):
             work_root="/tmp/forget-linear",
             case_rows=[_case_row("task-second", "run-second", "002.in", 1)],
             execution_signature="signature-task-first",
+            logical_run_id="run-first",
         )
         self.assertEqual(same_batch, batch_id)
 
@@ -264,33 +311,25 @@ class TestJudgehostStateLifecycle(unittest.TestCase):
         self.assertEqual(removed_batches, 1)
         self.assertIsNone(self.store.fetch_batch(batch_id))
 
-    def test_run_index_cancels_every_grouped_batch_without_history_scan(self) -> None:
+    def test_run_index_cancels_multiple_batches_without_history_scan(self) -> None:
         batch_ids = []
+        run_ids = []
         for sequence in range(2):
             task_id = f"task-shared-run-{sequence}"
+            run_id = f"primary-run-{sequence}"
+            run_ids.append(run_id)
             batch_ids.append(
                 _create_batch(
                     self.store,
                     task_id=task_id,
-                    run_id=f"primary-run-{sequence}",
+                    run_id=run_id,
                     work_root=f"/tmp/shared-run-{sequence}",
-                    case_rows=[_case_row(task_id, "shared-run", "001.in", 1)],
+                    case_rows=[_case_row(task_id, run_id, "001.in", 1)],
                 )
             )
 
-        same_batch = _create_batch(
-            self.store,
-            task_id="task-shared-run-late",
-            run_id="shared-run",
-            work_root="/tmp/shared-run-0",
-            case_rows=[_case_row("task-shared-run-late", "shared-run", "002.in", 1)],
-            execution_signature="signature-task-shared-run-0",
-        )
-        self.assertEqual(same_batch, batch_ids[0])
-        self.assertEqual(self.store.batch_for_run("shared-run")["batch_id"], batch_ids[1])
-
         self.assertEqual(
-            self.store.cancel_batches_for_runs(["shared-run"], now_text=_NOW),
+            self.store.cancel_batches_for_runs(run_ids, now_text=_NOW),
             batch_ids,
         )
         self.assertEqual(
@@ -542,6 +581,7 @@ class TestJudgehostLifecycle(DBTestBase):
             run_id=first_run,
             work_root=str(work_root),
             execution_signature="shared-group",
+            logical_run_id="logical-shared-group",
             case_rows=[_case_row(first_task, first_run, "001.in", 1)],
         )
         appended_batch = _create_batch(
@@ -551,6 +591,7 @@ class TestJudgehostLifecycle(DBTestBase):
             work_root=str(work_root),
             case_rows=[_case_row(second_task, second_run, "002.in", 1)],
             execution_signature="shared-group",
+            logical_run_id="logical-shared-group",
         )
         self.assertEqual(appended_batch, batch_id)
         self.assertTrue(store.activate_task_cases(second_task, now_text=_NOW))

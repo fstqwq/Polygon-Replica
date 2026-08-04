@@ -116,6 +116,7 @@ def _custom_input_expected_answer(
         selected_tests=[plan.test_name],
         verification_id=verification_id,
         verification_run_ids=[run_id],
+        logical_run_id=run_id,
         expected_behavior="accepted",
         verification_source="main-correct",
         task_kind="main-correct",
@@ -124,21 +125,24 @@ def _custom_input_expected_answer(
         persist_verification_run=False,
         prepared_payload=prepared,
     )
-    case_result = config.judgehost_task_service.wait_for_task_case_result(task_id, plan.test_name)
-    verdict, message = _result_verdict(case_result)
-    if verdict != "OK":
-        raise RuntimeError(message or "accepted solution failed on custom sample input")
-    output_ref, work_root, _case_id = config.judgehost_task_service.domjudge_case_output_for_task(
-        task_id,
-        plan.test_name,
-    )
-    if not output_ref:
-        output_ref = _result_output_ref(case_result)
-        work_root = None
-    answer_bytes = config.judgehost_task_service.resolve_artifact_blob(output_ref, work_root=work_root)
-    if answer_bytes is None:
-        raise RuntimeError("accepted solution output is unavailable for custom sample input")
-    return answer_bytes
+    try:
+        case_result = config.judgehost_task_service.wait_for_task_case_result(task_id, plan.test_name)
+        verdict, message = _result_verdict(case_result)
+        if verdict != "OK":
+            raise RuntimeError(message or "accepted solution failed on custom sample input")
+        output_ref, work_root, _case_id = config.judgehost_task_service.domjudge_case_output_for_task(
+            task_id,
+            plan.test_name,
+        )
+        if not output_ref:
+            output_ref = _result_output_ref(case_result)
+            work_root = None
+        answer_bytes = config.judgehost_task_service.resolve_artifact_blob(output_ref, work_root=work_root)
+        if answer_bytes is None:
+            raise RuntimeError("accepted solution output is unavailable for custom sample input")
+        return answer_bytes
+    finally:
+        config.judgehost_task_service.close_logical_runs(verification_id, [run_id])
 
 
 def validate_custom_sample_outputs(
@@ -207,6 +211,7 @@ def validate_custom_sample_outputs(
                 selected_tests=[plan.test_name],
                 verification_id=verification_id,
                 verification_run_ids=[run_id],
+                logical_run_id=run_id,
                 expected_behavior="accepted",
                 verification_source="sanity-check",
                 bypass_case_result_cache=bypass_case_result_cache,
@@ -214,7 +219,10 @@ def validate_custom_sample_outputs(
                 persist_verification_run=False,
                 prepared_payload=prepared_payload,
             )
-            case_result = config.judgehost_task_service.wait_for_task_case_result(task_id, plan.test_name)
+            try:
+                case_result = config.judgehost_task_service.wait_for_task_case_result(task_id, plan.test_name)
+            finally:
+                config.judgehost_task_service.close_logical_runs(verification_id, [run_id])
         except Exception as exc:
             error_text = f"custom sample output failed on {plan.test_name}: {str(exc) or 'judgehost sample validation failed'}"
             lines.append(f"{plan.test_name}: failed - {str(exc) or 'judgehost sample validation failed'}")

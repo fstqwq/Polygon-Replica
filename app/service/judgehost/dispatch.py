@@ -471,6 +471,8 @@ class DispatchHandler(DispatchCacheMixin):
 
         now_text = now_iso()
         verification_id = canonical_verification_id(domjudge_text(payload.get("verification_id")))
+        logical_run_id = domjudge_text(payload.get("logical_run_id"))
+        task_kind = self._toolkit.task_kind(payload)
         scope_sequence = self._s.batch_scheduler.scope_sequence(verification_id)
         case_rows = self._domjudge_case_rows(
             task_id=task_id,
@@ -497,7 +499,9 @@ class DispatchHandler(DispatchCacheMixin):
         return self._s.batch_scheduler.create_batch_with_cases(
             task_id=task_id,
             run_id=run_id,
+            logical_run_id=logical_run_id,
             execution_signature=execution_signature,
+            task_kind=task_kind,
             verification_id=verification_id,
             compile_key=full_compile_key,
             compile_submission=compile_submission,

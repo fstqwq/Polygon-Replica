@@ -30,7 +30,7 @@ def _task_row(
         "predecessor_task_id": "",
         "task_kind": task_kind,
         "source_path": source_path,
-        "logical_run_id": logical_run_id,
+        "logical_run_id": logical_run_id or f"run-{task_id}",
         "test_name": test_name,
         "expected_behavior": "accepted",
         "queue_index": queue_index,
@@ -217,6 +217,7 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
                     status=VerificationTaskStore.TASK_PENDING,
                     queue_index=1,
                     source_path="generators/gen.cpp",
+                    logical_run_id="logical-generate",
                 ),
                 _task_row(
                     "vt-main",
@@ -224,11 +225,13 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
                     status=VerificationTaskStore.TASK_PENDING,
                     queue_index=2,
                     source_path="solutions/main.cpp",
+                    logical_run_id="logical-main",
                 ),
             ],
             edges=[("vt-generate", "vt-main")],
         )
         publish_order: list[str] = []
+        closed_logical_runs: list[str] = []
         final_result = TaskExecutionResult(
             task_id="vt-generate",
             status=VerificationTaskStore.TASK_DONE,
@@ -260,6 +263,7 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
             probe_task_case_cache=lambda _task_ids, _limit: set(),
             resolve_case_result=lambda _task_id, _test_name: None,
             cancel_queued_tasks=lambda _reason: None,
+            close_logical_runs=closed_logical_runs.extend,
         )
         coordinator = VerificationRuntimeCoordinator(
             "ver-runtime",
@@ -291,6 +295,12 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
             rows = {str(row["id"]): row for row in store.list_rows("ver-runtime")}
             self.assertEqual(str(rows["vt-generate"]["status"]), VerificationTaskStore.TASK_DONE)
             self.assertEqual(str(rows["vt-main"]["status"]), VerificationTaskStore.TASK_QUEUED)
+            self._wait_until(
+                lambda: closed_logical_runs == ["logical-generate"],
+                timeout=2.0,
+                interval=0.01,
+                message="durable logical run result did not close its execution batch",
+            )
         finally:
             coordinator.enqueue_cancel("test shutdown")
             thread.join(timeout=2.0)
@@ -376,6 +386,7 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
             probe_task_case_cache=_probe,
             resolve_case_result=lambda _task_id, _test_name: None,
             cancel_queued_tasks=lambda _reason: None,
+            close_logical_runs=lambda _run_ids: None,
         )
         coordinator = VerificationRuntimeCoordinator(
             "ver-large-batch",
@@ -460,6 +471,7 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
             probe_task_case_cache=lambda _task_ids, _limit: set(),
             resolve_case_result=lambda _task_id, _test_name: None,
             cancel_queued_tasks=lambda _reason: None,
+            close_logical_runs=lambda _run_ids: None,
         )
         coordinator = VerificationRuntimeCoordinator(
             "ver-validator-stop",
@@ -544,6 +556,7 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
             probe_task_case_cache=lambda _task_ids, _limit: set(),
             resolve_case_result=lambda _task_id, _test_name: None,
             cancel_queued_tasks=lambda reason: queued_cancel_reasons.append(reason),
+            close_logical_runs=lambda _run_ids: None,
         )
         coordinator = VerificationRuntimeCoordinator(
             "ver-runtime-cancel",
@@ -625,6 +638,7 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
                 probe_task_case_cache=lambda _task_ids, _limit: set(),
                 resolve_case_result=lambda _task_id, _test_name: None,
                 cancel_queued_tasks=lambda _reason: None,
+                close_logical_runs=lambda _run_ids: None,
             ),
             edges=list(zip(task_ids, task_ids[1:])),
         )
@@ -704,6 +718,7 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
                 probe_task_case_cache=lambda _task_ids, _limit: set(),
                 resolve_case_result=lambda _task_id, _test_name: {"status": "ok"},
                 cancel_queued_tasks=lambda _reason: None,
+                close_logical_runs=lambda _run_ids: None,
             ),
             edges=[("vt-parent-a", "vt-child"), ("vt-parent-b", "vt-child")],
         )
