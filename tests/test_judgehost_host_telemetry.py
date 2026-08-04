@@ -1,159 +1,205 @@
 from __future__ import annotations
 
+import hashlib
 import unittest
 
-from app.service.judgehost.host_telemetry import HostTelemetryStore
+from app.service.judgehost.batch_scheduler import BatchScheduler
+from app.service.judgehost.batch_scheduler_models import (
+    CaseReportTelemetry,
+    CompileSubmission,
+    ExecutionBatchSpec,
+)
+from app.service.judgehost.case_result import build_case_result
+from app.service.judgehost.identity import domjudge_submit_id
+
+
+_NOW = "2026-08-03T01:00:00+00:00"
+_HASH = "1" * 64
+_COMPILE_KEY = "5" * 64
+
+
+def _result(test_name: str):
+    return build_case_result(
+        test_name=test_name,
+        runresult="correct",
+        verdict="OK",
+        runtime_sec=0.001,
+        cpu_sec=0.001,
+        wall_sec=0.002,
+        memory_kb=1024,
+        score_text="",
+        output_run_rel="",
+        output_error_rel="",
+        output_system_rel="",
+        output_diff_rel="",
+        metadata_rel="",
+        compare_metadata_rel="",
+        team_message_rel="",
+        feedback_text="",
+        feedback_files=[],
+        answer_correct=False,
+    )
 
 
 class TestHostTelemetryStore(unittest.TestCase):
-    @staticmethod
-    def _record_case(
-        store: HostTelemetryStore,
-        hostname: str,
-        batch_id: int,
-        case_id: int,
-        *,
-        reported_at: str,
-        reported_monotonic: float,
-    ) -> None:
-        store.record_case_reported(
-            hostname,
+    def setUp(self) -> None:
+        self.scheduler = BatchScheduler(id_base=100)
+        self.sequence = 0
+
+    def _batch(self, case_count: int) -> int:
+        self.sequence += 1
+        task_id = f"task-{self.sequence}"
+        run_id = f"run-{self.sequence}"
+        signature = hashlib.sha256(run_id.encode()).hexdigest()
+        batch_id = self.scheduler.create_batch_with_cases(
+            task_id=task_id,
+            run_id=run_id,
+            logical_run_id=run_id,
+            execution_signature=signature,
+            task_kind="solution-run",
+            verification_id="ver-1",
+            compile_key=_COMPILE_KEY,
+            compile_submission=CompileSubmission(
+                compile_key=_COMPILE_KEY,
+                submit_id=domjudge_submit_id(_COMPILE_KEY),
+                source_name="ac.cpp",
+                source_bytes=b"int main(){}\n",
+                extra_source_items=(),
+                compile_files=(),
+            ),
+            contest_id="default",
+            mode="pass-fail",
+            source_name="ac.cpp",
+            source_path="/tmp/source/ac.cpp",
+            work_root=f"/tmp/batch-{self.sequence}",
+            compile_hash="2" * 32,
+            run_hash="3" * 32,
+            compare_hash="4" * 32,
+            source_hash=_HASH,
+            compile_config_json="{}",
+            run_config_json="{}",
+            compare_config_json="{}",
+            expected_behavior="accepted",
+            verification_source="run.execute",
+            bypass_case_result_cache=0,
+            service_class="background",
+            batch_spec=ExecutionBatchSpec(),
+            created_at=_NOW,
+            case_rows=[
+                {
+                    "task_id": task_id,
+                    "run_id": run_id,
+                    "test_name": f"{index:03}.in",
+                    "ordinal": index,
+                    "scope_sequence": 1,
+                    "testcase_id": None,
+                    "testcase_hash": _HASH,
+                    "testcase_input_hash": _HASH,
+                    "testcase_answer_hash": _HASH,
+                    "input_ref": "",
+                    "answer_ref": "",
+                    "status": "pending",
+                }
+                for index in range(1, case_count + 1)
+            ],
+        )
+        self.scheduler.record_compile_result(
             batch_id,
+            compile_success=1,
+            compile_output_b64="",
+            compile_metadata_b64="",
+            lease_owner="host-a",
+            updated_at=_NOW,
+        )
+        return batch_id
+
+    def _report(self, hostname: str, case_id: int, at: float) -> None:
+        row = self.scheduler.fetch_case(case_id)
+        self.assertIsNotNone(row)
+        claim = self.scheduler.claim_case_reporting(
             case_id,
-            reported_at=reported_at,
-            reported_monotonic=reported_monotonic,
-            verification_id=f"ver-{batch_id:032x}",
+            hostname=hostname,
+            now_text=_NOW,
+        )
+        self.assertIsNotNone(claim)
+        report = CaseReportTelemetry(
+            hostname=hostname,
+            reported_at=f"2026-08-03T01:00:{int(at):02d}+00:00",
+            reported_monotonic=at,
+            verification_id="ver-1",
             problem_slug="alice/sample",
             task_kind="solution-run",
             source_label="ac.cpp",
-            test_name=f"{case_id:03}.in",
+            test_name=str(row["test_name"]),
         )
-
-    def test_normalizes_batches_before_aggregating_a_job(self) -> None:
-        store = HostTelemetryStore()
-        store.record_batch_leased("host-a", 1, [11, 12], leased_monotonic=10.0)
-        self._record_case(
-            store,
-            "host-a",
-            1,
-            11,
-            reported_at="2026-08-03T01:00:04+00:00",
-            reported_monotonic=14.0,
+        outcome = self.scheduler.commit_case_result(
+            case_id,
+            generation=claim.generation,
+            result=_result(str(row["test_name"])),
+            updated_at=_NOW,
+            report_telemetry=report,
         )
-        self._record_case(
-            store,
-            "host-a",
-            1,
-            12,
-            reported_at="2026-08-03T01:00:01+00:00",
-            reported_monotonic=11.0,
+        self.assertEqual(outcome, "reported")
+
+    def test_complete_fetch_batch_samples_immediately(self) -> None:
+        batch_id = self._batch(2)
+        rows = self.scheduler.lease_cases(batch_id, hostname="host-a", limit=2, now_text=_NOW)
+        case_ids = [int(row["id"]) for row in rows]
+        self.scheduler.record_batch_leased("host-a", batch_id, case_ids, leased_monotonic=10.0)
+        self._report("host-a", case_ids[0], 11.0)
+        self.assertIsNone(
+            self.scheduler.host_telemetry_snapshot()["host-a"]["recent_avg_per_case_sec"]
         )
-        self.assertEqual(
-            store.snapshot()["host-a"]["last_judging_at"],
-            "2026-08-03T01:00:04+00:00",
-        )
-        self.assertEqual(store.snapshot()["host-a"]["last_judging"]["test_name"], "011.in")
-        store.record_batch_leased("host-a", 1, [13], leased_monotonic=20.0)
-        self._record_case(
-            store,
-            "host-a",
-            1,
-            13,
-            reported_at="2026-08-03T01:00:07+00:00",
-            reported_monotonic=23.0,
-        )
-        store.record_batch_terminal(1)
+        self._report("host-a", case_ids[1], 14.0)
 
-        row = store.snapshot()["host-a"]
-        self.assertEqual(row["judged_case_count"], 3)
-        self.assertEqual(row["last_judging_at"], "2026-08-03T01:00:07+00:00")
-        self.assertEqual(
-            row["last_judging"],
-            {
-                "verification_id": "ver-00000000000000000000000000000001",
-                "problem_slug": "alice/sample",
-                "task_kind": "solution-run",
-                "source_label": "ac.cpp",
-                "test_name": "013.in",
-            },
-        )
-        self.assertAlmostEqual(row["recent_avg_per_case_sec"] or 0.0, 7.0 / 3.0)
+        row = self.scheduler.host_telemetry_snapshot()["host-a"]
+        self.assertEqual(row["judged_case_count"], 2)
+        self.assertEqual(row["recent_avg_per_case_sec"], 2.0)
+        self.assertEqual(row["last_judging"]["test_name"], "002.in")
 
-    def test_shared_job_keeps_host_samples_independent(self) -> None:
-        store = HostTelemetryStore()
-        store.record_batch_leased("host-a", 7, [1, 2], leased_monotonic=0.0)
-        store.record_batch_leased("host-b", 7, [3, 4, 5], leased_monotonic=0.0)
-        for case_id in [1, 2]:
-            self._record_case(
-                store,
-                "host-a",
-                7,
-                case_id,
-                reported_at="2026-08-03T01:00:04+00:00",
-                reported_monotonic=4.0,
-            )
-        for case_id in [3, 4, 5]:
-            self._record_case(
-                store,
-                "host-b",
-                7,
-                case_id,
-                reported_at="2026-08-03T01:00:09+00:00",
-                reported_monotonic=9.0,
-            )
-        store.record_batch_terminal(7)
+    def test_shared_batch_keeps_host_samples_independent(self) -> None:
+        batch_id = self._batch(5)
+        host_a = self.scheduler.lease_cases(batch_id, hostname="host-a", limit=2, now_text=_NOW)
+        host_b = self.scheduler.lease_cases(batch_id, hostname="host-b", limit=3, now_text=_NOW)
+        for hostname, rows, end in (("host-a", host_a, 4.0), ("host-b", host_b, 9.0)):
+            case_ids = [int(row["id"]) for row in rows]
+            self.scheduler.record_batch_leased(hostname, batch_id, case_ids, leased_monotonic=0.0)
+            for case_id in case_ids:
+                self._report(hostname, case_id, end)
 
-        rows = store.snapshot()
-        self.assertEqual(rows["host-a"]["recent_avg_per_case_sec"], 2.0)
-        self.assertEqual(rows["host-b"]["recent_avg_per_case_sec"], 3.0)
+        telemetry = self.scheduler.host_telemetry_snapshot()
+        self.assertEqual(telemetry["host-a"]["recent_avg_per_case_sec"], 2.0)
+        self.assertEqual(telemetry["host-b"]["recent_avg_per_case_sec"], 3.0)
 
-    def test_uses_the_median_of_only_the_last_ten_jobs(self) -> None:
-        store = HostTelemetryStore()
-        for batch_id in range(1, 12):
-            store.record_batch_leased("host-a", batch_id, [batch_id], leased_monotonic=0.0)
-            self._record_case(
-                store,
-                "host-a",
-                batch_id,
-                batch_id,
-                reported_at=f"2026-08-03T01:00:{batch_id:02d}+00:00",
-                reported_monotonic=float(batch_id),
-            )
-            store.record_batch_terminal(batch_id)
+    def test_median_uses_only_last_ten_fetch_batches(self) -> None:
+        for duration in range(1, 12):
+            batch_id = self._batch(1)
+            row = self.scheduler.lease_cases(batch_id, hostname="host-a", limit=1, now_text=_NOW)[0]
+            case_id = int(row["id"])
+            self.scheduler.record_batch_leased("host-a", batch_id, [case_id], leased_monotonic=0.0)
+            self._report("host-a", case_id, float(duration))
 
-        row = store.snapshot()["host-a"]
+        row = self.scheduler.host_telemetry_snapshot()["host-a"]
         self.assertEqual(row["judged_case_count"], 11)
         self.assertEqual(row["recent_avg_per_case_sec"], 6.5)
 
-    def test_discards_incomplete_batches_without_losing_valid_counts(self) -> None:
-        store = HostTelemetryStore()
-        store.record_batch_leased("host-a", 1, [1, 2], leased_monotonic=0.0)
-        self._record_case(
-            store,
-            "host-a",
-            1,
-            1,
-            reported_at="2026-08-03T01:00:01+00:00",
-            reported_monotonic=1.0,
-        )
-        store.release_host("host-a")
-        store.record_batch_terminal(1)
+    def test_host_release_discards_incomplete_fetch_batch(self) -> None:
+        first_batch = self._batch(2)
+        rows = self.scheduler.lease_cases(first_batch, hostname="host-a", limit=2, now_text=_NOW)
+        case_ids = [int(row["id"]) for row in rows]
+        self.scheduler.record_batch_leased("host-a", first_batch, case_ids, leased_monotonic=0.0)
+        self._report("host-a", case_ids[0], 1.0)
+        self.scheduler.release_host_leases("host-a", now_text=_NOW)
 
-        store.record_batch_leased("host-a", 2, [3], leased_monotonic=2.0)
-        self._record_case(
-            store,
-            "host-a",
-            2,
-            3,
-            reported_at="2026-08-03T01:00:05+00:00",
-            reported_monotonic=5.0,
-        )
-        store.record_batch_terminal(2)
-        store.record_batch_terminal(2)
+        second_batch = self._batch(1)
+        row = self.scheduler.lease_cases(second_batch, hostname="host-a", limit=1, now_text=_NOW)[0]
+        case_id = int(row["id"])
+        self.scheduler.record_batch_leased("host-a", second_batch, [case_id], leased_monotonic=2.0)
+        self._report("host-a", case_id, 5.0)
 
-        row = store.snapshot()["host-a"]
-        self.assertEqual(row["judged_case_count"], 2)
-        self.assertEqual(row["recent_avg_per_case_sec"], 3.0)
+        telemetry = self.scheduler.host_telemetry_snapshot()["host-a"]
+        self.assertEqual(telemetry["judged_case_count"], 2)
+        self.assertEqual(telemetry["recent_avg_per_case_sec"], 3.0)
 
 
 if __name__ == "__main__":

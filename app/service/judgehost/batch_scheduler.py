@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import heapq
 import itertools
+import statistics
 import threading
 import time
 from collections import defaultdict, deque
@@ -14,11 +15,16 @@ from app.service.judgehost.batch_scheduler_models import (
     JudgehostCaseRow,
     ExecutionBatchRow,
     CaseResult,
+    CaseReportTelemetry,
     CaseRecord,
     ExecutionBatchSpec,
     ExecutionBatchRecord,
     StatusCounts,
     TaskCaseCounts,
+    HostLeaseTelemetry,
+    HostTelemetryRow,
+    HostTelemetryState,
+    VerificationCancellation,
 )
 from app.service.judgehost.identity import domjudge_job_id, domjudge_submit_id
 from app.service.judgehost.batch_scheduler_results import BatchSchedulerResultMixin
@@ -72,6 +78,8 @@ class BatchScheduler(BatchSchedulerResultMixin):
         self._ready_prerequisite_ids: dict[tuple[str, str], dict[int, None]] = defaultdict(dict)
         self._finalization_retry_heap: list[tuple[float, int]] = []
         self._finalization_retry_deadlines: dict[int, float] = {}
+        self._host_telemetry: dict[str, HostTelemetryState] = {}
+        self._telemetry_hosts_by_batch: dict[int, set[str]] = defaultdict(set)
 
     def reset(self) -> None:
         with self._lock:
@@ -110,6 +118,8 @@ class BatchScheduler(BatchSchedulerResultMixin):
             self._ready_prerequisite_ids.clear()
             self._finalization_retry_heap.clear()
             self._finalization_retry_deadlines.clear()
+            self._host_telemetry.clear()
+            self._telemetry_hosts_by_batch.clear()
 
     @staticmethod
     def _priority(batch: ExecutionBatchRecord) -> int:
@@ -126,7 +136,6 @@ class BatchScheduler(BatchSchedulerResultMixin):
         row = asdict(case)
         row.pop("heap_generation")
         result = row.pop("result")
-        row.pop("cancel_requested")
         row.pop("terminal_result")
         row.pop("requeue_on_abort")
         row.pop("claim_generation")
@@ -652,6 +661,107 @@ class BatchScheduler(BatchSchedulerResultMixin):
                 if case_ids
             }
 
+    def _drop_host_telemetry_batch_locked(self, hostname: str) -> None:
+        telemetry = self._host_telemetry.get(hostname)
+        if telemetry is None or telemetry.active_batch is None:
+            return
+        batch_id = telemetry.active_batch.batch_id
+        telemetry.active_batch = None
+        hostnames = self._telemetry_hosts_by_batch.get(batch_id)
+        if hostnames is None:
+            return
+        hostnames.discard(hostname)
+        if not hostnames:
+            self._telemetry_hosts_by_batch.pop(batch_id, None)
+
+    def _discard_batch_telemetry_locked(self, batch_id: int) -> None:
+        for hostname in self._telemetry_hosts_by_batch.pop(int(batch_id), set()):
+            telemetry = self._host_telemetry.get(hostname)
+            if (
+                telemetry is not None
+                and telemetry.active_batch is not None
+                and telemetry.active_batch.batch_id == int(batch_id)
+            ):
+                telemetry.active_batch = None
+
+    def record_batch_leased(
+        self,
+        hostname: str,
+        batch_id: int,
+        case_ids: list[int],
+        *,
+        leased_monotonic: float,
+    ) -> None:
+        pending_case_ids = {int(case_id) for case_id in case_ids}
+        if not pending_case_ids:
+            return
+        with self._lock:
+            self._drop_host_telemetry_batch_locked(hostname)
+            telemetry = self._host_telemetry.setdefault(hostname, HostTelemetryState())
+            telemetry.active_batch = HostLeaseTelemetry(
+                batch_id=int(batch_id),
+                pending_case_ids=pending_case_ids,
+                case_count=len(pending_case_ids),
+                leased_monotonic=float(leased_monotonic),
+                latest_reported_monotonic=float(leased_monotonic),
+            )
+            self._telemetry_hosts_by_batch[int(batch_id)].add(hostname)
+
+    def _record_case_telemetry_locked(
+        self,
+        case: CaseRecord,
+        report: CaseReportTelemetry,
+    ) -> None:
+        telemetry = self._host_telemetry.setdefault(report.hostname, HostTelemetryState())
+        telemetry.judged_case_count += 1
+        if (
+            telemetry.last_judging_monotonic is None
+            or report.reported_monotonic >= telemetry.last_judging_monotonic
+        ):
+            telemetry.last_judging_at = report.reported_at
+            telemetry.last_judging_monotonic = report.reported_monotonic
+            telemetry.last_judging = {
+                "verification_id": report.verification_id,
+                "problem_slug": report.problem_slug,
+                "task_kind": report.task_kind,
+                "source_label": report.source_label,
+                "test_name": report.test_name,
+            }
+        lease = telemetry.active_batch
+        if (
+            lease is None
+            or lease.batch_id != case.batch_id
+            or case.id not in lease.pending_case_ids
+        ):
+            return
+        lease.pending_case_ids.remove(case.id)
+        lease.latest_reported_monotonic = max(
+            lease.latest_reported_monotonic,
+            report.reported_monotonic,
+        )
+        if lease.pending_case_ids:
+            return
+        elapsed = max(0.0, lease.latest_reported_monotonic - lease.leased_monotonic)
+        telemetry.recent_batch_avg_sec.append(elapsed / lease.case_count)
+        telemetry.recent_avg_per_case_sec = float(
+            statistics.median(telemetry.recent_batch_avg_sec)
+        )
+        self._drop_host_telemetry_batch_locked(report.hostname)
+
+    def host_telemetry_snapshot(self) -> dict[str, HostTelemetryRow]:
+        with self._lock:
+            return {
+                hostname: {
+                    "judged_case_count": telemetry.judged_case_count,
+                    "last_judging_at": telemetry.last_judging_at,
+                    "last_judging": (
+                        None if telemetry.last_judging is None else dict(telemetry.last_judging)
+                    ),
+                    "recent_avg_per_case_sec": telemetry.recent_avg_per_case_sec,
+                }
+                for hostname, telemetry in self._host_telemetry.items()
+            }
+
     def cases_for_batch(self, batch_id: int, *, status: str | None = None) -> list[JudgehostCaseRow]:
         with self._lock:
             rows = self._sorted_cases_locked(self._case_ids_by_batch.get(int(batch_id), []))
@@ -730,6 +840,65 @@ class BatchScheduler(BatchSchedulerResultMixin):
                 if batch.status == "finalize-pending":
                     ready.append(batch_id)
             return ready
+
+    def request_verification_cancel(
+        self,
+        verification_id: str,
+        *,
+        now_text: str,
+    ) -> VerificationCancellation:
+        """Close admission and cancel every not-yet-running Case in one operation."""
+        token = verification_id or "__direct__"
+        with self._lock:
+            self._closed_verification_ids.add(token)
+            batch_ids = tuple(sorted(self._batch_ids_by_verification.get(token, ())))
+            batch_id_set = set(batch_ids)
+            task_ids: set[str] = set()
+            awaiting_task_ids: set[str] = set()
+            cancelled_count = 0
+            awaiting_receipt_count = 0
+
+            for hostname, queue_ids in tuple(self._affinity_batches_by_host.items()):
+                retained = deque(batch_id for batch_id in queue_ids if batch_id not in batch_id_set)
+                if retained:
+                    self._affinity_batches_by_host[hostname] = retained
+                else:
+                    self._affinity_batches_by_host.pop(hostname, None)
+            for hostname, batch_id in tuple(self._stolen_batch_by_host.items()):
+                if batch_id in batch_id_set:
+                    self._stolen_batch_by_host.pop(hostname, None)
+
+            for batch_id in batch_ids:
+                batch = self._batches[batch_id]
+                self._closed_logical_run_keys.add((token, batch.logical_run_id))
+                for case_id in tuple(self._case_ids_by_batch.get(batch_id, ())):
+                    case = self._cases[case_id]
+                    task_ids.add(case.task_id)
+                    if case.status in self._TERMINAL_CASE_STATUSES:
+                        continue
+                    if case.status in {"leased", "reporting", "cache-probing"}:
+                        case.cancel_requested = True
+                        case.terminal_result = None
+                        awaiting_task_ids.add(case.task_id)
+                        awaiting_receipt_count += 1
+                        continue
+                    case.result = None
+                    self._transition_case_locked(
+                        case,
+                        "cancelled",
+                        lease_owner=None,
+                        updated_at=now_text,
+                        refresh_batch=False,
+                    )
+                    cancelled_count += 1
+            self._refresh_batches_locked(batch_id_set, updated_at=now_text)
+            return VerificationCancellation(
+                batch_ids=batch_ids,
+                task_ids=tuple(sorted(task_ids)),
+                awaiting_task_ids=tuple(sorted(awaiting_task_ids)),
+                cancelled_case_count=cancelled_count,
+                awaiting_receipt_count=awaiting_receipt_count,
+            )
 
     def finish_logical_runs(
         self,

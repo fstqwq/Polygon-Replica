@@ -220,6 +220,17 @@
   vertical-align: middle;
 }
 
+.settings-last-judging-link {
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.settings-last-judging-time {
+  font-size: 0.82rem;
+  line-height: 1.2;
+  margin-top: 0.2rem;
+}
+
 .settings-judgehost-toggle-form {
   display: inline-flex;
   align-items: center;

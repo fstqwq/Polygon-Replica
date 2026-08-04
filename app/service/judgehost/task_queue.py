@@ -9,6 +9,7 @@ from app.service.verification.task_scheduler import notify_verification_task_ter
 
 from app.service.judgehost.case_result import decode_case_test_row
 from app.service.judgehost.core import JudgehostCore
+from app.service.judgehost.batch_scheduler_models import HostLeaseRelease
 from app.service.judgehost.payload_retention import compact_payload_for_retention
 from app.service.judgehost.payload_retention import compact_task_row_payload
 from app.service.judgehost.state import JudgehostState
@@ -39,17 +40,6 @@ class TaskQueue:
             return
         compact_task_row_payload(row)
         self._s.task_registry.update(task_id, {"payload": row["payload"]})
-
-    def _run_ids_with_leased_cases(self, run_ids: list[str]) -> set[str]:
-        progress = self._s.batch_scheduler.case_progress_for_runs(run_ids)
-        return {
-            run_id
-            for run_id, row in progress.items()
-            if int(row.get("leased") or 0) > 0
-        }
-
-    def domjudge_runs_with_leased_cases(self, run_ids: list[str]) -> set[str]:
-        return self._run_ids_with_leased_cases([self._core.normalize_run_id(run_id) for run_id in run_ids if run_id])
 
     def _record_host_event_conn(
         self,
@@ -433,7 +423,7 @@ class TaskQueue:
     def _host_status_rows(self) -> tuple[list[dict[str, object]], int]:
         now_dt = datetime.now(timezone.utc)
         active_by_host = self._s.batch_scheduler.active_lease_counts()
-        telemetry_by_host = self._s.host_telemetry.snapshot()
+        telemetry_by_host = self._s.batch_scheduler.host_telemetry_snapshot()
         with self._s.state_lock:
             host_rows = sorted(
                 (dict(row) for row in self._s.hosts_state.values()),
@@ -485,7 +475,7 @@ class TaskQueue:
         return rows_out, online_count
 
 
-    def set_host_enabled(self, hostname: str, enabled: bool) -> dict[str, int]:
+    def set_host_enabled(self, hostname: str, enabled: bool) -> HostLeaseRelease:
         now_text = now_iso()
         with self._s.state_lock:
             current_row = dict(self._s.hosts_state.get(hostname, {}))
@@ -499,19 +489,13 @@ class TaskQueue:
                 "last_run_id": str(current_row.get("last_run_id") or ""),
                 "update_count": int(current_row.get("update_count") or 0) + 1,
             }
-        released_batches = 0
-        released_cases = 0
+        release = HostLeaseRelease(0, 0, (), ())
         if not enabled:
-            released_batches, released_cases = self._s.batch_scheduler.release_host_leases(
+            release = self._s.batch_scheduler.release_host_leases(
                 hostname,
                 now_text=now_text,
             )
-            self._s.host_telemetry.release_host(hostname)
-        return {
-            "released_tasks": 0,
-            "released_batches": released_batches,
-            "released_cases": released_cases,
-        }
+        return release
 
     def status(self) -> dict[str, object]:
         counts = self._core.task_status_counts()
@@ -530,18 +514,11 @@ class TaskQueue:
             },
         }
 
-    def cancel_tasks_for_runs(self, run_ids: list[str], *, reason: str) -> int:
-        reason = reason.strip()
-        if not reason:
-            raise RuntimeError("judgehost cancellation reason is required")
-        run_ids = [run_id for run_id in run_ids if run_id]
-        if not run_ids:
-            return 0
-        now_text = now_iso()
+    def cancel_unbatched_verification_tasks(self, verification_id: str, *, reason: str) -> int:
         affected = 0
-        for run_id in run_ids:
-            row = self._s.task_registry.get_for_run(run_id)
-            if row is None:
+        now_text = now_iso()
+        for row in self._s.task_registry.snapshots():
+            if str(row["verification_id"]) != verification_id:
                 continue
             task_id = str(row["id"])
             if self._s.batch_scheduler.batch_for_task(task_id) is not None:
@@ -560,7 +537,6 @@ class TaskQueue:
             )
             affected += int(updated is not None)
         return affected
-
 
     def startup_cancel_inflight_tasks(self, *, reason: str) -> list[dict[str, str]]:
         reason = reason.strip()
@@ -604,13 +580,6 @@ class TaskQueue:
         if not problem_slug:
             return 0
         return self._s.task_registry.remove_problem(problem_slug)
-
-
-    def cancel_domjudge_batches_for_runs(self, run_ids: list[str]) -> list[int]:
-        return self._s.batch_scheduler.cancel_batches_for_runs(
-            run_ids=run_ids,
-            now_text=now_iso(),
-        )
 
 
     def cancel_all_domjudge_batches(self) -> list[int]:

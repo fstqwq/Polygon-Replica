@@ -619,15 +619,14 @@ class VerificationTaskStore:
         verification_id: str,
         *,
         reason: str,
-        protected_run_ids: set[str] | None = None,
+        protected_judgehost_task_ids: set[str] | None = None,
     ) -> None:
         safe_reason = self._normalize_display_text(reason)
-        safe_protected_run_ids = protected_run_ids or set()
+        protected = protected_judgehost_task_ids or set()
         for row in self.list_rows(verification_id):
             if str(row["status"] or "") not in {self.TASK_PENDING, self.TASK_QUEUED}:
                 continue
-            run_id = str(row["run_id"] or "")
-            if run_id in safe_protected_run_ids:
+            if str(row["judgehost_task_id"] or "") in protected:
                 continue
             self.save_task_result(
                 str(row["id"]),

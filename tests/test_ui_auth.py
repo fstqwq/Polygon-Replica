@@ -1349,7 +1349,8 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
             'href="/problems/alice/sample/run/details?verification_id=ver-0123456789abcdef"',
             html,
         )
-        self.assertIn("[alice/sample:Solution Run:ac.cpp / 001.in]", html)
+        self.assertIn("Solution Run: <code>alice/sample</code> ac.cpp / 001.in", html)
+        self.assertIn('class="muted settings-last-judging-time"', html)
 
     def test_settings_config_category_update_requires_system_admin(self) -> None:
         with self.assertRaises(HTTPException) as blocked:

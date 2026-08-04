@@ -255,7 +255,7 @@ class TestJudgehostService(E2ETestBase):
             publish_task=lambda _row: (_ for _ in ()).throw(RuntimeError("unexpected publish")),
             probe_task_case_cache=lambda _task_ids, _limit: set(),
             resolve_case_result=lambda queued_task_id, test_name: service.poll_task_case_result(queued_task_id, test_name),
-            cancel_queued_tasks=lambda _reason: None,
+            cancel_execution=lambda _reason: None,
             close_logical_runs=lambda run_ids: service.close_logical_runs(verification_id, run_ids),
         )
         coordinator = VerificationRuntimeCoordinator(

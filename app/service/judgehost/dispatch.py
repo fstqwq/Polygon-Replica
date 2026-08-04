@@ -624,7 +624,7 @@ class DispatchHandler(DispatchCacheMixin):
                     case_task_id,
                     domjudge_text(row["test_name"]),
                 )
-        self._s.host_telemetry.record_batch_leased(
+        self._s.batch_scheduler.record_batch_leased(
             hostname,
             int(batch_id),
             [int(row["id"]) for row in rows],

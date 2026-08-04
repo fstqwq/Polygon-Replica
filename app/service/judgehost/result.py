@@ -32,7 +32,7 @@ from app.service.verification.task_scheduler import notify_verification_case_rep
 
 from app.service.judgehost.case_result import build_case_result, decode_case_test_row
 from app.service.judgehost.core import JudgehostCore
-from app.service.judgehost.batch_scheduler_models import CaseResult
+from app.service.judgehost.batch_scheduler_models import CaseReportTelemetry, CaseResult
 from app.service.judgehost.state import JudgehostState
 from app.service.judgehost.task_queue import TaskQueue
 from app.service.judgehost.toolkit import DomjudgeToolkit
@@ -291,6 +291,98 @@ class ResultProcessor:
                 safe_test_name,
             )
         return published
+
+    def _publish_verification_case_cancelled(
+        self,
+        *,
+        task_id: str,
+        test_name: str,
+        reason: str = "",
+    ) -> bool:
+        task_store = self._s.verification_task_store
+        row = task_store.find_runtime_row_by_judgehost_case(task_id, test_name)
+        if row is None:
+            return True
+        verification_id = domjudge_text(row["verification_id"])
+        _fail_flag, fail_reason = task_store.fail_state(verification_id)
+        cancel_reason = reason or fail_reason or "verification cancelled by user"
+        task_store.save_task_result(
+            domjudge_text(row["id"]),
+            status=task_store.TASK_CANCELLED,
+            verdict="",
+            run_id=domjudge_text(row["run_id"]),
+            judgehost_task_id=domjudge_text(row["judgehost_task_id"]),
+            runtime_sec=None,
+            cpu_sec=None,
+            wall_sec=None,
+            memory_kb=None,
+            compile_log="",
+            diagnostics_json="[]",
+            error_text=cancel_reason,
+            feedback_text="",
+            output_ref="",
+        )
+        return True
+
+    def _case_report_telemetry(
+        self,
+        *,
+        hostname: str,
+        row: dict[str, object],
+        task_payload: dict[str, object],
+        task_kind: str,
+        reported_at: str,
+        reported_monotonic: float,
+    ) -> CaseReportTelemetry:
+        return CaseReportTelemetry(
+            hostname=hostname,
+            reported_at=reported_at,
+            reported_monotonic=reported_monotonic,
+            verification_id=domjudge_text(task_payload.get("verification_id")),
+            problem_slug=domjudge_text(task_payload.get("problem")),
+            task_kind=task_kind,
+            source_label=Path(
+                domjudge_text(
+                    task_payload.get("source_label"),
+                    default=domjudge_text(row.get("source_name")),
+                ).replace("\\", "/")
+            ).name,
+            test_name=domjudge_text(row["test_name"]),
+        )
+
+    def _complete_cancelled_case_receipt(
+        self,
+        *,
+        case_id: int,
+        generation: int,
+        row: dict[str, object],
+        report: CaseReportTelemetry,
+    ) -> bool:
+        accepted = self._s.batch_scheduler.commit_cancelled_receipt(
+            case_id,
+            generation=generation,
+            updated_at=report.reported_at,
+            report_telemetry=report,
+        )
+        if not accepted:
+            return False
+        task_id = domjudge_text(row["task_id"])
+        test_name = domjudge_text(row["test_name"])
+        batch_id = int(row["batch_id"])
+        try:
+            if self._publish_verification_case_cancelled(task_id=task_id, test_name=test_name):
+                self._s.batch_scheduler.mark_case_verification_published(task_id, test_name)
+            batch_row = self._s.batch_scheduler.batch_finalize_row(batch_id)
+            if batch_row is not None:
+                self._domjudge_finalize_task_if_ready(task_id, batch_row=dict(batch_row))
+        except Exception:
+            logger.exception(
+                "failed to publish cancelled DOMjudge case task_id=%s case_id=%s",
+                task_id,
+                case_id,
+            )
+        self._domjudge_finalize_batch_if_ready(batch_id)
+        return True
 
     def _publish_verification_case_result(
         self,
@@ -564,26 +656,15 @@ class ResultProcessor:
             force_failed=force_failed,
             error_text=error_text,
         )
-        cancelled_case_result = {
-            "task_id": safe_task_id,
-            "verification_id": domjudge_text(task_row["verification_id"]),
-            "run_id": domjudge_text(task_row["run_id"]),
-            "artifact_path": "",
-            "status": "failed",
-            "task_status": self.STATUS_FAILED,
-            "missing_case_result": True,
-            "error": domjudge_text(payload.get("error"), default="judgehost task cancelled"),
-            "summary": dict(cast(dict[str, object], payload["summary"])),
-        }
         for case_row in cases:
             if domjudge_lower_text(case_row["status"]) != "cancelled":
                 continue
             if bool(case_row["verification_published"]):
                 continue
-            published = self._publish_verification_case_result(
+            published = self._publish_verification_case_cancelled(
                 task_id=safe_task_id,
                 test_name=domjudge_text(case_row["test_name"]),
-                case_result=cancelled_case_result,
+                reason=domjudge_text(payload.get("error"), default="judgehost task cancelled"),
             )
             if published:
                 self._s.batch_scheduler.mark_case_verification_published(
@@ -824,7 +905,6 @@ class ResultProcessor:
                 logger.error("DOMjudge batch finalization claim disappeared batch_id=%s", int(batch_id))
                 self._schedule_finalization_retry(int(batch_id))
                 return
-            self._s.host_telemetry.record_batch_terminal(int(batch_id))
             self._clear_finalization_retry(int(batch_id))
         except Exception:
             self._schedule_finalization_retry(int(batch_id))
@@ -937,6 +1017,28 @@ class ResultProcessor:
             lease_owner=safe_host,
             updated_at=reported_at,
         )
+        task_payload = self._core.task_payload(claim.task_id)
+        verification_source = task_payload.get("verification_source", "")
+        task_kind = self._toolkit.task_kind(
+            task_payload,
+            verification_source=verification_source,
+        )
+        report_telemetry = self._case_report_telemetry(
+            hostname=safe_host,
+            row=dict(case_row),
+            task_payload=task_payload,
+            task_kind=task_kind,
+            reported_at=reported_at,
+            reported_monotonic=reported_monotonic,
+        )
+        if claim.cancel_requested:
+            accepted = self._complete_cancelled_case_receipt(
+                case_id=claim.case_id,
+                generation=claim.generation,
+                row=dict(case_row),
+                report=report_telemetry,
+            )
+            return 1 if accepted else int(judgetask_id)
 
         def _abort_unfinished_claim() -> None:
             if self._s.batch_scheduler.abort_case_claim(
@@ -952,8 +1054,7 @@ class ResultProcessor:
                 judgetask_id,
                 payload,
                 claim_generation=claim.generation,
-                reported_at=reported_at,
-                reported_monotonic=reported_monotonic,
+                report_telemetry=report_telemetry,
             )
         except Exception:
             _abort_unfinished_claim()
@@ -970,8 +1071,7 @@ class ResultProcessor:
         payload: dict[str, object],
         *,
         claim_generation: int,
-        reported_at: str,
-        reported_monotonic: float,
+        report_telemetry: CaseReportTelemetry,
     ) -> int:
         safe_host = self._core.normalize_hostname(hostname)
         case_id = int(judgetask_id)
@@ -1146,6 +1246,15 @@ class ResultProcessor:
         shortcut_eligible = verdict != "FL"
         if compile_only and verdict != "OK":
             shortcut_eligible = False
+        current_case = self._s.batch_scheduler.fetch_case(case_id)
+        if current_case is not None and bool(current_case["cancel_requested"]):
+            accepted = self._complete_cancelled_case_receipt(
+                case_id=case_id,
+                generation=claim_generation,
+                row=dict(row),
+                report=report_telemetry,
+            )
+            return 1 if accepted else case_id
         self._toolkit.store_case_cache(
             key_parts={"key_hash": case_key_hash, "signature": case_signature},
             tags={
@@ -1226,7 +1335,25 @@ class ResultProcessor:
             generation=claim_generation,
             result=case_result,
             updated_at=now_text,
+            report_telemetry=report_telemetry,
         )
+        if outcome == "cancelled":
+            if self._publish_verification_case_cancelled(
+                task_id=safe_task_id,
+                test_name=domjudge_text(row["test_name"]),
+            ):
+                self._s.batch_scheduler.mark_case_verification_published(
+                    safe_task_id,
+                    domjudge_text(row["test_name"]),
+                )
+            batch_row = self._s.batch_scheduler.batch_finalize_row(batch_id)
+            if batch_row is not None:
+                self._domjudge_finalize_task_if_ready(
+                    safe_task_id,
+                    batch_row=dict(batch_row),
+                )
+            self._domjudge_finalize_batch_if_ready(batch_id)
+            return 1
         if outcome != "reported":
             logger.info("ignoring stale add_judging_run result for case id: %s", case_id)
             return case_id
@@ -1236,23 +1363,6 @@ class ResultProcessor:
             batch_id,
             case_id,
             runresult,
-        )
-        self._s.host_telemetry.record_case_reported(
-            safe_host,
-            batch_id,
-            case_id,
-            reported_at=reported_at,
-            reported_monotonic=reported_monotonic,
-            verification_id=domjudge_text(task_payload.get("verification_id")),
-            problem_slug=domjudge_text(task_payload.get("problem")),
-            task_kind=task_kind,
-            source_label=Path(
-                domjudge_text(
-                    task_payload.get("source_label"),
-                    default=domjudge_text(row["source_name"]),
-                ).replace("\\", "/")
-            ).name,
-            test_name=domjudge_text(row["test_name"]),
         )
         try:
             self._domjudge_publish_reported_case(

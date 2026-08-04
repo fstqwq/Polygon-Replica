@@ -8,7 +8,6 @@ from dataclasses import dataclass
 from typing import Callable, cast
 
 from app.service.verification.task_store import VerificationTaskRow, VerificationTaskStore
-from app.service.verification.types import is_cancel_reason
 
 
 @dataclass(frozen=True)
@@ -44,7 +43,7 @@ class VerificationRuntimeCallbacks:
     publish_task: Callable[[VerificationTaskRow], TaskPublishResult]
     probe_task_case_cache: Callable[[list[str], int], set[str]]
     resolve_case_result: Callable[[str, str], dict[str, object] | None]
-    cancel_queued_tasks: Callable[[str], None]
+    cancel_execution: Callable[[str], None]
     close_logical_runs: Callable[[list[str]], None]
 
 
@@ -268,7 +267,6 @@ class VerificationRuntimeCoordinator:
         self._events: queue.Queue[_VerificationEvent] = queue.Queue()
         self._cache_probe_task_ids: dict[str, None] = {}
         self._applied_fail_reason = ""
-        self._cancel_reason = ""
 
     def enqueue_bootstrap(self) -> None:
         self._events.put(_VerificationEvent(kind="bootstrap"))
@@ -421,8 +419,9 @@ class VerificationRuntimeCoordinator:
             if changed:
                 changed = self._publish_ready_rows() or changed
         elif event.kind == "cancel":
-            self._cancel_reason = event.reason or "verification cancelled by user"
-            self._task_store.set_fail_flag(self.verification_id, reason=self._cancel_reason)
+            reason = event.reason or "verification cancelled by user"
+            self._task_store.set_fail_flag(self.verification_id, reason=reason)
+            self._apply_fail_flag()
             return True
         self._apply_fail_flag()
         if self._is_terminal():
@@ -436,27 +435,18 @@ class VerificationRuntimeCoordinator:
         fail_flag, fail_reason = self._task_store.fail_state(self.verification_id)
         if not fail_flag:
             self._applied_fail_reason = ""
-            self._cancel_reason = ""
             return False
         cancel_reason = fail_reason or "cancelled after main-correct failure"
         if cancel_reason == self._applied_fail_reason:
             return False
-        if (
-            self._cancel_reason
-            and cancel_reason == self._cancel_reason
-            and is_cancel_reason(cancel_reason)
-        ):
-            self._applied_fail_reason = cancel_reason
-            return False
-        self._callbacks.cancel_queued_tasks(cancel_reason)
-        cancelled_task_ids = [
-            task_id
-            for task_id, status in self._dag.status_by_id.items()
-            if status in {VerificationTaskStore.TASK_PENDING, VerificationTaskStore.TASK_QUEUED}
-        ]
-        self._task_store.cancel_not_started_tasks(self.verification_id, reason=cancel_reason)
-        for task_id in cancelled_task_ids:
-            self._dag.transition(task_id, VerificationTaskStore.TASK_CANCELLED)
+        self._callbacks.cancel_execution(cancel_reason)
+        rows_by_id = {
+            str(row["id"]): row
+            for row in self._task_store.list_rows(self.verification_id)
+        }
+        for task_id, row in rows_by_id.items():
+            if str(row["status"]) == VerificationTaskStore.TASK_CANCELLED:
+                self._dag.transition(task_id, VerificationTaskStore.TASK_CANCELLED)
         self._applied_fail_reason = cancel_reason
         return True
 

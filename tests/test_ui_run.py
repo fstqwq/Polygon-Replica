@@ -1889,12 +1889,11 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             ],
             edges=[],
         )
-        with patch.object(
-            config.judgehost_task_service,
-            "domjudge_runs_with_leased_cases",
-            return_value=set(),
-        ):
-            cancel_resp = run_export_impl.run_cancel(problem="alice/sample", user="alice", verification_id=verification_id)
+        cancel_resp = run_export_impl.run_cancel(
+            problem="alice/sample",
+            user="alice",
+            verification_id=verification_id,
+        )
         self.assertEqual(cancel_resp.status_code, 303)
         rows = config.verification_task_store.list_rows(verification_id)
         self.assertEqual(

@@ -13,6 +13,7 @@ from app.service.judgehost.api import Judgehost
 from app.service.judgehost.case_result import build_case_result
 from app.service.judgehost.batch_scheduler import BatchScheduler
 from app.service.judgehost.batch_scheduler_models import (
+    CaseReportTelemetry,
     CompileSubmission,
     ExecutionBatchRow,
     ExecutionBatchSpec,
@@ -143,6 +144,69 @@ def _create_batch(
 class TestJudgehostStateLifecycle(unittest.TestCase):
     def setUp(self) -> None:
         self.store = BatchScheduler(id_base=100)
+
+    def test_verification_cancel_preserves_leased_case_until_receipt(self) -> None:
+        batch_id = _create_batch(
+            self.store,
+            task_id="task-cancel-receipt",
+            run_id="run-cancel-receipt",
+            work_root="/tmp/cancel-receipt",
+            case_rows=[
+                _case_row("task-cancel-receipt", "run-cancel-receipt", "001.in", 1),
+                _case_row("task-cancel-receipt", "run-cancel-receipt", "002.in", 2),
+            ],
+        )
+        leased = self.store.lease_cases(
+            batch_id,
+            hostname="host-a",
+            limit=1,
+            now_text=_NOW,
+        )
+        self.assertEqual(len(leased), 1)
+        leased_case_id = int(leased[0]["id"])
+        self.store.record_batch_leased(
+            "host-a",
+            batch_id,
+            [leased_case_id],
+            leased_monotonic=10.0,
+        )
+
+        cancellation = self.store.request_verification_cancel("ver-1", now_text=_NOW)
+        self.assertEqual(cancellation.cancelled_case_count, 1)
+        self.assertEqual(cancellation.awaiting_receipt_count, 1)
+        rows = {str(row["test_name"]): row for row in self.store.cases_for_batch(batch_id)}
+        self.assertEqual(rows["001.in"]["status"], "leased")
+        self.assertEqual(rows["001.in"]["lease_owner"], "host-a")
+        self.assertTrue(rows["001.in"]["cancel_requested"])
+        self.assertEqual(rows["002.in"]["status"], "cancelled")
+        self.assertEqual(self.store.lease_cases(batch_id, hostname="host-b", limit=2, now_text=_NOW), [])
+
+        claim = self.store.claim_case_reporting(
+            leased_case_id,
+            hostname="host-a",
+            now_text=_NOW,
+        )
+        self.assertIsNotNone(claim)
+        accepted = self.store.commit_cancelled_receipt(
+            leased_case_id,
+            generation=claim.generation,
+            updated_at=_NOW,
+            report_telemetry=CaseReportTelemetry(
+                hostname="host-a",
+                reported_at="2026-07-29T00:00:02+00:00",
+                reported_monotonic=12.0,
+                verification_id="ver-1",
+                problem_slug="alice/sample",
+                task_kind="solution-run",
+                source_label="solution.cpp",
+                test_name="001.in",
+            ),
+        )
+        self.assertTrue(accepted)
+        self.assertEqual(self.store.fetch_case(leased_case_id)["status"], "cancelled")
+        telemetry = self.store.host_telemetry_snapshot()["host-a"]
+        self.assertEqual(telemetry["judged_case_count"], 1)
+        self.assertEqual(telemetry["recent_avg_per_case_sec"], 2.0)
 
     def test_execution_batch_closes_when_logical_run_finishes(self) -> None:
         batch_id = _create_batch(
@@ -311,13 +375,11 @@ class TestJudgehostStateLifecycle(unittest.TestCase):
         self.assertEqual(removed_batches, 1)
         self.assertIsNone(self.store.fetch_batch(batch_id))
 
-    def test_run_index_cancels_multiple_batches_without_history_scan(self) -> None:
+    def test_verification_index_cancels_multiple_batches_without_history_scan(self) -> None:
         batch_ids = []
-        run_ids = []
         for sequence in range(2):
             task_id = f"task-shared-run-{sequence}"
             run_id = f"primary-run-{sequence}"
-            run_ids.append(run_id)
             batch_ids.append(
                 _create_batch(
                     self.store,
@@ -328,10 +390,8 @@ class TestJudgehostStateLifecycle(unittest.TestCase):
                 )
             )
 
-        self.assertEqual(
-            self.store.cancel_batches_for_runs(run_ids, now_text=_NOW),
-            batch_ids,
-        )
+        cancellation = self.store.request_verification_cancel("ver-1", now_text=_NOW)
+        self.assertEqual(list(cancellation.batch_ids), batch_ids)
         self.assertEqual(
             [self.store.cases_for_batch(batch_id)[0]["status"] for batch_id in batch_ids],
             ["cancelled", "cancelled"],
@@ -552,7 +612,8 @@ class TestJudgehostLifecycle(DBTestBase):
         case = store.lease_cases(batch_id, hostname="host-a", limit=1, now_text=_NOW)[0]
 
         def _cancel_then_fail(*_args, **_kwargs) -> int:
-            self.assertEqual(store.cancel_batches_for_runs([run_id], now_text=_NOW), [batch_id])
+            cancellation = store.request_verification_cancel("ver-1", now_text=_NOW)
+            self.assertEqual(list(cancellation.batch_ids), [batch_id])
             raise RuntimeError("artifact write failed")
 
         with patch.object(
@@ -566,6 +627,51 @@ class TestJudgehostLifecycle(DBTestBase):
         self.assertEqual(store.fetch_batch(batch_id)["status"], "failed")
         self.assertEqual(self._task(service, task_id)["status"], service.STATUS_FAILED)
         self.assertFalse(work_root.exists())
+
+    def test_cancelled_leased_case_callback_is_accepted_as_receipt(self) -> None:
+        service = self._service()
+        store = service.state.batch_scheduler
+        task_id, run_id = "task-cancelled-receipt", "run-cancelled-receipt"
+        self._add_task(service, task_id, run_id)
+        work_root = self._work_root()
+        batch_id = _create_batch(
+            store,
+            task_id=task_id,
+            run_id=run_id,
+            work_root=str(work_root),
+            case_rows=[_case_row(task_id, run_id, "001.in", 1)],
+        )
+        case = store.lease_cases(batch_id, hostname="host-a", limit=1, now_text=_NOW)[0]
+        case_id = int(case["id"])
+        store.record_batch_leased(
+            "host-a",
+            batch_id,
+            [case_id],
+            leased_monotonic=1.0,
+        )
+
+        cancellation = service.request_verification_cancel(
+            "ver-1",
+            "verification cancelled by user",
+        )
+        self.assertEqual(cancellation["awaiting_receipts"], 1)
+        self.assertEqual(store.fetch_case(case_id)["status"], "leased")
+
+        with patch.object(
+            service.result,
+            "_publish_verification_case_cancelled",
+            side_effect=RuntimeError("transient cancellation publication failure"),
+        ), patch("app.service.judgehost.result.logger.exception"):
+            self.assertEqual(service.domjudge_add_judging_run("host-a", case_id, {}), 1)
+        self.assertEqual(store.fetch_batch(batch_id)["status"], "finalize-pending")
+        service.result._domjudge_finalize_batch_if_ready(batch_id)
+        self.assertEqual(store.fetch_case(case_id)["status"], "cancelled")
+        self.assertEqual(self._task(service, task_id)["status"], service.STATUS_FAILED)
+        self.assertEqual(store.fetch_batch(batch_id)["status"], "failed")
+        self.assertFalse(work_root.exists())
+        telemetry = store.host_telemetry_snapshot()["host-a"]
+        self.assertEqual(telemetry["judged_case_count"], 1)
+        self.assertIsNotNone(telemetry["recent_avg_per_case_sec"])
 
     def test_grouped_batch_finalizes_each_task_once_across_hosts(self) -> None:
         service = self._service()
@@ -792,22 +898,49 @@ class TestJudgehostLifecycle(DBTestBase):
 
                 with patch.object(
                     service.result,
-                    "_publish_verification_case_result",
-                    wraps=service.result._publish_verification_case_result,
+                    "_publish_verification_case_cancelled",
+                    wraps=service.result._publish_verification_case_cancelled,
                 ) as publish_case:
                     if scenario == "cancel":
-                        self.assertEqual(
-                            service.cancel_tasks_for_runs(
-                                [run_id],
-                                reason="verification cancelled by user",
-                            ),
-                            0,
+                        cancellation = service.request_verification_cancel(
+                            "ver-1",
+                            "verification cancelled by user",
                         )
+                        self.assertEqual(cancellation["cancelled_cases"], 1)
+                        self.assertEqual(cancellation["awaiting_receipts"], 1)
                         self.assertEqual(
                             self._task(service, task_id)["status"],
                             service.STATUS_LEASED,
                         )
-                        self.assertEqual(service.cancel_domjudge_batches_for_runs([run_id]), 1)
+                        leased_case = next(
+                            row
+                            for row in store.cases_for_task(task_id)
+                            if row["status"] == "leased"
+                        )
+                        claim = store.claim_case_reporting(
+                            int(leased_case["id"]),
+                            hostname="host-a",
+                            now_text=_NOW,
+                        )
+                        self.assertIsNotNone(claim)
+                        self.assertTrue(
+                            store.commit_cancelled_receipt(
+                                int(leased_case["id"]),
+                                generation=claim.generation,
+                                updated_at=_NOW,
+                                report_telemetry=CaseReportTelemetry(
+                                    hostname="host-a",
+                                    reported_at=_NOW,
+                                    reported_monotonic=1.0,
+                                    verification_id="ver-1",
+                                    problem_slug="alice/sample",
+                                    task_kind="solution-run",
+                                    source_label="solution.cpp",
+                                    test_name=str(leased_case["test_name"]),
+                                ),
+                            )
+                        )
+                        service.result._domjudge_finalize_batch_if_ready(batch_id)
                     else:
                         service.result._domjudge_finalize_batch_if_ready(batch_id)
                 service.schedule_verification_cleanup("ver-1")

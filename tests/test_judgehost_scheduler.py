@@ -390,12 +390,12 @@ class TestJudgehostScheduler(unittest.TestCase):
             now_text=datetime.now(timezone.utc).isoformat(),
         )
 
-        released_batches, released_cases = scheduler.release_host_leases(
+        release = scheduler.release_host_leases(
             "host-a",
             now_text=datetime.now(timezone.utc).isoformat(),
         )
 
-        self.assertEqual((released_batches, released_cases), (1, 1))
+        self.assertEqual((release.affinity_count, release.lease_count), (1, 1))
         self.assertEqual(scheduler.host_context_batches("host-a"), [])
         self.assertEqual(scheduler.select_ready_batch("host-b")["batch_id"], other_id)
         self.assertEqual(scheduler.select_ready_batch("host-c")["batch_id"], first_id)
@@ -724,13 +724,11 @@ class TestJudgehostScheduler(unittest.TestCase):
                 hostname="host-a",
                 now_text="2026-08-03T00:00:02+00:00",
             )
-        self.assertEqual(
-            scheduler.cancel_batches_for_runs(
-                ["run-reporting"],
-                now_text="2026-08-03T00:00:03+00:00",
-            ),
-            [batch_id],
+        cancellation = scheduler.request_verification_cancel(
+            "ver-1",
+            now_text="2026-08-03T00:00:03+00:00",
         )
+        self.assertEqual(list(cancellation.batch_ids), [batch_id])
         self.assertFalse(scheduler.task_cases_terminal("reporting"))
         scheduler.request_batch_case_results(
             batch_id,

@@ -1142,45 +1142,11 @@ def run_workspace_verification_dag(
             )
             return task_status, summary, counts, rows, fail_flag, fail_reason
 
-        def _cancel_queued_tasks(reason: str) -> None:
-            statuses_by_run: dict[str, set[str]] = {}
-            for row in task_store.list_rows(verification_id):
-                run_id = normalize_run_id_token(str(row["run_id"] or ""))
-                if not run_id:
-                    continue
-                status = str(row["status"] or "")
-                run_statuses = statuses_by_run.get(run_id)
-                if run_statuses is None:
-                    run_statuses = set()
-                    statuses_by_run[run_id] = run_statuses
-                run_statuses.add(status)
-            run_ids: list[str] = []
-            for run_id, statuses in statuses_by_run.items():
-                if VerificationTaskStore.TASK_QUEUED not in statuses:
-                    continue
-                if VerificationTaskStore.TASK_LEASED in statuses:
-                    continue
-                run_ids.append(run_id)
-            if not run_ids:
-                return
-            config.judgehost_task_service.cancel_tasks_for_runs(run_ids, reason=reason)
-            config.judgehost_task_service.cancel_domjudge_batches_for_runs(run_ids)
-
-        def _cancel_active_tasks(reason: str) -> None:
-            run_ids: list[str] = []
-            for row in task_store.list_rows(verification_id):
-                if str(row["status"] or "") not in {
-                    VerificationTaskStore.TASK_QUEUED,
-                    VerificationTaskStore.TASK_LEASED,
-                }:
-                    continue
-                run_id = normalize_run_id_token(str(row["run_id"] or ""))
-                if run_id and run_id not in run_ids:
-                    run_ids.append(run_id)
-            if not run_ids:
-                return
-            config.judgehost_task_service.cancel_tasks_for_runs(run_ids, reason=reason)
-            config.judgehost_task_service.cancel_domjudge_batches_for_runs(run_ids)
+        def _cancel_execution(reason: str) -> None:
+            config.judgehost_task_service.request_verification_cancel(
+                verification_id,
+                reason,
+            )
 
         _refresh_state()
         callbacks = VerificationRuntimeCallbacks(
@@ -1193,7 +1159,7 @@ def run_workspace_verification_dag(
                 judgehost_task_id,
                 test_name,
             ),
-            cancel_queued_tasks=_cancel_queued_tasks,
+            cancel_execution=_cancel_execution,
             close_logical_runs=lambda logical_run_ids: config.judgehost_task_service.close_logical_runs(
                 verification_id,
                 logical_run_ids,
@@ -1209,7 +1175,7 @@ def run_workspace_verification_dag(
         try:
             coordinator.run()
         except Exception as exc:
-            _cancel_active_tasks(str(exc) or "verification scheduler failed")
+            _cancel_execution(str(exc) or "verification scheduler failed")
             task_store.set_fail_flag(verification_id, reason=str(exc) or "verification scheduler failed")
             task_store.cancel_unfinished_tasks(verification_id, reason=str(exc) or "verification scheduler failed")
             _refresh_state()

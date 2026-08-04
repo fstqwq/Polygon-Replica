@@ -1,5 +1,6 @@
 from __future__ import annotations
-from app.impl.auth.session import require_session_user
+
+import logging
 from pathlib import Path
 from typing import Annotated
 from urllib.parse import quote_plus
@@ -7,6 +8,7 @@ from urllib.parse import quote_plus
 from fastapi import File, Form, HTTPException, Request, UploadFile, Depends
 
 from app.db import now_iso
+from app.impl.auth.session import require_session_user
 from app.impl.auth.shared import redirect_response, template_response
 from app.impl.runtime.config import config
 from app.impl.workspace.access import require_write_access
@@ -38,6 +40,7 @@ from app.service.verification.task_scheduler import notify_verification_cancelle
 from app.service.verification.types import ACTIVE, Status
 
 _C = config.constants
+logger = logging.getLogger(__name__)
 
 
 def _upload_filename_token(raw: str) -> str:
@@ -54,32 +57,6 @@ def _uploaded_target_path(run_id: str, upload_filename: str) -> str:
 def _truthy_form_token(value: str) -> bool:
     return value.lower() in {'1', 'true', 'yes', 'on'}
 
-
-def _cancel_judgehost_tasks(run_ids: list[str], reason: str) -> int:
-    safe_ids: list[str] = []
-    for item in run_ids:
-        token = normalize_run_id_token(item)
-        if token:
-            safe_ids.append(token)
-    safe_ids = dedupe_preserve_order(safe_ids)
-    service = getattr(config, "judgehost_task_service", None)
-    affected = 0
-    if not safe_ids:
-        return affected
-    cancel_reason = reason or "verification cancelled by user"
-    if service is not None:
-        try:
-            affected = int(service.cancel_tasks_for_runs(safe_ids, reason=cancel_reason))
-        except Exception:
-            affected = 0
-
-    if service is not None:
-        try:
-            service.cancel_domjudge_batches_for_runs(safe_ids)
-        except Exception:
-            pass
-
-    return affected
 
 def run_page(request: Request, problem: str, user: Annotated[str, Depends(require_session_user)]):
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=True, include_workspace_changes=True)
@@ -211,46 +188,38 @@ def run_cancel(problem: str, user: Annotated[str, Depends(require_session_user)]
     actor_user_id = int(ctx["user"]["id"])
     problem_id = int(ctx["problem"]["id"])
     workspace_id = int(ctx["workspace"]["id"])
-    verification_run_ids = config.verification_service.workspace_verification_run_ids(
+    verification_exists = config.verification_service.workspace_verification_exists(
         problem_id,
         workspace_id,
         safe_verification_id,
     )
     details_url = f"/problems/{problem}/run/details?verification_id={quote_plus(safe_verification_id)}"
-    if verification_run_ids is None:
+    if not verification_exists:
         return redirect_response(details_url, status_code=303, message="verification not found")
-    normalized_run_ids: list[str] = []
-    for item in verification_run_ids:
-        token = normalize_run_id_token(item)
-        if token:
-            normalized_run_ids.append(token)
-    verification_run_ids = dedupe_preserve_order(normalized_run_ids)
     reason = "verification cancelled by user"
-    task_store = config.verification_task_store
+    try:
+        cancellation = config.judgehost_task_service.request_verification_cancel(
+            safe_verification_id,
+            reason,
+        )
+    except Exception as exc:
+        logger.exception("failed to cancel verification execution %s", safe_verification_id)
+        raise HTTPException(status_code=500, detail="failed to cancel verification execution") from exc
     config.verification_service.cancel_verification_if_active(
         safe_verification_id,
         reason=reason,
         now_text=now_iso(),
     )
     notify_verification_cancelled(safe_verification_id, reason)
-    cancelled_tasks = _cancel_judgehost_tasks(verification_run_ids, reason)
-    protected_run_ids = config.judgehost_task_service.domjudge_runs_with_leased_cases(verification_run_ids)
-    task_store.cancel_not_started_tasks(
-        safe_verification_id,
-        reason=reason,
-        protected_run_ids=protected_run_ids,
-    )
     cancel_details: dict[str, object] = {
         "verification_id": safe_verification_id,
-        "run_ids": verification_run_ids,
-        "run_count": len(verification_run_ids),
-        "cancelled_runs": 0,
-        "cancelled_tasks": cancelled_tasks,
+        **cancellation,
         "reason": reason,
     }
     audit(actor_user_id, problem_id, "run.cancel", cancel_details)
-    if cancelled_tasks > 0:
-        msg = f"cancel requested ({cancelled_tasks} active tasks)"
+    awaiting_receipts = int(cancellation["awaiting_receipts"])
+    if awaiting_receipts > 0:
+        msg = f"verification cancelled ({awaiting_receipts} running cases awaiting receipt)"
     else:
         msg = "verification cancelled"
     return redirect_response(details_url, status_code=303, message=msg)

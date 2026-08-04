@@ -128,9 +128,6 @@ class Judgehost:
     def enqueue_compile_only_task(self, **kwargs) -> str:
         return self._enqueue.enqueue_compile_only_task(**kwargs)
 
-    def domjudge_runs_with_leased_cases(self, *args, **kwargs):
-        return self._queue.domjudge_runs_with_leased_cases(*args, **kwargs)
-
     def report_result(self, *args, **kwargs):
         return self._queue.report_result(*args, **kwargs)
 
@@ -149,26 +146,69 @@ class Judgehost:
     def wait_for_task(self, *args, **kwargs):
         return self._queue.wait_for_task(*args, **kwargs)
 
-    def set_host_enabled(self, *args, **kwargs):
-        return self._queue.set_host_enabled(*args, **kwargs)
+    def set_host_enabled(self, hostname: str, enabled: bool) -> dict[str, int]:
+        release = self._queue.set_host_enabled(hostname, enabled)
+        for task_id in release.terminal_task_ids:
+            batch_row = self._state.batch_scheduler.batch_for_task(task_id)
+            if batch_row is not None:
+                self._result._domjudge_finalize_task_if_ready(
+                    task_id,
+                    batch_row=dict(batch_row),
+                )
+        for batch_id in release.terminal_batch_ids:
+            self._result._domjudge_finalize_batch_if_ready(batch_id)
+        return {
+            "released_tasks": len(release.terminal_task_ids),
+            "released_batches": release.affinity_count,
+            "released_cases": release.lease_count,
+        }
 
     def status(self, *args, **kwargs):
         return self._queue.status(*args, **kwargs)
 
-    def cancel_tasks_for_runs(self, *args, **kwargs):
-        return self._queue.cancel_tasks_for_runs(*args, **kwargs)
+    def request_verification_cancel(self, verification_id: str, reason: str) -> dict[str, int]:
+        if not verification_id:
+            raise RuntimeError("verification id is required")
+        if not reason:
+            raise RuntimeError("judgehost cancellation reason is required")
+        self._state.verification_task_store.set_fail_flag(
+            verification_id,
+            reason=reason,
+        )
+        cancellation = self._state.batch_scheduler.request_verification_cancel(
+            verification_id,
+            now_text=now_iso(),
+        )
+        self._state.verification_task_store.cancel_not_started_tasks(
+            verification_id,
+            reason=reason,
+            protected_judgehost_task_ids=set(cancellation.awaiting_task_ids),
+        )
+        unbatched_count = self._queue.cancel_unbatched_verification_tasks(
+            verification_id,
+            reason=reason,
+        )
+        for task_id in cancellation.task_ids:
+            batch_row = self._state.batch_scheduler.batch_for_task(task_id)
+            if batch_row is not None:
+                self._result._domjudge_finalize_task_if_ready(
+                    task_id,
+                    batch_row=dict(batch_row),
+                )
+        for batch_id in cancellation.batch_ids:
+            self._result._domjudge_finalize_batch_if_ready(batch_id)
+        return {
+            "cancelled_cases": cancellation.cancelled_case_count,
+            "awaiting_receipts": cancellation.awaiting_receipt_count,
+            "affected_tasks": len(cancellation.task_ids) + unbatched_count,
+            "affected_batches": len(cancellation.batch_ids),
+        }
 
     def startup_cancel_inflight_tasks(self, *args, **kwargs):
         return self._queue.startup_cancel_inflight_tasks(*args, **kwargs)
 
     def forget_problem_tasks(self, *args, **kwargs):
         return self._queue.forget_problem_tasks(*args, **kwargs)
-
-    def cancel_domjudge_batches_for_runs(self, run_ids: list[str]) -> int:
-        batch_ids = self._queue.cancel_domjudge_batches_for_runs(run_ids)
-        for batch_id in batch_ids:
-            self._result._domjudge_finalize_batch_if_ready(batch_id)
-        return len(batch_ids)
 
     def cancel_all_domjudge_batches(self) -> int:
         batch_ids = self._queue.cancel_all_domjudge_batches()
@@ -368,5 +408,4 @@ class Judgehost:
         with self._state.state_lock:
             self._state.hosts_state.clear()
             self._state.peer_hostname_by_client_addr.clear()
-        self._state.host_telemetry.reset()
         self._state.batch_scheduler.reset()

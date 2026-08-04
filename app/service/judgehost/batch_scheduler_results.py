@@ -6,7 +6,9 @@ import time
 from app.service.judgehost.batch_scheduler_models import (
     CaseClaim,
     CaseClaimBusy,
+    CaseReportTelemetry,
     CaseResult,
+    HostLeaseRelease,
     JudgehostCaseRow,
     ExecutionBatchFinalizationClaim,
 )
@@ -118,6 +120,7 @@ class BatchSchedulerResultMixin:
                 updated_at=updated_at,
             )
             self._finalization_retry_deadlines.pop(batch.batch_id, None)
+            self._discard_batch_telemetry_locked(batch.batch_id)
             return True
 
     def record_compile_result(
@@ -277,6 +280,7 @@ class BatchSchedulerResultMixin:
                 batch_id=case.batch_id,
                 task_id=case.task_id,
                 test_name=case.test_name,
+                cancel_requested=case.cancel_requested,
             )
 
     def observe_compile_success_from_case_claim(
@@ -342,6 +346,7 @@ class BatchSchedulerResultMixin:
                     batch_id=case.batch_id,
                     task_id=case.task_id,
                     test_name=case.test_name,
+                    cancel_requested=case.cancel_requested,
                 )
                 claimed.append((claim, self._case_row(case)))
             self._refresh_batches_locked({batch.batch_id}, updated_at=now_text)
@@ -380,6 +385,7 @@ class BatchSchedulerResultMixin:
         generation: int,
         result: CaseResult,
         updated_at: str,
+        report_telemetry: CaseReportTelemetry | None = None,
     ) -> str | None:
         with self._lock:
             case = self._cases.get(int(case_id))
@@ -389,7 +395,42 @@ class BatchSchedulerResultMixin:
                 or case.claim_generation != int(generation)
             ):
                 return None
+            if report_telemetry is not None:
+                if case.status != "reporting" or case.lease_owner != report_telemetry.hostname:
+                    return None
+                self._record_case_telemetry_locked(case, report_telemetry)
             return self._finish_claim_locked(case, result=result, updated_at=updated_at)
+
+    def commit_cancelled_receipt(
+        self,
+        case_id: int,
+        *,
+        generation: int,
+        updated_at: str,
+        report_telemetry: CaseReportTelemetry,
+    ) -> bool:
+        with self._lock:
+            case = self._cases.get(int(case_id))
+            if (
+                case is None
+                or case.status != "reporting"
+                or case.claim_generation != int(generation)
+                or case.lease_owner != report_telemetry.hostname
+                or not case.cancel_requested
+            ):
+                return False
+            self._record_case_telemetry_locked(case, report_telemetry)
+            case.cancel_requested = False
+            case.terminal_result = None
+            case.requeue_on_abort = False
+            case.result = None
+            self._transition_case_locked(
+                case,
+                "cancelled",
+                lease_owner=None,
+                updated_at=updated_at,
+            )
+            return True
 
     def finish_cache_miss(
         self,
@@ -607,67 +648,64 @@ class BatchSchedulerResultMixin:
                 }
             return result
 
-    def _cancel_case_locked(self, case, *, now_text: str) -> None:
-        if case.status in self._TERMINAL_CASE_STATUSES:
-            return
-        if case.status in {"reporting", "cache-probing"}:
-            case.cancel_requested = True
-            case.terminal_result = None
-            return
-        case.result = None
-        self._transition_case_locked(
-            case,
-            "cancelled",
-            lease_owner=None,
-            updated_at=now_text,
-            refresh_batch=False,
-        )
-
-    def cancel_batches_for_runs(self, run_ids: list[str], *, now_text: str) -> list[int]:
-        safe_run_ids = {run_id for run_id in run_ids if run_id}
-        if not safe_run_ids:
-            return []
+    def release_host_leases(self, hostname: str, *, now_text: str) -> HostLeaseRelease:
         with self._lock:
-            batch_ids = sorted({
-                batch_id
-                for run_id in safe_run_ids
-                for batch_id in self._batch_ids_by_run.get(run_id, ())
-                if self._batches[batch_id].status in {"open", "finalize-pending", "finalizing"}
-            })
-            for run_id in safe_run_ids:
-                for case_id in tuple(self._case_ids_by_run.get(run_id, ())):
-                    self._cancel_case_locked(self._cases[case_id], now_text=now_text)
-            self._refresh_batches_locked(set(batch_ids), updated_at=now_text)
-            return batch_ids
-
-    def release_host_leases(self, hostname: str, *, now_text: str) -> tuple[int, int]:
-        with self._lock:
+            self._drop_host_telemetry_batch_locked(hostname)
             affinity_ids = self._affinity_batches_by_host.pop(hostname, ())
             stolen_id = self._stolen_batch_by_host.pop(hostname, None)
             context_batch_ids = set(affinity_ids)
             if stolen_id is not None:
                 context_batch_ids.add(stolen_id)
             affected_batch_ids = set(context_batch_ids)
+            terminal_task_ids: set[str] = set()
             case_ids = list(self._leased_case_ids_by_host.get(hostname, ()))
             for case_id in case_ids:
                 case = self._cases[case_id]
                 if case.status == "reporting":
-                    case.requeue_on_abort = True
+                    if case.cancel_requested:
+                        case.cancel_requested = False
+                        case.requeue_on_abort = False
+                        case.result = None
+                        self._transition_case_locked(
+                            case,
+                            "cancelled",
+                            lease_owner=None,
+                            updated_at=now_text,
+                            refresh_batch=False,
+                        )
+                        if self._task_case_counts[case.task_id].remaining == 0:
+                            terminal_task_ids.add(case.task_id)
+                    else:
+                        case.requeue_on_abort = True
                 elif case.status == "leased":
+                    cancelled = case.cancel_requested
                     self._transition_case_locked(
                         case,
-                        "pending",
+                        "cancelled" if cancelled else "pending",
                         lease_owner=None,
                         updated_at=now_text,
                         refresh_batch=False,
                     )
+                    if cancelled and self._task_case_counts[case.task_id].remaining == 0:
+                        terminal_task_ids.add(case.task_id)
                 affected_batch_ids.add(case.batch_id)
             for batch_id in affected_batch_ids:
                 batch = self._batches.get(batch_id)
                 if batch is not None and batch.compile_owner == hostname:
                     batch.compile_owner = None
             self._refresh_batches_locked(affected_batch_ids, updated_at=now_text)
-            return len(context_batch_ids), len(case_ids)
+            terminal_batch_ids = tuple(sorted(
+                batch_id
+                for batch_id in affected_batch_ids
+                if self._batches.get(batch_id) is not None
+                and self._batches[batch_id].status == "finalize-pending"
+            ))
+            return HostLeaseRelease(
+                affinity_count=len(context_batch_ids),
+                lease_count=len(case_ids),
+                terminal_batch_ids=terminal_batch_ids,
+                terminal_task_ids=tuple(sorted(terminal_task_ids)),
+            )
 
     def _remove_cases_locked(self, case_ids: set[int]) -> None:
         cases = [self._cases[case_id] for case_id in case_ids if case_id in self._cases]
@@ -804,6 +842,19 @@ class BatchSchedulerResultMixin:
             )
             for batch_id in batch_ids:
                 for case_id in tuple(self._case_ids_by_batch[batch_id]):
-                    self._cancel_case_locked(self._cases[case_id], now_text=now_text)
+                    case = self._cases[case_id]
+                    if case.status in self._TERMINAL_CASE_STATUSES:
+                        continue
+                    case.cancel_requested = False
+                    case.terminal_result = None
+                    case.requeue_on_abort = False
+                    case.result = None
+                    self._transition_case_locked(
+                        case,
+                        "cancelled",
+                        lease_owner=None,
+                        updated_at=now_text,
+                        refresh_batch=False,
+                    )
             self._refresh_batches_locked(set(batch_ids), updated_at=now_text)
             return batch_ids

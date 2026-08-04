@@ -262,7 +262,7 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
             publish_task=_publish,
             probe_task_case_cache=lambda _task_ids, _limit: set(),
             resolve_case_result=lambda _task_id, _test_name: None,
-            cancel_queued_tasks=lambda _reason: None,
+            cancel_execution=lambda _reason: None,
             close_logical_runs=closed_logical_runs.extend,
         )
         coordinator = VerificationRuntimeCoordinator(
@@ -385,7 +385,7 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
             publish_task=_publish,
             probe_task_case_cache=_probe,
             resolve_case_result=lambda _task_id, _test_name: None,
-            cancel_queued_tasks=lambda _reason: None,
+            cancel_execution=lambda _reason: None,
             close_logical_runs=lambda _run_ids: None,
         )
         coordinator = VerificationRuntimeCoordinator(
@@ -457,6 +457,9 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
             fail_flag_reason="generate-input / generators/gen.cpp / 001.in: validator rejected generated input for 001.in",
         )
 
+        def _cancel_execution(reason: str) -> None:
+            store.cancel_not_started_tasks("ver-validator-stop", reason=reason)
+
         def _publish(row: dict[str, object]) -> TaskPublishResult:
             task_id = str(row["id"])
             publish_order.append(task_id)
@@ -470,7 +473,7 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
             publish_task=_publish,
             probe_task_case_cache=lambda _task_ids, _limit: set(),
             resolve_case_result=lambda _task_id, _test_name: None,
-            cancel_queued_tasks=lambda _reason: None,
+            cancel_execution=_cancel_execution,
             close_logical_runs=lambda _run_ids: None,
         )
         coordinator = VerificationRuntimeCoordinator(
@@ -555,7 +558,7 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
             publish_task=lambda _row: (_ for _ in ()).throw(RuntimeError("unexpected publish")),
             probe_task_case_cache=lambda _task_ids, _limit: set(),
             resolve_case_result=lambda _task_id, _test_name: None,
-            cancel_queued_tasks=lambda reason: queued_cancel_reasons.append(reason),
+            cancel_execution=lambda reason: queued_cancel_reasons.append(reason),
             close_logical_runs=lambda _run_ids: None,
         )
         coordinator = VerificationRuntimeCoordinator(
@@ -580,7 +583,7 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
             rows = {str(row["id"]): row for row in store.list_rows("ver-runtime-cancel")}
             self.assertEqual(str(rows["vt-leased"]["status"]), VerificationTaskStore.TASK_LEASED)
             self.assertEqual(str(rows["vt-queued"]["status"]), VerificationTaskStore.TASK_CANCELLED)
-            self.assertEqual(queued_cancel_reasons, [])
+            self.assertEqual(queued_cancel_reasons, ["verification cancelled by user"])
         finally:
             if thread.is_alive():
                 coordinator.enqueue_cancel("test shutdown")
@@ -637,7 +640,7 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
                 publish_task=_publish,
                 probe_task_case_cache=lambda _task_ids, _limit: set(),
                 resolve_case_result=lambda _task_id, _test_name: None,
-                cancel_queued_tasks=lambda _reason: None,
+                cancel_execution=lambda _reason: None,
                 close_logical_runs=lambda _run_ids: None,
             ),
             edges=list(zip(task_ids, task_ids[1:])),
@@ -717,7 +720,7 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
                 publish_task=_publish,
                 probe_task_case_cache=lambda _task_ids, _limit: set(),
                 resolve_case_result=lambda _task_id, _test_name: {"status": "ok"},
-                cancel_queued_tasks=lambda _reason: None,
+                cancel_execution=lambda _reason: None,
                 close_logical_runs=lambda _run_ids: None,
             ),
             edges=[("vt-parent-a", "vt-child"), ("vt-parent-b", "vt-child")],

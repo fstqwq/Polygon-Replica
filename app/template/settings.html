@@ -373,9 +373,12 @@
             {% set last_judging = row.get('last_judging') %}
             {% if last_judging %}
             <a
+              class="settings-last-judging-link"
               href="/problems/{{ last_judging.get('problem_slug', '') }}/run/details?verification_id={{ last_judging.get('verification_id', '') }}"
-              title="Last reported {{ row.get('last_judging_at') | local_time }}"
-            >[{{ last_judging.get('problem_slug', '') }}:{{ last_judging.get('task_kind', '') | replace('-', ' ') | title }}:{{ last_judging.get('source_label', '') }} / {{ last_judging.get('test_name', '') }}]</a>
+            >{{ last_judging.get('task_kind', '') | replace('-', ' ') | title }}: <code>{{ last_judging.get('problem_slug', '') }}</code> {{ last_judging.get('source_label', '') }} / {{ last_judging.get('test_name', '') }}</a>
+            <div class="muted settings-last-judging-time">
+              {{ row.get('last_judging_at') | local_time }}
+            </div>
             {% else %}
             -
             {% endif %}

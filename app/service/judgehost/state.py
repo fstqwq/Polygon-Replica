@@ -15,7 +15,6 @@ from app.service.verification.task_store import VerificationTaskStore
 
 from app.service.judgehost.task_registry import JudgehostTaskRegistry
 from app.service.judgehost.batch_scheduler import BatchScheduler
-from app.service.judgehost.host_telemetry import HostTelemetryStore
 
 
 @dataclass
@@ -50,7 +49,6 @@ class JudgehostState:
     )
     hosts_state: dict[str, dict[str, object]] = field(default_factory=dict)
     peer_hostname_by_client_addr: dict[str, str] = field(default_factory=dict)
-    host_telemetry: HostTelemetryStore = field(default_factory=HostTelemetryStore)
     batch_scheduler: BatchScheduler = field(default_factory=BatchScheduler)
 
     def __post_init__(self) -> None:

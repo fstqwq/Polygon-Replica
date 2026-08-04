@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections import deque
+from dataclasses import dataclass, field
 from typing import TypedDict
 
 
@@ -40,6 +41,53 @@ class CaseResult:
     feedback_files: tuple[str, ...]
     answer_correct: bool
     test_row_json: str
+
+
+class LastJudgingRow(TypedDict):
+    verification_id: str
+    problem_slug: str
+    task_kind: str
+    source_label: str
+    test_name: str
+
+
+class HostTelemetryRow(TypedDict):
+    judged_case_count: int
+    last_judging_at: str | None
+    last_judging: LastJudgingRow | None
+    recent_avg_per_case_sec: float | None
+
+
+@dataclass(frozen=True)
+class CaseReportTelemetry:
+    hostname: str
+    reported_at: str
+    reported_monotonic: float
+    verification_id: str
+    problem_slug: str
+    task_kind: str
+    source_label: str
+    test_name: str
+
+
+@dataclass(slots=True)
+class HostLeaseTelemetry:
+    batch_id: int
+    pending_case_ids: set[int]
+    case_count: int
+    leased_monotonic: float
+    latest_reported_monotonic: float
+
+
+@dataclass(slots=True)
+class HostTelemetryState:
+    judged_case_count: int = 0
+    last_judging_at: str | None = None
+    last_judging_monotonic: float | None = None
+    last_judging: LastJudgingRow | None = None
+    recent_batch_avg_sec: deque[float] = field(default_factory=lambda: deque(maxlen=10))
+    recent_avg_per_case_sec: float | None = None
+    active_batch: HostLeaseTelemetry | None = None
 
 
 class ExecutionBatchRow(TypedDict):
@@ -97,6 +145,7 @@ class JudgehostCaseRow(TypedDict):
     answer_ref: str
     status: str
     lease_owner: str
+    cancel_requested: bool
     runresult: str
     runtime_sec: float | None
     cpu_sec: float | None
@@ -233,7 +282,25 @@ class CaseClaim:
     batch_id: int
     task_id: str
     test_name: str
+    cancel_requested: bool
 
 
 class CaseClaimBusy(RuntimeError):
     """A duplicate callback arrived while the first callback still owns the Case."""
+
+
+@dataclass(frozen=True)
+class VerificationCancellation:
+    batch_ids: tuple[int, ...]
+    task_ids: tuple[str, ...]
+    awaiting_task_ids: tuple[str, ...]
+    cancelled_case_count: int
+    awaiting_receipt_count: int
+
+
+@dataclass(frozen=True)
+class HostLeaseRelease:
+    affinity_count: int
+    lease_count: int
+    terminal_batch_ids: tuple[int, ...]
+    terminal_task_ids: tuple[str, ...]

@@ -313,16 +313,21 @@ class TestSecurity(E2ETestBase):
             edges=[],
         )
 
-        with (
-            patch.object(config.judgehost_task_service, "cancel_tasks_for_runs", return_value=1) as cancel_runs,
-            patch.object(config.judgehost_task_service, "cancel_domjudge_batches_for_runs", return_value=1) as cancel_jobs,
-        ):
+        with patch.object(
+            config.judgehost_task_service,
+            "request_verification_cancel",
+            return_value={
+                "cancelled_cases": 0,
+                "awaiting_receipts": 0,
+                "affected_tasks": 0,
+                "affected_batches": 0,
+            },
+        ) as cancel_execution:
             resp = run_cancel("alice/sample", "bob", verification_id=verification_id)
 
         self.assertEqual(resp.status_code, 303)
         self.assertIn("verification not found", self._first_flash_message(resp).lower())
-        cancel_runs.assert_not_called()
-        cancel_jobs.assert_not_called()
+        cancel_execution.assert_not_called()
         verification_row = db_fetch_one("SELECT status,finished_at FROM verifications WHERE id=?", [verification_id])
         self.assertIsNotNone(verification_row)
         self.assertEqual(str(verification_row["status"] or "").lower(), "running")
