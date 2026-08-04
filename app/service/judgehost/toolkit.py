@@ -802,22 +802,10 @@ class DomjudgeToolkit:
             return self._TASK_KIND_MAIN_CORRECT
         return self._TASK_KIND_SOLUTION_RUN
 
-    def group_key(self, payload: dict[str, object] | None = None) -> str:
+    def execution_signature(self, payload: dict[str, object] | None = None) -> str:
         payload_obj = {} if payload is None else payload
         task_kind = self.task_kind(payload_obj)
         verification_source = domjudge_lower_text(payload_obj.get("verification_source"))
-        if verification_source not in {
-            self._TASK_KIND_GENERATE_INPUT,
-            self._TASK_KIND_MAIN_CORRECT,
-            self._TASK_KIND_SOLUTION_RUN,
-        }:
-            return ""
-        if task_kind not in {
-            self._TASK_KIND_GENERATE_INPUT,
-            self._TASK_KIND_MAIN_CORRECT,
-            self._TASK_KIND_SOLUTION_RUN,
-        }:
-            return ""
         precomputed_raw = payload_obj.get("domjudge_precomputed")
         if not isinstance(precomputed_raw, dict):
             return ""
@@ -839,8 +827,7 @@ class DomjudgeToolkit:
         compare_config_hash = sha256_hex_text(
             json.dumps(compare_config, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
         )
-        group_payload = {
-            "verification_id": domjudge_text(payload_obj.get("verification_id")),
+        signature_payload = {
             "task_kind": task_kind,
             "verification_source": verification_source,
             "expected_behavior": domjudge_lower_text(payload_obj.get("expected_behavior")),
@@ -857,12 +844,9 @@ class DomjudgeToolkit:
             ),
         }
         digest = sha256_hex_text(
-            json.dumps(group_payload, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+            json.dumps(signature_payload, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
         )
-        return f"jg-{digest[:32]}"
-
-    def is_grouped_verification_task(self, payload: dict[str, object] | None = None) -> bool:
-        return bool(self.group_key(payload))
+        return digest
 
     def execution_modes(
         self,

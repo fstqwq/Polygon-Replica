@@ -500,7 +500,7 @@ class TestJudgehostService(E2ETestBase):
         batch_id = store.create_batch_with_cases(
             task_id=f"jt-id-base-{uuid.uuid4().hex[:8]}",
             run_id=f"r-id-base-{uuid.uuid4().hex[:8]}",
-            group_key="",
+            execution_signature="a" * 64,
             verification_id="ver-1",
             compile_key="8" * 64,
             compile_submission=self._compile_submission("main.cpp", "8" * 64),
@@ -1031,6 +1031,10 @@ class TestJudgehostService(E2ETestBase):
 
         failed_batch = judgehost_fetch_batch(service, int(batch_row["batch_id"] or 0))
         self.assertIsNotNone(failed_batch)
+        assert failed_batch is not None
+        self.assertEqual(str(failed_batch["status"] or ""), "open")
+        service.schedule_verification_cleanup(str(failed_batch["verification_id"]))
+        failed_batch = judgehost_fetch_batch(service, int(batch_row["batch_id"] or 0))
         assert failed_batch is not None
         self.assertEqual(str(failed_batch["status"] or ""), "failed")
 
@@ -5473,7 +5477,7 @@ class TestJudgehostService(E2ETestBase):
         batch_id = service.state.batch_scheduler.create_batch_with_cases(
             task_id=task_id,
             run_id=run_id,
-            group_key="group-case-feedback",
+            execution_signature="b" * 64,
             verification_id=verification_id,
             compile_key="8" * 64,
             compile_submission=self._compile_submission("std.cpp", "8" * 64),
@@ -5584,7 +5588,7 @@ class TestJudgehostService(E2ETestBase):
         batch_id = service.state.batch_scheduler.create_batch_with_cases(
             task_id=task_id,
             run_id=run_id,
-            group_key="group-late-debug",
+            execution_signature="c" * 64,
             verification_id=verification_id,
             compile_key="9" * 64,
             compile_submission=self._compile_submission("std.cpp", "9" * 64),

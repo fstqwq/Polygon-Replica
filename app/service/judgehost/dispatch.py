@@ -437,7 +437,7 @@ class DispatchHandler(DispatchCacheMixin):
         )
 
 
-    def _domjudge_stage_task(self, task: dict[str, object], *, group_key: str = "") -> int:
+    def _domjudge_stage_task(self, task: dict[str, object], *, execution_signature: str = "") -> int:
         task_id, run_id, payload = self._domjudge_task_payload(task)
         latest_task_row = self._core.task_by_id(task_id)
         if latest_task_row is not None:
@@ -497,7 +497,7 @@ class DispatchHandler(DispatchCacheMixin):
         return self._s.batch_scheduler.create_batch_with_cases(
             task_id=task_id,
             run_id=run_id,
-            group_key=group_key,
+            execution_signature=execution_signature,
             verification_id=verification_id,
             compile_key=full_compile_key,
             compile_submission=compile_submission,
@@ -522,56 +522,10 @@ class DispatchHandler(DispatchCacheMixin):
             case_rows=case_rows,
         )
 
-    def _domjudge_append_task_to_batch(self, batch_id: int, task: dict[str, object]) -> str:
-        task_id, run_id, payload = self._domjudge_task_payload(task)
-        latest_task_row = self._core.task_by_id(task_id)
-        if latest_task_row is not None:
-            payload = dict(latest_task_row.get("payload") or {})
-            run_id = domjudge_text(latest_task_row.get("run_id"), default=run_id)
-        prepared = self._domjudge_prepare_payload(
-            payload,
-            compile_only=self._toolkit.task_kind(payload) == self._TASK_KIND_COMPILE_ONLY,
-        )
-        case_rows = self._domjudge_case_rows(
-            task_id=task_id,
-            run_id=run_id,
-            tests_rows=prepared["tests_rows"],
-            main_correct=prepared["main_correct"],
-            scope_sequence=self._s.batch_scheduler.scope_sequence(
-                domjudge_text(payload.get("verification_id"))
-            ),
-        )
-        append_result = self._s.batch_scheduler.append_cases_to_batch(
-            batch_id=int(batch_id),
-            case_rows=case_rows,
-            now_text=now_iso(),
-        )
-        outcome = str(append_result["outcome"])
-        if outcome == "closed":
-            return outcome
-        if int(append_result.get("inserted") or 0) > 0:
-            return outcome
-        missing_names = [
-            str(case_row.get("test_name") or "")
-            for case_row in case_rows
-            if self._s.batch_scheduler.case_for_task(task_id, str(case_row.get("test_name") or "")) is None
-        ]
-        if missing_names:
-            raise RuntimeError(f"grouped DOMjudge batch append failed for {', '.join(missing_names)}")
-        return outcome
-
     def stage_task(self, task: dict[str, object]) -> int:
         _task_id, _run_id, payload = self._domjudge_task_payload(task)
-        group_key = domjudge_text(payload.get("domjudge_group_key"))
-        with self._s.batch_scheduler.group_activity(group_key):
-            if group_key:
-                existing = self._s.batch_scheduler.batch_for_group_key(group_key)
-                if existing is not None:
-                    outcome = self._domjudge_append_task_to_batch(int(existing["batch_id"]), task)
-                    if outcome != "closed":
-                        return int(existing["batch_id"])
-            batch_id = self._domjudge_stage_task(task, group_key=group_key)
-            return batch_id
+        execution_signature = domjudge_text(payload.get("domjudge_execution_signature"))
+        return self._domjudge_stage_task(task, execution_signature=execution_signature)
 
     def finalize_batch_if_ready(self, batch_id: int, *, error_text: str = "") -> None:
         self._result._domjudge_finalize_batch_if_ready(
@@ -587,6 +541,9 @@ class DispatchHandler(DispatchCacheMixin):
         )
         if activated:
             self._queue.compact_task_payload(task_id)
+            batch = self._s.batch_scheduler.batch_for_task(task_id)
+            if batch is not None:
+                self._result._domjudge_finalize_batch_if_ready(int(batch["batch_id"]))
         return activated
 
     def _domjudge_lease_cases(self, batch_id: int, hostname: str, max_batchsize: int) -> list[dict[str, object]]:
@@ -595,7 +552,6 @@ class DispatchHandler(DispatchCacheMixin):
         if batch_row is None:
             return []
         cap = max(1, min(256, int(max_batchsize)))
-        safe_task_id = domjudge_text(batch_row["task_id"])
         if domjudge_lower_text(batch_row["status"]) != "open":
             return []
         rows = self._s.batch_scheduler.lease_cases(
@@ -655,7 +611,7 @@ class DispatchHandler(DispatchCacheMixin):
                     updates={"updated_at": now_text},
                 )
         for row in rows:
-            case_task_id = domjudge_text(row["task_id"], default=safe_task_id)
+            case_task_id = domjudge_text(row["task_id"])
             task_row = self._core.task_by_id(case_task_id)
             verification_id = "" if task_row is None else domjudge_text(task_row.get("verification_id"))
             if verification_id:

@@ -167,6 +167,7 @@ class DispatchCacheMixin:
                 source_path="",
                 work_root="",
                 success=False,
+                error_text="judgehost batch specification disappeared",
                 now_text=now_iso(),
             )
             self._result._domjudge_finalize_batch_if_ready(
@@ -175,7 +176,7 @@ class DispatchCacheMixin:
                 error_text="judgehost batch specification disappeared",
             )
             return False
-        work_root = self._toolkit.work_root(domjudge_text(batch_row["task_id"]))
+        work_root = self._toolkit.work_root(f"batch-{int(batch_id)}")
         source_dir = (work_root / "source").resolve()
         source_path = (source_dir / submission.source_name).resolve()
         try:
@@ -205,6 +206,7 @@ class DispatchCacheMixin:
                 source_path=str(source_path),
                 work_root=str(work_root),
                 success=False,
+                error_text=f"judgehost materialization failed: {exc}",
                 now_text=now_iso(),
             )
             self._result._domjudge_finalize_batch_if_ready(
@@ -218,6 +220,7 @@ class DispatchCacheMixin:
             source_path=str(source_path),
             work_root=str(work_root),
             success=True,
+            error_text="",
             now_text=now_iso(),
         )
 

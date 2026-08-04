@@ -1,0 +1,1565 @@
+{
+  "generatedAt": "2026-08-04T01:48:52.818433Z",
+  "boundariesPath": "import-policy/import-boundaries.json",
+  "firstWavePath": "import-policy/import-policy-first-wave.txt",
+  "firstWave": [],
+  "boundaries": {
+    "version": 1,
+    "firstWave": [],
+    "layers": []
+  },
+  "summary": {
+    "violations_total": 171,
+    "cycles_total": 0,
+    "rule_counts": {
+      "ALIAS_FROM_IMPORT": 11,
+      "MESH_RELATIVE_IMPORT": 160
+    }
+  },
+  "meta": {
+    "moduleCount": 191,
+    "firstWaveModuleCount": 0
+  },
+  "violations": [
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "app/impl/contest/access.py",
+      "line": 12,
+      "importer": "app.impl.contest.access",
+      "target": "app.impl.contest.common",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "app/impl/contest/access.py",
+      "line": 13,
+      "importer": "app.impl.contest.access",
+      "target": "app.impl.contest.shared",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "app/impl/contest/overview.py",
+      "line": 10,
+      "importer": "app.impl.contest.overview",
+      "target": "app.impl.contest.shared",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "app/impl/contest/package.py",
+      "line": 18,
+      "importer": "app.impl.contest.package",
+      "target": "app.impl.contest.shared",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "app/impl/contest/problem.py",
+      "line": 15,
+      "importer": "app.impl.contest.problem",
+      "target": "app.impl.contest.common",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "app/impl/contest/problem.py",
+      "line": 19,
+      "importer": "app.impl.contest.problem",
+      "target": "app.impl.contest.shared",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "app/impl/contest/property.py",
+      "line": 11,
+      "importer": "app.impl.contest.property",
+      "target": "app.impl.contest.shared",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "app/impl/contest/shared.py",
+      "line": 14,
+      "importer": "app.impl.contest.shared",
+      "target": "app.impl.contest.common",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "app/impl/workspace/context_component_status.py",
+      "line": 16,
+      "importer": "app.impl.workspace.context_component_status",
+      "target": "app.impl.workspace.context_operation",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "app/impl/workspace/context_component_status.py",
+      "line": 23,
+      "importer": "app.impl.workspace.context_component_status",
+      "target": "app.impl.workspace.test_spec",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "app/impl/workspace/context_job.py",
+      "line": 13,
+      "importer": "app.impl.workspace.context_job",
+      "target": "app.impl.workspace.context_job_helper",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "app/impl/workspace/context_job.py",
+      "line": 14,
+      "importer": "app.impl.workspace.context_job",
+      "target": "app.impl.workspace.context_operation",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "app/impl/workspace/context_job.py",
+      "line": 15,
+      "importer": "app.impl.workspace.context_job",
+      "target": "app.impl.workspace.context_verification",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "app/impl/workspace/context_job.py",
+      "line": 21,
+      "importer": "app.impl.workspace.context_job",
+      "target": "app.impl.workspace.problem_config",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "app/impl/workspace/context_job.py",
+      "line": 22,
+      "importer": "app.impl.workspace.context_job",
+      "target": "app.impl.workspace.verification_dag",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "app/impl/workspace/context_job_helper.py",
+      "line": 11,
+      "importer": "app.impl.workspace.context_job_helper",
+      "target": "app.impl.workspace.context_run_detail",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "app/impl/workspace/context_job_helper.py",
+      "line": 12,
+      "importer": "app.impl.workspace.context_job_helper",
+      "target": "app.impl.workspace.context_ui",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "app/impl/workspace/context_operation.py",
+      "line": 9,
+      "importer": "app.impl.workspace.context_operation",
+      "target": "app.impl.workspace.artifact",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "app/impl/workspace/context_operation.py",
+      "line": 12,
+      "importer": "app.impl.workspace.context_operation",
+      "target": "app.impl.workspace.context",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "app/impl/workspace/context_operation.py",
+      "line": 15,
+      "importer": "app.impl.workspace.context_operation",
+      "target": "app.impl.workspace.solution",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "app/impl/workspace/context_operation.py",
+      "line": 18,
+      "importer": "app.impl.workspace.context_operation",
+      "target": "app.impl.workspace.test_spec",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "app/impl/workspace/context_run_detail.py",
+      "line": 15,
+      "importer": "app.impl.workspace.context_run_detail",
+      "target": "app.impl.workspace.context_operation",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "app/impl/workspace/context_ui.py",
+      "line": 21,
+      "importer": "app.impl.workspace.context_ui",
+      "target": "app.impl.workspace.access",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "app/impl/workspace/context_ui.py",
+      "line": 26,
+      "importer": "app.impl.workspace.context_ui",
+      "target": "app.impl.workspace.artifact",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "app/impl/workspace/context_ui.py",
+      "line": 27,
+      "importer": "app.impl.workspace.context_ui",
+      "target": "app.impl.workspace.context",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "app/impl/workspace/context_ui.py",
+      "line": 28,
+      "importer": "app.impl.workspace.context_ui",
+      "target": "app.impl.workspace.context_operation",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "app/impl/workspace/context_ui.py",
+      "line": 32,
+      "importer": "app.impl.workspace.context_ui",
+      "target": "app.impl.workspace.context_component_status",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "app/impl/workspace/context_ui.py",
+      "line": 39,
+      "importer": "app.impl.workspace.context_ui",
+      "target": "app.impl.workspace.context_verification",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "app/impl/workspace/context_ui.py",
+      "line": 40,
+      "importer": "app.impl.workspace.context_ui",
+      "target": "app.impl.workspace.problem_config",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "ALIAS_FROM_IMPORT",
+      "file": "app/impl/workspace/context_verification.py",
+      "line": 12,
+      "importer": "app.impl.workspace.context_verification",
+      "target": "app.impl.workspace.run_display",
+      "message": "`from X import Y as Z` is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "app/impl/workspace/context_verification.py",
+      "line": 12,
+      "importer": "app.impl.workspace.context_verification",
+      "target": "app.impl.workspace.run_display",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "app/impl/workspace/run_view_detail.py",
+      "line": 7,
+      "importer": "app.impl.workspace.run_view_detail",
+      "target": "app.impl.workspace.artifact",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "app/impl/workspace/run_view_detail.py",
+      "line": 8,
+      "importer": "app.impl.workspace.run_view_detail",
+      "target": "app.impl.workspace.context",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "app/impl/workspace/run_view_detail.py",
+      "line": 9,
+      "importer": "app.impl.workspace.run_view_detail",
+      "target": "app.impl.workspace.problem_config",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "app/impl/workspace/run_view_detail.py",
+      "line": 10,
+      "importer": "app.impl.workspace.run_view_detail",
+      "target": "app.impl.workspace.context_operation",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "app/impl/workspace/run_view_detail.py",
+      "line": 14,
+      "importer": "app.impl.workspace.run_view_detail",
+      "target": "app.impl.workspace.context_run_detail",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "ALIAS_FROM_IMPORT",
+      "file": "app/impl/workspace/run_view_detail.py",
+      "line": 64,
+      "importer": "app.impl.workspace.run_view_detail",
+      "target": "app.impl.workspace.run_display",
+      "message": "`from X import Y as Z` is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "app/impl/workspace/run_view_detail.py",
+      "line": 75,
+      "importer": "app.impl.workspace.run_view_detail",
+      "target": "app.impl.workspace.runtime_threshold",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "app/impl/workspace/run_view_lifecycle_card.py",
+      "line": 7,
+      "importer": "app.impl.workspace.run_view_lifecycle_card",
+      "target": "app.impl.workspace.context_operation",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "app/impl/workspace/run_view_lifecycle_card.py",
+      "line": 8,
+      "importer": "app.impl.workspace.run_view_lifecycle_card",
+      "target": "app.impl.workspace.context_run_detail",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "app/impl/workspace/run_view_list.py",
+      "line": 13,
+      "importer": "app.impl.workspace.run_view_list",
+      "target": "app.impl.workspace.context_verification",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "app/impl/workspace/run_view_list.py",
+      "line": 14,
+      "importer": "app.impl.workspace.run_view_list",
+      "target": "app.impl.workspace.run_display",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "app/impl/workspace/sample_output_validation.py",
+      "line": 11,
+      "importer": "app.impl.workspace.sample_output_validation",
+      "target": "app.impl.workspace.verification_payload",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "app/impl/workspace/sanity_checks.py",
+      "line": 11,
+      "importer": "app.impl.workspace.sanity_checks",
+      "target": "app.impl.workspace.boundary_coverage",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "app/impl/workspace/sanity_checks.py",
+      "line": 16,
+      "importer": "app.impl.workspace.sanity_checks",
+      "target": "app.impl.workspace.sample_output_validation",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "app/impl/workspace/sanity_checks.py",
+      "line": 17,
+      "importer": "app.impl.workspace.sanity_checks",
+      "target": "app.impl.workspace.runtime_threshold",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "app/impl/workspace/verification_dag.py",
+      "line": 30,
+      "importer": "app.impl.workspace.verification_dag",
+      "target": "app.impl.workspace.context_job_helper",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "app/impl/workspace/verification_dag.py",
+      "line": 31,
+      "importer": "app.impl.workspace.verification_dag",
+      "target": "app.impl.workspace.context_operation",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "app/impl/workspace/verification_dag.py",
+      "line": 32,
+      "importer": "app.impl.workspace.verification_dag",
+      "target": "app.impl.workspace.context_run_detail",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "app/impl/workspace/verification_dag.py",
+      "line": 33,
+      "importer": "app.impl.workspace.verification_dag",
+      "target": "app.impl.workspace.context_verification",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "app/impl/workspace/verification_dag.py",
+      "line": 34,
+      "importer": "app.impl.workspace.verification_dag",
+      "target": "app.impl.workspace.sanity_checks",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "app/impl/workspace/verification_dag.py",
+      "line": 45,
+      "importer": "app.impl.workspace.verification_dag",
+      "target": "app.impl.workspace.runtime_threshold",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "app/impl/workspace/verification_dag.py",
+      "line": 47,
+      "importer": "app.impl.workspace.verification_dag",
+      "target": "app.impl.workspace.verification_dag_plan",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "ALIAS_FROM_IMPORT",
+      "file": "app/impl/workspace/verification_dag.py",
+      "line": 48,
+      "importer": "app.impl.workspace.verification_dag",
+      "target": "app.impl.workspace.verification_payload",
+      "message": "`from X import Y as Z` is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "app/impl/workspace/verification_dag.py",
+      "line": 48,
+      "importer": "app.impl.workspace.verification_dag",
+      "target": "app.impl.workspace.verification_payload",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "app/impl/workspace/verification_dag.py",
+      "line": 49,
+      "importer": "app.impl.workspace.verification_dag",
+      "target": "app.impl.workspace.problem_config",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "app/impl/workspace/verification_dag_plan.py",
+      "line": 14,
+      "importer": "app.impl.workspace.verification_dag_plan",
+      "target": "app.impl.workspace.context_operation",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "ALIAS_FROM_IMPORT",
+      "file": "app/main.py",
+      "line": 12,
+      "importer": "app.main",
+      "target": "app.impl.auth.middleware",
+      "message": "`from X import Y as Z` is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "ALIAS_FROM_IMPORT",
+      "file": "app/main.py",
+      "line": 13,
+      "importer": "app.main",
+      "target": "app.impl.auth.internal.runtime",
+      "message": "`from X import Y as Z` is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "app/service/judgehost/api.py",
+      "line": 13,
+      "importer": "app.service.judgehost.api",
+      "target": "app.service.judgehost.core",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "app/service/judgehost/api.py",
+      "line": 14,
+      "importer": "app.service.judgehost.api",
+      "target": "app.service.judgehost.cleanup",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "app/service/judgehost/api.py",
+      "line": 15,
+      "importer": "app.service.judgehost.api",
+      "target": "app.service.judgehost.dispatch",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "app/service/judgehost/api.py",
+      "line": 16,
+      "importer": "app.service.judgehost.api",
+      "target": "app.service.judgehost.enqueue",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "app/service/judgehost/api.py",
+      "line": 17,
+      "importer": "app.service.judgehost.api",
+      "target": "app.service.judgehost.result",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "app/service/judgehost/api.py",
+      "line": 18,
+      "importer": "app.service.judgehost.api",
+      "target": "app.service.judgehost.state",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "app/service/judgehost/api.py",
+      "line": 19,
+      "importer": "app.service.judgehost.api",
+      "target": "app.service.judgehost.task_queue",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "app/service/judgehost/api.py",
+      "line": 20,
+      "importer": "app.service.judgehost.api",
+      "target": "app.service.judgehost.toolkit",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "app/service/judgehost/batch_scheduler.py",
+      "line": 11,
+      "importer": "app.service.judgehost.batch_scheduler",
+      "target": "app.service.judgehost.domjudge.client",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "app/service/judgehost/batch_scheduler.py",
+      "line": 12,
+      "importer": "app.service.judgehost.batch_scheduler",
+      "target": "app.service.judgehost.batch_scheduler_models",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "app/service/judgehost/batch_scheduler.py",
+      "line": 23,
+      "importer": "app.service.judgehost.batch_scheduler",
+      "target": "app.service.judgehost.identity",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "app/service/judgehost/batch_scheduler.py",
+      "line": 24,
+      "importer": "app.service.judgehost.batch_scheduler",
+      "target": "app.service.judgehost.batch_scheduler_results",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "app/service/judgehost/batch_scheduler_results.py",
+      "line": 6,
+      "importer": "app.service.judgehost.batch_scheduler_results",
+      "target": "app.service.judgehost.batch_scheduler_models",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "app/service/judgehost/case_result.py",
+      "line": 12,
+      "importer": "app.service.judgehost.case_result",
+      "target": "app.service.judgehost.batch_scheduler_models",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "app/service/judgehost/cleanup.py",
+      "line": 8,
+      "importer": "app.service.judgehost.cleanup",
+      "target": "app.service.judgehost.task_registry",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "app/service/judgehost/core.py",
+      "line": 9,
+      "importer": "app.service.judgehost.core",
+      "target": "app.service.judgehost.state",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "ALIAS_FROM_IMPORT",
+      "file": "app/service/judgehost/dispatch.py",
+      "line": 23,
+      "importer": "app.service.judgehost.dispatch",
+      "target": "app.service.platform.hashing",
+      "message": "`from X import Y as Z` is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "app/service/judgehost/dispatch.py",
+      "line": 27,
+      "importer": "app.service.judgehost.dispatch",
+      "target": "app.service.judgehost.core",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "app/service/judgehost/dispatch.py",
+      "line": 28,
+      "importer": "app.service.judgehost.dispatch",
+      "target": "app.service.judgehost.dispatch_cache",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "app/service/judgehost/dispatch.py",
+      "line": 32,
+      "importer": "app.service.judgehost.dispatch",
+      "target": "app.service.judgehost.case_result",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "app/service/judgehost/dispatch.py",
+      "line": 33,
+      "importer": "app.service.judgehost.dispatch",
+      "target": "app.service.judgehost.batch_scheduler_models",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "app/service/judgehost/dispatch.py",
+      "line": 34,
+      "importer": "app.service.judgehost.dispatch",
+      "target": "app.service.judgehost.result",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "app/service/judgehost/dispatch.py",
+      "line": 35,
+      "importer": "app.service.judgehost.dispatch",
+      "target": "app.service.judgehost.state",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "app/service/judgehost/dispatch.py",
+      "line": 36,
+      "importer": "app.service.judgehost.dispatch",
+      "target": "app.service.judgehost.task_queue",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "app/service/judgehost/dispatch.py",
+      "line": 37,
+      "importer": "app.service.judgehost.dispatch",
+      "target": "app.service.judgehost.toolkit",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "app/service/judgehost/dispatch_cache.py",
+      "line": 18,
+      "importer": "app.service.judgehost.dispatch_cache",
+      "target": "app.service.judgehost.batch_scheduler_models",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "app/service/judgehost/dispatch_cache.py",
+      "line": 19,
+      "importer": "app.service.judgehost.dispatch_cache",
+      "target": "app.service.judgehost.batch_scheduler_models",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "app/service/judgehost/enqueue.py",
+      "line": 20,
+      "importer": "app.service.judgehost.enqueue",
+      "target": "app.service.judgehost.core",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "app/service/judgehost/enqueue.py",
+      "line": 21,
+      "importer": "app.service.judgehost.enqueue",
+      "target": "app.service.judgehost.dispatch",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "app/service/judgehost/enqueue.py",
+      "line": 22,
+      "importer": "app.service.judgehost.enqueue",
+      "target": "app.service.judgehost.state",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "app/service/judgehost/enqueue.py",
+      "line": 23,
+      "importer": "app.service.judgehost.enqueue",
+      "target": "app.service.judgehost.toolkit",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "app/service/judgehost/result.py",
+      "line": 33,
+      "importer": "app.service.judgehost.result",
+      "target": "app.service.judgehost.case_result",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "app/service/judgehost/result.py",
+      "line": 34,
+      "importer": "app.service.judgehost.result",
+      "target": "app.service.judgehost.core",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "app/service/judgehost/result.py",
+      "line": 35,
+      "importer": "app.service.judgehost.result",
+      "target": "app.service.judgehost.batch_scheduler_models",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "app/service/judgehost/result.py",
+      "line": 36,
+      "importer": "app.service.judgehost.result",
+      "target": "app.service.judgehost.state",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "app/service/judgehost/result.py",
+      "line": 37,
+      "importer": "app.service.judgehost.result",
+      "target": "app.service.judgehost.task_queue",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "app/service/judgehost/result.py",
+      "line": 38,
+      "importer": "app.service.judgehost.result",
+      "target": "app.service.judgehost.toolkit",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "app/service/judgehost/state.py",
+      "line": 16,
+      "importer": "app.service.judgehost.state",
+      "target": "app.service.judgehost.task_registry",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "app/service/judgehost/state.py",
+      "line": 17,
+      "importer": "app.service.judgehost.state",
+      "target": "app.service.judgehost.batch_scheduler",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "app/service/judgehost/state.py",
+      "line": 18,
+      "importer": "app.service.judgehost.state",
+      "target": "app.service.judgehost.host_telemetry",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "app/service/judgehost/task_queue.py",
+      "line": 10,
+      "importer": "app.service.judgehost.task_queue",
+      "target": "app.service.judgehost.case_result",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "app/service/judgehost/task_queue.py",
+      "line": 11,
+      "importer": "app.service.judgehost.task_queue",
+      "target": "app.service.judgehost.core",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "app/service/judgehost/task_queue.py",
+      "line": 12,
+      "importer": "app.service.judgehost.task_queue",
+      "target": "app.service.judgehost.payload_retention",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "app/service/judgehost/task_queue.py",
+      "line": 13,
+      "importer": "app.service.judgehost.task_queue",
+      "target": "app.service.judgehost.payload_retention",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "app/service/judgehost/task_queue.py",
+      "line": 14,
+      "importer": "app.service.judgehost.task_queue",
+      "target": "app.service.judgehost.state",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "app/service/judgehost/toolkit.py",
+      "line": 35,
+      "importer": "app.service.judgehost.toolkit",
+      "target": "app.service.judgehost.state",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "ALIAS_FROM_IMPORT",
+      "file": "app/service/platform/error_text.py",
+      "line": 5,
+      "importer": "app.service.platform.error_text",
+      "target": "app.main_constant",
+      "message": "`from X import Y as Z` is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "app/service/verification/read_model.py",
+      "line": 5,
+      "importer": "app.service.verification.read_model",
+      "target": "app.service.verification.task_store",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "app/service/verification/task_scheduler.py",
+      "line": 10,
+      "importer": "app.service.verification.task_scheduler",
+      "target": "app.service.verification.task_store",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "app/service/verification/task_scheduler.py",
+      "line": 11,
+      "importer": "app.service.verification.task_scheduler",
+      "target": "app.service.verification.types",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "app/service/verification/task_scheduler.py",
+      "line": 312,
+      "importer": "app.service.verification.task_scheduler",
+      "target": "app.service.verification.task_result_finalize",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "app/service/verification/task_scheduler.py",
+      "line": 534,
+      "importer": "app.service.verification.task_scheduler",
+      "target": "app.service.verification.task_result_finalize",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "tests/contest_support.py",
+      "line": 3,
+      "importer": "tests.contest_support",
+      "target": "tests.common",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "tests/contest_support.py",
+      "line": 4,
+      "importer": "tests.contest_support",
+      "target": "tests.db_helpers",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "tests/contest_support.py",
+      "line": 5,
+      "importer": "tests.contest_support",
+      "target": "tests.ui_support",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "tests/db_helpers.py",
+      "line": 6,
+      "importer": "tests.db_helpers",
+      "target": "tests.common",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "tests/test_agent_api.py",
+      "line": 10,
+      "importer": "tests.test_agent_api",
+      "target": "tests.common",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "tests/test_agent_api.py",
+      "line": 11,
+      "importer": "tests.test_agent_api",
+      "target": "tests.db_helpers",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "tests/test_agent_api.py",
+      "line": 12,
+      "importer": "tests.test_agent_api",
+      "target": "tests.ui_support",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "tests/test_backend_minimal.py",
+      "line": 15,
+      "importer": "tests.test_backend_minimal",
+      "target": "tests.db_helpers",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "tests/test_backend_minimal.py",
+      "line": 16,
+      "importer": "tests.test_backend_minimal",
+      "target": "tests.common",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "tests/test_backend_minimal.py",
+      "line": 17,
+      "importer": "tests.test_backend_minimal",
+      "target": "tests.ui_support",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "tests/test_contest_access_actions.py",
+      "line": 3,
+      "importer": "tests.test_contest_access_actions",
+      "target": "tests.contest_support",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "tests/test_contest_access_actions.py",
+      "line": 4,
+      "importer": "tests.test_contest_access_actions",
+      "target": "tests.db_helpers",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "tests/test_contest_access_actions.py",
+      "line": 5,
+      "importer": "tests.test_contest_access_actions",
+      "target": "tests.ui_support",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "tests/test_contest_builds.py",
+      "line": 13,
+      "importer": "tests.test_contest_builds",
+      "target": "tests.contest_support",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "tests/test_contest_builds.py",
+      "line": 14,
+      "importer": "tests.test_contest_builds",
+      "target": "tests.db_helpers",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "tests/test_contest_builds.py",
+      "line": 15,
+      "importer": "tests.test_contest_builds",
+      "target": "tests.ui_support",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "tests/test_contest_problem_actions.py",
+      "line": 5,
+      "importer": "tests.test_contest_problem_actions",
+      "target": "tests.contest_support",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "tests/test_contest_problem_actions.py",
+      "line": 6,
+      "importer": "tests.test_contest_problem_actions",
+      "target": "tests.db_helpers",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "tests/test_contest_problem_actions.py",
+      "line": 7,
+      "importer": "tests.test_contest_problem_actions",
+      "target": "tests.ui_support",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "tests/test_db_sql_trace.py",
+      "line": 7,
+      "importer": "tests.test_db_sql_trace",
+      "target": "tests.db_fixture",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "tests/test_export.py",
+      "line": 3,
+      "importer": "tests.test_export",
+      "target": "tests.db_helpers",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "tests/test_export.py",
+      "line": 16,
+      "importer": "tests.test_export",
+      "target": "tests.common",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "tests/test_export.py",
+      "line": 17,
+      "importer": "tests.test_export",
+      "target": "tests.ui_support",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "ALIAS_FROM_IMPORT",
+      "file": "tests/test_export.py",
+      "line": 18,
+      "importer": "tests.test_export",
+      "target": "app.impl.run_export",
+      "message": "`from X import Y as Z` is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "ALIAS_FROM_IMPORT",
+      "file": "tests/test_export.py",
+      "line": 19,
+      "importer": "tests.test_export",
+      "target": "app.impl.run_export",
+      "message": "`from X import Y as Z` is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "ALIAS_FROM_IMPORT",
+      "file": "tests/test_export.py",
+      "line": 23,
+      "importer": "tests.test_export",
+      "target": "app.service.importing",
+      "message": "`from X import Y as Z` is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "tests/test_judgehost_lifecycle.py",
+      "line": 24,
+      "importer": "tests.test_judgehost_lifecycle",
+      "target": "tests.db_fixture",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "tests/test_judgehost_service.py",
+      "line": 3,
+      "importer": "tests.test_judgehost_service",
+      "target": "tests.db_helpers",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "tests/test_judgehost_service.py",
+      "line": 43,
+      "importer": "tests.test_judgehost_service",
+      "target": "tests.common",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "tests/test_polygon_package_preview.py",
+      "line": 7,
+      "importer": "tests.test_polygon_package_preview",
+      "target": "tests.common",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "tests/test_polygon_package_preview.py",
+      "line": 8,
+      "importer": "tests.test_polygon_package_preview",
+      "target": "tests.db_helpers",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "tests/test_preview.py",
+      "line": 3,
+      "importer": "tests.test_preview",
+      "target": "tests.db_helpers",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "tests/test_preview.py",
+      "line": 34,
+      "importer": "tests.test_preview",
+      "target": "tests.common",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "tests/test_security.py",
+      "line": 3,
+      "importer": "tests.test_security",
+      "target": "tests.db_helpers",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "tests/test_security.py",
+      "line": 16,
+      "importer": "tests.test_security",
+      "target": "tests.common",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "tests/test_security.py",
+      "line": 43,
+      "importer": "tests.test_security",
+      "target": "tests.ui_support",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "tests/test_smtp_config.py",
+      "line": 9,
+      "importer": "tests.test_smtp_config",
+      "target": "tests.common",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "tests/test_smtp_config.py",
+      "line": 10,
+      "importer": "tests.test_smtp_config",
+      "target": "tests.db_helpers",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "tests/test_smtp_config.py",
+      "line": 11,
+      "importer": "tests.test_smtp_config",
+      "target": "tests.ui_support",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "tests/test_statement_default_restore.py",
+      "line": 13,
+      "importer": "tests.test_statement_default_restore",
+      "target": "tests.common",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "tests/test_statement_default_restore.py",
+      "line": 14,
+      "importer": "tests.test_statement_default_restore",
+      "target": "tests.db_helpers",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "tests/test_statement_default_restore.py",
+      "line": 15,
+      "importer": "tests.test_statement_default_restore",
+      "target": "tests.ui_support",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "tests/test_testlib_source.py",
+      "line": 10,
+      "importer": "tests.test_testlib_source",
+      "target": "tests.common",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "tests/test_ui_auth.py",
+      "line": 3,
+      "importer": "tests.test_ui_auth",
+      "target": "tests.db_helpers",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "tests/test_ui_auth.py",
+      "line": 14,
+      "importer": "tests.test_ui_auth",
+      "target": "tests.common",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "tests/test_ui_auth.py",
+      "line": 16,
+      "importer": "tests.test_ui_auth",
+      "target": "tests.ui_support",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "tests/test_ui_components.py",
+      "line": 7,
+      "importer": "tests.test_ui_components",
+      "target": "tests.common",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "tests/test_ui_components.py",
+      "line": 8,
+      "importer": "tests.test_ui_components",
+      "target": "tests.ui_support",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "tests/test_ui_contests.py",
+      "line": 3,
+      "importer": "tests.test_ui_contests",
+      "target": "tests.db_helpers",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "tests/test_ui_contests.py",
+      "line": 13,
+      "importer": "tests.test_ui_contests",
+      "target": "tests.common",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "tests/test_ui_contests.py",
+      "line": 14,
+      "importer": "tests.test_ui_contests",
+      "target": "tests.ui_support",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "tests/test_ui_run.py",
+      "line": 3,
+      "importer": "tests.test_ui_run",
+      "target": "tests.db_helpers",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "tests/test_ui_run.py",
+      "line": 15,
+      "importer": "tests.test_ui_run",
+      "target": "tests.common",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "ALIAS_FROM_IMPORT",
+      "file": "tests/test_ui_run.py",
+      "line": 17,
+      "importer": "tests.test_ui_run",
+      "target": "tests.ui_support",
+      "message": "`from X import Y as Z` is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "tests/test_ui_run.py",
+      "line": 17,
+      "importer": "tests.test_ui_run",
+      "target": "tests.ui_support",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "tests/test_ui_workspace.py",
+      "line": 3,
+      "importer": "tests.test_ui_workspace",
+      "target": "tests.db_helpers",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "tests/test_ui_workspace.py",
+      "line": 27,
+      "importer": "tests.test_ui_workspace",
+      "target": "tests.package_builders",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "tests/test_ui_workspace.py",
+      "line": 28,
+      "importer": "tests.test_ui_workspace",
+      "target": "tests.common",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "tests/test_ui_workspace.py",
+      "line": 30,
+      "importer": "tests.test_ui_workspace",
+      "target": "tests.ui_support",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    },
+    {
+      "rule": "MESH_RELATIVE_IMPORT",
+      "file": "tests/test_verification_task_scheduler.py",
+      "line": 8,
+      "importer": "tests.test_verification_task_scheduler",
+      "target": "tests.common",
+      "message": "mesh-style relative import is prohibited",
+      "firstWave": false
+    }
+  ],
+  "cycles": []
+}

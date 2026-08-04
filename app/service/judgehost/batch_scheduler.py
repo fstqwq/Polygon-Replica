@@ -5,15 +5,13 @@ import itertools
 import threading
 import time
 from collections import defaultdict
-from contextlib import contextmanager
 from dataclasses import asdict
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterable
 
 from .domjudge.client import domjudge_script_id
 from .batch_scheduler_models import (
     CompileSubmission,
     JudgehostCaseRow,
-    ExecutionBatchAppendResult,
     ExecutionBatchRow,
     CaseResult,
     CaseRecord,
@@ -45,8 +43,8 @@ class BatchScheduler(BatchSchedulerResultMixin):
         self._latest_case_id_by_task_test: dict[tuple[str, str], int] = {}
         self._batch_id_by_task: dict[str, int] = {}
         self._batch_ids_by_run: dict[str, set[int]] = defaultdict(set)
-        self._batch_ids_by_group: dict[str, set[int]] = defaultdict(set)
-        self._appendable_batch_id_by_group: dict[str, int] = {}
+        self._batch_id_by_execution: dict[tuple[str, str], int] = {}
+        self._closed_verification_ids: set[str] = set()
         self._script_hash_refcounts: dict[tuple[str, int, str], int] = defaultdict(int)
         self._script_hashes_by_id: dict[tuple[str, int], set[str]] = defaultdict(set)
         self._leased_case_ids_by_host: dict[str, set[int]] = defaultdict(set)
@@ -69,26 +67,6 @@ class BatchScheduler(BatchSchedulerResultMixin):
         self._ready_batch_ids: set[int] = set()
         self._finalization_retry_heap: list[tuple[float, int]] = []
         self._finalization_retry_deadlines: dict[int, float] = {}
-        self._group_activity_guard = threading.Lock()
-        self._group_activity_locks: dict[str, tuple[threading.RLock, int]] = {}
-
-    @contextmanager
-    def group_activity(self, group_key: str) -> Iterator[None]:
-        token = group_key or "__ungrouped__"
-        with self._group_activity_guard:
-            lock, users = self._group_activity_locks.get(token, (threading.RLock(), 0))
-            self._group_activity_locks[token] = (lock, users + 1)
-        lock.acquire()
-        try:
-            yield
-        finally:
-            lock.release()
-            with self._group_activity_guard:
-                current_lock, current_users = self._group_activity_locks[token]
-                if current_users == 1:
-                    self._group_activity_locks.pop(token)
-                else:
-                    self._group_activity_locks[token] = (current_lock, current_users - 1)
 
     def reset(self) -> None:
         with self._lock:
@@ -101,8 +79,8 @@ class BatchScheduler(BatchSchedulerResultMixin):
             self._latest_case_id_by_task_test.clear()
             self._batch_id_by_task.clear()
             self._batch_ids_by_run.clear()
-            self._batch_ids_by_group.clear()
-            self._appendable_batch_id_by_group.clear()
+            self._batch_id_by_execution.clear()
+            self._closed_verification_ids.clear()
             self._script_hash_refcounts.clear()
             self._script_hashes_by_id.clear()
             self._leased_case_ids_by_host.clear()
@@ -134,7 +112,7 @@ class BatchScheduler(BatchSchedulerResultMixin):
         row = asdict(batch)
         row.pop("admission_sequence")
         row.pop("generation")
-        row.pop("has_been_claimed")
+        row.pop("has_affinity")
         return row  # type: ignore[return-value]
 
     @staticmethod
@@ -253,7 +231,7 @@ class BatchScheduler(BatchSchedulerResultMixin):
         return (
             self._priority(batch),
             case.scope_sequence,
-            int(batch.has_been_claimed),
+            int(batch.has_affinity),
             case.ordinal,
             batch.admission_sequence,
             batch.batch_id,
@@ -289,8 +267,7 @@ class BatchScheduler(BatchSchedulerResultMixin):
         if batch.status != "open":
             return
         self._index_batch_scripts_locked(batch, -1)
-        if batch.group_key and self._appendable_batch_id_by_group.get(batch.group_key) == batch.batch_id:
-            self._appendable_batch_id_by_group.pop(batch.group_key, None)
+        self._release_batch_affinity_locked(batch)
         batch.status = "finalize-pending"
         batch.updated_at = updated_at
         self._touch_batch_locked(batch)
@@ -363,11 +340,11 @@ class BatchScheduler(BatchSchedulerResultMixin):
         case.updated_at = updated_at
         if status in {"leased", "reporting"} and lease_owner:
             self._leased_case_ids_by_host[lease_owner].add(case.id)
-            self._active_batch_by_host[lease_owner] = case.batch_id
         self._push_case_locked(case)
         counts = self._batch_counts[case.batch_id]
         if (
             batch.status == "open"
+            and batch.verification_id in self._closed_verification_ids
             and counts.total > 0
             and counts.terminal == counts.total
             and batch.materialization_state != "materializing"
@@ -458,6 +435,19 @@ class BatchScheduler(BatchSchedulerResultMixin):
             key=lambda row: (row.ordinal, row.id),
         )
 
+    def _release_batch_affinity_locked(self, batch: ExecutionBatchRecord) -> None:
+        for hostname, batch_id in tuple(self._active_batch_by_host.items()):
+            if batch_id == batch.batch_id:
+                self._active_batch_by_host.pop(hostname, None)
+        batch.has_affinity = False
+
+    def _claim_batch_affinity_locked(self, batch: ExecutionBatchRecord, hostname: str) -> None:
+        if hostname in self._active_batch_by_host or batch.has_affinity:
+            return
+        self._active_batch_by_host[hostname] = batch.batch_id
+        batch.has_affinity = True
+        self._touch_batch_locked(batch)
+
     def active_batch_for_host(self, hostname: str) -> ExecutionBatchRow | None:
         with self._lock:
             batch_id = self._active_batch_by_host.get(hostname)
@@ -486,6 +476,11 @@ class BatchScheduler(BatchSchedulerResultMixin):
         with self._lock:
             active_id = self._active_batch_by_host.get(hostname)
             active = None if active_id is None else self._batches.get(active_id)
+            if active is None or active.status != "open":
+                if active is not None:
+                    active.has_affinity = False
+                self._active_batch_by_host.pop(hostname, None)
+                active = None
             global_batch = self._peek_ready_batch_locked()
             active_case = None if active is None else self._batch_next_case_locked(active, hostname=hostname)
             # Cooperative preemption happens between fetch batches. A daemon
@@ -503,15 +498,11 @@ class BatchScheduler(BatchSchedulerResultMixin):
                 if not foreground_waiting:
                     return self._batch_row(active)
             if global_batch is None:
-                if active_case is None:
-                    self._active_batch_by_host.pop(hostname, None)
                 return None
-            self._active_batch_by_host[hostname] = global_batch.batch_id
-            if not global_batch.has_been_claimed:
-                # Keep later hosts on unclaimed batches in the same verification
-                # before sharing one that another host has already selected.
-                global_batch.has_been_claimed = True
-                self._touch_batch_locked(global_batch)
+            # A host may help another Batch while its own Batch waits for later DAG
+            # Cases. Only an unbound host selecting an unbound Batch establishes
+            # affinity; helper work must not overwrite either side's affinity.
+            self._claim_batch_affinity_locked(global_batch, hostname)
             return self._batch_row(global_batch)
 
     def host_leased_case_count(self, hostname: str) -> int:
@@ -584,6 +575,28 @@ class BatchScheduler(BatchSchedulerResultMixin):
         token = verification_id or "__direct__"
         with self._lock:
             self._scope_sequence_by_verification.pop(token, None)
+            if not self._batch_ids_by_verification.get(token):
+                self._closed_verification_ids.discard(token)
+
+    def finish_verification_execution(self, verification_id: str, *, now_text: str) -> list[int]:
+        """Close one execution scope and expose its terminal Batches for finalization."""
+        token = verification_id or "__direct__"
+        with self._lock:
+            self._closed_verification_ids.add(token)
+            ready: list[int] = []
+            for batch_id in self._batch_ids_by_verification.get(token, ()):
+                batch = self._batches[batch_id]
+                counts = self._batch_counts[batch_id]
+                if (
+                    batch.status == "open"
+                    and counts.total > 0
+                    and counts.terminal == counts.total
+                    and batch.materialization_state != "materializing"
+                ):
+                    self._close_batch_locked(batch, updated_at=now_text)
+                if batch.status == "finalize-pending":
+                    ready.append(batch_id)
+            return ready
 
     def batch_spec(self, batch_id: int) -> ExecutionBatchSpec | None:
         with self._lock:
@@ -611,24 +624,28 @@ class BatchScheduler(BatchSchedulerResultMixin):
         source_path: str,
         work_root: str,
         success: bool,
+        error_text: str,
         now_text: str,
     ) -> bool:
         with self._lock:
             batch = self._batches.get(int(batch_id))
             if batch is None or batch.status != "open" or batch.materialization_state != "materializing":
                 return False
-            if not success and batch.group_key:
-                if self._appendable_batch_id_by_group.get(batch.group_key) == batch.batch_id:
-                    self._appendable_batch_id_by_group.pop(batch.group_key, None)
             self._mutate_batch_locked(
                 batch,
                 source_path=source_path,
                 work_root=work_root,
                 materialization_state="ready" if success else "failed",
+                failure_runresult=batch.failure_runresult if success else "internal-error",
+                failure_text=batch.failure_text if success else error_text,
                 updated_at=now_text,
             )
             counts = self._batch_counts[batch.batch_id]
-            if counts.total > 0 and counts.terminal == counts.total:
+            if (
+                batch.verification_id in self._closed_verification_ids
+                and counts.total > 0
+                and counts.terminal == counts.total
+            ):
                 self._close_batch_locked(batch, updated_at=now_text)
             return True
 
@@ -643,14 +660,6 @@ class BatchScheduler(BatchSchedulerResultMixin):
             if not batch_ids:
                 return None
             return self._batch_row(self._batches[max(batch_ids)])
-
-    def batch_for_group_key(self, group_key: str) -> ExecutionBatchRow | None:
-        with self._lock:
-            batch_id = self._appendable_batch_id_by_group.get(group_key)
-            if batch_id is None:
-                return None
-            batch = self._batches[batch_id]
-            return self._batch_row(batch)
 
     def fetch_case(self, case_id: int) -> JudgehostCaseRow | None:
         with self._lock:
@@ -725,12 +734,43 @@ class BatchScheduler(BatchSchedulerResultMixin):
         with self._lock:
             return set(self._script_hashes_by_id.get((kind, int(script_id)), ()))
 
+    def leased_script_hash_for_host(
+        self,
+        hostname: str,
+        *,
+        kind: str,
+        script_id: int,
+    ) -> tuple[int, str] | None:
+        field_by_kind = {
+            "compile": "compile_hash",
+            "run": "run_hash",
+            "compare": "compare_hash",
+        }
+        field = field_by_kind.get(kind)
+        if field is None:
+            return None
+        with self._lock:
+            matching: dict[int, str] = {}
+            for case_id in self._leased_case_ids_by_host.get(hostname, ()):
+                case = self._cases.get(case_id)
+                if case is None or case.status not in {"leased", "reporting"}:
+                    continue
+                batch = self._batches.get(case.batch_id)
+                if batch is None:
+                    continue
+                script_hash = str(getattr(batch, field))
+                if domjudge_script_id(script_hash) == int(script_id):
+                    matching[batch.batch_id] = script_hash
+            if len(matching) != 1:
+                return None
+            return next(iter(matching.items()))
+
     def create_batch_with_cases(
         self,
         *,
         task_id: str,
         run_id: str,
-        group_key: str,
+        execution_signature: str,
         verification_id: str,
         compile_key: str,
         compile_submission: CompileSubmission,
@@ -764,7 +804,63 @@ class BatchScheduler(BatchSchedulerResultMixin):
             raise RuntimeError("compile submission key mismatch")
         if compile_submission.submit_id != domjudge_submit_id(compile_key):
             raise RuntimeError("compile submission id mismatch")
+        if len(execution_signature) != 64 or any(
+            char not in "0123456789abcdef" for char in execution_signature
+        ):
+            raise RuntimeError("invalid judgehost execution signature")
         with self._lock:
+            if verification_id in self._closed_verification_ids:
+                raise RuntimeError("judgehost verification execution is closed")
+            execution_key = (verification_id, execution_signature)
+            existing_batch_id = self._batch_id_by_execution.get(execution_key)
+            if existing_batch_id is not None:
+                existing_batch = self._batches[existing_batch_id]
+                identity = (
+                    existing_batch.compile_key,
+                    existing_batch.contest_id,
+                    existing_batch.mode,
+                    existing_batch.source_name,
+                    existing_batch.compile_hash,
+                    existing_batch.run_hash,
+                    existing_batch.compare_hash,
+                    existing_batch.source_hash,
+                    existing_batch.compile_config_json,
+                    existing_batch.run_config_json,
+                    existing_batch.compare_config_json,
+                    existing_batch.expected_behavior,
+                    existing_batch.verification_source,
+                    existing_batch.bypass_case_result_cache,
+                    existing_batch.service_class,
+                    self._batch_specs[existing_batch_id],
+                    self._compile_submissions_by_key[existing_batch.compile_key],
+                )
+                requested_identity = (
+                    compile_key,
+                    contest_id,
+                    mode,
+                    source_name,
+                    compile_hash,
+                    run_hash,
+                    compare_hash,
+                    source_hash,
+                    compile_config_json,
+                    run_config_json,
+                    compare_config_json,
+                    expected_behavior,
+                    verification_source,
+                    int(bypass_case_result_cache),
+                    service_class,
+                    batch_spec,
+                    compile_submission,
+                )
+                if identity != requested_identity:
+                    raise RuntimeError("judgehost execution signature identity changed")
+                self._append_cases_to_batch_locked(
+                    batch=existing_batch,
+                    case_rows=case_rows,
+                    now_text=created_at,
+                )
+                return existing_batch_id
             protocol_job_id = domjudge_job_id(verification_id)
             existing_verification_id = self._verification_by_domjudge_job_id.get(protocol_job_id)
             if existing_verification_id not in {None, verification_id}:
@@ -775,16 +871,6 @@ class BatchScheduler(BatchSchedulerResultMixin):
             existing_submission = self._compile_submissions_by_key.get(compile_key)
             if existing_submission is not None and existing_submission != compile_submission:
                 raise RuntimeError("compile submission identity changed")
-            if group_key:
-                existing_batch_id = self._appendable_batch_id_by_group.get(group_key)
-                if existing_batch_id is not None:
-                    existing_batch = self._batches[existing_batch_id]
-                    if (
-                        existing_batch.status == "open"
-                        and existing_batch.compile_state != "failed"
-                        and existing_batch.materialization_state != "failed"
-                    ):
-                        raise RuntimeError("appendable judgehost group batch already exists")
             case_task_ids = {str(row.get("task_id") or task_id) for row in case_rows}
             if any(case_task_id in self._batch_id_by_task for case_task_id in case_task_ids):
                 raise RuntimeError("judgehost task cases already belong to another batch")
@@ -793,9 +879,7 @@ class BatchScheduler(BatchSchedulerResultMixin):
             batch_id = next(self._entity_ids)
             batch = ExecutionBatchRecord(
                 batch_id=batch_id,
-                task_id=task_id,
-                run_id=run_id,
-                group_key=str(group_key),
+                execution_signature=str(execution_signature),
                 verification_id=verification_id,
                 domjudge_job_id=protocol_job_id,
                 compile_key=compile_key,
@@ -821,12 +905,14 @@ class BatchScheduler(BatchSchedulerResultMixin):
                     "ready" if source_path and work_root else "unmaterialized"
                 ),
                 service_class=service_class,
-                has_been_claimed=False,
+                has_affinity=False,
                 admission_sequence=next(self._sequence),
                 generation=1,
                 compile_output_b64=None,
                 compile_metadata_b64=None,
                 debug_text="",
+                failure_runresult="",
+                failure_text="",
                 status="open",
                 created_at=created_at,
                 updated_at=created_at,
@@ -840,9 +926,7 @@ class BatchScheduler(BatchSchedulerResultMixin):
             self._batch_ids_by_verification[verification_id].add(batch_id)
             self._verification_by_domjudge_job_id[protocol_job_id] = verification_id
             self._batch_counts[batch_id] = StatusCounts()
-            if batch.group_key:
-                self._batch_ids_by_group[batch.group_key].add(batch_id)
-                self._appendable_batch_id_by_group[batch.group_key] = batch_id
+            self._batch_id_by_execution[execution_key] = batch_id
             self._index_batch_scripts_locked(batch, 1)
             self._empty_batch_ids.add(batch_id)
             for case_row in case_rows:
@@ -914,73 +998,58 @@ class BatchScheduler(BatchSchedulerResultMixin):
             row.get("answer_ref"),
         )
 
-    def append_cases_to_batch(
+    def _append_cases_to_batch_locked(
         self,
         *,
-        batch_id: int,
+        batch: ExecutionBatchRecord,
         case_rows: list[dict[str, object]],
         now_text: str,
-    ) -> ExecutionBatchAppendResult:
-        with self._lock:
-            batch = self._batches.get(int(batch_id))
-            if batch is None:
-                return {"batch_id": 0, "outcome": "closed", "inserted": 0}
-            if (
-                batch.status != "open"
-                or batch.compile_state == "failed"
-                or batch.materialization_state == "failed"
-            ):
-                return {"batch_id": int(batch_id), "outcome": "closed", "inserted": 0}
-            self._validate_case_rows(case_rows)
-            rows_by_task: dict[str, list[dict[str, object]]] = defaultdict(list)
-            for row in case_rows:
-                case_task_id = str(row.get("task_id") or "")
-                if case_task_id:
-                    rows_by_task[case_task_id].append(row)
-            for case_task_id, requested_rows in rows_by_task.items():
-                existing_batch_id = self._batch_id_by_task.get(case_task_id)
-                if existing_batch_id is not None and existing_batch_id != batch.batch_id:
+    ) -> None:
+        if batch.status != "open" or batch.verification_id in self._closed_verification_ids:
+            raise RuntimeError("judgehost verification execution is closed")
+        self._validate_case_rows(case_rows)
+        rows_by_task: dict[str, list[dict[str, object]]] = defaultdict(list)
+        for row in case_rows:
+            case_task_id = str(row.get("task_id") or "")
+            if case_task_id:
+                rows_by_task[case_task_id].append(row)
+        for case_task_id, requested_rows in rows_by_task.items():
+            existing_batch_id = self._batch_id_by_task.get(case_task_id)
+            if existing_batch_id is not None and existing_batch_id != batch.batch_id:
+                raise RuntimeError("judgehost task cases already belong to another batch")
+            if existing_batch_id is None:
+                continue
+            existing_rows = [
+                self._case_row(self._cases[case_id])
+                for case_id in self._case_ids_by_task[case_task_id]
+            ]
+            requested = sorted((self._case_identity(row) for row in requested_rows), key=repr)
+            existing = sorted((self._case_identity(row) for row in existing_rows), key=repr)
+            if requested != existing:
+                raise RuntimeError("judgehost task case set is immutable")
+        for row in case_rows:
+            case_task_id = str(row.get("task_id") or "")
+            case_run_id = str(row.get("run_id") or "")
+            test_name = str(row.get("test_name") or "")
+            pair = (case_task_id, test_name)
+            if not case_task_id or not case_run_id or not test_name:
+                continue
+            existing_case_id = self._latest_case_id_by_task_test.get(pair)
+            if existing_case_id is not None:
+                if self._cases[existing_case_id].batch_id != batch.batch_id:
                     raise RuntimeError("judgehost task cases already belong to another batch")
-                if existing_batch_id is None:
-                    continue
-                existing_rows = [
-                    self._case_row(self._cases[case_id])
-                    for case_id in self._case_ids_by_task[case_task_id]
-                ]
-                requested = sorted((self._case_identity(row) for row in requested_rows), key=repr)
-                existing = sorted((self._case_identity(row) for row in existing_rows), key=repr)
-                if requested != existing:
-                    raise RuntimeError("judgehost task case set is immutable")
-            inserted = 0
-            for row in case_rows:
-                case_task_id = str(row.get("task_id") or "")
-                case_run_id = str(row.get("run_id") or "")
-                test_name = str(row.get("test_name") or "")
-                pair = (case_task_id, test_name)
-                if not case_task_id or not case_run_id or not test_name:
-                    continue
-                existing_case_id = self._latest_case_id_by_task_test.get(pair)
-                if existing_case_id is not None:
-                    if self._cases[existing_case_id].batch_id != batch.batch_id:
-                        raise RuntimeError("judgehost task cases already belong to another batch")
-                    continue
-                self._insert_case_locked(
-                    batch_id=batch.batch_id,
-                    task_id=case_task_id,
-                    run_id=case_run_id,
-                    test_name=test_name,
-                    ordinal=int(row["ordinal"]),
-                    scope_sequence=int(row.get("scope_sequence") or 1),
-                    source=row,
-                    status="staged",
-                    created_at=now_text,
-                )
-                inserted += 1
-            return {
-                "batch_id": batch.batch_id,
-                "outcome": "appended" if inserted else "duplicate",
-                "inserted": inserted,
-            }
+                continue
+            self._insert_case_locked(
+                batch_id=batch.batch_id,
+                task_id=case_task_id,
+                run_id=case_run_id,
+                test_name=test_name,
+                ordinal=int(row["ordinal"]),
+                scope_sequence=int(row.get("scope_sequence") or 1),
+                source=row,
+                status="staged",
+                created_at=now_text,
+            )
 
     def activate_task_cases(self, task_id: str, *, now_text: str) -> bool:
         with self._lock:
@@ -1041,7 +1110,7 @@ class BatchScheduler(BatchSchedulerResultMixin):
             first = self._peek_case_heap_locked(batch.batch_id, status="pending")
             if first is None:
                 return []
-            batch.has_been_claimed = True
+            self._claim_batch_affinity_locked(batch, hostname)
             if batch.compile_state == "unknown":
                 cap = 1
                 batch.compile_owner = hostname

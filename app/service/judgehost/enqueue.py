@@ -919,7 +919,7 @@ class TaskEnqueue:
             compile_only=bool(compile_only),
         )
         payload["domjudge_precomputed"] = self._domjudge_precomputed_fields_from_payload(payload)
-        payload["domjudge_group_key"] = self._toolkit.group_key(payload)
+        payload["domjudge_execution_signature"] = self._toolkit.execution_signature(payload)
         return payload
 
     def _initial_summary(
@@ -1031,7 +1031,7 @@ class TaskEnqueue:
             if execution_template is None
             else dict(execution_template)
         )
-        payload["domjudge_group_key"] = self._toolkit.group_key(payload)
+        payload["domjudge_execution_signature"] = self._toolkit.execution_signature(payload)
         safe_task_kind = self._toolkit.task_kind(payload)
         payload["run_id"] = safe_run_id
         payload["problem"] = problem

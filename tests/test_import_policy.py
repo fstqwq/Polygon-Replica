@@ -83,7 +83,25 @@ _export_public(globals(), module)
             ]
             self.assertEqual(first_wave_blockers, [])
 
+    def test_import_policy_check_rejects_missing_baseline(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="import-policy-missing-baseline-") as tmp:
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(IMPORT_POLICY_SCRIPT),
+                    "check",
+                    "--baseline",
+                    str(Path(tmp) / "missing.json"),
+                ],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn("missing baseline", proc.stderr)
+
 if __name__ == "__main__":
     unittest.main()
-
 

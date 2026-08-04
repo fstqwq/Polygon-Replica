@@ -17,10 +17,10 @@ class BatchSchedulerResultMixin:
 
     def batch_finalize_row(self, batch_id: int) -> dict[str, object] | None:
         fields = (
-            "task_id", "run_id", "group_key", "status", "compile_success",
+            "execution_signature", "status", "compile_success",
             "compile_output_b64", "compile_metadata_b64", "debug_text", "work_root",
             "run_config_json", "source_path", "source_name", "compile_hash", "run_hash",
-            "compare_hash", "materialization_state",
+            "compare_hash", "materialization_state", "failure_runresult", "failure_text",
         )
         with self._lock:
             batch = self._batches.get(int(batch_id))
@@ -39,6 +39,7 @@ class BatchSchedulerResultMixin:
             counts = self._batch_counts[batch.batch_id]
             if (
                 batch.status == "open"
+                and batch.verification_id in self._closed_verification_ids
                 and counts.total > 0
                 and counts.terminal == counts.total
                 and batch.materialization_state != "materializing"
@@ -135,9 +136,13 @@ class BatchSchedulerResultMixin:
                 return False
             if batch.compile_owner not in {None, lease_owner}:
                 return False
-            if compile_success != 1 and batch.group_key:
-                if self._appendable_batch_id_by_group.get(batch.group_key) == batch.batch_id:
-                    self._appendable_batch_id_by_group.pop(batch.group_key, None)
+            if batch.compile_state == "failed":
+                return False
+            if batch.compile_state == "succeeded":
+                return compile_success == 1
+            failure_runresult = batch.failure_runresult
+            if compile_success != 1 and not failure_runresult:
+                failure_runresult = "compiler-error"
             self._mutate_batch_locked(
                 batch,
                 compile_success=compile_success,
@@ -145,8 +150,33 @@ class BatchSchedulerResultMixin:
                 compile_output_b64=compile_output_b64,
                 compile_metadata_b64=compile_metadata_b64,
                 compile_owner=None if compile_success == 1 else lease_owner,
+                failure_runresult=failure_runresult,
+                failure_text=batch.failure_text,
                 updated_at=updated_at,
             )
+            return True
+
+    def record_batch_failure(
+        self,
+        batch_id: int,
+        *,
+        runresult: str,
+        error_text: str,
+        updated_at: str,
+    ) -> bool:
+        with self._lock:
+            batch = self._batches.get(int(batch_id))
+            if batch is None or batch.status != "open":
+                return False
+            if not batch.failure_runresult:
+                batch.failure_runresult = runresult
+                batch.failure_text = error_text
+                batch.updated_at = updated_at
+                self._touch_batch_locked(batch)
+            elif batch.failure_runresult == runresult and error_text and not batch.failure_text:
+                batch.failure_text = error_text
+                batch.updated_at = updated_at
+                self._touch_batch_locked(batch)
             return True
 
     def case_execution_row(self, case_id: int) -> dict[str, object] | None:
@@ -173,7 +203,7 @@ class BatchSchedulerResultMixin:
                 "source_name": batch.source_name,
                 "source_path": batch.source_path,
                 "batch_status": batch.status,
-                "group_key": batch.group_key,
+                "execution_signature": batch.execution_signature,
                 "source_hash": batch.source_hash,
                 "compile_hash": batch.compile_hash,
                 "run_hash": batch.run_hash,
@@ -474,8 +504,6 @@ class BatchSchedulerResultMixin:
             batch = self._batches.get(int(batch_id))
             if batch is None:
                 return affected_tasks
-            if batch.group_key and self._appendable_batch_id_by_group.get(batch.group_key) == batch.batch_id:
-                self._appendable_batch_id_by_group.pop(batch.group_key, None)
             affected = False
             for case_id, result in results.items():
                 case = self._cases.get(int(case_id))
@@ -619,8 +647,10 @@ class BatchSchedulerResultMixin:
             affected_batch_ids = set(batch_ids)
             for batch_id in batch_ids:
                 batch = self._batches.get(batch_id)
-                if batch is not None and batch.status == "open" and batch.compile_owner == hostname:
-                    batch.compile_owner = None
+                if batch is not None and batch.status == "open":
+                    batch.has_affinity = False
+                    if batch.compile_owner == hostname:
+                        batch.compile_owner = None
             case_ids = list(self._leased_case_ids_by_host.get(hostname, ()))
             for case_id in case_ids:
                 case = self._cases[case_id]
@@ -718,16 +748,12 @@ class BatchSchedulerResultMixin:
             self._index_batch_scripts_locked(batch, -1)
         self._ready_batch_ids.discard(batch_id)
         self._finalization_retry_deadlines.pop(batch_id, None)
-        for hostname, active_batch_id in tuple(self._active_batch_by_host.items()):
-            if active_batch_id == batch_id:
-                self._active_batch_by_host.pop(hostname, None)
-        if batch.group_key:
-            group_batches = self._batch_ids_by_group[batch.group_key]
-            group_batches.discard(batch_id)
-            if not group_batches:
-                self._batch_ids_by_group.pop(batch.group_key, None)
-            if self._appendable_batch_id_by_group.get(batch.group_key) == batch_id:
-                self._appendable_batch_id_by_group.pop(batch.group_key, None)
+        self._release_batch_affinity_locked(batch)
+        if batch.execution_signature:
+            self._batch_id_by_execution.pop(
+                (batch.verification_id, batch.execution_signature),
+                None,
+            )
         self._case_ids_by_batch.pop(batch_id, None)
         self._batch_counts.pop(batch_id, None)
         self._batch_specs.pop(batch_id, None)

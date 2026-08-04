@@ -44,9 +44,7 @@ class CaseResult:
 
 class ExecutionBatchRow(TypedDict):
     batch_id: int
-    task_id: str
-    run_id: str
-    group_key: str
+    execution_signature: str
     verification_id: str
     domjudge_job_id: int
     compile_key: str
@@ -73,6 +71,8 @@ class ExecutionBatchRow(TypedDict):
     compile_output_b64: str
     compile_metadata_b64: str
     debug_text: str
+    failure_runresult: str
+    failure_text: str
     status: str
     created_at: str
     updated_at: str
@@ -114,12 +114,6 @@ class JudgehostCaseRow(TypedDict):
     updated_at: str
 
 
-class ExecutionBatchAppendResult(TypedDict):
-    batch_id: int
-    outcome: str
-    inserted: int
-
-
 class ExecutionBatchFinalizationClaim(TypedDict):
     batch: ExecutionBatchRow
     cases: list[JudgehostCaseRow]
@@ -128,9 +122,7 @@ class ExecutionBatchFinalizationClaim(TypedDict):
 @dataclass
 class ExecutionBatchRecord:
     batch_id: int
-    task_id: str
-    run_id: str
-    group_key: str
+    execution_signature: str
     verification_id: str
     domjudge_job_id: int
     compile_key: str
@@ -154,12 +146,14 @@ class ExecutionBatchRecord:
     compile_owner: str | None
     materialization_state: str
     service_class: str
-    has_been_claimed: bool
+    has_affinity: bool
     admission_sequence: int
     generation: int
     compile_output_b64: str | None
     compile_metadata_b64: str | None
     debug_text: str
+    failure_runresult: str
+    failure_text: str
     status: str
     created_at: str
     updated_at: str

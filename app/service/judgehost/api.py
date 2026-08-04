@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from app.db import DB
+from app.db import DB, now_iso
 from app.runtime_value import RuntimeValues
 from app.service.platform.fs.layout import FsManager
 from app.service.platform.judge_fs_index import JudgeFsIndexService
@@ -180,6 +180,12 @@ class Judgehost:
         return self._queue.forget_domjudge_runs(*args, **kwargs)
 
     def schedule_verification_cleanup(self, verification_id: str) -> None:
+        ready_batch_ids = self._state.batch_scheduler.finish_verification_execution(
+            verification_id,
+            now_text=now_iso(),
+        )
+        for batch_id in ready_batch_ids:
+            self._result._domjudge_finalize_batch_if_ready(batch_id)
         self._terminal_cleanup.schedule(verification_id)
 
     def touch_verification_runtime(self, verification_id: str) -> None:
@@ -279,7 +285,12 @@ class Judgehost:
             prepared_payload=None if prepared_payload is None else dict(prepared_payload),
             service_class="foreground",
         )
-        return self.wait_for_task(task_id, timeout_sec=None)
+        task = self._state.task_registry.get(task_id)
+        runtime_verification_id = "" if task is None else str(task["verification_id"])
+        try:
+            return self.wait_for_task(task_id, timeout_sec=None)
+        finally:
+            self.schedule_verification_cleanup(runtime_verification_id)
 
     def compile_only_submission(
         self,
@@ -313,7 +324,12 @@ class Judgehost:
             verification_source=str(verification_source or "compile.only"),
             prepared_payload=None if prepared_payload is None else dict(prepared_payload),
         )
-        return self.wait_for_task_result(task_id, timeout_sec=None)
+        task = self._state.task_registry.get(task_id)
+        runtime_verification_id = "" if task is None else str(task["verification_id"])
+        try:
+            return self.wait_for_task_result(task_id, timeout_sec=None)
+        finally:
+            self.schedule_verification_cleanup(runtime_verification_id)
 
     def domjudge_case_output_for_task(self, task_id: str, test_name: str) -> tuple[str, Path | None, int]:
         row = self._state.batch_scheduler.case_output_for_task(task_id, test_name)

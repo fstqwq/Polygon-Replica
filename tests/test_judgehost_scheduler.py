@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import tempfile
 import threading
 import unittest
@@ -115,12 +116,16 @@ def _create_staged_batch(
     case_rows: list[dict[str, object]] | None = None,
     verification_id: str = "ver-1",
     compile_key: str = _COMPILE_KEY,
+    execution_signature: str | None = None,
 ) -> tuple[int, str]:
     now_text = datetime.now(timezone.utc).isoformat()
+    signature = hashlib.sha256(
+        (execution_signature or f"signature-{task_id}").encode("utf-8")
+    ).hexdigest()
     batch_id = scheduler.create_batch_with_cases(
         task_id=task_id,
         run_id=run_id,
-        group_key=f"group-{task_id}",
+        execution_signature=signature,
         verification_id=verification_id,
         compile_key=compile_key,
         compile_submission=_submission_for_key(compile_key),
@@ -189,6 +194,7 @@ def _create_ready_batch(
         source_path="/tmp/source.cpp",
         work_root="/tmp/work",
         success=True,
+        error_text="",
         now_text=now_text,
     )
     scheduler.record_compile_result(
@@ -310,6 +316,120 @@ class TestJudgehostScheduler(unittest.TestCase):
         self.assertEqual(scheduler.select_ready_batch("host-b")["batch_id"], second_id)
         self.assertEqual(scheduler.select_ready_batch("host-c")["batch_id"], first_id)
         self.assertEqual(scheduler.select_ready_batch("host-a")["batch_id"], first_id)
+
+    def test_helper_work_does_not_replace_host_affinity(self) -> None:
+        scheduler = BatchScheduler(id_base=132)
+        first_id = _create_ready_batch(
+            scheduler,
+            task_id="affinity-first",
+            run_id="run-affinity-first",
+            ordinals=[1],
+        )
+        second_id = _create_ready_batch(
+            scheduler,
+            task_id="affinity-help",
+            run_id="run-affinity-help",
+            ordinals=[2],
+        )
+        first_case = scheduler.lease_cases(
+            first_id,
+            hostname="host-a",
+            limit=1,
+            now_text=datetime.now(timezone.utc).isoformat(),
+        )[0]
+        scheduler.request_batch_case_results(
+            first_id,
+            results={int(first_case["id"]): _case_result("001.in")},
+            updated_at=datetime.now(timezone.utc).isoformat(),
+        )
+
+        self.assertEqual(scheduler.select_ready_batch("host-a")["batch_id"], second_id)
+        self.assertEqual(scheduler.active_batch_for_host("host-a")["batch_id"], first_id)
+        self.assertEqual(scheduler.select_ready_batch("host-b")["batch_id"], second_id)
+        self.assertEqual(scheduler.active_batch_for_host("host-b")["batch_id"], second_id)
+
+        first_again, now_text = _create_staged_batch(
+            scheduler,
+            task_id="affinity-first-later",
+            run_id="run-affinity-first-later",
+            ordinals=[3],
+            execution_signature="signature-affinity-first",
+        )
+        self.assertEqual(first_again, first_id)
+        scheduler.activate_task_cases("affinity-first-later", now_text=now_text)
+        self.assertEqual(scheduler.select_ready_batch("host-a")["batch_id"], first_id)
+
+    def test_host_release_makes_affinity_available_again(self) -> None:
+        scheduler = BatchScheduler(id_base=138)
+        first_id = _create_ready_batch(
+            scheduler,
+            task_id="released-affinity",
+            run_id="run-released-affinity",
+            ordinals=[1],
+        )
+        _create_ready_batch(
+            scheduler,
+            task_id="other-affinity",
+            run_id="run-other-affinity",
+            ordinals=[2],
+        )
+        scheduler.lease_cases(
+            first_id,
+            hostname="host-a",
+            limit=1,
+            now_text=datetime.now(timezone.utc).isoformat(),
+        )
+
+        released_batches, released_cases = scheduler.release_host_leases(
+            "host-a",
+            now_text=datetime.now(timezone.utc).isoformat(),
+        )
+
+        self.assertEqual((released_batches, released_cases), (1, 1))
+        self.assertIsNone(scheduler.active_batch_for_host("host-a"))
+        self.assertEqual(scheduler.select_ready_batch("host-b")["batch_id"], first_id)
+        self.assertEqual(scheduler.active_batch_for_host("host-b")["batch_id"], first_id)
+
+    def test_compile_failure_stays_on_unique_execution_batch(self) -> None:
+        scheduler = BatchScheduler(id_base=144)
+        batch_id, now_text = _create_staged_batch(
+            scheduler,
+            task_id="failed-first",
+            run_id="run-failed-first",
+            ordinals=[1],
+            execution_signature="sticky-failure",
+        )
+        scheduler.record_compile_result(
+            batch_id,
+            compile_success=0,
+            compile_output_b64="",
+            compile_metadata_b64="",
+            lease_owner="host-a",
+            updated_at=now_text,
+        )
+
+        same_batch_id, _ = _create_staged_batch(
+            scheduler,
+            task_id="failed-later",
+            run_id="run-failed-later",
+            ordinals=[2],
+            execution_signature="sticky-failure",
+        )
+
+        self.assertEqual(same_batch_id, batch_id)
+        self.assertEqual(scheduler.fetch_batch(batch_id)["failure_runresult"], "compiler-error")
+        self.assertEqual(len(scheduler.cases_for_batch(batch_id)), 2)
+        self.assertFalse(
+            scheduler.record_compile_result(
+                batch_id,
+                compile_success=1,
+                compile_output_b64="",
+                compile_metadata_b64="",
+                lease_owner="host-a",
+                updated_at=now_text,
+            )
+        )
+        self.assertEqual(scheduler.fetch_batch(batch_id)["compile_state"], "failed")
 
     def test_ready_batch_claim_does_not_reorder_verification_scopes(self) -> None:
         scheduler = BatchScheduler(id_base=140)
@@ -514,6 +634,7 @@ class TestJudgehostScheduler(unittest.TestCase):
             "cancelled",
         )
         self.assertTrue(scheduler.task_cases_terminal("reporting"))
+        scheduler.finish_verification_execution("ver-1", now_text="2026-08-03T00:00:04+00:00")
         self.assertEqual(scheduler.fetch_batch(batch_id)["status"], "finalize-pending")
 
     def test_run_result_claim_opens_warm_compile_gate_without_compile_callback(self) -> None:
@@ -542,6 +663,7 @@ class TestJudgehostScheduler(unittest.TestCase):
             source_path="/tmp/source.cpp",
             work_root="/tmp/work",
             success=True,
+            error_text="",
             now_text=now_text,
         )
 
@@ -603,6 +725,7 @@ class TestJudgehostScheduler(unittest.TestCase):
             source_path="/tmp/source.cpp",
             work_root="/tmp/work",
             success=True,
+            error_text="",
             now_text=now_text,
         )
         case = scheduler.lease_cases(
@@ -723,7 +846,7 @@ class TestJudgehostScheduler(unittest.TestCase):
         compile_id = int(domjudge_script_id(compile_hash))
 
         self.assertEqual(scheduler.active_script_hashes("compile", compile_id), {compile_hash})
-        for index, batch_id in enumerate((first_batch, second_batch)):
+        for batch_id in (first_batch, second_batch):
             case = scheduler.cases_for_batch(batch_id)[0]
             scheduler.request_batch_case_results(
                 batch_id,
@@ -736,10 +859,12 @@ class TestJudgehostScheduler(unittest.TestCase):
                 },
                 updated_at=now_text,
             )
-            self.assertEqual(
-                scheduler.active_script_hashes("compile", compile_id),
-                {compile_hash} if index == 0 else set(),
-            )
+            self.assertEqual(scheduler.active_script_hashes("compile", compile_id), {compile_hash})
+        self.assertCountEqual(
+            scheduler.finish_verification_execution("ver-1", now_text=now_text),
+            [first_batch, second_batch],
+        )
+        self.assertEqual(scheduler.active_script_hashes("compile", compile_id), set())
         self.assertIsNotNone(
             scheduler.claim_batch_finalization(
                 first_batch,

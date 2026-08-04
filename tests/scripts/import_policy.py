@@ -625,8 +625,8 @@ def cmd_check(args: argparse.Namespace) -> int:
         _print_text_report(payload, show_details=bool(args.verbose))
 
     if not Path(args.baseline).exists():
-        print(f"\nskipping no-new gate; missing baseline: {args.baseline}", file=sys.stderr)
-        return 0
+        print(f"\nImport policy check failed: missing baseline: {args.baseline}", file=sys.stderr)
+        return 1
 
     if new_violations or new_cycles:
         print("\nImport policy check failed: new violations detected.", file=sys.stderr)

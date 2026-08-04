@@ -185,6 +185,13 @@ class ResultProcessor:
         safe_host = self._core.normalize_hostname(hostname)
         if not safe_host:
             return None
+        leased_match = self._s.batch_scheduler.leased_script_hash_for_host(
+            safe_host,
+            kind=kind,
+            script_id=requested_id,
+        )
+        if leased_match is not None:
+            return leased_match
         batch_row = self._s.batch_scheduler.active_batch_for_host(safe_host)
         if batch_row is None:
             return None
@@ -645,6 +652,12 @@ class ResultProcessor:
             ) or "compilation failed"
         if not feedback:
             feedback = runresult.replace("-", " ")
+        self._s.batch_scheduler.record_batch_failure(
+            int(batch_id),
+            runresult=runresult,
+            error_text=feedback,
+            updated_at=now_iso(),
+        )
         verdict = domjudge_verdict_from_runresult(runresult)
         results: dict[int, CaseResult] = {}
         for row in self._s.batch_scheduler.cases_for_batch(int(batch_id)):
@@ -701,22 +714,39 @@ class ResultProcessor:
         current = self._s.batch_scheduler.fetch_batch(int(batch_id))
         if current is None:
             return
-        compile_failed = (
-            current["compile_success"] is not None
-            and int(current["compile_success"]) == 0
-        )
         if force_failed:
             self._request_batch_failure(
                 int(batch_id),
                 runresult="internal-error",
                 error_text=error_text,
             )
-        elif compile_failed:
+        elif domjudge_text(current["failure_runresult"]):
             self._request_batch_failure(
                 int(batch_id),
-                runresult="compiler-error",
-                error_text="",
+                runresult=domjudge_text(current["failure_runresult"]),
+                error_text=domjudge_text(current["failure_text"]),
             )
+        current = self._s.batch_scheduler.fetch_batch(int(batch_id))
+        if current is None:
+            return
+        current_cases = [
+            dict(row)
+            for row in self._s.batch_scheduler.cases_for_batch(int(batch_id))
+        ]
+        if not self._domjudge_publish_and_finalize_ready_tasks(
+            batch_id=int(batch_id),
+            batch_row=dict(current),
+            cases=current_cases,
+            force_failed=force_failed,
+            error_text=error_text,
+        ):
+            retry_claim = self._s.batch_scheduler.claim_batch_finalization(
+                int(batch_id),
+                now_text=now_iso(),
+            )
+            if retry_claim is not None:
+                self._schedule_finalization_retry(int(batch_id))
+            return
         claim = self._s.batch_scheduler.claim_batch_finalization(
             int(batch_id),
             now_text=now_iso(),
@@ -731,15 +761,6 @@ class ResultProcessor:
                 for row in cases
                 if (task_id := domjudge_text(row["task_id"]))
             ))
-            if not self._domjudge_publish_and_finalize_ready_tasks(
-                batch_id=int(batch_id),
-                batch_row=batch_row,
-                cases=cases,
-                force_failed=force_failed,
-                error_text=error_text,
-            ):
-                self._schedule_finalization_retry(int(batch_id))
-                return
             task_rows = {task_id: self._s.task_registry.get(task_id) for task_id in task_ids}
             unfinished_task_ids = [
                 task_id
@@ -1464,8 +1485,6 @@ class ResultProcessor:
             target_case_id = int(case_row["id"])
             target_batch_id = int(case_row["batch_id"])
         elif batch_row is not None:
-            safe_task_id = domjudge_text(batch_row["task_id"])
-            safe_run_id = domjudge_text(batch_row["run_id"])
             target_batch_id = int(batch_row["batch_id"])
         self._touch_task_verification(safe_task_id)
         debug_payload = {} if payload is None else payload
