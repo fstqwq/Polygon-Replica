@@ -1,0 +1,30 @@
+{
+  "name": "flat-cold",
+  "seed": 11,
+  "host_count": 8,
+  "fetch_batch_size": 2,
+  "fetch_idle_backoff_sec": 6.0,
+  "long_poll_enabled": false,
+  "verification_count": 1,
+  "verification_arrival_gap_sec": 0.0,
+  "tests_per_verification": 30,
+  "manual_test_count": 30,
+  "solution_count": 12,
+  "generator_enabled": false,
+  "main_correct_enabled": false,
+  "sanity_probe_count": 0,
+  "foreground_program_count": 0,
+  "cache_hit_rate": 0.0,
+  "compile_time_sec_by_kind": {"foreground": 1.0, "generate-input": 1.0, "main-correct": 1.0, "solution-run": 2.0, "sanity": 0.5},
+  "case_time_distribution_by_kind": {
+    "foreground": {"min_sec": 0.1, "max_sec": 0.2},
+    "generate-input": {"min_sec": 0.05, "max_sec": 0.1},
+    "main-correct": {"min_sec": 0.1, "max_sec": 0.2},
+    "solution-run": {"min_sec": 0.1, "max_sec": 0.5},
+    "sanity": {"min_sec": 0.01, "max_sec": 0.02}
+  },
+  "slow_solution_fraction": 0.0,
+  "slow_solution_multiplier": 1.0,
+  "host_disconnect_events": [],
+  "assertions": {"max_unfinished_case_count": 0, "max_invariant_violation_count": 0}
+}

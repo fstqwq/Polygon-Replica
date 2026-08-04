@@ -1,0 +1,30 @@
+{
+  "name": "dag-waves",
+  "seed": 23,
+  "host_count": 8,
+  "fetch_batch_size": 2,
+  "fetch_idle_backoff_sec": 6.0,
+  "long_poll_enabled": false,
+  "verification_count": 1,
+  "verification_arrival_gap_sec": 0.0,
+  "tests_per_verification": 50,
+  "manual_test_count": 0,
+  "solution_count": 10,
+  "generator_enabled": true,
+  "main_correct_enabled": true,
+  "sanity_probe_count": 2,
+  "foreground_program_count": 0,
+  "cache_hit_rate": 0.0,
+  "compile_time_sec_by_kind": {"foreground": 1.0, "generate-input": 1.5, "main-correct": 2.0, "solution-run": 2.0, "sanity": 0.5},
+  "case_time_distribution_by_kind": {
+    "foreground": {"min_sec": 0.1, "max_sec": 0.2},
+    "generate-input": {"min_sec": 0.05, "max_sec": 0.2},
+    "main-correct": {"min_sec": 0.15, "max_sec": 0.5},
+    "solution-run": {"min_sec": 0.1, "max_sec": 0.8},
+    "sanity": {"min_sec": 0.02, "max_sec": 0.05}
+  },
+  "slow_solution_fraction": 0.1,
+  "slow_solution_multiplier": 5.0,
+  "host_disconnect_events": [],
+  "assertions": {"max_unfinished_case_count": 0, "max_invariant_violation_count": 0}
+}
