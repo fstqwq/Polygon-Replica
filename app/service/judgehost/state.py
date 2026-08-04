@@ -13,9 +13,9 @@ from app.service.platform.judge_fs_index import JudgeFsIndexService
 from app.service.repository.workspace import WorkspaceService
 from app.service.verification.task_store import VerificationTaskStore
 
-from .task_registry import JudgehostTaskRegistry
-from .batch_scheduler import BatchScheduler
-from .host_telemetry import HostTelemetryStore
+from app.service.judgehost.task_registry import JudgehostTaskRegistry
+from app.service.judgehost.batch_scheduler import BatchScheduler
+from app.service.judgehost.host_telemetry import HostTelemetryStore
 
 
 @dataclass

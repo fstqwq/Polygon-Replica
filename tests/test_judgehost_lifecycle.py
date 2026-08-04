@@ -21,7 +21,7 @@ from app.service.judgehost.batch_scheduler_models import (
 from app.service.judgehost.identity import domjudge_submit_id
 from app.service.platform.rwlock import WriterPriorityRWLock
 
-from .db_fixture import DBTestBase
+from tests.db_fixture import DBTestBase
 
 
 _NOW = "2026-07-29T00:00:00+00:00"

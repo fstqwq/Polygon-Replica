@@ -32,7 +32,7 @@ from app.service.judgehost.runtime import domjudge_bool, domjudge_parse_float, d
 from app.service.platform.hashing import compile_command_digest, sha256_hex_bytes, sha256_hex_text
 from app.service.platform.judge_fs_index import JudgeFsIndexService
 
-from .state import JudgehostState
+from app.service.judgehost.state import JudgehostState
 
 logger = logging.getLogger(__name__)
 

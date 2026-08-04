@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from .db_helpers import db_execute, db_fetch_one, write_verification_summary
+from tests.db_helpers import db_execute, db_fetch_one, write_verification_summary
 
 import asyncio
 import base64
@@ -13,7 +13,7 @@ from unittest.mock import patch
 from fastapi import HTTPException
 from starlette.requests import Request
 
-from .common import E2ETestBase, suite_root
+from tests.common import E2ETestBase, suite_root
 from app.impl.runtime.config import config
 from app.impl.problem.checker import checker_rename_source, checker_set_standard
 from app.impl.problem.file import (
@@ -40,7 +40,7 @@ from app.impl.run_export.run import run_cancel, run_execute
 from app.impl.root.auth_pages import auth_password_meta, login_page
 from app.main_util import TEXTAREA_MAX_BYTES
 from app.service.verification.task_store import VerificationTaskStore
-from .ui_support import _register_with_password_envelope
+from tests.ui_support import _register_with_password_envelope
 
 db = config.db
 workspace_service = config.workspace_service

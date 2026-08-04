@@ -11,7 +11,7 @@ from app.service.verification.service import CPP_EXTENSIONS, DEFAULT_TIME_LIMIT_
 from app.service.verification.runtime import normalize_pass_limit, normalize_problem_mode
 from app.service.verification.plan import VerificationExecutionPlan, VerificationTestPlan
 from app.service.verification.source import resolve_source
-from .context_operation import list_solution_entries, resolve_build_accepted_solution_source
+from app.impl.workspace.context_operation import list_solution_entries, resolve_build_accepted_solution_source
 
 
 def _problem_limits(runtime_cfg: dict[str, object], *, pass_limit: int) -> dict[str, int]:

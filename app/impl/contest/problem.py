@@ -12,11 +12,11 @@ from app.impl.workspace.access import workspace_access_context
 from app.impl.workspace.context_operation import audit
 from app.main_util import form_text
 
-from .common import (
+from app.impl.contest.common import (
     _dedupe_preserve,
     _normalize_contest_problem_idx_required,
 )
-from .shared import (
+from app.impl.contest.shared import (
     _contest_ctx,
     _contest_problem_rows,
     _contest_redirect,

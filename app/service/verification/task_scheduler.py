@@ -7,8 +7,8 @@ from collections import deque
 from dataclasses import dataclass
 from typing import Callable, cast
 
-from .task_store import VerificationTaskRow, VerificationTaskStore
-from .types import is_cancel_reason
+from app.service.verification.task_store import VerificationTaskRow, VerificationTaskStore
+from app.service.verification.types import is_cancel_reason
 
 
 @dataclass(frozen=True)
@@ -309,7 +309,7 @@ class VerificationRuntimeCoordinator:
                 return
 
     def _handle_terminal_events(self, events: list[_VerificationEvent]) -> bool:
-        from .task_result_finalize import finalize_verification_task_result
+        from app.service.verification.task_result_finalize import finalize_verification_task_result
 
         prepared: list[tuple[str, TaskExecutionResult]] = []
         prepared_task_ids: set[str] = set()
@@ -531,7 +531,7 @@ class VerificationRuntimeCoordinator:
             result = self._callbacks.resolve_case_result(judgehost_task_id, str(row["test_name"]))
             if result is None:
                 continue
-            from .task_result_finalize import finalize_verification_task_result
+            from app.service.verification.task_result_finalize import finalize_verification_task_result
 
             final_result = finalize_verification_task_result(row, result=result)
             _save_result(

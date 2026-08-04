@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from .task_store import VerificationTaskReadRow, VerificationTaskStore
+from app.service.verification.task_store import VerificationTaskReadRow, VerificationTaskStore
 
 
 def task_display_status(status: str) -> str:

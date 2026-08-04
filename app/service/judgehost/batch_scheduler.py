@@ -8,8 +8,8 @@ from collections import defaultdict
 from dataclasses import asdict
 from collections.abc import Iterable
 
-from .domjudge.client import domjudge_script_id
-from .batch_scheduler_models import (
+from app.service.judgehost.domjudge.client import domjudge_script_id
+from app.service.judgehost.batch_scheduler_models import (
     CompileSubmission,
     JudgehostCaseRow,
     ExecutionBatchRow,
@@ -20,8 +20,8 @@ from .batch_scheduler_models import (
     StatusCounts,
     TaskCaseCounts,
 )
-from .identity import domjudge_job_id, domjudge_submit_id
-from .batch_scheduler_results import BatchSchedulerResultMixin
+from app.service.judgehost.identity import domjudge_job_id, domjudge_submit_id
+from app.service.judgehost.batch_scheduler_results import BatchSchedulerResultMixin
 
 
 class BatchScheduler(BatchSchedulerResultMixin):

@@ -20,21 +20,21 @@ from app.service.judgehost.runtime import (
     domjudge_parse_meta_text,
     domjudge_verdict_from_runresult,
 )
-from app.service.platform.hashing import sha256_hex_bytes as domjudge_sha256_bytes
+from app.service.platform.hashing import sha256_hex_bytes
 from app.service.run.runtime import RUN_TEST_NAME_RE
 from app.service.verification.task_scheduler import notify_verification_case_leased
 
-from .core import JudgehostCore
-from .dispatch_cache import (
+from app.service.judgehost.core import JudgehostCore
+from app.service.judgehost.dispatch_cache import (
     DispatchCacheMixin,
     _DomjudgeCacheEntry,
 )
-from .case_result import build_case_result
-from .batch_scheduler_models import CaseResult, CompileSubmission, ExecutionBatchSpec
-from .result import ResultProcessor
-from .state import JudgehostState
-from .task_queue import TaskQueue
-from .toolkit import DomjudgeToolkit
+from app.service.judgehost.case_result import build_case_result
+from app.service.judgehost.batch_scheduler_models import CaseResult, CompileSubmission, ExecutionBatchSpec
+from app.service.judgehost.result import ResultProcessor
+from app.service.judgehost.state import JudgehostState
+from app.service.judgehost.task_queue import TaskQueue
+from app.service.judgehost.toolkit import DomjudgeToolkit
 
 logger = logging.getLogger(__name__)
 
@@ -149,8 +149,8 @@ class DispatchHandler(DispatchCacheMixin):
             test_name = raw_name if RUN_TEST_NAME_RE.fullmatch(raw_name) else f"{ordinal:03}.in"
             in_bytes = self._toolkit.b64_decode(entry.get("input_b64"))
             ans_bytes = self._toolkit.b64_decode(entry.get("answer_b64"))
-            testcase_input_hash = domjudge_sha256_bytes(in_bytes)
-            testcase_answer_hash = domjudge_sha256_bytes(ans_bytes)
+            testcase_input_hash = sha256_hex_bytes(in_bytes)
+            testcase_answer_hash = sha256_hex_bytes(ans_bytes)
             testcase_signature = domjudge_hash_of_hashes(
                 [testcase_input_hash, testcase_answer_hash]
             )

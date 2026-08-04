@@ -13,14 +13,14 @@ from app.main_util import (
 )
 from app.service.problem.test_spec import parse_gen_command_tokens
 
-from .context_operation import (
+from app.impl.workspace.context_operation import (
     dedupe_preserve_order,
     generator_sources_from_build_cfg,
     _list_sources_with_extensions,
     read_build_config,
     workspace_rel_file_exists,
 )
-from .test_spec import read_tests_spec, tests_spec_read_payload
+from app.impl.workspace.test_spec import read_tests_spec, tests_spec_read_payload
 
 _C = config.constants
 

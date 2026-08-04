@@ -8,7 +8,7 @@ from app.impl.auth.shared import template_response
 from app.impl.runtime.config import config
 from app.impl.workspace.context_operation import audit, normalize_contest_title_required
 
-from .shared import (
+from app.impl.contest.shared import (
     _CONTEST_PROPERTY_DATE,
     _CONTEST_PROPERTY_LOCATION,
     _contest_ctx,

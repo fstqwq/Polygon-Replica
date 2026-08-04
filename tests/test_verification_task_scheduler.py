@@ -5,7 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 # tests.common installs isolated /tmp paths before app modules can create runtime config.
-from .common import E2ETestBase, config
+from tests.common import E2ETestBase, config
 
 from app.service.disk.verification_store import VerificationStore
 from app.service.verification.task_metadata import canonical_diagnostics, canonical_truncated_text, diagnostics_json_text

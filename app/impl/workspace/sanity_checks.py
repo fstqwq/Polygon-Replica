@@ -8,13 +8,13 @@ from pathlib import Path
 from app.impl.runtime.config import config
 from app.service.verification.types import Status
 
-from .boundary_coverage import (
+from app.impl.workspace.boundary_coverage import (
     BOUNDARY_COVERAGE_CHECK,
     boundary_coverage_missing_message,
     boundary_coverage_from_feedback,
 )
-from .sample_output_validation import _result_verdict, validate_custom_sample_outputs
-from .runtime_threshold import (
+from app.impl.workspace.sample_output_validation import _result_verdict, validate_custom_sample_outputs
+from app.impl.workspace.runtime_threshold import (
     SUMMARY_RUNTIME_THRESHOLD_CHECK,
     evaluate_summary_runtime_threshold,
     runtime_threshold_reason,

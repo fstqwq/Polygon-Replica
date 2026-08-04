@@ -10,9 +10,9 @@ from app.service.problem.test_spec import dumps_tests_spec, load_tests_spec
 from app.service.sandbox.base import ExecResult
 from app.service.statement.render import ensure_statement_language_sources
 
-from .contest_support import ContestActionBase
-from .db_helpers import db_execute, db_fetch_one, read_contest_job_summary, write_contest_job_summary
-from .ui_support import (
+from tests.contest_support import ContestActionBase
+from tests.db_helpers import db_execute, db_fetch_one, read_contest_job_summary, write_contest_job_summary
+from tests.ui_support import (
     Path,
     _request,
     _wait_for_row,

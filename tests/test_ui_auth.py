@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from .db_helpers import db_execute, db_fetch_one
+from tests.db_helpers import db_execute, db_fetch_one
 
 import asyncio
 import sqlite3
@@ -11,9 +11,9 @@ from starlette.responses import PlainTextResponse
 from app.service.auth.password_hash import password_verifier_storage_hash
 from app import main_constant
 from app.impl.auth.password_envelope import PasswordEnvelopeStore
-from .common import E2ETestBase
+from tests.common import E2ETestBase
 
-from .ui_support import (
+from tests.ui_support import (
     ADMIN_CONFIG_DEFAULTS,
     AUTH_COOKIE_NAME,
     Request,

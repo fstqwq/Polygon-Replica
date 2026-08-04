@@ -12,7 +12,7 @@ from app.main_util import (
     sanitize_log_text_for_ui,
 )
 
-from .context_operation import dedupe_preserve_order, workspace_rel_file_exists
+from app.impl.workspace.context_operation import dedupe_preserve_order, workspace_rel_file_exists
 
 _C = config.constants
 

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 
-from app.main_constant import AUX_DISPLAY_TEXT_LIMIT_BYTES as DEFAULT_AUX_DISPLAY_TEXT_LIMIT_BYTES
+from app.main_constant import AUX_DISPLAY_TEXT_LIMIT_BYTES
 
 _LOG_ANSI_ESCAPE_RE = re.compile(r"\x1B\[[0-?]*[ -/]*[@-~]")
 _LOG_CONTROL_CHAR_RE = re.compile(r"[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]")
@@ -40,7 +40,7 @@ def sanitize_log_text_for_ui(raw: str, *, path_prefixes: list[tuple[str, str]] |
 
 
 def aux_display_text_limit_bytes(constants: object | None = None) -> int:
-    default = max(1, int(DEFAULT_AUX_DISPLAY_TEXT_LIMIT_BYTES))
+    default = max(1, int(AUX_DISPLAY_TEXT_LIMIT_BYTES))
     source = constants
     if source is None:
         try:

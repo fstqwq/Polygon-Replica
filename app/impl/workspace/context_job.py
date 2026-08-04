@@ -10,16 +10,16 @@ from app.service.problem.solution_metadata import normalize_expected_behavior
 from app.service.problem.test_spec import load_tests_spec
 from app.service.verification.validation_status import build_validation_status
 
-from .context_job_helper import allocate_run_id, allocate_verification_id
-from .context_operation import audit, run_solution_options_context, workspace_rel_file_exists
-from .context_verification import (
+from app.impl.workspace.context_job_helper import allocate_run_id, allocate_verification_id
+from app.impl.workspace.context_operation import audit, run_solution_options_context, workspace_rel_file_exists
+from app.impl.workspace.context_verification import (
     remember_verification_fingerprint,
     normalize_run_id_token,
     _verification_sources_fingerprint,
     _verification_sources_signature,
 )
-from .problem_config import read_problem_config
-from .verification_dag import run_workspace_verification_dag
+from app.impl.workspace.problem_config import read_problem_config
+from app.impl.workspace.verification_dag import run_workspace_verification_dag
 
 _C = config.constants
 

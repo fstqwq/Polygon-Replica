@@ -4,14 +4,14 @@ from pathlib import Path
 from typing import cast
 from urllib.parse import quote_plus
 from app.impl.runtime.config import config
-from .artifact import verification_artifact_blob, verification_blob_virtual_rel
-from .context import count_label
-from .problem_config import read_problem_config
-from .context_operation import (
+from app.impl.workspace.artifact import verification_artifact_blob, verification_blob_virtual_rel
+from app.impl.workspace.context import count_label
+from app.impl.workspace.problem_config import read_problem_config
+from app.impl.workspace.context_operation import (
     solution_metadata_entry,
     workspace_rel_file_exists,
 )
-from .context_run_detail import (
+from app.impl.workspace.context_run_detail import (
     _cap_run_test_feedback_files,
     _cap_summary_list,
     _decorate_compile_diagnostics,
@@ -62,9 +62,9 @@ from app.impl.workspace.run_view_list import (
     _run_timeout_ms_from_summary,
 )
 from app.impl.workspace.run_display import (
-    generation_status_text as _generation_status_text,
-    rewrite_failure_reason_with_source as _rewrite_failure_reason_with_source,
-    verification_solution_failure_hint as _verification_solution_failure_hint,
+    generation_status_text,
+    rewrite_failure_reason_with_source,
+    verification_solution_failure_hint,
     run_actual_display,
     run_actual_short,
     run_cpu_wall_ms_text,
@@ -72,7 +72,7 @@ from app.impl.workspace.run_display import (
     run_memory_mb_text,
     run_verdict_short,
 )
-from .runtime_threshold import (
+from app.impl.workspace.runtime_threshold import (
     SUMMARY_RUNTIME_THRESHOLD_CHECK,
     evaluate_summary_runtime_threshold,
     time_limit_ms_from_run_config_json,
@@ -301,22 +301,22 @@ def _generate_detail_from_task_row(
     status = str(row['status'] or '')
     verdict = str(row['verdict'] or '')
     if status == VerificationTaskStore.TASK_DONE:
-        status_text = _generation_status_text(status, verdict)
+        status_text = generation_status_text(status, verdict)
         tone = 'ok'
     elif status == VerificationTaskStore.TASK_FAILED:
-        status_text = _generation_status_text(status, verdict)
+        status_text = generation_status_text(status, verdict)
         tone = 'fail'
     elif status == VerificationTaskStore.TASK_LEASED:
-        status_text = _generation_status_text(status, verdict)
+        status_text = generation_status_text(status, verdict)
         tone = 'running'
     elif status in {VerificationTaskStore.TASK_QUEUED, VerificationTaskStore.TASK_PENDING}:
-        status_text = _generation_status_text(status, verdict)
+        status_text = generation_status_text(status, verdict)
         tone = 'neutral'
     elif status == VerificationTaskStore.TASK_CANCELLED:
-        status_text = _generation_status_text(status, verdict)
+        status_text = generation_status_text(status, verdict)
         tone = 'neutral'
     else:
-        status_text = _generation_status_text(status, verdict)
+        status_text = generation_status_text(status, verdict)
         tone = 'neutral'
     runtime_ms = 0 if row['runtime_sec'] is None else max(0, int(round(float(row['runtime_sec']) * 1000.0)))
     memory_kb = 0 if row['memory_kb'] is None else max(0, int(row['memory_kb']))
@@ -1213,7 +1213,7 @@ def build_run_detail_context(
         max_time_display = f'{max_time_ms}ms' if has_test_metrics else '-'
         max_memory_display = run_memory_mb_text(max_memory_kb) if has_test_metrics else '-'
         failure_display = (
-            _verification_solution_failure_hint(source_for_display, match_reason, str(summary.get('error') or ''))
+            verification_solution_failure_hint(source_for_display, match_reason, str(summary.get('error') or ''))
             if (match_reason or summary.get('error'))
             else ''
         )
@@ -1625,7 +1625,7 @@ def build_run_detail_context(
         running_tasks = list(verification_details.get('running_tasks') or []) if isinstance(verification_details.get('running_tasks'), list) else []
     detail_fail_reason = str((verification_record.get('fail_reason') if verification_record is not None else '') or '')
     detail_fail_flag = bool(detail_fail_reason)
-    detail_fail_reason = _rewrite_failure_reason_with_source(detail_fail_reason, columns)
+    detail_fail_reason = rewrite_failure_reason_with_source(detail_fail_reason, columns)
     detail_fail_flag = bool(detail_fail_reason)
     detail_sanity = _detail_sanity_context(verification_id, verification_details)
     detail_status = str(status_summary['status'])
@@ -1682,8 +1682,8 @@ def build_run_detail_context(
                 artifact_verification_error = f'{diag_location}: {diag_message}'
             elif diag_message:
                 artifact_verification_error = diag_message
-        source_aware_column_reason = _rewrite_failure_reason_with_source("", columns)
-        artifact_verification_error = _rewrite_failure_reason_with_source(artifact_verification_error, columns)
+        source_aware_column_reason = rewrite_failure_reason_with_source("", columns)
+        artifact_verification_error = rewrite_failure_reason_with_source(artifact_verification_error, columns)
         generic_column_reasons = {
             str(col.get('match_reason') or '').strip()
             for col in columns

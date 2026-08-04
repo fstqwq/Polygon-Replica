@@ -3,7 +3,7 @@ from __future__ import annotations
 import heapq
 import time
 
-from .batch_scheduler_models import (
+from app.service.judgehost.batch_scheduler_models import (
     CaseClaim,
     CaseClaimBusy,
     CaseResult,

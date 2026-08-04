@@ -18,26 +18,26 @@ from app.service.statement.context import statement_languages
 from app.service.statement.render import default_statement_title_for_workspace
 from app.service.verification.runtime import coerce_int, normalize_pass_limit, normalize_problem_mode
 
-from .access import (
+from app.impl.workspace.access import (
     problem_acl_entries,
     require_read_access,
     workspace_access_context,
 )
-from .artifact import artifact_version_number
-from .context import count_label
-from .context_operation import (
+from app.impl.workspace.artifact import artifact_version_number
+from app.impl.workspace.context import count_label
+from app.impl.workspace.context_operation import (
     _solutions_status_context,
     _tests_spec_status_context,
 )
-from .context_component_status import (
+from app.impl.workspace.context_component_status import (
     checker_status_context,
     _count_used_configured_generators,
     generator_status_context,
     interactor_status_context,
     validator_status_context,
 )
-from .context_verification import _verification_status_context
-from .problem_config import read_problem_config
+from app.impl.workspace.context_verification import _verification_status_context
+from app.impl.workspace.problem_config import read_problem_config
 from app.service.repository.revision import git_commit_count, workspace_revision_info
 
 _C = config.constants

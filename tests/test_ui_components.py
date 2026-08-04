@@ -4,8 +4,8 @@ from unittest.mock import patch
 
 from app.impl.workspace.problem_config import read_problem_config
 
-from .common import E2ETestBase
-from .ui_support import (
+from tests.common import E2ETestBase
+from tests.ui_support import (
     Path,
     UIHelpersMixin,
     _flash_cookie_header,

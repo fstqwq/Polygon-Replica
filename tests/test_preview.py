@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from .db_helpers import (
+from tests.db_helpers import (
     db_execute,
     db_fetch_one,
     read_preview_summary,
@@ -31,7 +31,7 @@ from app.service.statement.ftl.renderer import render_ftl_template
 from app.service.statement.render import render_statement_main
 from app.service.statement.signature import statement_sources_signature
 from app.service.verification.signature import verification_fingerprint, verification_signature
-from .common import E2ETestBase
+from tests.common import E2ETestBase
 from app.impl.runtime.config import config
 
 preview_service = config.preview_service

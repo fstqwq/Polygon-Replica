@@ -10,9 +10,9 @@ from app.impl.problem.file import files_page, files_restore_default
 from app.impl.runtime.config import config
 from app.service.statement.constant import STATEMENT_DEFAULT_FILES
 
-from .common import WorkspaceTestBase
-from .db_helpers import db_fetch_one
-from .ui_support import _flash_messages_from_response, _request
+from tests.common import WorkspaceTestBase
+from tests.db_helpers import db_fetch_one
+from tests.ui_support import _flash_messages_from_response, _request
 
 
 workspace_service = config.workspace_service

@@ -9,8 +9,8 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.impl.auth.middleware import auth_middleware as auth_http_middleware
-from app.impl.auth.internal.runtime import shutdown as auth_shutdown, startup as auth_startup
+import app.impl.auth.internal.runtime as auth_runtime
+import app.impl.auth.middleware as auth_http
 from app.impl.auth.shared import _apply_security_headers
 from app.route import (
     tests_route,
@@ -32,11 +32,11 @@ install_uvicorn_access_filter()
 async def lifespan(_app: FastAPI):
     """Start and stop process-wide runtime helpers."""
 
-    auth_startup()
+    auth_runtime.startup()
     try:
         yield
     finally:
-        auth_shutdown()
+        auth_runtime.shutdown()
 
 
 app = FastAPI(title="Polygonlike", lifespan=lifespan)
@@ -55,7 +55,7 @@ async def auth_middleware(request: Request, call_next):
 
     request.state.request_started_at = monotonic()
     try:
-        response = await auth_http_middleware(request, call_next)
+        response = await auth_http.auth_middleware(request, call_next)
     except HTTPException as exc:
         response = PlainTextResponse(
             str(exc.detail or "request failed"),

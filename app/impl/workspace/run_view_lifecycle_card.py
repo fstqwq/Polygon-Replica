@@ -4,8 +4,8 @@ from typing import TypedDict
 
 from app.impl.runtime.config import config
 
-from .context_operation import dedupe_preserve_order
-from .context_run_detail import normalize_run_id_token, normalize_run_test_name_token
+from app.impl.workspace.context_operation import dedupe_preserve_order
+from app.impl.workspace.context_run_detail import normalize_run_id_token, normalize_run_test_name_token
 VerificationDetailSummaryRow = TypedDict(
     "VerificationDetailSummaryRow",
     {

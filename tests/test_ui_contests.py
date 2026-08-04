@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from .db_helpers import (
+from tests.db_helpers import (
     db_execute,
     db_fetch_all,
     db_fetch_one,
@@ -10,8 +10,8 @@ from .db_helpers import (
 
 from app.service.platform.git_process import run_git
 
-from .common import E2ETestBase
-from .ui_support import (
+from tests.common import E2ETestBase
+from tests.ui_support import (
     Path,
     UIHelpersMixin,
     _flash_messages_from_response,

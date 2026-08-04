@@ -7,7 +7,7 @@ from fastapi import Request, Depends
 from app.impl.auth.shared import template_response
 from app.impl.runtime.config import config
 
-from .shared import _contest_ctx, _contest_problem_rows
+from app.impl.contest.shared import _contest_ctx, _contest_problem_rows
 
 
 def contest_overview_page(request: Request, contest: str, user: Annotated[str, Depends(require_session_user)]):

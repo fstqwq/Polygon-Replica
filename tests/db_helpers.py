@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from typing import Callable
 
-from .common import db
+from tests.common import db
 from app.impl.runtime.config import config
 
 

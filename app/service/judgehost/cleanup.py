@@ -5,7 +5,7 @@ import threading
 import time
 from typing import Protocol
 
-from .task_registry import JudgehostTaskRegistry
+from app.service.judgehost.task_registry import JudgehostTaskRegistry
 
 
 class _RuntimeCaseStore(Protocol):

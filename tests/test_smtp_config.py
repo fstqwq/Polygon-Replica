@@ -6,9 +6,9 @@ from unittest.mock import MagicMock, patch
 
 from fastapi import HTTPException
 
-from .common import E2ETestBase
-from .db_helpers import db_execute, db_fetch_one
-from .ui_support import (
+from tests.common import E2ETestBase
+from tests.db_helpers import db_execute, db_fetch_one
+from tests.ui_support import (
     UIHelpersMixin,
     _request,
     config,

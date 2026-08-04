@@ -12,9 +12,9 @@ from unittest.mock import patch
 from fastapi import HTTPException
 
 from app.db import CURRENT_SCHEMA_COLUMNS
-from .db_helpers import db_connection, db_execute, db_fetch_one, db_write_transaction, write_preview_summary
-from .common import E2ETestBase
-from .ui_support import _flash_messages_from_response, _request
+from tests.db_helpers import db_connection, db_execute, db_fetch_one, db_write_transaction, write_preview_summary
+from tests.common import E2ETestBase
+from tests.ui_support import _flash_messages_from_response, _request
 from app.impl.preview.preview import (
     preview_page,
     preview_run,

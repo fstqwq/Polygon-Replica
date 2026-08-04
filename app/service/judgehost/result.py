@@ -30,12 +30,12 @@ from app.service.judgehost.runtime import (
 from app.service.verification.task_result_finalize import finalize_verification_task_result
 from app.service.verification.task_scheduler import notify_verification_case_reported
 
-from .case_result import build_case_result, decode_case_test_row
-from .core import JudgehostCore
-from .batch_scheduler_models import CaseResult
-from .state import JudgehostState
-from .task_queue import TaskQueue
-from .toolkit import DomjudgeToolkit
+from app.service.judgehost.case_result import build_case_result, decode_case_test_row
+from app.service.judgehost.core import JudgehostCore
+from app.service.judgehost.batch_scheduler_models import CaseResult
+from app.service.judgehost.state import JudgehostState
+from app.service.judgehost.task_queue import TaskQueue
+from app.service.judgehost.toolkit import DomjudgeToolkit
 
 logger = logging.getLogger(__name__)
 

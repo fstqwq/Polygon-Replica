@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-from .contest_support import ContestActionBase
-from .db_helpers import db_fetch_all
-from .ui_support import (
+from tests.contest_support import ContestActionBase
+from tests.db_helpers import db_fetch_all
+from tests.ui_support import (
     _flash_messages_from_response,
     config,
     contest_problems_change_general_retry,

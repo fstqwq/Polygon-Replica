@@ -17,10 +17,10 @@ from app.service.platform.hashing import domjudge_executable_hash, sha256_hex_js
 from app.service.run.runtime import RUN_TEST_NAME_RE
 from app.service.platform.testlib_source import workspace_testlib_header
 
-from .core import JudgehostCore
-from .dispatch import DispatchHandler
-from .state import JudgehostState
-from .toolkit import DomjudgeToolkit
+from app.service.judgehost.core import JudgehostCore
+from app.service.judgehost.dispatch import DispatchHandler
+from app.service.judgehost.state import JudgehostState
+from app.service.judgehost.toolkit import DomjudgeToolkit
 
 
 class TaskEnqueue:

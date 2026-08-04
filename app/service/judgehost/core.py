@@ -6,7 +6,7 @@ from pathlib import Path
 from app.runtime_value import RuntimeValues
 from app.service.judgehost.shared import _HOSTNAME_RE, _RUN_ID_RE
 
-from .state import JudgehostState
+from app.service.judgehost.state import JudgehostState
 
 
 class JudgehostCore:

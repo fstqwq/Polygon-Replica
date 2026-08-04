@@ -7,11 +7,11 @@ from app.db import now_iso
 from app.service.judgehost.runtime import parse_iso_utc
 from app.service.verification.task_scheduler import notify_verification_task_terminal
 
-from .case_result import decode_case_test_row
-from .core import JudgehostCore
-from .payload_retention import compact_payload_for_retention
-from .payload_retention import compact_task_row_payload
-from .state import JudgehostState
+from app.service.judgehost.case_result import decode_case_test_row
+from app.service.judgehost.core import JudgehostCore
+from app.service.judgehost.payload_retention import compact_payload_for_retention
+from app.service.judgehost.payload_retention import compact_task_row_payload
+from app.service.judgehost.state import JudgehostState
 
 
 class TaskQueue:

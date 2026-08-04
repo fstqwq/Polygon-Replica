@@ -25,13 +25,13 @@ from app.service.verification.test_rows import build_verification_test_row
 from app.service.verification.types import Kind, Status
 from app.service.verification.types import is_cancel_reason
 from app.service.verification.runtime import normalize_pass_limit, normalize_problem_mode
-from app.impl.workspace.run_display import run_actual_failed_codes
+from app.impl.workspace.run_display import run_actual_failed_codes, verification_solution_failure_hint
 
-from .context_job_helper import allocate_run_id
-from .context_operation import audit
-from .context_run_detail import normalize_run_id_token
-from .context_verification import _verification_solution_failure_hint, _verification_solution_match
-from .sanity_checks import (
+from app.impl.workspace.context_job_helper import allocate_run_id
+from app.impl.workspace.context_operation import audit
+from app.impl.workspace.context_run_detail import normalize_run_id_token
+from app.impl.workspace.context_verification import _verification_solution_match
+from app.impl.workspace.sanity_checks import (
     SANITY_FAILED,
     SANITY_PENDING,
     SANITY_PASSED,
@@ -42,11 +42,11 @@ from .sanity_checks import (
     planned_sanity_checks,
     run_verification_sanity_checks,
 )
-from .runtime_threshold import time_limit_ms_from_run_config_json
+from app.impl.workspace.runtime_threshold import time_limit_ms_from_run_config_json
 from app.service.verification.plan import VerificationTestPlan
-from .verification_dag_plan import build_verification_execution_plan
-from .verification_payload import prepared_payload_for_uploaded_source as _prepared_payload_for_uploaded_source
-from .problem_config import read_problem_config
+from app.impl.workspace.verification_dag_plan import build_verification_execution_plan
+from app.impl.workspace.verification_payload import prepared_payload_for_uploaded_source
+from app.impl.workspace.problem_config import read_problem_config
 
 _C = config.constants
 
@@ -516,9 +516,13 @@ def _verification_summary_from_tasks(
             continue
         reason_text = reason
         if (not matched) and completed and (not reason_text):
-            reason_text = _verification_solution_failure_hint(logical_run.source_path, "", str(run_summary.get("error") or ""))
+            reason_text = verification_solution_failure_hint(
+                logical_run.source_path,
+                "",
+                str(run_summary.get("error") or ""),
+            )
         if (not matched) and completed and (not first_solution_error):
-            first_solution_error = reason_text or _verification_solution_failure_hint(
+            first_solution_error = reason_text or verification_solution_failure_hint(
                 logical_run.source_path,
                 "",
                 str(run_summary.get("error") or ""),
@@ -718,7 +722,7 @@ def _publish_generate_task(task_row: VerificationTaskRow, *, execution: TaskExec
     test_name = str(task_row["test_name"])
     run_id = allocate_run_id()
     try:
-        prepared = _prepared_payload_for_uploaded_source(
+        prepared = prepared_payload_for_uploaded_source(
             source_label=test_plan.execution_source_name,
             run_id=run_id,
             test_name=test_name,
@@ -814,7 +818,7 @@ def _publish_run_task(task_row: VerificationTaskRow, *, execution: TaskExecution
             verification_source = TASK_SOLUTION_RUN
             expected_behavior = normalize_expected_behavior(task_row["expected_behavior"])
         source_name, source_bytes = _source_bytes_for_path(execution, source_path)
-        prepared = _prepared_payload_for_uploaded_source(
+        prepared = prepared_payload_for_uploaded_source(
             source_label=source_path,
             run_id=run_id,
             test_name=test_name,

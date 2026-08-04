@@ -15,7 +15,7 @@ from app.main_util import enforce_textarea_max_bytes, read_upload_bytes_limited
 from app.service.statement.constant import DEFAULT_OLYMP_STY
 from app.service.statement.context import normalize_statement_language
 
-from .shared import (
+from app.impl.contest.shared import (
     _CONTEST_JOB_TYPE_PACKAGE,
     _CONTEST_JOB_TYPE_PDF,
     _contest_ctx,

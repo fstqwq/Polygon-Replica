@@ -4,7 +4,7 @@ import json
 from unittest.mock import patch
 
 from app.db import DB, now_iso, sqlite3
-from .db_fixture import DBTestBase
+from tests.db_fixture import DBTestBase
 
 
 class _TraceValues:

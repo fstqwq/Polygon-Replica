@@ -9,10 +9,10 @@ from app.service.problem.solution_metadata import normalize_expected_behavior
 from app.service.verification.task_store import VerificationTaskRow, VerificationTaskStore
 from app.service.verification.signature import verification_fingerprint, verification_signature
 from app.service.verification.types import Kind
-from .run_display import (
+from app.impl.workspace.run_display import (
     run_actual_failed_codes,
     run_actual_short,
-    verification_solution_failure_hint as _verification_solution_failure_hint,
+    verification_solution_failure_hint,
 )
 
 _SANITY_STATUS_TOKENS = {"ok", "passed", "pending", "running", "warning", "failed", "skipped"}
@@ -309,10 +309,10 @@ def _verification_task_rows_failure_hint(verification_id: str) -> str:
             summary,
         )
         if completed and reason:
-            return _verification_solution_failure_hint(first_row["source_path"], reason, "")
+            return verification_solution_failure_hint(first_row["source_path"], reason, "")
         error_text = str(summary["error"])
         if completed and error_text:
-            return _verification_solution_failure_hint(first_row["source_path"], "", error_text)
+            return verification_solution_failure_hint(first_row["source_path"], "", error_text)
     return ""
 
 def _verification_error_prefers_source_hint(error_text: str) -> bool:

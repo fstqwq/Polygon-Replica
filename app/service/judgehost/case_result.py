@@ -9,7 +9,7 @@ from app.service.verification.test_rows import (
     build_verification_test_row,
 )
 
-from .batch_scheduler_models import CaseResult
+from app.service.judgehost.batch_scheduler_models import CaseResult
 
 
 def build_case_result(

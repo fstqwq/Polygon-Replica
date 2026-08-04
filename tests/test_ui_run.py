@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from .db_helpers import db_execute, db_fetch_one, write_preview_summary
+from tests.db_helpers import db_execute, db_fetch_one, write_preview_summary
 
 import asyncio
 import base64
@@ -12,24 +12,24 @@ from urllib.parse import parse_qs, urlparse
 from app.main_util import TEXTAREA_MAX_BYTES
 from app.service.statement.render import statement_title_for_language
 from app.service.statement.signature import statement_sources_signature
-from .common import E2ETestBase
+from tests.common import E2ETestBase
 
-from .ui_support import (
+from tests.ui_support import (
     Path,
     UIHelpersMixin,
     _flash_messages_from_response,
     _request,
     _wait_for_row,
-    tests_page as ui_tests_page,
-    tests_spec_add_gen as add_gen_call,
-    tests_spec_edit as edit_spec_call,
-    tests_spec_add_manual as add_manual_call,
-    tests_spec_add_manual_upload as add_manual_upload_call,
-    tests_spec_delete as delete_spec_call,
-    tests_spec_gen_script_save as save_gen_script_call,
-    tests_spec_payload_download as download_payload_call,
-    tests_spec_payload_upload as upload_payload_call,
-    tests_spec_reindex as reindex_spec_call,
+    tests_page,
+    tests_spec_add_gen,
+    tests_spec_edit,
+    tests_spec_add_manual,
+    tests_spec_add_manual_upload,
+    tests_spec_delete,
+    tests_spec_gen_script_save,
+    tests_spec_payload_download,
+    tests_spec_payload_upload,
+    tests_spec_reindex,
     config,
     general_page,
     git_commit,
@@ -312,7 +312,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             for p in generator_dir.glob("*.in"):
                 p.unlink(missing_ok=True)
 
-        add_manual = add_manual_call(
+        add_manual = tests_spec_add_manual(
             problem="alice/sample",
             user="alice",
             test_id="001",
@@ -325,7 +325,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         self.assertIsNone(add_manual_query.get("mode"))
         self.assertEqual(add_manual_query.get("focus"), ["1"])
 
-        add_gen = add_gen_call(
+        add_gen = tests_spec_add_gen(
             problem="alice/sample",
             user="alice",
             test_id="002",
@@ -349,7 +349,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         self.assertNotIn("\r", manual_payload)
         self.assertEqual((generator_dir / "002.in").read_text(encoding="utf-8"), "gen 10 20")
 
-        edit_gen = edit_spec_call(
+        edit_gen = tests_spec_edit(
             problem="alice/sample",
             user="alice",
             index="2",
@@ -361,7 +361,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         self.assertEqual(edit_gen.status_code, 303)
         self.assertEqual((generator_dir / "002.in").read_text(encoding="utf-8"), "gen 99")
 
-        reindex = reindex_spec_call(
+        reindex = tests_spec_reindex(
             problem="alice/sample",
             user="alice",
             test_id="002",
@@ -371,7 +371,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         reindex_loc = str(reindex.headers.get("location", ""))
         self.assertIn("focus=1", reindex_loc)
 
-        delete_second = delete_spec_call(
+        delete_second = tests_spec_delete(
             problem="alice/sample",
             user="alice",
             index="2",
@@ -386,7 +386,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         self.assertTrue(bool(tests_after[0].get("sample")))
         self.assertEqual((generator_dir / "002.in").read_text(encoding="utf-8"), "gen 99")
 
-        page = ui_tests_page(_request("/problems/alice/sample/tests"), "alice/sample", "alice")
+        page = tests_page(_request("/problems/alice/sample/tests"), "alice/sample", "alice")
         html = page.body.decode("utf-8", errors="replace")
         self.assertIn("tests/spec.json", html)
         self.assertIn("tests/generator/002.in", html)
@@ -406,7 +406,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             for p in generator_dir.glob("*.in"):
                 p.unlink(missing_ok=True)
 
-        add_manual = add_manual_call(
+        add_manual = tests_spec_add_manual(
             problem="alice/sample",
             user="alice",
             test_id="001",
@@ -417,7 +417,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         )
         self.assertEqual(add_manual.status_code, 303)
 
-        edit_spec = edit_spec_call(
+        edit_spec = tests_spec_edit(
             problem="alice/sample",
             user="alice",
             index="1",
@@ -435,7 +435,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         self.assertEqual(len(tests), 1)
         self.assertFalse(bool(tests[0].get("sample_output_validate", True)))
 
-        edit_spec_checked = edit_spec_call(
+        edit_spec_checked = tests_spec_edit(
             problem="alice/sample",
             user="alice",
             index="1",
@@ -453,7 +453,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         self.assertEqual(len(tests_checked), 1)
         self.assertTrue(bool(tests_checked[0].get("sample_output_validate", True)))
 
-        page = ui_tests_page(_request("/problems/alice/sample/tests"), "alice/sample", "alice")
+        page = tests_page(_request("/problems/alice/sample/tests"), "alice/sample", "alice")
         html = page.body.decode("utf-8", errors="replace")
         self.assertIn('type="hidden" name="sample_output_validate" value="0"', html)
 
@@ -471,19 +471,19 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
                 p.unlink(missing_ok=True)
 
         self.assertEqual(
-            add_manual_call(problem="alice/sample", user="alice", test_id="001", manual_input="7\n").status_code,
+            tests_spec_add_manual(problem="alice/sample", user="alice", test_id="001", manual_input="7\n").status_code,
             303,
         )
         self.assertEqual(
-            add_gen_call(problem="alice/sample", user="alice", test_id="002", command="gen 10 1").status_code,
+            tests_spec_add_gen(problem="alice/sample", user="alice", test_id="002", command="gen 10 1").status_code,
             303,
         )
         self.assertEqual(
-            add_gen_call(problem="alice/sample", user="alice", test_id="003", command="gen 20 2").status_code,
+            tests_spec_add_gen(problem="alice/sample", user="alice", test_id="003", command="gen 20 2").status_code,
             303,
         )
 
-        updated = save_gen_script_call(
+        updated = tests_spec_gen_script_save(
             problem="alice/sample",
             user="alice",
             gen_script_text="gen 10 1\r\ngen 30 3\r\n",
@@ -499,7 +499,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         self.assertNotIn("\r", (generator_dir / "002.in").read_text(encoding="utf-8"))
         self.assertNotIn("\r", (generator_dir / "003.in").read_text(encoding="utf-8"))
 
-        cleared = save_gen_script_call(problem="alice/sample", user="alice", gen_script_text="")
+        cleared = tests_spec_gen_script_save(problem="alice/sample", user="alice", gen_script_text="")
         self.assertEqual(cleared.status_code, 303)
         payload_after = json.loads(spec_path.read_text(encoding="utf-8"))
         tests_after = payload_after.get("tests") or []
@@ -521,7 +521,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             for p in generator_dir.glob("*.in"):
                 p.unlink(missing_ok=True)
 
-        add_manual = add_manual_call(
+        add_manual = tests_spec_add_manual(
             problem="alice/sample",
             user="alice",
             test_id="001",
@@ -532,7 +532,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         huge_manual = ("A" * 200000) + "\n"
         (manual_dir / "001.in").write_text(huge_manual, encoding="utf-8")
 
-        page = ui_tests_page(_request("/problems/alice/sample/tests"), "alice/sample", "alice")
+        page = tests_page(_request("/problems/alice/sample/tests"), "alice/sample", "alice")
         self.assertEqual(page.status_code, 200)
         html = page.body.decode("utf-8", errors="replace")
         self.assertIn("Inline payload editor is disabled for large manual tests.", html)
@@ -557,7 +557,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             for p in generator_dir.glob("*.in"):
                 p.unlink(missing_ok=True)
 
-        add_manual = add_manual_call(
+        add_manual = tests_spec_add_manual(
             problem="alice/sample",
             user="alice",
             test_id="001",
@@ -567,7 +567,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
 
         upload_payload = self._FakeUpload(b"7 8 9  \r\n10 11\t \r\n")
         uploaded = asyncio.run(
-            upload_payload_call(
+            tests_spec_payload_upload(
                 problem="alice/sample",
                 user="alice",
                 index="1",
@@ -578,7 +578,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         self.assertIn("/problems/alice/sample/tests", uploaded.headers.get("location", ""))
         self.assertEqual((manual_dir / "001.in").read_text(encoding="utf-8"), "7 8 9\n10 11\n")
 
-        downloaded = download_payload_call(problem="alice/sample", user="alice", index="1")
+        downloaded = tests_spec_payload_download(problem="alice/sample", user="alice", index="1")
         self.assertEqual(downloaded.status_code, 200)
         self.assertIn("001.in", str(downloaded.headers.get("content-disposition", "")))
 
@@ -597,7 +597,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             for p in generator_dir.glob("*.in"):
                 p.unlink(missing_ok=True)
 
-        add_manual = add_manual_call(
+        add_manual = tests_spec_add_manual(
             problem="alice/sample",
             user="alice",
             test_id="001",
@@ -606,7 +606,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         self.assertEqual(add_manual.status_code, 303)
 
         uploaded = asyncio.run(
-            upload_payload_call(
+            tests_spec_payload_upload(
                 problem="alice/sample",
                 user="alice",
                 index="1",
@@ -634,7 +634,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             for p in generator_dir.glob("*.in"):
                 p.unlink(missing_ok=True)
 
-        add_manual = add_manual_call(
+        add_manual = tests_spec_add_manual(
             problem="alice/sample",
             user="alice",
             test_id="001",
@@ -643,7 +643,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         self.assertEqual(add_manual.status_code, 303)
 
         uploaded = asyncio.run(
-            upload_payload_call(
+            tests_spec_payload_upload(
                 problem="alice/sample",
                 user="alice",
                 index="1",
@@ -668,7 +668,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             for p in generator_dir.glob("*.in"):
                 p.unlink(missing_ok=True)
 
-        add_manual = add_manual_call(
+        add_manual = tests_spec_add_manual(
             problem="alice/sample",
             user="alice",
             test_id="001",
@@ -678,7 +678,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
 
         with patch("app.main_util.UPLOAD_MAX_BYTES", 8):
             uploaded = asyncio.run(
-                upload_payload_call(
+                tests_spec_payload_upload(
                     problem="alice/sample",
                     user="alice",
                     index="1",
@@ -705,7 +705,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
 
         upload = self._FakeUpload(b"11 22  \r\n33 44\t \r\n")
         created = asyncio.run(
-            add_manual_upload_call(
+            tests_spec_add_manual_upload(
                 problem="alice/sample",
                 user="alice",
                 test_id="",
@@ -744,7 +744,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
                 p.unlink(missing_ok=True)
 
         created = asyncio.run(
-            add_manual_upload_call(
+            tests_spec_add_manual_upload(
                 problem="alice/sample",
                 user="alice",
                 test_id="",
@@ -779,7 +779,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
                 p.unlink(missing_ok=True)
 
         created = asyncio.run(
-            add_manual_upload_call(
+            tests_spec_add_manual_upload(
                 problem="alice/sample",
                 user="alice",
                 test_id="",
@@ -807,7 +807,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
 
         with patch("app.main_util.UPLOAD_MAX_BYTES", 8):
             created = asyncio.run(
-                add_manual_upload_call(
+                tests_spec_add_manual_upload(
                     problem="alice/sample",
                     user="alice",
                     test_id="",
@@ -820,8 +820,8 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         self.assertFalse((manual_dir / "001.in").exists())
 
     def test_tests_page_includes_templates_examples_and_mode_controls(self) -> None:
-        add_manual_call(problem="alice/sample", user="alice", test_id="001", manual_input="1\n")
-        page = ui_tests_page(_request("/problems/alice/sample/tests"), "alice/sample", "alice")
+        tests_spec_add_manual(problem="alice/sample", user="alice", test_id="001", manual_input="1\n")
+        page = tests_page(_request("/problems/alice/sample/tests"), "alice/sample", "alice")
         self.assertEqual(page.status_code, 200)
         html = page.body.decode("utf-8", errors="replace")
         self.assertIn('data-popup-open="tests-add-manual-popup"', html)
@@ -1488,8 +1488,8 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         (ws / "solutions").mkdir(parents=True, exist_ok=True)
         (ws / "solutions" / "accepted.cpp").write_text("int main(){return 0;}\n", encoding="utf-8")
 
-        add_manual_1 = add_manual_call(problem=problem, user="alice", test_id="001", manual_input="1\n")
-        add_manual_2 = add_manual_call(problem=problem, user="alice", test_id="002", manual_input="2\n")
+        add_manual_1 = tests_spec_add_manual(problem=problem, user="alice", test_id="001", manual_input="1\n")
+        add_manual_2 = tests_spec_add_manual(problem=problem, user="alice", test_id="002", manual_input="2\n")
         self.assertEqual(add_manual_1.status_code, 303)
         self.assertEqual(add_manual_2.status_code, 303)
 

@@ -6,16 +6,16 @@ from pathlib import Path
 from urllib.parse import quote_plus
 from fastapi import HTTPException
 from app.impl.runtime.config import config
-from .artifact import (
+from app.impl.workspace.artifact import (
     artifact_root,
 )
-from .context import (
+from app.impl.workspace.context import (
     count_label,
 )
-from .solution import (
+from app.impl.workspace.solution import (
     list_solution_sources,
 )
-from .test_spec import (
+from app.impl.workspace.test_spec import (
     read_tests_spec,
     tests_spec_payload_file_path,
     tests_spec_payload_rel_path,

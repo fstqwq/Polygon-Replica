@@ -9,8 +9,8 @@ from app.impl.runtime.config import config
 from app.impl.workspace.context_operation import audit
 from app.impl.workspace.access import workspace_access_context
 
-from .common import _normalize_transferable_contest_member_role_required
-from .shared import _contest_ctx, _contest_redirect
+from app.impl.contest.common import _normalize_transferable_contest_member_role_required
+from app.impl.contest.shared import _contest_ctx, _contest_redirect
 
 
 def _contest_sync_candidate_problems(contest_id: int, actor_user_id: int) -> tuple[list[dict[str, object]], int]:

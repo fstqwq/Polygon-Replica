@@ -15,8 +15,8 @@ from app.service.judgehost.runtime import (
 )
 from app.service.judgehost.shared import domjudge_lower_text, domjudge_text
 
-from .batch_scheduler_models import JudgehostCaseRow, ExecutionBatchRow
-from .batch_scheduler_models import CaseResult
+from app.service.judgehost.batch_scheduler_models import JudgehostCaseRow, ExecutionBatchRow
+from app.service.judgehost.batch_scheduler_models import CaseResult
 
 logger = logging.getLogger(__name__)
 _DomjudgeCacheEntry = TypedDict(

@@ -8,8 +8,8 @@ from app.service.problem.solution_metadata import normalize_expected_behavior
 from app.service.verification.task_store import VerificationTaskStore
 from app.service.verification.types import Kind, Status
 
-from .context_run_detail import normalize_run_id_token
-from .context_ui import page_ctx
+from app.impl.workspace.context_run_detail import normalize_run_id_token
+from app.impl.workspace.context_ui import page_ctx
 
 
 def allocate_run_id() -> str:

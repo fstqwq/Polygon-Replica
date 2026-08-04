@@ -8,7 +8,7 @@ from pathlib import Path
 from app.impl.runtime.config import config
 
 from app.service.verification.plan import VerificationTestPlan
-from .verification_payload import prepared_payload_for_uploaded_source
+from app.impl.workspace.verification_payload import prepared_payload_for_uploaded_source
 
 
 @dataclass(frozen=True)

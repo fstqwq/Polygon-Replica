@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from .common import E2ETestBase
-from .db_helpers import db_fetch_one
-from .ui_support import (
+from tests.common import E2ETestBase
+from tests.db_helpers import db_fetch_one
+from tests.ui_support import (
     UIHelpersMixin,
     _request,
     config,

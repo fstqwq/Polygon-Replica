@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from .db_helpers import db_execute, db_fetch_all, db_fetch_one
+from tests.db_helpers import db_execute, db_fetch_all, db_fetch_one
 
 import io
 import json
@@ -13,14 +13,14 @@ import zipfile
 from pathlib import Path
 from unittest.mock import patch
 
-from .common import E2ETestBase
-from .ui_support import _flash_messages_from_response, _request
-from app.impl.run_export import export as export_page_module
-from app.impl.run_export import import_source as export_import_module
+from tests.common import E2ETestBase
+from tests.ui_support import _flash_messages_from_response, _request
+import app.impl.run_export.export as export_page_module
+import app.impl.run_export.import_source as export_import_module
 from app.impl.run_export.import_source import import_package_as_new_problem
 from app.impl.workspace.context_job import _icpc_verification_has_complete_artifacts, _run_export_create_worker
 from app.impl.runtime.config import config
-from app.service.importing import native as native_import_module
+import app.service.importing.native as native_import_module
 from app.service.platform.git_process import run_git
 from app.service.importing.native import NativePackageImportService
 from app.service.sandbox.base import ExecResult

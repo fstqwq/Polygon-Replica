@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from .db_helpers import (
+from tests.db_helpers import (
     db_execute,
     db_fetch_one,
     judgehost_cases_for_run,
@@ -24,7 +24,7 @@ from unittest.mock import patch
 from fastapi.testclient import TestClient
 from starlette.formparsers import MultiPartParser
 
-from app.impl.workspace.verification_dag import _prepared_payload_for_uploaded_source
+from app.impl.workspace.verification_payload import prepared_payload_for_uploaded_source
 from app.service.verification.plan import VerificationTestPlan
 from app.service.judgehost.case_result import build_case_result
 from app.service.judgehost.batch_scheduler import BatchScheduler
@@ -40,7 +40,7 @@ from app.service.verification.task_scheduler import (
     unregister_verification_runtime_coordinator,
 )
 from app.service.verification.task_store import VerificationTaskStore
-from .common import E2ETestBase, config
+from tests.common import E2ETestBase, config
 
 
 def _canonical_verification_id(label: str) -> str:
@@ -1074,7 +1074,7 @@ class TestJudgehostService(E2ETestBase):
             "  return 0;\n"
             "}\n"
         ).encode("utf-8")
-        prepared = _prepared_payload_for_uploaded_source(
+        prepared = prepared_payload_for_uploaded_source(
             source_label="gen.cpp",
             run_id=run_id,
             test_name="001.in",
@@ -5751,7 +5751,7 @@ class TestJudgehostService(E2ETestBase):
         run_id_b = f"r-jh-grouped-generate-b-{uuid.uuid4().hex[:8]}"
         self.assertNotEqual(run_id_a, run_id_b)
 
-        prepared_a = _prepared_payload_for_uploaded_source(
+        prepared_a = prepared_payload_for_uploaded_source(
             source_label="gen.cpp",
             run_id=run_id_a,
             test_name="001.in",
@@ -5800,7 +5800,7 @@ class TestJudgehostService(E2ETestBase):
             },
         )
 
-        prepared_b = _prepared_payload_for_uploaded_source(
+        prepared_b = prepared_payload_for_uploaded_source(
             source_label="gen.cpp",
             run_id=run_id_b,
             test_name="002.in",
@@ -5931,7 +5931,7 @@ class TestJudgehostService(E2ETestBase):
         }
         run_id_a = f"r-jh-grouped-batch-one-a-{uuid.uuid4().hex[:8]}"
         run_id_b = f"r-jh-grouped-batch-one-b-{uuid.uuid4().hex[:8]}"
-        prepared_a = _prepared_payload_for_uploaded_source(
+        prepared_a = prepared_payload_for_uploaded_source(
             source_label="gen.cpp",
             run_id=run_id_a,
             test_name="003.in",
@@ -5940,7 +5940,7 @@ class TestJudgehostService(E2ETestBase):
             verification_payload_base=payload_base,
             extra_sources_b64={"testlib.h": extra_testlib},
         )
-        prepared_b = _prepared_payload_for_uploaded_source(
+        prepared_b = prepared_payload_for_uploaded_source(
             source_label="gen.cpp",
             run_id=run_id_b,
             test_name="004.in",

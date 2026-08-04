@@ -10,14 +10,14 @@ from app.service.repository.workspace import WorkspaceService
 from app.service.verification.task_store import VerificationTaskStore
 from app.setting import Settings
 
-from .core import JudgehostCore
-from .cleanup import JudgehostTerminalCleanup
-from .dispatch import DispatchHandler
-from .enqueue import TaskEnqueue
-from .result import ResultProcessor
-from .state import JudgehostState
-from .task_queue import TaskQueue
-from .toolkit import DomjudgeToolkit
+from app.service.judgehost.core import JudgehostCore
+from app.service.judgehost.cleanup import JudgehostTerminalCleanup
+from app.service.judgehost.dispatch import DispatchHandler
+from app.service.judgehost.enqueue import TaskEnqueue
+from app.service.judgehost.result import ResultProcessor
+from app.service.judgehost.state import JudgehostState
+from app.service.judgehost.task_queue import TaskQueue
+from app.service.judgehost.toolkit import DomjudgeToolkit
 
 
 class Judgehost:

@@ -11,7 +11,7 @@ from fastapi import HTTPException
 from app.main_util import problem_slug_leaf
 from app.impl.auth.shared import redirect_response
 from app.impl.runtime.config import config
-from .common import _contest_problem_slug_file_token
+from app.impl.contest.common import _contest_problem_slug_file_token
 from app.impl.workspace.context_operation import audit, normalize_contest_slug_required
 from app.impl.workspace.context_job import prepare_icpc_export_verification
 from app.impl.workspace.context import global_user_ctx

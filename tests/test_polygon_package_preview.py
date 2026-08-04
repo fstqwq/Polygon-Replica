@@ -4,8 +4,8 @@ from unittest.mock import patch
 
 from app.service.statement.render import render_statement_main
 
-from .common import E2ETestBase, config
-from .db_helpers import db_fetch_one, read_preview_summary
+from tests.common import E2ETestBase, config
+from tests.db_helpers import db_fetch_one, read_preview_summary
 
 
 class TestPolygonPackagePreview(E2ETestBase):

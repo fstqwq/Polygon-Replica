@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from .contest_support import ContestActionBase
-from .db_helpers import db_execute, db_fetch_one
-from .ui_support import (
+from tests.contest_support import ContestActionBase
+from tests.db_helpers import db_execute, db_fetch_one
+from tests.ui_support import (
     _flash_messages_from_response,
     config,
     contest_access_revoke,

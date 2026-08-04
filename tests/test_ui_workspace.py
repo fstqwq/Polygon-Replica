@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from .db_helpers import db_execute, db_fetch_all, db_fetch_one
+from tests.db_helpers import db_execute, db_fetch_all, db_fetch_one
 
 import asyncio
 import io
@@ -24,10 +24,10 @@ from app.service.statement.constant import (
 )
 from app.service.statement.render import ensure_statement_language_sources
 from app.impl.run_export.import_source import import_package_as_new_problem
-from .package_builders import polygon_contest_package, polygon_problem_package
-from .common import E2ETestBase
+from tests.package_builders import polygon_contest_package, polygon_problem_package
+from tests.common import E2ETestBase
 
-from .ui_support import (
+from tests.ui_support import (
     AUTH_COOKIE_NAME,
     Path,
     UIHelpersMixin,
