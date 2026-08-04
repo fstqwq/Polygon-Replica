@@ -20,8 +20,8 @@ class BatchSchedulerResultMixin:
     def batch_finalize_row(self, batch_id: int) -> dict[str, object] | None:
         fields = (
             "execution_signature", "status", "compile_success",
-            "compile_output_b64", "compile_metadata_b64", "debug_text", "work_root",
-            "run_config_json", "source_path", "source_name", "compile_hash", "run_hash",
+            "compile_output_b64", "compile_metadata_b64", "debug_text",
+            "run_config_json", "source_name", "compile_hash", "run_hash",
             "compare_hash", "materialization_state", "failure_runresult", "failure_text",
         )
         with self._lock:
@@ -201,10 +201,8 @@ class BatchSchedulerResultMixin:
                 "case_status": case.status,
                 "case_lease_owner": case.lease_owner,
                 "run_id": case.run_id,
-                "work_root": batch.work_root,
                 "mode": batch.mode,
                 "source_name": batch.source_name,
-                "source_path": batch.source_path,
                 "batch_status": batch.status,
                 "execution_signature": batch.execution_signature,
                 "source_hash": batch.source_hash,
@@ -223,11 +221,10 @@ class BatchSchedulerResultMixin:
             if case_id is None:
                 return None
             case = self._cases[case_id]
-            output_ref = "" if case.result is None else case.result.output_run_rel
+            output_ref = "" if case.result is None else case.result.output_run_ref
             return {
                 "id": case.id,
-                "output_run_rel": output_ref,
-                "work_root": self._batches[case.batch_id].work_root,
+                "output_run_ref": output_ref,
             }
 
     def case_for_task(self, task_id: str, test_name: str) -> dict[str, object] | None:
@@ -241,7 +238,6 @@ class BatchSchedulerResultMixin:
                 **self._case_row(case),
                 "batch_id": batch.batch_id,
                 "batch_status": batch.status,
-                "work_root": batch.work_root,
                 "compile_success": batch.compile_success,
             }
 

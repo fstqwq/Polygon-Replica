@@ -1,14 +1,11 @@
 from __future__ import annotations
 
 import secrets
-from pathlib import Path
 from typing import TypedDict
 
 from app.db import DB, now_iso
 from app.service.platform.error_text import bounded_display_text
-from app.service.platform.fs.layout import FsManager
 from app.service.verification.types import ACTIVE, Kind, Status
-from app.setting import load_settings
 
 
 class VerificationStatusRow(TypedDict):
@@ -44,12 +41,8 @@ class WorkspaceVerificationRow(TypedDict):
 
 
 class VerificationStore:
-    def __init__(self, db: DB, fs_manager: FsManager | None = None):
+    def __init__(self, db: DB):
         self.db = db
-        if fs_manager is None:
-            settings = load_settings()
-            fs_manager = FsManager(settings.cache_root, settings.artifacts_root)
-        self._fs_manager = fs_manager
 
     def allocate_id(self) -> str:
         for _ in range(8):
@@ -57,9 +50,6 @@ class VerificationStore:
             if self.db.fetch_one("SELECT id FROM verifications WHERE id=?", [candidate]) is None:
                 return candidate
         return f"ver-{secrets.token_hex(8)}"
-
-    def _verification_root(self, verification_id: str) -> Path:
-        return self._fs_manager.resolve_verification_root(verification_id)
 
     def _record_row(self, row: dict[str, object]) -> VerificationRecordRow:
         workspace_id_raw = row["workspace_id"]
@@ -115,7 +105,6 @@ class VerificationStore:
 
     def create_or_update_record(
         self,
-        _fs_manager: FsManager,
         *,
         verification_id: str,
         problem_id: int,
@@ -124,9 +113,7 @@ class VerificationStore:
         source_commit: str,
         kind: str,
         status: str,
-    ) -> str:
-        root = self._verification_root(verification_id)
-        root.mkdir(parents=True, exist_ok=True)
+    ) -> None:
         now_text = now_iso()
         existing = self.db.fetch_one("SELECT id FROM verifications WHERE id=?", [verification_id])
         params = [
@@ -160,7 +147,6 @@ class VerificationStore:
                 """,
                 [*params, verification_id],
             )
-        return str(root)
 
     def cancel_active_verification(self, verification_id: str, *, reason: str, now_text: str) -> bool:
         cancel_reason = bounded_display_text(reason or "verification cancelled by user")
@@ -193,27 +179,6 @@ class VerificationStore:
             return int(cursor.rowcount or 0)
 
         return int(self.db.write_transaction(_tx)) > 0
-
-    def artifact_path_for_problem_artifact(self, problem_id: int, artifact_id: str) -> str:
-        if artifact_id.startswith("p-"):
-            row = self.db.fetch_one(
-                "SELECT id FROM previews WHERE id=? AND problem_id=?",
-                [artifact_id, problem_id],
-            )
-            return "" if row is None else str(self._fs_manager.resolve_preview_root(artifact_id))
-        row = self.db.fetch_one(
-            "SELECT id FROM verifications WHERE id=? AND problem_id=?",
-            [artifact_id, problem_id],
-        )
-        if row is None:
-            return ""
-        return str(self._verification_root(artifact_id))
-
-    def artifact_path_for_verification(self, verification_id: str) -> str:
-        row = self.db.fetch_one("SELECT id FROM verifications WHERE id=?", [verification_id])
-        if row is None:
-            return ""
-        return str(self._verification_root(verification_id))
 
     def list_rows(
         self,

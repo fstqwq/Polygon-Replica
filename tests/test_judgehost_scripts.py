@@ -9,7 +9,6 @@ from types import SimpleNamespace
 
 from app.runtime_value import build_runtime_values
 from app.service.judgehost.toolkit import DomjudgeToolkit
-from app.service.platform.judge_fs_index import JudgeFsIndexService
 
 
 config = SimpleNamespace(constants=build_runtime_values(), judgehost_task_service=None)
@@ -20,10 +19,8 @@ class TestJudgehostScripts(unittest.TestCase):
         self._root = tempfile.TemporaryDirectory(prefix="judgehost-scripts-")
         self.addCleanup(self._root.cleanup)
         config.constants = build_runtime_values()
-        cache = JudgeFsIndexService(Path(self._root.name))
         state = SimpleNamespace(
             constants=config.constants,
-            judge_fs_index_service=cache,
         )
         config.judgehost_task_service = SimpleNamespace(toolkit=DomjudgeToolkit(state))
 

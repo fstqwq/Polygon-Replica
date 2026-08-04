@@ -453,7 +453,7 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
             diagnostics_json="[]",
             error_text="validator rejected generated input for 001.in",
             feedback_text="validator rejected generated input for 001.in",
-            output_ref="cache://case/output/001.out",
+            output_ref="blob://sha256/" + ("1" * 64),
             fail_flag_reason="generate-input / generators/gen.cpp / 001.in: validator rejected generated input for 001.in",
         )
 

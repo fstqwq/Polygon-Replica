@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import unittest
+from pathlib import Path
 
 from app.service.judgehost.batch_scheduler import BatchScheduler
 from app.service.judgehost.batch_scheduler_models import (
@@ -11,6 +12,7 @@ from app.service.judgehost.batch_scheduler_models import (
 )
 from app.service.judgehost.case_result import build_case_result
 from app.service.judgehost.identity import domjudge_submit_id
+from app.service.platform.runtime_blob_store import PayloadFile
 
 
 _NOW = "2026-08-03T01:00:00+00:00"
@@ -28,13 +30,13 @@ def _result(test_name: str):
         wall_sec=0.002,
         memory_kb=1024,
         score_text="",
-        output_run_rel="",
-        output_error_rel="",
-        output_system_rel="",
-        output_diff_rel="",
-        metadata_rel="",
-        compare_metadata_rel="",
-        team_message_rel="",
+        output_run_ref="",
+        output_error_ref="",
+        output_system_ref="",
+        output_diff_ref="",
+        metadata_ref="",
+        compare_metadata_ref="",
+        team_message_ref="",
         feedback_text="",
         feedback_files=[],
         answer_correct=False,
@@ -63,15 +65,17 @@ class TestHostTelemetryStore(unittest.TestCase):
                 compile_key=_COMPILE_KEY,
                 submit_id=domjudge_submit_id(_COMPILE_KEY),
                 source_name="ac.cpp",
-                source_bytes=b"int main(){}\n",
+                source_file=PayloadFile(
+                    path=Path("/tmp/telemetry-ac.cpp"),
+                    size=13,
+                    identity=hashlib.sha256(b"int main(){}\n").hexdigest(),
+                ),
                 extra_source_items=(),
                 compile_files=(),
             ),
             contest_id="default",
             mode="pass-fail",
             source_name="ac.cpp",
-            source_path="/tmp/source/ac.cpp",
-            work_root=f"/tmp/batch-{self.sequence}",
             compile_hash="2" * 32,
             run_hash="3" * 32,
             compare_hash="4" * 32,
@@ -102,6 +106,15 @@ class TestHostTelemetryStore(unittest.TestCase):
                 }
                 for index in range(1, case_count + 1)
             ],
+        )
+        self.assertTrue(self.scheduler.claim_materialization(batch_id, now_text=_NOW))
+        self.assertTrue(
+            self.scheduler.finish_materialization(
+                batch_id,
+                success=True,
+                error_text="",
+                now_text=_NOW,
+            )
         )
         self.scheduler.record_compile_result(
             batch_id,

@@ -5,19 +5,13 @@ import json
 import logging
 import re
 import shlex
-import uuid
 from pathlib import Path
 
-from app.service.judgehost.artifact import domjudge_read_artifact_blob, resolve_artifact_blob
 from app.service.judgehost.domjudge.cache import (
-    domjudge_cache_blob_ref,
     domjudge_case_cache_ref,
-    domjudge_manifest_digest,
-    domjudge_parse_cache_blob_ref,
     domjudge_set_hash_from_blobs,
 )
 from app.service.judgehost.shared import (
-    _DOMJUDGE_CACHE_NAME_RE,
     _DOMJUDGE_CONTEST_ID_RE,
     _DOMJUDGE_PROTOCOL_TRACE_BYTES_RE,
     _DOMJUDGE_PROTOCOL_TRACE_RE,
@@ -29,8 +23,9 @@ from app.service.judgehost.shared import (
     domjudge_text,
 )
 from app.service.judgehost.runtime import domjudge_bool, domjudge_parse_float, domjudge_parse_int
-from app.service.platform.hashing import compile_command_digest, sha256_hex_bytes, sha256_hex_text
-from app.service.platform.judge_fs_index import JudgeFsIndexService
+from app.service.platform.hashing import compile_command_digest, sha256_hex_text
+from app.service.platform.runtime_blob_store import PayloadFile
+from app.service.platform.runtime_cache_index import RuntimeCacheEntry, RuntimeCacheIndex
 
 from app.service.judgehost.state import JudgehostState
 
@@ -38,8 +33,8 @@ logger = logging.getLogger(__name__)
 
 
 class DomjudgeToolkit:
-    CASE_CACHE_KIND = JudgeFsIndexService.KIND_CASE
-    EXECUTABLE_CACHE_KIND = JudgeFsIndexService.KIND_EXECUTABLE
+    CASE_CACHE_KIND = RuntimeCacheIndex.RESULT
+    EXECUTABLE_CACHE_KIND = RuntimeCacheIndex.EXECUTABLE
     _EXECUTABLE_KINDS = frozenset({"compile", "run", "compare"})
     _EXECUTABLE_HASH_RE = re.compile(r"^[0-9a-f]{32}$")
     _EXECUTABLE_CACHE_SIGNATURE = sha256_hex_text("domjudge-executable-cache-v1")
@@ -66,12 +61,6 @@ class DomjudgeToolkit:
         if not _DOMJUDGE_CONTEST_ID_RE.fullmatch(token):
             return "local"
         return token
-
-    def work_root(self, task_id: str) -> Path:
-        safe = re.sub(r"[^A-Za-z0-9._-]+", "-", domjudge_text(task_id)).strip("-")
-        if not safe:
-            safe = f"task-{uuid.uuid4().hex[:8]}"
-        return (self._s.fs_manager.judgehost_runs_root / safe).resolve()
 
     @staticmethod
     def b64_decode(text: str | bytes | bytearray | memoryview | None) -> bytes:
@@ -102,86 +91,6 @@ class DomjudgeToolkit:
         except TypeError:
             return DomjudgeToolkit.b64_decode(value)
 
-    def manifest_from_files(self, files: dict[str, bytes]) -> tuple[list[dict[str, object]], str]:
-        rows: list[dict[str, object]] = []
-        for raw_name, raw_blob in sorted(files.items(), key=lambda item: domjudge_text(item[0])):
-            path = domjudge_path_name(raw_name)
-            if (not path) or (_DOMJUDGE_CACHE_NAME_RE.fullmatch(path) is None):
-                continue
-            blob = raw_blob
-            sha256_text = sha256_hex_bytes(blob)
-            size_value = int(len(blob))
-            mode = "0644"
-            blob_key = f"{sha256_text}:{size_value}:{mode}"
-            rows.append(
-                {
-                    "path": path,
-                    "blob_key": blob_key,
-                    "sha256": sha256_text,
-                    "size": size_value,
-                    "mode": mode,
-                }
-            )
-        return rows, domjudge_manifest_digest(rows)
-
-    def validate_cache_entry(
-        self,
-        *,
-        entry: dict[str, object],
-    ) -> bool:
-        value_map = dict(entry["value"])
-        files_map = dict(entry["files"])
-        manifest_raw = list(value_map["manifest"])
-        manifest_rows: list[dict[str, object]] = []
-        for raw in manifest_raw:
-            path = domjudge_path_name(raw["path"])
-            if (not path) or (_DOMJUDGE_CACHE_NAME_RE.fullmatch(path) is None):
-                return False
-            sha = domjudge_lower_text(raw["sha256"])
-            if re.fullmatch(r"[0-9a-f]{64}", sha) is None:
-                return False
-            mode = domjudge_text(raw["mode"], default="0644")
-            size = max(0, int(raw["size"]))
-            blob_key = domjudge_text(raw["blob_key"])
-            if not blob_key:
-                return False
-            manifest_rows.append(
-                {
-                    "path": path,
-                    "blob_key": blob_key,
-                    "sha256": sha,
-                    "size": size,
-                    "mode": mode,
-                }
-            )
-        declared_digest = domjudge_lower_text(value_map.get("manifest_digest"))
-        computed_digest = domjudge_manifest_digest(manifest_rows)
-        if (not declared_digest) or (declared_digest != computed_digest):
-            return False
-        manifest_paths = {str(item["path"]) for item in manifest_rows}
-        file_paths = {domjudge_path_name(name) for name in files_map.keys()}
-        if manifest_paths != file_paths:
-            return False
-        seen_blob: dict[str, tuple[str, int]] = {}
-        for row in manifest_rows:
-            path = str(row["path"])
-            file_meta = files_map.get(path)
-            if file_meta is None:
-                return False
-            meta_sha = domjudge_lower_text(file_meta["sha256"])
-            meta_size = max(0, int(file_meta["size"]))
-            if meta_sha != str(row["sha256"]) or meta_size != int(row["size"]):
-                return False
-            blob_key = str(row["blob_key"])
-            expected = (str(row["sha256"]), int(row["size"]))
-            existing = seen_blob.get(blob_key)
-            if existing is not None:
-                if existing != expected:
-                    return False
-                continue
-            seen_blob[blob_key] = expected
-        return True
-
     def case_cache_ref(
         self,
         *,
@@ -207,101 +116,52 @@ class DomjudgeToolkit:
             testcase_hash=testcase_hash,
         )
 
-    def cache_get(self, kind: str, key_hash: str, signature: str) -> dict[str, object] | None:
-        service = self._s.judge_fs_index_service
-        if service is None:
-            return None
-        entry = service.get(kind=kind, key_hash=key_hash, signature=signature)
-        if entry is None:
-            return None
-        resolved = {
-            "key_hash": key_hash,
-            "signature": signature,
-            "value": dict(entry["value"]),
-            "tags": dict(entry["tags"]),
-            "files": dict(entry["files"]),
-            "created_at": domjudge_text(entry.get("created_at")),
-            "updated_at": domjudge_text(entry.get("updated_at")),
+    @staticmethod
+    def _cache_entry_dict(entry: RuntimeCacheEntry) -> dict[str, object]:
+        return {
+            "key_hash": entry.key_hash,
+            "signature": entry.signature,
+            "value": dict(entry.value),
+            "tags": dict(entry.tags),
+            "files": {
+                name: {
+                    "size": payload.size,
+                    "sha256": payload.identity,
+                    "blob_ref": payload.blob_ref,
+                }
+                for name, payload in entry.files.items()
+            },
+            "created_at": entry.created_at,
+            "updated_at": entry.updated_at,
         }
-        if not self.validate_cache_entry(
-            entry=resolved,
-        ):
-            self.cache_delete(kind=kind, key_hash=key_hash, signature=signature)
-            return None
-        return resolved
 
-    def cache_get_with_blobs(
+    def cache_get_with_payloads(
         self,
         kind: str,
         key_hash: str,
         signature: str,
         *,
         names: list[str],
-    ) -> tuple[dict[str, object], dict[str, bytes]] | None:
-        service = self._s.judge_fs_index_service
-        if service is None:
-            return None
-        result = service.get_with_blobs(
-            kind=kind,
+    ) -> tuple[dict[str, object], dict[str, PayloadFile]] | None:
+        entry = self._s.runtime_cache_index.get(
+            namespace=kind,
             key_hash=key_hash,
             signature=signature,
-            names=names,
         )
-        if result is None:
+        if entry is None:
             return None
-        entry, blobs = result
-        resolved = {
-            "key_hash": key_hash,
-            "signature": signature,
-            "value": dict(entry["value"]),
-            "tags": dict(entry["tags"]),
-            "files": dict(entry["files"]),
-            "created_at": domjudge_text(entry.get("created_at")),
-            "updated_at": domjudge_text(entry.get("updated_at")),
-        }
-        if not self.validate_cache_entry(entry=resolved):
-            self.cache_delete(kind=kind, key_hash=key_hash, signature=signature)
-            return None
-        return (resolved, blobs)
-
-    def cache_put(
-        self,
-        kind: str,
-        key_hash: str,
-        signature: str,
-        value: dict[str, object],
-        *,
-        files: dict[str, bytes] | None = None,
-        tags: dict[str, object] | None = None,
-    ) -> str:
-        service = self._s.judge_fs_index_service
-        if service is None:
-            return ""
-        service.put(
-            kind=kind,
-            key_hash=key_hash,
-            signature=signature,
-            value=value,
-            files=files,
-            tags=tags,
-        )
-        return signature
+        resolved = self._cache_entry_dict(entry)
+        selected = {name: entry.files[name] for name in names if name in entry.files}
+        return (resolved, selected)
 
     def cache_delete(self, kind: str, key_hash: str, signature: str) -> None:
-        service = self._s.judge_fs_index_service
-        if service is None:
-            return
-        service.delete(kind=kind, key_hash=key_hash, signature=signature)
+        self._s.runtime_cache_index.delete(namespace=kind, key_hash=key_hash, signature=signature)
 
-    def cache_read_blob(self, kind: str, key_hash: str, signature: str, name: str) -> bytes | None:
-        service = self._s.judge_fs_index_service
-        if service is None:
+    def read_blob_ref(self, blob_ref: str, *, max_bytes: int | None = None) -> bytes | None:
+        descriptor = self._s.runtime_blob_store.descriptor(blob_ref)
+        if descriptor is None:
             return None
-        return service.read_blob(kind=kind, key_hash=key_hash, signature=signature, name=name)
-
-    @staticmethod
-    def cache_blob_ref(*, kind: str, key_hash: str, signature: str, name: str) -> str:
-        return domjudge_cache_blob_ref(kind=kind, key_hash=key_hash, signature=signature, name=name)
+        return self._s.runtime_blob_store.read(descriptor, max_bytes=max_bytes)
 
     def build_cached_case(
         self,
@@ -313,25 +173,20 @@ class DomjudgeToolkit:
         cache_files: dict[str, object] | None = None,
     ) -> dict[str, object]:
         mapping = {
-            "program.out": "output_run_rel",
-            "program.err": "output_error_rel",
-            "system.out": "output_system_rel",
-            "judgemessage.txt": "output_diff_rel",
-            "program.meta": "metadata_rel",
-            "compare.meta": "compare_metadata_rel",
-            "teammessage.txt": "team_message_rel",
+            "program.out": "output_run_ref",
+            "program.err": "output_error_ref",
+            "system.out": "output_system_ref",
+            "judgemessage.txt": "output_diff_ref",
+            "program.meta": "metadata_ref",
+            "compare.meta": "compare_metadata_ref",
+            "teammessage.txt": "team_message_ref",
         }
         rel_map: dict[str, str] = {}
         files_map = {} if cache_files is None else cache_files
         for blob_name, rel_key in mapping.items():
             if blob_name not in files_map:
                 continue
-            rel_map[rel_key] = domjudge_cache_blob_ref(
-                kind=cache_kind,
-                key_hash=cache_key_hash,
-                signature=cache_signature,
-                name=blob_name,
-            )
+            rel_map[rel_key] = domjudge_text(dict(files_map[blob_name]).get("blob_ref"))
         return {
             "runresult": domjudge_lower_text(cache_value.get("runresult"), default="correct"),
             "runtime_sec": domjudge_parse_float(cache_value.get("runtime_sec"), 0.0),
@@ -351,11 +206,8 @@ class DomjudgeToolkit:
         kind: str,
         executable_hash: str,
         files: list[tuple[str, bytes, bool]],
-    ) -> None:
+    ) -> dict[str, PayloadFile]:
         safe_kind, safe_hash = self._executable_cache_identity(kind, executable_hash)
-        service = self._s.judge_fs_index_service
-        if service is None:
-            raise RuntimeError("judge fs index executable store is unavailable")
         file_payloads: dict[str, bytes] = {}
         manifest: list[dict[str, object]] = []
         for name, content, is_executable in sorted(files, key=lambda item: item[0]):
@@ -364,8 +216,8 @@ class DomjudgeToolkit:
                 raise RuntimeError("invalid executable cache file set")
             file_payloads[safe_name] = bytes(content)
             manifest.append({"filename": safe_name, "is_executable": bool(is_executable)})
-        service.put(
-            kind=self.EXECUTABLE_CACHE_KIND,
+        self._s.runtime_cache_index.put(
+            namespace=self.EXECUTABLE_CACHE_KIND,
             key_hash=self._executable_cache_key_hash(safe_kind, safe_hash),
             signature=self._EXECUTABLE_CACHE_SIGNATURE,
             value={
@@ -385,19 +237,14 @@ class DomjudgeToolkit:
         executable_hash: str,
     ) -> list[dict[str, object]] | None:
         safe_kind, safe_hash = self._executable_cache_identity(kind, executable_hash)
-        service = self._s.judge_fs_index_service
-        if service is None:
-            raise RuntimeError("judge fs index executable store is unavailable")
-        cached = service.get_with_blobs(
-            kind=self.EXECUTABLE_CACHE_KIND,
+        entry = self._s.runtime_cache_index.get(
+            namespace=self.EXECUTABLE_CACHE_KIND,
             key_hash=self._executable_cache_key_hash(safe_kind, safe_hash),
             signature=self._EXECUTABLE_CACHE_SIGNATURE,
-            names=None,
         )
-        if cached is None:
+        if entry is None:
             return None
-        entry, blobs = cached
-        value = dict(entry["value"])
+        value = dict(entry.value)
         if (
             value.get("schema") != "domjudge-executable-cache-v1"
             or value.get("kind") != safe_kind
@@ -412,16 +259,16 @@ class DomjudgeToolkit:
             if not isinstance(raw_row, dict):
                 return None
             filename = domjudge_path_name(raw_row.get("filename"))
-            if not filename or filename not in blobs:
+            if not filename or filename not in entry.files:
                 return None
             rows.append(
                 {
                     "filename": filename,
-                    "content": blobs[filename],
+                    "payload": entry.files[filename],
                     "is_executable": bool(raw_row.get("is_executable")),
                 }
             )
-        if len(rows) != len(blobs):
+        if len(rows) != len(entry.files):
             return None
         return rows
 
@@ -437,32 +284,8 @@ class DomjudgeToolkit:
     def _executable_cache_key_hash(kind: str, executable_hash: str) -> str:
         return sha256_hex_text(f"{kind}\0{executable_hash}")
 
-    def read_artifact_blob(self, work_root: Path, token: str) -> bytes | None:
-        return domjudge_read_artifact_blob(
-            parse_cache_blob_ref=domjudge_parse_cache_blob_ref,
-            cache_read_blob=lambda kind, key_hash, signature, name: self.cache_read_blob(
-                kind=kind,
-                key_hash=key_hash,
-                signature=signature,
-                name=name,
-            ),
-            work_root=work_root,
-            token=token,
-        )
-
-    def resolve_artifact_blob(self, token: str, *, work_root: str | Path | None = None) -> bytes | None:
-        return resolve_artifact_blob(
-            parse_cache_blob_ref=domjudge_parse_cache_blob_ref,
-            cache_read_blob=lambda kind, key_hash, signature, name: self.cache_read_blob(
-                kind=kind,
-                key_hash=key_hash,
-                signature=signature,
-                name=name,
-            ),
-            read_artifact_blob=self.read_artifact_blob,
-            token=token,
-            work_root=work_root,
-        )
+    def resolve_artifact_blob(self, token: str) -> bytes | None:
+        return self.read_blob_ref(token)
 
     def store_case_cache(
         self,
@@ -477,13 +300,12 @@ class DomjudgeToolkit:
         score_text: str,
         files: dict[str, bytes],
         shortcut_eligible: bool,
-    ) -> None:
-        manifest_rows, manifest_digest = self.manifest_from_files(files)
-        key_hash = self.cache_put(
-            self.CASE_CACHE_KIND,
-            key_parts["key_hash"],
-            key_parts["signature"],
-            {
+    ) -> dict[str, PayloadFile]:
+        entry = self._s.runtime_cache_index.put(
+            namespace=self.CASE_CACHE_KIND,
+            key_hash=key_parts["key_hash"],
+            signature=key_parts["signature"],
+            value={
                 "runresult": domjudge_lower_text(runresult),
                 "runtime_sec": float(max(0.0, runtime_sec)),
                 "cpu_sec": float(max(0.0, cpu_sec)),
@@ -491,14 +313,11 @@ class DomjudgeToolkit:
                 "memory_kb": int(max(0, memory_kb)),
                 "score_text": domjudge_text(score_text),
                 "shortcut_eligible": bool(shortcut_eligible),
-                "manifest": manifest_rows,
-                "manifest_digest": manifest_digest,
             },
             files=files,
             tags=tags,
         )
-        if not key_hash:
-            return
+        return dict(entry.files)
 
     @staticmethod
     def strip_protocol_trace(raw: bytes) -> bytes:
@@ -531,95 +350,6 @@ class DomjudgeToolkit:
         if b"#define DOMJUDGE" in payload or b"# define DOMJUDGE" in payload:
             return payload
         return b"#ifndef DOMJUDGE\n#define DOMJUDGE 1\n#endif\n" + payload
-
-    @staticmethod
-    def ensure_bytes_file(path: Path, content: bytes, *, executable: bool = False) -> None:
-        target = Path(path).resolve()
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(content)
-        if executable:
-            try:
-                mode = int(target.stat().st_mode)
-                target.chmod(mode | 0o755)
-            except Exception as exc:
-                logger.debug("failed to set executable bit on %s: %s", target, exc)
-
-    def testcase_blob_ref(self, *, testcase_hash: str, signature: str, name: str) -> str:
-        return self.cache_blob_ref(
-            kind=self.CASE_CACHE_KIND,
-            key_hash=testcase_hash,
-            signature=signature,
-            name=name,
-        )
-
-    def register_cached_testcase(
-        self,
-        *,
-        testcase_hash: str,
-        testcase_signature: str,
-        input_hash: str,
-        answer_hash: str,
-        in_bytes: bytes,
-        ans_bytes: bytes,
-    ) -> tuple[str, str]:
-        safe_hash = domjudge_lower_text(testcase_hash)
-        safe_signature = domjudge_lower_text(testcase_signature)
-        safe_input_hash = domjudge_lower_text(input_hash)
-        safe_answer_hash = domjudge_lower_text(answer_hash)
-        if any(
-            re.fullmatch(r"[0-9a-f]{64}", token) is None
-            for token in (safe_hash, safe_signature, safe_input_hash, safe_answer_hash)
-        ):
-            raise RuntimeError("invalid testcase artifact hash")
-        input_ref = self.testcase_blob_ref(
-            testcase_hash=safe_hash,
-            signature=safe_signature,
-            name="input.in",
-        )
-        answer_ref = self.testcase_blob_ref(
-            testcase_hash=safe_hash,
-            signature=safe_signature,
-            name="answer.ans",
-        )
-        service = self._s.judge_fs_index_service
-        if service is None:
-            raise RuntimeError("judge fs index testcase store is unavailable")
-        expected_value = {
-            "schema": "testcase-artifact",
-            "testcase_hash": safe_hash,
-            "input_sha256": safe_input_hash,
-            "answer_sha256": safe_answer_hash,
-        }
-        # Grouped tasks repeatedly register identical tests. Keep a valid hit
-        # metadata-only so warm verifications do not rewrite large payloads.
-        entry = service.get(
-            kind=self.CASE_CACHE_KIND,
-            key_hash=safe_hash,
-            signature=safe_signature,
-        )
-        if entry is not None:
-            files = dict(entry["files"])
-            if (
-                dict(entry["value"]) == expected_value
-                and set(files) == {"input.in", "answer.ans"}
-                and int(files["input.in"]["size"]) == len(in_bytes)
-                and str(files["input.in"]["sha256"]) == safe_input_hash
-                and int(files["answer.ans"]["size"]) == len(ans_bytes)
-                and str(files["answer.ans"]["sha256"]) == safe_answer_hash
-            ):
-                return (input_ref, answer_ref)
-        service.put(
-            kind=self.CASE_CACHE_KIND,
-            key_hash=safe_hash,
-            signature=safe_signature,
-            value=expected_value,
-            files={"input.in": in_bytes, "answer.ans": ans_bytes},
-            tags={
-                "testcase_hash": safe_hash,
-                "artifact_kind": "domjudge-testcase",
-            },
-        )
-        return (input_ref, answer_ref)
 
     @staticmethod
     def language_extensions(source_name: str) -> tuple[str, list[str]]:

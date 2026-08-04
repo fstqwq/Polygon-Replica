@@ -9,13 +9,10 @@ from typing import cast
 
 from app.db import DB, now_iso
 from app.runtime_value import RuntimeValues
-from app.service.platform.artifact import ArtifactService
 from app.service.disk.verification_store import VerificationStore
+from app.service.platform.runtime_blob_store import PayloadFile, RuntimeBlobStore
 from app.service.platform.fs.layout import FsManager
-from app.service.platform.hashing import sha256_hex_bytes, sha256_hex_json
-from app.service.platform.judge_fs_index import JudgeFsIndexService
 from app.service.platform.error_text import aux_display_text_limit_bytes, bounded_display_text
-from app.service.judgehost.domjudge.cache import domjudge_cache_blob_ref
 from app.service.problem.test_spec import (
     parse_gen_command_tokens,
 )
@@ -29,7 +26,10 @@ from app.service.verification.read_model import (
     task_counts,
 )
 from app.service.verification.runtime import load_problem_runtime_config
-from app.service.verification.signature import verification_signature
+from app.service.verification.signature import (
+    git_blob_identities,
+    verification_manifest,
+)
 from app.service.verification.source import select_source
 from app.service.verification.task_metadata import normalize_diagnostics_json_text
 from app.service.verification.task_store import VerificationTaskStore
@@ -65,22 +65,21 @@ class VerificationService:
         self,
         db: DB,
         workspace_service: WorkspaceService,
-        artifacts: ArtifactService,
         judgehost_task_service: Judgehost,
         task_store: VerificationTaskStore,
-        judge_fs_index_service: JudgeFsIndexService | None = None,
+        runtime_blob_store: RuntimeBlobStore,
+        fs_manager: FsManager,
         constants: RuntimeValues | None = None,
     ):
         self.db = db
         self.workspace_service = workspace_service
-        self.artifacts = artifacts
         self.judgehost_task_service = judgehost_task_service
         self.task_store = task_store
-        self.judge_fs_index_service = judge_fs_index_service
+        self.runtime_blob_store = runtime_blob_store
+        self.fs_manager = fs_manager
         self._verification_inflight_lock = threading.RLock()
         self._applied_aux_display_text_limit_bytes: int | None = None
-        self.fs_manager = FsManager(self.workspace_service.settings.cache_root, self.workspace_service.settings.artifacts_root)
-        self._verification_store = VerificationStore(db, self.fs_manager)
+        self._verification_store = VerificationStore(db)
 
     def export_runtime_verification(self, problem_id: int, verification_id: str) -> dict[str, object] | None:
         row = self.verification_record(verification_id)
@@ -99,10 +98,21 @@ class VerificationService:
         return row["status"] in {"queued", "pending", "running", "ok", "failed"}
 
     def artifact_path_for_problem_artifact(self, problem_id: int, artifact_id: str) -> str:
-        return self._verification_store.artifact_path_for_problem_artifact(int(problem_id), artifact_id)
+        if artifact_id.startswith("p-"):
+            row = self.db.fetch_one(
+                "SELECT id FROM previews WHERE id=? AND problem_id=?",
+                [artifact_id, int(problem_id)],
+            )
+            return "" if row is None else str(self.fs_manager.resolve_preview_root(artifact_id))
+        row = self.db.fetch_one(
+            "SELECT id FROM verifications WHERE id=? AND problem_id=?",
+            [artifact_id, int(problem_id)],
+        )
+        return "" if row is None else str(self.fs_manager.resolve_verification_root(artifact_id))
 
     def artifact_path_for_verification(self, verification_id: str) -> str:
-        return self._verification_store.artifact_path_for_verification(verification_id)
+        row = self.db.fetch_one("SELECT id FROM verifications WHERE id=?", [verification_id])
+        return "" if row is None else str(self.fs_manager.resolve_verification_root(verification_id))
 
     def allocate_verification_id(self) -> str:
         return self._verification_store.allocate_id()
@@ -535,14 +545,6 @@ class VerificationService:
 
         self.db.write_transaction(_tx)
 
-    def _verification_blob_ref(self, *, key_hash: str, signature: str, name: str) -> str:
-        return domjudge_cache_blob_ref(
-            kind=JudgeFsIndexService.KIND_VERIFICATION,
-            key_hash=key_hash,
-            signature=signature,
-            name=name,
-        )
-
     def store_verification_blob(
         self,
         *,
@@ -553,53 +555,8 @@ class VerificationService:
         payload: bytes,
         extra_tags: dict[str, object] | None = None,
     ) -> str:
-        service = self.judge_fs_index_service
-        if service is None:
-            raise RuntimeError("verification blob store is unavailable")
-        safe_verification_id = str(verification_id or "").strip()
-        safe_test_name = str(test_name or "").strip()
-        safe_role = str(role or "").strip().lower()
-        safe_file_name = Path(file_name).name
-        blob = bytes(payload)
-        key_hash = sha256_hex_json(
-            {
-                "schema": "verification-artifact-key",
-                "verification_id": safe_verification_id,
-                "test_name": safe_test_name,
-                "role": safe_role,
-            },
-            ensure_ascii=False,
-        )
-        signature = JudgeFsIndexService.signature(
-            {
-                "schema": "verification-artifact",
-                "payload_sha256": sha256_hex_bytes(blob),
-                "file_name": safe_file_name,
-            }
-        )
-        tags = {
-            "verification_id": safe_verification_id,
-            "test_name": safe_test_name,
-            "role": safe_role,
-        }
-        if extra_tags:
-            tags.update(dict(extra_tags))
-        service.put(
-            kind=JudgeFsIndexService.KIND_VERIFICATION,
-            key_hash=key_hash,
-            signature=signature,
-            value={
-                "schema": "verification-artifact",
-                "verification_id": safe_verification_id,
-                "test_name": safe_test_name,
-                "role": safe_role,
-                "file_name": safe_file_name,
-                "payload_sha256": sha256_hex_bytes(blob),
-            },
-            files={safe_file_name: blob},
-            tags=tags,
-        )
-        return self._verification_blob_ref(key_hash=key_hash, signature=signature, name=safe_file_name)
+        _ = verification_id, test_name, role, file_name, extra_tags
+        return self.runtime_blob_store.put_bytes(payload).blob_ref or ""
 
     def verification_artifact_refs(self, verification_id: str) -> dict[str, dict[str, str]]:
         safe_verification_id = str(verification_id or "").strip()
@@ -708,6 +665,9 @@ class VerificationService:
     def resolve_artifact_blob(self, token: str) -> bytes | None:
         return self.judgehost_task_service.resolve_artifact_blob(token)
 
+    def artifact_descriptor(self, token: str) -> PayloadFile | None:
+        return self.runtime_blob_store.descriptor(token)
+
     def update_verification_artifact_refs(self, verification_id: str, test_name: str, refs: dict[str, str]) -> dict[str, object]:
         safe_verification_id = str(verification_id or "").strip()
         safe_test_name = str(test_name or "").strip()
@@ -797,9 +757,8 @@ class VerificationService:
         kind: str,
         status: str,
         detail: dict[str, object] | None = None,
-    ) -> str:
-        root = self._verification_store.create_or_update_record(
-            self.fs_manager,
+    ) -> None:
+        self._verification_store.create_or_update_record(
             verification_id=verification_id,
             problem_id=int(problem_id),
             workspace_id=None if workspace_id is None else int(workspace_id),
@@ -810,7 +769,6 @@ class VerificationService:
         )
         if detail is not None:
             self.persist_verification_detail(verification_id, detail)
-        return root
 
     def cancel_verification_if_active(self, verification_id: str, *, reason: str, now_text: str) -> bool:
         return self._verification_store.cancel_active_verification(
@@ -1024,12 +982,10 @@ class VerificationService:
         self,
         snapshot: Path,
         tests_spec_entries: list[dict],
-        bin_dir: Path,
-    ) -> tuple[list[dict], list[tuple[str, Path, Path]]]:
+    ) -> tuple[list[dict], list[tuple[str, Path]]]:
         return prepare_tests_spec_runtime(
             snapshot,
             tests_spec_entries,
-            bin_dir,
             generator_source_extensions=GENERATOR_SOURCE_EXTENSIONS,
             parse_gen_command_tokens_fn=parse_gen_command_tokens,
         )
@@ -1054,22 +1010,24 @@ class VerificationService:
         workspace_head = str(status.get("head_commit") or "")
         workspace_dirty = bool(status.get("dirty"))
         snapshot_root: Path | None = None
-        signature_root = workspace_path
         source_commit = ""
         if commit:
             source_commit = self.workspace_service.resolve_commit(workspace_path, commit)
             snapshot_root = self.workspace_service.create_snapshot(workspace_path, source_commit)
             workspace_dirty = False
-            signature_root = snapshot_root
-        elif workspace_dirty or (not workspace_head):
+        else:
             snapshot_root = self.workspace_service.create_snapshot(
                 workspace_path,
                 None,
                 workspace_head=workspace_head,
                 workspace_dirty=workspace_dirty,
             )
-            signature_root = snapshot_root
-        signature = verification_signature(signature_root)
+        assert snapshot_root is not None
+        git_identities = None
+        if not workspace_dirty and (source_commit or workspace_head):
+            git_identities = git_blob_identities(workspace_path, source_commit or workspace_head)
+        manifest = verification_manifest(snapshot_root, git_identities=git_identities)
+        signature = manifest.signature
         target_verification_id = verification_id or self._verification_store.allocate_id()
         run_workspace_verification_dag(
             problem,
@@ -1086,5 +1044,6 @@ class VerificationService:
             kind=Kind.SAMPLE.value if sample_only else Kind.ALL.value,
             sample_only=bool(sample_only),
             snapshot_root_override=snapshot_root,
+            manifest=manifest,
         )
         return target_verification_id

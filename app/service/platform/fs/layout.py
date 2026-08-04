@@ -12,19 +12,6 @@ _TOKEN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 class VerificationLayout:
     root: Path
     logs: Path
-    tests: Path
-    answers: Path
-    bin: Path
-    uploaded_sources: Path
-
-
-@dataclass(frozen=True)
-class VerificationRuntimeLayout:
-    root: Path
-    tests: Path
-    answers: Path
-    bin: Path
-    uploaded_sources: Path
 
 
 @dataclass(frozen=True)
@@ -43,7 +30,6 @@ class FsManager:
         self.verification_root = self.cache_artifacts_root / "verifications"
         self.preview_root = self.cache_artifacts_root / "previews"
         self.snapshot_root = self.runtime_root / "snapshots"
-        self.judgehost_runs_root = self.runtime_root / "judgehost-runs"
 
     def resolve_verification_root(self, verification_id: str) -> Path:
         safe_verification_id = self._normalize_token(verification_id, field_name="verification_id")
@@ -63,31 +49,13 @@ class FsManager:
         return VerificationLayout(
             root=root,
             logs=root / "logs",
-            tests=root / "tests",
-            answers=root / "ans",
-            bin=root / "bin",
-            uploaded_sources=root / "uploaded-sources",
         )
 
     def prepare_verification_layout(self, verification_id: str) -> VerificationLayout:
         layout = self.verification_layout(verification_id)
         layout.root.mkdir(parents=True, exist_ok=True)
         layout.logs.mkdir(parents=True, exist_ok=True)
-        layout.tests.mkdir(parents=True, exist_ok=True)
-        layout.answers.mkdir(parents=True, exist_ok=True)
-        layout.bin.mkdir(parents=True, exist_ok=True)
-        layout.uploaded_sources.mkdir(parents=True, exist_ok=True)
         return layout
-
-    def prepare_verification_runtime_layout(self, verification_id: str) -> VerificationRuntimeLayout:
-        layout = self.prepare_verification_layout(verification_id)
-        return VerificationRuntimeLayout(
-            root=layout.root,
-            tests=layout.tests,
-            answers=layout.answers,
-            bin=layout.bin,
-            uploaded_sources=layout.uploaded_sources,
-        )
 
     def resolve_preview_root(self, preview_id: str) -> Path:
         safe_preview_id = self._normalize_token(preview_id, field_name="preview_id")

@@ -9,7 +9,8 @@ from app.db import DB
 from app.runtime_value import RuntimeValues
 from app.service.disk.verification_store import VerificationStore
 from app.service.platform.fs.layout import FsManager
-from app.service.platform.judge_fs_index import JudgeFsIndexService
+from app.service.platform.runtime_blob_store import RuntimeBlobStore
+from app.service.platform.runtime_cache_index import RuntimeCacheIndex
 from app.service.repository.workspace import WorkspaceService
 from app.service.verification.task_store import VerificationTaskStore
 
@@ -23,7 +24,8 @@ class JudgehostState:
     workspace_service: WorkspaceService
     fs_manager: FsManager
     constants: RuntimeValues
-    judge_fs_index_service: JudgeFsIndexService | None
+    runtime_blob_store: RuntimeBlobStore
+    runtime_cache_index: RuntimeCacheIndex
     verification_task_store: VerificationTaskStore
     verification_store: VerificationStore = field(init=False)
 

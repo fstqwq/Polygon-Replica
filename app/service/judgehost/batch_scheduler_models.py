@@ -4,14 +4,16 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import TypedDict
 
+from app.service.platform.runtime_blob_store import PayloadFile
+
 
 @dataclass(frozen=True)
 class CompileSubmission:
     compile_key: str
     submit_id: int
     source_name: str
-    source_bytes: bytes
-    extra_source_items: tuple[tuple[str, bytes], ...]
+    source_file: PayloadFile
+    extra_source_items: tuple[tuple[str, PayloadFile], ...]
     compile_files: tuple[tuple[str, bytes, bool], ...]
 
 
@@ -30,13 +32,13 @@ class CaseResult:
     wall_sec: float
     memory_kb: int
     score_text: str
-    output_run_rel: str
-    output_error_rel: str
-    output_system_rel: str
-    output_diff_rel: str
-    metadata_rel: str
-    compare_metadata_rel: str
-    team_message_rel: str
+    output_run_ref: str
+    output_error_ref: str
+    output_system_ref: str
+    output_diff_ref: str
+    metadata_ref: str
+    compare_metadata_ref: str
+    team_message_ref: str
     feedback_text: str
     feedback_files: tuple[str, ...]
     answer_correct: bool
@@ -101,8 +103,6 @@ class ExecutionBatchRow(TypedDict):
     contest_id: str
     mode: str
     source_name: str
-    source_path: str
-    work_root: str
     compile_hash: str
     run_hash: str
     compare_hash: str
@@ -151,13 +151,13 @@ class JudgehostCaseRow(TypedDict):
     cpu_sec: float | None
     wall_sec: float | None
     memory_kb: int | None
-    output_run_rel: str
-    output_error_rel: str
-    output_system_rel: str
-    output_diff_rel: str
-    metadata_rel: str
-    compare_metadata_rel: str
-    team_message_rel: str
+    output_run_ref: str
+    output_error_ref: str
+    output_system_ref: str
+    output_diff_ref: str
+    metadata_ref: str
+    compare_metadata_ref: str
+    team_message_ref: str
     score_text: str
     debug_text: str
     verification_published: bool
@@ -182,8 +182,6 @@ class ExecutionBatchRecord:
     contest_id: str
     mode: str
     source_name: str
-    source_path: str
-    work_root: str
     compile_hash: str
     run_hash: str
     compare_hash: str

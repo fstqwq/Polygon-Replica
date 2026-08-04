@@ -230,7 +230,8 @@ A finished verification writes structured result data to two places:
 - verification detail tables: selected tests, source paths, test metadata, and sanity-check results
 
 ### Filesystem/blob store
-- `judge-fs-index`: blobs addressed by cache tokens referenced from `output_ref`, `input_ref`, and `answer_ref`
+- `runtime/blobs/<prefix>/<sha256>`: immutable blobs addressed by
+  `blob://sha256/<sha256>` refs in `output_ref`, `input_ref`, and `answer_ref`
 
 ## Conventions
 

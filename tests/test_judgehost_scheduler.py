@@ -12,7 +12,6 @@ from unittest.mock import patch
 from app.runtime_value import build_runtime_values
 from app.service.judgehost.cleanup import JudgehostTerminalCleanup
 from app.service.judgehost.case_result import build_case_result
-from app.service.judgehost.domjudge.cache import domjudge_hash_of_hashes
 from app.service.judgehost.domjudge.client import domjudge_script_id
 from app.service.judgehost.batch_scheduler import BatchScheduler
 from app.service.judgehost.batch_scheduler_models import (
@@ -23,8 +22,8 @@ from app.service.judgehost.batch_scheduler_models import (
 from app.service.judgehost.identity import domjudge_submit_id
 from app.service.judgehost.task_registry import JudgehostTaskRegistry
 from app.service.judgehost.toolkit import DomjudgeToolkit
-from app.service.platform.hashing import sha256_hex_bytes
-from app.service.platform.judge_fs_index import JudgeFsIndexService
+from app.service.platform.runtime_blob_store import PayloadFile, RuntimeBlobStore
+from app.service.platform.runtime_cache_index import RuntimeCacheIndex
 
 
 def _case_result(test_name: str, *, runresult: str = "correct", verdict: str = "OK"):
@@ -37,13 +36,13 @@ def _case_result(test_name: str, *, runresult: str = "correct", verdict: str = "
         wall_sec=0.002,
         memory_kb=1024,
         score_text="",
-        output_run_rel="",
-        output_error_rel="",
-        output_system_rel="",
-        output_diff_rel="",
-        metadata_rel="",
-        compare_metadata_rel="",
-        team_message_rel="",
+        output_run_ref="",
+        output_error_ref="",
+        output_system_ref="",
+        output_diff_ref="",
+        metadata_ref="",
+        compare_metadata_ref="",
+        team_message_ref="",
         feedback_text="",
         feedback_files=[],
         answer_correct=False,
@@ -58,7 +57,11 @@ def _submission_for_key(compile_key: str) -> CompileSubmission:
         compile_key=compile_key,
         submit_id=domjudge_submit_id(compile_key),
         source_name="main.cpp",
-        source_bytes=compile_key.encode("ascii"),
+        source_file=PayloadFile(
+            path=Path("/tmp/test-main.cpp"),
+            size=len(compile_key),
+            identity=hashlib.sha256(compile_key.encode("ascii")).hexdigest(),
+        ),
         extra_source_items=(),
         compile_files=(),
     )
@@ -99,8 +102,8 @@ def _case_row(task_id: str, run_id: str, ordinal: int, scope: int) -> dict[str, 
         "testcase_hash": token,
         "testcase_input_hash": token,
         "testcase_answer_hash": token,
-        "input_ref": f"cache://input/{ordinal}",
-        "answer_ref": f"cache://answer/{ordinal}",
+        "input_ref": f"blob://sha256/{token}",
+        "answer_ref": f"blob://sha256/{token}",
         "status": "staged",
     }
 
@@ -136,8 +139,6 @@ def _create_staged_batch(
         contest_id="local",
         mode="pass-fail",
         source_name="main.cpp",
-        source_path="",
-        work_root="",
         compile_hash="1" * 32,
         run_hash="2" * 32,
         compare_hash="3" * 32,
@@ -197,8 +198,6 @@ def _create_ready_batch(
     scheduler.claim_materialization(batch_id, now_text=now_text)
     scheduler.finish_materialization(
         batch_id,
-        source_path="/tmp/source.cpp",
-        work_root="/tmp/work",
         success=True,
         error_text="",
         now_text=now_text,
@@ -216,28 +215,61 @@ def _create_ready_batch(
 
 class TestJudgehostScheduler(unittest.TestCase):
     @staticmethod
-    def _testcase_toolkit(temp_root: Path) -> tuple[DomjudgeToolkit, JudgeFsIndexService]:
-        cache = JudgeFsIndexService(temp_root / "index")
-        state = SimpleNamespace(judge_fs_index_service=cache)
-        return (DomjudgeToolkit(state), cache)
-
-    @staticmethod
-    def _register_testcase(
-        toolkit: DomjudgeToolkit,
-        input_blob: bytes,
-        answer_blob: bytes,
-    ) -> tuple[str, str]:
-        input_hash = sha256_hex_bytes(input_blob)
-        answer_hash = sha256_hex_bytes(answer_blob)
-        signature = domjudge_hash_of_hashes([input_hash, answer_hash])
-        return toolkit.register_cached_testcase(
-            testcase_hash=signature,
-            testcase_signature=signature,
-            input_hash=input_hash,
-            answer_hash=answer_hash,
-            in_bytes=input_blob,
-            ans_bytes=answer_blob,
+    def _runtime_toolkit(
+        temp_root: Path,
+    ) -> tuple[DomjudgeToolkit, RuntimeBlobStore, RuntimeCacheIndex]:
+        blob_store = RuntimeBlobStore(temp_root)
+        cache_index = RuntimeCacheIndex(blob_store)
+        state = SimpleNamespace(
+            runtime_blob_store=blob_store,
+            runtime_cache_index=cache_index,
         )
+        return (DomjudgeToolkit(state), blob_store, cache_index)
+
+    def test_materialized_compile_source_outlives_snapshot_descriptor(self) -> None:
+        scheduler = BatchScheduler(id_base=100)
+        _create_staged_batch(
+            scheduler,
+            task_id="task-source-a",
+            run_id="run-source-a",
+            ordinals=[1],
+            verification_id="ver-1",
+            compile_key=_COMPILE_KEY,
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            snapshot_source = root / "snapshot" / "main.cpp"
+            snapshot_source.parent.mkdir(parents=True)
+            snapshot_source.write_bytes(_COMPILE_KEY.encode("ascii"))
+            blob_store = RuntimeBlobStore(root / "runtime")
+            stored_source = blob_store.put_file(
+                RuntimeBlobStore.describe_file(snapshot_source)
+            )
+            materialized = CompileSubmission(
+                compile_key=_COMPILE_KEY,
+                submit_id=domjudge_submit_id(_COMPILE_KEY),
+                source_name="main.cpp",
+                source_file=stored_source,
+                extra_source_items=(),
+                compile_files=(),
+            )
+            scheduler.publish_materialized_compile_submission(_COMPILE_KEY, materialized)
+            snapshot_source.unlink()
+
+            source = scheduler.source_submission(str(materialized.submit_id), contest_id="local")
+            self.assertIsNotNone(source)
+            assert source is not None
+            self.assertEqual(source.source_file.path.read_bytes(), _COMPILE_KEY.encode("ascii"))
+
+            # A later Verification may describe the same source from another snapshot.
+            _create_staged_batch(
+                scheduler,
+                task_id="task-source-b",
+                run_id="run-source-b",
+                ordinals=[2],
+                verification_id="ver-2",
+                compile_key=_COMPILE_KEY,
+            )
 
     def test_task_registry_has_identity_but_no_scheduler(self) -> None:
         registry = JudgehostTaskRegistry()
@@ -777,8 +809,6 @@ class TestJudgehostScheduler(unittest.TestCase):
         scheduler.claim_materialization(batch_id, now_text=now_text)
         scheduler.finish_materialization(
             batch_id,
-            source_path="/tmp/source.cpp",
-            work_root="/tmp/work",
             success=True,
             error_text="",
             now_text=now_text,
@@ -839,8 +869,6 @@ class TestJudgehostScheduler(unittest.TestCase):
         scheduler.claim_materialization(batch_id, now_text=now_text)
         scheduler.finish_materialization(
             batch_id,
-            source_path="/tmp/source.cpp",
-            work_root="/tmp/work",
             success=True,
             error_text="",
             now_text=now_text,
@@ -1044,96 +1072,53 @@ class TestJudgehostScheduler(unittest.TestCase):
         self.assertEqual(overridden.JUDGEHOST_FETCH_BATCH_SIZE, 8)
         self.assertEqual(overridden.RUN_EXEC_PROCESS_LIMIT, 256)
 
-    def test_case_cache_metadata_hit_does_not_read_payload_files(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="judge-fs-index-") as temp_dir:
-            cache = JudgeFsIndexService(Path(temp_dir))
+    def test_runtime_cache_hit_does_not_open_payload_files(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="runtime-cache-") as temp_dir:
+            _toolkit, _blobs, cache = self._runtime_toolkit(Path(temp_dir))
             cache.put(
-                kind=JudgeFsIndexService.KIND_CASE,
+                namespace=RuntimeCacheIndex.RESULT,
                 key_hash="1" * 64,
                 signature="2" * 64,
-                value={"manifest": []},
+                value={"verdict": "OK"},
                 files={"program.out": b"large output"},
             )
-            with patch.object(Path, "read_bytes", side_effect=AssertionError("payload was read")):
+            with patch.object(Path, "open", side_effect=AssertionError("payload was opened")):
                 entry = cache.get(
-                    kind=JudgeFsIndexService.KIND_CASE,
+                    namespace=RuntimeCacheIndex.RESULT,
                     key_hash="1" * 64,
                     signature="2" * 64,
                 )
             self.assertIsNotNone(entry)
 
-    def test_testcase_registration_hits_without_rewrite_and_recovers_truncation(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="judge-testcase-cache-") as temp_dir:
-            toolkit, cache = self._testcase_toolkit(Path(temp_dir))
-            input_blob = b"input\n"
-            answer_blob = b"answer\n"
-            first_refs = self._register_testcase(toolkit, input_blob, answer_blob)
-            with (
-                patch.object(cache, "put", side_effect=AssertionError("cache hit rewrote testcase")),
-                patch(
-                    "app.service.judgehost.toolkit.sha256_hex_bytes",
-                    side_effect=AssertionError("payload rehashed"),
-                ),
-            ):
-                self.assertEqual(self._register_testcase(toolkit, input_blob, answer_blob), first_refs)
-            self.assertNotEqual(
-                self._register_testcase(toolkit, input_blob, b"other answer\n"),
-                first_refs,
+    def test_cache_deletion_keeps_referenced_blob(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="runtime-cache-delete-") as temp_dir:
+            _toolkit, blobs, cache = self._runtime_toolkit(Path(temp_dir))
+            entry = cache.put(
+                namespace=RuntimeCacheIndex.RESULT,
+                key_hash="3" * 64,
+                signature="4" * 64,
+                value={},
+                files={"program.out": b"answer\n"},
             )
-            input_hash = sha256_hex_bytes(input_blob)
-            answer_hash = sha256_hex_bytes(answer_blob)
-            signature = domjudge_hash_of_hashes([input_hash, answer_hash])
-            input_path = cache._files_dir(
-                kind=JudgeFsIndexService.KIND_CASE,
-                key_hash=signature,
-                signature=signature,
-            ) / "input.in"
-            input_path.write_bytes(b"truncated")
-            self.assertEqual(self._register_testcase(toolkit, input_blob, answer_blob), first_refs)
-            self.assertEqual(
-                cache.read_blob(
-                    kind=JudgeFsIndexService.KIND_CASE,
-                    key_hash=signature,
-                    signature=signature,
-                    name="input.in",
-                ),
-                input_blob,
+            output = entry.files["program.out"]
+            cache.delete(
+                namespace=RuntimeCacheIndex.RESULT,
+                key_hash="3" * 64,
+                signature="4" * 64,
             )
-
-    def test_concurrent_testcase_registration_writes_once(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="judge-testcase-concurrent-") as temp_dir:
-            toolkit, cache = self._testcase_toolkit(Path(temp_dir))
-            barrier = threading.Barrier(8)
-            refs: list[tuple[str, str]] = []
-
-            def _register() -> None:
-                barrier.wait(timeout=5)
-                refs.append(self._register_testcase(toolkit, b"input\n", b"answer\n"))
-
-            with patch.object(
-                cache,
-                "_write_integrity_marker",
-                wraps=cache._write_integrity_marker,
-            ) as publish_entry:
-                threads = [threading.Thread(target=_register) for _ in range(8)]
-                for thread in threads:
-                    thread.start()
-                for thread in threads:
-                    thread.join(timeout=5)
-            self.assertTrue(all(not thread.is_alive() for thread in threads))
-            self.assertEqual(len(set(refs)), 1)
-            self.assertEqual(publish_entry.call_count, 1)
+            self.assertIsNone(cache.get(
+                namespace=RuntimeCacheIndex.RESULT,
+                key_hash="3" * 64,
+                signature="4" * 64,
+            ))
+            self.assertEqual(blobs.read(output), b"answer\n")
 
     def test_executable_cache_reuses_valid_entry_and_repairs_damage(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="judge-executable-cache-") as temp_dir:
-            toolkit, cache = self._testcase_toolkit(Path(temp_dir))
+        with tempfile.TemporaryDirectory(prefix="runtime-executable-cache-") as temp_dir:
+            toolkit, _blobs, cache = self._runtime_toolkit(Path(temp_dir))
             executable_hash = "a" * 32
             files = [("run", b"#!/bin/sh\nexit 0\n", True)]
-            with patch.object(
-                cache,
-                "_write_integrity_marker",
-                wraps=cache._write_integrity_marker,
-            ) as publish_entry:
+            with patch.object(cache, "put", wraps=cache.put) as publish_entry:
                 toolkit.store_executable_cache(
                     kind="run",
                     executable_hash=executable_hash,
@@ -1144,18 +1129,20 @@ class TestJudgehostScheduler(unittest.TestCase):
                     executable_hash=executable_hash,
                     files=files,
                 )
-            self.assertEqual(publish_entry.call_count, 1)
-            self.assertEqual(
-                toolkit.read_executable_cache(kind="run", executable_hash=executable_hash),
-                [{"filename": "run", "content": files[0][1], "is_executable": True}],
-            )
+            self.assertEqual(publish_entry.call_count, 2)
+            rows = toolkit.read_executable_cache(kind="run", executable_hash=executable_hash)
+            self.assertIsNotNone(rows)
+            assert rows is not None
+            self.assertEqual(rows[0]["payload"].path.read_bytes(), files[0][1])
 
             key_hash = toolkit._executable_cache_key_hash("run", executable_hash)
-            executable_path = cache._files_dir(
-                kind=JudgeFsIndexService.KIND_EXECUTABLE,
+            entry = cache.get(
+                namespace=RuntimeCacheIndex.EXECUTABLE,
                 key_hash=key_hash,
                 signature=toolkit._EXECUTABLE_CACHE_SIGNATURE,
-            ) / "run"
+            )
+            assert entry is not None
+            executable_path = entry.files["run"].path
             executable_path.unlink()
             self.assertIsNone(
                 toolkit.read_executable_cache(kind="run", executable_hash=executable_hash)
@@ -1168,20 +1155,20 @@ class TestJudgehostScheduler(unittest.TestCase):
             self.assertEqual(executable_path.read_bytes(), files[0][1])
 
     def test_different_cache_keys_publish_concurrently(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="judge-cache-parallel-") as temp_dir:
-            cache = JudgeFsIndexService(Path(temp_dir))
+        with tempfile.TemporaryDirectory(prefix="runtime-cache-parallel-") as temp_dir:
+            _toolkit, blobs, cache = self._runtime_toolkit(Path(temp_dir))
             barrier = threading.Barrier(2)
             errors: list[Exception] = []
-            original = cache._write_integrity_marker
+            original = blobs.put_bytes
 
-            def _publish(entry_dir: Path, integrity_hash: str) -> None:
+            def _publish(payload: bytes):
                 barrier.wait(timeout=5)
-                original(entry_dir, integrity_hash)
+                return original(payload)
 
             def _put(token: str) -> None:
                 try:
                     cache.put(
-                        kind=JudgeFsIndexService.KIND_CASE,
+                        namespace=RuntimeCacheIndex.RESULT,
                         key_hash=token * 64,
                         signature=("f" if token == "1" else "e") * 64,
                         value={"token": token},
@@ -1190,7 +1177,7 @@ class TestJudgehostScheduler(unittest.TestCase):
                 except Exception as exc:  # pragma: no cover - asserted below
                     errors.append(exc)
 
-            with patch.object(cache, "_write_integrity_marker", side_effect=_publish):
+            with patch.object(blobs, "put_bytes", side_effect=_publish):
                 threads = [threading.Thread(target=_put, args=(token,)) for token in ("1", "2")]
                 for thread in threads:
                     thread.start()
@@ -1198,7 +1185,7 @@ class TestJudgehostScheduler(unittest.TestCase):
                     thread.join(timeout=5)
             self.assertEqual(errors, [])
             self.assertTrue(all(not thread.is_alive() for thread in threads))
-            self.assertEqual(cache.count_entries(kind=JudgeFsIndexService.KIND_CASE), 2)
+            self.assertEqual(cache.count_entries(namespace=RuntimeCacheIndex.RESULT), 2)
 
     def test_terminal_cleanup_removes_runtime_identity_but_not_cache(self) -> None:
         registry = JudgehostTaskRegistry()

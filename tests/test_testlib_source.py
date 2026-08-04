@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-import base64
 import tempfile
 import unittest
 from pathlib import Path
 
 from app.impl.problem.compile_check import _testlib_extra_sources
 from app.service.platform.testlib_source import maintained_testlib_header, workspace_testlib_header
-from tests.common import WorkspaceTestBase
+from app.service.platform.runtime_blob_store import PayloadFile
+from tests.common import WorkspaceTestBase, config
 
 
 class TestWorkspaceTestlibSource(WorkspaceTestBase):
@@ -36,10 +36,10 @@ class TestTestlibSourceHelpers(unittest.TestCase):
 
             payload = _testlib_extra_sources(workspace, "validators/validator.cpp")
             self.assertIsInstance(payload, dict)
-            extra = payload.get("extra_sources_b64") if isinstance(payload, dict) else None
+            extra = payload.get("extra_source_files") if isinstance(payload, dict) else None
             self.assertIsInstance(extra, dict)
             self.assertEqual(
-                base64.b64decode(str(extra.get("testlib.h") or "").encode("ascii")),
+                config.runtime_blob_store.read(PayloadFile.from_payload(extra["testlib.h"])),
                 b"// workspace testlib\n",
             )
 

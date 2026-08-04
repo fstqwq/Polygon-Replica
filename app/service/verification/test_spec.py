@@ -218,14 +218,13 @@ def resolve_generator_source_from_token(
 def prepare_tests_spec_runtime(
     snapshot: Path,
     tests_spec_entries: list[dict],
-    bin_dir: Path,
     *,
     generator_source_extensions: tuple[str, ...],
     parse_gen_command_tokens_fn,
-) -> tuple[list[dict], list[tuple[str, Path, Path]]]:
+) -> tuple[list[dict], list[tuple[str, Path]]]:
     runtime_entries: list[dict] = []
-    generator_targets: list[tuple[str, Path, Path]] = []
-    by_source_rel: dict[str, tuple[str, Path]] = {}
+    generator_targets: list[tuple[str, Path]] = []
+    by_source_rel: dict[str, str] = {}
     generator_catalog = generator_source_catalog(snapshot, generator_source_extensions)
     for index, row in enumerate(tests_spec_entries, start=1):
         kind = row["kind"].strip()
@@ -259,10 +258,9 @@ def prepare_tests_spec_runtime(
         if compiled is None:
             gen_index = len(by_source_rel) + 1
             target_name = f"generator_spec_{gen_index}"
-            target_bin = bin_dir / target_name
-            by_source_rel[source_rel] = (target_name, target_bin)
-            generator_targets.append((target_name, source_path, target_bin))
-            compiled = (target_name, target_bin)
+            by_source_rel[source_rel] = target_name
+            generator_targets.append((target_name, source_path))
+            compiled = target_name
         runtime_entries.append(
             {
                 "index": index,
@@ -276,9 +274,8 @@ def prepare_tests_spec_runtime(
                 "args": [str(x) for x in tokens[1:]],
                 "source_rel": source_rel,
                 "payload_rel": payload_rel,
-                "target_name": compiled[0],
+                "target_name": compiled,
             }
         )
     return runtime_entries, generator_targets
-
 

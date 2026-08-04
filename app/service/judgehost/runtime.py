@@ -109,15 +109,15 @@ def domjudge_feedback_text_from_bytes(blob: bytes) -> str:
 def domjudge_feedback_token_order(
     *,
     runresult: str,
-    output_error_rel: str,
-    output_diff_rel: str,
-    team_message_rel: str,
+    output_error_ref: str,
+    output_diff_ref: str,
+    team_message_ref: str,
 ) -> list[str]:
     runresult_token = str(runresult or "").strip().lower()
     if runresult_token in {"run-error", "internal-error"}:
-        ordered = [output_error_rel, output_diff_rel, team_message_rel]
+        ordered = [output_error_ref, output_diff_ref, team_message_ref]
     else:
-        ordered = [output_diff_rel, team_message_rel, output_error_rel]
+        ordered = [output_diff_ref, team_message_ref, output_error_ref]
     feedback_tokens: list[str] = []
     for token in ordered:
         feedback_token = str(token or "").strip()
@@ -130,15 +130,15 @@ def domjudge_feedback_text_and_files(
     *,
     read_blob: Callable[[str], bytes | None],
     runresult: str,
-    output_error_rel: str,
-    output_diff_rel: str,
-    team_message_rel: str,
+    output_error_ref: str,
+    output_diff_ref: str,
+    team_message_ref: str,
 ) -> tuple[str, list[str]]:
     feedback_files = domjudge_feedback_token_order(
         runresult=runresult,
-        output_error_rel=output_error_rel,
-        output_diff_rel=output_diff_rel,
-        team_message_rel=team_message_rel,
+        output_error_ref=output_error_ref,
+        output_diff_ref=output_diff_ref,
+        team_message_ref=team_message_ref,
     )
     feedback_text = ""
     for token in feedback_files:

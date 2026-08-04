@@ -20,6 +20,7 @@ from app.impl.workspace.runtime_threshold import (
     runtime_threshold_reason,
 )
 from app.service.verification.plan import VerificationTestPlan
+from app.service.platform.runtime_blob_store import PayloadFile
 
 SANITY_PENDING = "pending"
 SANITY_RUNNING = "running"
@@ -308,7 +309,7 @@ def run_verification_sanity_checks(
     test_plans: list[VerificationTestPlan],
     accepted_source_label: str = "",
     accepted_source_name: str = "",
-    accepted_source_bytes: bytes = b"",
+    accepted_source_file: PayloadFile | None = None,
     run_verification_payload_base: dict[str, object] | None = None,
     generate_feedback_by_test: dict[str, str] | None = None,
     runtime_columns: list[dict[str, object]] | None = None,
@@ -403,7 +404,7 @@ def run_verification_sanity_checks(
             test_plans=test_plans,
             accepted_source_label=accepted_source_label,
             accepted_source_name=accepted_source_name,
-            accepted_source_bytes=accepted_source_bytes,
+            accepted_source_file=accepted_source_file,
             run_verification_payload_base=run_verification_payload_base,
             bypass_case_result_cache=bypass_case_result_cache,
         )

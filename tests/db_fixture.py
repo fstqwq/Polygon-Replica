@@ -10,7 +10,8 @@ from pathlib import Path
 from app.db import DB
 from app.runtime_value import build_runtime_values
 from app.service.platform.fs.layout import FsManager
-from app.service.platform.judge_fs_index import JudgeFsIndexService
+from app.service.platform.runtime_blob_store import RuntimeBlobStore
+from app.service.platform.runtime_cache_index import RuntimeCacheIndex
 from app.service.repository.workspace import WorkspaceService
 from app.service.verification.task_store import VerificationTaskStore
 from app.setting import Settings
@@ -87,6 +88,7 @@ class DBTestBase(unittest.TestCase):
             self.settings.cache_root,
             self.settings.artifacts_root,
         )
-        self.judge_fs_index_service = JudgeFsIndexService(self.settings.cache_root)
+        self.runtime_blob_store = RuntimeBlobStore(self.fs_manager.runtime_root)
+        self.runtime_cache_index = RuntimeCacheIndex(self.runtime_blob_store)
         self.user = f"alice-{uuid.uuid4().hex[:8]}"
         self.problem = f"{self.user}/sample-{uuid.uuid4().hex[:8]}"

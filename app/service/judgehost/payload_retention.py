@@ -3,12 +3,9 @@ from __future__ import annotations
 
 _HEAVY_PAYLOAD_KEYS = {
     "domjudge_precomputed",
-    "extra_sources_b64",
-    "source_b64",
 }
 _HEAVY_VERIFICATION_PAYLOAD_KEYS = {
-    "binaries_b64",
-    "sources_b64",
+    "source_files",
 }
 _RETAINED_TEST_KEYS = ("name", "answer_name")
 

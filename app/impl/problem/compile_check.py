@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-import base64
 import uuid
 from pathlib import Path
 
 from app.impl.runtime.config import config
 from app.service.platform.error_text import bounded_display_text, normalize_display_text
 from app.service.platform.testlib_source import workspace_testlib_header
+from app.service.platform.runtime_blob_store import RuntimeBlobStore
 
 _C = config.constants
 _CPP_EXTENSIONS = {".cpp", ".cc", ".cxx", ".c++", ".c"}
@@ -115,8 +115,10 @@ def _testlib_extra_sources(workspace: Path, source_path: str) -> dict[str, objec
         return None
     testlib_header = workspace_testlib_header(workspace)
     if testlib_header is not None:
-        blob = testlib_header.read_bytes()
-        return {"extra_sources_b64": {"testlib.h": base64.b64encode(blob).decode("ascii")}}
+        descriptor = config.runtime_blob_store.put_file(
+            RuntimeBlobStore.describe_file(testlib_header)
+        )
+        return {"extra_source_files": {"testlib.h": descriptor.to_payload()}}
     return None
 
 

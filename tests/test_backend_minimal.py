@@ -68,7 +68,7 @@ class TestBackendMinimal(E2ETestBase):
 
     def test_startup_clear_all_caches_wipes_cache_root_artifacts_and_runtime(self) -> None:
         artifact_file = config.fs_manager.cache_artifacts_root / "verifications" / "ver-test" / "logs" / "compile.log"
-        runtime_file = config.fs_manager.runtime_root / "judgehost-runs" / "jt-test" / "stdout.txt"
+        runtime_file = config.fs_manager.runtime_root / "blobs" / "aa" / ("a" * 64)
         durable_log = config.fs_manager.runtime_root / "worker-queue-events.jsonl"
         artifact_file.parent.mkdir(parents=True, exist_ok=True)
         runtime_file.parent.mkdir(parents=True, exist_ok=True)
@@ -77,7 +77,7 @@ class TestBackendMinimal(E2ETestBase):
         runtime_file.write_text("ok\n", encoding="utf-8")
         durable_log.write_text("event\n", encoding="utf-8")
 
-        with patch.object(config.judge_fs_index_service, "clear_all", return_value=None):
+        with patch.object(config.runtime_cache_index, "clear_all", return_value=None):
             _startup_clear_all_caches()
 
         self.assertTrue(config.fs_manager.cache_artifacts_root.exists())
@@ -1131,15 +1131,16 @@ class TestBackendMinimal(E2ETestBase):
             kind=Kind.ALL.value,
             status=Status.FAILED.value,
         )
+        input_ref = config.runtime_blob_store.put_bytes(b"input\n").blob_ref
+        answer_ref = config.runtime_blob_store.put_bytes(b"answer\n").blob_ref
         config.verification_service.update_verification_artifact_refs(
             verification_id,
             "001.in",
-            {"input_ref": "fresh-input", "answer_ref": "fresh-answer"},
+            {"input_ref": input_ref, "answer_ref": answer_ref},
         )
         with (
             patch("app.impl.workspace.context_job._icpc_required_test_ids_for_commit", return_value=["001"]),
             patch("app.impl.workspace.context_job.run_workspace_verification_dag", side_effect=AssertionError("full verification should not run")),
-            patch.object(config.verification_service, "resolve_artifact_blob", return_value=b"payload"),
             patch.object(config.export_service, "create_export", return_value=Path("package.zip")) as create_export,
         ):
             _run_export_create_worker(
@@ -1178,11 +1179,8 @@ class TestBackendMinimal(E2ETestBase):
         )
         seen: dict[str, object] = {}
 
-        def fake_resolve_artifact_blob(token: str):
-            safe_token = str(token or "")
-            if safe_token.startswith("fresh-"):
-                return b"payload"
-            return None
+        fresh_input_ref = config.runtime_blob_store.put_bytes(b"fresh input\n").blob_ref
+        fresh_answer_ref = config.runtime_blob_store.put_bytes(b"fresh answer\n").blob_ref
 
         def fake_run_workspace_verification_dag(*args, **kwargs):
             verification_id = str(kwargs["verification_id"])
@@ -1198,7 +1196,7 @@ class TestBackendMinimal(E2ETestBase):
             config.verification_service.update_verification_artifact_refs(
                 verification_id,
                 "001.in",
-                {"input_ref": "fresh-input", "answer_ref": "fresh-answer"},
+                {"input_ref": fresh_input_ref, "answer_ref": fresh_answer_ref},
             )
 
         with (
@@ -1208,7 +1206,6 @@ class TestBackendMinimal(E2ETestBase):
                 return_value=([{"path": "solutions/std.cpp", "expected_behavior": "accepted", "run_id": "r-ok"}], "solutions/std.cpp"),
             ),
             patch("app.impl.workspace.context_job.run_workspace_verification_dag", side_effect=fake_run_workspace_verification_dag),
-            patch.object(config.verification_service, "resolve_artifact_blob", side_effect=fake_resolve_artifact_blob),
             patch.object(config.export_service, "create_export", return_value=Path("package.zip")) as create_export,
         ):
             _run_export_create_worker(
@@ -1234,6 +1231,8 @@ class TestBackendMinimal(E2ETestBase):
         (ws / "export-marker.txt").write_text("export data generation\n", encoding="utf-8")
         source_commit = config.git_service.commit(ws, "export data generation", self.user, f"{self.user}@polygonlike.local")
         seen: dict[str, object] = {}
+        input_ref = config.runtime_blob_store.put_bytes(b"generated input\n").blob_ref
+        answer_ref = config.runtime_blob_store.put_bytes(b"generated answer\n").blob_ref
 
         def fake_run_workspace_verification_dag(*args, **kwargs):
             verification_id = str(kwargs["verification_id"])
@@ -1252,7 +1251,7 @@ class TestBackendMinimal(E2ETestBase):
             config.verification_service.update_verification_artifact_refs(
                 verification_id,
                 "001.in",
-                {"input_ref": "blob-input", "answer_ref": "blob-answer"},
+                {"input_ref": input_ref, "answer_ref": answer_ref},
             )
 
         with (
@@ -1268,7 +1267,6 @@ class TestBackendMinimal(E2ETestBase):
                 ),
             ),
             patch("app.impl.workspace.context_job.run_workspace_verification_dag", side_effect=fake_run_workspace_verification_dag),
-            patch.object(config.verification_service, "resolve_artifact_blob", return_value=b"payload"),
             patch.object(config.export_service, "create_export", return_value=Path("package.zip")) as create_export,
         ):
             _run_export_create_worker(

@@ -38,6 +38,21 @@ class BatchScheduler(BatchSchedulerResultMixin):
     _TERMINAL_CASE_STATUSES = frozenset({"reported", "cancelled"})
     _PREREQUISITE_TASK_KINDS = ("main-correct", "generate-input")
 
+    @staticmethod
+    def _compile_submission_identity(submission: CompileSubmission) -> tuple[object, ...]:
+        return (
+            submission.compile_key,
+            submission.submit_id,
+            submission.source_name,
+            submission.source_file.identity,
+            submission.source_file.size,
+            tuple(
+                (name, payload.identity, payload.size)
+                for name, payload in submission.extra_source_items
+            ),
+            submission.compile_files,
+        )
+
     def __init__(self, lock: threading.RLock | None = None, *, id_base: int | None = None):
         self._lock = threading.RLock() if lock is None else lock
         self._id_base = max(1, int(id_base if id_base is not None else time.time() * 1000))
@@ -48,6 +63,7 @@ class BatchScheduler(BatchSchedulerResultMixin):
         self._case_ids_by_task: dict[str, set[int]] = defaultdict(set)
         self._case_ids_by_run: dict[str, set[int]] = defaultdict(set)
         self._case_ids_by_testcase: dict[int, set[int]] = defaultdict(set)
+        self._testcase_hash_by_id: dict[int, str] = {}
         self._latest_case_id_by_task_test: dict[tuple[str, str], int] = {}
         self._batch_id_by_task: dict[str, int] = {}
         self._batch_ids_by_run: dict[str, set[int]] = defaultdict(set)
@@ -65,6 +81,7 @@ class BatchScheduler(BatchSchedulerResultMixin):
         self._scope_sequence_by_verification: dict[str, int] = {}
         self._batch_specs: dict[int, ExecutionBatchSpec] = {}
         self._compile_submissions_by_key: dict[str, CompileSubmission] = {}
+        self._materialized_compile_submissions_by_key: dict[str, CompileSubmission] = {}
         self._compile_key_by_submit_id: dict[int, str] = {}
         self._batch_ids_by_compile_key: dict[str, set[int]] = defaultdict(set)
         self._batch_ids_by_verification: dict[str, set[int]] = defaultdict(set)
@@ -89,6 +106,7 @@ class BatchScheduler(BatchSchedulerResultMixin):
             self._case_ids_by_task.clear()
             self._case_ids_by_run.clear()
             self._case_ids_by_testcase.clear()
+            self._testcase_hash_by_id.clear()
             self._latest_case_id_by_task_test.clear()
             self._batch_id_by_task.clear()
             self._batch_ids_by_run.clear()
@@ -105,6 +123,7 @@ class BatchScheduler(BatchSchedulerResultMixin):
             self._scope_sequence_by_verification.clear()
             self._batch_specs.clear()
             self._compile_submissions_by_key.clear()
+            self._materialized_compile_submissions_by_key.clear()
             self._compile_key_by_submit_id.clear()
             self._batch_ids_by_compile_key.clear()
             self._batch_ids_by_verification.clear()
@@ -141,8 +160,8 @@ class BatchScheduler(BatchSchedulerResultMixin):
         row.pop("claim_generation")
         result_fields = (
             "runresult", "runtime_sec", "cpu_sec", "wall_sec", "memory_kb",
-            "output_run_rel", "output_error_rel", "output_system_rel", "output_diff_rel",
-            "metadata_rel", "compare_metadata_rel", "team_message_rel", "score_text",
+            "output_run_ref", "output_error_ref", "output_system_ref", "output_diff_ref",
+            "metadata_ref", "compare_metadata_ref", "team_message_ref", "score_text",
         )
         if result is None:
             for field in result_fields:
@@ -407,6 +426,14 @@ class BatchScheduler(BatchSchedulerResultMixin):
         created_at: str,
     ) -> CaseRecord:
         case_id = next(self._entity_ids)
+        testcase_id = source["testcase_id"]
+        testcase_hash = str(source["testcase_hash"])
+        if testcase_id is not None:
+            numeric_testcase_id = int(testcase_id)
+            existing_hash = self._testcase_hash_by_id.get(numeric_testcase_id)
+            if existing_hash not in {None, testcase_hash}:
+                raise RuntimeError("DOMjudge testcase id collision")
+            self._testcase_hash_by_id[numeric_testcase_id] = testcase_hash
         case = CaseRecord(
             id=case_id,
             batch_id=batch_id,
@@ -416,8 +443,8 @@ class BatchScheduler(BatchSchedulerResultMixin):
             ordinal=ordinal,
             scope_sequence=scope_sequence,
             heap_generation=1,
-            testcase_id=source["testcase_id"],  # type: ignore[arg-type]
-            testcase_hash=str(source["testcase_hash"]),
+            testcase_id=testcase_id,  # type: ignore[arg-type]
+            testcase_hash=testcase_hash,
             testcase_input_hash=str(source["testcase_input_hash"]),
             testcase_answer_hash=str(source["testcase_answer_hash"]),
             input_ref=str(source["input_ref"]),
@@ -941,6 +968,25 @@ class BatchScheduler(BatchSchedulerResultMixin):
                 return None
             return self._compile_submissions_by_key.get(batch.compile_key)
 
+    def publish_materialized_compile_submission(
+        self,
+        compile_key: str,
+        submission: CompileSubmission,
+    ) -> None:
+        with self._lock:
+            original = self._compile_submissions_by_key.get(compile_key)
+            if original is None:
+                raise RuntimeError("compile submission disappeared during materialization")
+            if (
+                self._compile_submission_identity(submission)
+                != self._compile_submission_identity(original)
+                or submission.source_file.blob_ref is None
+                or any(payload.blob_ref is None for _, payload in submission.extra_source_items)
+            ):
+                raise RuntimeError("materialized compile submission identity changed")
+            self._compile_submissions_by_key[compile_key] = submission
+            self._materialized_compile_submissions_by_key[compile_key] = submission
+
     def claim_materialization(self, batch_id: int, *, now_text: str) -> bool:
         with self._lock:
             batch = self._batches.get(int(batch_id))
@@ -953,8 +999,6 @@ class BatchScheduler(BatchSchedulerResultMixin):
         self,
         batch_id: int,
         *,
-        source_path: str,
-        work_root: str,
         success: bool,
         error_text: str,
         now_text: str,
@@ -965,8 +1009,6 @@ class BatchScheduler(BatchSchedulerResultMixin):
                 return False
             self._mutate_batch_locked(
                 batch,
-                source_path=source_path,
-                work_root=work_root,
                 materialization_state="ready" if success else "failed",
                 failure_runresult=batch.failure_runresult if success else "internal-error",
                 failure_text=batch.failure_text if success else error_text,
@@ -1030,7 +1072,10 @@ class BatchScheduler(BatchSchedulerResultMixin):
                 if batch_id in self._batches
             ):
                 return None
-            return self._compile_submissions_by_key.get(compile_key)
+            return self._materialized_compile_submissions_by_key.get(
+                compile_key,
+                self._compile_submissions_by_key.get(compile_key),
+            )
 
     def testcase_refs(
         self,
@@ -1041,18 +1086,12 @@ class BatchScheduler(BatchSchedulerResultMixin):
         safe_host = str(hostname or "").strip()
         token = int(testcase_id)
         with self._lock:
-            direct = self._cases.get(token)
-            if direct is not None and direct.status == "leased":
-                return (
-                    {"input_ref": direct.input_ref, "answer_ref": direct.answer_ref},
-                    "leased-case-id",
-                )
             if not safe_host:
                 return None, "missing-host"
             candidates = [
                 self._cases[case_id]
                 for case_id in self._case_ids_by_testcase.get(token, ())
-                if self._cases[case_id].status == "leased"
+                if self._cases[case_id].status in {"leased", "reporting"}
                 and self._cases[case_id].lease_owner == safe_host
             ]
             if not candidates:
@@ -1114,8 +1153,6 @@ class BatchScheduler(BatchSchedulerResultMixin):
         contest_id: str,
         mode: str,
         source_name: str,
-        source_path: str,
-        work_root: str,
         compile_hash: str,
         run_hash: str,
         compare_hash: str,
@@ -1150,6 +1187,7 @@ class BatchScheduler(BatchSchedulerResultMixin):
         ):
             raise RuntimeError("invalid judgehost execution signature")
         with self._lock:
+            self._validate_testcase_identities_locked(case_rows)
             if verification_id in self._closed_verification_ids:
                 raise RuntimeError("judgehost verification execution is closed")
             logical_run_key = (verification_id, logical_run_id)
@@ -1177,7 +1215,9 @@ class BatchScheduler(BatchSchedulerResultMixin):
                     existing_batch.bypass_case_result_cache,
                     existing_batch.service_class,
                     self._batch_specs[existing_batch_id],
-                    self._compile_submissions_by_key[existing_batch.compile_key],
+                    self._compile_submission_identity(
+                        self._compile_submissions_by_key[existing_batch.compile_key]
+                    ),
                 )
                 requested_identity = (
                     execution_signature,
@@ -1198,7 +1238,7 @@ class BatchScheduler(BatchSchedulerResultMixin):
                     int(bypass_case_result_cache),
                     service_class,
                     batch_spec,
-                    compile_submission,
+                    self._compile_submission_identity(compile_submission),
                 )
                 if identity != requested_identity:
                     raise RuntimeError("judgehost logical run execution identity changed")
@@ -1218,7 +1258,11 @@ class BatchScheduler(BatchSchedulerResultMixin):
             if existing_compile_key not in {None, compile_key}:
                 raise RuntimeError("DOMjudge submit id collision")
             existing_submission = self._compile_submissions_by_key.get(compile_key)
-            if existing_submission is not None and existing_submission != compile_submission:
+            if (
+                existing_submission is not None
+                and self._compile_submission_identity(existing_submission)
+                != self._compile_submission_identity(compile_submission)
+            ):
                 raise RuntimeError("compile submission identity changed")
             case_task_ids = {str(row.get("task_id") or task_id) for row in case_rows}
             if any(case_task_id in self._batch_id_by_task for case_task_id in case_task_ids):
@@ -1237,8 +1281,6 @@ class BatchScheduler(BatchSchedulerResultMixin):
                 contest_id=contest_id,
                 mode=mode,
                 source_name=source_name,
-                source_path=source_path,
-                work_root=work_root,
                 compile_hash=compile_hash,
                 run_hash=run_hash,
                 compare_hash=compare_hash,
@@ -1252,9 +1294,7 @@ class BatchScheduler(BatchSchedulerResultMixin):
                 compile_success=None,
                 compile_state="unknown",
                 compile_owner=None,
-                materialization_state=(
-                    "ready" if source_path and work_root else "unmaterialized"
-                ),
+                materialization_state="unmaterialized",
                 service_class=service_class,
                 has_been_dispatched=False,
                 compile_output_b64=None,
@@ -1269,7 +1309,8 @@ class BatchScheduler(BatchSchedulerResultMixin):
             )
             self._batches[batch_id] = batch
             self._batch_specs[batch_id] = batch_spec
-            self._compile_submissions_by_key.setdefault(compile_key, compile_submission)
+            if compile_key not in self._materialized_compile_submissions_by_key:
+                self._compile_submissions_by_key[compile_key] = compile_submission
             self._compile_key_by_submit_id[compile_submission.submit_id] = compile_key
             self._batch_ids_by_compile_key[compile_key].add(batch_id)
             self._batch_ids_by_verification[verification_id].add(batch_id)
@@ -1357,6 +1398,7 @@ class BatchScheduler(BatchSchedulerResultMixin):
         if batch.status != "open" or batch.verification_id in self._closed_verification_ids:
             raise RuntimeError("judgehost verification execution is closed")
         self._validate_case_rows(case_rows)
+        self._validate_testcase_identities_locked(case_rows)
         rows_by_task: dict[str, list[dict[str, object]]] = defaultdict(list)
         for row in case_rows:
             case_task_id = str(row.get("task_id") or "")
@@ -1399,6 +1441,19 @@ class BatchScheduler(BatchSchedulerResultMixin):
                 status="staged",
                 created_at=now_text,
             )
+
+    def _validate_testcase_identities_locked(self, case_rows: list[dict[str, object]]) -> None:
+        requested: dict[int, str] = {}
+        for row in case_rows:
+            testcase_id = row.get("testcase_id")
+            if testcase_id is None:
+                continue
+            numeric_id = int(testcase_id)
+            testcase_hash = str(row.get("testcase_hash") or "")
+            known_hash = requested.get(numeric_id, self._testcase_hash_by_id.get(numeric_id))
+            if known_hash not in {None, testcase_hash}:
+                raise RuntimeError("DOMjudge testcase id collision")
+            requested[numeric_id] = testcase_hash
 
     def activate_task_cases(self, task_id: str, *, now_text: str) -> bool:
         with self._lock:

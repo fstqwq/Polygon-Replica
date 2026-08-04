@@ -7,7 +7,6 @@ from fastapi.templating import Jinja2Templates
 from app.db import DB
 from app.main_util import configure_runtime_values
 from app.runtime_value import RuntimeValues, build_runtime_values
-from app.service.platform.artifact import ArtifactService
 from app.service.auth.service import AuthService
 from app.service.agent.service import AgentService
 from app.service.contest.service import ContestService
@@ -16,7 +15,8 @@ from app.service.verification.service import VerificationService
 from app.service.verification.task_store import VerificationTaskStore
 from app.service.export.service import ExportService
 from app.service.repository.git import GitService
-from app.service.platform.judge_fs_index import JudgeFsIndexService
+from app.service.platform.runtime_blob_store import RuntimeBlobStore
+from app.service.platform.runtime_cache_index import RuntimeCacheIndex
 from app.service.judgehost.api import Judgehost
 from app.service.sandbox.base import SandboxBackend
 from app.service.sandbox.tex_backend import TexSandboxBackend
@@ -49,7 +49,8 @@ class RuntimeConfig:
     contest_service: ContestService = field(init=False)
     git_service: GitService = field(init=False)
     fs_manager: FsManager = field(init=False)
-    artifact_service: ArtifactService = field(init=False)
+    runtime_blob_store: RuntimeBlobStore = field(init=False)
+    runtime_cache_index: RuntimeCacheIndex = field(init=False)
     tex_sandbox_backend: SandboxBackend = field(init=False)
     tex_compile_service: TexCompileService = field(init=False)
     verification_service: VerificationService = field(init=False)
@@ -57,7 +58,6 @@ class RuntimeConfig:
     preview_service: PreviewService = field(init=False)
     judgehost_task_service: Judgehost = field(init=False)
     export_service: ExportService = field(init=False)
-    judge_fs_index_service: JudgeFsIndexService = field(init=False)
     worker_queue_service: WorkerQueueService = field(init=False)
     system_config_service: SystemConfigService = field(init=False)
     smtp_config_service: SmtpConfigService = field(init=False)
@@ -112,7 +112,6 @@ class RuntimeConfig:
         self.verification_task_store = VerificationTaskStore(self.db)
         self.system_config_service = SystemConfigService(self.db)
         self.smtp_config_service = SmtpConfigService(self.db)
-        self.judge_fs_index_service = JudgeFsIndexService(self.settings.cache_root)
         runtime_overrides = self.system_config_service.refresh()
         self.constants = build_runtime_values(runtime_overrides)
         self.db.apply_runtime_values(self.constants)
@@ -135,7 +134,8 @@ class RuntimeConfig:
         self.workspace_file_service = WorkspaceFileService(self.git_service, self.workspace_service)
         self.workspace_mutation_service = WorkspaceMutationService(self.workspace_service)
         self.fs_manager = FsManager(self.settings.cache_root, self.settings.artifacts_root)
-        self.artifact_service = ArtifactService(self.settings.artifacts_root)
+        self.runtime_blob_store = RuntimeBlobStore(self.fs_manager.runtime_root)
+        self.runtime_cache_index = RuntimeCacheIndex(self.runtime_blob_store)
         self.tex_sandbox_backend = TexSandboxBackend()
         self.tex_compile_service = TexCompileService(
             sandbox_backend=self.tex_sandbox_backend,
@@ -147,22 +147,22 @@ class RuntimeConfig:
             self.fs_manager,
             self.settings,
             self.constants,
-            judge_fs_index_service=self.judge_fs_index_service,
+            runtime_blob_store=self.runtime_blob_store,
+            runtime_cache_index=self.runtime_cache_index,
             verification_task_store=self.verification_task_store,
         )
         self.verification_service = VerificationService(
             self.db,
             self.workspace_service,
-            self.artifact_service,
             self.judgehost_task_service,
             task_store=self.verification_task_store,
-            judge_fs_index_service=self.judge_fs_index_service,
+            runtime_blob_store=self.runtime_blob_store,
+            fs_manager=self.fs_manager,
             constants=self.constants,
         )
         self.preview_service = PreviewService(
             self.db,
             self.workspace_service,
-            self.artifact_service,
             self.tex_compile_service,
             verification_service=self.verification_service,
         )
@@ -171,7 +171,7 @@ class RuntimeConfig:
             self.settings.artifacts_root,
             self.settings.workspace_root,
             self.tex_compile_service,
-            artifact_blob_resolver=self.judgehost_task_service.resolve_artifact_blob,
+            artifact_file_resolver=self.runtime_blob_store.descriptor,
         )
         durable_log_raw = str(self.constants.WORKER_QUEUE_DURABLE_LOG or "").strip()
         durable_log_path = self.settings.cache_root / "runtime" / "worker-queue-events.jsonl"

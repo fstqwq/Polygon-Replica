@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import base64
 import json
 import re
 import uuid
@@ -14,6 +13,7 @@ from app.service.judgehost.identity import canonical_verification_id, compile_ke
 from app.service.judgehost.shared import _RUN_ID_RE, domjudge_lower_text, domjudge_path_name, domjudge_text
 from app.service.judgehost.runtime import domjudge_bool, domjudge_parse_int
 from app.service.platform.hashing import domjudge_executable_hash, sha256_hex_json
+from app.service.platform.runtime_blob_store import PayloadFile, RuntimeBlobStore
 from app.service.run.runtime import RUN_TEST_NAME_RE
 from app.service.platform.testlib_source import workspace_testlib_header
 
@@ -299,7 +299,7 @@ class TaskEnqueue:
         stable_payload = dict(payload)
         stable_payload.pop("enqueued_at", None)
         # Precomputed executable fields contain bytes and are derived entirely
-        # from the canonical, base64-backed request payload.
+        # from the canonical descriptor-backed request payload.
         stable_payload.pop("domjudge_precomputed", None)
         return sha256_hex_json(stable_payload, ensure_ascii=False)
 
@@ -360,24 +360,24 @@ class TaskEnqueue:
             )
             if not input_ref:
                 continue
-            test_bytes = self._toolkit.resolve_artifact_blob(input_ref)
-            if test_bytes is None:
+            input_file = self._s.runtime_blob_store.descriptor(input_ref)
+            if input_file is None:
                 continue
             ans_name = f"{Path(test_name).stem}.ans"
             answer_ref = TaskEnqueue._normalize_text(
                 self._verification_artifact_ref(safe_verification_id, test_name, "answer_ref")
             )
-            ans_bytes = b""
+            answer_file = self._s.runtime_blob_store.put_bytes(b"")
             if answer_ref:
-                resolved_answer = self._toolkit.resolve_artifact_blob(answer_ref)
+                resolved_answer = self._s.runtime_blob_store.descriptor(answer_ref)
                 if resolved_answer is not None:
-                    ans_bytes = resolved_answer
+                    answer_file = resolved_answer
             tests_payload.append(
                 {
                     "name": test_name,
-                    "input_b64": base64.b64encode(test_bytes).decode("ascii"),
+                    "input_file": input_file.to_payload(),
                     "answer_name": ans_name,
-                    "answer_b64": base64.b64encode(ans_bytes).decode("ascii"),
+                    "answer_file": answer_file.to_payload(),
                 }
             )
 
@@ -390,8 +390,6 @@ class TaskEnqueue:
         )
         if verification_row is not None:
             run_config_text = TaskEnqueue._normalize_text(verification_row["run_config_json"])
-
-        binaries: dict[str, str] = {}
 
         def _safe_workspace_rel_file(rel_path: str) -> Path | None:
             token = TaskEnqueue._normalize_text(rel_path).replace("\\", "/")
@@ -482,14 +480,14 @@ class TaskEnqueue:
             if testlib_source is not None:
                 source_files["testlib.h"] = testlib_source
 
-        sources_payload: dict[str, str] = {}
+        sources_payload: dict[str, dict[str, object]] = {}
         for name, source_path in source_files.items():
-            blob = self._core.safe_read_bytes(
-                source_path,
-                max_bytes=self._s.max_binary_payload_bytes,
-                label=f"{name} payload",
-            )
-            sources_payload[name] = base64.b64encode(blob).decode("ascii")
+            descriptor = RuntimeBlobStore.describe_file(source_path)
+            if descriptor.size > self._s.max_binary_payload_bytes:
+                raise RuntimeError(f"{name} payload exceeds size limit")
+            sources_payload[name] = self._s.runtime_blob_store.put_file(
+                descriptor
+            ).to_payload()
 
         return {
             "tests": tests_payload,
@@ -499,8 +497,7 @@ class TaskEnqueue:
                 "memory_limit_mb": int(problem_memory_limit_mb),
                 "pass_limit": domjudge_parse_int(problem_cfg_obj.get("pass_limit"), 1),
             },
-            "binaries_b64": binaries,
-            "sources_b64": sources_payload,
+            "source_files": sources_payload,
         }
 
     def _build_task_payload(
@@ -512,6 +509,7 @@ class TaskEnqueue:
         mode: str,
         submission_path: str | None,
         upload_content: bytes | None,
+        upload_file: PayloadFile | None,
         upload_filename: str | None,
         selected_tests: list[str],
         verification_id: str,
@@ -526,15 +524,25 @@ class TaskEnqueue:
         verification_payload_override: dict[str, object] | None = None,
     ) -> dict[str, object]:
         workspace: Path | None = None
-        if upload_content is None or verification_payload_override is None:
+        if (upload_content is None and upload_file is None) or verification_payload_override is None:
             ctx = self._s.workspace_service.workspace_context(problem, username, include_recent=False)
             workspace = Path(ctx["workspace"]["path"])
 
         source_bytes: bytes
         source_name: str
         source_label: str
-        if upload_content is not None:
+        source_file: PayloadFile
+        if upload_file is not None:
+            source_file = upload_file
+            source_bytes = self._s.runtime_blob_store.read(
+                source_file,
+                max_bytes=self._s.max_source_bytes,
+            )
+            source_name = TaskEnqueue._normalize_text_with_default(upload_filename, default="submission.cpp")
+            source_label = source_name
+        elif upload_content is not None:
             source_bytes = upload_content
+            source_file = self._s.runtime_blob_store.put_bytes(source_bytes)
             source_name = TaskEnqueue._normalize_text_with_default(upload_filename, default="submission.cpp")
             source_label = source_name
         else:
@@ -546,6 +554,7 @@ class TaskEnqueue:
                 max_bytes=self._s.max_source_bytes,
                 label="submission payload",
             )
+            source_file = self._s.runtime_blob_store.put_bytes(source_bytes)
             source_name = source_path.name
             source_label = TaskEnqueue._normalize_text(submission_path) or source_name
         source_name, entry_point = self._normalize_submission_source(
@@ -583,7 +592,7 @@ class TaskEnqueue:
             "submission_path": TaskEnqueue._normalize_text(submission_path),
             "source_name": source_name,
             "source_label": source_label,
-            "source_b64": base64.b64encode(source_bytes).decode("ascii"),
+            "source_file": source_file.to_payload(),
             "entry_point": entry_point,
             "selected_tests": list(selected_tests),
             "verification_id": verification_id,
@@ -602,16 +611,20 @@ class TaskEnqueue:
         self,
         *,
         mode: str,
-        upload_content: bytes,
+        upload_file: PayloadFile,
         upload_filename: str,
         verification_payload: dict[str, object],
         expected_behavior: str,
         verification_source: str,
         task_kind: str,
-        extra_sources_b64: dict[str, str] | None = None,
+        extra_source_files: dict[str, PayloadFile] | None = None,
         manual_validate_only: bool = False,
         compile_only: bool = False,
     ) -> dict[str, object]:
+        upload_content = self._s.runtime_blob_store.read(
+            upload_file,
+            max_bytes=self._s.max_source_bytes,
+        )
         source_name, entry_point = self._normalize_submission_source(
             source_name=upload_filename,
             source_bytes=bytes(upload_content),
@@ -619,7 +632,7 @@ class TaskEnqueue:
         payload: dict[str, object] = {
             "mode": mode,
             "source_name": source_name,
-            "source_b64": base64.b64encode(upload_content).decode("ascii"),
+            "source_file": upload_file.to_payload(),
             "entry_point": entry_point,
             "verification_payload": dict(verification_payload),
             "expected_behavior": expected_behavior,
@@ -627,27 +640,38 @@ class TaskEnqueue:
             "task_kind": task_kind,
             "compile_only": bool(compile_only),
         }
-        if extra_sources_b64:
-            payload["extra_sources_b64"] = dict(extra_sources_b64)
+        if extra_source_files:
+            payload["extra_source_files"] = {
+                name: source.to_payload()
+                for name, source in extra_source_files.items()
+            }
         if manual_validate_only:
             payload["manual_validate_only"] = True
         return self._domjudge_precomputed_fields_from_payload(payload)
 
     def _domjudge_precomputed_fields_from_payload(self, payload: dict[str, object]) -> dict[str, object]:
         source_name = domjudge_path_name(payload.get("source_name"), default="submission.cpp")
-        source_bytes = self._toolkit.b64_decode(payload.get("source_b64"))
+        source_file = PayloadFile.from_payload(payload["source_file"])
+        source_bytes = self._s.runtime_blob_store.read(
+            source_file,
+            max_bytes=self._s.max_source_bytes,
+        )
         if not source_bytes:
             raise RuntimeError("submission source payload is empty")
         entry_point = domjudge_text(payload.get("entry_point"))
-        extra_sources_obj = cast(dict[str, object] | None, payload.get("extra_sources_b64"))
+        extra_sources_obj = cast(dict[str, object] | None, payload.get("extra_source_files"))
         if extra_sources_obj is None:
             extra_sources_obj = {}
         extra_source_items: list[tuple[str, bytes]] = []
-        for raw_name, raw_blob in sorted(extra_sources_obj.items(), key=lambda item: TaskEnqueue._normalize_text(item[0])):
+        for raw_name, raw_file in sorted(extra_sources_obj.items(), key=lambda item: TaskEnqueue._normalize_text(item[0])):
             safe_name = domjudge_path_name(raw_name)
             if (not safe_name) or safe_name == source_name:
                 continue
-            blob = self._toolkit.b64_decode(raw_blob)
+            descriptor = PayloadFile.from_payload(raw_file)
+            blob = self._s.runtime_blob_store.read(
+                descriptor,
+                max_bytes=self._s.max_source_bytes,
+            )
             if not blob:
                 continue
             extra_source_items.append((safe_name, blob))
@@ -707,34 +731,31 @@ class TaskEnqueue:
         run_tl_sec = max(0.1, float(run_tl_ms) / 1000.0)
         run_overshoot_sec = 0.0
         run_mem_kb = max(16 * 1024, int(run_mem_mb * 1024))
-        binaries_b64 = verification_payload.get("binaries_b64")
-        binaries_obj = cast(dict[str, object] | None, binaries_b64)
-        if binaries_obj is None:
-            binaries_obj = {}
-        checker_bytes = self._toolkit.b64_decode(binaries_obj.get("checker"))
-        validator_bytes = self._toolkit.b64_decode(binaries_obj.get("validator"))
-        interactor_bytes = self._toolkit.b64_decode(binaries_obj.get("interactor"))
-        sources_b64 = verification_payload.get("sources_b64")
-        sources_obj = cast(dict[str, object] | None, sources_b64)
+        sources_files = verification_payload.get("source_files")
+        sources_obj = cast(dict[str, object] | None, sources_files)
         if sources_obj is None:
             sources_obj = {}
-        checker_source_bytes = self._toolkit.b64_decode(sources_obj.get("checker.cpp"))
-        validator_source_bytes = self._toolkit.b64_decode(sources_obj.get("validator.cpp"))
-        interactor_source_bytes = self._toolkit.b64_decode(sources_obj.get("interactor.cpp"))
-        testlib_header_bytes = self._toolkit.b64_decode(sources_obj.get("testlib.h"))
+
+        def _source_bytes(name: str) -> bytes:
+            raw_file = sources_obj.get(name)
+            if raw_file is None:
+                return b""
+            return self._s.runtime_blob_store.read(
+                PayloadFile.from_payload(raw_file),
+                max_bytes=self._s.max_binary_payload_bytes,
+            )
+
+        checker_source_bytes = _source_bytes("checker.cpp")
+        validator_source_bytes = _source_bytes("validator.cpp")
+        interactor_source_bytes = _source_bytes("interactor.cpp")
+        testlib_header_bytes = _source_bytes("testlib.h")
         if checker_source_bytes:
             checker_source_bytes = self._toolkit.force_cpp_define(checker_source_bytes)
         if validator_source_bytes:
             validator_source_bytes = self._toolkit.force_cpp_define(validator_source_bytes)
         if interactor_source_bytes:
             interactor_source_bytes = self._toolkit.force_cpp_define(interactor_source_bytes)
-        if checker_source_bytes:
-            checker_bytes = b""
-        if validator_source_bytes:
-            validator_bytes = b""
-        if interactor_source_bytes:
-            interactor_bytes = b""
-        has_interactor_payload = bool(interactor_bytes or interactor_source_bytes)
+        has_interactor_payload = bool(interactor_source_bytes)
         interactive = (
             (not compile_only)
             and (not generate_mode)
@@ -764,9 +785,7 @@ class TaskEnqueue:
             # DOMjudge combined run/compare wraps the provided run executable
             # itself (renames run->runjury and writes run-interactive.sh).
             # Therefore we must provide jury program as "run" here.
-            if interactor_bytes:
-                run_files.append(("run", interactor_bytes, True))
-            elif interactor_source_bytes:
+            if interactor_source_bytes:
                 run_files.append(
                     ("build", self._toolkit.cpp_executable_build_script("interactor.cpp", role="interactor"), True)
                 )
@@ -798,16 +817,12 @@ class TaskEnqueue:
                     compare_files.append(("validator.cpp", validator_source_bytes, False))
                     if testlib_header_bytes:
                         compare_files.append(("testlib.h", testlib_header_bytes, False))
-                elif validator_bytes:
-                    compare_files.append(("validator", validator_bytes, True))
             else:
                 compare_files.append(("run", self._toolkit.compare_script(main_correct=main_correct), True))
                 if checker_source_bytes:
                     compare_files.append(("checker.cpp", checker_source_bytes, False))
                     if testlib_header_bytes:
                         compare_files.append(("testlib.h", testlib_header_bytes, False))
-                elif checker_bytes:
-                    compare_files.append(("checker", checker_bytes, True))
 
         source_hash = domjudge_source_hash(source_name, source_bytes)
         if extra_source_items:
@@ -888,6 +903,7 @@ class TaskEnqueue:
         mode: str,
         submission_path: str | None,
         upload_content: bytes | None,
+        upload_file: PayloadFile | None = None,
         upload_filename: str | None,
         run_id: str,
         selected_tests: list[str] | None,
@@ -911,6 +927,7 @@ class TaskEnqueue:
             mode=mode,
             submission_path=submission_path,
             upload_content=upload_content,
+            upload_file=upload_file,
             upload_filename=upload_filename,
             selected_tests=selected,
             verification_id=verification_id,
@@ -984,6 +1001,7 @@ class TaskEnqueue:
         mode: str,
         submission_path: str | None,
         upload_content: bytes | None,
+        upload_file: PayloadFile | None = None,
         upload_filename: str | None,
         run_id: str | None = None,
         selected_tests: list[str] | None,
@@ -1008,7 +1026,7 @@ class TaskEnqueue:
         if not verification_run_id_list:
             verification_run_id_list = [safe_run_id]
         verification_payload_override = None
-        if prepared_payload is not None:
+        if prepared_payload is not None and "verification_payload" in prepared_payload:
             verification_payload_override = dict(
                 cast(dict[str, object], prepared_payload["verification_payload"])
             )
@@ -1019,6 +1037,7 @@ class TaskEnqueue:
             mode=mode,
             submission_path=submission_path,
             upload_content=upload_content,
+            upload_file=upload_file,
             upload_filename=upload_filename,
             selected_tests=selected,
             verification_id=safe_verification_id,

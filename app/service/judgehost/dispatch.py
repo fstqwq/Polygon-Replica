@@ -20,7 +20,7 @@ from app.service.judgehost.runtime import (
     domjudge_parse_meta_text,
     domjudge_verdict_from_runresult,
 )
-from app.service.platform.hashing import sha256_hex_bytes
+from app.service.platform.runtime_blob_store import PayloadFile
 from app.service.run.runtime import RUN_TEST_NAME_RE
 from app.service.verification.task_scheduler import notify_verification_case_leased
 
@@ -38,15 +38,12 @@ from app.service.judgehost.toolkit import DomjudgeToolkit
 
 logger = logging.getLogger(__name__)
 
-_NUMERIC_TEST_NAME_RE = re.compile(r"^([0-9]+)\.in$")
-
-
 _DomjudgePreparedTestRow = TypedDict(
     "_DomjudgePreparedTestRow",
     {
         "name": str,
-        "input_b64": object,
-        "answer_b64": object,
+        "input_file": object,
+        "answer_file": object,
     },
 )
 
@@ -72,8 +69,8 @@ _DomjudgePreparedPayload = TypedDict(
     "_DomjudgePreparedPayload",
     {
         "source_name": str,
-        "source_bytes": bytes,
-        "extra_source_items": list[tuple[str, bytes]],
+        "source_file": PayloadFile,
+        "extra_source_items": list[tuple[str, PayloadFile]],
         "tests_rows": list[_DomjudgePreparedTestRow],
         "run_cfg_obj": dict[str, object],
         "problem_limits_obj": dict[str, object],
@@ -96,9 +93,6 @@ _DomjudgePreparedPayload = TypedDict(
         "expected_behavior": str,
         "bypass_case_result_cache": bool,
         "manual_validate_only": bool,
-        "checker_bytes": bytes,
-        "validator_bytes": bytes,
-        "interactor_bytes": bytes,
         "checker_source_bytes": bytes,
         "validator_source_bytes": bytes,
         "interactor_source_bytes": bytes,
@@ -124,21 +118,12 @@ class DispatchHandler(DispatchCacheMixin):
         self._result = result
         self._toolkit = toolkit
 
-    @staticmethod
-    def _domjudge_visible_testcase_id(*, test_name: str, ordinal: int) -> int:
-        token = domjudge_text(test_name)
-        match = _NUMERIC_TEST_NAME_RE.fullmatch(token)
-        if match is not None:
-            return max(1, int(match.group(1)))
-        return max(1, int(ordinal))
-
     def _domjudge_case_rows(
         self,
         *,
         task_id: str,
         run_id: str,
         tests_rows: list[_DomjudgePreparedTestRow],
-        main_correct: bool,
         scope_sequence: int,
     ) -> list[dict[str, object]]:
         case_rows: list[dict[str, object]] = []
@@ -147,29 +132,31 @@ class DispatchHandler(DispatchCacheMixin):
             ordinal += 1
             raw_name = domjudge_text(entry.get("name"))
             test_name = raw_name if RUN_TEST_NAME_RE.fullmatch(raw_name) else f"{ordinal:03}.in"
-            in_bytes = self._toolkit.b64_decode(entry.get("input_b64"))
-            ans_bytes = self._toolkit.b64_decode(entry.get("answer_b64"))
-            testcase_input_hash = sha256_hex_bytes(in_bytes)
-            testcase_answer_hash = sha256_hex_bytes(ans_bytes)
+            input_file = PayloadFile.from_payload(entry["input_file"])
+            answer_file = PayloadFile.from_payload(entry["answer_file"])
+            testcase_input_hash = input_file.identity
+            testcase_answer_hash = answer_file.identity
             testcase_signature = domjudge_hash_of_hashes(
                 [testcase_input_hash, testcase_answer_hash]
             )
-            testcase_hash = testcase_input_hash if main_correct else testcase_signature
-            input_ref_text, answer_ref_text = self._toolkit.register_cached_testcase(
-                testcase_hash=testcase_hash,
-                testcase_signature=testcase_signature,
-                input_hash=testcase_input_hash,
-                answer_hash=testcase_answer_hash,
-                in_bytes=in_bytes,
-                ans_bytes=ans_bytes,
+            testcase_hash = testcase_signature
+            input_ref_text = (
+                input_file.blob_ref
+                or self._s.runtime_blob_store.put_file(input_file).blob_ref
+                or ""
             )
-            testcase_id = self._domjudge_visible_testcase_id(test_name=test_name, ordinal=ordinal)
+            answer_ref_text = (
+                answer_file.blob_ref
+                or self._s.runtime_blob_store.put_file(answer_file).blob_ref
+                or ""
+            )
+            testcase_id = int(testcase_hash, 16) % (1 << 63)
             case_rows.append(
                 {
                     "task_id": task_id,
                     "run_id": run_id,
                     "test_name": test_name,
-                    "ordinal": testcase_id,
+                    "ordinal": ordinal,
                     "scope_sequence": scope_sequence,
                     "testcase_id": testcase_id,
                     "testcase_hash": testcase_hash,
@@ -265,22 +252,22 @@ class DispatchHandler(DispatchCacheMixin):
 
     def _domjudge_prepare_payload(self, payload: dict[str, object], *, compile_only: bool) -> _DomjudgePreparedPayload:
         source_name = domjudge_path_name(payload.get("source_name"), default="submission.cpp")
-        source_bytes = self._toolkit.b64_decode(payload.get("source_b64"))
-        if not source_bytes:
+        source_file = PayloadFile.from_payload(payload["source_file"])
+        if source_file.size <= 0:
             raise RuntimeError("submission source payload is empty")
 
-        extra_sources_payload = cast(dict[str, object] | None, payload.get("extra_sources_b64"))
+        extra_sources_payload = cast(dict[str, object] | None, payload.get("extra_source_files"))
         if extra_sources_payload is None:
             extra_sources_payload = {}
-        extra_source_items: list[tuple[str, bytes]] = []
-        for raw_name, raw_blob in sorted(extra_sources_payload.items()):
+        extra_source_items: list[tuple[str, PayloadFile]] = []
+        for raw_name, raw_file in sorted(extra_sources_payload.items()):
             safe_name = domjudge_path_name(raw_name)
             if (not safe_name) or safe_name == source_name:
                 continue
-            blob = self._toolkit.b64_decode(raw_blob)
-            if not blob:
+            source = PayloadFile.from_payload(raw_file)
+            if source.size <= 0:
                 continue
-            extra_source_items.append((safe_name, blob))
+            extra_source_items.append((safe_name, source))
 
         verification_payload = cast(dict[str, object] | None, payload.get("verification_payload"))
         if verification_payload is None:
@@ -292,9 +279,9 @@ class DispatchHandler(DispatchCacheMixin):
             tests_rows = [
                 {
                     "name": "compile-only.in",
-                    "input_b64": "",
+                    "input_file": self._s.runtime_blob_store.put_bytes(b"").to_payload(),
                     "answer_name": "compile-only.ans",
-                    "answer_b64": "",
+                    "answer_file": self._s.runtime_blob_store.put_bytes(b"").to_payload(),
                 }
             ]
         if not tests_rows:
@@ -313,19 +300,13 @@ class DispatchHandler(DispatchCacheMixin):
                 if token:
                     checker_args.append(token)
 
-        binaries_payload = cast(dict[str, object] | None, verification_payload.get("binaries_b64"))
-        if binaries_payload is None:
-            binaries_payload = {}
-        sources_payload = cast(dict[str, object] | None, verification_payload.get("sources_b64"))
-        if sources_payload is None:
-            sources_payload = {}
         precomputed = self._domjudge_precomputed_bundle(payload.get("domjudge_precomputed"))
         if precomputed is None:
             raise RuntimeError("domjudge precomputed payload is required")
 
         return {
             "source_name": source_name,
-            "source_bytes": source_bytes,
+            "source_file": source_file,
             "extra_source_items": extra_source_items,
             "tests_rows": tests_rows,
             "run_cfg_obj": run_cfg_obj,
@@ -350,13 +331,6 @@ class DispatchHandler(DispatchCacheMixin):
             "expected_behavior": domjudge_lower_text(payload.get("expected_behavior")),
             "bypass_case_result_cache": domjudge_bool(payload.get("bypass_case_result_cache"), default=False),
             "manual_validate_only": domjudge_bool(payload.get("manual_validate_only"), default=False),
-            "checker_bytes": self._toolkit.b64_decode(binaries_payload.get("checker")),
-            "validator_bytes": self._toolkit.b64_decode(binaries_payload.get("validator")),
-            "interactor_bytes": self._toolkit.b64_decode(binaries_payload.get("interactor")),
-            "checker_source_bytes": self._toolkit.b64_decode(sources_payload.get("checker.cpp")),
-            "validator_source_bytes": self._toolkit.b64_decode(sources_payload.get("validator.cpp")),
-            "interactor_source_bytes": self._toolkit.b64_decode(sources_payload.get("interactor.cpp")),
-            "testlib_header_bytes": self._toolkit.b64_decode(sources_payload.get("testlib.h")),
         }
 
     def _domjudge_cache_entry(self, raw_entry: dict[str, object] | None) -> _DomjudgeCacheEntry | None:
@@ -379,33 +353,28 @@ class DispatchHandler(DispatchCacheMixin):
         test_name: str,
         runresult: str,
         built: dict[str, object],
-        blobs: dict[str, bytes],
-        cache_key_hash: str,
-        cache_signature: str,
+        payloads: dict[str, PayloadFile],
     ) -> CaseResult:
-        output_run_rel = domjudge_text(built.get("output_run_rel"))
-        output_error_rel = domjudge_text(built.get("output_error_rel")) or None
-        output_diff_rel = domjudge_text(built.get("output_diff_rel")) or None
-        team_message_rel = domjudge_text(built.get("team_message_rel")) or None
+        output_run_ref = domjudge_text(built.get("output_run_ref"))
+        output_error_ref = domjudge_text(built.get("output_error_ref")) or None
+        output_diff_ref = domjudge_text(built.get("output_diff_ref")) or None
+        team_message_ref = domjudge_text(built.get("team_message_ref")) or None
         blob_by_ref = {
-            self._toolkit.cache_blob_ref(
-                kind=self.CASE_CACHE_KIND,
-                key_hash=cache_key_hash,
-                signature=cache_signature,
-                name=name,
-            ): payload
-            for name, payload in blobs.items()
+            payload.blob_ref or "": self._s.runtime_blob_store.read(payload, max_bytes=16 * 1024 * 1024)
+            for name, payload in payloads.items()
+            if name != "program.out"
         }
         feedback_text, feedback_files = domjudge_feedback_text_and_files(
             read_blob=blob_by_ref.get,
             runresult=runresult,
-            output_error_rel=output_error_rel or "",
-            output_diff_rel=output_diff_rel or "",
-            team_message_rel=team_message_rel or "",
+            output_error_ref=output_error_ref or "",
+            output_diff_ref=output_diff_ref or "",
+            team_message_ref=team_message_ref or "",
         )
         compare_exit_code = -1
-        compare_meta_blob = blobs.get("compare.meta")
-        if compare_meta_blob is not None:
+        compare_meta_file = payloads.get("compare.meta")
+        if compare_meta_file is not None:
+            compare_meta_blob = self._s.runtime_blob_store.read(compare_meta_file, max_bytes=1024 * 1024)
             compare_meta = domjudge_parse_meta_text(
                 compare_meta_blob.decode("utf-8", errors="replace")
             )
@@ -424,13 +393,13 @@ class DispatchHandler(DispatchCacheMixin):
             wall_sec=wall_sec,
             memory_kb=memory_kb,
             score_text=domjudge_text(built.get("score_text")),
-            output_run_rel=output_run_rel,
-            output_error_rel=output_error_rel or "",
-            output_system_rel=domjudge_text(built.get("output_system_rel")),
-            output_diff_rel=output_diff_rel or "",
-            metadata_rel=domjudge_text(built.get("metadata_rel")),
-            compare_metadata_rel=domjudge_text(built.get("compare_metadata_rel")),
-            team_message_rel=team_message_rel or "",
+            output_run_ref=output_run_ref,
+            output_error_ref=output_error_ref or "",
+            output_system_ref=domjudge_text(built.get("output_system_ref")),
+            output_diff_ref=output_diff_ref or "",
+            metadata_ref=domjudge_text(built.get("metadata_ref")),
+            compare_metadata_ref=domjudge_text(built.get("compare_metadata_ref")),
+            team_message_ref=team_message_ref or "",
             feedback_text=feedback_text,
             feedback_files=feedback_files,
             answer_correct=answer_correct,
@@ -448,7 +417,7 @@ class DispatchHandler(DispatchCacheMixin):
             compile_only=self._toolkit.task_kind(payload) == self._TASK_KIND_COMPILE_ONLY,
         )
         source_name = prepared["source_name"]
-        source_bytes = prepared["source_bytes"]
+        source_file = prepared["source_file"]
         extra_source_items = prepared["extra_source_items"]
         contest_id = prepared["contest_id"]
         mode = prepared["mode"]
@@ -467,7 +436,6 @@ class DispatchHandler(DispatchCacheMixin):
         compile_files = prepared["compile_files"]
         run_files = prepared["run_files"]
         compare_files = prepared["compare_files"]
-        main_correct = prepared["main_correct"]
 
         now_text = now_iso()
         verification_id = canonical_verification_id(domjudge_text(payload.get("verification_id")))
@@ -478,7 +446,6 @@ class DispatchHandler(DispatchCacheMixin):
             task_id=task_id,
             run_id=run_id,
             tests_rows=tests_rows,
-            main_correct=main_correct,
             scope_sequence=scope_sequence,
         )
         service_class = domjudge_lower_text(payload.get("service_class"), default="background")
@@ -488,7 +455,7 @@ class DispatchHandler(DispatchCacheMixin):
             compile_key=full_compile_key,
             submit_id=domjudge_submit_id(full_compile_key),
             source_name=source_name,
-            source_bytes=source_bytes,
+            source_file=source_file,
             extra_source_items=tuple(extra_source_items),
             compile_files=tuple(compile_files),
         )
@@ -508,8 +475,6 @@ class DispatchHandler(DispatchCacheMixin):
             contest_id=contest_id,
             mode=mode,
             source_name=source_name,
-            source_path="",
-            work_root="",
             compile_hash=compile_hash,
             run_hash=run_hash,
             compare_hash=compare_hash,
@@ -595,11 +560,7 @@ class DispatchHandler(DispatchCacheMixin):
                     "compile_script_id": str(int(compile_id)),
                     "run_script_id": str(int(run_id_num)),
                     "compare_script_id": str(int(compare_id)),
-                    # DOMjudge fetches testcase files back by this id without
-                    # including the judgehost hostname. Use our unique case id
-                    # instead of the public test number to avoid collisions
-                    # across concurrent batches and NAT/proxy-shared judgehosts.
-                    "testcase_id": str(case_id),
+                    "testcase_id": str(int(row["testcase_id"])),
                     "testcase_hash": domjudge_text(row["testcase_hash"]),
                     "compile_config": compile_config_json,
                     "run_config": run_config_json,

@@ -1,9 +1,9 @@
 from __future__ import annotations
 from dataclasses import dataclass
-from pathlib import Path
 from typing import cast
 
 from app.service.judgehost.limits import STORED_LOG_TRUNCATED_MARKER
+from app.service.platform.runtime_blob_store import PayloadFile
 from app.service.platform.error_text import (
     aux_display_text_limit_bytes,
     bounded_display_text,
@@ -65,82 +65,41 @@ def verification_task_fail_reason(
     return bounded_display_text(detail_text)
 
 
-def _answer_name(test_name: str) -> str:
-    stem = Path(test_name).stem
-    if not stem:
-        raise RuntimeError("test name is required")
-    return f"{stem}.ans"
-
-
-def _materialized_output_name(test_name: str) -> str:
-    stem = Path(test_name).stem
-    if stem:
-        return f"{stem}.out"
-    return "program.out"
-
-
-def _persist_verification_artifact(
+def _register_verification_artifact(
     *,
     verification_id: str,
     test_name: str,
     ref_key: str,
-    file_name: str,
-    payload: bytes,
-) -> str:
+    blob_ref: str,
+) -> None:
     from app.impl.runtime.config import config
 
-    role = ref_key.removesuffix("_ref") or ref_key
-    ref = config.verification_service.store_verification_blob(
-        verification_id=verification_id,
-        test_name=test_name,
-        role=role,
-        file_name=file_name,
-        payload=payload,
+    config.verification_service.update_verification_artifact_refs(
+        verification_id,
+        test_name,
+        {ref_key: blob_ref},
     )
-    if ref_key in {"input_ref", "answer_ref"}:
-        config.verification_service.update_verification_artifact_refs(
-            verification_id,
-            test_name,
-            {ref_key: ref},
-        )
-    return ref
 
 
 def _materialize_run_output(
     *,
-    verification_id: str,
-    artifact_run_id: str,
     judgehost_task_id: str,
     test_name: str,
     output_ref: str,
-) -> tuple[str, bytes | None]:
-    if (not artifact_run_id) or (not judgehost_task_id) or (not test_name):
+) -> tuple[str, PayloadFile | None]:
+    if (not judgehost_task_id) or (not test_name):
         return ("", None)
     from app.impl.runtime.config import config
 
-    case_output_ref, work_root, _case_id = config.judgehost_task_service.domjudge_case_output_for_task(
+    case_output_ref, _case_id = config.judgehost_task_service.domjudge_case_output_for_task(
         judgehost_task_id,
         test_name,
     )
     resolved_output_ref = output_ref or case_output_ref
     if not resolved_output_ref:
         return ("", None)
-    output_blob = config.judgehost_task_service.resolve_artifact_blob(
-        resolved_output_ref,
-        work_root=work_root,
-    )
-    if output_blob is None:
-        return ("", None)
-    if resolved_output_ref.startswith("cache://"):
-        return (resolved_output_ref, output_blob)
-    output_ref_token = _persist_verification_artifact(
-        verification_id=verification_id,
-        test_name=test_name,
-        ref_key="output_ref",
-        file_name=_materialized_output_name(test_name),
-        payload=output_blob,
-    )
-    return (output_ref_token, output_blob)
+    descriptor = config.runtime_blob_store.descriptor(resolved_output_ref)
+    return (resolved_output_ref, descriptor)
 
 
 def _verdict_from_summary(summary: dict[str, object], run_status: str) -> str:
@@ -248,7 +207,6 @@ def finalize_verification_task_result(task_row: VerificationTaskRow, *, result: 
     test_name = str(task_row["test_name"] or "")
     judgehost_task_id = str(task_row["judgehost_task_id"] or "")
     run_id = str(result.get("run_id") or str(task_row["run_id"] or ""))
-    artifact_run_id = str(task_row["logical_run_id"] or run_id)
     result_summary = dict(result.get("summary") or {})
     result_status = str(result.get("status") or "")
     summary_error_text = str(result_summary.get("error") or "")
@@ -256,20 +214,11 @@ def finalize_verification_task_result(task_row: VerificationTaskRow, *, result: 
     error_text = summary_error_text or result_error_text
     missing_case_result = bool(result.get("missing_case_result"))
     parts = _summary_parts(result_summary, run_status=result_status, error_text=error_text)
-    cache_ref_only = (
-        task_kind not in {TASK_GENERATE_INPUT, TASK_MAIN_CORRECT}
-        and parts.output_ref.startswith("cache://")
+    materialized_output_ref, materialized_output_file = _materialize_run_output(
+        judgehost_task_id=judgehost_task_id,
+        test_name=test_name,
+        output_ref=parts.output_ref,
     )
-    if cache_ref_only:
-        materialized_output_ref, materialized_output_blob = (parts.output_ref, None)
-    else:
-        materialized_output_ref, materialized_output_blob = _materialize_run_output(
-            verification_id=verification_id,
-            artifact_run_id=artifact_run_id,
-            judgehost_task_id=judgehost_task_id,
-            test_name=test_name,
-            output_ref=parts.output_ref,
-        )
 
     if missing_case_result:
         fail_reason = error_text or f"judgehost case result missing for {test_name}"
@@ -321,8 +270,7 @@ def finalize_verification_task_result(task_row: VerificationTaskRow, *, result: 
                 fail_flag_reason=verification_task_fail_reason(task_row, error_text=fail_reason),
                 answer_correct=parts.answer_correct,
             )
-        output_blob = materialized_output_blob
-        if output_blob is None:
+        if materialized_output_file is None:
             fail_message = f"generated input output missing for {test_name}"
             return TaskExecutionResult(
                 task_id=task_id,
@@ -342,7 +290,11 @@ def finalize_verification_task_result(task_row: VerificationTaskRow, *, result: 
                 fail_flag_reason=verification_task_fail_reason(task_row, error_text=fail_message),
                 answer_correct=parts.answer_correct,
             )
-        if _generated_input_truncated(output_blob):
+        from app.impl.runtime.config import config
+
+        if _generated_input_truncated(
+            config.runtime_blob_store.read_tail(materialized_output_ref, max_bytes=4096)
+        ):
             fail_message = f"generated input output was truncated for {test_name}"
             return TaskExecutionResult(
                 task_id=task_id,
@@ -362,12 +314,11 @@ def finalize_verification_task_result(task_row: VerificationTaskRow, *, result: 
                 fail_flag_reason=verification_task_fail_reason(task_row, error_text=fail_message),
                 answer_correct=parts.answer_correct,
             )
-        _persist_verification_artifact(
+        _register_verification_artifact(
             verification_id=verification_id,
             test_name=test_name,
             ref_key="input_ref",
-            file_name=test_name,
-            payload=output_blob,
+            blob_ref=materialized_output_ref,
         )
         return TaskExecutionResult(
             task_id=task_id,
@@ -394,8 +345,7 @@ def finalize_verification_task_result(task_row: VerificationTaskRow, *, result: 
         final_error = _final_error_text(parts, fallback=error_text or f"main correct failed on {test_name}")
         fail_flag_reason = verification_task_fail_reason(task_row, error_text=final_error)
     if task_kind == TASK_MAIN_CORRECT and task_status == VerificationTaskStore.TASK_DONE:
-        output_bytes = materialized_output_blob
-        if output_bytes is None:
+        if materialized_output_file is None:
             fail_message = f"main correct output missing for {test_name}"
             return TaskExecutionResult(
                 task_id=task_id,
@@ -415,12 +365,11 @@ def finalize_verification_task_result(task_row: VerificationTaskRow, *, result: 
                 fail_flag_reason=verification_task_fail_reason(task_row, error_text=fail_message),
                 answer_correct=parts.answer_correct,
             )
-        _persist_verification_artifact(
+        _register_verification_artifact(
             verification_id=verification_id,
             test_name=test_name,
             ref_key="answer_ref",
-            file_name=_answer_name(test_name),
-            payload=output_bytes,
+            blob_ref=materialized_output_ref,
         )
     return TaskExecutionResult(
         task_id=task_id,

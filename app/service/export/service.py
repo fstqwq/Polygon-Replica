@@ -14,6 +14,7 @@ from typing import Callable
 from app.db import DB
 from app.service.disk.export_store import ExportStore
 from app.service.platform.hashing import sha256_file
+from app.service.platform.runtime_blob_store import PayloadFile
 from app.service.platform.fs.op import extract_git_archive, remove_symlinks
 from app.service.problem.test_spec import dumps_tests_spec, load_tests_spec, payload_rel_path_for_test
 from app.service.problem.solution_metadata import infer_expected_behavior_from_name, normalize_expected_behavior, parse_solution_desc
@@ -69,14 +70,14 @@ class ExportService:
         artifacts_root: Path,
         workspace_root: Path,
         tex_compile_service: TexCompileService,
-        artifact_blob_resolver: Callable[[str], bytes | None],
+        artifact_file_resolver: Callable[[str], PayloadFile | None],
     ):
         self.db = db
         self._store = ExportStore(db)
         self.artifacts_root = artifacts_root
         self.workspace_root = workspace_root
         self.tex_compile_service = tex_compile_service
-        self.artifact_blob_resolver = artifact_blob_resolver
+        self.artifact_file_resolver = artifact_file_resolver
 
     def latest_workspace_source_commit(self, problem_id: int, workspace_id: int) -> str:
         return self._store.latest_workspace_source_commit(problem_id, workspace_id)
@@ -649,18 +650,18 @@ class ExportService:
                 refs.append(artifact_ref)
         return refs
 
-    def _verification_blob(self, verification_id: str, test_id: str, ref_key: str) -> bytes | None:
+    def _verification_file(self, verification_id: str, test_id: str, ref_key: str) -> PayloadFile | None:
         for artifact_ref in self._verification_artifact_ref_candidates(verification_id, test_id, ref_key):
-            blob = self.artifact_blob_resolver(artifact_ref)
-            if blob is not None:
-                return blob
+            payload_file = self.artifact_file_resolver(artifact_ref)
+            if payload_file is not None:
+                return payload_file
         return None
 
-    def _verification_input_blob(self, verification_id: str, test_id: str) -> bytes | None:
-        return self._verification_blob(verification_id, test_id, "input_ref")
+    def _verification_input_file(self, verification_id: str, test_id: str) -> PayloadFile | None:
+        return self._verification_file(verification_id, test_id, "input_ref")
 
-    def _verification_answer_blob(self, verification_id: str, test_id: str) -> bytes | None:
-        return self._verification_blob(verification_id, test_id, "answer_ref")
+    def _verification_answer_file(self, verification_id: str, test_id: str) -> PayloadFile | None:
+        return self._verification_file(verification_id, test_id, "answer_ref")
 
     def _copy_workspace_payload_input(
         self,
@@ -687,10 +688,10 @@ class ExportService:
         if row["kind"] == "manual":
             self._copy_workspace_payload_input(snapshot, test_id, row["kind"], target)
             return
-        input_blob = self._verification_input_blob(verification_id, test_id)
-        if input_blob is None:
+        input_file = self._verification_input_file(verification_id, test_id)
+        if input_file is None:
             raise ValueError(f"export missing verification input artifact: {test_id}.in")
-        target.write_bytes(input_blob)
+        shutil.copy2(input_file.path, target)
 
     def _copy_sample_input(
         self,
@@ -714,9 +715,9 @@ class ExportService:
         *,
         verification_id: str,
     ) -> None:
-        answer_blob = self._verification_answer_blob(verification_id, test_id)
-        if answer_blob is not None:
-            target.write_bytes(answer_blob)
+        answer_file = self._verification_answer_file(verification_id, test_id)
+        if answer_file is not None:
+            shutil.copy2(answer_file.path, target)
             return
         raise ValueError(f"export missing verification answer artifact: {test_id}.ans")
 
@@ -733,16 +734,16 @@ class ExportService:
             if not bool(row["sample"]):
                 continue
             if row["kind"] == "gen" and not row["sample_input"]:
-                input_blob = self._verification_input_blob(verification_id, row["id"])
-                if input_blob is not None:
-                    row["sample_input"] = input_blob.decode("utf-8", errors="replace")
+                input_file = self._verification_input_file(verification_id, row["id"])
+                if input_file is not None:
+                    row["sample_input"] = input_file.path.read_text(encoding="utf-8", errors="replace")
                     changed = True
             if row["sample_output"]:
                 continue
-            answer_blob = self._verification_answer_blob(verification_id, row["id"])
-            if answer_blob is None:
+            answer_file = self._verification_answer_file(verification_id, row["id"])
+            if answer_file is None:
                 continue
-            row["sample_output"] = answer_blob.decode("utf-8", errors="replace")
+            row["sample_output"] = answer_file.path.read_text(encoding="utf-8", errors="replace")
             changed = True
         if changed:
             spec_path.write_text(dumps_tests_spec(entries), encoding="utf-8")

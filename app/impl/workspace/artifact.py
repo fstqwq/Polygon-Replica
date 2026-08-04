@@ -8,6 +8,7 @@ from fastapi.responses import FileResponse
 from app.impl.runtime.config import config
 from app.main_util import contains_symlink_component
 from app.service.platform.process import is_canonical_artifact_id
+from app.service.platform.runtime_blob_store import PayloadFile
 from app.service.repository.revision import git_commit_count
 
 
@@ -61,7 +62,7 @@ def safe_artifact_path(problem: str, verification_id: str, rel: str) -> Path:
     return path
 
 
-def verification_artifact_blob(verification_id: str, rel: str) -> tuple[bytes, str] | None:
+def verification_artifact_file(verification_id: str, rel: str) -> tuple[PayloadFile, str] | None:
     safe_verification_id = str(verification_id or "").strip()
     rel_norm = rel.lstrip("/")
     if not safe_verification_id or not rel_norm:
@@ -81,10 +82,10 @@ def verification_artifact_blob(verification_id: str, rel: str) -> tuple[bytes, s
             return None
         if not config.verification_service.verification_has_artifact_token(safe_verification_id, token):
             return None
-        blob = config.verification_service.resolve_artifact_blob(token)
-        if blob is None:
+        payload_file = config.verification_service.artifact_descriptor(token)
+        if payload_file is None:
             return None
-        return (blob, filename)
+        return (payload_file, filename)
     if len(parts) == 3 and parts[0] == "output":
         task_id = str(parts[1] or "").strip()
         filename = Path(parts[2]).name
@@ -99,19 +100,19 @@ def verification_artifact_blob(verification_id: str, rel: str) -> tuple[bytes, s
             return None
         if not ref:
             return None
-        blob = config.verification_service.resolve_artifact_blob(ref)
-        if blob is None:
+        payload_file = config.verification_service.artifact_descriptor(ref)
+        if payload_file is None:
             return None
-        return (blob, filename)
+        return (payload_file, filename)
     filename = Path(rel_norm).name
     if rel_norm == f"tests/{filename}" and filename:
         ref = config.verification_service.verification_artifact_ref(safe_verification_id, filename, "input_ref")
         if not ref:
             return None
-        blob = config.verification_service.resolve_artifact_blob(ref)
-        if blob is None:
+        payload_file = config.verification_service.artifact_descriptor(ref)
+        if payload_file is None:
             return None
-        return (blob, filename)
+        return (payload_file, filename)
     if rel_norm == f"ans/{filename}" and filename:
         stem = Path(filename).stem
         if not stem:
@@ -120,10 +121,10 @@ def verification_artifact_blob(verification_id: str, rel: str) -> tuple[bytes, s
         ref = config.verification_service.verification_artifact_ref(safe_verification_id, test_name, "answer_ref")
         if not ref:
             return None
-        blob = config.verification_service.resolve_artifact_blob(ref)
-        if blob is None:
+        payload_file = config.verification_service.artifact_descriptor(ref)
+        if payload_file is None:
             return None
-        return (blob, filename)
+        return (payload_file, filename)
     return None
 
 

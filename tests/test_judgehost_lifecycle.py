@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import hashlib
-import shutil
-import tempfile
 import threading
 import time
 import unittest
@@ -20,6 +18,7 @@ from app.service.judgehost.batch_scheduler_models import (
     JudgehostCaseRow,
 )
 from app.service.judgehost.identity import domjudge_submit_id
+from app.service.platform.runtime_blob_store import PayloadFile
 from app.service.platform.rwlock import WriterPriorityRWLock
 
 from tests.db_fixture import DBTestBase
@@ -35,7 +34,11 @@ def _compile_submission() -> CompileSubmission:
         compile_key=_COMPILE_KEY,
         submit_id=domjudge_submit_id(_COMPILE_KEY),
         source_name="solution.cpp",
-        source_bytes=b"int main() { return 0; }\n",
+        source_file=PayloadFile(
+            path=Path("/tmp/test-solution.cpp"),
+            size=25,
+            identity=hashlib.sha256(b"int main() { return 0; }\n").hexdigest(),
+        ),
         extra_source_items=(),
         compile_files=(),
     )
@@ -51,13 +54,13 @@ def _result(test_name: str, *, runresult: str = "correct", verdict: str = "OK"):
         wall_sec=0.002,
         memory_kb=1024,
         score_text="",
-        output_run_rel="",
-        output_error_rel="",
-        output_system_rel="",
-        output_diff_rel="",
-        metadata_rel="",
-        compare_metadata_rel="",
-        team_message_rel="",
+        output_run_ref="",
+        output_error_ref="",
+        output_system_ref="",
+        output_diff_ref="",
+        metadata_ref="",
+        compare_metadata_ref="",
+        team_message_ref="",
         feedback_text="",
         feedback_files=[],
         answer_correct=False,
@@ -102,7 +105,6 @@ def _create_batch(
     *,
     task_id: str,
     run_id: str,
-    work_root: str,
     case_rows: list[dict[str, object]],
     execution_signature: str | None = None,
     logical_run_id: str | None = None,
@@ -110,7 +112,7 @@ def _create_batch(
     signature = hashlib.sha256(
         (execution_signature or f"signature-{task_id}").encode("utf-8")
     ).hexdigest()
-    return store.create_batch_with_cases(
+    batch_id = store.create_batch_with_cases(
         task_id=task_id,
         run_id=run_id,
         logical_run_id=logical_run_id or run_id,
@@ -122,8 +124,6 @@ def _create_batch(
         contest_id="default",
         mode="pass-fail",
         source_name="solution.cpp",
-        source_path=f"{work_root}/source/solution.cpp",
-        work_root=work_root,
         compile_hash="2" * 32,
         run_hash="3" * 32,
         compare_hash="4" * 32,
@@ -139,6 +139,15 @@ def _create_batch(
         created_at=_NOW,
         case_rows=case_rows,
     )
+    if store.fetch_batch(batch_id)["materialization_state"] == "unmaterialized":
+        assert store.claim_materialization(batch_id, now_text=_NOW)
+        assert store.finish_materialization(
+            batch_id,
+            success=True,
+            error_text="",
+            now_text=_NOW,
+        )
+    return batch_id
 
 
 class TestJudgehostStateLifecycle(unittest.TestCase):
@@ -150,7 +159,6 @@ class TestJudgehostStateLifecycle(unittest.TestCase):
             self.store,
             task_id="task-cancel-receipt",
             run_id="run-cancel-receipt",
-            work_root="/tmp/cancel-receipt",
             case_rows=[
                 _case_row("task-cancel-receipt", "run-cancel-receipt", "001.in", 1),
                 _case_row("task-cancel-receipt", "run-cancel-receipt", "002.in", 2),
@@ -213,7 +221,6 @@ class TestJudgehostStateLifecycle(unittest.TestCase):
             self.store,
             task_id="task-append-first",
             run_id="run-append-first",
-            work_root="/tmp/append-first",
             case_rows=[_case_row("task-append-first", "run-append-first", "001.in", 1)],
             execution_signature="shared-signature",
             logical_run_id="logical-shared",
@@ -226,7 +233,6 @@ class TestJudgehostStateLifecycle(unittest.TestCase):
             self.store,
             task_id="task-later",
             run_id="run-later",
-            work_root="/tmp/ignored-for-existing-batch",
             case_rows=[_case_row("task-later", "run-later", "002.in", 1)],
             execution_signature="shared-signature",
             logical_run_id="logical-shared",
@@ -243,7 +249,6 @@ class TestJudgehostStateLifecycle(unittest.TestCase):
                 self.store,
                 task_id="task-too-late",
                 run_id="run-too-late",
-                work_root="/tmp/too-late",
                 case_rows=[_case_row("task-too-late", "run-too-late", "003.in", 1)],
                 execution_signature="shared-signature",
                 logical_run_id="logical-shared",
@@ -255,7 +260,6 @@ class TestJudgehostStateLifecycle(unittest.TestCase):
             self.store,
             task_id="task-logical-first",
             run_id="run-logical-first",
-            work_root="/tmp/logical-first",
             case_rows=[_case_row("task-logical-first", "run-logical-first", "001.in", 1)],
             execution_signature="shared-execution",
             logical_run_id="logical-first",
@@ -264,7 +268,6 @@ class TestJudgehostStateLifecycle(unittest.TestCase):
             self.store,
             task_id="task-logical-second",
             run_id="run-logical-second",
-            work_root="/tmp/logical-second",
             case_rows=[_case_row("task-logical-second", "run-logical-second", "001.in", 1)],
             execution_signature="shared-execution",
             logical_run_id="logical-second",
@@ -276,7 +279,6 @@ class TestJudgehostStateLifecycle(unittest.TestCase):
                 self.store,
                 task_id="task-logical-first-later",
                 run_id="run-logical-first-later",
-                work_root="/tmp/logical-first-later",
                 case_rows=[
                     _case_row(
                         "task-logical-first-later",
@@ -294,14 +296,12 @@ class TestJudgehostStateLifecycle(unittest.TestCase):
             self.store,
             task_id="task-first-batch",
             run_id="run-first-batch",
-            work_root="/tmp/first-batch",
             case_rows=[_case_row("task-first-batch", "run-first-batch", "001.in", 1)],
         )
         second_batch = _create_batch(
             self.store,
             task_id="task-second-batch",
             run_id="run-second-batch",
-            work_root="/tmp/second-batch",
             case_rows=[_case_row("task-second-batch", "run-second-batch", "001.in", 1)],
         )
         self.assertNotEqual(first_batch, second_batch)
@@ -310,7 +310,6 @@ class TestJudgehostStateLifecycle(unittest.TestCase):
                 self.store,
                 task_id="task-first-batch",
                 run_id="run-first-batch",
-                work_root="/tmp/second-batch",
                 case_rows=[_case_row("task-first-batch", "run-first-batch", "002.in", 2)],
                 execution_signature="signature-task-second-batch",
                 logical_run_id="new-logical-run",
@@ -319,7 +318,6 @@ class TestJudgehostStateLifecycle(unittest.TestCase):
             self.store,
             task_id="task-first-batch",
             run_id="run-first-batch",
-            work_root="/tmp/first-batch",
             case_rows=[_case_row("task-first-batch", "run-first-batch", "001.in", 1)],
             execution_signature="signature-task-first-batch",
             logical_run_id="run-first-batch",
@@ -331,7 +329,6 @@ class TestJudgehostStateLifecycle(unittest.TestCase):
                 self.store,
                 task_id="task-first-batch",
                 run_id="run-first-batch",
-                work_root="/tmp/first-batch",
                 case_rows=[reordered],
                 execution_signature="signature-task-first-batch",
                 logical_run_id="run-first-batch",
@@ -341,7 +338,6 @@ class TestJudgehostStateLifecycle(unittest.TestCase):
                 self.store,
                 task_id="task-first-batch",
                 run_id="run-first-batch",
-                work_root="/tmp/first-batch",
                 case_rows=[
                     _case_row("task-first-batch", "run-first-batch", "001.in", 1),
                     _case_row("task-first-batch", "run-first-batch", "002.in", 2),
@@ -355,14 +351,12 @@ class TestJudgehostStateLifecycle(unittest.TestCase):
             self.store,
             task_id="task-first",
             run_id="run-first",
-            work_root="/tmp/forget-linear",
             case_rows=[_case_row("task-first", "run-first", "001.in", 1)],
         )
         same_batch = _create_batch(
             self.store,
             task_id="task-second",
             run_id="run-second",
-            work_root="/tmp/forget-linear",
             case_rows=[_case_row("task-second", "run-second", "002.in", 1)],
             execution_signature="signature-task-first",
             logical_run_id="run-first",
@@ -385,7 +379,6 @@ class TestJudgehostStateLifecycle(unittest.TestCase):
                     self.store,
                     task_id=task_id,
                     run_id=run_id,
-                    work_root=f"/tmp/shared-run-{sequence}",
                     case_rows=[_case_row(task_id, run_id, "001.in", 1)],
                 )
             )
@@ -402,7 +395,6 @@ class TestJudgehostStateLifecycle(unittest.TestCase):
             self.store,
             task_id="task-shapes",
             run_id="run-shapes",
-            work_root="/tmp/shapes",
             case_rows=[
                 _case_row("task-shapes", "run-shapes", "001.in", 1),
                 _case_row("task-shapes", "run-shapes", "002.in", 2),
@@ -485,20 +477,14 @@ class TestJudgehostLifecycle(DBTestBase):
             self.settings,
             self.constants,
             verification_task_store=self.verification_task_store,
-            judge_fs_index_service=self.judge_fs_index_service,
+            runtime_blob_store=self.runtime_blob_store,
+            runtime_cache_index=self.runtime_cache_index,
         )
         service.state.enabled = True
         service.state.api_token = "test-token"
         service.state.api_username = "judgehost"
         service.state.include_build_payload = True
         return service
-
-    def _work_root(self) -> Path:
-        root = Path(tempfile.mkdtemp(prefix="judgehost-lifecycle-")).resolve()
-        (root / "source").mkdir()
-        (root / "source" / "solution.cpp").write_text("int main() { return 0; }\n", encoding="utf-8")
-        self.addCleanup(shutil.rmtree, root, True)
-        return root
 
     @staticmethod
     def _add_task(service: Judgehost, task_id: str, run_id: str) -> None:
@@ -559,12 +545,10 @@ class TestJudgehostLifecycle(DBTestBase):
         store = service.state.batch_scheduler
         task_id, run_id = "task-two-cases", "run-two-cases"
         self._add_task(service, task_id, run_id)
-        work_root = self._work_root()
         batch_id = _create_batch(
             store,
             task_id=task_id,
             run_id=run_id,
-            work_root=str(work_root),
             case_rows=[
                 _case_row(task_id, run_id, "001.in", 1),
                 _case_row(task_id, run_id, "002.in", 2),
@@ -584,29 +568,24 @@ class TestJudgehostLifecycle(DBTestBase):
         service.result._domjudge_finalize_batch_if_ready(batch_id)
         self.assertEqual(self._task(service, task_id)["status"], service.STATUS_LEASED)
         self.assertEqual(store.fetch_batch(batch_id)["status"], "open")
-        self.assertTrue(work_root.is_dir())
 
         self.assertTrue(self._report_case(store, int(cases[1]["id"]), "host-a"))
         service.result._domjudge_finalize_batch_if_ready(batch_id)
         self.assertEqual(self._task(service, task_id)["status"], service.STATUS_COMPLETED)
         self.assertEqual(store.fetch_batch(batch_id)["status"], "open")
-        self.assertTrue(work_root.is_dir())
 
         service.schedule_verification_cleanup("ver-1")
         self.assertEqual(store.fetch_batch(batch_id)["status"], "completed")
-        self.assertFalse(work_root.exists())
 
     def test_reporting_abort_finalizes_deferred_cancel(self) -> None:
         service = self._service()
         store = service.state.batch_scheduler
         task_id, run_id = "task-abort-cancel", "run-abort-cancel"
         self._add_task(service, task_id, run_id)
-        work_root = self._work_root()
         batch_id = _create_batch(
             store,
             task_id=task_id,
             run_id=run_id,
-            work_root=str(work_root),
             case_rows=[_case_row(task_id, run_id, "001.in", 1)],
         )
         case = store.lease_cases(batch_id, hostname="host-a", limit=1, now_text=_NOW)[0]
@@ -626,19 +605,16 @@ class TestJudgehostLifecycle(DBTestBase):
         service.schedule_verification_cleanup("ver-1")
         self.assertEqual(store.fetch_batch(batch_id)["status"], "failed")
         self.assertEqual(self._task(service, task_id)["status"], service.STATUS_FAILED)
-        self.assertFalse(work_root.exists())
 
     def test_cancelled_leased_case_callback_is_accepted_as_receipt(self) -> None:
         service = self._service()
         store = service.state.batch_scheduler
         task_id, run_id = "task-cancelled-receipt", "run-cancelled-receipt"
         self._add_task(service, task_id, run_id)
-        work_root = self._work_root()
         batch_id = _create_batch(
             store,
             task_id=task_id,
             run_id=run_id,
-            work_root=str(work_root),
             case_rows=[_case_row(task_id, run_id, "001.in", 1)],
         )
         case = store.lease_cases(batch_id, hostname="host-a", limit=1, now_text=_NOW)[0]
@@ -668,7 +644,6 @@ class TestJudgehostLifecycle(DBTestBase):
         self.assertEqual(store.fetch_case(case_id)["status"], "cancelled")
         self.assertEqual(self._task(service, task_id)["status"], service.STATUS_FAILED)
         self.assertEqual(store.fetch_batch(batch_id)["status"], "failed")
-        self.assertFalse(work_root.exists())
         telemetry = store.host_telemetry_snapshot()["host-a"]
         self.assertEqual(telemetry["judged_case_count"], 1)
         self.assertIsNotNone(telemetry["recent_avg_per_case_sec"])
@@ -680,12 +655,10 @@ class TestJudgehostLifecycle(DBTestBase):
         second_task, second_run = "task-group-b", "run-group-b"
         self._add_task(service, first_task, first_run)
         self._add_task(service, second_task, second_run)
-        work_root = self._work_root()
         batch_id = _create_batch(
             store,
             task_id=first_task,
             run_id=first_run,
-            work_root=str(work_root),
             execution_signature="shared-group",
             logical_run_id="logical-shared-group",
             case_rows=[_case_row(first_task, first_run, "001.in", 1)],
@@ -694,7 +667,6 @@ class TestJudgehostLifecycle(DBTestBase):
             store,
             task_id=second_task,
             run_id=second_run,
-            work_root=str(work_root),
             case_rows=[_case_row(second_task, second_run, "002.in", 1)],
             execution_signature="shared-group",
             logical_run_id="logical-shared-group",
@@ -756,7 +728,6 @@ class TestJudgehostLifecycle(DBTestBase):
             service.result._domjudge_finalize_batch_if_ready(batch_id)
             self.assertEqual(self._task(service, first_task)["status"], service.STATUS_COMPLETED)
             self.assertEqual(self._task(service, second_task)["status"], service.STATUS_LEASED)
-            self.assertTrue(work_root.exists())
             self.assertIsNotNone(service.state.task_registry.get(first_task))
 
             self.assertTrue(self._report_case(store, int(second_case["id"]), "host-b"))
@@ -784,19 +755,16 @@ class TestJudgehostLifecycle(DBTestBase):
         self.assertNotIn("internal-finalizer", service.state.hosts_state)
         self.assertTrue({(first_task, "001.in"), (second_task, "002.in")}.issubset(set(published)))
         self.assertEqual(store.fetch_batch(batch_id)["status"], "completed")
-        self.assertFalse(work_root.exists())
 
     def test_finalizing_batch_retries_incomplete_steps_before_cleanup(self) -> None:
         service = self._service()
         store = service.state.batch_scheduler
         task_id, run_id = "task-finalize-retry", "run-finalize-retry"
         self._add_task(service, task_id, run_id)
-        work_root = self._work_root()
         batch_id = _create_batch(
             store,
             task_id=task_id,
             run_id=run_id,
-            work_root=str(work_root),
             case_rows=[_case_row(task_id, run_id, "001.in", 1)],
         )
         case_row = store.lease_cases(batch_id, hostname="host-a", limit=1, now_text=_NOW)[0]
@@ -812,7 +780,6 @@ class TestJudgehostLifecycle(DBTestBase):
 
         self.assertEqual(store.fetch_batch(batch_id)["status"], "finalize-pending")
         self.assertEqual(self._task(service, task_id)["status"], service.STATUS_LEASED)
-        self.assertTrue(work_root.exists())
 
         with patch.object(
             service.result,
@@ -825,13 +792,11 @@ class TestJudgehostLifecycle(DBTestBase):
 
         self.assertEqual(store.fetch_batch(batch_id)["status"], "finalize-pending")
         self.assertEqual(self._task(service, task_id)["status"], service.STATUS_LEASED)
-        self.assertTrue(work_root.exists())
 
         service.result._domjudge_finalize_batch_if_ready(batch_id)
 
         self.assertEqual(store.fetch_batch(batch_id)["status"], "completed")
         self.assertEqual(self._task(service, task_id)["status"], service.STATUS_COMPLETED)
-        self.assertFalse(work_root.exists())
 
     def test_cache_compile_failure_and_cancel_use_common_finalizer(self) -> None:
         for scenario in ("cache", "compile-failure", "cancel"):
@@ -840,12 +805,10 @@ class TestJudgehostLifecycle(DBTestBase):
                 store = service.state.batch_scheduler
                 task_id, run_id = f"task-{scenario}", f"run-{scenario}"
                 self._add_task(service, task_id, run_id)
-                work_root = self._work_root()
                 batch_id = _create_batch(
                     store,
                     task_id=task_id,
                     run_id=run_id,
-                    work_root=str(work_root),
                     case_rows=[
                         _case_row(
                             task_id,
@@ -952,7 +915,6 @@ class TestJudgehostLifecycle(DBTestBase):
                 self.assertTrue(
                     all(row["status"] in {"reported", "cancelled"} for row in store.cases_for_task(task_id))
                 )
-                self.assertFalse(work_root.exists())
 
     def test_run_id_is_idempotent_only_for_identical_payload(self) -> None:
         service = self._service()
@@ -964,7 +926,7 @@ class TestJudgehostLifecycle(DBTestBase):
             return {
                 "source_name": "solution.cpp",
                 "source_label": "solution.cpp",
-                "source_b64": "eA==",
+                "source_file": _compile_submission().source_file.to_payload(),
                 "task_kind": "solution-run",
                 "verification_payload": {},
                 "selected_tests": list(kwargs["selected_tests"]),

@@ -7,7 +7,7 @@ from functools import partial
 from urllib.parse import parse_qsl
 
 from fastapi import HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from starlette.concurrency import run_in_threadpool
 from starlette.datastructures import UploadFile
 from starlette.formparsers import MultiPartParser
@@ -16,6 +16,7 @@ from app.impl.runtime.config import config
 from app.main_util import UPLOAD_MAX_BYTES, read_upload_bytes_limited
 from app.service.judgehost.batch_scheduler_models import CaseClaimBusy
 from app.service.judgehost.limits import judgehost_form_part_limit_bytes
+from app.service.judgehost.file_stream import stream_domjudge_file_array, validate_domjudge_file_array
 
 
 JudgehostPayload = dict[str, str | bytes]
@@ -287,7 +288,7 @@ async def domjudge_fetch_work(request: Request):
     max_batchsize = _int_or_none(payload.get("max_batchsize"))
     try:
         tasks = await _run_service_call(service.domjudge_fetch_work, hostname, max_batchsize=max_batchsize)
-    except RuntimeError as exc:
+    except (OSError, RuntimeError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return JSONResponse(tasks)
 
@@ -296,18 +297,20 @@ async def domjudge_get_files_source(request: Request, contest_id: str, item_id: 
     service = _require_judgehost_auth(request)
     try:
         rows = await _run_service_call(service.domjudge_get_source_files, item_id, contest_id=contest_id)
-    except RuntimeError as exc:
+        validate_domjudge_file_array(rows)
+    except (OSError, RuntimeError) as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return JSONResponse(rows)
+    return StreamingResponse(stream_domjudge_file_array(rows), media_type="application/json")
 
 
 async def domjudge_get_files_source_submit(request: Request, item_id: str):
     service = _require_judgehost_auth(request)
     try:
         rows = await _run_service_call(service.domjudge_get_source_files, item_id, contest_id=None)
-    except RuntimeError as exc:
+        validate_domjudge_file_array(rows)
+    except (OSError, RuntimeError) as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return JSONResponse(rows)
+    return StreamingResponse(stream_domjudge_file_array(rows), media_type="application/json")
 
 
 async def domjudge_get_files_by_type(request: Request, file_type: str, item_id: str):
@@ -325,9 +328,10 @@ async def domjudge_get_files_by_type(request: Request, file_type: str, item_id: 
             rows = await _run_service_call(service.domjudge_get_executable_files, token, item_id, hostname=hostname)
         else:
             raise RuntimeError("unknown file type")
-    except RuntimeError as exc:
+        validate_domjudge_file_array(rows)
+    except (OSError, RuntimeError) as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return JSONResponse(rows)
+    return StreamingResponse(stream_domjudge_file_array(rows), media_type="application/json")
 
 
 async def domjudge_get_version_commands(request: Request, judgetask_id: int):

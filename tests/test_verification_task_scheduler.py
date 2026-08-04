@@ -66,9 +66,9 @@ def _sanity_test_plan(
         source_kind="manual",
         display_source_path="manual_validate.cpp",
         execution_source_name="manual_validate.cpp",
-        execution_source_bytes=b"int main(){return 0;}\n",
-        execution_input_bytes=b"1\n",
-        extra_sources_b64={},
+        execution_source_file=config.runtime_blob_store.put_bytes(b"int main(){return 0;}\n"),
+        execution_input_file=config.runtime_blob_store.put_bytes(b"1\n"),
+        extra_source_files={},
         tests_meta={},
         sample=sample,
         sample_input_custom=False,
@@ -91,26 +91,27 @@ class TestVerificationTaskScheduler(E2ETestBase):
             detail={"status": "running"},
         )
 
-    def test_required_verification_blob_waits_for_late_artifact_visibility(self) -> None:
-        from app.impl.workspace.verification_dag import _verification_required_blob
+    def test_required_verification_file_waits_for_late_artifact_visibility(self) -> None:
+        from app.impl.workspace.verification_dag import _verification_required_file
 
-        calls = {"ref": 0, "blob": 0}
+        payload = config.runtime_blob_store.put_bytes(b"generated\n")
+        calls = {"ref": 0, "descriptor": 0}
 
         def _late_ref(_verification_id: str, _test_name: str, _ref_key: str) -> str:
             calls["ref"] += 1
-            return "cache://late-input" if calls["ref"] >= 2 else ""
+            return str(payload.blob_ref) if calls["ref"] >= 2 else ""
 
-        def _late_blob(_ref: str) -> bytes | None:
-            calls["blob"] += 1
-            return b"generated\n" if calls["blob"] >= 2 else None
+        def _late_descriptor(_ref: str) -> object:
+            calls["descriptor"] += 1
+            return payload if calls["descriptor"] >= 2 else None
 
         with patch.object(config.verification_service, "verification_artifact_ref", side_effect=_late_ref), patch.object(
-            config.verification_service,
-            "resolve_artifact_blob",
-            side_effect=_late_blob,
+            config.runtime_blob_store,
+            "descriptor",
+            side_effect=_late_descriptor,
         ):
             self.assertEqual(
-                _verification_required_blob(
+                _verification_required_file(
                     "ver-late",
                     "026.in",
                     "input_ref",
@@ -118,11 +119,11 @@ class TestVerificationTaskScheduler(E2ETestBase):
                     timeout_sec=0.2,
                     interval_sec=0.001,
                 ),
-                b"generated\n",
+                payload,
             )
 
         self.assertGreaterEqual(calls["ref"], 3)
-        self.assertGreaterEqual(calls["blob"], 2)
+        self.assertGreaterEqual(calls["descriptor"], 2)
 
     def test_effective_verification_status_waits_for_pending_sanity_checks(self) -> None:
         from app.impl.workspace.sanity_checks import effective_verification_status
@@ -208,25 +209,21 @@ class TestVerificationTaskScheduler(E2ETestBase):
         )
 
         verification_id = self.random_id("ver-force-recompile")
-        layout = config.fs_manager.prepare_verification_runtime_layout(verification_id)
-        source_path = layout.root / "std.cpp"
-        source_path.write_text("int main(){return 0;}\n", encoding="utf-8")
+        source_file = config.runtime_blob_store.put_bytes(b"int main(){return 0;}\n")
+        input_file = config.runtime_blob_store.put_bytes(b"1\n")
         execution = TaskExecutionContext(
             problem=self.problem,
             user=self.user,
             verification_id=verification_id,
             mode="pass-fail",
             pass_limit=1,
-            snapshot_root=layout.root,
-            uploaded_sources_root=layout.uploaded_sources,
-            source_file_by_path={"solutions/std.cpp": source_path},
-            source_bytes_by_path={},
-            source_sha256_by_content={},
+            snapshot_root=source_file.path.parent,
+            source_file_by_path={"solutions/std.cpp": source_file},
+            artifact_file_by_test_ref={},
+            execution_template_by_key={},
             test_plan_by_name={"001.in": _sanity_test_plan()},
             run_verification_payload_base={},
             generate_verification_payload_base={},
-            artifact_bytes_by_test_ref={},
-            execution_template_by_key={},
             bypass_case_result_cache=True,
         )
         calls: list[dict[str, object]] = []
@@ -240,8 +237,8 @@ class TestVerificationTaskScheduler(E2ETestBase):
             "prepare_execution_template",
             return_value={},
         ) as prepare_template, patch(
-            "app.impl.workspace.verification_dag._verification_required_blob",
-            return_value=b"1\n",
+            "app.impl.workspace.verification_dag._verification_required_file",
+            return_value=input_file,
         ):
             _publish_generate_task(
                 _task_row(
@@ -279,37 +276,38 @@ class TestVerificationTaskScheduler(E2ETestBase):
         self.assertEqual([call["bypass_case_result_cache"] for call in calls], [True, True, True])
         self.assertEqual(prepare_template.call_count, 2)
 
-    def test_verification_artifact_bytes_are_cached_across_sources(self) -> None:
-        from app.impl.workspace.verification_dag import _verification_required_blob
+    def test_verification_artifact_descriptors_are_cached_across_sources(self) -> None:
+        from app.impl.workspace.verification_dag import _verification_required_file
 
-        cache: dict[tuple[str, str], bytes] = {}
+        payload = config.runtime_blob_store.put_bytes(b"input\n")
+        cache = {}
         with patch.object(
             config.verification_service,
             "verification_artifact_ref",
-            return_value="cache://verification/input",
+            return_value=payload.blob_ref,
         ) as lookup_ref, patch.object(
-            config.verification_service,
-            "resolve_artifact_blob",
-            return_value=b"input\n",
-        ) as resolve_blob:
-            first = _verification_required_blob(
+            config.runtime_blob_store,
+            "descriptor",
+            return_value=payload,
+        ) as resolve_descriptor:
+            first = _verification_required_file(
                 "ver-artifact-cache",
                 "001.in",
                 "input_ref",
                 label="test input",
                 cache=cache,
             )
-            second = _verification_required_blob(
+            second = _verification_required_file(
                 "ver-artifact-cache",
                 "001.in",
                 "input_ref",
                 label="test input",
                 cache=cache,
             )
-        self.assertEqual(first, b"input\n")
+        self.assertEqual(first, payload)
         self.assertEqual(second, first)
         self.assertEqual(lookup_ref.call_count, 1)
-        self.assertEqual(resolve_blob.call_count, 1)
+        self.assertEqual(resolve_descriptor.call_count, 1)
 
     def test_sanity_stability_probes_pass_on_non_ac_non_fl(self) -> None:
         from app.impl.workspace.sanity_checks import run_verification_sanity_checks
@@ -696,9 +694,9 @@ class TestVerificationTaskScheduler(E2ETestBase):
                     source_kind="gen",
                     display_source_path="generators/gen.cpp",
                     execution_source_name="gen.cpp",
-                    execution_source_bytes=b"int main(){return 0;}\n",
-                    execution_input_bytes=b"\"$SUBMISSION_BIN\"\n",
-                    extra_sources_b64={},
+                    execution_source_file=config.runtime_blob_store.put_bytes(b"int main(){return 0;}\n"),
+                    execution_input_file=config.runtime_blob_store.put_bytes(b"\"$SUBMISSION_BIN\"\n"),
+                    extra_source_files={},
                     tests_meta={},
                     sample=False,
                     sample_input_custom=False,
@@ -712,9 +710,9 @@ class TestVerificationTaskScheduler(E2ETestBase):
                     source_kind="gen",
                     display_source_path="generators/gen.cpp",
                     execution_source_name="gen.cpp",
-                    execution_source_bytes=b"int main(){return 0;}\n",
-                    execution_input_bytes=b"\"$SUBMISSION_BIN\"\n",
-                    extra_sources_b64={},
+                    execution_source_file=config.runtime_blob_store.put_bytes(b"int main(){return 0;}\n"),
+                    execution_input_file=config.runtime_blob_store.put_bytes(b"\"$SUBMISSION_BIN\"\n"),
+                    extra_source_files={},
                     tests_meta={},
                     sample=False,
                     sample_input_custom=False,
@@ -754,17 +752,18 @@ class TestVerificationTaskScheduler(E2ETestBase):
     def test_finalize_generate_input_validator_rejection_fails_task_and_sets_fail_flag_reason(self) -> None:
         from app.service.verification.task_result_finalize import finalize_verification_task_result
 
-        class _JudgehostTaskService:
-            def domjudge_case_output_for_task(self, judgehost_task_id: str, test_name: str) -> tuple[str, None, str]:
-                self.seen = (judgehost_task_id, test_name)
-                return ("", None, "")
+        output_file = config.runtime_blob_store.put_bytes(b"bad-input\n")
 
-            def resolve_artifact_blob(self, output_ref: str, *, work_root: object = None) -> bytes | None:
-                self.seen_output_ref = output_ref
-                return b"bad-input\n"
+        class _JudgehostTaskService:
+            def domjudge_case_output_for_task(self, judgehost_task_id: str, test_name: str) -> tuple[str, int]:
+                self.seen = (judgehost_task_id, test_name)
+                return (str(output_file.blob_ref), 1)
 
         fake_task_service = _JudgehostTaskService()
-        fake_config = SimpleNamespace(judgehost_task_service=fake_task_service)
+        fake_config = SimpleNamespace(
+            judgehost_task_service=fake_task_service,
+            runtime_blob_store=config.runtime_blob_store,
+        )
         task_row = {
             "id": "vt-generate",
             "verification_id": "ver-validator-reject",
@@ -782,7 +781,7 @@ class TestVerificationTaskScheduler(E2ETestBase):
                     {
                         "verdict": "WA",
                         "message": "validator rejected generated input\nline 2 detail",
-                        "output_ref": "cache://case/output/001.out",
+                        "output_ref": output_file.blob_ref,
                         "time_ms": 7,
                         "time_user_ms": 7,
                         "time_wall_ms": 8,
@@ -803,28 +802,23 @@ class TestVerificationTaskScheduler(E2ETestBase):
         )
         self.assertEqual(final_result.error_text, "validator rejected generated input\nline 2 detail")
         self.assertEqual(final_result.feedback_text, "validator rejected generated input\nline 2 detail")
-        self.assertEqual(final_result.output_ref, "cache://case/output/001.out")
+        self.assertEqual(final_result.output_ref, output_file.blob_ref)
 
     def test_finalize_generate_input_truncation_fails_before_persisting_input_ref(self) -> None:
         from app.service.verification.task_result_finalize import finalize_verification_task_result
 
-        class _JudgehostTaskService:
-            def domjudge_case_output_for_task(self, judgehost_task_id: str, test_name: str) -> tuple[str, None, str]:
-                self.seen = (judgehost_task_id, test_name)
-                return ("", None, "")
+        output_file = config.runtime_blob_store.put_bytes(
+            b"50000 50000\n[output storage truncated after 65536 B]\n"
+        )
 
-            def resolve_artifact_blob(self, output_ref: str, *, work_root: object = None) -> bytes | None:
-                self.seen_output_ref = output_ref
-                return b"50000 50000\n[output storage truncated after 65536 B]\n"
+        class _JudgehostTaskService:
+            def domjudge_case_output_for_task(self, judgehost_task_id: str, test_name: str) -> tuple[str, int]:
+                self.seen = (judgehost_task_id, test_name)
+                return (str(output_file.blob_ref), 1)
 
         class _VerificationService:
             def __init__(self) -> None:
-                self.stored: list[dict[str, object]] = []
                 self.updated: list[tuple[str, str, dict[str, str]]] = []
-
-            def store_verification_blob(self, **kwargs: object) -> str:
-                self.stored.append(dict(kwargs))
-                return "cache://verification/should-not-store"
 
             def update_verification_artifact_refs(
                 self,
@@ -840,6 +834,7 @@ class TestVerificationTaskScheduler(E2ETestBase):
         fake_config = SimpleNamespace(
             judgehost_task_service=fake_task_service,
             verification_service=fake_verification_service,
+            runtime_blob_store=config.runtime_blob_store,
         )
         task_row = {
             "id": "vt-generate",
@@ -858,7 +853,7 @@ class TestVerificationTaskScheduler(E2ETestBase):
                     {
                         "verdict": "OK",
                         "message": "validator accepted",
-                        "output_ref": "cache://case/output/020.out",
+                        "output_ref": output_file.blob_ref,
                         "time_ms": 7,
                         "time_user_ms": 7,
                         "time_wall_ms": 8,
@@ -875,12 +870,11 @@ class TestVerificationTaskScheduler(E2ETestBase):
         self.assertEqual(final_result.verdict, "FL")
         self.assertEqual(final_result.error_text, "generated input output was truncated for 020.in")
         self.assertEqual(final_result.feedback_text, "generated input output was truncated for 020.in")
-        self.assertEqual(final_result.output_ref, "cache://case/output/020.out")
+        self.assertEqual(final_result.output_ref, output_file.blob_ref)
         self.assertEqual(
             final_result.fail_flag_reason,
             "generate-input / generators/gen.cpp / 020.in: generated input output was truncated for 020.in",
         )
-        self.assertEqual(fake_verification_service.stored, [])
         self.assertEqual(fake_verification_service.updated, [])
 
     def test_finalize_main_correct_prefers_detailed_summary_error_over_generic_result_error(self) -> None:

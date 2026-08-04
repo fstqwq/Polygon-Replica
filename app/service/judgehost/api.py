@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from pathlib import Path
 
 from app.db import DB, now_iso
 from app.runtime_value import RuntimeValues
 from app.service.platform.fs.layout import FsManager
-from app.service.platform.judge_fs_index import JudgeFsIndexService
+from app.service.platform.runtime_blob_store import RuntimeBlobStore
+from app.service.platform.runtime_cache_index import RuntimeCacheIndex
 from app.service.repository.workspace import WorkspaceService
 from app.service.verification.task_store import VerificationTaskStore
 from app.setting import Settings
@@ -27,7 +27,7 @@ class Judgehost:
     STATUS_FAILED = "failed"
     STATUS_ENQUEUING = "enqueuing"
     STATUS_REPORTING = "reporting"
-    CASE_CACHE_KIND = JudgeFsIndexService.KIND_CASE
+    CASE_CACHE_KIND = RuntimeCacheIndex.RESULT
 
     def __init__(
         self,
@@ -38,7 +38,8 @@ class Judgehost:
         constants: RuntimeValues,
         *,
         verification_task_store: VerificationTaskStore,
-        judge_fs_index_service: JudgeFsIndexService | None = None,
+        runtime_blob_store: RuntimeBlobStore,
+        runtime_cache_index: RuntimeCacheIndex,
     ) -> None:
         _ = settings
         self.db = db
@@ -47,7 +48,8 @@ class Judgehost:
             workspace_service=workspace_service,
             fs_manager=fs_manager,
             constants=constants,
-            judge_fs_index_service=judge_fs_index_service,
+            runtime_blob_store=runtime_blob_store,
+            runtime_cache_index=runtime_cache_index,
             verification_task_store=verification_task_store,
         )
         self._toolkit = DomjudgeToolkit(self._state)
@@ -380,27 +382,21 @@ class Judgehost:
         finally:
             self.schedule_verification_cleanup(runtime_verification_id)
 
-    def domjudge_case_output_for_task(self, task_id: str, test_name: str) -> tuple[str, Path | None, int]:
+    def domjudge_case_output_for_task(self, task_id: str, test_name: str) -> tuple[str, int]:
         row = self._state.batch_scheduler.case_output_for_task(task_id, test_name)
         if row is None:
-            return ("", None, 0)
-        work_root = str(row["work_root"])
+            return ("", 0)
         case_id = int(row["id"])
-        output_ref = str(row["output_run_rel"])
-        if not work_root:
-            return (output_ref, None, case_id)
-        return (output_ref, Path(work_root).resolve(), case_id)
+        output_ref = str(row["output_run_ref"])
+        return (output_ref, case_id)
 
     def domjudge_case_feedback_blob_for_task(self, task_id: str, test_name: str) -> bytes | None:
         row = self._state.batch_scheduler.case_for_task(task_id, test_name)
         if row is None:
             return None
-        output_diff_ref = str(row["output_diff_rel"] or "")
+        output_diff_ref = str(row["output_diff_ref"] or "")
         if not output_diff_ref:
             return None
-        work_root = str(row["work_root"] or "")
-        if work_root:
-            return self.resolve_artifact_blob(output_diff_ref, work_root=Path(work_root).resolve())
         return self.resolve_artifact_blob(output_diff_ref)
 
     def reset_runtime_state(self) -> None:

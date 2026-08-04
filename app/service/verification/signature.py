@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import os
+import re
+from dataclasses import dataclass
 from pathlib import Path
 
-from app.service.platform.hashing import quick_fp_digest, sha256_file
+from app.service.platform.git_process import run_git
+from app.service.platform.hashing import quick_fp_digest, sha256_file, sha256_hex_text
+from app.service.platform.runtime_blob_store import PayloadFile
 
 
 _VERIFICATION_SIGNATURE_FILE_TARGETS: tuple[str, ...] = (
@@ -21,6 +25,46 @@ _VERIFICATION_SIGNATURE_DIR_TARGETS: tuple[str, ...] = (
     "tests/generator",
     "third_party/testlib",
 )
+
+
+@dataclass(frozen=True, slots=True)
+class VerificationManifest:
+    signature: str
+    files: dict[str, PayloadFile]
+
+    def require(self, relative_path: str) -> PayloadFile:
+        payload = self.files.get(relative_path)
+        if payload is None:
+            raise RuntimeError(f"verification manifest file is missing: {relative_path}")
+        return payload
+
+
+def git_blob_identities(workspace: Path, commit: str) -> dict[str, str]:
+    args = [
+        "git",
+        "-C",
+        str(workspace),
+        "ls-tree",
+        "-r",
+        "--full-tree",
+        commit,
+        "--",
+        *_VERIFICATION_SIGNATURE_FILE_TARGETS,
+        *_VERIFICATION_SIGNATURE_DIR_TARGETS,
+    ]
+    result = run_git(args)
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr.strip() or "failed to inspect verification Git blobs")
+    identities: dict[str, str] = {}
+    for line in result.stdout.splitlines():
+        metadata, separator, relative_path = line.partition("\t")
+        if not separator:
+            continue
+        parts = metadata.split()
+        if len(parts) != 3 or parts[1] != "blob" or re.fullmatch(r"[0-9a-f]+", parts[2]) is None:
+            continue
+        identities[relative_path] = sha256_hex_text(f"git-blob\0{parts[2]}")
+    return identities
 
 
 def _stat_mtime_ns(stat_obj: os.stat_result) -> int:
@@ -147,6 +191,40 @@ def verification_signature(workspace: Path) -> str:
         _verification_source_entries(workspace, hash_content=True),
         schema="verification-signature",
     )
+
+
+def verification_manifest(
+    snapshot: Path,
+    *,
+    git_identities: dict[str, str] | None = None,
+) -> VerificationManifest:
+    raw_entries = _verification_source_entries(snapshot, hash_content=False)
+    manifest_entries: list[dict[str, object]] = []
+    files: dict[str, PayloadFile] = {}
+    identities = {} if git_identities is None else git_identities
+    for raw in raw_entries:
+        entry = dict(raw)
+        entry.pop("mtime_ns", None)
+        relative_path = ""
+        if entry.get("state") == "ok" and entry.get("kind") == "file":
+            relative_path = str(entry["target"])
+        elif entry.get("state") == "ok" and entry.get("kind") == "dir-file":
+            relative_path = str(entry["path"])
+        if relative_path:
+            path = (snapshot / relative_path).resolve()
+            identity = identities.get(relative_path)
+            if identity is None:
+                identity = sha256_file(path, chunk_size=16 * 1024 * 1024)
+            payload = PayloadFile(
+                path=path,
+                size=int(entry["size"]),
+                identity=identity,
+            )
+            files[relative_path] = payload
+            entry["identity"] = identity
+        manifest_entries.append(entry)
+    signature = quick_fp_digest(manifest_entries, schema="verification-manifest")
+    return VerificationManifest(signature=signature, files=files)
 
 
 def verification_fingerprint(workspace: Path) -> str:

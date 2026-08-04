@@ -314,9 +314,9 @@ def _icpc_verification_has_complete_artifacts(
             return False
         if not answer_ref:
             return False
-        if config.verification_service.resolve_artifact_blob(input_ref) is None:
+        if config.verification_service.artifact_descriptor(input_ref) is None:
             return False
-        if config.verification_service.resolve_artifact_blob(answer_ref) is None:
+        if config.verification_service.artifact_descriptor(answer_ref) is None:
             return False
     return True
 

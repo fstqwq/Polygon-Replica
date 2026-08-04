@@ -93,7 +93,8 @@ Current verification results are ref-based.
 - `verification_artifact_refs.answer_ref`
 
 ### Stored in the blob store
-Blob payloads live in `judge-fs-index` and are addressed by `cache://...` tokens.
+Blob payloads live under `runtime/blobs/<prefix>/<sha256>` and are addressed by
+`blob://sha256/<sha256>` refs.
 
 Current roles:
 - testcase input/answer cache
@@ -115,8 +116,9 @@ There is no fresh `/runs/{run_id}/artifacts/...` path anymore.
 ## Input, Answer, and Output Lifecycle
 
 ### `solution-run`
-- judgehost executes the case in `runtime/judgehost-runs/<judgehost_task_id>/...`
-- the result becomes an exact case-cache blob when eligible
+- stock judgedaemon executes the case in its own work directory
+- retained output is published once as an immutable runtime blob and may be indexed
+  by the exact case cache
 - `verification_tasks.output_ref` stores the locator
 - the detail page reads output through `output_ref`
 
@@ -195,10 +197,11 @@ logical runs as an idempotent fallback.
 
 Later judgehost polls service the finalization retry heap. Duplicate result
 callbacks are idempotent after the first reporting claim. A transient publication
-failure therefore retains the work root instead of stranding an unresumable Batch.
+failure retains the Batch result state and blob refs for indexed retry.
 
 Case publication, task result aggregation, and task-terminal notification finish
-before work-root removal and the final `completed/failed` transition.
+before the final `completed/failed` transition. The server does not create a Batch
+work root; source, testcase, executable, and result files are descriptor-backed.
 Executable scripts have a different lifetime: they remain runtime-scoped and are
 cleared at service startup, not when an individual Batch or Verification finishes.
 
@@ -218,8 +221,8 @@ rather than scanning open Batches.
 
 Cases enter a Batch as `staged`, atomically activate as `cache-pending`, and cannot be
 leased until their exact result-cache probe misses. A full cache hit reaches
-`reported` without creating a work root. Source files and executable scripts are
-materialized lazily only after at least one miss. Before compilation succeeds, one
+`reported` without opening testcase or source payload files. Executable bundles are
+indexed lazily only after at least one miss. Before compilation succeeds, one
 smallest-ordinal Case is the compile leader; successful compilation opens the
 remaining Cases to other hosts.
 
@@ -229,9 +232,9 @@ The Scheduler decrements a per-Task remaining counter in constant time; only the
 last Case sorts that Task's Cases once and writes its final summary. Case polling is
 an indexed lookup and never reconstructs feedback from artifacts.
 
-JudgeFS entries are synchronized per `(kind, key, signature)` and published from a
-temporary directory. Unrelated cache keys perform file I/O concurrently; the small
-global mutex only maintains ref-counted key locks. Fetch fallback probes cache Cases
+Runtime cache entries are synchronized per cache key and refer only to immutable
+blob refs. Unrelated cache keys perform file I/O concurrently; the small global
+mutex only maintains ref-counted key locks. Fetch fallback probes cache Cases
 in 32-Case claim chunks until it finds runnable work, exhausts pending cache work,
 or reaches its monotonic-time budget.
 
@@ -284,9 +287,10 @@ Current cache behavior for execution results:
   Verification Coordinator or races with the proactive path
 - same-key cache reads/materialization are serialized without blocking unrelated keys
 - cache-hit results still update `verification_tasks` and artifact refs through the normal batched finalize path
-- testcase input/answer registration uses metadata-only hits and does not rewrite an existing valid blob
-- executable entries use the same per-key JudgeFS store and do not have an
-  independent global I/O lock
+- testcase input/answer descriptors use manifest identities; cache hits do not open
+  or rewrite payload files
+- executable entries use the same per-key runtime cache index and immutable blob
+  store and do not have an independent global I/O lock
 
 ## Worker Queue
 
@@ -301,11 +305,10 @@ Current facts:
 ## Current Filesystem Touch Points During Verification
 
 A single verification can write to these places:
-- `artifacts/verifications/<verification_id>/tests/`, `ans/`, `logs/`, `bin/`, `uploaded-sources/`
+- `artifacts/verifications/<verification_id>/logs/`
 - `runtime/snapshots/<snapshot_id>/src`
-- `runtime/judgehost-runs/<judgehost_task_id>/...`
-- `judge-fs-index/...`
+- `runtime/blobs/<prefix>/<sha256>`
 - `runtime/worker-queue-events.jsonl`
 
-By current runtime policy, cache-root data is startup-cleared. JudgeFS executable
-entries are not cleared at verification completion.
+By current runtime policy, cache-root data is startup-cleared. Runtime executable
+cache entries and blobs are not cleared at verification completion.

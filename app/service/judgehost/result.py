@@ -4,7 +4,6 @@ import base64
 import logging
 import json
 import re
-import shutil
 import time
 from pathlib import Path
 from typing import cast
@@ -14,9 +13,11 @@ from app.service.judgehost.shared import (
     domjudge_lower_text,
 )
 from app.db import now_iso
-from app.service.judgehost.domjudge.cache import domjudge_json_hash, domjudge_source_hash
+from app.service.judgehost.domjudge.cache import domjudge_json_hash
 from app.service.judgehost.domjudge.client import domjudge_parse_script_id, domjudge_script_hash_field, domjudge_script_id
 from app.service.judgehost.limits import truncate_stored_log_bytes
+from app.service.judgehost.file_stream import DomjudgeDownloadFile
+from app.service.platform.runtime_blob_store import PayloadFile
 from app.service.judgehost.runtime import (
     domjudge_bool,
     domjudge_feedback_text_and_files,
@@ -83,21 +84,24 @@ class ResultProcessor:
     def _domjudge_feedback_text_and_files(
         self,
         *,
-        work_root: Path,
         runresult: str,
-        output_error_rel: str,
-        output_diff_rel: str,
-        team_message_rel: str,
+        output_error_ref: str,
+        output_diff_ref: str,
+        team_message_ref: str,
     ) -> tuple[str, list[str]]:
         return domjudge_feedback_text_and_files(
-            read_blob=lambda token: self._toolkit.read_artifact_blob(work_root, token),
+            read_blob=lambda token: self._toolkit.read_blob_ref(token, max_bytes=16 * 1024 * 1024),
             runresult=runresult,
-            output_error_rel=output_error_rel,
-            output_diff_rel=output_diff_rel,
-            team_message_rel=team_message_rel,
+            output_error_ref=output_error_ref,
+            output_diff_ref=output_diff_ref,
+            team_message_ref=team_message_ref,
         )
 
-    def domjudge_get_source_files(self, submit_id: str, contest_id: str | None = None) -> list[dict[str, object]]:
+    def domjudge_get_source_files(
+        self,
+        submit_id: str,
+        contest_id: str | None = None,
+    ) -> list[DomjudgeDownloadFile]:
         safe_submit = domjudge_text(submit_id)
         if not safe_submit:
             raise RuntimeError("source files not found")
@@ -106,18 +110,20 @@ class ResultProcessor:
         if submission is None:
             raise RuntimeError("source files not found")
         source_files = (
-            (submission.source_name, submission.source_bytes),
+            (submission.source_name, submission.source_file),
             *submission.extra_source_items,
         )
         return [
-            {
-                "filename": filename,
-                "content": base64.b64encode(content).decode("ascii"),
-            }
-            for filename, content in source_files
+            DomjudgeDownloadFile(filename, payload)
+            for filename, payload in source_files
         ]
 
-    def domjudge_get_testcase_files(self, testcase_id: int, *, hostname: str) -> list[dict[str, object]]:
+    def domjudge_get_testcase_files(
+        self,
+        testcase_id: int,
+        *,
+        hostname: str,
+    ) -> list[DomjudgeDownloadFile]:
         token = int(testcase_id)
         safe_host = self._core.normalize_hostname(hostname)
         row, resolution_source = self._s.batch_scheduler.testcase_refs(token, hostname=safe_host)
@@ -130,9 +136,9 @@ class ResultProcessor:
             raise RuntimeError("testcase files not found")
         input_ref = domjudge_text(row["input_ref"])
         answer_ref = domjudge_text(row["answer_ref"])
-        input_blob = self._toolkit.resolve_artifact_blob(input_ref)
-        answer_blob = self._toolkit.resolve_artifact_blob(answer_ref)
-        if input_blob is None or answer_blob is None:
+        input_file = self._s.runtime_blob_store.descriptor(input_ref)
+        answer_file = self._s.runtime_blob_store.descriptor(answer_ref)
+        if input_file is None or answer_file is None:
             _diag_logger.warning(
                 "judgehost.get_testcase_files testcase_id=%s host=%s resolved=%s exists=%s input=%s answer=%s",
                 token,
@@ -153,8 +159,8 @@ class ResultProcessor:
             answer_ref,
         )
         return [
-            {"filename": "input", "content": base64.b64encode(input_blob).decode("ascii")},
-            {"filename": "output", "content": base64.b64encode(answer_blob).decode("ascii")},
+            DomjudgeDownloadFile("input", input_file),
+            DomjudgeDownloadFile("output", answer_file),
         ]
 
     def _domjudge_executable_rows(
@@ -162,16 +168,16 @@ class ResultProcessor:
         *,
         kind: str,
         executable_hash: str,
-    ) -> list[dict[str, object]]:
+    ) -> list[DomjudgeDownloadFile]:
         cached_rows = self._toolkit.read_executable_cache(kind=kind, executable_hash=executable_hash)
         if not cached_rows:
             raise RuntimeError("script files not found")
         return [
-            {
-                "filename": str(row["filename"]),
-                "content": base64.b64encode(bytes(row["content"])).decode("ascii"),
-                "is_executable": bool(row["is_executable"]),
-            }
+            DomjudgeDownloadFile(
+                str(row["filename"]),
+                cast(PayloadFile, row["payload"]),
+                bool(row["is_executable"]),
+            )
             for row in cached_rows
         ]
 
@@ -232,7 +238,7 @@ class ResultProcessor:
         script_id: object,
         *,
         hostname: str = "",
-    ) -> list[dict[str, object]]:
+    ) -> list[DomjudgeDownloadFile]:
         requested_id = domjudge_parse_script_id(script_id)
         token = domjudge_lower_text(kind)
         _ = domjudge_script_hash_field(token)
@@ -755,13 +761,13 @@ class ResultProcessor:
                 wall_sec=0.0,
                 memory_kb=0,
                 score_text="",
-                output_run_rel="",
-                output_error_rel="",
-                output_system_rel="",
-                output_diff_rel="",
-                metadata_rel="",
-                compare_metadata_rel="",
-                team_message_rel="",
+                output_run_ref="",
+                output_error_ref="",
+                output_system_ref="",
+                output_diff_ref="",
+                metadata_ref="",
+                compare_metadata_ref="",
+                team_message_ref="",
                 feedback_text=feedback,
                 feedback_files=[],
                 answer_correct=False,
@@ -892,9 +898,6 @@ class ResultProcessor:
                 if force_failed or compile_failed or has_cancelled_cases or has_failed_tasks
                 else "completed"
             )
-            work_root_text = domjudge_text(batch_row["work_root"])
-            if work_root_text:
-                shutil.rmtree(Path(work_root_text).resolve(), ignore_errors=True)
             updated = self._s.batch_scheduler.set_batch_terminal_status(
                 int(batch_id),
                 status=terminal_status,
@@ -1099,7 +1102,6 @@ class ResultProcessor:
             return case_id
         batch_id = int(row["batch_id"])
         safe_task_id = domjudge_text(row["task_id"])
-        work_root = Path(domjudge_text(row["work_root"])).resolve()
         task_payload = self._core.task_payload(safe_task_id) if safe_task_id else {}
         verification_source = task_payload.get("verification_source", "")
         task_kind = self._toolkit.task_kind(task_payload, verification_source=verification_source)
@@ -1169,17 +1171,8 @@ class ResultProcessor:
 
         source_name = domjudge_text(row["source_name"])
         source_hash = domjudge_lower_text(row["source_hash"])
-        # Reuse the enqueue-time source hash directly so cache keys stay stable
-        # when payload contains extra sources (for example testlib.h).
         if re.fullmatch(r"[0-9a-f]{64}", source_hash) is None:
-            source_bytes = b""
-            source_path = Path(domjudge_text(row["source_path"])).resolve()
-            try:
-                if source_path.exists() and source_path.is_file() and (not source_path.is_symlink()):
-                    source_bytes = source_path.read_bytes()
-            except OSError:
-                source_bytes = b""
-            source_hash = domjudge_source_hash(source_name, source_bytes)
+            raise RuntimeError(f"missing source_hash for DOMjudge case {case_id}")
 
         testcase_hash = domjudge_lower_text(row["testcase_hash"])
         testcase_input_hash = domjudge_lower_text(row["testcase_input_hash"])
@@ -1255,7 +1248,7 @@ class ResultProcessor:
                 report=report_telemetry,
             )
             return 1 if accepted else case_id
-        self._toolkit.store_case_cache(
+        cached_payloads = self._toolkit.store_case_cache(
             key_parts={"key_hash": case_key_hash, "signature": case_signature},
             tags={
                 "source_hash": source_hash,
@@ -1273,17 +1266,9 @@ class ResultProcessor:
             shortcut_eligible=shortcut_eligible,
         )
 
-        use_case_cache_tokens = bool(self._s.judge_fs_index_service is not None)
-
         def _case_blob_token(blob_name: str) -> str:
-            if (not use_case_cache_tokens) or (blob_name not in cache_files):
-                return ""
-            return self._toolkit.cache_blob_ref(
-                kind=self.CASE_CACHE_KIND,
-                key_hash=case_key_hash,
-                signature=case_signature,
-                name=blob_name,
-            )
+            payload = cached_payloads.get(blob_name)
+            return "" if payload is None else payload.blob_ref or ""
 
         output_run_token = _case_blob_token("program.out")
         output_err_token = _case_blob_token("program.err")
@@ -1293,14 +1278,13 @@ class ResultProcessor:
         compare_meta_token = _case_blob_token("compare.meta")
         team_message_token = _case_blob_token("teammessage.txt")
         feedback_text, feedback_files = self._domjudge_feedback_text_and_files(
-            work_root=work_root,
             runresult=runresult,
-            output_error_rel=output_err_token,
-            output_diff_rel=output_diff_token,
-            team_message_rel=team_message_token,
+            output_error_ref=output_err_token,
+            output_diff_ref=output_diff_token,
+            team_message_ref=team_message_token,
         )
         # Always persist result artifacts as cache refs so product and judgehost
-        # readers do not depend on work_root/results materialization.
+        # Artifact readers only depend on immutable blob references.
 
         if not feedback_text:
             debug_context = self._s.batch_scheduler.case_debug_context(case_id)
@@ -1318,13 +1302,13 @@ class ResultProcessor:
             wall_sec=wall_sec,
             memory_kb=memory_kb,
             score_text=score_text,
-            output_run_rel=output_run_token,
-            output_error_rel=output_err_token,
-            output_system_rel=output_sys_token,
-            output_diff_rel=output_diff_token,
-            metadata_rel=metadata_token,
-            compare_metadata_rel=compare_meta_token,
-            team_message_rel=team_message_token,
+            output_run_ref=output_run_token,
+            output_error_ref=output_err_token,
+            output_system_ref=output_sys_token,
+            output_diff_ref=output_diff_token,
+            metadata_ref=metadata_token,
+            compare_metadata_ref=compare_meta_token,
+            team_message_ref=team_message_token,
             feedback_text=feedback_text,
             feedback_files=feedback_files,
             answer_correct=answer_correct,

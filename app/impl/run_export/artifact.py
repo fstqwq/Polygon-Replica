@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Annotated
 
 from fastapi import HTTPException, Depends
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse
 
 from app.impl.runtime.config import config
 from app.impl.workspace.artifact import (
@@ -13,12 +13,12 @@ from app.impl.workspace.artifact import (
     browser_file_response,
     export_download_filename,
     safe_artifact_path,
-    verification_artifact_blob,
+    verification_artifact_file,
 )
 from app.impl.workspace.context_ui import page_ctx
 
 
-def _browser_blob_response(blob: bytes, filename: str) -> Response:
+def _browser_blob_response(file_path: Path, filename: str) -> FileResponse:
     download_name = Path(filename).name or "artifact.bin"
     headers = {
         "X-Content-Type-Options": "nosniff",
@@ -26,10 +26,10 @@ def _browser_blob_response(blob: bytes, filename: str) -> Response:
     }
     suffix = Path(download_name).suffix.lower()
     if suffix == ".pdf":
-        return Response(content=blob, media_type="application/pdf", headers=headers)
+        return FileResponse(file_path, filename=download_name, media_type="application/pdf", headers=headers)
     if suffix in {".log", ".txt", ".tex", ".json", ".md", ".csv", ".xml", ".yaml", ".yml", ".in", ".out", ".ans"}:
-        return Response(content=blob, media_type="text/plain; charset=utf-8", headers=headers)
-    return Response(content=blob, media_type="application/octet-stream", headers=headers)
+        return FileResponse(file_path, filename=download_name, media_type="text/plain; charset=utf-8", headers=headers)
+    return FileResponse(file_path, filename=download_name, media_type="application/octet-stream", headers=headers)
 
 
 def artifact_file(problem: str, user: Annotated[str, Depends(require_session_user)], verification_id: str, rel_path: str):
@@ -46,10 +46,10 @@ def artifact_file(problem: str, user: Annotated[str, Depends(require_session_use
         if file_path is None:
             raise HTTPException(status_code=404, detail="artifact file not found")
     else:
-        virtual_blob = verification_artifact_blob(verification_id, rel_norm)
-        if virtual_blob is not None:
-            blob, filename = virtual_blob
-            return _browser_blob_response(blob, filename)
+        virtual_file = verification_artifact_file(verification_id, rel_norm)
+        if virtual_file is not None:
+            payload_file, filename = virtual_file
+            return _browser_blob_response(payload_file.path, filename)
         try:
             file_path = safe_artifact_path(problem, verification_id, rel_norm)
         except HTTPException as exc:

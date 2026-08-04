@@ -10,7 +10,6 @@ from typing import TYPE_CHECKING, TypedDict
 from app.db import DB
 from app.main_util import problem_slug_leaf
 from app.service.disk.verification_store import VerificationStore
-from app.service.platform.artifact import ArtifactService
 from app.service.disk.preview_store import PreviewArtifactRow, PreviewRow, PreviewStore
 from app.service.platform.fs.layout import FsManager
 from app.service.platform.hashing import sha256_hex_json
@@ -63,7 +62,6 @@ class PreviewService:
         self,
         db: DB,
         workspace_service: WorkspaceService,
-        artifacts: ArtifactService,
         pdf_compiler: TexCompileService,
         verification_service: VerificationService | None = None,
     ):
@@ -71,7 +69,6 @@ class PreviewService:
         self._store = PreviewStore(db)
         self._verification_store = VerificationStore(db)
         self.workspace_service = workspace_service
-        self.artifacts = artifacts
         self.verification_service = verification_service
         self.fs_manager = FsManager(
             self.workspace_service.settings.cache_root,
@@ -206,19 +203,22 @@ class PreviewService:
                 raise RuntimeError(f"invalid sample target path for test id {test_id}")
             copied_row = False
             if row.needs_input_copy:
-                input_blob = self.verification_service.resolve_artifact_blob(input_ref) if input_ref else None
-                if input_blob is None:
+                input_file = self.verification_service.artifact_descriptor(input_ref) if input_ref else None
+                if input_file is None:
                     raise RuntimeError(f"sample input missing from verification for test id {test_id} (row {index})")
                 input_target.parent.mkdir(parents=True, exist_ok=True)
-                input_target.write_bytes(input_blob)
+                shutil.copy2(input_file.path, input_target)
                 copied_row = True
             if row.needs_output_copy:
-                answer_blob = self.verification_service.resolve_artifact_blob(answer_ref) if answer_ref else None
-                if answer_blob is None:
+                answer_file = self.verification_service.artifact_descriptor(answer_ref) if answer_ref else None
+                if answer_file is None:
                     raise RuntimeError(f"sample answer missing from verification for test id {test_id} (row {index})")
                 if index < 1 or index > len(spec_entries):
                     raise RuntimeError(f"invalid tests/spec.json row for sample id {test_id}")
-                spec_entries[index - 1]["sample_output"] = answer_blob.decode("utf-8", errors="replace")
+                spec_entries[index - 1]["sample_output"] = answer_file.path.read_text(
+                    encoding="utf-8",
+                    errors="replace",
+                )
                 spec_changed = True
                 copied_row = True
             if copied_row:

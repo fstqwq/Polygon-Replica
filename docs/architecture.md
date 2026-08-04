@@ -75,7 +75,8 @@ Important domains:
 
 `service/platform/` provides shared infrastructure:
 - `worker_queue.py`: async worker queue with durable event log
-- `judge_fs_index.py`: content-addressed blob store under cache root
+- `runtime_blob_store.py`: immutable content-addressed runtime blobs
+- `runtime_cache_index.py`: process-local result and executable cache metadata
 - `fs/layout.py`: typed filesystem layout helpers
 - `hashing.py`, `git_process.py`, `latex_process.py`, `workspace_path.py`, `system_config.py`
 
@@ -98,7 +99,7 @@ Three storage backends matter in day-to-day execution.
 |---------|---------|--------------|
 | SQLite | metadata | users, problems, workspaces, verifications, verification_tasks, previews, exports, contests, audit log, runtime config |
 | Git bare repos | source of truth | problem sources only |
-| Filesystem | derived payloads | snapshots, judgehost workdirs, preview PDFs, export archives, blob caches |
+| Filesystem | derived payloads | snapshots, preview PDFs, export archives, runtime blobs |
 
 ## Current Filesystem Layout
 
@@ -111,35 +112,27 @@ The exact root paths come from environment settings. Relative to those roots, th
   artifacts/
     verifications/<verification_id>/
       logs/
-      tests/
-      ans/
-      bin/
-      uploaded-sources/
     previews/<preview_id>/
       logs/
       statement_preview/
   runtime/
     snapshots/<snapshot_id>/src/
-    judgehost-runs/<judgehost_task_id>/
+    blobs/<hash-prefix>/<sha256>
     worker-queue-events.jsonl
-  judge-fs-index/
 ```
 
 What each area means:
-- `artifacts/verifications/<id>/tests` and `ans`: prepared directories kept by the verification layout; current downloads resolve through DB refs rather than requiring mirror files
+- `artifacts/verifications/<id>/logs`: human-readable verification logs
 - `artifacts/previews/<id>/statement_preview/statement.pdf`: preview output
 - `runtime/snapshots/<id>/src`: snapshot created for verification/preview/export execution
-- `runtime/judgehost-runs/<task_id>`: temporary judgehost workdirs
-- `judge-fs-index`: per-key synchronized content-addressed entries for testcase
-  files, DOMjudge executables, exact case-cache payloads, and verification artifact
-  blobs referenced from SQLite
+- `runtime/blobs/<prefix>/<sha256>`: immutable payloads referenced as
+  `blob://sha256/<sha256>` from SQLite and runtime cache metadata
 
 Judgehost task/job/case scheduling state is process-local and indexed in memory.
 It is not stored in SQLite: startup reconciliation fails durable inflight
-`verification_tasks`, while fresh work creates new runtime records. Terminal job
-workdirs are deleted immediately; runtime identities use a verification-scoped
-60-second quiet window, and content-addressed caches keep their independent
-startup-scoped lifetime.
+`verification_tasks`, while fresh work creates new runtime records. Runtime
+identities use a verification-scoped 60-second quiet window. Cache index entries
+and immutable blobs have an independent startup-scoped lifetime.
 
 ### Artifacts root
 
@@ -173,9 +166,9 @@ Important current rules:
 
 At startup the runtime layer:
 - cancels inflight preview, contest, judgehost, and verification rows
-- clears `judge-fs-index`
 - clears `cache_root/artifacts`
 - clears `cache_root/runtime`
+- resets the process-local runtime cache index
 - clears the worker-queue durable log
 - starts the worker queue
 

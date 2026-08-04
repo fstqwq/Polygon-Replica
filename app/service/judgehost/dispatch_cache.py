@@ -15,8 +15,12 @@ from app.service.judgehost.runtime import (
 )
 from app.service.judgehost.shared import domjudge_lower_text, domjudge_text
 
-from app.service.judgehost.batch_scheduler_models import JudgehostCaseRow, ExecutionBatchRow
-from app.service.judgehost.batch_scheduler_models import CaseResult
+from app.service.judgehost.batch_scheduler_models import (
+    CaseResult,
+    CompileSubmission,
+    ExecutionBatchRow,
+    JudgehostCaseRow,
+)
 
 logger = logging.getLogger(__name__)
 _DomjudgeCacheEntry = TypedDict(
@@ -86,7 +90,7 @@ class DispatchCacheMixin:
         requires_output_blob = main_correct or "generate-input" in verification_source
         if requires_output_blob:
             blob_names.append("program.out")
-        cached_read = self._toolkit.cache_get_with_blobs(
+        cached_read = self._toolkit.cache_get_with_payloads(
             self.CASE_CACHE_KIND,
             case_key_hash,
             case_signature,
@@ -94,7 +98,7 @@ class DispatchCacheMixin:
         )
         if cached_read is None:
             return None
-        cached_entry, cached_blobs = cached_read
+        cached_entry, cached_payloads = cached_read
         cached_exact = self._domjudge_cache_entry(cached_entry)
         if cached_exact is not None:
             cached_obj = cached_exact["value"]
@@ -131,16 +135,14 @@ class DispatchCacheMixin:
                 test_name=domjudge_text(case_row["test_name"]),
                 runresult=cached_runresult,
                 built=built,
-                blobs=cached_blobs,
-                cache_key_hash=case_key_hash,
-                cache_signature=case_signature,
+                payloads=cached_payloads,
             )
             if cached_verdict == "OK" and (not compile_only):
                 # Cached OK result must carry a resolvable output artifact.
-                if not cached_result.output_run_rel:
+                if not cached_result.output_run_ref:
                     self._toolkit.cache_delete(self.CASE_CACHE_KIND, case_key_hash, case_signature)
                     return None
-            if requires_output_blob and "program.out" not in cached_blobs:
+            if requires_output_blob and "program.out" not in cached_payloads:
                 self._toolkit.cache_delete(self.CASE_CACHE_KIND, case_key_hash, case_signature)
                 return None
             return cached_result
@@ -164,8 +166,6 @@ class DispatchCacheMixin:
         if spec is None or submission is None:
             self._s.batch_scheduler.finish_materialization(
                 int(batch_id),
-                source_path="",
-                work_root="",
                 success=False,
                 error_text="judgehost batch specification disappeared",
                 now_text=now_iso(),
@@ -176,16 +176,22 @@ class DispatchCacheMixin:
                 error_text="judgehost batch specification disappeared",
             )
             return False
-        work_root = self._toolkit.work_root(f"batch-{int(batch_id)}")
-        source_dir = (work_root / "source").resolve()
-        source_path = (source_dir / submission.source_name).resolve()
         try:
-            source_dir.mkdir(parents=True, exist_ok=True)
-            self._toolkit.ensure_bytes_file(source_path, submission.source_bytes, executable=False)
-            for name, blob in submission.extra_source_items:
-                target = (source_dir / name).resolve()
-                if target != source_path:
-                    self._toolkit.ensure_bytes_file(target, blob, executable=False)
+            materialized_submission = CompileSubmission(
+                compile_key=submission.compile_key,
+                submit_id=submission.submit_id,
+                source_name=submission.source_name,
+                source_file=self._s.runtime_blob_store.put_file(submission.source_file),
+                extra_source_items=tuple(
+                    (name, self._s.runtime_blob_store.put_file(payload))
+                    for name, payload in submission.extra_source_items
+                ),
+                compile_files=submission.compile_files,
+            )
+            self._s.batch_scheduler.publish_materialized_compile_submission(
+                submission.compile_key,
+                materialized_submission,
+            )
             for kind, hash_key, files_key in (
                 ("run", "run_hash", "run_files"),
                 ("compare", "compare_hash", "compare_files"),
@@ -203,8 +209,6 @@ class DispatchCacheMixin:
         except Exception as exc:
             self._s.batch_scheduler.finish_materialization(
                 int(batch_id),
-                source_path=str(source_path),
-                work_root=str(work_root),
                 success=False,
                 error_text=f"judgehost materialization failed: {exc}",
                 now_text=now_iso(),
@@ -217,8 +221,6 @@ class DispatchCacheMixin:
             return False
         return self._s.batch_scheduler.finish_materialization(
             int(batch_id),
-            source_path=str(source_path),
-            work_root=str(work_root),
             success=True,
             error_text="",
             now_text=now_iso(),

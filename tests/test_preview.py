@@ -7,7 +7,6 @@ from tests.db_helpers import (
     write_preview_summary,
 )
 
-import base64
 import json
 import fcntl
 import os
@@ -26,6 +25,7 @@ from app.service.statement.constant import (
 )
 from app.impl.workspace.sample_output_validation import validate_custom_sample_outputs
 from app.service.verification.plan import VerificationTestPlan
+from app.service.platform.runtime_blob_store import PayloadFile
 from app.service.statement.context import pick_statement_language, statement_languages
 from app.service.statement.ftl.renderer import render_ftl_template
 from app.service.statement.render import render_statement_main
@@ -436,11 +436,12 @@ class TestPreview(E2ETestBase):
             encoding="utf-8",
         )
         verification_id = self.random_id("ver-preview-sample-sync")
-        runtime_layout = config.fs_manager.prepare_verification_runtime_layout(verification_id)
-        (runtime_layout.tests / "001.in").write_text("build-manual-input\n", encoding="utf-8")
-        (runtime_layout.answers / "001.ans").write_text("build-manual-answer\n", encoding="utf-8")
-        (runtime_layout.tests / "002.in").write_text("build-gen-input\n", encoding="utf-8")
-        (runtime_layout.answers / "002.ans").write_text("build-gen-answer\n", encoding="utf-8")
+        payloads = {
+            ("001.in", "input_ref"): config.runtime_blob_store.put_bytes(b"build-manual-input\n"),
+            ("001.in", "answer_ref"): config.runtime_blob_store.put_bytes(b"build-manual-answer\n"),
+            ("002.in", "input_ref"): config.runtime_blob_store.put_bytes(b"build-gen-input\n"),
+            ("002.in", "answer_ref"): config.runtime_blob_store.put_bytes(b"build-gen-answer\n"),
+        }
 
         ctx = preview_service.workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
         db_execute(
@@ -477,20 +478,11 @@ class TestPreview(E2ETestBase):
 
             def verification_artifact_ref(self, verification_id_arg: str, test_name: str, ref_key: str) -> str:
                 _ = verification_id_arg
-                if test_name == "001.in":
-                    return f"blob://{ref_key}/001"
-                if test_name == "002.in":
-                    return f"blob://{ref_key}/002"
-                return ""
+                payload = payloads.get((test_name, ref_key))
+                return "" if payload is None else str(payload.blob_ref)
 
-            def resolve_artifact_blob(self, token: str) -> bytes | None:
-                payloads = {
-                    "blob://input_ref/001": b"build-manual-input\n",
-                    "blob://answer_ref/001": b"build-manual-answer\n",
-                    "blob://input_ref/002": b"build-gen-input\n",
-                    "blob://answer_ref/002": b"build-gen-answer\n",
-                }
-                return payloads.get(token)
+            def artifact_descriptor(self, token: str) -> PayloadFile | None:
+                return config.runtime_blob_store.descriptor(token)
 
         old_verification_service = preview_service.verification_service
         try:
@@ -526,9 +518,8 @@ class TestPreview(E2ETestBase):
             encoding="utf-8",
         )
         verification_id = self.random_id("ver-preview-custom-sample")
-        runtime_layout = config.fs_manager.prepare_verification_runtime_layout(verification_id)
-        (runtime_layout.tests / "001.in").write_text("custom-sample-input\n", encoding="utf-8")
-        (runtime_layout.answers / "001.ans").write_text("custom-sample-answer\n", encoding="utf-8")
+        input_file = config.runtime_blob_store.put_bytes(b"custom-sample-input\n")
+        answer_file = config.runtime_blob_store.put_bytes(b"custom-sample-answer\n")
 
         ctx = preview_service.workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
         db_execute(
@@ -564,15 +555,11 @@ class TestPreview(E2ETestBase):
             def verification_artifact_ref(self, verification_id_arg: str, test_name: str, ref_key: str) -> str:
                 _ = verification_id_arg
                 if test_name == "001.in":
-                    return f"blob://{ref_key}/001"
+                    return str(input_file.blob_ref if ref_key == "input_ref" else answer_file.blob_ref)
                 return ""
 
-            def resolve_artifact_blob(self, token: str) -> bytes | None:
-                payloads = {
-                    "blob://input_ref/001": b"custom-sample-input\n",
-                    "blob://answer_ref/001": b"custom-sample-answer\n",
-                }
-                return payloads.get(token)
+            def artifact_descriptor(self, token: str) -> PayloadFile | None:
+                return config.runtime_blob_store.descriptor(token)
 
         old_verification_service = preview_service.verification_service
         try:
@@ -716,9 +703,9 @@ class TestPreview(E2ETestBase):
             source_kind="manual",
             display_source_path="manual_validate.cpp",
             execution_source_name="manual_validate.cpp",
-            execution_source_bytes=b"int main(){return 0;}\n",
-            execution_input_bytes=b"1\n",
-            extra_sources_b64={},
+            execution_source_file=config.runtime_blob_store.put_bytes(b"int main(){return 0;}\n"),
+            execution_input_file=config.runtime_blob_store.put_bytes(b"1\n"),
+            extra_source_files={},
             tests_meta={},
             sample=True,
             sample_input_custom=False,
@@ -773,14 +760,15 @@ class TestPreview(E2ETestBase):
         artifact_root = config.fs_manager.prepare_verification_root(verification_id).resolve()
         logs_root = artifact_root / "logs"
         logs_root.mkdir(parents=True, exist_ok=True)
+        answer_file = config.runtime_blob_store.put_bytes(b"custom-answer\n")
         plan = VerificationTestPlan(
             test_name="001.in",
             source_kind="manual",
             display_source_path="manual_validate.cpp",
             execution_source_name="manual_validate.cpp",
-            execution_source_bytes=b"int main(){return 0;}\n",
-            execution_input_bytes=b"base\n",
-            extra_sources_b64={},
+            execution_source_file=config.runtime_blob_store.put_bytes(b"int main(){return 0;}\n"),
+            execution_input_file=config.runtime_blob_store.put_bytes(b"base\n"),
+            extra_source_files={},
             tests_meta={},
             sample=True,
             sample_input_custom=True,
@@ -807,7 +795,7 @@ class TestPreview(E2ETestBase):
                                 "test": "001.in",
                                 "verdict": "OK",
                                 "message": "",
-                                "output_ref": "cache://answer",
+                                "output_ref": answer_file.blob_ref,
                             }
                         ]
                     },
@@ -830,18 +818,12 @@ class TestPreview(E2ETestBase):
         def _fake_case_output(task_id: str, test_name: str):
             self.assertEqual(task_id, "jt-main-ok")
             self.assertEqual(test_name, "001.in")
-            return ("cache://answer", None, 1)
-
-        def _fake_resolve_artifact_blob(output_ref: str, *, work_root: object = None) -> bytes | None:
-            self.assertEqual(output_ref, "cache://answer")
-            self.assertIsNone(work_root)
-            return b"custom-answer\n"
+            return (answer_file.blob_ref, 1)
 
         payload_base = {
             "run_config_json": "{}",
             "problem_limits": {"time_limit_ms": 2000, "memory_limit_mb": 1024, "pass_limit": 1},
-            "binaries_b64": {},
-            "sources_b64": {},
+            "source_files": {},
         }
         with patch.object(config.judgehost_task_service, "enqueue_task", side_effect=_fake_enqueue_task), patch.object(
             config.judgehost_task_service,
@@ -851,10 +833,6 @@ class TestPreview(E2ETestBase):
             config.judgehost_task_service,
             "domjudge_case_output_for_task",
             side_effect=_fake_case_output,
-        ), patch.object(
-            config.judgehost_task_service,
-            "resolve_artifact_blob",
-            side_effect=_fake_resolve_artifact_blob,
         ):
             result = validate_custom_sample_outputs(
                 problem="alice/sample",
@@ -865,7 +843,7 @@ class TestPreview(E2ETestBase):
                 test_plans=[plan],
                 accepted_source_label="solutions/std.cpp",
                 accepted_source_name="std.cpp",
-                accepted_source_bytes=b"int main(){return 0;}\n",
+                accepted_source_file=config.runtime_blob_store.put_bytes(b"int main(){return 0;}\n"),
                 run_verification_payload_base=payload_base,
                 bypass_case_result_cache=True,
             )
@@ -879,10 +857,22 @@ class TestPreview(E2ETestBase):
         second_payload = dict(calls[1]["prepared_payload"])
         first_test = list(dict(first_payload["verification_payload"])["tests"])[0]
         second_test = list(dict(second_payload["verification_payload"])["tests"])[0]
-        self.assertEqual(first_test["input_b64"], base64.b64encode(b"custom-input\n").decode("ascii"))
-        self.assertEqual(first_test["answer_b64"], "")
-        self.assertEqual(second_test["input_b64"], base64.b64encode(b"custom-input\n").decode("ascii"))
-        self.assertEqual(second_test["answer_b64"], base64.b64encode(b"custom-answer\n").decode("ascii"))
+        first_input = config.runtime_blob_store.read(
+            PayloadFile.from_payload(first_test["input_file"])
+        )
+        first_answer = config.runtime_blob_store.read(
+            PayloadFile.from_payload(first_test["answer_file"])
+        )
+        second_input = config.runtime_blob_store.read(
+            PayloadFile.from_payload(second_test["input_file"])
+        )
+        second_answer = config.runtime_blob_store.read(
+            PayloadFile.from_payload(second_test["answer_file"])
+        )
+        self.assertEqual(first_input, b"custom-input\n")
+        self.assertEqual(first_answer, b"")
+        self.assertEqual(second_input, b"custom-input\n")
+        self.assertEqual(second_answer, b"custom-answer\n")
         self.assertEqual((logs_root / "validate.log").read_text(encoding="utf-8"), "001.in: ok\n")
 
     def test_render_ftl_strips_standalone_directive_lines(self) -> None:

@@ -1,15 +1,16 @@
 from __future__ import annotations
 
-import base64
 import json
 import shlex
 from pathlib import Path
 
 from app.impl.runtime.config import config
 from app.service.platform.testlib_source import workspace_testlib_header
+from app.service.platform.runtime_blob_store import PayloadFile
 from app.service.verification.service import CPP_EXTENSIONS, DEFAULT_TIME_LIMIT_MS, SOLUTION_SOURCE_EXTENSIONS
 from app.service.verification.runtime import normalize_pass_limit, normalize_problem_mode
 from app.service.verification.plan import VerificationExecutionPlan, VerificationTestPlan
+from app.service.verification.signature import VerificationManifest, verification_manifest
 from app.service.verification.source import resolve_source
 from app.impl.workspace.context_operation import list_solution_entries, resolve_build_accepted_solution_source
 
@@ -34,7 +35,7 @@ def _run_payload_base(
     *,
     build_cfg: dict[str, object],
     problem_limits: dict[str, int],
-    source_payloads_b64: dict[str, str],
+    source_files: dict[str, PayloadFile],
 ) -> dict[str, object]:
     checker_args_raw = build_cfg.get("checker_args") or []
     checker_args = [str(item) for item in checker_args_raw if str(item or "")]
@@ -51,15 +52,14 @@ def _run_payload_base(
             separators=(",", ":"),
         ),
         "problem_limits": dict(problem_limits),
-        "binaries_b64": {},
-        "sources_b64": dict(source_payloads_b64),
+        "source_files": {name: payload.to_payload() for name, payload in source_files.items()},
     }
 
 
 def _generate_payload_base(
     *,
     problem_limits: dict[str, int],
-    source_payloads_b64: dict[str, str],
+    source_files: dict[str, PayloadFile],
 ) -> dict[str, object]:
     return {
         "run_config_json": json.dumps(
@@ -78,20 +78,14 @@ def _generate_payload_base(
             "memory_limit_mb": int(problem_limits["memory_limit_mb"]),
             "pass_limit": int(problem_limits["pass_limit"]),
         },
-        "binaries_b64": {},
-        "sources_b64": dict(source_payloads_b64),
+        "source_files": {name: payload.to_payload() for name, payload in source_files.items()},
     }
-
-
-def _optional_b64(path: Path | None) -> str:
-    if path is None:
-        return ""
-    return base64.b64encode(path.read_bytes()).decode("ascii")
 
 
 def _shared_source_payloads(
     *,
     snapshot: Path,
+    manifest: VerificationManifest,
     build_cfg: dict[str, object],
     mode: str,
 ) -> dict[str, object]:
@@ -127,26 +121,26 @@ def _shared_source_payloads(
         raise RuntimeError("accepted solution source must be under solutions/")
     if Path(accepted_source_path).suffix.lower() not in SOLUTION_SOURCE_EXTENSIONS:
         raise RuntimeError("accepted solution source must be .cpp/.cc/.cxx/.c++/.py/.java")
-    accepted_source = resolve_source(snapshot, accepted_source_path, snapshot_resolved=snapshot_resolved)
+    manifest.require(accepted_source_path)
     if mode == "interactive" and interactor_source is None:
         raise RuntimeError("interactor source is required for interactive mode")
     source_file_by_path = {
-        accepted_source_path: accepted_source,
+        accepted_source_path: manifest.require(accepted_source_path),
     }
     testlib_header = workspace_testlib_header(snapshot)
-    sources_b64: dict[str, str] = {}
+    source_files: dict[str, PayloadFile] = {}
     if checker_source is not None:
-        sources_b64["checker.cpp"] = _optional_b64(checker_source)
+        source_files["checker.cpp"] = manifest.require(checker_source.relative_to(snapshot).as_posix())
     if validator_source is not None:
-        sources_b64["validator.cpp"] = _optional_b64(validator_source)
+        source_files["validator.cpp"] = manifest.require(validator_source.relative_to(snapshot).as_posix())
     if interactor_source is not None:
-        sources_b64["interactor.cpp"] = _optional_b64(interactor_source)
+        source_files["interactor.cpp"] = manifest.require(interactor_source.relative_to(snapshot).as_posix())
     if testlib_header is not None:
-        sources_b64["testlib.h"] = base64.b64encode(testlib_header.read_bytes()).decode("ascii")
+        source_files["testlib.h"] = manifest.require(testlib_header.relative_to(snapshot).as_posix())
     return {
         "accepted_source_path": accepted_source_path,
         "source_file_by_path": source_file_by_path,
-        "sources_b64": sources_b64,
+        "source_files": source_files,
         "testlib_header": testlib_header,
     }
 
@@ -160,7 +154,8 @@ def _generator_command_payload(args: list[str]) -> str:
 def _manual_plan(
     *,
     test_name: str,
-    input_bytes: bytes,
+    input_bytes: bytes | None = None,
+    input_file: PayloadFile | None = None,
     tests_meta: dict[str, object],
     sample: bool = False,
     sample_input_custom: bool = False,
@@ -169,14 +164,17 @@ def _manual_plan(
     sample_output_text: str = "",
     sample_output_validate: bool = True,
 ) -> VerificationTestPlan:
+    execution_input = input_file
+    if execution_input is None:
+        execution_input = config.runtime_blob_store.put_bytes(input_bytes or b"")
     return VerificationTestPlan(
         test_name=test_name,
         source_kind="manual",
         display_source_path="manual_validate.cpp",
         execution_source_name="manual_validate.cpp",
-        execution_source_bytes=b"int main(){return 0;}\n",
-        execution_input_bytes=input_bytes,
-        extra_sources_b64={},
+        execution_source_file=config.runtime_blob_store.put_bytes(b"int main(){return 0;}\n"),
+        execution_input_file=execution_input,
+        extra_source_files={},
         tests_meta=tests_meta,
         sample=sample,
         sample_input_custom=sample_input_custom,
@@ -189,6 +187,8 @@ def _manual_plan(
 
 def _generated_plan(
     *,
+    snapshot: Path,
+    manifest: VerificationManifest,
     test_name: str,
     display_source_path: str,
     generator_source: Path,
@@ -202,17 +202,19 @@ def _generated_plan(
     sample_output_text: str = "",
     sample_output_validate: bool = True,
 ) -> VerificationTestPlan:
-    extra_sources_b64: dict[str, str] = {}
+    extra_source_files: dict[str, PayloadFile] = {}
     if generator_source.suffix.lower() in CPP_EXTENSIONS and testlib_header is not None:
-        extra_sources_b64["testlib.h"] = base64.b64encode(testlib_header.read_bytes()).decode("ascii")
+        extra_source_files["testlib.h"] = manifest.require(
+            testlib_header.relative_to(snapshot).as_posix()
+        )
     return VerificationTestPlan(
         test_name=test_name,
         source_kind="gen",
         display_source_path=display_source_path,
         execution_source_name=generator_source.name,
-        execution_source_bytes=generator_source.read_bytes(),
-        execution_input_bytes=(command_payload + "\n").encode("utf-8"),
-        extra_sources_b64=extra_sources_b64,
+        execution_source_file=manifest.require(generator_source.relative_to(snapshot).as_posix()),
+        execution_input_file=config.runtime_blob_store.put_bytes((command_payload + "\n").encode("utf-8")),
+        extra_source_files=extra_source_files,
         tests_meta=tests_meta,
         sample=sample,
         sample_input_custom=sample_input_custom,
@@ -226,7 +228,7 @@ def _generated_plan(
 def _tests_from_spec(
     *,
     snapshot: Path,
-    bin_dir: Path,
+    manifest: VerificationManifest,
     testlib_header: Path | None,
     sample_only: bool,
 ) -> tuple[list[VerificationTestPlan], list[dict[str, object]]]:
@@ -234,10 +236,10 @@ def _tests_from_spec(
     entries = verification_service._load_tests_spec(snapshot)
     if entries is None:
         return ([], [])
-    runtime_rows, generator_targets = verification_service._prepare_tests_spec_runtime(snapshot, entries, bin_dir)
+    runtime_rows, generator_targets = verification_service._prepare_tests_spec_runtime(snapshot, entries)
     generator_source_by_name = {
         str(target_name): source_path
-        for target_name, source_path, _target_bin in generator_targets
+        for target_name, source_path in generator_targets
         if source_path is not None
     }
     plans: list[VerificationTestPlan] = []
@@ -266,7 +268,8 @@ def _tests_from_spec(
             }
             plan = _manual_plan(
                 test_name=test_name,
-                input_bytes=sample_input.encode("utf-8") if use_custom_sample_input else str(row["input"]).encode("utf-8"),
+                input_bytes=sample_input.encode("utf-8") if use_custom_sample_input else None,
+                input_file=None if use_custom_sample_input else manifest.require(str(row["source_rel"])),
                 tests_meta=tests_meta,
                 sample=sample,
                 sample_input_custom=bool(sample_input),
@@ -295,6 +298,8 @@ def _tests_from_spec(
                 "payload_source": str(row["payload_rel"]),
             }
             plan = _generated_plan(
+                snapshot=snapshot,
+                manifest=manifest,
                 test_name=test_name,
                 display_source_path=str(row["source_rel"]),
                 generator_source=generator_source,
@@ -317,6 +322,7 @@ def _tests_from_spec(
 def _tests_without_spec(
     *,
     snapshot: Path,
+    manifest: VerificationManifest,
     build_cfg: dict[str, object],
     testlib_header: Path | None,
 ) -> tuple[list[VerificationTestPlan], list[dict[str, object]]]:
@@ -339,7 +345,7 @@ def _tests_without_spec(
         }
         plan = _manual_plan(
             test_name=f"{counter:03d}.in",
-            input_bytes=manual_source.read_bytes(),
+            input_file=manifest.require(manual_source.relative_to(snapshot).as_posix()),
             tests_meta=tests_meta,
         )
         plans.append(plan)
@@ -365,6 +371,8 @@ def _tests_without_spec(
                 "source": source_label,
             }
             plan = _generated_plan(
+                snapshot=snapshot,
+                manifest=manifest,
                 test_name=f"{counter:03d}.in",
                 display_source_path=source_label,
                 generator_source=source_path,
@@ -381,25 +389,32 @@ def _tests_without_spec(
 def build_verification_execution_plan(
     snapshot: Path,
     *,
-    bin_dir: Path,
+    manifest: VerificationManifest | None = None,
     sample_only: bool = False,
 ) -> VerificationExecutionPlan:
+    resolved_manifest = verification_manifest(snapshot) if manifest is None else manifest
     verification_service = config.verification_service
     build_cfg = verification_service._load_build_config(snapshot)
     runtime_cfg = verification_service._load_problem_runtime_config(snapshot)
     mode = normalize_problem_mode(runtime_cfg.get("mode"), "pass-fail")
     pass_limit = normalize_pass_limit(runtime_cfg.get("pass_limit"), 1)
-    shared_sources = _shared_source_payloads(snapshot=snapshot, build_cfg=build_cfg, mode=mode)
+    shared_sources = _shared_source_payloads(
+        snapshot=snapshot,
+        manifest=resolved_manifest,
+        build_cfg=build_cfg,
+        mode=mode,
+    )
     problem_limits = _problem_limits(runtime_cfg, pass_limit=pass_limit)
     plans, tests_meta_rows = _tests_from_spec(
         snapshot=snapshot,
-        bin_dir=bin_dir,
+        manifest=resolved_manifest,
         testlib_header=shared_sources["testlib_header"],
         sample_only=bool(sample_only),
     )
     if not plans:
         plans, tests_meta_rows = _tests_without_spec(
             snapshot=snapshot,
+            manifest=resolved_manifest,
             build_cfg=build_cfg,
             testlib_header=shared_sources["testlib_header"],
         )
@@ -422,11 +437,11 @@ def build_verification_execution_plan(
         run_verification_payload_base=_run_payload_base(
             build_cfg=build_cfg,
             problem_limits=problem_limits,
-            source_payloads_b64=dict(shared_sources["sources_b64"]),
+            source_files=dict(shared_sources["source_files"]),
         ),
         generate_verification_payload_base=_generate_payload_base(
             problem_limits=problem_limits,
-            source_payloads_b64=dict(shared_sources["sources_b64"]),
+            source_files=dict(shared_sources["source_files"]),
         ),
         source_file_by_path=dict(shared_sources["source_file_by_path"]),
         test_names=[plan.test_name for plan in plans],

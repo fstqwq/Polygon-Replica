@@ -9,6 +9,7 @@
     "test_public_contracts.py",
     "test_icpc_package_import.py",
     "test_run_display.py",
+    "test_runtime_blob_store.py",
     "test_statement_style.py",
     "test_verification_analysis.py",
     "test_verification_runtime_coordinator.py",

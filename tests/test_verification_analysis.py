@@ -1,10 +1,21 @@
 from __future__ import annotations
 
 import unittest
+import hashlib
+from pathlib import Path
 
 from app.impl.workspace.boundary_coverage import boundary_coverage_from_feedback
 from app.impl.workspace.runtime_threshold import evaluate_summary_runtime_threshold
 from app.service.verification.plan import VerificationTestPlan
+from app.service.platform.runtime_blob_store import PayloadFile
+
+
+def _payload(name: str, content: bytes) -> PayloadFile:
+    return PayloadFile(
+        path=Path("/tmp") / name,
+        size=len(content),
+        identity=hashlib.sha256(content).hexdigest(),
+    )
 
 
 def _test_plan(test_name: str = "001.in") -> VerificationTestPlan:
@@ -13,9 +24,9 @@ def _test_plan(test_name: str = "001.in") -> VerificationTestPlan:
         source_kind="manual",
         display_source_path="manual_validate.cpp",
         execution_source_name="manual_validate.cpp",
-        execution_source_bytes=b"int main(){return 0;}\n",
-        execution_input_bytes=b"1\n",
-        extra_sources_b64={},
+        execution_source_file=_payload("manual_validate.cpp", b"int main(){return 0;}\n"),
+        execution_input_file=_payload("001.in", b"1\n"),
+        extra_source_files={},
         tests_meta={},
         sample=False,
         sample_input_custom=False,

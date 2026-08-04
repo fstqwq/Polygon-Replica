@@ -9,7 +9,7 @@ from typing import cast
 from app.db import now_iso
 from app.impl.runtime.config import config
 from app.service.problem.solution_metadata import normalize_expected_behavior
-from app.service.platform.hashing import sha256_hex_bytes
+from app.service.platform.runtime_blob_store import PayloadFile, RuntimeBlobStore
 from app.service.verification.source import resolve_source
 from app.service.verification.task_scheduler import (
     TaskExecutionResult,
@@ -23,6 +23,7 @@ from app.service.verification.task_store import VerificationTaskRow, Verificatio
 from app.service.verification.task_result_finalize import verification_task_fail_reason
 from app.service.verification.test_rows import build_verification_test_row
 from app.service.verification.types import Kind, Status
+from app.service.verification.signature import VerificationManifest, verification_manifest
 from app.service.verification.types import is_cancel_reason
 from app.service.verification.runtime import normalize_pass_limit, normalize_problem_mode
 from app.impl.workspace.run_display import run_actual_failed_codes, verification_solution_failure_hint
@@ -84,11 +85,8 @@ class TaskExecutionContext:
     mode: str
     pass_limit: int
     snapshot_root: Path
-    uploaded_sources_root: Path
-    source_file_by_path: dict[str, Path]
-    source_bytes_by_path: dict[str, tuple[str, bytes]]
-    source_sha256_by_content: dict[bytes, str]
-    artifact_bytes_by_test_ref: dict[tuple[str, str], bytes]
+    source_file_by_path: dict[str, PayloadFile]
+    artifact_file_by_test_ref: dict[tuple[str, str], PayloadFile]
     execution_template_by_key: dict[tuple[str, str, str, bool, str], dict[str, object]]
     test_plan_by_name: dict[str, VerificationTestPlan]
     run_verification_payload_base: dict[str, object]
@@ -119,16 +117,16 @@ def _require_online_judgehost() -> None:
         raise RuntimeError("judgehost is offline")
 
 
-def _verification_required_blob(
+def _verification_required_file(
     verification_id: str,
     test_name: str,
     ref_key: str,
     *,
     label: str,
-    cache: dict[tuple[str, str], bytes] | None = None,
+    cache: dict[tuple[str, str], PayloadFile] | None = None,
     timeout_sec: float = _ARTIFACT_READY_TIMEOUT_SEC,
     interval_sec: float = _ARTIFACT_READY_INTERVAL_SEC,
-) -> bytes:
+) -> PayloadFile:
     cache_key = (test_name, ref_key)
     if cache is not None and cache_key in cache:
         return cache[cache_key]
@@ -136,11 +134,11 @@ def _verification_required_blob(
     while True:
         ref = config.verification_service.verification_artifact_ref(verification_id, test_name, ref_key)
         if ref:
-            blob = config.verification_service.resolve_artifact_blob(ref)
-            if blob is not None:
+            payload = config.runtime_blob_store.descriptor(ref)
+            if payload is not None:
                 if cache is not None:
-                    cache[cache_key] = blob
-                return blob
+                    cache[cache_key] = payload
+                return payload
         if time.monotonic() >= deadline:
             break
         time.sleep(max(0.001, min(float(interval_sec), deadline - time.monotonic())))
@@ -192,8 +190,13 @@ def _build_graph(
         generator_key = (
             test_plan.source_kind,
             test_plan.execution_source_name,
-            sha256_hex_bytes(test_plan.execution_source_bytes),
-            json.dumps(test_plan.extra_sources_b64, ensure_ascii=True, sort_keys=True, separators=(",", ":")),
+            test_plan.execution_source_file.identity,
+            json.dumps(
+                {name: payload.identity for name, payload in test_plan.extra_source_files.items()},
+                ensure_ascii=True,
+                sort_keys=True,
+                separators=(",", ":"),
+            ),
         )
         generator_run_id = generator_run_ids.get(generator_key)
         if generator_run_id is None:
@@ -257,8 +260,8 @@ def _build_graph(
     )
 
 
-def _materialize_uploaded_sources(*, layout_root: Path, targets: list[dict[str, object]]) -> dict[str, Path]:
-    values: dict[str, Path] = {}
+def _uploaded_source_files(targets: list[dict[str, object]]) -> dict[str, PayloadFile]:
+    values: dict[str, PayloadFile] = {}
     for target in targets:
         source_path = str(target.get("path") or "")
         upload_name = str(target.get("upload_filename") or "")
@@ -267,10 +270,7 @@ def _materialize_uploaded_sources(*, layout_root: Path, targets: list[dict[str, 
             continue
         if not isinstance(raw_content, (bytes, bytearray)):
             raise RuntimeError("uploaded verification source payload is invalid")
-        target_path = (layout_root / source_path).resolve()
-        target_path.parent.mkdir(parents=True, exist_ok=True)
-        target_path.write_bytes(bytes(raw_content))
-        values[source_path] = target_path
+        values[source_path] = config.runtime_blob_store.put_bytes(bytes(raw_content))
     return values
 
 
@@ -643,16 +643,11 @@ def _sanity_plan_for_verification_kind(kind: str, test_plans: list[VerificationT
     return (checks, SANITY_PENDING if checks else "")
 
 
-def _source_bytes_for_path(execution: TaskExecutionContext, source_path: str) -> tuple[str, bytes]:
-    cached = execution.source_bytes_by_path.get(source_path)
-    if cached is not None:
-        return cached
+def _source_file_for_path(execution: TaskExecutionContext, source_path: str) -> tuple[str, PayloadFile]:
     source_file = execution.source_file_by_path.get(source_path)
     if source_file is None:
         raise RuntimeError(f"verification source is missing: {source_path}")
-    loaded = (source_file.name, source_file.read_bytes())
-    execution.source_bytes_by_path[source_path] = loaded
-    return loaded
+    return (source_file.path.name, source_file)
 
 
 def _execution_template(
@@ -660,21 +655,20 @@ def _execution_template(
     *,
     source_label: str,
     source_name: str,
-    source_bytes: bytes,
+    source_file: PayloadFile,
     task_kind: str,
     expected_behavior: str,
     verification_source: str,
     verification_payload_base: dict[str, object],
-    extra_sources_b64: dict[str, str] | None = None,
+    extra_source_files: dict[str, PayloadFile] | None = None,
     manual_validate_only: bool = False,
 ) -> dict[str, object]:
-    extra_sources_key = json.dumps(extra_sources_b64 or {}, sort_keys=True, separators=(",", ":"))
-    source_hash = execution.source_sha256_by_content.get(source_bytes)
-    if source_hash is None:
-        # Source bytes are immutable within one snapshot; hash each distinct source
-        # once rather than repeating source-sized work for every test Case.
-        source_hash = sha256_hex_bytes(source_bytes)
-        execution.source_sha256_by_content[source_bytes] = source_hash
+    extra_sources_key = json.dumps(
+        {name: payload.identity for name, payload in (extra_source_files or {}).items()},
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    source_hash = source_file.identity
     key = (
         source_label,
         source_hash,
@@ -687,13 +681,13 @@ def _execution_template(
         return cached
     prepared = config.judgehost_task_service.prepare_execution_template(
         mode=execution.mode,
-        upload_content=source_bytes,
+        upload_file=source_file,
         upload_filename=source_name,
         verification_payload=verification_payload_base,
         expected_behavior=expected_behavior,
         verification_source=verification_source,
         task_kind=task_kind,
-        extra_sources_b64=extra_sources_b64,
+        extra_source_files=extra_source_files,
         manual_validate_only=manual_validate_only,
         compile_only=False,
     )
@@ -740,22 +734,22 @@ def _publish_generate_task(task_row: VerificationTaskRow, *, execution: TaskExec
             source_label=test_plan.execution_source_name,
             run_id=run_id,
             test_name=test_name,
-            input_bytes=test_plan.execution_input_bytes,
-            answer_bytes=b"",
+            input_file=test_plan.execution_input_file,
+            answer_file=config.runtime_blob_store.put_bytes(b""),
             verification_payload_base=execution.generate_verification_payload_base,
-            extra_sources_b64=test_plan.extra_sources_b64,
+            extra_source_files=test_plan.extra_source_files,
             manual_validate_only=test_plan.source_kind == "manual",
         )
         execution_template = _execution_template(
             execution,
             source_label=test_plan.execution_source_name,
             source_name=test_plan.execution_source_name,
-            source_bytes=test_plan.execution_source_bytes,
+            source_file=test_plan.execution_source_file,
             task_kind=TASK_GENERATE_INPUT,
             expected_behavior="accepted",
             verification_source=TASK_GENERATE_INPUT,
             verification_payload_base=execution.generate_verification_payload_base,
-            extra_sources_b64=test_plan.extra_sources_b64,
+            extra_source_files=test_plan.extra_source_files,
             manual_validate_only=test_plan.source_kind == "manual",
         )
         judgehost_task_id = config.judgehost_task_service.enqueue_task(
@@ -764,7 +758,8 @@ def _publish_generate_task(task_row: VerificationTaskRow, *, execution: TaskExec
             artifact_verification_id=execution.verification_id,
             mode=execution.mode,
             submission_path=None,
-            upload_content=test_plan.execution_source_bytes,
+            upload_content=None,
+            upload_file=test_plan.execution_source_file,
             upload_filename=test_plan.execution_source_name,
             run_id=str(prepared.get("run_id") or run_id),
             selected_tests=[],
@@ -811,41 +806,41 @@ def _publish_run_task(task_row: VerificationTaskRow, *, execution: TaskExecution
     logical_run_id = str(task_row["logical_run_id"] or "")
     run_id = allocate_run_id()
     try:
-        input_bytes = _verification_required_blob(
+        input_file = _verification_required_file(
             execution.verification_id,
             test_name,
             "input_ref",
             label=f"verification test {test_name}",
-            cache=execution.artifact_bytes_by_test_ref,
+            cache=execution.artifact_file_by_test_ref,
         )
         if task_kind == TASK_MAIN_CORRECT:
-            answer_bytes = b""
+            answer_file = config.runtime_blob_store.put_bytes(b"")
             verification_source = TASK_MAIN_CORRECT
             expected_behavior = "accepted"
         else:
-            answer_bytes = _verification_required_blob(
+            answer_file = _verification_required_file(
                 execution.verification_id,
                 test_name,
                 "answer_ref",
                 label=f"verification answer {test_name}",
-                cache=execution.artifact_bytes_by_test_ref,
+                cache=execution.artifact_file_by_test_ref,
             )
             verification_source = TASK_SOLUTION_RUN
             expected_behavior = normalize_expected_behavior(task_row["expected_behavior"])
-        source_name, source_bytes = _source_bytes_for_path(execution, source_path)
+        source_name, source_file = _source_file_for_path(execution, source_path)
         prepared = prepared_payload_for_uploaded_source(
             source_label=source_path,
             run_id=run_id,
             test_name=test_name,
-            input_bytes=input_bytes,
-            answer_bytes=answer_bytes,
+            input_file=input_file,
+            answer_file=answer_file,
             verification_payload_base=execution.run_verification_payload_base,
         )
         execution_template = _execution_template(
             execution,
             source_label=source_path,
             source_name=source_name,
-            source_bytes=source_bytes,
+            source_file=source_file,
             task_kind=task_kind,
             expected_behavior=expected_behavior,
             verification_source=verification_source,
@@ -857,7 +852,8 @@ def _publish_run_task(task_row: VerificationTaskRow, *, execution: TaskExecution
             artifact_verification_id=execution.verification_id,
             mode=execution.mode,
             submission_path=None,
-            upload_content=source_bytes,
+            upload_content=None,
+            upload_file=source_file,
             upload_filename=source_name,
             run_id=run_id,
             selected_tests=[test_name],
@@ -940,6 +936,7 @@ def run_workspace_verification_dag(
     kind: str = Kind.ALL.value,
     sample_only: bool = False,
     snapshot_root_override: Path | None = None,
+    manifest: VerificationManifest | None = None,
     selected_test_names: list[str] | None = None,
     bypass_case_result_cache: bool = False,
     skip_sanity: bool = False,
@@ -952,7 +949,6 @@ def run_workspace_verification_dag(
         raise RuntimeError("workspace path is unavailable")
     task_store = config.verification_task_store
     layout = config.fs_manager.prepare_verification_layout(verification_id)
-    runtime_layout = config.fs_manager.prepare_verification_runtime_layout(verification_id)
     snapshot_root = snapshot_root_override
     if snapshot_root is None:
         snapshot_root = config.workspace_service.create_snapshot(
@@ -961,11 +957,13 @@ def run_workspace_verification_dag(
             workspace_head=workspace_head,
             workspace_dirty=workspace_dirty,
         )
+    execution_manifest = verification_manifest(snapshot_root) if manifest is None else manifest
+    signature = execution_manifest.signature
     execution_plan = None
     try:
         execution_plan = build_verification_execution_plan(
             snapshot_root,
-            bin_dir=runtime_layout.bin,
+            manifest=execution_manifest,
             sample_only=bool(sample_only),
         )
         _require_online_judgehost()
@@ -1020,18 +1018,19 @@ def run_workspace_verification_dag(
     try:
         verification_mode = execution_plan.mode
         verification_pass_limit = execution_plan.pass_limit
-        uploaded_sources_root = runtime_layout.uploaded_sources
         source_file_by_path = dict(execution_plan.source_file_by_path)
-        source_file_by_path.update(_materialize_uploaded_sources(layout_root=uploaded_sources_root, targets=targets))
+        source_file_by_path.update(_uploaded_source_files(targets))
         snapshot_resolved = execution_plan.snapshot_root.resolve()
         for target in targets:
             source_path = str(target.get("path") or "")
             if not source_path or source_path in source_file_by_path:
                 continue
-            source_file_by_path[source_path] = resolve_source(
-                execution_plan.snapshot_root,
-                source_path,
-                snapshot_resolved=snapshot_resolved,
+            source_file_by_path[source_path] = RuntimeBlobStore.describe_file(
+                resolve_source(
+                    execution_plan.snapshot_root,
+                    source_path,
+                    snapshot_resolved=snapshot_resolved,
+                )
             )
         requested_test_names = selected_test_names or []
         if requested_test_names:
@@ -1090,11 +1089,8 @@ def run_workspace_verification_dag(
             mode=verification_mode,
             pass_limit=verification_pass_limit,
             snapshot_root=execution_plan.snapshot_root,
-            uploaded_sources_root=uploaded_sources_root,
             source_file_by_path=source_file_by_path,
-            source_bytes_by_path={},
-            source_sha256_by_content={},
-            artifact_bytes_by_test_ref={},
+            artifact_file_by_test_ref={},
             execution_template_by_key={},
             test_plan_by_name=execution_plan.test_plan_by_name,
             run_verification_payload_base=execution_plan.run_verification_payload_base,
@@ -1191,11 +1187,6 @@ def run_workspace_verification_dag(
             updated_detail["sanity_status"] = sanity_status
             config.verification_service.persist_verification_detail(verification_id, updated_detail)
             accepted_source_file = source_file_by_path.get(execution_plan.accepted_source_path)
-            accepted_source_bytes = (
-                _source_bytes_for_path(execution, execution_plan.accepted_source_path)[1]
-                if accepted_source_file is not None
-                else b""
-            )
             sanity_result = run_verification_sanity_checks(
                 problem=problem,
                 user=user,
@@ -1204,8 +1195,8 @@ def run_workspace_verification_dag(
                 logs_dir=layout.logs,
                 test_plans=selected_test_plans,
                 accepted_source_label=execution_plan.accepted_source_path,
-                accepted_source_name=accepted_source_file.name if accepted_source_file is not None else "",
-                accepted_source_bytes=accepted_source_bytes,
+                accepted_source_name=accepted_source_file.path.name if accepted_source_file is not None else "",
+                accepted_source_file=accepted_source_file,
                 run_verification_payload_base=execution_plan.run_verification_payload_base,
                 generate_feedback_by_test=_generate_feedback_by_test(rows),
                 runtime_columns=_runtime_threshold_columns_from_tasks(

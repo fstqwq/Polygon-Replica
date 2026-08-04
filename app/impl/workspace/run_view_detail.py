@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import cast
 from urllib.parse import quote_plus
 from app.impl.runtime.config import config
-from app.impl.workspace.artifact import verification_artifact_blob, verification_blob_virtual_rel
+from app.impl.workspace.artifact import verification_artifact_file, verification_blob_virtual_rel
 from app.impl.workspace.context import count_label
 from app.impl.workspace.problem_config import read_problem_config
 from app.impl.workspace.context_operation import (
@@ -1423,10 +1423,12 @@ def build_run_detail_context(
             if not problem_slug or not username or (not safe_rel_path) or (not is_canonical_artifact_id(safe_verification_id)):
                 return _run_detail_preview_unavailable('missing')
             download_href = f'/problems/{problem_slug}/artifacts/{safe_verification_id}/{safe_rel_path}'
-            resolved = verification_artifact_blob(safe_verification_id, safe_rel_path)
+            resolved = verification_artifact_file(safe_verification_id, safe_rel_path)
             if resolved is None:
                 return _run_detail_preview_unavailable('missing')
-            blob, _filename = resolved
+            payload_file, _filename = resolved
+            with payload_file.path.open('rb') as stream:
+                blob = stream.read(int(_C.RUN_DETAIL_PREVIEW_MAX_BYTES) + 1)
             return _run_detail_preview_from_bytes(blob, download_href)
 
         def _verification_output_preview(verification_id: str, task_id: str, test_name: str) -> dict[str, object]:
@@ -1444,7 +1446,7 @@ def build_run_detail_context(
             safe_rel_path = (rel_path or '').lstrip('/')
             if not problem_slug or not username or (not safe_rel_path) or (not is_canonical_artifact_id(safe_verification_id)):
                 return _run_detail_preview_unavailable('missing')
-            if not safe_rel_path.startswith('cache://'):
+            if not safe_rel_path.startswith('blob://'):
                 return _run_detail_preview_unavailable('missing')
             virtual_rel = verification_blob_virtual_rel(safe_rel_path, filename=Path(safe_rel_path).name)
             if not virtual_rel:

@@ -3777,7 +3777,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
 
     def test_run_details_transcript_preview_shows_download_link(self) -> None:
         workspace_service.ensure_workspace("alice/sample", "alice")
-        token = "cache://judgehost-domjudge-case/" + ("a" * 64) + "/" + ("b" * 64) + "/program.out"
+        token = "blob://sha256/" + ("a" * 64)
         encoded = base64.urlsafe_b64encode(token.encode("utf-8")).decode("ascii").rstrip("=")
         download_href = f"/problems/alice/sample/artifacts/ver-r-transcript/blob/{encoded}/program.out"
         detail_ctx = {
@@ -4200,7 +4200,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             "tests/001.in",
         )
         self.assertEqual(input_download.status_code, 200)
-        self.assertEqual(input_download.body, b"1 2 3\n")
+        self.assertEqual(Path(str(input_download.path)).read_bytes(), b"1 2 3\n")
         answer_download = run_export_impl.artifact_file(
             "alice/sample",
             "alice",
@@ -4208,7 +4208,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             "ans/001.ans",
         )
         self.assertEqual(answer_download.status_code, 200)
-        self.assertEqual(answer_download.body, b"6\n")
+        self.assertEqual(Path(str(answer_download.path)).read_bytes(), b"6\n")
 
     def test_collaborator_can_view_foreign_workspace_run_details(self) -> None:
         workspace_service.grant_repo_access("alice/sample", "bob", "owner")
