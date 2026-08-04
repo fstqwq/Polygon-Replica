@@ -133,7 +133,11 @@ def start_verification_job(
         try:
             workspace_obj = Path(workspace_path)
             fingerprint = _verification_sources_fingerprint(workspace_obj)
-            signature = _verification_sources_signature(workspace_obj)
+            signature = _verification_sources_signature(
+                workspace_obj,
+                workspace_dirty=workspace_dirty,
+                source_commit=source_commit or workspace_head,
+            )
         except Exception:
             fingerprint = ""
             signature = ""

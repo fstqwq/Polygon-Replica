@@ -125,9 +125,6 @@ class DispatchCacheMixin:
                     self._toolkit.cache_delete(self.CASE_CACHE_KIND, case_key_hash, case_signature)
                 return None
             built = self._toolkit.build_cached_case(
-                cache_kind=self.CASE_CACHE_KIND,
-                cache_key_hash=case_key_hash,
-                cache_signature=case_signature,
                 cache_value=cached_obj,
                 cache_files=cached_exact["files"],
             )

@@ -23,7 +23,11 @@ from app.service.verification.task_store import VerificationTaskRow, Verificatio
 from app.service.verification.task_result_finalize import verification_task_fail_reason
 from app.service.verification.test_rows import build_verification_test_row
 from app.service.verification.types import Kind, Status
-from app.service.verification.signature import VerificationManifest, verification_manifest
+from app.service.verification.signature import (
+    VerificationManifest,
+    git_blob_identities,
+    verification_manifest,
+)
 from app.service.verification.types import is_cancel_reason
 from app.service.verification.runtime import normalize_pass_limit, normalize_problem_mode
 from app.impl.workspace.run_display import run_actual_failed_codes, verification_solution_failure_hint
@@ -957,7 +961,19 @@ def run_workspace_verification_dag(
             workspace_head=workspace_head,
             workspace_dirty=workspace_dirty,
         )
-    execution_manifest = verification_manifest(snapshot_root) if manifest is None else manifest
+    if manifest is None:
+        git_identities = None
+        if not workspace_dirty and (source_commit or workspace_head):
+            git_identities = git_blob_identities(
+                workspace_path,
+                source_commit or workspace_head,
+            )
+        execution_manifest = verification_manifest(
+            snapshot_root,
+            git_identities=git_identities,
+        )
+    else:
+        execution_manifest = manifest
     signature = execution_manifest.signature
     execution_plan = None
     try:

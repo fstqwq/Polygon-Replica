@@ -271,6 +271,46 @@ class TestJudgehostScheduler(unittest.TestCase):
                 compile_key=_COMPILE_KEY,
             )
 
+    def test_materialized_submission_remains_canonical_when_logical_run_appends(self) -> None:
+        scheduler = BatchScheduler(id_base=100)
+        batch_id, _now_text = _create_staged_batch(
+            scheduler,
+            task_id="task-warm-a",
+            run_id="run-warm-a",
+            ordinals=[1],
+            logical_run_id="logical-warm",
+            execution_signature="warm-execution",
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            source = root / "main.cpp"
+            source.write_bytes(_COMPILE_KEY.encode("ascii"))
+            blob_store = RuntimeBlobStore(root / "runtime")
+            materialized = CompileSubmission(
+                compile_key=_COMPILE_KEY,
+                submit_id=domjudge_submit_id(_COMPILE_KEY),
+                source_name="main.cpp",
+                source_file=blob_store.put_file(source),
+                extra_source_items=(),
+                compile_files=(),
+            )
+            scheduler.publish_materialized_compile_submission(_COMPILE_KEY, materialized)
+
+            appended_batch_id, _ = _create_staged_batch(
+                scheduler,
+                task_id="task-warm-b",
+                run_id="run-warm-b",
+                ordinals=[2],
+                logical_run_id="logical-warm",
+                execution_signature="warm-execution",
+            )
+
+        self.assertEqual(appended_batch_id, batch_id)
+        self.assertEqual(
+            scheduler.compile_submission_for_batch(batch_id),
+            materialized,
+        )
+
     def test_task_registry_has_identity_but_no_scheduler(self) -> None:
         registry = JudgehostTaskRegistry()
         registry.insert(_task_row(1))

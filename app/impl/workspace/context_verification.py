@@ -7,7 +7,11 @@ from typing import TypedDict
 from app.impl.runtime.config import config
 from app.service.problem.solution_metadata import normalize_expected_behavior
 from app.service.verification.task_store import VerificationTaskRow, VerificationTaskStore
-from app.service.verification.signature import verification_fingerprint, verification_signature
+from app.service.verification.signature import (
+    git_blob_identities,
+    verification_fingerprint,
+    verification_manifest,
+)
 from app.service.verification.types import Kind
 from app.impl.workspace.run_display import (
     run_actual_failed_codes,
@@ -110,8 +114,20 @@ def latest_workspace_source_commit_verification(
         ok_only=bool(ok_only),
     )
 
-def _verification_sources_signature(workspace: Path) -> str:
-    return verification_signature(workspace)
+def _verification_sources_signature(
+    workspace: Path,
+    *,
+    workspace_dirty: bool = True,
+    source_commit: str = "",
+) -> str:
+    git_identities = None
+    if not workspace_dirty:
+        try:
+            git_identities = git_blob_identities(workspace, source_commit or "HEAD")
+        except RuntimeError:
+            # A newly initialized workspace may not have HEAD yet.
+            git_identities = None
+    return verification_manifest(workspace, git_identities=git_identities).signature
 
 
 def _verification_sources_fingerprint(workspace: Path) -> str:
@@ -128,11 +144,11 @@ def remember_verification_fingerprint(
     if not fingerprint or not verification_id:
         return
     key = (int(problem_id), int(workspace_id), fingerprint)
-    # Full verification_signature() hashes file contents and remains the correctness boundary.
-    # Workspace status is a high-frequency UI path, so repeated full hashes of large tests
-    # can become a file-size DoS. This process-local cache only skips full hashing after a
-    # stat-based fingerprint is known to map to a recent verification; cache misses still
-    # fall back to the full content signature.
+    # The manifest signature remains the correctness boundary.
+    # Workspace status is a high-frequency UI path, so repeated manifest work over large
+    # tests can become a file-size DoS. This process-local cache skips that work after a
+    # stat fingerprint maps to a recent verification. On a miss, dirty files are hashed;
+    # clean files use their Git blob identities.
     with _VERIFICATION_FINGERPRINT_CACHE_LOCK:
         _VERIFICATION_FINGERPRINT_CACHE[key] = {
             "verification_id": str(verification_id),
@@ -379,7 +395,10 @@ def _verification_status_context(
     )
     if row is None and workspace_obj is not None:
         try:
-            current_signature = _verification_sources_signature(workspace_obj)
+            current_signature = _verification_sources_signature(
+                workspace_obj,
+                workspace_dirty=workspace_dirty,
+            )
         except Exception:
             current_signature = ''
     if row is None and current_signature:

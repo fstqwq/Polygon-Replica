@@ -797,8 +797,12 @@ class BatchSchedulerResultMixin:
         compile_batches.discard(batch_id)
         if not compile_batches:
             self._batch_ids_by_compile_key.pop(batch.compile_key, None)
-            submission = self._compile_submissions_by_key.pop(batch.compile_key)
+            submission = self._compile_submissions_by_key.get(batch.compile_key)
+            if submission is None:
+                raise RuntimeError("judgehost compile submission is missing")
             self._compile_key_by_submit_id.pop(submission.submit_id, None)
+            if not self._compile_submission_is_materialized(submission):
+                self._compile_submissions_by_key.pop(batch.compile_key, None)
         verification_batches = self._batch_ids_by_verification[batch.verification_id]
         verification_batches.discard(batch_id)
         if not verification_batches:

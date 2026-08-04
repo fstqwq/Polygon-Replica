@@ -53,6 +53,13 @@ class BatchScheduler(BatchSchedulerResultMixin):
             submission.compile_files,
         )
 
+    @staticmethod
+    def _compile_submission_is_materialized(submission: CompileSubmission) -> bool:
+        return submission.source_file.blob_ref is not None and all(
+            payload.blob_ref is not None
+            for _, payload in submission.extra_source_items
+        )
+
     def __init__(self, lock: threading.RLock | None = None, *, id_base: int | None = None):
         self._lock = threading.RLock() if lock is None else lock
         self._id_base = max(1, int(id_base if id_base is not None else time.time() * 1000))
@@ -80,8 +87,10 @@ class BatchScheduler(BatchSchedulerResultMixin):
         self._sequence = itertools.count()
         self._scope_sequence_by_verification: dict[str, int] = {}
         self._batch_specs: dict[int, ExecutionBatchSpec] = {}
+        # Materialization replaces the descriptor in this canonical map. Keeping
+        # raw and materialized copies separately made warm logical-run appends
+        # observe a compile key without its submission.
         self._compile_submissions_by_key: dict[str, CompileSubmission] = {}
-        self._materialized_compile_submissions_by_key: dict[str, CompileSubmission] = {}
         self._compile_key_by_submit_id: dict[int, str] = {}
         self._batch_ids_by_compile_key: dict[str, set[int]] = defaultdict(set)
         self._batch_ids_by_verification: dict[str, set[int]] = defaultdict(set)
@@ -123,7 +132,6 @@ class BatchScheduler(BatchSchedulerResultMixin):
             self._scope_sequence_by_verification.clear()
             self._batch_specs.clear()
             self._compile_submissions_by_key.clear()
-            self._materialized_compile_submissions_by_key.clear()
             self._compile_key_by_submit_id.clear()
             self._batch_ids_by_compile_key.clear()
             self._batch_ids_by_verification.clear()
@@ -980,12 +988,10 @@ class BatchScheduler(BatchSchedulerResultMixin):
             if (
                 self._compile_submission_identity(submission)
                 != self._compile_submission_identity(original)
-                or submission.source_file.blob_ref is None
-                or any(payload.blob_ref is None for _, payload in submission.extra_source_items)
+                or not self._compile_submission_is_materialized(submission)
             ):
                 raise RuntimeError("materialized compile submission identity changed")
             self._compile_submissions_by_key[compile_key] = submission
-            self._materialized_compile_submissions_by_key[compile_key] = submission
 
     def claim_materialization(self, batch_id: int, *, now_text: str) -> bool:
         with self._lock:
@@ -1072,10 +1078,7 @@ class BatchScheduler(BatchSchedulerResultMixin):
                 if batch_id in self._batches
             ):
                 return None
-            return self._materialized_compile_submissions_by_key.get(
-                compile_key,
-                self._compile_submissions_by_key.get(compile_key),
-            )
+            return self._compile_submissions_by_key.get(compile_key)
 
     def testcase_refs(
         self,
@@ -1309,7 +1312,7 @@ class BatchScheduler(BatchSchedulerResultMixin):
             )
             self._batches[batch_id] = batch
             self._batch_specs[batch_id] = batch_spec
-            if compile_key not in self._materialized_compile_submissions_by_key:
+            if existing_submission is None:
                 self._compile_submissions_by_key[compile_key] = compile_submission
             self._compile_key_by_submit_id[compile_submission.submit_id] = compile_key
             self._batch_ids_by_compile_key[compile_key].add(batch_id)

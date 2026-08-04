@@ -166,9 +166,6 @@ class DomjudgeToolkit:
     def build_cached_case(
         self,
         *,
-        cache_kind: str,
-        cache_key_hash: str,
-        cache_signature: str,
         cache_value: dict[str, object],
         cache_files: dict[str, object] | None = None,
     ) -> dict[str, object]:
