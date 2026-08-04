@@ -1640,7 +1640,7 @@ class TestJudgehostService(E2ETestBase):
         self.assertEqual(str(case_row["lease_owner"] or ""), "judgehost-reconnect")
         self.assertEqual(str(case_row["status"] or ""), "leased")
 
-    def test_domjudge_fetch_work_refreshes_heartbeat_for_active_idle_job(self) -> None:
+    def test_domjudge_valid_execution_events_refresh_host_heartbeat(self) -> None:
         service = config.judgehost_task_service
         verification_id = f"ver-{uuid.uuid4().hex}"
         run_id = f"r-active-idle-heartbeat-{uuid.uuid4().hex[:8]}"
@@ -1666,22 +1666,67 @@ class TestJudgehostService(E2ETestBase):
         self.assertTrue(task_id.startswith("jt-"))
 
         service.domjudge_register_host(host)
+
+        def _mark_host_stale() -> None:
+            with service.state.state_lock:
+                service.state.hosts_state[host]["last_seen_at"] = "2000-01-01T00:00:00+00:00"
+
+        def _host_row() -> dict[str, object]:
+            rows = {
+                str(row.get("hostname") or ""): row
+                for row in service.status().get("hosts", [])
+            }
+            self.assertIn(host, rows)
+            return rows[host]
+
+        _mark_host_stale()
         first_rows = service.domjudge_fetch_work(host, max_batchsize=1)
         self.assertEqual(len(first_rows), 1)
+        case_id = int(first_rows[0]["judgetaskid"])
+        self.assertTrue(_host_row().get("online"))
+        self.assertEqual(_host_row().get("last_action"), "lease")
 
-        with service.state.state_lock:
-            service.state.hosts_state[host]["last_seen_at"] = "2000-01-01T00:00:00+00:00"
+        _mark_host_stale()
+        service.domjudge_update_judging(
+            "judgehost-not-owner",
+            case_id,
+            {"compile_success": "1"},
+        )
+        self.assertFalse(_host_row().get("online"))
+        self.assertNotIn("judgehost-not-owner", service.state.hosts_state)
 
+        service.domjudge_update_judging(
+            host,
+            case_id,
+            {"compile_success": "1", "output_compile": "", "compile_metadata": ""},
+        )
+        self.assertTrue(_host_row().get("online"))
+        self.assertEqual(_host_row().get("last_action"), "update")
+
+        _mark_host_stale()
+        meta_text = "cpu-time: 0.004\nwall-time: 0.005\nmemory-bytes: 4096\n"
+        service.domjudge_add_judging_run(
+            host,
+            case_id,
+            {
+                "runresult": "correct",
+                "runtime": "0.004",
+                "output_run": "",
+                "output_diff": base64.b64encode(b"ok\n").decode("ascii"),
+                "output_error": "",
+                "output_system": "",
+                "metadata": base64.b64encode(meta_text.encode("utf-8")).decode("ascii"),
+                "compare_metadata": "",
+            },
+        )
+        self.assertTrue(_host_row().get("online"))
+        self.assertEqual(_host_row().get("last_action"), "report")
+
+        _mark_host_stale()
         second_rows = service.domjudge_fetch_work(host, max_batchsize=1)
         self.assertEqual(second_rows, [])
-
-        host_rows = {
-            str(row.get("hostname") or ""): row
-            for row in service.status().get("hosts", [])
-        }
-        self.assertIn(host, host_rows)
-        self.assertTrue(host_rows[host].get("online"))
-        self.assertEqual(host_rows[host].get("last_action"), "fetch")
+        self.assertTrue(_host_row().get("online"))
+        self.assertEqual(_host_row().get("last_action"), "fetch")
 
     def test_enqueue_rejects_invalid_payload_before_scheduling(self) -> None:
         service = config.judgehost_task_service

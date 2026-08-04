@@ -870,6 +870,12 @@ class ResultProcessor:
         if not self._domjudge_task_accepts_case_updates(safe_task_id):
             logger.info("ignoring update for cancelled DOMjudge task case id: %s", case_id)
             return
+        self._queue._record_host_event_conn(
+            hostname=safe_host,
+            action="update",
+            task_id=safe_task_id,
+            run_id=domjudge_text(case_row["run_id"]),
+        )
         batch_id = int(case_row["batch_id"])
         compile_success = None
         if "compile_success" in payload:
@@ -919,6 +925,12 @@ class ResultProcessor:
         if claim is None:
             logger.info("ignoring stale add_judging_run result for case id: %s", int(judgetask_id))
             return int(judgetask_id)
+        self._queue._record_host_event_conn(
+            hostname=safe_host,
+            action="report",
+            task_id=domjudge_text(case_row["task_id"]),
+            run_id=domjudge_text(case_row["run_id"]),
+        )
         self._s.batch_scheduler.observe_compile_success_from_case_claim(
             claim.case_id,
             generation=claim.generation,

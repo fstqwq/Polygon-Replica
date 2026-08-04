@@ -630,6 +630,13 @@ class DispatchHandler(DispatchCacheMixin):
             [int(row["id"]) for row in rows],
             leased_monotonic=time.monotonic(),
         )
+        first_row = rows[0]
+        self._queue._record_host_event_conn(
+            hostname=hostname,
+            action="lease",
+            task_id=domjudge_text(first_row["task_id"]),
+            run_id=domjudge_text(first_row["run_id"]),
+        )
         return out
 
     def domjudge_fetch_work(self, hostname: str, max_batchsize: int | None = None) -> list[dict[str, object]]:
