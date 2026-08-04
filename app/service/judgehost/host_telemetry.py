@@ -7,9 +7,18 @@ from dataclasses import dataclass, field
 from typing import TypedDict
 
 
+class LastJudgingRow(TypedDict):
+    verification_id: str
+    problem_slug: str
+    task_kind: str
+    source_label: str
+    test_name: str
+
+
 class HostTelemetryRow(TypedDict):
     judged_case_count: int
     last_judging_at: str | None
+    last_judging: LastJudgingRow | None
     recent_avg_per_case_sec: float | None
 
 
@@ -33,6 +42,7 @@ class _HostTelemetry:
     judged_case_count: int = 0
     last_judging_at: str | None = None
     last_judging_monotonic: float | None = None
+    last_judging: LastJudgingRow | None = None
     recent_batch_avg_sec: deque[float] = field(default_factory=lambda: deque(maxlen=10))
     recent_avg_per_case_sec: float | None = None
     active_batch: _LeaseBatch | None = None
@@ -106,6 +116,11 @@ class HostTelemetryStore:
         *,
         reported_at: str,
         reported_monotonic: float,
+        verification_id: str,
+        problem_slug: str,
+        task_kind: str,
+        source_label: str,
+        test_name: str,
     ) -> None:
         safe_batch_id = int(batch_id)
         safe_case_id = int(case_id)
@@ -119,6 +134,13 @@ class HostTelemetryStore:
             ):
                 telemetry.last_judging_at = reported_at
                 telemetry.last_judging_monotonic = safe_reported_monotonic
+                telemetry.last_judging = {
+                    "verification_id": verification_id,
+                    "problem_slug": problem_slug,
+                    "task_kind": task_kind,
+                    "source_label": source_label,
+                    "test_name": test_name,
+                }
             batch = telemetry.active_batch
             if (
                 batch is None
@@ -168,6 +190,9 @@ class HostTelemetryStore:
                 hostname: {
                     "judged_case_count": telemetry.judged_case_count,
                     "last_judging_at": telemetry.last_judging_at,
+                    "last_judging": (
+                        None if telemetry.last_judging is None else dict(telemetry.last_judging)
+                    ),
                     "recent_avg_per_case_sec": telemetry.recent_avg_per_case_sec,
                 }
                 for hostname, telemetry in self._hosts.items()

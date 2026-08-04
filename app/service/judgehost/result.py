@@ -1229,6 +1229,16 @@ class ResultProcessor:
             case_id,
             reported_at=reported_at,
             reported_monotonic=reported_monotonic,
+            verification_id=domjudge_text(task_payload.get("verification_id")),
+            problem_slug=domjudge_text(task_payload.get("problem")),
+            task_kind=task_kind,
+            source_label=Path(
+                domjudge_text(
+                    task_payload.get("source_label"),
+                    default=domjudge_text(row["source_name"]),
+                ).replace("\\", "/")
+            ).name,
+            test_name=domjudge_text(row["test_name"]),
         )
         try:
             self._domjudge_publish_reported_case(

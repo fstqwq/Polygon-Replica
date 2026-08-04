@@ -1322,6 +1322,13 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
                     "last_run_id": "",
                     "judged_case_count": 42,
                     "last_judging_at": raw_last_judging,
+                    "last_judging": {
+                        "verification_id": "ver-0123456789abcdef",
+                        "problem_slug": "alice/sample",
+                        "task_kind": "solution-run",
+                        "source_label": "ac.cpp",
+                        "test_name": "001.in",
+                    },
                     "recent_avg_per_case_sec": 0.125,
                 }
             ],
@@ -1332,12 +1339,17 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         html = resp.body.decode("utf-8", errors="replace")
         self.assertIn("judgehost-lastseen-time", html)
         self.assertIn("Count", html)
-        self.assertIn("Last Judging Time", html)
+        self.assertIn("Last Judging", html)
         self.assertIn("Recent Avg Per Case", html)
         self.assertIn(">42<", html)
         self.assertIn("0.125 s", html)
         self.assertIn(config.templates.env.filters["local_time"](raw_last_judging), html)
         self.assertNotIn(raw_last_judging, html)
+        self.assertIn(
+            'href="/problems/alice/sample/run/details?verification_id=ver-0123456789abcdef"',
+            html,
+        )
+        self.assertIn("[alice/sample:Solution Run:ac.cpp / 001.in]", html)
 
     def test_settings_config_category_update_requires_system_admin(self) -> None:
         with self.assertRaises(HTTPException) as blocked:

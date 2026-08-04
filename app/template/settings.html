@@ -348,7 +348,7 @@
           <th>Enabled</th>
           <th>State</th>
           <th>Count</th>
-          <th>Last Judging Time</th>
+          <th>Last Judging</th>
           <th>Recent Avg Per Case</th>
           <th>Action</th>
         </tr>
@@ -369,7 +369,17 @@
             {% endif %}
           </td>
           <td>{{ row.get('judged_case_count', 0) }}</td>
-          <td>{{ row.get('last_judging_at') | local_time if row.get('last_judging_at') else '-' }}</td>
+          <td>
+            {% set last_judging = row.get('last_judging') %}
+            {% if last_judging %}
+            <a
+              href="/problems/{{ last_judging.get('problem_slug', '') }}/run/details?verification_id={{ last_judging.get('verification_id', '') }}"
+              title="Last reported {{ row.get('last_judging_at') | local_time }}"
+            >[{{ last_judging.get('problem_slug', '') }}:{{ last_judging.get('task_kind', '') | replace('-', ' ') | title }}:{{ last_judging.get('source_label', '') }} / {{ last_judging.get('test_name', '') }}]</a>
+            {% else %}
+            -
+            {% endif %}
+          </td>
           <td class="muted">{% if row.get('recent_avg_per_case_sec') is not none %}{{ "%.3f s"|format(row.get('recent_avg_per_case_sec') | float) }}{% else %}-{% endif %}</td>
           <td>
             <form

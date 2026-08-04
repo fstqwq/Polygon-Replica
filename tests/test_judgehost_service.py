@@ -309,6 +309,21 @@ class TestJudgehostService(E2ETestBase):
             rows = {str(row["id"]): row for row in task_store.list_rows(verification_id)}
             self.assertEqual(str(rows["vt-case-001"]["status"] or ""), VerificationTaskStore.TASK_DONE)
             self.assertEqual(str(rows["vt-case-002"]["status"] or ""), VerificationTaskStore.TASK_QUEUED)
+            host = next(
+                row
+                for row in service.status()["hosts"]
+                if row["hostname"] == "judgehost-immediate-finalize"
+            )
+            self.assertEqual(
+                host["last_judging"],
+                {
+                    "verification_id": verification_id,
+                    "problem_slug": self.problem,
+                    "task_kind": "solution-run",
+                    "source_label": "ac.cpp",
+                    "test_name": "001.in",
+                },
+            )
         finally:
             unregister_verification_runtime_coordinator(verification_id)
             coordinator.enqueue_cancel("test shutdown")

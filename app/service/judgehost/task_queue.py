@@ -476,6 +476,7 @@ class TaskQueue:
                     "update_count": int(row.get("update_count") or 0),
                     "judged_case_count": 0 if telemetry is None else telemetry["judged_case_count"],
                     "last_judging_at": None if telemetry is None else telemetry["last_judging_at"],
+                    "last_judging": None if telemetry is None else telemetry["last_judging"],
                     "recent_avg_per_case_sec": (
                         None if telemetry is None else telemetry["recent_avg_per_case_sec"]
                     ),
