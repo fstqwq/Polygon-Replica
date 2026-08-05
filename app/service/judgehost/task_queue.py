@@ -489,7 +489,7 @@ class TaskQueue:
                 "last_run_id": str(current_row.get("last_run_id") or ""),
                 "update_count": int(current_row.get("update_count") or 0) + 1,
             }
-        release = HostLeaseRelease(0, 0, (), ())
+        release = HostLeaseRelease(0, 0, (), (), ())
         if not enabled:
             release = self._s.batch_scheduler.release_host_leases(
                 hostname,

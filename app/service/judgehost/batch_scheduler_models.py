@@ -300,3 +300,4 @@ class HostLeaseRelease:
     lease_count: int
     terminal_batch_ids: tuple[int, ...]
     terminal_task_ids: tuple[str, ...]
+    workdirs: tuple[tuple[int, int], ...]

@@ -150,15 +150,7 @@ class Judgehost:
 
     def set_host_enabled(self, hostname: str, enabled: bool) -> dict[str, int]:
         release = self._queue.set_host_enabled(hostname, enabled)
-        for task_id in release.terminal_task_ids:
-            batch_row = self._state.batch_scheduler.batch_for_task(task_id)
-            if batch_row is not None:
-                self._result._domjudge_finalize_task_if_ready(
-                    task_id,
-                    batch_row=dict(batch_row),
-                )
-        for batch_id in release.terminal_batch_ids:
-            self._result._domjudge_finalize_batch_if_ready(batch_id)
+        self._result.finalize_host_lease_release(release)
         return {
             "released_tasks": len(release.terminal_task_ids),
             "released_batches": release.affinity_count,

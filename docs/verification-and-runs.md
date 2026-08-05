@@ -160,9 +160,10 @@ The runtime keeps four distinct lifecycle layers:
 
 - `verification_tasks` rows are durable per-case product results. A case report updates its matching row immediately and only once.
 - A judgehost task has an immutable case set. It becomes terminal only after all of its own cases are `reported` or `cancelled`.
-- A DOMjudge case is leased independently. Explicitly disabling a host releases
-  its `leased` cases back to `pending`; result and cache I/O first claim the Case
-  as `reporting` or `cache-probing`, then commit a terminal result.
+- A DOMjudge case is leased independently. Registering/reconnecting a judgedaemon
+  or explicitly disabling its host releases ordinary `leased` cases back to
+  `pending`; result and cache I/O first claim the Case as `reporting` or
+  `cache-probing`, then commit a terminal result.
 - An internal `ExecutionBatch` is the scheduling and materialization container
   for one logical run inside one Verification. Its unique identity is
   `(verification_id, logical_run_id)`, and every appended task must have the
@@ -174,6 +175,11 @@ The existing DOMjudge fields have independent identities:
 - `submitid` is the full compile-input SHA-256 reduced modulo `2^63`.
 - `uuid` is that full compile-input SHA-256.
 - `judgetaskid` is the internal Case ID.
+
+Batch and Case IDs share one process-local sequence whose default base is
+`time.time_ns()`. IDs must fit in a positive signed 64-bit integer. This assumes
+one Scheduler process, a wall clock that does not move substantially backwards,
+and entity creation far below one billion IDs per second.
 
 Consequently, all Batches inside one Verification reuse one `jobid`, while
 identical compile inputs reuse one `submitid` and `uuid`. The source endpoint
@@ -210,21 +216,21 @@ edge once. The judgehost Task Registry stores only identity, immutable request
 fingerprints, result receipts, wait conditions, and terminal cleanup metadata; it
 does not schedule work.
 
-Execution scheduling uses one global ready-Batch heap plus one cache-pending heap
-and one runnable Case heap per Batch. The global heap contains at most one entry
-per ready Batch and orders only by service class, first-dispatch state, Verification
-scope, and Batch ID. Fetch does not scan or sort all Tasks, Batches, or Cases. One
-ordinary reentrant lock protects only in-memory dictionaries, counters, sets, and
-heaps; cache, filesystem, SQLite, and Coordinator notifications are never accessed
-while it is held. Executable callbacks use a lifecycle-maintained script-ID index
-rather than scanning open Batches.
+Execution scheduling uses an exact ordered ready-Batch index plus one cache-pending
+heap and one runnable Case heap per Batch. A ready Batch has exactly one ordered
+entry keyed by service priority, dispatch count, Verification scope, descending
+pending count, and Batch ID. Fetch does not scan or sort all Tasks, Batches, or
+Cases. One ordinary reentrant lock protects only in-memory dictionaries, counters,
+sets, and indexes; cache, filesystem, SQLite, and Coordinator notifications are
+never accessed while it is held. Executable callbacks use a lifecycle-maintained
+script-ID index rather than scanning open Batches.
 
 Cases enter a Batch as `staged`, atomically activate as `cache-pending`, and cannot be
 leased until their exact result-cache probe misses. A full cache hit reaches
 `reported` without opening testcase or source payload files. Executable bundles are
-indexed lazily only after at least one miss. Before compilation succeeds, one
-smallest-ordinal Case is the compile leader; successful compilation opens the
-remaining Cases to other hosts.
+indexed lazily only after at least one miss. Multiple hosts may compile the same
+unknown Batch concurrently. Any valid compiler failure fails the Batch immediately;
+later success or result callbacks cannot revive it.
 
 Every reported Case owns one immutable canonical `CaseResult`. Cache hits and cold
 callbacks build the same object, including feedback and the verification test row.
@@ -234,31 +240,29 @@ an indexed lookup and never reconstructs feedback from artifacts.
 
 Runtime cache entries are synchronized per cache key and refer only to immutable
 blob refs. Unrelated cache keys perform file I/O concurrently; the small global
-mutex only maintains ref-counted key locks. Fetch fallback probes cache Cases
-in 32-Case claim chunks until it finds runnable work, exhausts pending cache work,
-or reaches its monotonic-time budget.
+mutex only maintains ref-counted key locks. Coordinator and fetch fallback cache
+claims use the same 256-item boundary as result persistence; fetch still stops at
+its monotonic-time budget and atomically aborts unprocessed claims.
 
 Only two global service classes exist: foreground direct/compile-only work and
 background verification work. Foreground work cooperatively preempts between fetch
 batches; already leased Cases are never cancelled. Within an ExecutionBatch, ready
 Cases are leased by numeric test ordinal.
 
-Each host keeps a FIFO warm queue of at most four Batches plus one stolen Batch.
-It first continues ready work from that queue, then its current stolen Batch. If
-all warm Batches are blocked, the host may help a ready `main-correct` or
-`generate-input` Batch from the same Verification because that work can unblock
-the queue; this prerequisite preference is local and never changes global ordering
-between Verifications. Otherwise the host selects from the global heap. A Batch
-selected from the heap is marked dispatched permanently, so undispatched Batches
-are spread before already-dispatched work is stolen. A full warm queue does not
-adopt another Batch: the host may keep only one stolen Batch until that Batch is
-blocked or closed.
+Each host keeps a FIFO affinity queue of at most four Batches. Selection continues
+an existing lease first, then foreground work, local ready affinity, a ready
+`main-correct` or `generate-input` prerequisite for blocked affinity, and finally
+the global ordered index. Foreground, prerequisite, and global selection increment
+the Batch dispatch count; existing-lease and affinity reuse do not. Registration,
+disable, Batch closure, and runtime reset remove host affinity.
 
-There is no automatic Case lease timeout. Judgehost registration is also a
-heartbeat and therefore cannot safely distinguish a restart from a live daemon.
-Operators must disable an unresponsive host to return its Cases to `pending` before
-re-enabling or replacing it. This avoids duplicate delivery caused by treating
-periodic registration as reconnect recovery.
+There is no automatic Case lease timeout. `POST /judgehosts` is judgedaemon's
+startup/reconnect and unfinished-work return operation; idle status checks use
+`GET /judgehosts`. Registration atomically returns ordinary leased Cases to
+`pending`, leaves active reporting claims in place with requeue-on-abort, and
+returns distinct `jobid`/`submitid` workdirs to the daemon. A host that disappears
+and never registers again still requires an operator to disable it before its
+Cases can be reassigned.
 
 Job and Case state is held in typed indexed memory records rather than a shared
 in-memory SQLite connection. Terminal verification results are persisted through

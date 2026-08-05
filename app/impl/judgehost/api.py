@@ -382,11 +382,7 @@ async def domjudge_internal_error(request: Request):
     service = _require_judgehost_auth(request)
     payload = await _request_payload(request)
     description = (payload.get("description") or "").strip()
-    judgetask_id = None
-    for key in ("judgetaskid", "run_id"):
-        judgetask_id = _int_or_none(payload.get(key))
-        if judgetask_id is not None:
-            break
+    judgetask_id = _int_or_none(payload.get("judgetaskid"))
     result = await _run_service_call(
         service.domjudge_internal_error,
         description=description,

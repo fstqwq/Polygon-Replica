@@ -174,10 +174,15 @@ class DispatchHandler(DispatchCacheMixin):
     def domjudge_register_host(self, hostname: str) -> list[dict[str, object]]:
         safe_host = self._core.normalize_hostname(hostname)
         self._queue._record_host_event_conn(hostname=safe_host, action="register")
-        # judgedaemon calls /judgehosts periodically as a heartbeat, so
-        # registration cannot distinguish a restart from a healthy daemon.
-        # Keep it idempotent; explicit host disable releases owned Cases.
-        return []
+        release = self._s.batch_scheduler.release_host_leases(
+            safe_host,
+            now_text=now_iso(),
+        )
+        self._result.finalize_host_lease_release(release)
+        return [
+            {"jobid": job_id, "submitid": str(submit_id)}
+            for job_id, submit_id in release.workdirs
+        ]
 
     def _domjudge_task_payload(self, task: dict[str, object]) -> tuple[str, str, dict[str, object]]:
         task_id = domjudge_text(task.get("task_id"))

@@ -3,6 +3,7 @@ from __future__ import annotations
 import heapq
 import time
 
+from app.service.judgehost.case_result import build_case_result
 from app.service.judgehost.batch_scheduler_models import (
     CaseClaim,
     CaseClaimBusy,
@@ -130,6 +131,7 @@ class BatchSchedulerResultMixin:
         compile_success: int,
         compile_output_b64: str,
         compile_metadata_b64: str,
+        failure_text: str = "",
         updated_at: str,
     ) -> bool:
         with self._lock:
@@ -153,6 +155,45 @@ class BatchSchedulerResultMixin:
                 failure_text=batch.failure_text,
                 updated_at=updated_at,
             )
+            if compile_success != 1:
+                feedback = failure_text or "compilation failed"
+                for case_id in tuple(self._case_ids_by_batch[batch.batch_id]):
+                    case = self._cases[case_id]
+                    if case.status in self._TERMINAL_CASE_STATUSES:
+                        continue
+                    result = build_case_result(
+                        test_name=case.test_name,
+                        runresult="compiler-error",
+                        verdict="CE",
+                        runtime_sec=0.0,
+                        cpu_sec=0.0,
+                        wall_sec=0.0,
+                        memory_kb=0,
+                        score_text="",
+                        output_run_ref="",
+                        output_error_ref="",
+                        output_system_ref="",
+                        output_diff_ref="",
+                        metadata_ref="",
+                        compare_metadata_ref="",
+                        team_message_ref="",
+                        feedback_text=feedback,
+                        feedback_files=(),
+                        answer_correct=False,
+                    )
+                    if case.status in {"reporting", "cache-probing"}:
+                        if not case.cancel_requested:
+                            case.terminal_result = result
+                        continue
+                    case.result = result
+                    self._transition_case_locked(
+                        case,
+                        "reported",
+                        lease_owner=case.lease_owner,
+                        updated_at=updated_at,
+                        refresh_batch=False,
+                    )
+                self._refresh_batches_locked({batch.batch_id}, updated_at=updated_at)
             return True
 
     def record_batch_failure(
@@ -739,34 +780,44 @@ class BatchSchedulerResultMixin:
             affected_batch_ids = set(context_batch_ids)
             terminal_task_ids: set[str] = set()
             case_ids = list(self._leased_case_ids_by_host.get(hostname, ()))
+            workdirs: set[tuple[int, int]] = set()
             for case_id in case_ids:
                 case = self._cases[case_id]
+                batch = self._batches[case.batch_id]
+                submission = self._compile_submissions_by_key[batch.compile_key]
+                workdirs.add((batch.domjudge_job_id, submission.submit_id))
                 if case.status == "reporting":
-                    if case.cancel_requested:
-                        case.cancel_requested = False
-                        case.requeue_on_abort = False
-                        case.result = None
-                        self._transition_case_locked(
-                            case,
-                            "cancelled",
-                            lease_owner=None,
-                            updated_at=now_text,
-                            refresh_batch=False,
-                        )
-                        if self._task_case_counts[case.task_id].remaining == 0:
-                            terminal_task_ids.add(case.task_id)
-                    else:
-                        case.requeue_on_abort = True
+                    case.requeue_on_abort = True
+                    leased_ids = self._leased_case_ids_by_host[hostname]
+                    leased_ids.discard(case.id)
+                    if not leased_ids:
+                        self._leased_case_ids_by_host.pop(hostname, None)
                 elif case.status == "leased":
                     cancelled = case.cancel_requested
+                    terminal_result = case.terminal_result
+                    case.cancel_requested = False
+                    case.terminal_result = None
+                    case.requeue_on_abort = False
+                    if cancelled:
+                        case.result = None
+                        status = "cancelled"
+                    elif terminal_result is not None:
+                        case.result = terminal_result
+                        status = "reported"
+                    else:
+                        case.result = None
+                        status = "pending"
                     self._transition_case_locked(
                         case,
-                        "cancelled" if cancelled else "pending",
+                        status,
                         lease_owner=None,
                         updated_at=now_text,
                         refresh_batch=False,
                     )
-                    if cancelled and self._task_case_counts[case.task_id].remaining == 0:
+                    if (
+                        status in self._TERMINAL_CASE_STATUSES
+                        and self._task_case_counts[case.task_id].remaining == 0
+                    ):
                         terminal_task_ids.add(case.task_id)
                 affected_batch_ids.add(case.batch_id)
             self._refresh_batches_locked(affected_batch_ids, updated_at=now_text)
@@ -781,6 +832,7 @@ class BatchSchedulerResultMixin:
                 lease_count=len(case_ids),
                 terminal_batch_ids=terminal_batch_ids,
                 terminal_task_ids=tuple(sorted(terminal_task_ids)),
+                workdirs=tuple(sorted(workdirs)),
             )
 
     def _remove_cases_locked(self, case_ids: set[int]) -> None:

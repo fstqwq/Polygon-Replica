@@ -56,6 +56,7 @@ from app.service.judgehost.batch_scheduler_results import BatchSchedulerResultMi
 class BatchScheduler(BatchSchedulerResultMixin):
     """Indexed process-local state for DOMjudge compatibility batches and cases."""
 
+    _MAX_ENTITY_ID = (1 << 63) - 1
     _AFFINITY_QUEUE_SIZE = 4
     _ACTIVE_BATCH_STATUSES = frozenset({"open"})
     _TERMINAL_CASE_STATUSES = frozenset({"reported", "cancelled"})
@@ -88,8 +89,8 @@ class BatchScheduler(BatchSchedulerResultMixin):
         self._lock = threading.RLock() if lock is None else lock
         self._ready_condition = threading.Condition(self._lock)
         self._ready_generation = 0
-        self._id_base = max(1, int(id_base if id_base is not None else time.time() * 1000))
-        self._entity_ids = itertools.count(self._id_base + 1)
+        self._id_base = max(1, int(id_base if id_base is not None else time.time_ns()))
+        self._next_entity_id_value = self._id_base + 1
         self._batches: dict[int, ExecutionBatchRecord] = {}
         self._cases: dict[int, CaseRecord] = {}
         self._case_ids_by_batch: dict[int, set[int]] = defaultdict(set)
@@ -130,6 +131,18 @@ class BatchScheduler(BatchSchedulerResultMixin):
         self._finalization_retry_deadlines: dict[int, float] = {}
         self._host_telemetry: dict[str, HostTelemetryState] = {}
         self._telemetry_hosts_by_batch: dict[int, set[str]] = defaultdict(set)
+
+    def _next_entity_ids_locked(self, count: int) -> tuple[int, ...]:
+        if count < 0:
+            raise ValueError("judgehost entity id reservation must be non-negative")
+        if count == 0:
+            return ()
+        first_id = self._next_entity_id_value
+        last_id = first_id + count - 1
+        if not 0 < first_id <= last_id <= self._MAX_ENTITY_ID:
+            raise OverflowError("judgehost entity id exceeds the signed 64-bit range")
+        self._next_entity_id_value = last_id + 1
+        return tuple(range(first_id, last_id + 1))
 
     def reset(self) -> None:
         with self._lock:
@@ -449,6 +462,7 @@ class BatchScheduler(BatchSchedulerResultMixin):
     def _insert_case_locked(
         self,
         *,
+        case_id: int,
         batch_id: int,
         task_id: str,
         run_id: str,
@@ -459,7 +473,6 @@ class BatchScheduler(BatchSchedulerResultMixin):
         status: str,
         created_at: str,
     ) -> CaseRecord:
-        case_id = next(self._entity_ids)
         testcase_id = source["testcase_id"]
         testcase_hash = str(source["testcase_hash"])
         if testcase_id is not None:
@@ -1280,7 +1293,8 @@ class BatchScheduler(BatchSchedulerResultMixin):
                 raise RuntimeError("judgehost task cases already belong to another batch")
             if task_id in self._batch_id_by_task or run_id in self._batch_ids_by_run:
                 raise RuntimeError("judgehost batch identity already exists")
-            batch_id = next(self._entity_ids)
+            entity_ids = self._next_entity_ids_locked(len(case_rows) + 1)
+            batch_id = entity_ids[0]
             batch = ExecutionBatchRecord(
                 batch_id=batch_id,
                 logical_run_id=logical_run_id,
@@ -1329,8 +1343,9 @@ class BatchScheduler(BatchSchedulerResultMixin):
             self._batch_id_by_logical_run[logical_run_key] = batch_id
             self._index_batch_scripts_locked(batch, 1)
             self._empty_batch_ids.add(batch_id)
-            for case_row in case_rows:
+            for case_id, case_row in zip(entity_ids[1:], case_rows, strict=True):
                 self._insert_case_locked(
+                    case_id=case_id,
                     batch_id=batch_id,
                     task_id=str(case_row.get("task_id") or task_id),
                     run_id=str(case_row.get("run_id") or run_id),
@@ -1410,6 +1425,7 @@ class BatchScheduler(BatchSchedulerResultMixin):
         self._validate_case_rows(case_rows)
         self._validate_testcase_identities_locked(case_rows)
         rows_by_task: dict[str, list[dict[str, object]]] = defaultdict(list)
+        new_rows: list[dict[str, object]] = []
         for row in case_rows:
             case_task_id = str(row.get("task_id") or "")
             if case_task_id:
@@ -1440,7 +1456,17 @@ class BatchScheduler(BatchSchedulerResultMixin):
                 if self._cases[existing_case_id].batch_id != batch.batch_id:
                     raise RuntimeError("judgehost task cases already belong to another batch")
                 continue
+            new_rows.append(row)
+        for case_id, row in zip(
+            self._next_entity_ids_locked(len(new_rows)),
+            new_rows,
+            strict=True,
+        ):
+            case_task_id = str(row["task_id"])
+            case_run_id = str(row["run_id"])
+            test_name = str(row["test_name"])
             self._insert_case_locked(
+                case_id=case_id,
                 batch_id=batch.batch_id,
                 task_id=case_task_id,
                 run_id=case_run_id,

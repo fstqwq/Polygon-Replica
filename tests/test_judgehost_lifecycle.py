@@ -647,6 +647,39 @@ class TestJudgehostLifecycle(DBTestBase):
         self.assertEqual(telemetry["judged_case_count"], 1)
         self.assertIsNotNone(telemetry["recent_avg_per_case_sec"])
 
+    def test_cancelled_leased_case_registration_finalizes_without_callback(self) -> None:
+        service = self._service()
+        store = service.state.batch_scheduler
+        task_id, run_id = "task-cancelled-register", "run-cancelled-register"
+        self._add_task(service, task_id, run_id)
+        batch_id = _create_batch(
+            store,
+            task_id=task_id,
+            run_id=run_id,
+            case_rows=[_case_row(task_id, run_id, "001.in", 1)],
+        )
+        case = store.lease_cases(
+            batch_id,
+            hostname="host-a",
+            limit=1,
+            now_text=_NOW,
+        )[0]
+        case_id = int(case["id"])
+
+        cancellation = service.request_verification_cancel(
+            "ver-1",
+            "verification cancelled by user",
+        )
+        self.assertEqual(cancellation["awaiting_receipts"], 1)
+        returned = service.domjudge_register_host("host-a")
+
+        self.assertEqual(len(returned), 1)
+        self.assertEqual(store.fetch_case(case_id)["status"], "cancelled")
+        self.assertEqual(self._task(service, task_id)["status"], service.STATUS_FAILED)
+        self.assertEqual(store.fetch_batch(batch_id)["status"], "failed")
+        self.assertEqual(store.lease_cases(batch_id, hostname="host-b", limit=1, now_text=_NOW), [])
+        self.assertEqual(service.domjudge_register_host("host-a"), [])
+
     def test_grouped_batch_finalizes_each_task_once_across_hosts(self) -> None:
         service = self._service()
         store = service.state.batch_scheduler

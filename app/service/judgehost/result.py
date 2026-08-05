@@ -33,7 +33,7 @@ from app.service.verification.task_scheduler import notify_verification_case_rep
 
 from app.service.judgehost.case_result import build_case_result, decode_case_test_row
 from app.service.judgehost.core import JudgehostCore
-from app.service.judgehost.batch_scheduler_models import CaseReportTelemetry, CaseResult
+from app.service.judgehost.batch_scheduler_models import CaseReportTelemetry, CaseResult, HostLeaseRelease
 from app.service.judgehost.state import JudgehostState
 from app.service.judgehost.task_queue import TaskQueue
 from app.service.judgehost.toolkit import DomjudgeToolkit
@@ -68,6 +68,17 @@ class ResultProcessor:
         task = self._s.task_registry.get(task_id)
         if task is not None:
             self._s.touch_verification_runtime(domjudge_text(task.get("verification_id")))
+
+    def finalize_host_lease_release(self, release: HostLeaseRelease) -> None:
+        for task_id in release.terminal_task_ids:
+            batch_row = self._s.batch_scheduler.batch_for_task(task_id)
+            if batch_row is not None:
+                self._domjudge_finalize_task_if_ready(
+                    task_id,
+                    batch_row=dict(batch_row),
+                )
+        for batch_id in release.terminal_batch_ids:
+            self._domjudge_finalize_batch_if_ready(batch_id)
 
     def _domjudge_task_accepts_case_updates(self, task_id: str) -> bool:
         task_row = self._core.task_by_id(task_id)
@@ -974,11 +985,21 @@ class ResultProcessor:
         compile_meta = _payload_blob_as_b64(payload.get("compile_metadata"))
         if compile_success is not None:
             updated_at = now_iso()
+            failure_text = ""
+            if compile_success == 0:
+                compile_blob = self._toolkit.b64_decode(compile_output)
+                failure_text = (
+                    domjudge_feedback_text_from_text(
+                        compile_blob.decode("utf-8", errors="replace")
+                    )
+                    or "compilation failed"
+                )
             updated = self._s.batch_scheduler.record_compile_result(
                 batch_id,
                 compile_success=compile_success,
                 compile_output_b64=compile_output,
                 compile_metadata_b64=compile_meta,
+                failure_text=failure_text,
                 updated_at=updated_at,
             )
             if not updated:
@@ -1385,30 +1406,18 @@ class ResultProcessor:
         if judgetask_id is None:
             return 0
         case_id = int(judgetask_id)
-        target_case_id: int | None = None
         row = self._s.batch_scheduler.case_debug_context(case_id)
-        if row is not None:
-            batch_id = int(row["batch_id"])
-            case_debug = domjudge_text(row["case_debug_text"])
-            batch_debug = domjudge_text(row["batch_debug_text"])
-            debug_text = case_debug
-            if batch_debug and batch_debug not in debug_text:
-                debug_text = batch_debug if not debug_text else f"{debug_text}\n{batch_debug}"
-            result_id = case_id
-            target_case_id = case_id
-            case_identity = self._s.batch_scheduler.fetch_case(case_id)
-            if case_identity is not None:
-                self._touch_task_verification(domjudge_text(case_identity["task_id"]))
-        else:
-            batch_row = self._s.batch_scheduler.batch_debug_context(case_id)
-            if batch_row is None:
-                return 0
-            batch_id = int(batch_row["batch_id"])
-            debug_text = domjudge_text(batch_row["debug_text"])
-            result_id = batch_id
-            batch_identity = self._s.batch_scheduler.fetch_batch(batch_id)
-            if batch_identity is not None:
-                self._touch_task_verification(domjudge_text(batch_identity["task_id"]))
+        if row is None:
+            return 0
+        batch_id = int(row["batch_id"])
+        case_debug = domjudge_text(row["case_debug_text"])
+        batch_debug = domjudge_text(row["batch_debug_text"])
+        debug_text = case_debug
+        if batch_debug and batch_debug not in debug_text:
+            debug_text = batch_debug if not debug_text else f"{debug_text}\n{batch_debug}"
+        case_identity = self._s.batch_scheduler.fetch_case(case_id)
+        if case_identity is not None:
+            self._touch_task_verification(domjudge_text(case_identity["task_id"]))
         payload_text = self._domjudge_debug_payload_text({} if payload is None else payload)
         if payload_text:
             debug_text = payload_text if not debug_text else f"{debug_text}\n{payload_text}"
@@ -1417,7 +1426,7 @@ class ResultProcessor:
         persisted_debug_text = debug_text or safe_desc
         if persisted_debug_text:
             self._s.batch_scheduler.append_debug_text(
-                case_id=target_case_id,
+                case_id=case_id,
                 batch_id=batch_id,
                 debug_text=persisted_debug_text,
                 now_text=now_iso(),
@@ -1426,7 +1435,7 @@ class ResultProcessor:
             if debug_text.lower() not in safe_desc.lower():
                 safe_desc = f"{safe_desc}\n\n{debug_text}"
         self._domjudge_finalize_batch_if_ready(batch_id, force_failed=True, error_text=safe_desc)
-        return result_id
+        return case_id
 
     def _domjudge_debug_payload_text(self, payload: dict[str, object]) -> str:
         if not payload:
@@ -1591,7 +1600,6 @@ class ResultProcessor:
         safe_host = self._core.normalize_hostname(hostname)
         case_id = int(judgetask_id)
         case_row = self._s.batch_scheduler.fetch_case(case_id)
-        batch_row = self._s.batch_scheduler.fetch_batch(case_id)
         safe_task_id = ""
         safe_run_id = ""
         target_case_id: int | None = None
@@ -1601,8 +1609,6 @@ class ResultProcessor:
             safe_run_id = domjudge_text(case_row["run_id"])
             target_case_id = int(case_row["id"])
             target_batch_id = int(case_row["batch_id"])
-        elif batch_row is not None:
-            target_batch_id = int(batch_row["batch_id"])
         self._touch_task_verification(safe_task_id)
         debug_payload = {} if payload is None else payload
         if debug_payload:

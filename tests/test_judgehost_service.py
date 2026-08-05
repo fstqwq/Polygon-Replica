@@ -1571,7 +1571,7 @@ class TestJudgehostService(E2ETestBase):
         self.assertIsInstance(passes, list)
         self.assertEqual(str((passes[0] or {}).get("verdict") or ""), "TL")
 
-    def test_domjudge_register_host_is_idempotent_for_leased_job(self) -> None:
+    def test_domjudge_register_host_requeues_leased_case_for_another_host(self) -> None:
         service = config.judgehost_task_service
         old_enabled = service.state.enabled
         old_token = service.state.api_token
@@ -1638,12 +1638,31 @@ class TestJudgehostService(E2ETestBase):
         self.assertEqual(int(first["submitid"]), domjudge_submit_id(str(first["uuid"])))
 
         unfinished = service.domjudge_register_host("judgehost-reconnect")
-        self.assertEqual(unfinished, [])
+        self.assertEqual(
+            unfinished,
+            [{"jobid": protocol_job_id, "submitid": str(first["submitid"])}],
+        )
 
-        second_rows = service.domjudge_fetch_work("judgehost-reconnect", max_batchsize=8)
-        self.assertEqual(second_rows, [])
+        case_id = int(first["judgetaskid"])
+        case_row = judgehost_fetch_case(service, case_id)
+        self.assertIsNotNone(case_row)
+        assert case_row is not None
+        self.assertEqual(str(case_row["lease_owner"] or ""), "")
+        self.assertEqual(str(case_row["status"] or ""), "pending")
 
-        case_row = judgehost_fetch_case(service, int(first["judgetaskid"]))
+        self.assertEqual(service.domjudge_register_host("judgehost-reconnect"), [])
+        second_rows = service.domjudge_fetch_work("judgehost-reconnect-b", max_batchsize=8)
+        self.assertEqual(len(second_rows), 1)
+        self.assertEqual(int(second_rows[0]["judgetaskid"]), case_id)
+        self.assertEqual(second_rows[0]["jobid"], first["jobid"])
+        self.assertEqual(second_rows[0]["submitid"], first["submitid"])
+
+        service.domjudge_update_judging(
+            "judgehost-reconnect",
+            case_id,
+            {"compile_success": "0"},
+        )
+        case_row = judgehost_fetch_case(service, case_id)
         self.assertIsNotNone(case_row)
         assert case_row is not None
         batch_row = judgehost_fetch_batch(service, int(case_row["batch_id"]))
@@ -1651,8 +1670,19 @@ class TestJudgehostService(E2ETestBase):
         assert batch_row is not None
         self.assertNotIn("compile_owner", batch_row)
         self.assertEqual(str(batch_row["status"] or ""), "open")
-        self.assertEqual(str(case_row["lease_owner"] or ""), "judgehost-reconnect")
+        self.assertEqual(str(batch_row["compile_state"] or ""), "unknown")
+        self.assertEqual(str(case_row["lease_owner"] or ""), "judgehost-reconnect-b")
         self.assertEqual(str(case_row["status"] or ""), "leased")
+
+        self._commit_case_result(
+            service,
+            case_id=case_id,
+            hostname="judgehost-reconnect-b",
+            test_name="001.in",
+            runresult="correct",
+            verdict="OK",
+        )
+        self.assertEqual(judgehost_fetch_case(service, case_id)["status"], "reported")
 
     def test_domjudge_valid_execution_events_refresh_host_heartbeat(self) -> None:
         service = config.judgehost_task_service
@@ -4594,7 +4624,7 @@ class TestJudgehostService(E2ETestBase):
         self.assertIn("compare script 33 crashed with exit code 3, expected one of 42/43", error_text)
         self.assertIn("FAIL Can not write to the result file (test case 1)", error_text)
 
-    def test_domjudge_internal_error_includes_job_level_debug_message(self) -> None:
+    def test_domjudge_batch_id_is_not_a_judgetask_id(self) -> None:
         service = config.judgehost_task_service
         old_enabled = service.state.enabled
         old_token = service.state.api_token
@@ -4609,14 +4639,10 @@ class TestJudgehostService(E2ETestBase):
         service.state.api_username = "judgehost"
         service.state.include_build_payload = True
 
-        verification_id = f"b-jh-compare-batch-debug-{uuid.uuid4().hex[:8]}"
-        run_id = f"r-jh-compare-batch-debug-{uuid.uuid4().hex[:8]}"
+        verification_id = f"b-jh-case-only-id-{uuid.uuid4().hex[:8]}"
+        run_id = f"r-jh-case-only-id-{uuid.uuid4().hex[:8]}"
         self._seed_build_verification(verification_id)
-        self._seed_verification_test_artifacts(
-            verification_id,
-            [("001.in", "ok\n", "ok\n"), ("002.in", "ok\n", "ok\n")],
-        )
-        service.domjudge_register_host("judgehost-compare-batch-debug")
+        service.domjudge_register_host("judgehost-case-only-id")
 
         service.enqueue_task(
             problem=self.problem,
@@ -4627,46 +4653,38 @@ class TestJudgehostService(E2ETestBase):
             upload_content=None,
             upload_filename=None,
             run_id=run_id,
-            selected_tests=["001.in", "002.in"],
-            verification_id=_canonical_verification_id("inv-compare-batch-debug"),
+            selected_tests=["001.in"],
+            verification_id=_canonical_verification_id("inv-case-only-id"),
             verification_run_ids=[run_id],
             expected_behavior="accepted",
             verification_source="run.execute",
         )
-        leased = service.domjudge_fetch_work("judgehost-compare-batch-debug", max_batchsize=8)
-        self.assertEqual(len(leased), 2)
-        service.domjudge_update_judging(
-            "judgehost-compare-batch-debug",
-            int(leased[0]["judgetaskid"]),
-            {"compile_success": "1", "output_compile": "", "compile_metadata": ""},
-        )
-        leased += service.domjudge_fetch_work("judgehost-compare-batch-debug", max_batchsize=8)
-        self.assertEqual(len(leased), 2)
-        case_ids = sorted(int(item.get("judgetaskid") or 0) for item in leased)
-        self.assertGreater(case_ids[0], 0)
-        self.assertGreater(case_ids[1], 0)
-        target_case = case_ids[1]
-        row = judgehost_fetch_case(service, target_case)
+        leased = service.domjudge_fetch_work("judgehost-case-only-id", max_batchsize=8)
+        self.assertEqual(len(leased), 1)
+        case_id = int(leased[0]["judgetaskid"])
+        row = judgehost_fetch_case(service, case_id)
         self.assertIsNotNone(row)
+        assert row is not None
         batch_id = int(row["batch_id"])
+        before = judgehost_fetch_batch(service, batch_id)
+        self.assertIsNotNone(before)
 
         service.domjudge_add_debug_info(
-            hostname="judgehost-compare-batch-debug",
+            hostname="judgehost-case-only-id",
             judgetask_id=batch_id,
             payload={"message": "FAIL compare script output from batch-level debug"},
         )
-        service.domjudge_internal_error(
-            description="compare script 33 crashed with exit code 3, expected one of 42/43",
-            judgetask_id=target_case,
+        self.assertEqual(
+            service.domjudge_internal_error(
+                description="must not target a batch",
+                judgetask_id=batch_id,
+            ),
+            0,
         )
 
-        run_row = self._verification_run_row(run_id)
-        self.assertIsNotNone(run_row)
-        self.assertEqual(str(run_row["status"] or "").strip().lower(), "failed")
-        summary = dict(run_row["summary"])
-        error_text = str(summary.get("error") or "")
-        self.assertIn("compare script 33 crashed with exit code 3, expected one of 42/43", error_text)
-        self.assertIn("FAIL compare script output from batch-level debug", error_text)
+        after = judgehost_fetch_batch(service, batch_id)
+        self.assertEqual(after, before)
+        self.assertEqual(judgehost_fetch_case(service, case_id)["status"], "leased")
 
     def test_domjudge_internal_error_includes_judgehostlog_compare_output(self) -> None:
         service = config.judgehost_task_service

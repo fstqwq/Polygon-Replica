@@ -225,6 +225,80 @@ class TestJudgehostScheduler(unittest.TestCase):
         )
         return (DomjudgeToolkit(state), blob_store, cache_index)
 
+    def test_default_entity_ids_use_nanosecond_base_and_survive_reset(self) -> None:
+        with patch(
+            "app.service.judgehost.batch_scheduler.time.time_ns",
+            return_value=1_000_000,
+        ):
+            scheduler = BatchScheduler()
+        first_batch, _now_text = _create_staged_batch(
+            scheduler,
+            task_id="nanosecond-first",
+            run_id="run-nanosecond-first",
+            ordinals=[1],
+        )
+        first_case = scheduler.cases_for_batch(first_batch)[0]
+        self.assertEqual((first_batch, int(first_case["id"])), (1_000_001, 1_000_002))
+
+        scheduler.reset()
+        second_batch, _now_text = _create_staged_batch(
+            scheduler,
+            task_id="nanosecond-second",
+            run_id="run-nanosecond-second",
+            ordinals=[1],
+        )
+        second_case = scheduler.cases_for_batch(second_batch)[0]
+        self.assertEqual((second_batch, int(second_case["id"])), (1_000_003, 1_000_004))
+
+    def test_entity_id_reservation_rejects_overflow_without_partial_state(self) -> None:
+        max_id = (1 << 63) - 1
+        scheduler = BatchScheduler(id_base=max_id - 2)
+        batch_id, _now_text = _create_staged_batch(
+            scheduler,
+            task_id="boundary-first",
+            run_id="run-boundary-first",
+            ordinals=[1],
+            execution_signature="boundary-signature",
+            logical_run_id="boundary-logical-run",
+        )
+        self.assertEqual(batch_id, max_id - 1)
+        self.assertEqual(int(scheduler.cases_for_batch(batch_id)[0]["id"]), max_id)
+
+        with self.assertRaisesRegex(OverflowError, "signed 64-bit"):
+            _create_staged_batch(
+                scheduler,
+                task_id="boundary-overflow",
+                run_id="run-boundary-overflow",
+                ordinals=[2],
+                execution_signature="boundary-signature",
+                logical_run_id="boundary-logical-run",
+            )
+        self.assertIsNone(scheduler.batch_for_task("boundary-overflow"))
+        self.assertEqual(len(scheduler.cases_for_batch(batch_id)), 1)
+
+    def test_nanosecond_restart_bases_do_not_overlap_at_supported_creation_rate(self) -> None:
+        with patch(
+            "app.service.judgehost.batch_scheduler.time.time_ns",
+            side_effect=[2_000_000, 2_000_100],
+        ):
+            old_scheduler = BatchScheduler()
+            new_scheduler = BatchScheduler()
+        old_batch, _now_text = _create_staged_batch(
+            old_scheduler,
+            task_id="old-process",
+            run_id="run-old-process",
+            ordinals=[1, 2, 3],
+        )
+        new_batch, _now_text = _create_staged_batch(
+            new_scheduler,
+            task_id="new-process",
+            run_id="run-new-process",
+            ordinals=[1],
+        )
+        old_ids = {old_batch, *(int(row["id"]) for row in old_scheduler.cases_for_batch(old_batch))}
+        new_ids = {new_batch, *(int(row["id"]) for row in new_scheduler.cases_for_batch(new_batch))}
+        self.assertTrue(old_ids.isdisjoint(new_ids))
+
     def test_materialized_compile_source_outlives_snapshot_descriptor(self) -> None:
         scheduler = BatchScheduler(id_base=100)
         _create_staged_batch(
@@ -493,7 +567,7 @@ class TestJudgehostScheduler(unittest.TestCase):
             scheduler,
             task_id="released-affinity",
             run_id="run-released-affinity",
-            ordinals=[1],
+            ordinals=[1, 2],
         )
         other_id = _create_ready_batch(
             scheduler,
@@ -502,22 +576,203 @@ class TestJudgehostScheduler(unittest.TestCase):
             ordinals=[2],
         )
         self.assertEqual(scheduler.select_ready_batch("host-a")["batch_id"], first_id)
-        scheduler.lease_cases(
+        leased = scheduler.lease_cases(
             first_id,
             hostname="host-a",
-            limit=1,
+            limit=2,
             now_text=datetime.now(timezone.utc).isoformat(),
         )
+        dispatch_count = scheduler.batch_dispatch_count(first_id)
+        batch = scheduler.fetch_batch(first_id)
+        assert batch is not None
 
         release = scheduler.release_host_leases(
             "host-a",
             now_text=datetime.now(timezone.utc).isoformat(),
         )
 
-        self.assertEqual((release.affinity_count, release.lease_count), (1, 1))
+        self.assertEqual((release.affinity_count, release.lease_count), (1, 2))
+        self.assertEqual(
+            release.workdirs,
+            ((int(batch["domjudge_job_id"]), domjudge_submit_id(_COMPILE_KEY)),),
+        )
+        self.assertEqual(scheduler.batch_dispatch_count(first_id), dispatch_count)
+        self.assertEqual(scheduler.batch_case_count(first_id, status="pending"), 2)
+        for row in leased:
+            released = scheduler.fetch_case(int(row["id"]))
+            assert released is not None
+            self.assertEqual((released["status"], released["lease_owner"]), ("pending", None))
         self.assertEqual(scheduler.host_context_batches("host-a"), [])
         self.assertEqual(scheduler.select_ready_batch("host-b")["batch_id"], other_id)
         self.assertEqual(scheduler.select_ready_batch("host-c")["batch_id"], first_id)
+        reassigned = scheduler.lease_cases(
+            first_id,
+            hostname="host-c",
+            limit=1,
+            now_text=datetime.now(timezone.utc).isoformat(),
+        )[0]
+        self.assertIsNone(
+            scheduler.claim_case_reporting(
+                int(reassigned["id"]),
+                hostname="host-a",
+                now_text=datetime.now(timezone.utc).isoformat(),
+            )
+        )
+        self.assertEqual(
+            scheduler.release_host_leases(
+                "host-a",
+                now_text=datetime.now(timezone.utc).isoformat(),
+            ).workdirs,
+            (),
+        )
+
+    def test_host_release_defers_reporting_until_claim_finishes(self) -> None:
+        scheduler = BatchScheduler(id_base=142)
+        batch_id = _create_ready_batch(
+            scheduler,
+            task_id="released-reporting",
+            run_id="run-released-reporting",
+            ordinals=[1],
+        )
+        case = scheduler.lease_cases(
+            batch_id,
+            hostname="host-a",
+            limit=1,
+            now_text="2026-08-05T00:00:00+00:00",
+        )[0]
+        claim = scheduler.claim_case_reporting(
+            int(case["id"]),
+            hostname="host-a",
+            now_text="2026-08-05T00:00:01+00:00",
+        )
+        assert claim is not None
+
+        first_release = scheduler.release_host_leases(
+            "host-a",
+            now_text="2026-08-05T00:00:02+00:00",
+        )
+
+        self.assertEqual(first_release.lease_count, 1)
+        self.assertEqual(scheduler.fetch_case(claim.case_id)["status"], "reporting")
+        self.assertEqual(
+            scheduler.release_host_leases(
+                "host-a",
+                now_text="2026-08-05T00:00:03+00:00",
+            ).workdirs,
+            (),
+        )
+        self.assertTrue(
+            scheduler.abort_case_claim(
+                claim.case_id,
+                generation=claim.generation,
+                updated_at="2026-08-05T00:00:04+00:00",
+            )
+        )
+        self.assertEqual(scheduler.fetch_case(claim.case_id)["status"], "pending")
+
+    def test_host_release_keeps_successful_reporting_commit_valid(self) -> None:
+        scheduler = BatchScheduler(id_base=144)
+        batch_id = _create_ready_batch(
+            scheduler,
+            task_id="released-reporting-success",
+            run_id="run-released-reporting-success",
+            ordinals=[1],
+        )
+        case = scheduler.lease_cases(
+            batch_id,
+            hostname="host-a",
+            limit=1,
+            now_text="2026-08-05T00:00:00+00:00",
+        )[0]
+        claim = scheduler.claim_case_reporting(
+            int(case["id"]),
+            hostname="host-a",
+            now_text="2026-08-05T00:00:01+00:00",
+        )
+        assert claim is not None
+        scheduler.release_host_leases(
+            "host-a",
+            now_text="2026-08-05T00:00:02+00:00",
+        )
+
+        self.assertEqual(
+            scheduler.commit_case_result(
+                claim.case_id,
+                generation=claim.generation,
+                result=_case_result("001.in"),
+                updated_at="2026-08-05T00:00:03+00:00",
+            ),
+            "reported",
+        )
+        self.assertEqual(scheduler.fetch_case(claim.case_id)["status"], "reported")
+
+    def test_host_release_finishes_cancelled_lease_without_requeue(self) -> None:
+        scheduler = BatchScheduler(id_base=146)
+        batch_id = _create_ready_batch(
+            scheduler,
+            task_id="released-cancelled",
+            run_id="run-released-cancelled",
+            ordinals=[1],
+        )
+        case = scheduler.lease_cases(
+            batch_id,
+            hostname="host-a",
+            limit=1,
+            now_text="2026-08-05T00:00:00+00:00",
+        )[0]
+        scheduler.request_verification_cancel(
+            "ver-1",
+            now_text="2026-08-05T00:00:01+00:00",
+        )
+
+        release = scheduler.release_host_leases(
+            "host-a",
+            now_text="2026-08-05T00:00:02+00:00",
+        )
+
+        self.assertEqual(release.terminal_task_ids, ("released-cancelled",))
+        self.assertEqual(scheduler.fetch_case(int(case["id"]))["status"], "cancelled")
+        self.assertEqual(scheduler.batch_case_count(batch_id, status="pending"), 0)
+        self.assertEqual(scheduler.lease_cases(batch_id, hostname="host-b", limit=1, now_text="later"), [])
+
+    def test_host_release_cancelled_reporting_aborts_to_cancelled(self) -> None:
+        scheduler = BatchScheduler(id_base=148)
+        batch_id = _create_ready_batch(
+            scheduler,
+            task_id="released-reporting-cancelled",
+            run_id="run-released-reporting-cancelled",
+            ordinals=[1],
+        )
+        case = scheduler.lease_cases(
+            batch_id,
+            hostname="host-a",
+            limit=1,
+            now_text="2026-08-05T00:00:00+00:00",
+        )[0]
+        claim = scheduler.claim_case_reporting(
+            int(case["id"]),
+            hostname="host-a",
+            now_text="2026-08-05T00:00:01+00:00",
+        )
+        assert claim is not None
+        scheduler.request_verification_cancel(
+            "ver-1",
+            now_text="2026-08-05T00:00:02+00:00",
+        )
+        scheduler.release_host_leases(
+            "host-a",
+            now_text="2026-08-05T00:00:03+00:00",
+        )
+
+        self.assertTrue(
+            scheduler.abort_case_claim(
+                claim.case_id,
+                generation=claim.generation,
+                updated_at="2026-08-05T00:00:04+00:00",
+            )
+        )
+        self.assertEqual(scheduler.fetch_case(claim.case_id)["status"], "cancelled")
+        self.assertTrue(scheduler.task_cases_terminal("released-reporting-cancelled"))
 
     def test_compile_failure_stays_on_unique_execution_batch(self) -> None:
         scheduler = BatchScheduler(id_base=144)
@@ -558,6 +813,41 @@ class TestJudgehostScheduler(unittest.TestCase):
             )
         )
         self.assertEqual(scheduler.fetch_batch(batch_id)["compile_state"], "failed")
+
+    def test_host_release_does_not_reopen_sticky_compile_failure(self) -> None:
+        scheduler = BatchScheduler(id_base=149)
+        batch_id = _create_ready_batch(
+            scheduler,
+            task_id="released-compile-failure",
+            run_id="run-released-compile-failure",
+            ordinals=[1],
+        )
+        case = scheduler.lease_cases(
+            batch_id,
+            hostname="host-a",
+            limit=1,
+            now_text="2026-08-05T00:00:00+00:00",
+        )[0]
+        scheduler.record_compile_result(
+            batch_id,
+            compile_success=0,
+            compile_output_b64="",
+            compile_metadata_b64="",
+            updated_at="2026-08-05T00:00:01+00:00",
+        )
+        self.assertEqual(scheduler.fetch_case(int(case["id"]))["status"], "reported")
+
+        release = scheduler.release_host_leases(
+            "host-a",
+            now_text="2026-08-05T00:00:02+00:00",
+        )
+
+        self.assertEqual(release.lease_count, 0)
+        self.assertEqual(release.terminal_task_ids, ())
+        self.assertEqual(release.workdirs, ())
+        self.assertEqual(scheduler.fetch_batch(batch_id)["compile_state"], "failed")
+        self.assertEqual(scheduler.fetch_case(int(case["id"]))["status"], "reported")
+        self.assertEqual(scheduler.batch_case_count(batch_id, status="pending"), 0)
 
     def test_undispatched_batch_precedes_dispatched_older_scope(self) -> None:
         scheduler = BatchScheduler(id_base=140)
@@ -858,6 +1148,12 @@ class TestJudgehostScheduler(unittest.TestCase):
         )
         self.assertEqual(list(cancellation.batch_ids), [batch_id])
         self.assertFalse(scheduler.task_cases_terminal("reporting"))
+        release = scheduler.release_host_leases(
+            "host-a",
+            now_text="2026-08-03T00:00:03+00:00",
+        )
+        self.assertEqual(release.lease_count, 1)
+        self.assertEqual(scheduler.fetch_case(case_id)["status"], "reporting")
         scheduler.request_batch_case_results(
             batch_id,
             results={
