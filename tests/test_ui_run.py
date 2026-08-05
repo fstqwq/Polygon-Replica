@@ -32,8 +32,8 @@ from tests.ui_support import (
     tests_spec_reindex,
     config,
     general_page,
-    git_commit,
     json,
+    revision_commit,
     preview_page,
     run_details_page,
     run_details_test_fragment,
@@ -1649,14 +1649,14 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         rows = workspace_impl.run_list_rows(problem_id, workspace_id, ws, limit=10, actor_user_id=int(ctx["user"]["id"]))
         working_row = next(item for item in rows if str(item.get("id") or "") == working_id)
         revision_row = next(item for item in rows if str(item.get("id") or "") == revision_id)
-        self.assertEqual(str(working_row.get("source_display") or ""), "working copy")
+        self.assertEqual(str(working_row.get("source_display") or ""), "current files")
         self.assertRegex(str(revision_row.get("source_display") or ""), r"^v[1-9][0-9]*$")
 
         resp = run_page(_request("/problems/alice/sample/run"), "alice/sample", "alice")
         html = resp.body.decode("utf-8", errors="replace")
         self.assertIn("<th>Source</th>", html)
         self.assertNotIn("<th>Finished</th>", html)
-        self.assertIn("working copy", html)
+        self.assertIn("current files", html)
         self.assertIn(str(revision_row.get("source_display") or ""), html)
 
     def test_rejudge_unavailable_consistent_between_list_and_details_while_running(self) -> None:
@@ -2943,7 +2943,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         (ws / "solutions").mkdir(parents=True, exist_ok=True)
         (ws / "solutions" / "accepted.cpp").write_text("int main(){return 0;}\n", encoding="utf-8")
         (ws / "solutions" / "wa.cpp").write_text("int main(){return 1;}\n", encoding="utf-8")
-        commit_resp = git_commit(problem=problem, user="alice", message=f"sidebar-running-{uuid.uuid4().hex[:6]}")
+        commit_resp = revision_commit(problem=problem, user="alice", message=f"sidebar-running-{uuid.uuid4().hex[:6]}")
         self.assertEqual(commit_resp.status_code, 303)
         ctx = workspace_service.workspace_context(problem, "alice", include_recent=False)
         problem_id = int(ctx["problem"]["id"])

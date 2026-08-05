@@ -35,7 +35,7 @@ Route files register endpoints and delegate to `impl/` handlers.
 |------|-------|
 | `root_auth_route.py` | login, register, setup, home, problem list, contest list |
 | `agent_route.py` | agent pairing UI and `/agent/v1/*` API |
-| `problem_route.py` | problem workspace pages, git actions, settings |
+| `problem_route.py` | problem pages, revision merge/commit actions, settings |
 | `contest_route.py` | contest pages, roster, access, packages |
 | `judgehost_route.py` | `/api/v4/*` DOMjudge-compatible API |
 | `preview_route.py` | statement preview pages and actions |

@@ -4,15 +4,15 @@
 
 ```mermaid
 graph LR
-    Create[Create or import] --> Edit[Edit in workspace]
-    Edit --> Commit[Git commit]
-    Commit --> Push[Git push]
-    Push --> Verify[Verification or run]
+    Create[Create or import] --> Edit[Edit files]
+    Edit --> Merge[Merge latest revision]
+    Merge --> Commit[Commit and share revision]
+    Commit --> Verify[Verification or run]
     Verify --> Export[Export package]
     Edit --> Preview[Compile statement preview]
 ```
 
-A problem is created from scratch or imported from an external package. Users edit sources in their own workspaces, commit and push to the bare repository, then run verification or export.
+A problem is created from scratch or imported from an external package. Users edit sources in separate workspaces, merge the latest shared revision, commit the result, then run verification or export.
 
 ## Git-Backed Source of Truth
 
@@ -26,9 +26,9 @@ Multiple users can edit the same problem concurrently in separate checkouts.
 graph LR
     Bare[bare repo] --> WS1[user A workspace]
     Bare --> WS2[user B workspace]
-    WS1 -->|commit + push| Bare
-    WS2 -->|commit + push| Bare
-    WS2 -->|pull or rebase| Bare
+    WS1 -->|commit revision| Bare
+    WS2 -->|commit revision| Bare
+    Bare -->|preview then merge| WS2
 ```
 
 `WorkspaceService` is responsible for:
@@ -154,16 +154,13 @@ remaining languages alphabetically. Dirty workspace content is never used to
 derive export metadata. SQLite stores the problem slug and repository metadata,
 not a global problem name.
 
-## Git Operations Exposed in the UI
+## Revision Operations Exposed in the UI
 
-The workspace pages expose:
-- commit
-- push
-- pull
-- restore revision
-- rebase continue/abort
+The workspace pages expose Commit, Merge, revision history, and a one-level Undo for the most recent Merge.
 
-These all go through the repository services and Git helpers. They operate on the workspace and bare repo only; they do not touch derived verification artifacts.
+Merge first creates a runtime-only preview. The preview captures the user's complete visible file tree and the latest shared revision without changing the workspace. A clean three-way result may be accepted as a suggestion; otherwise every affected file group requires an explicit whole-file choice. Applying a preview rechecks the workspace and shared revision, builds a complete candidate beside the workspace, and switches directories under a recoverable transaction journal.
+
+The preview expires after 30 minutes or service restart. Undo is local, covers all visible files and executable bits, and remains safe only while the post-Merge workspace has not changed. A later successful Merge replaces the previous Undo snapshot. Commit is blocked when a newer shared revision exists, so users must Merge before publishing.
 
 ## Access Control
 

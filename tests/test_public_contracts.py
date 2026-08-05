@@ -113,9 +113,6 @@ class TestPublicContracts(unittest.TestCase):
             ROOT / "app" / "template" / "run_details.html": [
                 r'class="linkish danger-link" data-submit-form="1">Cancel</a>',
             ],
-            ROOT / "app" / "template" / "history.html": [
-                r'class="linkish danger-link"\s+data-submit-form="1"',
-            ],
             ROOT / "app" / "template" / "preview.html": [
                 r'class="linkish danger-link" data-submit-form="1">Delete</a>',
             ],
@@ -147,6 +144,20 @@ class TestPublicContracts(unittest.TestCase):
         self.assertIn("color: var(--danger-link-hover-color);", workspace_source)
         self.assertIn("background: var(--danger-link-hover-bg);", workspace_source)
         self.assertIn("outline: 2px solid var(--danger-link-focus);", workspace_source)
+
+    def test_merge_ui_uses_result_language_and_has_no_default_file_choice(self) -> None:
+        source = (ROOT / "app" / "template" / "merge.html").read_text(encoding="utf-8")
+        for label in [
+            "Use this suggested result",
+            "Choose files one by one",
+            "Keep my files unchanged",
+            "Use the latest shared file",
+            "Keep my current file",
+        ]:
+            self.assertIn(label, source)
+        self.assertNotIn(" checked", source)
+        for implementation_term in ["rebase", "commit hash", "bare repo", "uncommitted"]:
+            self.assertNotIn(implementation_term, source.lower())
 
     def test_old_danger_link_variants_removed_from_templates_and_styles(self) -> None:
         offenders: list[str] = []

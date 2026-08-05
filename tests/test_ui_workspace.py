@@ -49,11 +49,7 @@ from tests.ui_support import (
     files_page,
     general_page,
     general_save,
-    git_commit,
     git_discard_path,
-    git_pull,
-    git_rebase_abort,
-    git_restore_revision,
     git_service,
     history_page,
     json,
@@ -62,6 +58,7 @@ from tests.ui_support import (
     problems_root_import_slug_hint,
     problems_root_page,
     preview_page,
+    revision_commit,
     statement_templates_reset,
     switch_workspace,
     uuid,
@@ -102,16 +99,6 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         refreshed_head = refreshed.stdout.strip() if refreshed.returncode == 0 else ""
         self.assertRegex(refreshed_head, r"^[0-9a-f]{40}$")
         return ws, refreshed_head
-
-    def _provision_shared_problem(self, slug_prefix: str) -> tuple[str, Path, Path]:
-        problem = f"alice/{slug_prefix}-{uuid.uuid4().hex[:8]}"
-        workspace_service.ensure_problem(problem)
-        workspace_service.grant_repo_access(problem, "alice", "owner")
-        workspace_service.grant_repo_access(problem, "bob", "owner")
-        alice_ws, _ = self._ensure_committed_head(problem, "alice")
-        bob_ws = Path(workspace_service.ensure_workspace(problem, "bob"))
-        git_service.pull(bob_ws, "main")
-        return problem, alice_ws, bob_ws
 
     def _issue_auth_cookie_header(self, username: str, password: str) -> str:
         reg = _register_with_password_envelope(username, password, next_path="/")
@@ -606,11 +593,11 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         resp = workspace_page(_request("/problems/alice/sample/workspace"), "alice/sample", "alice")
         self.assertEqual(resp.status_code, 200)
         html = resp.body.decode("utf-8", errors="replace")
-        self.assertIn("Working Copy", html)
-        self.assertIn("Main Working Copy", html)
-        self.assertIn("Based on <strong>", html)
+        self.assertIn("My Files", html)
+        self.assertIn("Latest shared revision", html)
         self.assertNotIn("/problems/alice/sample/git/pull", html)
-        self.assertIn("Commit and Publish", html)
+        self.assertIn("Commit and share revision", html)
+        self.assertNotIn("rebase", html.lower())
         self.assertNotIn("Problem Access", html)
         self.assertNotIn("<h2>Access</h2>", html)
         self.assertNotIn("Branch Operations", html)
@@ -765,7 +752,7 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         self.assertIn('data-sudo-required="1"', html)
         self.assertIn('data-sudo-url="/sudo?next=', html)
         self.assertIn("sudo_popup_done%3D1", html)
-        self.assertIn("Delete Working Copy", html)
+        self.assertIn("Delete My Files", html)
         self.assertIn("Delete Problem", html)
 
     def test_workspace_page_marks_delete_forms_ready_when_sudo_cookie_exists(self) -> None:
@@ -846,7 +833,7 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         resp = workspace_page(_request("/problems/alice/sample/workspace", f"path={rel}"), "alice/sample", "alice")
         self.assertEqual(resp.status_code, 200)
         html = resp.body.decode("utf-8", errors="replace")
-        self.assertIn("Discard local changes", html)
+        self.assertIn("Discard file changes", html)
         self.assertIn("/problems/alice/sample/git/discard-path", html)
         self.assertIn(f'name="path" value="{rel}"', html)
 
@@ -865,7 +852,7 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         self.assertIn("/problems/alice/sample/workspace", resp.headers.get("location", ""))
         messages = _flash_messages_from_response(resp)
         self.assertTrue(messages)
-        self.assertIn("discarded local changes", messages[0])
+        self.assertIn("discarded file changes", messages[0])
         self.assertEqual(target.read_text(encoding="utf-8"), "base\n")
         status_rows = git_service.status_change_summary(ws, limit=32)["rows"]
         self.assertFalse(any(str(row.get("link_path") or "") == rel for row in status_rows))
@@ -883,69 +870,7 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         self.assertFalse(target.exists())
         messages = _flash_messages_from_response(resp)
         self.assertTrue(messages)
-        self.assertIn("discarded local changes", messages[0])
-
-    def test_git_pull_skips_empty_untracked_file_that_matches_upstream_path(self) -> None:
-        problem, alice_ws, bob_ws = self._provision_shared_problem("ui-pull-empty")
-        rel = "statement/problem.tex"
-        upstream_target = bob_ws / rel
-        upstream_target.parent.mkdir(parents=True, exist_ok=True)
-        upstream_target.write_text("Upstream statement body.\n", encoding="utf-8")
-        git_service.commit(bob_ws, f"pull-empty-{uuid.uuid4().hex[:6]}", "bob", "bob@polygonlike.local")
-        git_service.push(bob_ws, "main")
-
-        local_target = alice_ws / rel
-        local_target.parent.mkdir(parents=True, exist_ok=True)
-        local_target.write_text("", encoding="utf-8")
-
-        resp = git_pull(problem=problem, user="alice")
-        self.assertEqual(resp.status_code, 303)
-        messages = _flash_messages_from_response(resp)
-        self.assertTrue(messages)
-        self.assertIn("skipped 1 safe untracked path", messages[0])
-        self.assertEqual(local_target.read_text(encoding="utf-8"), "Upstream statement body.\n")
-
-    def test_git_pull_skips_identical_untracked_file_that_matches_upstream_path(self) -> None:
-        problem, alice_ws, bob_ws = self._provision_shared_problem("ui-pull-identical")
-        rel = "statement/statements.ftl"
-        upstream_text = "Template body.\n"
-        upstream_target = bob_ws / rel
-        upstream_target.parent.mkdir(parents=True, exist_ok=True)
-        upstream_target.write_text(upstream_text, encoding="utf-8")
-        git_service.commit(bob_ws, f"pull-identical-{uuid.uuid4().hex[:6]}", "bob", "bob@polygonlike.local")
-        git_service.push(bob_ws, "main")
-
-        local_target = alice_ws / rel
-        local_target.parent.mkdir(parents=True, exist_ok=True)
-        local_target.write_text(upstream_text, encoding="utf-8")
-
-        resp = git_pull(problem=problem, user="alice")
-        self.assertEqual(resp.status_code, 303)
-        messages = _flash_messages_from_response(resp)
-        self.assertTrue(messages)
-        self.assertIn("skipped 1 safe untracked path", messages[0])
-        self.assertEqual(local_target.read_text(encoding="utf-8"), upstream_text)
-
-    def test_git_pull_rejects_nonempty_untracked_file_that_differs_from_upstream(self) -> None:
-        problem, alice_ws, bob_ws = self._provision_shared_problem("ui-pull-blocked")
-        rel = "statement/olymp.sty"
-        upstream_target = bob_ws / rel
-        upstream_target.parent.mkdir(parents=True, exist_ok=True)
-        upstream_target.write_text("% upstream style\n", encoding="utf-8")
-        git_service.commit(bob_ws, f"pull-blocked-{uuid.uuid4().hex[:6]}", "bob", "bob@polygonlike.local")
-        git_service.push(bob_ws, "main")
-
-        local_target = alice_ws / rel
-        local_target.parent.mkdir(parents=True, exist_ok=True)
-        local_target.write_text("% local custom style\n", encoding="utf-8")
-
-        resp = git_pull(problem=problem, user="alice")
-        self.assertEqual(resp.status_code, 303)
-        messages = _flash_messages_from_response(resp)
-        self.assertTrue(messages)
-        self.assertIn("pull blocked by untracked files that differ from upstream", messages[0])
-        self.assertIn(rel, messages[0])
-        self.assertEqual(local_target.read_text(encoding="utf-8"), "% local custom style\n")
+        self.assertIn("discarded file changes", messages[0])
 
     def test_commit_and_publish_rolls_back_commit_when_push_fails(self) -> None:
         self._ensure_committed_head("alice/sample", "alice")
@@ -958,13 +883,13 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         self.assertTrue(head_before)
 
         with patch.object(git_service, "push", side_effect=RuntimeError("non-fast-forward")):
-            resp = git_commit(problem="alice/sample", user="alice", message=f"ui-atomic-{uuid.uuid4().hex[:6]}")
+            resp = revision_commit(problem="alice/sample", user="alice", message=f"ui-atomic-{uuid.uuid4().hex[:6]}")
         self.assertEqual(resp.status_code, 303)
         loc = resp.headers.get("location", "")
         self.assertIn("/problems/alice/sample/workspace", loc)
         messages = _flash_messages_from_response(resp)
         self.assertTrue(messages)
-        self.assertIn("commit rolled back", messages[0])
+        self.assertIn("newer shared revision", messages[0])
 
         head_after = run_git(["git", "-C", str(ws), "rev-parse", "HEAD"]).stdout.strip()
         self.assertEqual(head_after, head_before)
@@ -976,14 +901,15 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         initial = general_page(_request("/problems/alice/sample/general"), "alice/sample", "alice")
         self.assertEqual(initial.status_code, 200)
         initial_html = initial.body.decode("utf-8", errors="replace")
-        self.assertNotIn("/problems/alice/sample/git/pull", initial_html)
+        self.assertNotIn("/problems/alice/sample/merge/start", initial_html)
 
         workspace_service.grant_repo_access("alice/sample", "bob", "owner")
         bob_ws = Path(workspace_service.ensure_workspace("alice/sample", "bob"))
         self.assertEqual(run_git(["git", "config", "user.name", "Bob"], cwd=bob_ws).returncode, 0)
         self.assertEqual(run_git(["git", "config", "user.email", "bob@example.com"], cwd=bob_ws).returncode, 0)
         # Keep this test deterministic when bob workspace already exists from earlier cases.
-        self.assertEqual(run_git(["git", "pull", "--rebase", "origin", "main"], cwd=bob_ws).returncode, 0)
+        self.assertEqual(run_git(["git", "fetch", "origin", "main"], cwd=bob_ws).returncode, 0)
+        self.assertEqual(run_git(["git", "reset", "--hard", "origin/main"], cwd=bob_ws).returncode, 0)
         marker = f"upstream-{uuid.uuid4().hex[:8]}.txt"
         (bob_ws / marker).write_text("upstream update\n", encoding="utf-8")
         self.assertEqual(run_git(["git", "add", marker], cwd=bob_ws).returncode, 0)
@@ -993,7 +919,7 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         refreshed = general_page(_request("/problems/alice/sample/general"), "alice/sample", "alice")
         self.assertEqual(refreshed.status_code, 200)
         refreshed_html = refreshed.body.decode("utf-8", errors="replace")
-        self.assertIn("/problems/alice/sample/git/pull", refreshed_html)
+        self.assertIn("/problems/alice/sample/merge/start", refreshed_html)
 
     def test_problem_page_denies_user_without_acl(self) -> None:
         private_problem = f"alice/ui-private-{uuid.uuid4().hex[:8]}"
@@ -1290,7 +1216,7 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
             ("/problems/alice/sample/checker", "Checker"),
             ("/problems/alice/sample/validator", "Validator"),
             ("/problems/alice/sample/files", "Files"),
-            ("/problems/alice/sample/workspace", "Working Copy"),
+            ("/problems/alice/sample/workspace", "My Files"),
             ("/problems/alice/sample/history", "Revision History"),
         ]
         with TestClient(app) as client:
@@ -1337,8 +1263,8 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         self.assertIn(">alice/</span>", html)
         self.assertIn(">sample</span>", html)
         self.assertNotIn(">sample</a> - <code>alice/sample</code>", html)
-        self.assertIn("v0 / upstream v0", html)
-        self.assertIn("none / upstream missing", html)
+        self.assertIn("v0 / latest shared v0", html)
+        self.assertIn("none / latest shared missing", html)
         self.assertIn("revision-alert", html)
 
     def test_workspace_page_header_uses_slug_link_and_copy_button(self) -> None:
@@ -1880,7 +1806,7 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         self.assertEqual(resp.status_code, 200)
         html = resp.body.decode("utf-8", errors="replace")
         self.assertIn("Revision History", html)
-        self.assertIn("No commits yet.", html)
+        self.assertIn("No revisions yet.", html)
         self.assertNotIn("ambiguous argument 'HEAD'", html)
         self.assertNotIn("unknown revision or path not in the working tree", html)
 
@@ -1899,9 +1825,8 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         html = resp.body.decode("utf-8", errors="replace")
         self.assertIn("Revision History", html)
         self.assertIn(marker, html)
-        self.assertIn("View Diff", html)
-        self.assertIn("Restore To Working Copy", html)
-        self.assertIn('class="linkish danger-link"', html)
+        self.assertIn("View changes", html)
+        self.assertNotIn("Restore", html)
 
     def test_git_commit_does_not_stage_hidden_paths(self) -> None:
         self._ensure_committed_head("alice/sample", "alice")
@@ -1919,6 +1844,26 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         names = {line.strip() for line in shown.stdout.splitlines() if line.strip()}
         self.assertIn(visible_rel, names)
         self.assertNotIn(".env", names)
+
+    def test_revision_commit_publishes_first_revision_from_v0(self) -> None:
+        ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
+        marker = f"notes/first-revision-{uuid.uuid4().hex[:8]}.txt"
+        target = ws / marker
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("first\n", encoding="utf-8")
+        response = revision_commit(
+            problem="alice/sample",
+            user="alice",
+            message=f"first-revision-{uuid.uuid4().hex[:6]}",
+        )
+        self.assertEqual(response.status_code, 303)
+        messages = _flash_messages_from_response(response)
+        self.assertTrue(messages)
+        self.assertIn("revision committed and shared", messages[0])
+        self.assertEqual(
+            run_git(["git", "-C", str(ws), "rev-parse", "HEAD"]).returncode,
+            0,
+        )
 
     def test_git_diff_for_revision_filters_hidden_paths(self) -> None:
         self._ensure_committed_head("alice/sample", "alice")
@@ -1950,114 +1895,13 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         p.write_text("before\nafter\n", encoding="utf-8")
         marker = f"ui-history-diff-{uuid.uuid4().hex[:6]}"
         git_service.commit(ws, marker, "alice", "alice@polygonlike.local")
-        selected = run_git(["git", "-C", str(ws), "rev-parse", "HEAD"]).stdout.strip()
-        self.assertTrue(selected)
+        selected_version = workspace_revision_info(ws, "main")["local"]
+        self.assertIsNotNone(selected_version)
 
-        resp = history_page(_request("/problems/alice/sample/history", f"revision={selected}"), "alice/sample", "alice")
+        resp = history_page(_request("/problems/alice/sample/history", f"revision=v{selected_version}"), "alice/sample", "alice")
         self.assertEqual(resp.status_code, 200)
         html = resp.body.decode("utf-8", errors="replace")
-        self.assertIn("Revision Diff", html)
-        self.assertIn("Selected revision:", html)
+        self.assertIn("Revision Changes", html)
         self.assertIn(marker, html)
         self.assertIn("workspace-diff-line-add", html)
         self.assertIn("+after", html)
-
-    def test_restore_revision_to_working_copy_from_history(self) -> None:
-        self._ensure_committed_head("alice/sample", "alice")
-        ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
-        rel = f"notes/ui-restore-{uuid.uuid4().hex[:8]}.txt"
-        p = ws / rel
-        p.parent.mkdir(parents=True, exist_ok=True)
-
-        p.write_text("old-version\n", encoding="utf-8")
-        git_service.commit(ws, f"ui-restore-old-{uuid.uuid4().hex[:6]}", "alice", "alice@polygonlike.local")
-        old_commit = run_git(["git", "-C", str(ws), "rev-parse", "HEAD"]).stdout.strip()
-        self.assertTrue(old_commit)
-
-        p.write_text("new-version\n", encoding="utf-8")
-        git_service.commit(ws, f"ui-restore-new-{uuid.uuid4().hex[:6]}", "alice", "alice@polygonlike.local")
-        p.write_text("dirty-local-change\n", encoding="utf-8")
-        dirty_untracked = ws / f"notes/ui-restore-untracked-{uuid.uuid4().hex[:8]}.txt"
-        dirty_untracked.write_text("temp\n", encoding="utf-8")
-
-        resp = git_restore_revision(problem="alice/sample", user="alice", revision=old_commit, page="history")
-        self.assertEqual(resp.status_code, 303)
-        location = resp.headers.get("location", "")
-        self.assertIn("/problems/alice/sample/history", location)
-        restore_messages = _flash_messages_from_response(resp)
-        self.assertTrue(restore_messages)
-        self.assertIn("restored files from", restore_messages[0])
-
-        self.assertEqual(p.read_text(encoding="utf-8"), "old-version\n")
-        self.assertFalse(dirty_untracked.exists())
-        change_summary = git_service.status_change_summary(ws, limit=32)
-        self.assertGreater(int(change_summary.get("total") or 0), 0)
-
-    def test_rebase_conflict_is_visible_and_abortable_from_ui(self) -> None:
-        problem = "alice/sample"
-        workspace_service.grant_repo_access(problem, "alice", "owner")
-        workspace_service.grant_repo_access(problem, "bob", "owner")
-        self._ensure_committed_head(problem, "alice")
-        alice = Path(workspace_service.ensure_workspace(problem, "alice"))
-        bob = Path(workspace_service.ensure_workspace(problem, "bob"))
-        file_rel = f"notes/ui-rebase-conflict-{uuid.uuid4().hex[:8]}.txt"
-        for ws in [alice, bob]:
-            status = git_service.status(ws)
-            if status.get("rebase_active"):
-                try:
-                    git_service.rebase_abort(ws)
-                except Exception:
-                    pass
-            switched = run_git(["git", "-C", str(ws), "switch", "main"])
-            if switched.returncode != 0:
-                raise RuntimeError(switched.stderr or switched.stdout or "unable to switch workspace to main")
-            git_service.pull(ws, "main")
-
-        alice = Path(workspace_service.ensure_workspace(problem, "alice"))
-        bob = Path(workspace_service.ensure_workspace(problem, "bob"))
-        file_alice = alice / file_rel
-        file_bob = bob / file_rel
-        file_alice.parent.mkdir(parents=True, exist_ok=True)
-        file_bob.parent.mkdir(parents=True, exist_ok=True)
-
-        file_alice.write_text("base\n", encoding="utf-8")
-        alice = Path(workspace_service.ensure_workspace(problem, "alice"))
-        git_service.commit(alice, f"ui-base-{uuid.uuid4().hex[:6]}", "alice", "alice@polygonlike.local")
-        git_service.push(alice, "main")
-        bob = Path(workspace_service.ensure_workspace(problem, "bob"))
-        git_service.pull(bob, "main")
-
-        alice = Path(workspace_service.ensure_workspace(problem, "alice"))
-        file_alice.write_text("alice-change\n", encoding="utf-8")
-        git_service.commit(alice, f"ui-alice-{uuid.uuid4().hex[:6]}", "alice", "alice@polygonlike.local")
-        git_service.push(alice, "main")
-
-        bob = Path(workspace_service.ensure_workspace(problem, "bob"))
-        file_bob.write_text("bob-change\n", encoding="utf-8")
-        git_service.commit(bob, f"ui-bob-{uuid.uuid4().hex[:6]}", "bob", "bob@polygonlike.local")
-
-        with self.assertRaises(RuntimeError):
-            git_service.pull(bob, "main")
-
-        ws_page = workspace_page(_request("/problems/alice/sample/workspace"), "alice/sample", "bob")
-        self.assertEqual(ws_page.status_code, 200)
-        html = ws_page.body.decode("utf-8", errors="replace")
-        self.assertIn("Rebase In Progress", html)
-        self.assertIn("Continue Rebase", html)
-        self.assertIn("Abort Rebase", html)
-        self.assertIn(file_rel, html)
-        self.assertIn("src=workspace", html)
-        self.assertNotIn("Discard local changes", html)
-
-        discard = git_discard_path(problem="alice/sample", user="bob", path=file_rel)
-        self.assertEqual(discard.status_code, 303)
-        discard_messages = _flash_messages_from_response(discard)
-        self.assertTrue(discard_messages)
-        self.assertIn("rebase in progress", discard_messages[0])
-
-        abort = git_rebase_abort("alice/sample", "bob")
-        self.assertEqual(abort.status_code, 303)
-        self.assertIn("/problems/alice/sample/workspace", abort.headers.get("location", ""))
-
-        status_after = git_service.status(bob)
-        self.assertFalse(bool(status_after.get("rebase_active")))

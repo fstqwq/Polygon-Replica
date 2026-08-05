@@ -79,7 +79,7 @@ def workspace_delete(request: Request, problem: str, user: Annotated[str, Depend
     next_path = f'/problems/{problem}/workspace'
     if not _has_destructive_sudo_for_ctx(request, ctx):
         return _sudo_redirect_for_destructive(next_path)
-    msg = 'working copy deleted; it will be recreated on next open'
+    msg = 'current files deleted; they will be recreated on next open'
     try:
         result = config.workspace_service.delete_workspace(problem, user)
         audit(

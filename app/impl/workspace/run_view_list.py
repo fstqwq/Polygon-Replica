@@ -184,7 +184,7 @@ def _verification_row_to_list_item(row: dict[str, object]) -> dict[str, object] 
 def _verification_source_display(source_commit: str, workspace: Path, revision_cache: dict[str, int | None]) -> str:
     commit = str(source_commit or "")
     if not commit:
-        return "working copy"
+        return "current files"
     if commit not in revision_cache:
         revision_cache[commit] = git_commit_count(workspace, commit)
     revision = revision_cache[commit]

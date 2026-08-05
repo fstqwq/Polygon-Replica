@@ -155,8 +155,8 @@ def workspace_revision_info(
         upstream_higher = behind_count > 0
     missing = local_version is None or upstream_version is None
     local_text = f"v{local_version}" if local_version is not None else "none"
-    upstream_text = f"v{upstream_version}" if upstream_version is not None else "missing"
-    display = f"{local_text} / upstream {upstream_text}"
+    shared_text = f"v{upstream_version}" if upstream_version is not None else "missing"
+    display = f"{local_text} / latest shared {shared_text}"
     highlight = bool(upstream_higher or missing)
     return {
         "local": local_version,
@@ -168,5 +168,4 @@ def workspace_revision_info(
         "ahead_count": ahead_count,
         "behind_count": behind_count,
     }
-
 

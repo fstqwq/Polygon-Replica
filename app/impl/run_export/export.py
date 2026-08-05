@@ -48,7 +48,7 @@ def _export_type_display(export_type: str) -> str:
 
 def _source_revision_display(workspace: Path, source_commit: str, revision_cache: dict[str, int | None]) -> str:
     if not source_commit:
-        return "working copy"
+        return "current files"
     if source_commit not in revision_cache:
         revision_cache[source_commit] = git_commit_count(workspace, source_commit)
     revision = revision_cache[source_commit]

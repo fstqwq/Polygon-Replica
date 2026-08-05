@@ -15,6 +15,7 @@ from app.service.verification.service import VerificationService
 from app.service.verification.task_store import VerificationTaskStore
 from app.service.export.service import ExportService
 from app.service.repository.git import GitService
+from app.service.repository.merge import WorkspaceMergeService
 from app.service.platform.runtime_blob_store import RuntimeBlobStore
 from app.service.platform.runtime_cache_index import RuntimeCacheIndex
 from app.service.judgehost.api import Judgehost
@@ -48,6 +49,7 @@ class RuntimeConfig:
     agent_service: AgentService = field(init=False)
     contest_service: ContestService = field(init=False)
     git_service: GitService = field(init=False)
+    workspace_merge_service: WorkspaceMergeService = field(init=False)
     fs_manager: FsManager = field(init=False)
     runtime_blob_store: RuntimeBlobStore = field(init=False)
     runtime_cache_index: RuntimeCacheIndex = field(init=False)
@@ -130,6 +132,7 @@ class RuntimeConfig:
         self.agent_service = AgentService(self.db, self.workspace_service, constants=self.constants)
         self.contest_service = ContestService(self.db, self.settings)
         self.git_service = GitService()
+        self.workspace_merge_service = WorkspaceMergeService(self.settings, self.workspace_service)
         self.workspace_archive_service = WorkspaceArchiveService()
         self.workspace_file_service = WorkspaceFileService(self.git_service, self.workspace_service)
         self.workspace_mutation_service = WorkspaceMutationService(self.workspace_service)

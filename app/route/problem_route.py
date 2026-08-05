@@ -33,8 +33,17 @@ from app.impl.problem.generator import (
     generator_save_source,
     generators_page,
 )
-from app.impl.problem.git_op import git_commit, git_discard_path, git_pull, git_push, git_rebase_abort, git_rebase_continue, git_restore_revision
+from app.impl.problem.git_op import git_discard_path, revision_commit
 from app.impl.problem.history import history_page
+from app.impl.problem.merge_op import (
+    merge_apply,
+    merge_cancel,
+    merge_file,
+    merge_page,
+    merge_review,
+    merge_start,
+    merge_undo,
+)
 from app.impl.problem.interactor import (
     interactor_create_template,
     interactor_page,
@@ -377,8 +386,8 @@ router.add_api_route(
     response_class=HTMLResponse,
 )
 router.add_api_route(
-    "/problems/{problem:path}/git/commit",
-    git_commit,
+    "/problems/{problem:path}/revision/commit",
+    revision_commit,
     methods=["POST"],
 )
 router.add_api_route(
@@ -386,28 +395,23 @@ router.add_api_route(
     git_discard_path,
     methods=["POST"],
 )
+router.add_api_route("/problems/{problem:path}/merge/start", merge_start, methods=["POST"])
 router.add_api_route(
-    "/problems/{problem:path}/git/push",
-    git_push,
-    methods=["POST"],
+    "/problems/{problem:path}/merge/{preview_id}",
+    merge_page,
+    methods=["GET"],
+    response_class=HTMLResponse,
 )
 router.add_api_route(
-    "/problems/{problem:path}/git/pull",
-    git_pull,
-    methods=["POST"],
+    "/problems/{problem:path}/merge/{preview_id}/review", merge_review, methods=["POST"]
 )
 router.add_api_route(
-    "/problems/{problem:path}/git/restore-revision",
-    git_restore_revision,
-    methods=["POST"],
+    "/problems/{problem:path}/merge/{preview_id}/apply", merge_apply, methods=["POST"]
 )
 router.add_api_route(
-    "/problems/{problem:path}/git/rebase/continue",
-    git_rebase_continue,
-    methods=["POST"],
+    "/problems/{problem:path}/merge/{preview_id}/cancel", merge_cancel, methods=["POST"]
 )
 router.add_api_route(
-    "/problems/{problem:path}/git/rebase/abort",
-    git_rebase_abort,
-    methods=["POST"],
+    "/problems/{problem:path}/merge/{preview_id}/file/{entry_id}", merge_file, methods=["GET"]
 )
+router.add_api_route("/problems/{problem:path}/merge/undo", merge_undo, methods=["POST"])

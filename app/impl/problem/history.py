@@ -33,7 +33,9 @@ def history_page(request: Request, problem: str, user: Annotated[str, Depends(re
             else:
                 row['version'] = max(1, revision_top - idx)
         if selected_revision:
-            selected_row = next((row for row in commits if row.get('commit') == selected_revision), None)
+            selected_row = next(
+                (row for row in commits if f"v{row.get('version')}" == selected_revision), None
+            )
             if selected_row is None:
                 raise ValueError('selected revision is not in visible history')
             selected_commit = selected_row['commit']
@@ -75,4 +77,3 @@ def history_page(request: Request, problem: str, user: Annotated[str, Depends(re
             'diff_char_limit': int(config.git_service.DIFF_MAX_CHARS),
         },
     )
-

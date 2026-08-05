@@ -1006,7 +1006,7 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         self.assertTrue(token)
 
         req = _request_with_cookie(
-            f"/problems/alice/sample/{username}/git/pull",
+            f"/problems/alice/sample/{username}/merge/start",
             f"{AUTH_COOKIE_NAME}={token}",
             method="POST",
             extra_headers=[(b"origin", b"http://evil.example")],
@@ -1028,7 +1028,7 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         self.assertTrue(token)
 
         req = _request_with_cookie(
-            f"/problems/alice/sample/{username}/git/pull",
+            f"/problems/alice/sample/{username}/merge/start",
             f"{AUTH_COOKIE_NAME}={token}",
             method="POST",
             extra_headers=[(b"origin", b"http://testserver")],

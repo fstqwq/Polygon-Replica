@@ -105,6 +105,6 @@ def _extract_tar_safe(tar_path: Path, target: Path) -> None:
             out.parent.mkdir(parents=True, exist_ok=True)
             with src, out.open("wb") as dst:
                 shutil.copyfileobj(src, dst, length=1024 * 1024)
-
+            out.chmod(member.mode & 0o777)
 
 

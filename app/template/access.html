@@ -9,7 +9,7 @@
     <p><strong>Role:</strong> {{ ctx.access.role }}</p>
     <p><strong>Capabilities:</strong> {{ "read/write" if ctx.access.can_write else "read-only" }}{% if ctx.access.can_manage %}, manage access{% endif %}</p>
     {% if not ctx.access.can_write %}
-    <p class="flash">This workspace is read-only. Commit/pull/rebase actions are disabled.</p>
+    <p class="flash">These files are read-only. Commit and Merge actions are disabled.</p>
     {% endif %}
   </section>
 
@@ -42,7 +42,7 @@
             class="inline-form"
             method="post"
             action="/problems/{{ ctx.problem.slug }}/access/revoke"
-            data-confirm-message="Revoke direct problem access for {{ row.username }}? Existing working copies will remain stored."
+            data-confirm-message="Revoke direct problem access for {{ row.username }}? Existing files will remain stored."
           >
             <input type="hidden" name="target_user" value="{{ row.username }}" />
             <button class="btn" type="submit">Revoke</button>

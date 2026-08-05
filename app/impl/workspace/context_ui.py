@@ -85,6 +85,7 @@ def page_ctx(problem: str, user: str, include_branches: bool=True, refresh_statu
     ctx['branches_truncated'] = False
     ctx['branch_limit'] = 1
     workspace_path = Path(ctx['workspace']['path'])
+    ctx['workspace_has_merge_undo'] = config.workspace_merge_service.has_undo(workspace_path)
     if refresh_status:
         live_status: dict[str, object] | None = None
         try:
@@ -405,7 +406,6 @@ def _build_problem_nav_status(ctx: dict) -> dict[str, dict[str, object]]:
 def render_workspace_page(request: Request, problem: str, user: Annotated[str, Depends(require_session_user)], *, show_access_admin: bool=False):
     ctx = page_ctx(problem, user)
     workspace = Path(ctx['workspace']['path'])
-    status = config.git_service.status(workspace)
     message = ''
     has_destructive_sudo = has_sudo_session(
         request,
@@ -445,4 +445,4 @@ def render_workspace_page(request: Request, problem: str, user: Annotated[str, D
             elif line.startswith('-'):
                 kind = 'del'
             selected_diff_lines.append({'text': line, 'kind': kind})
-    return template_response(request, 'workspace.html', {'ctx': ctx, 'status': status, 'branches': ctx.get('branches', []), 'message': message, 'selected_path': selected_path, 'selected_diff': selected_diff, 'selected_diff_truncated': bool(selected_diff_truncated), 'selected_diff_lines': selected_diff_lines, 'change_rows': change_rows, 'has_destructive_sudo': bool(has_destructive_sudo)})
+    return template_response(request, 'workspace.html', {'ctx': ctx, 'branches': ctx.get('branches', []), 'message': message, 'selected_path': selected_path, 'selected_diff': selected_diff, 'selected_diff_truncated': bool(selected_diff_truncated), 'selected_diff_lines': selected_diff_lines, 'change_rows': change_rows, 'has_destructive_sudo': bool(has_destructive_sudo)})

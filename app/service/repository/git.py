@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import os
 import shutil
-import tempfile
 from pathlib import Path, PurePosixPath
 
 from app.service.platform.git_process import run_git
@@ -132,8 +131,6 @@ class GitService:
         diff_limit = max(1, int(self.DIFF_MAX_CHARS))
         diff_truncated = False
         diff_text = ""
-        rebase_active = self._rebase_active(workspace)
-        conflicted_files = self._conflicted_files(workspace) if rebase_active else []
         return {
             "status": status_text,
             "diff": diff_text,
@@ -141,8 +138,6 @@ class GitService:
             "status_line_limit": status_limit,
             "diff_truncated": diff_truncated,
             "diff_char_limit": diff_limit,
-            "rebase_active": rebase_active,
-            "conflicted_files": conflicted_files,
         }
 
     def _normalize_status_path(self, raw: str) -> str:
@@ -285,7 +280,7 @@ class GitService:
 
     def commit(self, workspace: Path, message: str, name: str, email: str) -> str:
         if self._rebase_active(workspace):
-            raise RuntimeError("rebase in progress; resolve conflicts and continue/abort rebase first")
+            raise RuntimeError("an older update is unfinished; use Merge to replace it safely")
         self._assert_on_main(workspace)
         run_git(["git", "-C", str(workspace), "config", "user.name", name])
         run_git(["git", "-C", str(workspace), "config", "user.email", email])
@@ -329,7 +324,7 @@ class GitService:
 
     def rollback_last_commit(self, workspace: Path, expected_head: str = "") -> str:
         if self._rebase_active(workspace):
-            raise RuntimeError("rebase in progress; resolve conflicts and continue/abort rebase first")
+            raise RuntimeError("an older update is unfinished; use Merge to replace it safely")
         self._assert_on_main(workspace)
         expected = str(expected_head or "").strip()
         current_head_proc = run_git(["git", "-C", str(workspace), "rev-parse", "HEAD"])
@@ -398,131 +393,6 @@ class GitService:
                 return entry
         return None
 
-    def _upstream_blob_exists(self, workspace: Path, upstream_ref: str, rel_path: str) -> bool:
-        proc = run_git(["git", "-C", str(workspace), "cat-file", "-e", f"{upstream_ref}:{rel_path}"])
-        return proc.returncode == 0
-
-    def _read_upstream_blob_bytes(self, workspace: Path, upstream_ref: str, rel_path: str) -> bytes:
-        tmp_path: Path | None = None
-        try:
-            fd, tmp_name = tempfile.mkstemp(prefix="git-upstream-blob-", suffix=".bin")
-            os.close(fd)
-            tmp_path = Path(tmp_name)
-            proc = run_git(
-                ["git", "-C", str(workspace), "show", f"{upstream_ref}:{rel_path}"],
-                stdout_path=tmp_path,
-            )
-            if proc.returncode != 0:
-                raise RuntimeError(proc.stderr or proc.stdout or "failed to read upstream blob")
-            return tmp_path.read_bytes()
-        finally:
-            if tmp_path is not None:
-                tmp_path.unlink(missing_ok=True)
-
-    def _reconcile_safe_untracked_pull_conflicts(self, workspace: Path, upstream_ref: str) -> list[str]:
-        skipped_paths: list[str] = []
-        for entry in self._status_entries(workspace):
-            if entry["code"] != "??":
-                continue
-            rel_path = entry["link_path"]
-            if not rel_path or (not self._upstream_blob_exists(workspace, upstream_ref, rel_path)):
-                continue
-            target = self._resolve_user_path(workspace, rel_path)
-            if (not target.exists()) or (not target.is_file()):
-                continue
-            local_bytes = target.read_bytes()
-            if local_bytes:
-                upstream_bytes = self._read_upstream_blob_bytes(workspace, upstream_ref, rel_path)
-                if local_bytes != upstream_bytes:
-                    continue
-            target.unlink()
-            skipped_paths.append(rel_path)
-        return skipped_paths
-
-    def _blocking_untracked_pull_conflicts(self, workspace: Path, upstream_ref: str) -> list[str]:
-        blocked: list[str] = []
-        for entry in self._status_entries(workspace):
-            if entry["code"] != "??":
-                continue
-            rel_path = entry["link_path"]
-            if not rel_path or (not self._upstream_blob_exists(workspace, upstream_ref, rel_path)):
-                continue
-            target = self._resolve_user_path(workspace, rel_path)
-            if target.exists():
-                blocked.append(rel_path)
-        return blocked
-
-    def pull(self, workspace: Path, branch: str) -> str:
-        if str(branch or "main") != "main":
-            raise RuntimeError("only main is supported")
-        self._assert_on_main(workspace)
-        fetch = run_git(["git", "-C", str(workspace), "fetch", "origin", "main"])
-        if fetch.returncode != 0:
-            raise RuntimeError(fetch.stderr or fetch.stdout)
-        skipped_paths = self._reconcile_safe_untracked_pull_conflicts(workspace, "origin/main")
-        proc = run_git(["git", "-C", str(workspace), "pull", "--rebase", "--autostash", "origin", "main"])
-        if proc.returncode != 0:
-            blocked_paths = self._blocking_untracked_pull_conflicts(workspace, "origin/main")
-            if blocked_paths:
-                detail = ", ".join(blocked_paths[:5])
-                if len(blocked_paths) > 5:
-                    detail = f"{detail}, ... (+{len(blocked_paths) - 5} more)"
-                if skipped_paths:
-                    raise RuntimeError(
-                        f"pull blocked by untracked files that differ from upstream after skipping {len(skipped_paths)} safe path(s): {detail}"
-                    )
-                raise RuntimeError(f"pull blocked by untracked files that differ from upstream: {detail}")
-            raise RuntimeError(proc.stderr or proc.stdout)
-        if skipped_paths:
-            detail = ", ".join(skipped_paths[:5])
-            if len(skipped_paths) > 5:
-                detail = f"{detail}, ... (+{len(skipped_paths) - 5} more)"
-            return f"pull ok; skipped {len(skipped_paths)} safe untracked path(s): {detail}"
-        return "pull ok"
-
-    def _discard_local_changes(self, workspace: Path) -> None:
-        reset = run_git(["git", "-C", str(workspace), "reset", "--hard", "HEAD"])
-        if reset.returncode != 0:
-            raise RuntimeError(reset.stderr or reset.stdout or "failed to discard local changes")
-        clean = run_git(["git", "-C", str(workspace), "clean", "-fd"])
-        if clean.returncode != 0:
-            raise RuntimeError(clean.stderr or clean.stdout or "failed to clean untracked files")
-
-    def restore_revision_to_working_copy(self, workspace: Path, revision: str) -> str:
-        target = str(revision or "").strip()
-        if not target:
-            raise RuntimeError("revision is required")
-        if self._rebase_active(workspace):
-            raise RuntimeError("rebase in progress; resolve conflicts and continue/abort rebase first")
-        self._assert_on_main(workspace)
-        self._discard_local_changes(workspace)
-        self.pull(workspace, "main")
-
-        resolved = run_git(["git", "-C", str(workspace), "rev-parse", "--verify", f"{target}^{{commit}}"])
-        if resolved.returncode != 0:
-            raise RuntimeError(resolved.stderr or resolved.stdout or "invalid revision")
-        commit = resolved.stdout.strip()
-        if not commit:
-            raise RuntimeError("invalid revision")
-
-        restore = run_git(["git", "-C", str(workspace), "restore", "--source", commit, "--staged", "--worktree", ":/"])
-        if restore.returncode != 0:
-            raise RuntimeError(restore.stderr or restore.stdout or "failed to restore revision")
-
-        run_git(
-            [
-                "git",
-                "-C",
-                str(workspace),
-                "reset",
-                "--quiet",
-                "--",
-                ":(glob).*",
-                ":(glob)**/.*",
-            ]
-        )
-        return commit
-
     def _current_branch(self, workspace: Path) -> str:
         proc = run_git(["git", "-C", str(workspace), "rev-parse", "--abbrev-ref", "HEAD"])
         branch = proc.stdout.strip()
@@ -546,28 +416,6 @@ class GitService:
     def _rebase_active(self, workspace: Path) -> bool:
         git_dir = workspace / ".git"
         return (git_dir / "rebase-merge").exists() or (git_dir / "rebase-apply").exists()
-
-    def _conflicted_files(self, workspace: Path) -> list[str]:
-        proc = run_git(["git", "-C", str(workspace), "diff", "--name-only", "--diff-filter=U"])
-        if proc.returncode != 0:
-            return []
-        return [line.strip() for line in proc.stdout.splitlines() if line.strip()]
-
-    def rebase_continue(self, workspace: Path) -> str:
-        if not self._rebase_active(workspace):
-            raise RuntimeError("no rebase in progress")
-        proc = run_git(["git", "-C", str(workspace), "rebase", "--continue"])
-        if proc.returncode != 0:
-            raise RuntimeError(proc.stderr or proc.stdout)
-        return proc.stdout + proc.stderr
-
-    def rebase_abort(self, workspace: Path) -> str:
-        if not self._rebase_active(workspace):
-            raise RuntimeError("no rebase in progress")
-        proc = run_git(["git", "-C", str(workspace), "rebase", "--abort"])
-        if proc.returncode != 0:
-            raise RuntimeError(proc.stderr or proc.stdout)
-        return proc.stdout + proc.stderr
 
     def list_files_capped(self, workspace: Path, rel: str = ".", limit: int | None = None) -> tuple[list[str], bool]:
         workspace_root = workspace.resolve()
@@ -664,7 +512,7 @@ class GitService:
 
     def discard_path(self, workspace: Path, rel_path: str) -> None:
         if self._rebase_active(workspace):
-            raise RuntimeError("rebase in progress; resolve conflicts and continue/abort rebase first")
+            raise RuntimeError("an older update is unfinished; use Merge to replace it safely")
         normalized = self._normalize_status_path(rel_path)
         if not normalized:
             raise ValueError("path is required")

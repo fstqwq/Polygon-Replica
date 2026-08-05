@@ -22,7 +22,8 @@
   ],
   "workspace": [
     "test_statement_default_restore.py",
-    "test_testlib_source.py"
+    "test_testlib_source.py",
+    "test_workspace_merge.py"
   ],
   "executor": [
     "test_import_policy.py",

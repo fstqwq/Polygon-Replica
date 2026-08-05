@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import errno
 import fcntl
+import json
 import os
 import shutil
 import sqlite3
@@ -27,6 +28,96 @@ USERNAME_RULE_MESSAGE: str = "invalid username"
 APP_PROBLEM_IDENT_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*/[a-z0-9]+(?:-[a-z0-9]+)*$")
 APP_USER_IDENT_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 APP_PROBLEM_ID_MAX_LEN = 64
+
+
+def _workspace_transaction_path(workspace: Path) -> Path:
+    return workspace.parent / f".{workspace.name}.merge-transaction.json"
+
+
+def _fsync_directory(path: Path) -> None:
+    fd = os.open(str(path), os.O_RDONLY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def _write_transaction(path: Path, payload: dict[str, str]) -> None:
+    temp = path.with_name(f"{path.name}.{uuid.uuid4().hex}.tmp")
+    with temp.open("w", encoding="utf-8") as fh:
+        json.dump(payload, fh, sort_keys=True)
+        fh.flush()
+        os.fsync(fh.fileno())
+    os.replace(temp, path)
+    _fsync_directory(path.parent)
+
+
+def _transaction_member(workspace: Path, name: str, prefix: str) -> Path:
+    if not name or Path(name).name != name or not name.startswith(prefix):
+        raise RuntimeError("invalid workspace transaction")
+    return workspace.parent / name
+
+
+def _remove_transaction_tree(path: Path) -> None:
+    if path.is_symlink():
+        path.unlink(missing_ok=True)
+    elif path.exists():
+        shutil.rmtree(path)
+
+
+def recover_workspace_swap(workspace: Path) -> None:
+    journal = _workspace_transaction_path(workspace)
+    if not journal.exists():
+        return
+    try:
+        payload = json.loads(journal.read_text(encoding="utf-8"))
+        phase = str(payload["phase"])
+        candidate = _transaction_member(workspace, str(payload["candidate"]), f".{workspace.name}.merge-candidate-")
+        backup = _transaction_member(workspace, str(payload["backup"]), f".{workspace.name}.merge-backup-")
+    except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise RuntimeError("workspace merge recovery metadata is invalid") from exc
+
+    if phase == "new-active":
+        _remove_transaction_tree(backup)
+        _remove_transaction_tree(candidate)
+    else:
+        if backup.exists():
+            _remove_transaction_tree(workspace)
+            os.replace(backup, workspace)
+            _fsync_directory(workspace.parent)
+        elif not workspace.exists():
+            raise RuntimeError("workspace merge recovery cannot find the previous workspace")
+        _remove_transaction_tree(candidate)
+    journal.unlink(missing_ok=True)
+    _fsync_directory(workspace.parent)
+
+
+def atomic_swap_workspace(workspace: Path, candidate: Path) -> None:
+    if candidate.parent != workspace.parent or candidate.is_symlink() or not candidate.is_dir():
+        raise ValueError("workspace merge candidate is invalid")
+    expected_prefix = f".{workspace.name}.merge-candidate-"
+    if not candidate.name.startswith(expected_prefix):
+        raise ValueError("workspace merge candidate is invalid")
+    tx_id = uuid.uuid4().hex
+    backup = workspace.parent / f".{workspace.name}.merge-backup-{tx_id}"
+    journal = _workspace_transaction_path(workspace)
+    payload = {
+        "phase": "prepared",
+        "candidate": candidate.name,
+        "backup": backup.name,
+    }
+    _write_transaction(journal, payload)
+    os.replace(workspace, backup)
+    _fsync_directory(workspace.parent)
+    payload["phase"] = "old-moved"
+    _write_transaction(journal, payload)
+    os.replace(candidate, workspace)
+    _fsync_directory(workspace.parent)
+    payload["phase"] = "new-active"
+    _write_transaction(journal, payload)
+    _remove_transaction_tree(backup)
+    journal.unlink(missing_ok=True)
+    _fsync_directory(workspace.parent)
 
 
 def apply_runtime_values(values: RuntimeValues) -> None:
@@ -394,7 +485,7 @@ class WorkspaceService:
             yield
 
     @contextmanager
-    def _exclusive_lock_file(self, lock_path: Path, label: str):
+    def _exclusive_lock_file(self, lock_path: Path, label: str, *, remove_after: bool = True):
         lock_path.parent.mkdir(parents=True, exist_ok=True)
         if not hasattr(os, "O_NOFOLLOW") and lock_path.is_symlink():
             raise ValueError(f"{label} lock path is invalid")
@@ -413,10 +504,16 @@ class WorkspaceService:
                 yield
             finally:
                 fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
-        try:
-            lock_path.unlink(missing_ok=True)
-        except OSError:
-            pass
+        if remove_after:
+            try:
+                lock_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+    @staticmethod
+    def _workspace_lock_path(workspace: Path) -> Path:
+        lock_key = uuid.uuid5(uuid.NAMESPACE_URL, str(workspace.resolve(strict=False))).hex
+        return workspace.parent / f".{lock_key}.workspace.lock"
 
     def ensure_workspace(self, problem: str, username: str, refresh_status: bool = True) -> Path:
         u = self.ensure_user(username)
@@ -424,6 +521,9 @@ class WorkspaceService:
 
         username_key = str(u["username"])
         workspace = self.settings.workspace_root / username_key / problem
+        lock_path = self._workspace_lock_path(workspace)
+        with self._exclusive_lock_file(lock_path, "workspace", remove_after=False):
+            recover_workspace_swap(workspace)
         bare = self.settings.bare_root / p["repo_name"]
         workspace_id = self._store.workspace_id(int(p["id"]), int(u["id"]))
 
@@ -891,12 +991,14 @@ class WorkspaceService:
 
     @contextmanager
     def workspace_lock(self, workspace: Path):
-        lock_path = workspace / ".polygonlike.lock"
-        with self._exclusive_lock_file(lock_path, "workspace"):
+        lock_path = self._workspace_lock_path(workspace)
+        with self._exclusive_lock_file(lock_path, "workspace", remove_after=False):
+            recover_workspace_swap(workspace)
             try:
                 yield
             except Exception:
                 try:
+                    recover_workspace_swap(workspace)
                     self.refresh_workspace_status_by_path(workspace)
                 except Exception:
                     pass

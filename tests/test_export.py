@@ -1640,7 +1640,7 @@ class TestExport(E2ETestBase):
         self.assertIn("Native (committed revision v", html)
         self.assertIn("Download Snapshot", html)
         self.assertIn(f'/problems/{self.problem}/export/snapshot', html)
-        self.assertIn("Import Into Working Copy", html)
+        self.assertIn("Import Into My Files", html)
         self.assertIn("Activity", html)
         self.assertNotIn("Generation Tasks", html)
         self.assertNotIn("Generated Exports", html)
@@ -1729,7 +1729,7 @@ class TestExport(E2ETestBase):
         self.assertIn(f"/problems/{self.problem}/workspace", str(resp.headers.get("location", "")))
         messages = _flash_messages_from_response(resp)
         self.assertTrue(messages)
-        self.assertIn(f"native package imported into working copy {self.problem}", messages[0])
+        self.assertIn(f"native package imported into current files for {self.problem}", messages[0])
         self.assertEqual((ws / overwritten_rel).read_text(encoding="utf-8"), "int main(){return 7;}\n")
         self.assertEqual((ws / kept_rel).read_text(encoding="utf-8"), "keep-local\n")
         self.assertEqual((ws / "tests" / "manual" / "001.in").read_text(encoding="utf-8"), "5\n")
@@ -1758,7 +1758,7 @@ class TestExport(E2ETestBase):
         self.assertIn(f"/problems/{self.problem}/workspace", str(resp.headers.get("location", "")))
         messages = _flash_messages_from_response(resp)
         self.assertTrue(messages)
-        self.assertIn(f"native package imported into working copy {self.problem}", messages[0])
+        self.assertIn(f"native package imported into current files for {self.problem}", messages[0])
 
     def test_icpc_export_uses_committed_snapshot_without_verification(self) -> None:
         ws = Path(self._workspace_path())

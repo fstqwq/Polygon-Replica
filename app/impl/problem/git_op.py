@@ -1,170 +1,92 @@
 from __future__ import annotations
-from app.impl.auth.session import require_session_user
 
 from pathlib import Path
 from typing import Annotated
 from urllib.parse import urlencode
 
-from fastapi import Form, Depends
+from fastapi import Depends, Form
 
+from app.impl.auth.session import require_session_user
 from app.impl.auth.shared import redirect_response
 from app.impl.runtime.config import config
-from app.impl.workspace.context_operation import audit
 from app.impl.workspace.access import require_write_access
+from app.impl.workspace.context_operation import audit
 from app.impl.workspace.context_ui import page_ctx
 
 
 def _workspace_redirect_href(problem: str, selected_path: str = "") -> str:
     base = f"/problems/{problem}/workspace"
-    safe_path = str(selected_path or "").strip()
-    if not safe_path:
+    if not selected_path:
         return base
-    return f"{base}?{urlencode({'path': safe_path})}"
+    return f"{base}?{urlencode({'path': selected_path})}"
 
 
-def git_commit(problem: str, user: Annotated[str, Depends(require_session_user)], message: str=Form(...)):
+def revision_commit(
+    problem: str,
+    user: Annotated[str, Depends(require_session_user)],
+    message: Annotated[str, Form()],
+):
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
     require_write_access(ctx)
-    workspace = Path(ctx['workspace']['path'])
-    commit_created = False
-    commit_head = ''
+    workspace = Path(ctx["workspace"]["path"])
+    commit_head = ""
     try:
         with config.workspace_service.workspace_lock(workspace):
+            if config.workspace_merge_service.shared_revision_advanced(workspace):
+                raise RuntimeError("a newer shared revision is available; merge it before committing")
+            commit_head = config.git_service.commit(
+                workspace, message, user, f"{user}@polygon-replica.local"
+            )
             try:
-                commit_head = config.git_service.commit(workspace, message, user, f'{user}@polygonlike.local')
-                commit_created = True
-            except Exception as commit_exc:
-                commit_err = str(commit_exc)
-                commit_err_lower = commit_err.lower()
-                if 'nothing to commit' not in commit_err_lower and 'no changes added to commit' not in commit_err_lower:
-                    raise
-            try:
-                config.git_service.push(workspace, 'main')
+                config.git_service.push(workspace, "main")
             except Exception as push_exc:
-                if commit_created:
-                    try:
-                        config.git_service.rollback_last_commit(workspace, expected_head=commit_head)
-                    except Exception as rollback_exc:
-                        raise RuntimeError(f'{push_exc}; rollback failed: {rollback_exc}') from rollback_exc
-                raise push_exc
-        if commit_created:
-            audit(ctx['user']['id'], ctx['problem']['id'], 'git.commit', {'message': message, 'head': commit_head})
-        audit(ctx['user']['id'], ctx['problem']['id'], 'git.push', {'branch': 'main', 'via': 'commit'})
-        msg = 'commit and publish ok' if commit_created else 'publish ok'
+                try:
+                    config.git_service.rollback_last_commit(workspace, expected_head=commit_head)
+                except Exception as rollback_exc:
+                    raise RuntimeError(f"{push_exc}; commit rollback failed: {rollback_exc}") from rollback_exc
+                raise
+            config.workspace_merge_service.clear_undo(workspace)
+        audit(
+            int(ctx["user"]["id"]),
+            int(ctx["problem"]["id"]),
+            "revision.commit",
+            {"message": message, "head": commit_head},
+        )
+        msg = "revision committed and shared"
     except Exception as exc:
         err = str(exc)
-        err_lower = err.lower()
-        if 'non-fast-forward' in err_lower or 'fetch first' in err_lower or 'rejected' in err_lower:
-            msg = 'publish failed: upstream advanced; rebase required, commit rolled back'
+        if any(token in err.lower() for token in ("non-fast-forward", "fetch first", "rejected")):
+            msg = "a newer shared revision is available; merge it before committing"
         else:
             msg = err
-    return redirect_response(f'/problems/{problem}/workspace', status_code=303, message=msg)
-
-def git_push(problem: str, user: Annotated[str, Depends(require_session_user)]):
-    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
-    require_write_access(ctx)
-    workspace = Path(ctx['workspace']['path'])
-    try:
-        with config.workspace_service.workspace_lock(workspace):
-            config.git_service.push(workspace, 'main')
-        audit(ctx['user']['id'], ctx['problem']['id'], 'git.push', {'branch': 'main'})
-        msg = 'push ok'
-    except Exception as exc:
-        msg = str(exc)
-    return redirect_response(f'/problems/{problem}/workspace', status_code=303, message=msg)
-
-def git_pull(problem: str, user: Annotated[str, Depends(require_session_user)]):
-    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
-    require_write_access(ctx)
-    workspace = Path(ctx['workspace']['path'])
-    try:
-        with config.workspace_service.workspace_lock(workspace):
-            msg = config.git_service.pull(workspace, 'main')
-        audit(ctx['user']['id'], ctx['problem']['id'], 'git.pull', {'branch': 'main'})
-    except Exception as exc:
-        msg = str(exc)
-    return redirect_response(f'/problems/{problem}/workspace', status_code=303, message=msg)
+    return redirect_response(f"/problems/{problem}/workspace", message=msg)
 
 
 def git_discard_path(
     problem: str,
     user: Annotated[str, Depends(require_session_user)],
-    path: Annotated[str, Form()] = '',
+    path: Annotated[str, Form()] = "",
 ):
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
     require_write_access(ctx)
-    workspace = Path(ctx['workspace']['path'])
-    selected_path = str(path or "").strip()
+    workspace = Path(ctx["workspace"]["path"])
+    selected_path = path.strip()
     next_path = selected_path
-    msg = 'discarded local changes'
+    msg = "discarded file changes"
     try:
         with config.workspace_service.workspace_lock(workspace):
             config.git_service.discard_path(workspace, selected_path)
             changes = config.git_service.status_change_summary(workspace)
-        rows = changes.get('rows') if isinstance(changes, dict) else []
-        row_list = rows if isinstance(rows, list) else []
-        link_paths = [
-            str(row.get('link_path') or '')
-            for row in row_list
-            if isinstance(row, dict) and str(row.get('link_path') or '')
-        ]
-        if selected_path in link_paths:
-            next_path = selected_path
-        elif link_paths:
-            next_path = link_paths[0]
-        else:
-            next_path = ''
-        audit(ctx['user']['id'], ctx['problem']['id'], 'git.discard_path', {'path': selected_path})
+        rows = changes["rows"]
+        link_paths = [str(row["link_path"]) for row in rows if row["link_path"]]
+        if selected_path not in link_paths:
+            next_path = link_paths[0] if link_paths else ""
+        audit(
+            int(ctx["user"]["id"]),
+            int(ctx["problem"]["id"]),
+            "workspace.discard_path",
+            {"path": selected_path},
+        )
     except Exception as exc:
         msg = str(exc)
-    return redirect_response(_workspace_redirect_href(problem, next_path), status_code=303, message=msg)
-
-def git_restore_revision(
-    problem: str,
-    user: Annotated[str, Depends(require_session_user)],
-    revision: str = Form(...),
-    page: str = Form('history'),
-):
-    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
-    require_write_access(ctx)
-    workspace = Path(ctx['workspace']['path'])
-    target_page = 'workspace' if page.strip().lower() == 'workspace' else 'history'
-    next_path = (
-        f"/problems/{problem}/workspace"
-        if target_page == 'workspace'
-        else f"/problems/{problem}/history?{urlencode({'revision': revision})}"
-    )
-    try:
-        with config.workspace_service.workspace_lock(workspace):
-            resolved = config.git_service.restore_revision_to_working_copy(workspace, revision)
-        audit(ctx['user']['id'], ctx['problem']['id'], 'git.restore_revision', {'revision': revision, 'resolved_commit': resolved})
-        msg = f'restored files from {resolved[:12]} on top of latest main; commit when ready'
-    except Exception as exc:
-        msg = str(exc)
-    return redirect_response(next_path, status_code=303, message=msg)
-
-def git_rebase_continue(problem: str, user: Annotated[str, Depends(require_session_user)]):
-    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
-    require_write_access(ctx)
-    workspace = Path(ctx['workspace']['path'])
-    try:
-        with config.workspace_service.workspace_lock(workspace):
-            config.git_service.rebase_continue(workspace)
-        audit(ctx['user']['id'], ctx['problem']['id'], 'git.rebase_continue', {})
-        msg = 'rebase continue ok'
-    except Exception as exc:
-        msg = str(exc)
-    return redirect_response(f'/problems/{problem}/workspace', status_code=303, message=msg)
-
-def git_rebase_abort(problem: str, user: Annotated[str, Depends(require_session_user)]):
-    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
-    require_write_access(ctx)
-    workspace = Path(ctx['workspace']['path'])
-    try:
-        with config.workspace_service.workspace_lock(workspace):
-            config.git_service.rebase_abort(workspace)
-        audit(ctx['user']['id'], ctx['problem']['id'], 'git.rebase_abort', {})
-        msg = 'rebase aborted'
-    except Exception as exc:
-        msg = str(exc)
-    return redirect_response(f'/problems/{problem}/workspace', status_code=303, message=msg)
+    return redirect_response(_workspace_redirect_href(problem, next_path), message=msg)

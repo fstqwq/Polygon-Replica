@@ -448,7 +448,7 @@ def export_import(problem: str, user: Annotated[str, Depends(require_session_use
         target_problem = cast(str, imported["target_problem"])
         total_tests = int(imported["total_tests"])
         package_format = cast(str, imported["package_format"])
-        msg = f"{package_format} package imported into working copy {target_problem} ({_count_label(total_tests, 'test')})"
+        msg = f"{package_format} package imported into current files for {target_problem} ({_count_label(total_tests, 'test')})"
         warnings = import_package_warnings(imported)
         if warnings:
             msg = f"{msg}; warning: {'; '.join(warnings)}"
