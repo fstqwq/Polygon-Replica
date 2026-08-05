@@ -24,7 +24,7 @@ _TOP_LEVEL_FIELDS = {
     "generator_enabled",
     "main_correct_enabled",
     "sanity_probe_count",
-    "foreground_program_count",
+    "foreground_tasks",
     "cache_hit_rate",
     "compile_time_sec_by_kind",
     "case_time_distribution_by_kind",
@@ -57,6 +57,13 @@ class HostDisconnect:
 
 
 @dataclass(frozen=True)
+class ForegroundTask:
+    arrival_sec: float
+    kind: str
+    compile_time_sec: float
+
+
+@dataclass(frozen=True)
 class Workload:
     name: str
     seed: int
@@ -72,7 +79,7 @@ class Workload:
     generator_enabled: bool
     main_correct_enabled: bool
     sanity_probe_count: int
-    foreground_program_count: int
+    foreground_tasks: tuple[ForegroundTask, ...]
     cache_hit_rate: float
     compile_time_sec_by_kind: Mapping[str, float]
     case_time_distribution_by_kind: Mapping[str, DurationRange]
@@ -165,6 +172,10 @@ def parse_workload(payload: Mapping[str, object]) -> Workload:
             _list(payload["host_disconnect_events"], "host_disconnect_events")
         )
     )
+    foreground_tasks = tuple(
+        _parse_foreground_task(item, index=index)
+        for index, item in enumerate(_list(payload["foreground_tasks"], "foreground_tasks"))
+    )
     assertion_payload = _mapping(payload["assertions"], "assertions")
     unknown_assertions = set(assertion_payload).difference(_ASSERTION_FIELDS)
     if unknown_assertions:
@@ -203,9 +214,7 @@ def parse_workload(payload: Mapping[str, object]) -> Workload:
         generator_enabled=_boolean(payload["generator_enabled"], "generator_enabled"),
         main_correct_enabled=_boolean(payload["main_correct_enabled"], "main_correct_enabled"),
         sanity_probe_count=_nonnegative_int(payload["sanity_probe_count"], "sanity_probe_count"),
-        foreground_program_count=_nonnegative_int(
-            payload["foreground_program_count"], "foreground_program_count"
-        ),
+        foreground_tasks=foreground_tasks,
         cache_hit_rate=cache_hit_rate,
         compile_time_sec_by_kind=compile_times,
         case_time_distribution_by_kind=durations,
@@ -227,6 +236,24 @@ def _parse_disconnect(raw: object, *, host_count: int, index: int) -> HostDiscon
         host_index=host_index,
         at_sec=_nonnegative_float(payload["at_sec"], f"disconnect[{index}].at_sec"),
         duration_sec=_positive_float(payload["duration_sec"], f"disconnect[{index}].duration_sec"),
+    )
+
+
+def _parse_foreground_task(raw: object, *, index: int) -> ForegroundTask:
+    payload = _mapping(raw, f"foreground_tasks[{index}]")
+    if set(payload) != {"arrival_sec", "kind", "compile_time_sec"}:
+        raise ValueError(f"invalid foreground task fields at index {index}")
+    kind = _nonempty_text(payload["kind"], f"foreground_tasks[{index}].kind")
+    if kind != "compile-only":
+        raise ValueError(f"unsupported foreground task kind at index {index}: {kind}")
+    return ForegroundTask(
+        arrival_sec=_nonnegative_float(
+            payload["arrival_sec"], f"foreground_tasks[{index}].arrival_sec"
+        ),
+        kind=kind,
+        compile_time_sec=_nonnegative_float(
+            payload["compile_time_sec"], f"foreground_tasks[{index}].compile_time_sec"
+        ),
     )
 
 

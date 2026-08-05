@@ -41,7 +41,7 @@ class TaskExecutionResult:
 @dataclass(frozen=True)
 class VerificationRuntimeCallbacks:
     publish_task: Callable[[VerificationTaskRow], TaskPublishResult]
-    probe_task_case_cache: Callable[[list[str], int], set[str]]
+    probe_task_case_cache: Callable[[list[str]], set[str]]
     resolve_case_result: Callable[[str, str], dict[str, object] | None]
     cancel_execution: Callable[[str], None]
     close_logical_runs: Callable[[list[str]], None]
@@ -58,8 +58,7 @@ class _VerificationEvent:
 
 _COORDINATOR_LOCK = threading.Lock()
 _COORDINATORS_BY_VERIFICATION_ID: dict[str, "VerificationRuntimeCoordinator"] = {}
-_CACHE_PROBE_SLICE_SIZE = 32
-_RESULT_BATCH_MAX_SIZE = 256
+COORDINATOR_BATCH_SIZE = 256
 _RESULT_BATCH_MAX_WAIT_SEC = 0.005
 _TERMINAL_TASK_STATUSES = frozenset(
     {
@@ -320,7 +319,7 @@ class VerificationRuntimeCoordinator:
                 continue
             events = [event]
             deadline = time.monotonic() + _RESULT_BATCH_MAX_WAIT_SEC
-            while len(events) < _RESULT_BATCH_MAX_SIZE:
+            while len(events) < COORDINATOR_BATCH_SIZE:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     break
@@ -456,8 +455,8 @@ class VerificationRuntimeCoordinator:
         changed = False
         published_count = 0
         while (
-            published_count < _CACHE_PROBE_SLICE_SIZE
-            and len(self._cache_probe_task_ids) < _CACHE_PROBE_SLICE_SIZE
+            published_count < COORDINATOR_BATCH_SIZE
+            and len(self._cache_probe_task_ids) < COORDINATOR_BATCH_SIZE
         ):
             row = self._dag.pop_ready()
             if row is None:
@@ -494,8 +493,8 @@ class VerificationRuntimeCoordinator:
             if not self._events.empty():
                 return changed
         if self._cache_probe_task_ids:
-            selected = list(self._cache_probe_task_ids)[:_CACHE_PROBE_SLICE_SIZE]
-            pending = self._callbacks.probe_task_case_cache(selected, _CACHE_PROBE_SLICE_SIZE)
+            selected = list(self._cache_probe_task_ids)[:COORDINATOR_BATCH_SIZE]
+            pending = self._callbacks.probe_task_case_cache(selected)
             for judgehost_task_id in selected:
                 if judgehost_task_id not in pending:
                     self._cache_probe_task_ids.pop(judgehost_task_id, None)
@@ -505,7 +504,7 @@ class VerificationRuntimeCoordinator:
                 # Yield to queued result events between slices instead of publishing an
                 # unbounded ready graph in one coordinator turn.
                 self.enqueue_bootstrap()
-        if published_count == _CACHE_PROBE_SLICE_SIZE and self._events.empty():
+        if published_count == COORDINATOR_BATCH_SIZE and self._events.empty():
             self.enqueue_bootstrap()
         return changed
 

@@ -979,7 +979,6 @@ class ResultProcessor:
                 compile_success=compile_success,
                 compile_output_b64=compile_output,
                 compile_metadata_b64=compile_meta,
-                lease_owner=safe_host,
                 updated_at=updated_at,
             )
             if not updated:

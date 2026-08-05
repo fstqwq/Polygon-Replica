@@ -22,7 +22,10 @@ from app.service.judgehost.runtime import (
 )
 from app.service.platform.runtime_blob_store import PayloadFile
 from app.service.run.runtime import RUN_TEST_NAME_RE
-from app.service.verification.task_scheduler import notify_verification_case_leased
+from app.service.verification.task_scheduler import (
+    COORDINATOR_BATCH_SIZE,
+    notify_verification_case_leased,
+)
 
 from app.service.judgehost.core import JudgehostCore
 from app.service.judgehost.dispatch_cache import (
@@ -107,7 +110,6 @@ class DispatchHandler(DispatchCacheMixin):
     CASE_CACHE_KIND = DomjudgeToolkit.CASE_CACHE_KIND
     _TASK_KIND_COMPILE_ONLY = "compile-only"
     _TASK_KIND_MAIN_CORRECT = "main-correct"
-    _CACHE_PROBE_CLAIM_SIZE = 32
     _CACHE_PROBE_BUDGET_SEC = 0.25
     _COORDINATOR_CACHE_OWNER = "verification-coordinator-cache"
 
@@ -609,17 +611,26 @@ class DispatchHandler(DispatchCacheMixin):
         cap = self._s.fetch_batch_size if max_batchsize is None else max(1, min(256, int(max_batchsize)))
         deadline = time.monotonic() + self._CACHE_PROBE_BUDGET_SEC
         first_transition = True
+        long_poll_used = False
         while first_transition or time.monotonic() < deadline:
             first_transition = False
             batch_row = self._s.batch_scheduler.select_ready_batch(safe_host)
             if batch_row is None:
+                if not long_poll_used:
+                    long_poll_used = True
+                    if self._s.batch_scheduler.wait_for_ready_batch(
+                        self._s.fetch_long_poll_sec
+                    ):
+                        deadline = time.monotonic() + self._CACHE_PROBE_BUDGET_SEC
+                        first_transition = True
+                        continue
                 self._queue._record_host_event_conn(hostname=safe_host, action="fetch")
                 return []
             batch_id = int(batch_row["batch_id"])
             processed = self._domjudge_apply_cache_shortcuts_for_batch(
                 batch_id,
                 hostname=safe_host,
-                limit=self._CACHE_PROBE_CLAIM_SIZE,
+                limit=COORDINATOR_BATCH_SIZE,
                 deadline=deadline,
             )
             refreshed = self._s.batch_scheduler.fetch_batch(batch_id)
@@ -639,17 +650,16 @@ class DispatchHandler(DispatchCacheMixin):
                 break
         return []
 
-    def probe_task_case_cache(self, task_ids: list[str], *, limit: int = 32) -> set[str]:
-        remaining = max(0, int(limit))
+    def probe_task_case_cache(self, task_ids: list[str]) -> set[str]:
+        remaining = COORDINATOR_BATCH_SIZE
         ordered_task_ids = list(dict.fromkeys(task_ids))
-        batch_ids: list[int] = []
+        batch_ids: dict[int, None] = {}
         for task_id in ordered_task_ids:
             batch = self._s.batch_scheduler.batch_for_task(task_id)
             if batch is None:
                 continue
             batch_id = int(batch["batch_id"])
-            if batch_id not in batch_ids:
-                batch_ids.append(batch_id)
+            batch_ids.setdefault(batch_id, None)
         for batch_id in batch_ids:
             if remaining <= 0:
                 break

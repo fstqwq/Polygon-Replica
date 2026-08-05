@@ -115,7 +115,6 @@ class ExecutionBatchRow(TypedDict):
     bypass_case_result_cache: int
     compile_success: int | None
     compile_state: str
-    compile_owner: str
     materialization_state: str
     service_class: str
     compile_output_b64: str
@@ -194,10 +193,9 @@ class ExecutionBatchRecord:
     bypass_case_result_cache: int
     compile_success: int | None
     compile_state: str
-    compile_owner: str | None
     materialization_state: str
     service_class: str
-    has_been_dispatched: bool
+    dispatch_count: int
     compile_output_b64: str | None
     compile_metadata_b64: str | None
     debug_text: str

@@ -379,6 +379,14 @@ class E2ETestBase(WorkerTestBase):
 
     def setUp(self) -> None:
         super().setUp()
+        old_long_poll = config.judgehost_task_service.state.fetch_long_poll_sec
+        config.judgehost_task_service.state.fetch_long_poll_sec = 0.0
+        self.addCleanup(
+            setattr,
+            config.judgehost_task_service.state,
+            "fetch_long_poll_sec",
+            old_long_poll,
+        )
         if self.seed_primary_workspace:
             self._seed_workspace(self.problem, self.user)
         if self.seed_default_workspace:

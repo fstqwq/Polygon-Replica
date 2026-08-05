@@ -36,6 +36,7 @@ class JudgehostState:
     api_token: str = ""
     api_username: str = "judgehost"
     fetch_batch_size: int = 2
+    fetch_long_poll_sec: float = 5.0
     wait_timeout_sec: int = 900
     wait_poll_sec: float = 0.5
     online_window_sec: int = 120

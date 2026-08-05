@@ -13,7 +13,7 @@
   "generator_enabled": false,
   "main_correct_enabled": false,
   "sanity_probe_count": 0,
-  "foreground_program_count": 0,
+  "foreground_tasks": [],
   "cache_hit_rate": 0.0,
   "compile_time_sec_by_kind": {"foreground": 1.0, "generate-input": 1.0, "main-correct": 1.0, "solution-run": 2.0, "sanity": 0.5},
   "case_time_distribution_by_kind": {

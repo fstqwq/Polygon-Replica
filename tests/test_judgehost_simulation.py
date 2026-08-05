@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import io
 import json
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from dataclasses import replace
 from pathlib import Path
 
@@ -10,6 +12,7 @@ from tests.scripts import simulate_judgehost
 from tests.simulation.judgehost import JudgehostSimulation
 from tests.simulation.workload import (
     DurationRange,
+    ForegroundTask,
     HostDisconnect,
     builtin_names,
     load_builtin,
@@ -28,6 +31,7 @@ def _small_workload(
     tests: int = 1,
     hosts: int = 1,
     disconnects: tuple[HostDisconnect, ...] = (),
+    foreground_tasks: tuple[ForegroundTask, ...] = (),
 ):
     base = load_builtin("flat-cold")
     return replace(
@@ -45,7 +49,7 @@ def _small_workload(
         generator_enabled=False,
         main_correct_enabled=False,
         sanity_probe_count=0,
-        foreground_program_count=0,
+        foreground_tasks=foreground_tasks,
         cache_hit_rate=cache_hit_rate,
         compile_time_sec_by_kind={kind: compile_sec for kind in _KINDS},
         case_time_distribution_by_kind={
@@ -71,6 +75,7 @@ class TestJudgehostSimulation(unittest.TestCase):
                 "flat-cold",
                 "host-disconnect",
                 "mixed-load",
+                "occur-with-foreground",
                 "single-wide",
                 "straggler",
                 "warm-cache",
@@ -112,6 +117,75 @@ class TestJudgehostSimulation(unittest.TestCase):
         first = JudgehostSimulation(workload, trace=True).run()
         second = JudgehostSimulation(workload, trace=True).run()
         self.assertEqual(first, second)
+
+    def test_foreground_arrives_later_and_takes_the_next_lease(self) -> None:
+        workload = _small_workload(
+            case_sec=3.0,
+            compile_sec=1.0,
+            tests=3,
+            foreground_tasks=(ForegroundTask(1.0, "compile-only", 2.0),),
+        )
+        report = JudgehostSimulation(workload, trace=True).run()
+        trace = report["trace"]
+        arrival = next(row for row in trace if row["event"] == "foreground_arrival")
+        foreground_lease = next(
+            row
+            for row in trace
+            if row["event"] == "cases_leased"
+            and any(":foreground-compile-" in node for node in row["nodes"])
+        )
+        first_lease_after_arrival = next(
+            row
+            for row in trace
+            if row["event"] == "cases_leased" and row["at_sec"] >= arrival["at_sec"]
+        )
+        last_background_report_before_foreground = max(
+            row["at_sec"]
+            for row in trace
+            if row["event"] == "case_reported"
+            and row["at_sec"] <= foreground_lease["at_sec"]
+            and ":solution-" in row["node"]
+        )
+        self.assertEqual(arrival["at_sec"], 1.0)
+        self.assertEqual(first_lease_after_arrival, foreground_lease)
+        self.assertGreaterEqual(foreground_lease["at_sec"], last_background_report_before_foreground)
+        self.assertEqual(report["summary"]["foreground_background_lease_count"], 0)
+        self.assertTrue(report["foreground_tasks"][0]["resumed_previous_background"])
+
+    def test_idle_host_takes_foreground_without_waiting_for_busy_host(self) -> None:
+        workload = _small_workload(
+            case_sec=5.0,
+            compile_sec=2.0,
+            tests=2,
+            hosts=2,
+            foreground_tasks=(ForegroundTask(1.0, "compile-only", 1.0),),
+        )
+        report = JudgehostSimulation(workload, trace=True).run()
+        foreground_lease = next(
+            row
+            for row in report["trace"]
+            if row["event"] == "cases_leased"
+            and any(":foreground-compile-" in node for node in row["nodes"])
+        )
+        self.assertEqual(foreground_lease["at_sec"], 1.0)
+        self.assertEqual(foreground_lease["host"], "host-2")
+        self.assertEqual(report["summary"]["foreground_background_lease_count"], 0)
+
+    def test_foreground_is_reported_separately_from_background_verification(self) -> None:
+        workload = _small_workload(
+            case_sec=1.0,
+            compile_sec=0.5,
+            foreground_tasks=(ForegroundTask(1.0, "compile-only", 2.0),),
+        )
+        report = JudgehostSimulation(workload).run()
+        self.assertEqual(len(report["verifications"]), 1)
+        self.assertEqual(len(report["foreground_tasks"]), 1)
+        self.assertEqual(report["foreground_tasks"][0]["arrival_sec"], 1.0)
+        self.assertGreater(report["summary"]["foreground_makespan_sec"], 0.0)
+        self.assertGreater(
+            report["summary"]["makespan_sec"],
+            report["summary"]["background_makespan_sec"],
+        )
 
     def test_dependencies_become_ready_only_after_parent_report(self) -> None:
         workload = replace(
@@ -202,6 +276,109 @@ class TestJudgehostSimulation(unittest.TestCase):
             self.assertEqual(report_payload["seeds"], [31])
             self.assertNotIn("input_ref", trace_text)
             self.assertNotIn("answer_ref", trace_text)
+
+    def test_cli_compares_all_scheduler_strategies(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp) / "strategies.json"
+            exit_code = simulate_judgehost.main(
+                [
+                    "--scenario",
+                    "occur-with-foreground",
+                    "--repeat",
+                    "2",
+                    "--all-strategies",
+                    "--output",
+                    str(output),
+                ]
+            )
+            self.assertEqual(exit_code, 0)
+            payload = json.loads(output.read_text(encoding="utf-8"))
+            self.assertEqual(
+                set(payload["strategies"]),
+                {
+                    "production",
+                    "legacy-production",
+                    "naive-no-affinity",
+                    "affinity-foreground-last",
+                    "affinity-foreground-first",
+                    "dispatch-scope-pending-parallel",
+                },
+            )
+
+    def test_cli_ablates_selection_stage_presence_and_order(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp) / "stage-ablation.json"
+            with redirect_stdout(io.StringIO()):
+                exit_code = simulate_judgehost.main(
+                    [
+                        "--scenario",
+                        "dag-waves",
+                        "--repeat",
+                        "1",
+                        "--selection-stage-ablation",
+                        "--parallel-compile",
+                        "--output",
+                        str(output),
+                    ]
+                )
+            self.assertEqual(exit_code, 0)
+            payload = json.loads(output.read_text(encoding="utf-8"))
+            self.assertTrue(payload["parallel_compile"])
+            self.assertEqual(
+                set(payload["presence"]),
+                {
+                    "all",
+                    "without-affinity",
+                    "without-stolen",
+                    "without-prerequisite",
+                    "without-undispatched",
+                },
+            )
+            self.assertEqual(len(payload["orders"]), 24)
+            self.assertEqual(payload["assertion_failures"], [])
+            for row in (*payload["presence"].values(), *payload["orders"].values()):
+                self.assertEqual(
+                    row["runs"][0]["summary"]["invariant_violation_count"],
+                    0,
+                )
+
+    def test_cli_compares_exact_observed_and_oracle_scores(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp) / "score-strategies.json"
+            with redirect_stdout(io.StringIO()):
+                exit_code = simulate_judgehost.main(
+                    [
+                        "--scenario",
+                        "dag-waves",
+                        "--repeat",
+                        "1",
+                        "--score-strategies",
+                        "--output",
+                        str(output),
+                    ]
+                )
+            self.assertEqual(exit_code, 0)
+            payload = json.loads(output.read_text(encoding="utf-8"))
+            self.assertEqual(
+                set(payload["strategies"]),
+                {
+                    f"{mode}/{score}"
+                    for mode in ("spread-first", "score-all")
+                    for score in (
+                        "pending-count",
+                        "pending-per-active-host",
+                        "observed-work",
+                        "observed-work-per-active-host",
+                        "observed-marginal-saving",
+                        "oracle-marginal-saving",
+                    )
+                },
+            )
+            for row in payload["strategies"].values():
+                self.assertEqual(
+                    row["runs"][0]["summary"]["invariant_violation_count"],
+                    0,
+                )
 
 
 if __name__ == "__main__":

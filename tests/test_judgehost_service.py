@@ -257,7 +257,7 @@ class TestJudgehostService(E2ETestBase):
 
         callbacks = VerificationRuntimeCallbacks(
             publish_task=lambda _row: (_ for _ in ()).throw(RuntimeError("unexpected publish")),
-            probe_task_case_cache=lambda _task_ids, _limit: set(),
+            probe_task_case_cache=lambda _task_ids: set(),
             resolve_case_result=lambda queued_task_id, test_name: service.poll_task_case_result(queued_task_id, test_name),
             cancel_execution=lambda _reason: None,
             close_logical_runs=lambda run_ids: service.close_logical_runs(verification_id, run_ids),
@@ -711,14 +711,14 @@ class TestJudgehostService(E2ETestBase):
         service.domjudge_register_host(host)
 
         leader = service.domjudge_fetch_work(host)
-        self.assertEqual(len(leader), 1)
+        self.assertEqual(len(leader), 2)
         service.domjudge_update_judging(
             host,
             int(leader[0]["judgetaskid"]),
             {"compile_success": "1", "output_compile": "", "compile_metadata": ""},
         )
         self.assertEqual(len(service.domjudge_fetch_work(host, max_batchsize=1)), 1)
-        self.assertEqual(len(service.domjudge_fetch_work(host)), 2)
+        self.assertEqual(len(service.domjudge_fetch_work(host)), 1)
 
     def test_domjudge_endpoints_finalize_run(self) -> None:
         service = config.judgehost_task_service
@@ -1210,7 +1210,7 @@ class TestJudgehostService(E2ETestBase):
 
         service.domjudge_register_host("judgehost-notrunc")
         rows = service.domjudge_fetch_work("judgehost-notrunc", max_batchsize=8)
-        self.assertEqual(len(rows), 1)
+        self.assertEqual(len(rows), 2)
         service.domjudge_update_judging(
             "judgehost-notrunc",
             int(rows[0]["judgetaskid"]),
@@ -1649,7 +1649,7 @@ class TestJudgehostService(E2ETestBase):
         batch_row = judgehost_fetch_batch(service, int(case_row["batch_id"]))
         self.assertIsNotNone(batch_row)
         assert batch_row is not None
-        self.assertEqual(str(batch_row["compile_owner"] or ""), "judgehost-reconnect")
+        self.assertNotIn("compile_owner", batch_row)
         self.assertEqual(str(batch_row["status"] or ""), "open")
         self.assertEqual(str(case_row["lease_owner"] or ""), "judgehost-reconnect")
         self.assertEqual(str(case_row["status"] or ""), "leased")
@@ -3996,7 +3996,7 @@ class TestJudgehostService(E2ETestBase):
             expected_behavior="accepted",
             verification_source="run.execute",
         )
-        self.assertEqual(service.probe_task_case_cache([hit_task_id], limit=32), set())
+        self.assertEqual(service.probe_task_case_cache([hit_task_id]), set())
         self.assertEqual(service.wait_for_task(hit_task_id, timeout_sec=2.0), run_id_hit)
         hit_rows = judgehost_cases_for_run(service, run_id_hit)
         self.assertEqual([str(row["status"]) for row in hit_rows], ["reported"])
@@ -4021,7 +4021,7 @@ class TestJudgehostService(E2ETestBase):
         self.assertEqual(len(rows), 2)
         self.assertEqual({str(row["status"]) for row in rows}, {"cache-pending"})
 
-        self.assertEqual(service.probe_task_case_cache([target_task_id], limit=32), set())
+        self.assertEqual(service.probe_task_case_cache([target_task_id]), set())
         rows = judgehost_cases_for_run(service, run_id_target)
         self.assertEqual(str(rows[0]["test_name"] or ""), "001.in")
         self.assertEqual(str(rows[0]["status"] or ""), "reported")
@@ -4634,7 +4634,7 @@ class TestJudgehostService(E2ETestBase):
             verification_source="run.execute",
         )
         leased = service.domjudge_fetch_work("judgehost-compare-batch-debug", max_batchsize=8)
-        self.assertEqual(len(leased), 1)
+        self.assertEqual(len(leased), 2)
         service.domjudge_update_judging(
             "judgehost-compare-batch-debug",
             int(leased[0]["judgetaskid"]),
@@ -5122,7 +5122,7 @@ class TestJudgehostService(E2ETestBase):
             upload_content=None,
             upload_filename=None,
             run_id=f"r-jh-preempt-low-{uuid.uuid4().hex[:8]}",
-            selected_tests=["001.in", "002.in"],
+            selected_tests=["001.in"],
             verification_id=_canonical_verification_id("inv-jh-preempt-low"),
             verification_run_ids=[],
             expected_behavior="accepted",

@@ -260,7 +260,7 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
 
         callbacks = VerificationRuntimeCallbacks(
             publish_task=_publish,
-            probe_task_case_cache=lambda _task_ids, _limit: set(),
+            probe_task_case_cache=lambda _task_ids: set(),
             resolve_case_result=lambda _task_id, _test_name: None,
             cancel_execution=lambda _reason: None,
             close_logical_runs=closed_logical_runs.extend,
@@ -307,7 +307,7 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
             self.assertFalse(thread.is_alive())
 
     def test_runtime_coordinator_actively_probes_cached_cases_after_identity_registration(self) -> None:
-        total_tasks = 40
+        total_tasks = 257
         store = _InMemoryTaskStore(
             rows=[
                 _task_row(
@@ -337,7 +337,7 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
 
         coordinator: VerificationRuntimeCoordinator
 
-        def _probe(task_ids: list[str], limit: int) -> set[str]:
+        def _probe(task_ids: list[str]) -> set[str]:
             probe_slices.append(list(task_ids))
             rows_by_judgehost_id = {
                 str(row["judgehost_task_id"]): row
@@ -345,8 +345,7 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
                 if row["judgehost_task_id"]
             }
             identity_registered.append(
-                limit == 32
-                and len(task_ids) <= limit
+                len(task_ids) <= 256
                 and all(
                     task_id in rows_by_judgehost_id
                     and str(rows_by_judgehost_id[task_id]["status"])
@@ -397,10 +396,10 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
         thread = threading.Thread(target=coordinator.run, daemon=True)
         thread.start()
         try:
-            thread.join(timeout=2.0)
+            thread.join(timeout=5.0)
             self.assertFalse(thread.is_alive(), "active cache probes did not finish the graph")
             self.assertEqual(len(publish_order), total_tasks)
-            self.assertEqual([len(task_ids) for task_ids in probe_slices], [32, 8])
+            self.assertEqual([len(task_ids) for task_ids in probe_slices], [256, 1])
             self.assertTrue(all(identity_registered))
             self.assertTrue(
                 all(
@@ -471,7 +470,7 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
 
         callbacks = VerificationRuntimeCallbacks(
             publish_task=_publish,
-            probe_task_case_cache=lambda _task_ids, _limit: set(),
+            probe_task_case_cache=lambda _task_ids: set(),
             resolve_case_result=lambda _task_id, _test_name: None,
             cancel_execution=_cancel_execution,
             close_logical_runs=lambda _run_ids: None,
@@ -556,7 +555,7 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
         queued_cancel_reasons: list[str] = []
         callbacks = VerificationRuntimeCallbacks(
             publish_task=lambda _row: (_ for _ in ()).throw(RuntimeError("unexpected publish")),
-            probe_task_case_cache=lambda _task_ids, _limit: set(),
+            probe_task_case_cache=lambda _task_ids: set(),
             resolve_case_result=lambda _task_id, _test_name: None,
             cancel_execution=lambda reason: queued_cancel_reasons.append(reason),
             close_logical_runs=lambda _run_ids: None,
@@ -638,7 +637,7 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
             task_store=store,
             callbacks=VerificationRuntimeCallbacks(
                 publish_task=_publish,
-                probe_task_case_cache=lambda _task_ids, _limit: set(),
+                probe_task_case_cache=lambda _task_ids: set(),
                 resolve_case_result=lambda _task_id, _test_name: None,
                 cancel_execution=lambda _reason: None,
                 close_logical_runs=lambda _run_ids: None,
@@ -718,7 +717,7 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
             task_store=store,
             callbacks=VerificationRuntimeCallbacks(
                 publish_task=_publish,
-                probe_task_case_cache=lambda _task_ids, _limit: set(),
+                probe_task_case_cache=lambda _task_ids: set(),
                 resolve_case_result=lambda _task_id, _test_name: {"status": "ok"},
                 cancel_execution=lambda _reason: None,
                 close_logical_runs=lambda _run_ids: None,

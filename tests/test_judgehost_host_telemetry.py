@@ -121,7 +121,6 @@ class TestHostTelemetryStore(unittest.TestCase):
             compile_success=1,
             compile_output_b64="",
             compile_metadata_b64="",
-            lease_owner="host-a",
             updated_at=_NOW,
         )
         return batch_id

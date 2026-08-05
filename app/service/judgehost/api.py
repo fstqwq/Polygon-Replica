@@ -260,8 +260,8 @@ class Judgehost:
     def domjudge_fetch_work(self, *args, **kwargs):
         return self._dispatch.domjudge_fetch_work(*args, **kwargs)
 
-    def probe_task_case_cache(self, task_ids: list[str], *, limit: int = 32) -> set[str]:
-        return self._dispatch.probe_task_case_cache(task_ids, limit=limit)
+    def probe_task_case_cache(self, task_ids: list[str]) -> set[str]:
+        return self._dispatch.probe_task_case_cache(task_ids)
 
     def domjudge_get_source_files(self, *args, **kwargs):
         return self._result.domjudge_get_source_files(*args, **kwargs)

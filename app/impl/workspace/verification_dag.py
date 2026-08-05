@@ -1163,10 +1163,7 @@ def run_workspace_verification_dag(
         _refresh_state()
         callbacks = VerificationRuntimeCallbacks(
             publish_task=lambda row: _publish_task(row, execution=execution),
-            probe_task_case_cache=lambda task_ids, limit: config.judgehost_task_service.probe_task_case_cache(
-                task_ids,
-                limit=limit,
-            ),
+            probe_task_case_cache=config.judgehost_task_service.probe_task_case_cache,
             resolve_case_result=lambda judgehost_task_id, test_name: config.judgehost_task_service.poll_task_case_result(
                 judgehost_task_id,
                 test_name,

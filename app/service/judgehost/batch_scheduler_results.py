@@ -130,19 +130,16 @@ class BatchSchedulerResultMixin:
         compile_success: int,
         compile_output_b64: str,
         compile_metadata_b64: str,
-        lease_owner: str,
         updated_at: str,
     ) -> bool:
         with self._lock:
             batch = self._batches.get(int(batch_id))
             if batch is None or batch.status != "open":
                 return False
-            if batch.compile_owner not in {None, lease_owner}:
-                return False
             if batch.compile_state == "failed":
-                return False
-            if batch.compile_state == "succeeded":
-                return compile_success == 1
+                return compile_success != 1
+            if batch.compile_state == "succeeded" and compile_success == 1:
+                return True
             failure_runresult = batch.failure_runresult
             if compile_success != 1 and not failure_runresult:
                 failure_runresult = "compiler-error"
@@ -152,7 +149,6 @@ class BatchSchedulerResultMixin:
                 compile_state="succeeded" if compile_success == 1 else "failed",
                 compile_output_b64=compile_output_b64,
                 compile_metadata_b64=compile_metadata_b64,
-                compile_owner=None if compile_success == 1 else lease_owner,
                 failure_runresult=failure_runresult,
                 failure_text=batch.failure_text,
                 updated_at=updated_at,
@@ -305,7 +301,6 @@ class BatchSchedulerResultMixin:
                     batch,
                     compile_success=1,
                     compile_state="succeeded",
-                    compile_owner=None,
                     updated_at=updated_at,
                 )
             return batch.compile_state == "succeeded"
@@ -471,6 +466,56 @@ class BatchSchedulerResultMixin:
                 )
             return True
 
+    def finish_cache_claims(
+        self,
+        outcomes: list[tuple[CaseClaim, CaseResult | None]],
+        *,
+        updated_at: str,
+    ) -> dict[int, str]:
+        """Commit one cache probe batch and refresh each ready index once."""
+        finished: dict[int, str] = {}
+        affected_batch_ids: set[int] = set()
+        with self._lock:
+            for claim, result in outcomes:
+                case = self._cases.get(claim.case_id)
+                if (
+                    case is None
+                    or case.status != "cache-probing"
+                    or case.claim_generation != claim.generation
+                ):
+                    continue
+                cancel_requested = case.cancel_requested
+                terminal_result = case.terminal_result
+                case.cancel_requested = False
+                case.terminal_result = None
+                case.requeue_on_abort = False
+                if cancel_requested:
+                    case.result = None
+                    status = "cancelled"
+                elif terminal_result is not None:
+                    case.result = terminal_result
+                    status = "reported"
+                elif result is None:
+                    case.result = None
+                    status = "pending"
+                else:
+                    case.result = result
+                    status = "reported"
+                self._transition_case_locked(
+                    case,
+                    status,
+                    lease_owner=None,
+                    updated_at=updated_at,
+                    refresh_batch=False,
+                )
+                finished[case.id] = status
+                affected_batch_ids.add(case.batch_id)
+            self._refresh_batches_locked(
+                affected_batch_ids,
+                updated_at=updated_at,
+            )
+        return finished
+
     def abort_case_claim(
         self,
         case_id: int,
@@ -528,6 +573,48 @@ class BatchSchedulerResultMixin:
                 )
             case.requeue_on_abort = False
             return True
+
+    def abort_cache_claims(
+        self,
+        claims: list[CaseClaim],
+        *,
+        updated_at: str,
+    ) -> int:
+        aborted = 0
+        affected_batch_ids: set[int] = set()
+        with self._lock:
+            for claim in claims:
+                case = self._cases.get(int(claim.case_id))
+                if (
+                    case is None
+                    or case.status != "cache-probing"
+                    or case.claim_generation != int(claim.generation)
+                ):
+                    continue
+                cancel_requested = case.cancel_requested
+                terminal_result = case.terminal_result
+                case.cancel_requested = False
+                case.terminal_result = None
+                case.requeue_on_abort = False
+                if cancel_requested:
+                    status = "cancelled"
+                    case.result = None
+                elif terminal_result is not None:
+                    status = "reported"
+                    case.result = terminal_result
+                else:
+                    status = "cache-pending"
+                self._transition_case_locked(
+                    case,
+                    status,
+                    lease_owner=None,
+                    updated_at=updated_at,
+                    refresh_batch=False,
+                )
+                affected_batch_ids.add(case.batch_id)
+                aborted += 1
+            self._refresh_batches_locked(affected_batch_ids, updated_at=updated_at)
+        return aborted
 
     def request_batch_case_results(
         self,
@@ -648,10 +735,7 @@ class BatchSchedulerResultMixin:
         with self._lock:
             self._drop_host_telemetry_batch_locked(hostname)
             affinity_ids = self._affinity_batches_by_host.pop(hostname, ())
-            stolen_id = self._stolen_batch_by_host.pop(hostname, None)
             context_batch_ids = set(affinity_ids)
-            if stolen_id is not None:
-                context_batch_ids.add(stolen_id)
             affected_batch_ids = set(context_batch_ids)
             terminal_task_ids: set[str] = set()
             case_ids = list(self._leased_case_ids_by_host.get(hostname, ()))
@@ -685,10 +769,6 @@ class BatchSchedulerResultMixin:
                     if cancelled and self._task_case_counts[case.task_id].remaining == 0:
                         terminal_task_ids.add(case.task_id)
                 affected_batch_ids.add(case.batch_id)
-            for batch_id in affected_batch_ids:
-                batch = self._batches.get(batch_id)
-                if batch is not None and batch.compile_owner == hostname:
-                    batch.compile_owner = None
             self._refresh_batches_locked(affected_batch_ids, updated_at=now_text)
             terminal_batch_ids = tuple(sorted(
                 batch_id
@@ -781,7 +861,7 @@ class BatchSchedulerResultMixin:
         batch = self._batches.pop(batch_id)
         if batch.status == "open":
             self._index_batch_scripts_locked(batch, -1)
-        self._batch_ids_in_heap.discard(batch_id)
+        self._ready_batches.remove(batch_id)
         self._finalization_retry_deadlines.pop(batch_id, None)
         self._refresh_prerequisite_index_locked(batch, ready=False)
         logical_run_key = (batch.verification_id, batch.logical_run_id)

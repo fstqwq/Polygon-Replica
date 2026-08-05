@@ -9,12 +9,17 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable, Mapping
 
-from app.service.judgehost.batch_scheduler import BatchScheduler
 from app.service.judgehost.batch_scheduler_models import CompileSubmission, ExecutionBatchSpec
 from app.service.judgehost.case_result import build_case_result
 from app.service.judgehost.identity import domjudge_submit_id
 from app.service.platform.runtime_blob_store import PayloadFile
 from tests.simulation.report import evaluate_assertions
+from tests.simulation.strategy import (
+    create_scheduler,
+    observe_simulated_case,
+    observe_simulated_compile,
+    register_simulated_case,
+)
 from tests.simulation.workload import DurationRange, Workload
 
 
@@ -47,12 +52,18 @@ class _Node:
     run_id: str = ""
     batch_id: int | None = None
     case_id: int | None = None
+    leased_at: float | None = None
+    compile_started_at: float | None = None
+    leased_hostname: str | None = None
+    prior_background_batch_id: int | None = None
+    resumed_previous_background: bool | None = None
 
 
 @dataclass(slots=True)
 class _Verification:
     verification_id: str
     arrival_sec: float
+    foreground: bool = False
     node_ids: list[str] = field(default_factory=list)
     first_progress_sec: float | None = None
     finished_sec: float | None = None
@@ -77,14 +88,22 @@ class _Host:
     current_batch_id: int | None = None
     current_rows: list[dict[str, object]] = field(default_factory=list)
     current_index: int = 0
+    last_background_batch_id: int | None = None
 
 
 class JudgehostSimulation:
     """Drive the real in-memory Scheduler from a deterministic virtual event loop."""
 
-    def __init__(self, workload: Workload, *, trace: bool = False) -> None:
+    def __init__(
+        self,
+        workload: Workload,
+        *,
+        trace: bool = False,
+        strategy: str = "production",
+    ) -> None:
         self.workload = workload
-        self.scheduler = BatchScheduler(id_base=1_000_000)
+        self.strategy = strategy
+        self.scheduler = create_scheduler(strategy, id_base=1_000_000)
         self._rng = random.Random(workload.seed)
         self._trace_enabled = bool(trace)
         self._trace: list[dict[str, object]] = []
@@ -113,6 +132,8 @@ class JudgehostSimulation:
         self._empty_fetch_count = 0
         self._poll_backoff_sec = 0.0
         self._long_poll_wake_count = 0
+        self._background_leases_while_foreground_waited = 0
+        self._foreground_resume_by_host: dict[str, tuple[str, int | None]] = {}
         self._build_graph()
         self._remaining_node_count = len(self._nodes)
 
@@ -226,20 +247,23 @@ class JudgehostSimulation:
                     test_index=self.workload.tests_per_verification + sanity_index + 1,
                     dependencies=tuple(solution_nodes),
                 )
-            if verification_index == 0:
-                for foreground_index in range(self.workload.foreground_program_count):
-                    self._add_node(
-                        verification,
-                        timing_kind="foreground",
-                        program_key=f"foreground-{foreground_index + 1}",
-                        test_index=(
-                            self.workload.tests_per_verification
-                            + self.workload.sanity_probe_count
-                            + foreground_index
-                            + 1
-                        ),
-                        dependencies=(),
-                    )
+            verification.critical_path_sec = self._critical_path(verification.node_ids)
+            verification.remaining_node_count = len(verification.node_ids)
+        for foreground_index, task in enumerate(self.workload.foreground_tasks, start=1):
+            verification = _Verification(
+                verification_id=f"ver-f{foreground_index:08x}",
+                arrival_sec=task.arrival_sec,
+                foreground=True,
+            )
+            self._verifications[verification.verification_id] = verification
+            self._add_node(
+                verification,
+                timing_kind="foreground",
+                program_key=f"foreground-compile-{foreground_index}",
+                test_index=1,
+                dependencies=(),
+                compile_duration_sec=task.compile_time_sec,
+            )
             verification.critical_path_sec = self._critical_path(verification.node_ids)
             verification.remaining_node_count = len(verification.node_ids)
 
@@ -252,6 +276,7 @@ class JudgehostSimulation:
         test_index: int,
         dependencies: tuple[str, ...],
         duration_multiplier: float = 1.0,
+        compile_duration_sec: float | None = None,
     ) -> str:
         sequence = len(verification.node_ids) + 1
         node_id = f"{verification.verification_id}:{program_key}:{test_index}"
@@ -261,7 +286,9 @@ class JudgehostSimulation:
         duration_range = self.workload.case_time_distribution_by_kind[timing_kind]
         duration = self._duration(duration_range) * duration_multiplier
         scheduler_kind = (
-            timing_kind
+            "compile-only"
+            if timing_kind == "foreground"
+            else timing_kind
             if timing_kind in {"generate-input", "main-correct"}
             else "solution-run"
         )
@@ -277,7 +304,11 @@ class JudgehostSimulation:
             test_index=test_index,
             scope_sequence=sequence,
             compile_key=compile_key,
-            compile_duration_sec=float(self.workload.compile_time_sec_by_kind[timing_kind]),
+            compile_duration_sec=(
+                float(self.workload.compile_time_sec_by_kind[timing_kind])
+                if compile_duration_sec is None
+                else float(compile_duration_sec)
+            ),
             case_duration_sec=duration,
             cache_hit=self._rng.random() < self.workload.cache_hit_rate,
             parents=dependencies,
@@ -303,6 +334,10 @@ class JudgehostSimulation:
 
     def _verification_arrival(self, verification_id: object) -> None:
         verification = self._verifications[str(verification_id)]
+        self._trace_event(
+            "foreground_arrival" if verification.foreground else "verification_arrival",
+            verification_id=verification.verification_id,
+        )
         roots = [
             self._nodes[node_id]
             for node_id in verification.node_ids
@@ -363,6 +398,13 @@ class JudgehostSimulation:
         claim, row = claims[0]
         node.case_id = int(row["id"])
         self._case_node_ids[node.case_id] = node.node_id
+        register_simulated_case(
+            self.scheduler,
+            batch_id=batch_id,
+            case_id=node.case_id,
+            case_duration_sec=node.case_duration_sec,
+            compile_duration_sec=node.compile_duration_sec,
+        )
         if node.cache_hit:
             outcome = self.scheduler.commit_case_result(
                 claim.case_id,
@@ -408,6 +450,7 @@ class JudgehostSimulation:
                     )
             return
         batch_id = int(batch["batch_id"])
+        batch_is_foreground = str(batch["service_class"]) == "foreground"
         self._trace_event("batch_selected", host=host.hostname, batch_id=batch_id)
         if str(batch["materialization_state"]) != "ready":
             if self.scheduler.claim_materialization(batch_id, now_text=self._now_text()):
@@ -426,6 +469,8 @@ class JudgehostSimulation:
         if not rows:
             self._schedule(self._now, "host_fetch", host.hostname, host.epoch)
             return
+        if self._foreground_waiting() and not batch_is_foreground:
+            self._background_leases_while_foreground_waited += len(rows)
         host.current_batch_id = batch_id
         host.current_rows = [dict(row) for row in rows]
         host.current_index = 0
@@ -434,6 +479,19 @@ class JudgehostSimulation:
         if host.last_compile_key is not None and host.last_compile_key != compile_key:
             host.program_switch_count += 1
         host.last_compile_key = compile_key
+        if batch_is_foreground:
+            foreground_node = self._nodes[self._case_node_ids[int(rows[0]["id"])]]
+            foreground_node.leased_at = self._now
+            foreground_node.leased_hostname = host.hostname
+            foreground_node.prior_background_batch_id = host.last_background_batch_id
+        else:
+            resume = self._foreground_resume_by_host.pop(host.hostname, None)
+            if resume is not None:
+                node_id, previous_batch_id = resume
+                self._nodes[node_id].resumed_previous_background = (
+                    previous_batch_id is not None and previous_batch_id == batch_id
+                )
+            host.last_background_batch_id = batch_id
         for row in rows:
             case_id = int(row["id"])
             if case_id in self._active_case_ids:
@@ -451,14 +509,19 @@ class JudgehostSimulation:
             host=host.hostname,
             batch_id=batch_id,
             case_ids=[int(row["id"]) for row in rows],
+            nodes=[self._case_node_ids[int(row["id"])] for row in rows],
         )
         if compile_key in host.local_compile_cache:
+            if batch_is_foreground:
+                foreground_node.compile_started_at = self._now
             self._transition_host(host, "execute")
             self._schedule_current_case(host)
             return
         host.compile_keys_seen.add(compile_key)
         self._compile_count += 1
         node = self._nodes[self._case_node_ids[int(rows[0]["id"])]]
+        if batch_is_foreground:
+            node.compile_started_at = self._now
         self._compile_time_sec += node.compile_duration_sec
         self._transition_host(host, "compile")
         self._trace_event("compile_start", host=host.hostname, batch_id=batch_id)
@@ -486,12 +549,19 @@ class JudgehostSimulation:
             self._violate(f"invalid compile key event for {host.hostname}")
             return
         host.local_compile_cache.add((str(key[0]), str(key[1])))
+        observe_simulated_compile(
+            self.scheduler,
+            batch_id=int(batch_id),
+            hostname=host.hostname,
+            duration_sec=self._nodes[
+                self._case_node_ids[int(host.current_rows[0]["id"])]
+            ].compile_duration_sec,
+        )
         if not self.scheduler.record_compile_result(
             int(batch_id),
             compile_success=1,
             compile_output_b64="",
             compile_metadata_b64="",
-            lease_owner=host.hostname,
             updated_at=self._now_text(),
         ):
             self._violate(f"compile result rejected for Batch {batch_id}")
@@ -547,6 +617,15 @@ class JudgehostSimulation:
         if outcome != "reported":
             self._violate(f"Case result rejected for {numeric_case_id}")
             return
+        if node.batch_id is None:
+            self._violate(f"Case {numeric_case_id} has no Batch identity")
+            return
+        observe_simulated_case(
+            self.scheduler,
+            batch_id=node.batch_id,
+            hostname=host.hostname,
+            duration_sec=node.case_duration_sec,
+        )
         self._active_case_ids.discard(numeric_case_id)
         if numeric_case_id in self._reported_case_ids:
             self._duplicate_report_count += 1
@@ -577,6 +656,11 @@ class JudgehostSimulation:
             return
         node.state = "completed"
         node.completed_at = self._now
+        if node.timing_kind == "foreground" and node.leased_hostname is not None:
+            self._foreground_resume_by_host[node.leased_hostname] = (
+                node.node_id,
+                node.prior_background_batch_id,
+            )
         self._remaining_node_count -= 1
         verification = self._verifications[node.verification_id]
         verification.remaining_node_count -= 1
@@ -761,6 +845,8 @@ class JudgehostSimulation:
             )
         verification_rows = []
         for verification in self._verifications.values():
+            if verification.foreground:
+                continue
             finished = verification.finished_sec
             completion = None if finished is None else finished - verification.arrival_sec
             first_progress = (
@@ -783,9 +869,81 @@ class JudgehostSimulation:
                     "slowdown": _optional_round(slowdown),
                 }
             )
+        foreground_rows = []
+        for node in self._nodes.values():
+            if node.timing_kind != "foreground":
+                continue
+            arrival = self._verifications[node.verification_id].arrival_sec
+            ready_to_lease = None if node.leased_at is None else node.leased_at - arrival
+            ready_to_compile = (
+                None if node.compile_started_at is None else node.compile_started_at - arrival
+            )
+            foreground_rows.append(
+                {
+                    "verification_id": node.verification_id,
+                    "arrival_sec": _round(arrival),
+                    "ready_to_lease_sec": _optional_round(ready_to_lease),
+                    "ready_to_compile_start_sec": _optional_round(ready_to_compile),
+                    "completion_sec": _optional_round(node.completed_at),
+                    "makespan_sec": _optional_round(
+                        None if node.completed_at is None else node.completed_at - arrival
+                    ),
+                    "wait_for_current_lease_sec": _optional_round(ready_to_lease),
+                    "hostname": node.leased_hostname,
+                    "prior_background_batch_id": node.prior_background_batch_id,
+                    "resumed_previous_background": node.resumed_previous_background,
+                }
+            )
+        background_makespan = max(
+            (
+                verification.finished_sec or self._now
+                for verification in self._verifications.values()
+                if not verification.foreground
+            ),
+            default=0.0,
+        )
+        foreground_ready_to_lease = [
+            float(row["ready_to_lease_sec"])
+            for row in foreground_rows
+            if row["ready_to_lease_sec"] is not None
+        ]
+        foreground_ready_to_compile = [
+            float(row["ready_to_compile_start_sec"])
+            for row in foreground_rows
+            if row["ready_to_compile_start_sec"] is not None
+        ]
+        foreground_completion = [
+            float(row["completion_sec"])
+            for row in foreground_rows
+            if row["completion_sec"] is not None
+        ]
+        foreground_makespan = [
+            float(row["makespan_sec"])
+            for row in foreground_rows
+            if row["makespan_sec"] is not None
+        ]
         average_utilization = statistics.fmean(row["utilization"] for row in host_rows)
         summary = {
             "makespan_sec": _round(makespan),
+            "background_makespan_sec": _round(background_makespan),
+            "foreground_ready_to_lease_sec": _round(max(foreground_ready_to_lease, default=0.0)),
+            "foreground_ready_to_compile_start_sec": _round(
+                max(foreground_ready_to_compile, default=0.0)
+            ),
+            "foreground_completion_sec": _round(max(foreground_completion, default=0.0)),
+            "foreground_makespan_sec": _round(max(foreground_makespan, default=0.0)),
+            "foreground_wait_for_current_lease_sec": _round(
+                max(foreground_ready_to_lease, default=0.0)
+            ),
+            "foreground_background_lease_count": (
+                self._background_leases_while_foreground_waited
+            ),
+            "foreground_resume_count": sum(
+                row["resumed_previous_background"] is not None for row in foreground_rows
+            ),
+            "foreground_resume_same_batch_count": sum(
+                row["resumed_previous_background"] is True for row in foreground_rows
+            ),
             "case_count": len(self._nodes),
             "completed_case_count": len(self._nodes) - len(unfinished),
             "unfinished_case_count": len(unfinished),
@@ -802,6 +960,7 @@ class JudgehostSimulation:
             "ready_to_lease_p95_sec": _round(_percentile(self._ready_to_lease_sec, 0.95)),
             "ready_to_lease_max_sec": _round(max(self._ready_to_lease_sec, default=0.0)),
             "average_host_utilization": _round(average_utilization),
+            "program_switch_count": sum(row["program_switch_count"] for row in host_rows),
             "empty_fetch_count": self._empty_fetch_count,
             "poll_backoff_sec": _round(self._poll_backoff_sec),
             "long_poll_wake_count": self._long_poll_wake_count,
@@ -814,11 +973,13 @@ class JudgehostSimulation:
             "invariant_violation_count": len(self._invariant_violations),
         }
         report: dict[str, object] = {
-            "schema_version": 1,
+            "schema_version": 2,
             "workload": self.workload.name,
             "seed": self.workload.seed,
+            "strategy": self.strategy,
             "summary": summary,
             "verifications": verification_rows,
+            "foreground_tasks": foreground_rows,
             "hosts": host_rows,
             "batch_host_counts": {
                 str(batch_id): len(hosts) for batch_id, hosts in sorted(self._batch_hosts.items())
@@ -864,13 +1025,26 @@ class JudgehostSimulation:
     def _all_complete(self) -> bool:
         return self._remaining_node_count == 0
 
+    def _foreground_waiting(self) -> bool:
+        return any(
+            node.timing_kind == "foreground"
+            and node.state == "ready"
+            and node.leased_at is None
+            for node in self._nodes.values()
+        )
+
     def _violate(self, message: str) -> None:
         if message not in self._invariant_violations:
             self._invariant_violations.append(message)
 
 
-def run_simulation(workload: Workload, *, trace: bool = False) -> dict[str, object]:
-    return JudgehostSimulation(workload, trace=trace).run()
+def run_simulation(
+    workload: Workload,
+    *,
+    trace: bool = False,
+    strategy: str = "production",
+) -> dict[str, object]:
+    return JudgehostSimulation(workload, trace=trace, strategy=strategy).run()
 
 
 def _sha256(text: str) -> str:

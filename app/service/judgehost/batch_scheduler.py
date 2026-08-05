@@ -1,3 +1,25 @@
+"""Deterministic in-memory scheduling for DOMjudge execution Batches.
+
+An ExecutionBatch is one logical run inside one Verification. Cases are the
+only lease/report unit. Hosts select work in this fixed order: an existing
+lease, foreground work, a ready Batch in the host's four-entry affinity queue,
+a prerequisite that can unblock one of those Batches, and finally the global
+minimum ``(dispatch_count, scope_sequence, -pending_count, batch_id)``. The
+global ordered index prefixes that key with service priority so foreground can
+be selected without a second scan.
+
+Foreground, prerequisite-helper, and global selections increment the Batch's
+process-local dispatch count exactly once. Existing-lease and affinity reuse do
+not. Compilation may occur concurrently on several hosts; any valid compiler
+failure fails the Batch immediately, while later callbacks cannot revive it.
+
+Ready indexes are derived data and never own Batch state. All Scheduler state
+and index transitions happen under one in-memory lock. File, SQLite, network,
+cache, and callback work is forbidden while that lock is held. The policy is
+deterministic, but it does not promise strict Case completion order or exclusive
+execution of a Batch by one host.
+"""
+
 from __future__ import annotations
 
 import heapq
@@ -27,6 +49,7 @@ from app.service.judgehost.batch_scheduler_models import (
     VerificationCancellation,
 )
 from app.service.judgehost.identity import domjudge_job_id, domjudge_submit_id
+from app.service.judgehost.ready_batch_index import ReadyBatchIndex, ReadyBatchKey
 from app.service.judgehost.batch_scheduler_results import BatchSchedulerResultMixin
 
 
@@ -36,6 +59,7 @@ class BatchScheduler(BatchSchedulerResultMixin):
     _AFFINITY_QUEUE_SIZE = 4
     _ACTIVE_BATCH_STATUSES = frozenset({"open"})
     _TERMINAL_CASE_STATUSES = frozenset({"reported", "cancelled"})
+    _READY_CASE_STATUSES = frozenset({"staged", "cache-pending", "pending"})
     _PREREQUISITE_TASK_KINDS = ("main-correct", "generate-input")
 
     @staticmethod
@@ -62,6 +86,8 @@ class BatchScheduler(BatchSchedulerResultMixin):
 
     def __init__(self, lock: threading.RLock | None = None, *, id_base: int | None = None):
         self._lock = threading.RLock() if lock is None else lock
+        self._ready_condition = threading.Condition(self._lock)
+        self._ready_generation = 0
         self._id_base = max(1, int(id_base if id_base is not None else time.time() * 1000))
         self._entity_ids = itertools.count(self._id_base + 1)
         self._batches: dict[int, ExecutionBatchRecord] = {}
@@ -95,13 +121,11 @@ class BatchScheduler(BatchSchedulerResultMixin):
         self._batch_ids_by_compile_key: dict[str, set[int]] = defaultdict(set)
         self._batch_ids_by_verification: dict[str, set[int]] = defaultdict(set)
         self._verification_by_domjudge_job_id: dict[int, str] = {}
-        self._ready_batches: list[tuple[int, int, int, int]] = []
+        self._ready_batches = ReadyBatchIndex()
         self._cache_heaps_by_batch: dict[int, list[tuple[int, int, int, int]]] = defaultdict(list)
         self._runnable_heaps_by_batch: dict[int, list[tuple[int, int, int, int]]] = defaultdict(list)
         self._affinity_batches_by_host: dict[str, deque[int]] = defaultdict(deque)
-        self._stolen_batch_by_host: dict[str, int] = {}
-        self._batch_ids_in_heap: set[int] = set()
-        self._ready_prerequisite_ids: dict[tuple[str, str], dict[int, None]] = defaultdict(dict)
+        self._ready_prerequisites: dict[tuple[str, str], ReadyBatchIndex] = {}
         self._finalization_retry_heap: list[tuple[float, int]] = []
         self._finalization_retry_deadlines: dict[int, float] = {}
         self._host_telemetry: dict[str, HostTelemetryState] = {}
@@ -140,13 +164,13 @@ class BatchScheduler(BatchSchedulerResultMixin):
             self._cache_heaps_by_batch.clear()
             self._runnable_heaps_by_batch.clear()
             self._affinity_batches_by_host.clear()
-            self._stolen_batch_by_host.clear()
-            self._batch_ids_in_heap.clear()
-            self._ready_prerequisite_ids.clear()
+            self._ready_prerequisites.clear()
             self._finalization_retry_heap.clear()
             self._finalization_retry_deadlines.clear()
             self._host_telemetry.clear()
             self._telemetry_hosts_by_batch.clear()
+            self._ready_generation += 1
+            self._ready_condition.notify_all()
 
     @staticmethod
     def _priority(batch: ExecutionBatchRecord) -> int:
@@ -155,7 +179,7 @@ class BatchScheduler(BatchSchedulerResultMixin):
     @staticmethod
     def _batch_row(batch: ExecutionBatchRecord) -> ExecutionBatchRow:
         row = asdict(batch)
-        row.pop("has_been_dispatched")
+        row.pop("dispatch_count")
         return row  # type: ignore[return-value]
 
     @staticmethod
@@ -257,23 +281,20 @@ class BatchScheduler(BatchSchedulerResultMixin):
             return pending
         if batch.materialization_state != "ready":
             return None
-        if batch.compile_state == "unknown" and batch.compile_owner not in {None, hostname or None}:
-            return None
-        if batch.compile_state == "unknown" and batch.compile_owner is not None and self._batch_counts[batch.batch_id].leased:
-            return None
         return pending
 
     def _batch_heap_key_locked(
         self,
         batch: ExecutionBatchRecord,
-    ) -> tuple[int, int, int, int] | None:
+    ) -> ReadyBatchKey | None:
         case = self._batch_next_case_locked(batch)
         if case is None:
             return None
         return (
             self._priority(batch),
-            int(batch.has_been_dispatched),
+            batch.dispatch_count,
             case.scope_sequence,
+            -self._batch_counts[batch.batch_id].pending,
             batch.batch_id,
         )
 
@@ -286,23 +307,25 @@ class BatchScheduler(BatchSchedulerResultMixin):
         if batch.task_kind not in self._PREREQUISITE_TASK_KINDS:
             return
         key = (batch.verification_id, batch.task_kind)
-        index = self._ready_prerequisite_ids[key]
+        index = self._ready_prerequisites.get(key)
         if ready:
-            index.setdefault(batch.batch_id, None)
-        else:
-            index.pop(batch.batch_id, None)
-            if not index:
-                self._ready_prerequisite_ids.pop(key, None)
+            if index is None:
+                index = ReadyBatchIndex()
+                self._ready_prerequisites[key] = index
+            index.update(batch.batch_id, self._batch_heap_key_locked(batch))
+            return
+        if index is None:
+            return
+        index.remove(batch.batch_id)
+        if len(index) == 0:
+            self._ready_prerequisites.pop(key, None)
 
     def _push_batch_ready_locked(self, batch: ExecutionBatchRecord) -> None:
         key = self._batch_heap_key_locked(batch)
         self._refresh_prerequisite_index_locked(batch, ready=key is not None)
-        if key is None:
-            return
-        if batch.batch_id in self._batch_ids_in_heap:
-            return
-        self._batch_ids_in_heap.add(batch.batch_id)
-        heapq.heappush(self._ready_batches, key)
+        if self._ready_batches.update(batch.batch_id, key):
+            self._ready_generation += 1
+            self._ready_condition.notify_all()
 
     def _touch_batch_locked(self, batch: ExecutionBatchRecord) -> None:
         self._push_batch_ready_locked(batch)
@@ -401,7 +424,10 @@ class BatchScheduler(BatchSchedulerResultMixin):
             and batch.materialization_state != "materializing"
         ):
             self._close_batch_locked(batch, updated_at=updated_at)
-        if refresh_batch:
+        if refresh_batch and (
+            old_status in self._READY_CASE_STATUSES
+            or status in self._READY_CASE_STATUSES
+        ):
             self._refresh_batches_locked({batch.batch_id})
 
     def _refresh_batches_locked(
@@ -495,27 +521,23 @@ class BatchScheduler(BatchSchedulerResultMixin):
         )
 
     def _peek_ready_batch_locked(self) -> ExecutionBatchRecord | None:
-        while self._ready_batches:
-            entry = self._ready_batches[0]
-            batch_id = entry[-1]
-            batch = self._batches.get(batch_id)
-            key = None if batch is None else self._batch_heap_key_locked(batch)
-            if key is not None and batch is not None and key == entry:
-                return batch
-            heapq.heappop(self._ready_batches)
-            self._batch_ids_in_heap.discard(batch_id)
-            if batch is not None and key is not None:
-                self._push_batch_ready_locked(batch)
-        return None
+        entry = self._ready_batches.first()
+        if entry is None:
+            return None
+        batch = self._batches.get(entry[-1])
+        if batch is None or self._batch_heap_key_locked(batch) != entry:
+            raise RuntimeError("ready Batch index is inconsistent")
+        return batch
+
+    def _dispatch_batch_locked(self, batch: ExecutionBatchRecord) -> None:
+        batch.dispatch_count += 1
+        self._touch_batch_locked(batch)
 
     def _take_ready_batch_locked(self) -> ExecutionBatchRecord | None:
         batch = self._peek_ready_batch_locked()
         if batch is None:
             return None
-        heapq.heappop(self._ready_batches)
-        self._batch_ids_in_heap.discard(batch.batch_id)
-        batch.has_been_dispatched = True
-        self._push_batch_ready_locked(batch)
+        self._dispatch_batch_locked(batch)
         return batch
 
     def _prune_host_context_locked(self, hostname: str) -> deque[int]:
@@ -529,33 +551,19 @@ class BatchScheduler(BatchSchedulerResultMixin):
             self._affinity_batches_by_host[hostname] = retained
         else:
             self._affinity_batches_by_host.pop(hostname, None)
-        stolen_id = self._stolen_batch_by_host.get(hostname)
-        if stolen_id is not None:
-            stolen = self._batches.get(stolen_id)
-            if stolen is None or stolen.status != "open":
-                self._stolen_batch_by_host.pop(hostname, None)
         return retained
 
     def _remember_host_batch_locked(
         self,
         hostname: str,
         batch: ExecutionBatchRecord,
-        *,
-        foreground: bool = False,
     ) -> None:
         queue_ids = self._prune_host_context_locked(hostname)
         if batch.batch_id in queue_ids:
             return
-        if foreground:
-            self._stolen_batch_by_host[hostname] = batch.batch_id
-            return
         if len(queue_ids) < self._AFFINITY_QUEUE_SIZE:
             queue_ids.append(batch.batch_id)
             self._affinity_batches_by_host[hostname] = queue_ids
-            if self._stolen_batch_by_host.get(hostname) == batch.batch_id:
-                self._stolen_batch_by_host.pop(hostname, None)
-            return
-        self._stolen_batch_by_host[hostname] = batch.batch_id
 
     def _ready_host_batch_locked(
         self,
@@ -575,21 +583,18 @@ class BatchScheduler(BatchSchedulerResultMixin):
         task_kind: str,
         hostname: str,
     ) -> ExecutionBatchRecord | None:
-        index = self._ready_prerequisite_ids.get((verification_id, task_kind))
+        index_key = (verification_id, task_kind)
+        index = self._ready_prerequisites.get(index_key)
         if not index:
             return None
-        for batch_id in tuple(index):
-            batch = self._batches.get(batch_id)
-            if batch is None or batch.status != "open":
-                index.pop(batch_id, None)
-                continue
-            if self._batch_next_case_locked(batch, hostname=hostname) is None:
-                continue
-            batch.has_been_dispatched = True
-            return batch
-        if not index:
-            self._ready_prerequisite_ids.pop((verification_id, task_kind), None)
-        return None
+        entry = index.first()
+        if entry is None:
+            return None
+        batch = self._batches.get(entry[-1])
+        if batch is None or self._batch_heap_key_locked(batch) != entry:
+            raise RuntimeError("ready prerequisite index is inconsistent")
+        self._dispatch_batch_locked(batch)
+        return batch
 
     def _unblocking_batch_locked(
         self,
@@ -620,13 +625,9 @@ class BatchScheduler(BatchSchedulerResultMixin):
     def host_context_batches(self, hostname: str) -> list[ExecutionBatchRow]:
         with self._lock:
             affinity_ids = self._prune_host_context_locked(hostname)
-            batch_ids = list(affinity_ids)
-            stolen_id = self._stolen_batch_by_host.get(hostname)
-            if stolen_id is not None and stolen_id not in batch_ids:
-                batch_ids.append(stolen_id)
             return [
                 self._batch_row(self._batches[batch_id])
-                for batch_id in batch_ids
+                for batch_id in affinity_ids
                 if batch_id in self._batches
             ]
 
@@ -652,20 +653,13 @@ class BatchScheduler(BatchSchedulerResultMixin):
             if global_batch is not None and global_batch.service_class == "foreground":
                 selected = self._take_ready_batch_locked()
                 if selected is not None:
-                    self._remember_host_batch_locked(hostname, selected, foreground=True)
+                    self._remember_host_batch_locked(hostname, selected)
                     return self._batch_row(selected)
 
             affinity_ids = self._prune_host_context_locked(hostname)
             affinity_batch = self._ready_host_batch_locked(hostname, affinity_ids)
             if affinity_batch is not None:
                 return self._batch_row(affinity_batch)
-
-            stolen_id = self._stolen_batch_by_host.get(hostname)
-            stolen = None if stolen_id is None else self._batches.get(stolen_id)
-            if stolen is not None and self._batch_next_case_locked(stolen, hostname=hostname) is not None:
-                return self._batch_row(stolen)
-            if stolen_id is not None:
-                self._stolen_batch_by_host.pop(hostname, None)
 
             unblocking = self._unblocking_batch_locked(hostname, affinity_ids)
             if unblocking is not None:
@@ -678,6 +672,18 @@ class BatchScheduler(BatchSchedulerResultMixin):
             self._remember_host_batch_locked(hostname, selected)
             return self._batch_row(selected)
 
+    def wait_for_ready_batch(self, timeout_sec: float) -> bool:
+        """Wait for one readiness transition without retaining the Scheduler lock."""
+        with self._ready_condition:
+            if self._ready_batches.first() is not None:
+                return True
+            generation = self._ready_generation
+            self._ready_condition.wait_for(
+                lambda: self._ready_generation != generation,
+                timeout=max(0.0, float(timeout_sec)),
+            )
+            return self._ready_batches.first() is not None
+
     def host_leased_case_count(self, hostname: str) -> int:
         with self._lock:
             return len(self._leased_case_ids_by_host.get(hostname, ()))
@@ -687,6 +693,12 @@ class BatchScheduler(BatchSchedulerResultMixin):
         with self._lock:
             counts = self._batch_counts.get(int(batch_id))
             return 0 if counts is None else int(getattr(counts, self._status_attr(status)))
+
+    def batch_dispatch_count(self, batch_id: int) -> int:
+        """Return the process-local number of non-affinity dispatches."""
+        with self._lock:
+            batch = self._batches.get(int(batch_id))
+            return 0 if batch is None else batch.dispatch_count
 
     def active_lease_counts(self) -> dict[str, int]:
         with self._lock:
@@ -899,10 +911,6 @@ class BatchScheduler(BatchSchedulerResultMixin):
                     self._affinity_batches_by_host[hostname] = retained
                 else:
                     self._affinity_batches_by_host.pop(hostname, None)
-            for hostname, batch_id in tuple(self._stolen_batch_by_host.items()):
-                if batch_id in batch_id_set:
-                    self._stolen_batch_by_host.pop(hostname, None)
-
             for batch_id in batch_ids:
                 batch = self._batches[batch_id]
                 self._closed_logical_run_keys.add((token, batch.logical_run_id))
@@ -1296,10 +1304,9 @@ class BatchScheduler(BatchSchedulerResultMixin):
                 bypass_case_result_cache=int(bypass_case_result_cache),
                 compile_success=None,
                 compile_state="unknown",
-                compile_owner=None,
                 materialization_state="unmaterialized",
                 service_class=service_class,
-                has_been_dispatched=False,
+                dispatch_count=0,
                 compile_output_b64=None,
                 compile_metadata_b64=None,
                 debug_text="",
@@ -1510,17 +1517,11 @@ class BatchScheduler(BatchSchedulerResultMixin):
                 or batch.status != "open"
                 or batch.materialization_state != "ready"
                 or batch.compile_state == "failed"
-                or (batch.compile_state == "unknown" and batch.compile_owner not in {None, hostname})
-                or (batch.compile_state == "unknown" and batch.compile_owner is not None and self._batch_counts[batch.batch_id].leased)
             ):
                 return []
             first = self._peek_case_heap_locked(batch.batch_id, status="pending")
             if first is None:
                 return []
-            if batch.compile_state == "unknown":
-                cap = 1
-                batch.compile_owner = hostname
-                batch.updated_at = now_text
             leased: list[JudgehostCaseRow] = []
             while len(leased) < cap:
                 case = self._peek_case_heap_locked(batch.batch_id, status="pending")

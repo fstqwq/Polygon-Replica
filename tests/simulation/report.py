@@ -6,6 +6,15 @@ from typing import Mapping
 
 _NUMERIC_FIELDS = (
     "makespan_sec",
+    "background_makespan_sec",
+    "foreground_ready_to_lease_sec",
+    "foreground_ready_to_compile_start_sec",
+    "foreground_completion_sec",
+    "foreground_makespan_sec",
+    "foreground_wait_for_current_lease_sec",
+    "foreground_background_lease_count",
+    "foreground_resume_count",
+    "foreground_resume_same_batch_count",
     "duplicate_compile_count",
     "compile_count",
     "compile_time_sec",
@@ -15,6 +24,7 @@ _NUMERIC_FIELDS = (
     "duplicate_report_count",
     "ready_to_lease_p95_sec",
     "average_host_utilization",
+    "program_switch_count",
     "empty_fetch_count",
     "poll_backoff_sec",
     "long_poll_wake_count",
@@ -32,11 +42,12 @@ def aggregate_reports(reports: list[dict[str, object]]) -> dict[str, object]:
         values = [float(_summary(report)[metric_name]) for report in reports]
         aggregates[metric_name] = {
             "median": _round(statistics.median(values)),
+            "p95": _round(_percentile(values, 0.95)),
             "minimum": _round(min(values)),
             "maximum": _round(max(values)),
         }
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "workload": str(reports[0]["workload"]),
         "run_count": len(reports),
         "aggregate": aggregates,
@@ -119,3 +130,14 @@ def _mapping_field(payload: Mapping[str, object], field: str) -> Mapping[str, ob
 
 def _round(value: float) -> float:
     return round(float(value), 6)
+
+
+def _percentile(values: list[float], quantile: float) -> float:
+    ordered = sorted(values)
+    if len(ordered) == 1:
+        return ordered[0]
+    position = (len(ordered) - 1) * quantile
+    lower = int(position)
+    upper = min(lower + 1, len(ordered) - 1)
+    fraction = position - lower
+    return ordered[lower] * (1.0 - fraction) + ordered[upper] * fraction

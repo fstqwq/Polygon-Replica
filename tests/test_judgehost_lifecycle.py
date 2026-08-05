@@ -559,7 +559,6 @@ class TestJudgehostLifecycle(DBTestBase):
             compile_success=1,
             compile_output_b64="",
             compile_metadata_b64="",
-            lease_owner="host-a",
             updated_at=_NOW,
         )
         cases = store.lease_cases(batch_id, hostname="host-a", limit=2, now_text=_NOW)
@@ -694,7 +693,6 @@ class TestJudgehostLifecycle(DBTestBase):
             compile_success=1,
             compile_output_b64="",
             compile_metadata_b64="",
-            lease_owner="host-a",
             updated_at=_NOW,
         )
         first_case = store.lease_cases(batch_id, hostname="host-a", limit=1, now_text=_NOW)[0]
@@ -819,7 +817,7 @@ class TestJudgehostLifecycle(DBTestBase):
                         ),
                         *(
                             [_case_row(task_id, run_id, "002.in", 2)]
-                            if scenario == "cancel"
+                            if scenario in {"compile-failure", "cancel"}
                             else []
                         ),
                     ],
@@ -842,12 +840,24 @@ class TestJudgehostLifecycle(DBTestBase):
                         "reported",
                     )
                 elif scenario == "compile-failure":
+                    first_lease = store.lease_cases(
+                        batch_id,
+                        hostname="host-a",
+                        limit=1,
+                        now_text=_NOW,
+                    )
+                    second_lease = store.lease_cases(
+                        batch_id,
+                        hostname="host-b",
+                        limit=1,
+                        now_text=_NOW,
+                    )
+                    self.assertEqual((len(first_lease), len(second_lease)), (1, 1))
                     store.record_compile_result(
                         batch_id,
                         compile_success=0,
                         compile_output_b64="",
                         compile_metadata_b64="",
-                        lease_owner="host-a",
                         updated_at=_NOW,
                     )
                 else:

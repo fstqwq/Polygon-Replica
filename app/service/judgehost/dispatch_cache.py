@@ -16,6 +16,7 @@ from app.service.judgehost.runtime import (
 from app.service.judgehost.shared import domjudge_lower_text, domjudge_text
 
 from app.service.judgehost.batch_scheduler_models import (
+    CaseClaim,
     CaseResult,
     CompileSubmission,
     ExecutionBatchRow,
@@ -255,26 +256,13 @@ class DispatchCacheMixin:
             return 0
 
         processed = 0
+        finished_claims: list[tuple[CaseClaim, CaseResult | None]] = []
+        unprocessed: list[CaseClaim] = []
         for claim, row in claims:
             if deadline is not None and processed > 0 and time.monotonic() >= deadline:
-                self._s.batch_scheduler.abort_case_claim(
-                    claim.case_id,
-                    generation=claim.generation,
-                    updated_at=now_iso(),
-                )
+                unprocessed.append(claim)
                 continue
             try:
-                cache_key_hash, cache_signature = self._toolkit.case_cache_ref(
-                    source_hash=domjudge_lower_text(batch_row["source_hash"]),
-                    compile_hash=domjudge_lower_text(batch_row["compile_hash"]),
-                    run_hash=domjudge_lower_text(batch_row["run_hash"]),
-                    compare_hash=domjudge_lower_text(batch_row["compare_hash"]),
-                    compile_config_hash=compile_config_hash,
-                    run_config_hash=run_config_hash,
-                    compare_config_hash=compare_config_hash,
-                    toolchain_cmd_digest=toolchain_cmd_digest,
-                    testcase_hash=domjudge_lower_text(row["testcase_hash"]),
-                )
                 shortcut = self._domjudge_try_cache_shortcut(
                     batch_row=batch_row,
                     case_row=row,
@@ -290,35 +278,40 @@ class DispatchCacheMixin:
                     int(row["id"]),
                 )
                 shortcut = None
-            if shortcut is None:
-                self._s.batch_scheduler.finish_cache_miss(
-                    claim.case_id,
-                    generation=claim.generation,
-                    updated_at=now_iso(),
-                )
-            else:
-                outcome = self._s.batch_scheduler.commit_case_result(
-                    claim.case_id,
-                    generation=claim.generation,
-                    result=shortcut,
-                    updated_at=now_iso(),
-                )
-                if outcome == "reported":
-                    try:
-                        self._result._domjudge_publish_reported_case(
-                            task_id=claim.task_id,
-                            test_name=claim.test_name,
-                        )
-                    except Exception:
-                        logger.exception(
-                            "failed to publish cached DOMjudge case batch_id=%s case_id=%s",
-                            int(batch_id),
-                            claim.case_id,
-                        )
-                    self._result._domjudge_finalize_task_if_ready(
-                        claim.task_id,
-                        batch_row=dict(batch_row),
-                    )
+            finished_claims.append((claim, shortcut))
             processed += 1
+        outcomes = self._s.batch_scheduler.finish_cache_claims(
+            finished_claims,
+            updated_at=now_iso(),
+        )
+        for claim, _shortcut in finished_claims:
+            outcome = outcomes.get(claim.case_id)
+            try:
+                if outcome == "reported":
+                    self._result._domjudge_publish_reported_case(
+                        task_id=claim.task_id,
+                        test_name=claim.test_name,
+                    )
+                elif outcome == "cancelled":
+                    self._result._publish_verification_case_cancelled(
+                        task_id=claim.task_id,
+                        test_name=claim.test_name,
+                    )
+            except Exception:
+                logger.exception(
+                    "failed to publish cached DOMjudge case batch_id=%s case_id=%s",
+                    int(batch_id),
+                    claim.case_id,
+                )
+            if outcome in {"reported", "cancelled"}:
+                self._result._domjudge_finalize_task_if_ready(
+                    claim.task_id,
+                    batch_row=dict(batch_row),
+                )
+        if unprocessed:
+            self._s.batch_scheduler.abort_cache_claims(
+                unprocessed,
+                updated_at=now_iso(),
+            )
         self._result._domjudge_finalize_batch_if_ready(batch_id)
         return processed

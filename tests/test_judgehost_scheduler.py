@@ -207,7 +207,6 @@ def _create_ready_batch(
         compile_success=1,
         compile_output_b64="",
         compile_metadata_b64="",
-        lease_owner="host-setup",
         updated_at=now_text,
     )
     return batch_id
@@ -359,6 +358,7 @@ class TestJudgehostScheduler(unittest.TestCase):
             scope=2,
         )
         self.assertEqual(scheduler.select_ready_batch("host-a")["batch_id"], foreground_id)
+        self.assertEqual(scheduler.batch_dispatch_count(foreground_id), 1)
         foreground = scheduler.lease_cases(
             foreground_id,
             hostname="host-a",
@@ -394,6 +394,53 @@ class TestJudgehostScheduler(unittest.TestCase):
         self.assertEqual(scheduler.select_ready_batch("host-b")["batch_id"], second_id)
         self.assertEqual(scheduler.select_ready_batch("host-c")["batch_id"], first_id)
         self.assertEqual(scheduler.select_ready_batch("host-a")["batch_id"], first_id)
+
+    def test_global_ready_order_uses_dispatch_scope_pending_and_id(self) -> None:
+        scheduler = BatchScheduler(id_base=128)
+        smaller_id = _create_ready_batch(
+            scheduler,
+            task_id="global-small",
+            run_id="run-global-small",
+            ordinals=[1],
+        )
+        larger_id = _create_ready_batch(
+            scheduler,
+            task_id="global-large",
+            run_id="run-global-large",
+            ordinals=[2, 3, 4],
+        )
+
+        self.assertEqual(scheduler.select_ready_batch("host-a")["batch_id"], larger_id)
+        self.assertEqual(scheduler.batch_dispatch_count(larger_id), 1)
+        self.assertEqual(scheduler.select_ready_batch("host-b")["batch_id"], smaller_id)
+        self.assertEqual(scheduler.batch_dispatch_count(smaller_id), 1)
+
+    def test_existing_lease_and_affinity_reuse_do_not_increment_dispatch(self) -> None:
+        scheduler = BatchScheduler(id_base=130)
+        batch_id = _create_ready_batch(
+            scheduler,
+            task_id="dispatch-reuse",
+            run_id="run-dispatch-reuse",
+            ordinals=[1, 2],
+        )
+        self.assertEqual(scheduler.select_ready_batch("host-a")["batch_id"], batch_id)
+        self.assertEqual(scheduler.batch_dispatch_count(batch_id), 1)
+        leased = scheduler.lease_cases(
+            batch_id,
+            hostname="host-a",
+            limit=1,
+            now_text=datetime.now(timezone.utc).isoformat(),
+        )[0]
+
+        self.assertEqual(scheduler.select_ready_batch("host-a")["batch_id"], batch_id)
+        self.assertEqual(scheduler.batch_dispatch_count(batch_id), 1)
+        scheduler.request_batch_case_results(
+            batch_id,
+            results={int(leased["id"]): _case_result("001.in")},
+            updated_at=datetime.now(timezone.utc).isoformat(),
+        )
+        self.assertEqual(scheduler.select_ready_batch("host-a")["batch_id"], batch_id)
+        self.assertEqual(scheduler.batch_dispatch_count(batch_id), 1)
 
     def test_host_queue_keeps_temporarily_blocked_batch(self) -> None:
         scheduler = BatchScheduler(id_base=132)
@@ -486,7 +533,6 @@ class TestJudgehostScheduler(unittest.TestCase):
             compile_success=0,
             compile_output_b64="",
             compile_metadata_b64="",
-            lease_owner="host-a",
             updated_at=now_text,
         )
 
@@ -508,7 +554,6 @@ class TestJudgehostScheduler(unittest.TestCase):
                 compile_success=1,
                 compile_output_b64="",
                 compile_metadata_b64="",
-                lease_owner="host-a",
                 updated_at=now_text,
             )
         )
@@ -611,8 +656,9 @@ class TestJudgehostScheduler(unittest.TestCase):
         selected = scheduler.select_ready_batch("host-a")["batch_id"]
         self.assertEqual(selected, main_a)
         self.assertNotIn(selected, {generate_a, main_b})
+        self.assertEqual(scheduler.batch_dispatch_count(main_a), 1)
 
-    def test_full_affinity_queue_keeps_one_stolen_batch_until_it_blocks(self) -> None:
+    def test_full_affinity_queue_does_not_create_stolen_state(self) -> None:
         scheduler = BatchScheduler(id_base=185)
         affinity_ids: list[int] = []
         for index in range(4):
@@ -649,23 +695,9 @@ class TestJudgehostScheduler(unittest.TestCase):
             ordinals=[11],
         )
         self.assertEqual(scheduler.select_ready_batch("host-a")["batch_id"], stolen_id)
-        self.assertEqual(scheduler.select_ready_batch("host-a")["batch_id"], stolen_id)
-        self.assertEqual(len(scheduler.host_context_batches("host-a")), 5)
-
-        stolen_case = scheduler.lease_cases(
-            stolen_id,
-            hostname="host-a",
-            limit=1,
-            now_text=datetime.now(timezone.utc).isoformat(),
-        )[0]
-        scheduler.request_batch_case_results(
-            stolen_id,
-            results={int(stolen_case["id"]): _case_result("010.in")},
-            updated_at=datetime.now(timezone.utc).isoformat(),
-        )
         self.assertEqual(scheduler.select_ready_batch("host-a")["batch_id"], waiting_id)
         self.assertEqual(
-            [row["batch_id"] for row in scheduler.host_context_batches("host-a")[:4]],
+            [row["batch_id"] for row in scheduler.host_context_batches("host-a")],
             affinity_ids,
         )
 
@@ -768,6 +800,30 @@ class TestJudgehostScheduler(unittest.TestCase):
         self.assertEqual(scheduler.select_ready_batch("host-a")["batch_id"], batch_id)
         self.assertEqual(scheduler.select_ready_batch("host-b")["batch_id"], batch_id)
 
+    def test_ready_wait_uses_generation_without_lost_wakeup(self) -> None:
+        scheduler = BatchScheduler(id_base=260)
+        _batch_id, now_text = _create_staged_batch(
+            scheduler,
+            task_id="wait-ready",
+            run_id="run-wait-ready",
+            ordinals=[1],
+        )
+        entered = threading.Event()
+        outcomes: list[bool] = []
+
+        def _wait() -> None:
+            entered.set()
+            outcomes.append(scheduler.wait_for_ready_batch(1.0))
+
+        thread = threading.Thread(target=_wait)
+        thread.start()
+        self.assertTrue(entered.wait(timeout=1.0))
+        scheduler.activate_task_cases("wait-ready", now_text=now_text)
+        thread.join(timeout=2.0)
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(outcomes, [True])
+        self.assertEqual(scheduler.select_ready_batch("host-b")["batch_id"], _batch_id)
+
     def test_reporting_claim_serializes_duplicate_and_defers_cancel(self) -> None:
         scheduler = BatchScheduler(id_base=250)
         batch_id = _create_ready_batch(
@@ -826,7 +882,43 @@ class TestJudgehostScheduler(unittest.TestCase):
         scheduler.finish_verification_execution("ver-1", now_text="2026-08-03T00:00:04+00:00")
         self.assertEqual(scheduler.fetch_batch(batch_id)["status"], "finalize-pending")
 
-    def test_run_result_claim_opens_warm_compile_gate_without_compile_callback(self) -> None:
+    def test_ordinary_case_report_does_not_refresh_ready_index(self) -> None:
+        scheduler = BatchScheduler(id_base=272)
+        batch_id = _create_ready_batch(
+            scheduler,
+            task_id="report-index",
+            run_id="run-report-index",
+            ordinals=[1, 2],
+        )
+        case = scheduler.lease_cases(
+            batch_id,
+            hostname="host-a",
+            limit=1,
+            now_text="2026-08-03T00:00:00+00:00",
+        )[0]
+        with patch.object(
+            scheduler,
+            "_touch_batch_locked",
+            wraps=scheduler._touch_batch_locked,
+        ) as touch_batch:
+            claim = scheduler.claim_case_reporting(
+                int(case["id"]),
+                hostname="host-a",
+                now_text="2026-08-03T00:00:01+00:00",
+            )
+            assert claim is not None
+            self.assertEqual(
+                scheduler.commit_case_result(
+                    claim.case_id,
+                    generation=claim.generation,
+                    result=_case_result("001.in"),
+                    updated_at="2026-08-03T00:00:02+00:00",
+                ),
+                "reported",
+            )
+        self.assertEqual(touch_batch.call_count, 0)
+
+    def test_unknown_compile_batch_can_lease_to_multiple_hosts(self) -> None:
         scheduler = BatchScheduler(id_base=275)
         batch_id, now_text = _create_staged_batch(
             scheduler,
@@ -854,14 +946,23 @@ class TestJudgehostScheduler(unittest.TestCase):
             now_text=now_text,
         )
 
-        leader = scheduler.lease_cases(
+        first = scheduler.lease_cases(
             batch_id,
             hostname="host-a",
-            limit=8,
+            limit=1,
             now_text=now_text,
         )
-        self.assertEqual(len(leader), 1)
-        case_id = int(leader[0]["id"])
+        second = scheduler.lease_cases(
+            batch_id,
+            hostname="host-b",
+            limit=1,
+            now_text=now_text,
+        )
+        self.assertEqual([int(row["ordinal"]) for row in first], [1])
+        self.assertEqual([int(row["ordinal"]) for row in second], [2])
+        self.assertEqual(scheduler.fetch_batch(batch_id)["compile_state"], "unknown")
+
+        case_id = int(first[0]["id"])
         claim = scheduler.claim_case_reporting(
             case_id,
             hostname="host-a",
@@ -880,11 +981,11 @@ class TestJudgehostScheduler(unittest.TestCase):
         self.assertEqual(scheduler.fetch_batch(batch_id)["compile_state"], "succeeded")
         followers = scheduler.lease_cases(
             batch_id,
-            hostname="host-b",
+            hostname="host-c",
             limit=8,
             now_text=now_text,
         )
-        self.assertEqual([int(row["ordinal"]) for row in followers], [2, 3])
+        self.assertEqual([int(row["ordinal"]) for row in followers], [3])
 
     def test_invalid_run_result_claim_cannot_change_compile_state(self) -> None:
         scheduler = BatchScheduler(id_base=290)
@@ -949,7 +1050,6 @@ class TestJudgehostScheduler(unittest.TestCase):
                 compile_success=0,
                 compile_output_b64="",
                 compile_metadata_b64="",
-                lease_owner="host-a",
                 updated_at=now_text,
             )
         )
@@ -1002,16 +1102,62 @@ class TestJudgehostScheduler(unittest.TestCase):
         reported = scheduler.fetch_case(first_claim.case_id)
         self.assertEqual(reported["status"], "reported")
         self.assertIsNone(reported["lease_owner"])
-        for claim, _row in claims[1:]:
-            self.assertTrue(
-                scheduler.finish_cache_miss(
-                    claim.case_id,
-                    generation=claim.generation,
-                    updated_at=now_text,
-                )
+        with patch.object(
+            scheduler,
+            "_touch_batch_locked",
+            wraps=scheduler._touch_batch_locked,
+        ) as touch_batch:
+            outcomes = scheduler.finish_cache_claims(
+                [(claim, None) for claim, _row in claims[1:]],
+                updated_at=now_text,
             )
+        self.assertEqual(set(outcomes.values()), {"pending"})
+        self.assertEqual(touch_batch.call_count, 1)
         self.assertEqual(len(scheduler.cases_for_batch(batch_id, status="pending")), 255)
         self.assertEqual(scheduler.select_ready_batch("host-a")["batch_id"], batch_id)
+
+    def test_bulk_cache_abort_refreshes_each_batch_once(self) -> None:
+        scheduler = BatchScheduler(id_base=315)
+        batch_id, now_text = _create_staged_batch(
+            scheduler,
+            task_id="bulk-abort",
+            run_id="run-bulk-abort",
+            ordinals=list(range(1, 258)),
+        )
+        self.assertTrue(scheduler.activate_task_cases("bulk-abort", now_text=now_text))
+        claims = scheduler.claim_cache_cases(
+            batch_id,
+            hostname="cache",
+            limit=256,
+            now_text=now_text,
+        )
+        self.assertEqual(len(claims), 256)
+        first_claim, _row = claims[0]
+        self.assertTrue(
+            scheduler.finish_cache_miss(
+                first_claim.case_id,
+                generation=first_claim.generation,
+                updated_at=now_text,
+            )
+        )
+        with patch.object(
+            scheduler,
+            "_touch_batch_locked",
+            wraps=scheduler._touch_batch_locked,
+        ) as touch_batch:
+            self.assertEqual(
+                scheduler.abort_cache_claims(
+                    [claim for claim, _row in claims[1:]],
+                    updated_at=now_text,
+                ),
+                255,
+            )
+        self.assertEqual(touch_batch.call_count, 1)
+        self.assertEqual(scheduler.batch_case_count(batch_id, status="pending"), 1)
+        self.assertEqual(
+            scheduler.batch_case_count(batch_id, status="cache-pending"),
+            256,
+        )
 
     def test_script_hash_index_tracks_open_job_references(self) -> None:
         scheduler = BatchScheduler(id_base=400)
