@@ -60,63 +60,45 @@
     });
   }
 
-  function initializeReview(review) {
-    var comparison = review.querySelector("[data-merge-comparison]");
-    var selectedInput = review.querySelector("[data-selected-entry-input]");
-    var buttons = Array.prototype.slice.call(review.querySelectorAll("[data-compare-url]"));
-    var controller = null;
-
-    function select(button) {
-      if (controller) controller.abort();
-      controller = new AbortController();
-      buttons.forEach(function (row) {
-        var active = row === button;
-        row.classList.toggle("active", active);
-        row.setAttribute("aria-selected", active ? "true" : "false");
-      });
-      if (selectedInput) selectedInput.value = button.dataset.entryId || "";
-      comparison.setAttribute("aria-busy", "true");
-      comparison.querySelector("[data-merge-empty]").hidden = false;
-      comparison.querySelector("[data-merge-empty]").textContent = "Loading comparison...";
-      comparison.querySelector("[data-merge-content]").hidden = true;
-      comparison.querySelector("[data-merge-error]").hidden = true;
-      fetch(button.dataset.compareUrl, { credentials: "same-origin", signal: controller.signal })
-        .then(function (response) {
-          return response.json().then(function (payload) {
-            if (!response.ok) throw new Error(payload.error || "Unable to load this comparison.");
-            return payload;
-          });
-        })
-        .then(function (payload) {
-          renderComparison(comparison, payload);
-        })
-        .catch(function (error) {
-          if (error.name === "AbortError") return;
-          comparison.querySelector("[data-merge-empty]").hidden = true;
-          comparison.querySelector("[data-merge-content]").hidden = true;
-          var errorNode = comparison.querySelector("[data-merge-error]");
-          errorNode.textContent = error.message || "Unable to load this comparison.";
-          errorNode.hidden = false;
-        })
-        .finally(function () {
-          comparison.setAttribute("aria-busy", "false");
+  function loadComparison(comparison, url, controller) {
+    comparison.setAttribute("aria-busy", "true");
+    comparison.querySelector("[data-merge-empty]").hidden = false;
+    comparison.querySelector("[data-merge-empty]").textContent = "Loading comparison...";
+    comparison.querySelector("[data-merge-content]").hidden = true;
+    comparison.querySelector("[data-merge-error]").hidden = true;
+    return fetch(url, { credentials: "same-origin", signal: controller && controller.signal })
+      .then(function (response) {
+        return response.json().then(function (payload) {
+          if (!response.ok) throw new Error(payload.error || "Unable to load this comparison.");
+          return payload;
         });
-    }
-
-    buttons.forEach(function (button) {
-      button.addEventListener("click", function () {
-        select(button);
+      })
+      .then(function (payload) {
+        renderComparison(comparison, payload);
+      })
+      .catch(function (error) {
+        if (error.name === "AbortError") return;
+        comparison.querySelector("[data-merge-empty]").hidden = true;
+        comparison.querySelector("[data-merge-content]").hidden = true;
+        var errorNode = comparison.querySelector("[data-merge-error]");
+        errorNode.textContent = error.message || "Unable to load this comparison.";
+        errorNode.hidden = false;
+      })
+      .finally(function () {
+        comparison.setAttribute("aria-busy", "false");
       });
+  }
+
+  function initializeExpandedReview(review) {
+    Array.prototype.slice.call(review.querySelectorAll("[data-merge-comparison][data-compare-url]")).forEach(function (comparison) {
+      loadComparison(comparison, comparison.dataset.compareUrl, null);
     });
-    var requested = review.dataset.selectedEntry || "";
-    var initial = buttons.find(function (button) {
-      return button.dataset.entryId === requested;
-    }) || buttons[0];
-    if (initial) select(initial);
   }
 
   function start() {
-    document.querySelectorAll("[data-merge-review]").forEach(initializeReview);
+    document.querySelectorAll("[data-merge-review]").forEach(function (review) {
+      initializeExpandedReview(review);
+    });
   }
 
   if (document.readyState === "loading") {

@@ -37,12 +37,9 @@ from app.impl.problem.git_op import git_discard_path, revision_commit
 from app.impl.problem.history import history_page
 from app.impl.problem.merge_op import (
     merge_apply,
-    merge_cancel,
     merge_compare,
-    merge_edit,
     merge_file,
     merge_page,
-    merge_review,
     merge_start,
     merge_undo,
 )
@@ -405,16 +402,7 @@ router.add_api_route(
     response_class=HTMLResponse,
 )
 router.add_api_route(
-    "/problems/{problem:path}/merge/{preview_id}/review", merge_review, methods=["POST"]
-)
-router.add_api_route(
-    "/problems/{problem:path}/merge/{preview_id}/edit", merge_edit, methods=["POST"]
-)
-router.add_api_route(
     "/problems/{problem:path}/merge/{preview_id}/apply", merge_apply, methods=["POST"]
-)
-router.add_api_route(
-    "/problems/{problem:path}/merge/{preview_id}/cancel", merge_cancel, methods=["POST"]
 )
 router.add_api_route(
     "/problems/{problem:path}/merge/{preview_id}/file/{entry_id}", merge_file, methods=["GET"]

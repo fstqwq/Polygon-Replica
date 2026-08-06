@@ -148,15 +148,22 @@ class TestPublicContracts(unittest.TestCase):
     def test_merge_ui_uses_result_language_and_has_no_default_file_choice(self) -> None:
         source = (ROOT / "app" / "template" / "merge.html").read_text(encoding="utf-8")
         for label in [
-            "Review and choose",
-            "Confirm update",
-            "Review suggested update",
-            "Choose complete files instead",
-            "Keep my files unchanged",
+            "choose files one by one",
+            "Update my files",
             "Use the latest shared file",
             "Keep my current file",
+            "Fast-forward possible.",
         ]:
             self.assertIn(label, source)
+        self.assertNotIn("Choose complete files instead", source)
+        self.assertNotIn("Keep my files unchanged", source)
+        self.assertNotIn("Each comparison shows", source)
+        self.assertNotIn("Review and choose", source)
+        self.assertNotIn("Confirm update", source)
+        self.assertNotIn("Confirm File Update", source)
+        self.assertNotIn("merge-file-browser", source)
+        self.assertNotIn("merge-review-layout", source)
+        self.assertNotIn("data-selected-entry", source)
         self.assertNotIn('value="latest" required checked', source)
         self.assertNotIn('value="current" required checked', source)
         self.assertNotIn("File group", source)
@@ -167,6 +174,10 @@ class TestPublicContracts(unittest.TestCase):
         script = (ROOT / "app" / "static" / "merge.js").read_text(encoding="utf-8")
         self.assertIn("textContent", script)
         self.assertNotIn("innerHTML", script)
+
+        routes = (ROOT / "app" / "route" / "problem_route.py").read_text(encoding="utf-8")
+        for suffix in ["/merge/{preview_id}/review", "/merge/{preview_id}/edit", "/merge/{preview_id}/cancel"]:
+            self.assertNotIn(suffix, routes)
 
     def test_old_danger_link_variants_removed_from_templates_and_styles(self) -> None:
         offenders: list[str] = []

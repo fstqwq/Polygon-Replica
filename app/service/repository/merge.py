@@ -61,6 +61,7 @@ class MergePreview:
     latest_manifest: tuple[MergeFile, ...]
     suggested_manifest: tuple[MergeFile, ...]
     suggested_available: bool
+    fast_forward_possible: bool
 
 
 class WorkspaceMergeService:
@@ -111,12 +112,6 @@ class WorkspaceMergeService:
     def shared_revision_advanced(cls, workspace: Path) -> bool:
         return cls.current_head(workspace) != cls.latest_shared_head(workspace)
 
-    def has_active_preview(self, workspace: Path) -> bool:
-        with self._lock:
-            self._prune_expired_locked()
-            preview_id = self._preview_by_workspace.get(str(workspace))
-            return preview_id is not None and preview_id in self._previews
-
     def advance_clean_workspace(self, workspace: Path) -> bool:
         """Fast-forward a clean workspace without creating merge or undo state."""
         with self._workspace_service.workspace_lock(workspace):
@@ -124,11 +119,6 @@ class WorkspaceMergeService:
             latest_head = self.latest_shared_head(workspace)
             if not latest_head or current_head == latest_head:
                 return False
-            with self._lock:
-                self._prune_expired_locked()
-                preview_id = self._preview_by_workspace.get(str(workspace))
-                if preview_id is not None and preview_id in self._previews:
-                    return False
             status = run_git(
                 [
                     "git",
@@ -482,6 +472,20 @@ class WorkspaceMergeService:
                 raise RuntimeError(clone.stderr or clone.stdout or "failed to read the latest shared revision")
             shared_repo = root / "shared-repo"
             self._assert_shared_tree_has_no_symlinks(shared_repo, latest_head)
+            fast_forward_possible = False
+            if current_head:
+                ancestor = run_git(
+                    [
+                        "git",
+                        "-C",
+                        str(shared_repo),
+                        "merge-base",
+                        "--is-ancestor",
+                        current_head,
+                        latest_head,
+                    ]
+                )
+                fast_forward_possible = ancestor.returncode == 0
             extract_git_archive(shared_repo, latest_head, latest_tree)
             latest = self._manifest(latest_tree)
             suggested_available = self._build_merge_repo(
@@ -506,6 +510,7 @@ class WorkspaceMergeService:
                 tuple(latest[path] for path in sorted(latest)),
                 tuple(suggested[path] for path in sorted(suggested)),
                 suggested_available,
+                fast_forward_possible,
             )
             with self._lock:
                 self._prune_expired_locked()
@@ -528,11 +533,6 @@ class WorkspaceMergeService:
         if preview is None or preview.actor != actor or preview.problem != problem:
             raise ValueError("merge preview is missing or expired")
         return preview
-
-    def cancel_preview(self, actor: str, problem: str, preview_id: str) -> None:
-        preview = self.get_preview(actor, problem, preview_id)
-        with self._lock:
-            self._drop_preview(preview)
 
     def _claim_preview(self, actor: str, problem: str, preview_id: str) -> MergePreview:
         with self._lock:

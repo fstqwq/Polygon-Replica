@@ -298,7 +298,7 @@ class GitService:
                 ":(glob)**/.*",
             ]
         )
-        proc = run_git(["git", "-C", str(workspace), "commit", "-m", message])
+        proc = run_git(["git", "-C", str(workspace), "commit", "--quiet", "-m", message])
         if proc.returncode != 0:
             raise RuntimeError(proc.stderr or proc.stdout)
         head = run_git(["git", "-C", str(workspace), "rev-parse", "HEAD"])

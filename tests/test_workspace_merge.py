@@ -7,8 +7,10 @@ import unittest
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator, cast
+from unittest.mock import patch
 
 from app.service.platform.git_process import run_git
+from app.service.repository.git import GitService
 from app.service.repository.merge import WorkspaceMergeService
 from app.service.repository.workspace import WorkspaceService, recover_workspace_swap
 from app.setting import Settings
@@ -90,9 +92,26 @@ class TestWorkspaceMerge(unittest.TestCase):
             (self.workspace / "shared.txt").read_text(encoding="utf-8"),
             "latest\n",
         )
-        self.assertFalse(self.service.has_active_preview(self.workspace))
         self.assertFalse(self.service.has_undo(self.workspace))
         self.assertFalse(self.service.advance_clean_workspace(self.workspace))
+
+    def test_git_service_commit_is_quiet_and_keeps_head_and_empty_commit_behavior(self) -> None:
+        target = self.workspace / "quiet-commit.txt"
+        target.write_text("quiet\n", encoding="utf-8")
+
+        with patch("app.service.repository.git.run_git", wraps=run_git) as mocked_run_git:
+            head = GitService().commit(self.workspace, "quiet commit", "Test User", "test@example.invalid")
+
+        commit_command = next(
+            call.args[0]
+            for call in mocked_run_git.call_args_list
+            if len(call.args[0]) >= 5 and call.args[0][3] == "commit"
+        )
+        self.assertEqual(commit_command[-3:], ["--quiet", "-m", "quiet commit"])
+        self.assertEqual(head, self._git(self.workspace, "rev-parse", "HEAD"))
+
+        with self.assertRaisesRegex(RuntimeError, "nothing to commit"):
+            GitService().commit(self.workspace, "empty commit", "Test User", "test@example.invalid")
 
     def test_dirty_or_diverged_workspace_does_not_advance(self) -> None:
         initial_head = self._git(self.workspace, "rev-parse", "HEAD")
@@ -108,18 +127,6 @@ class TestWorkspaceMerge(unittest.TestCase):
         self.assertFalse(self.service.advance_clean_workspace(self.workspace))
         self.assertEqual(self._git(self.workspace, "rev-parse", "HEAD"), diverged_head)
 
-    def test_active_preview_blocks_clean_workspace_auto_update(self) -> None:
-        initial_head = self._git(self.workspace, "rev-parse", "HEAD")
-        self._push_shared_file("preview-shared", "shared.txt", "latest\n")
-        preview = self.service.start_preview("alice", "alice/sample", self.workspace)
-
-        self.assertTrue(self.service.has_active_preview(self.workspace))
-        self.assertFalse(self.service.advance_clean_workspace(self.workspace))
-        self.assertEqual(self._git(self.workspace, "rev-parse", "HEAD"), initial_head)
-
-        self.service.cancel_preview("alice", "alice/sample", preview.preview_id)
-        self.assertTrue(self.service.advance_clean_workspace(self.workspace))
-
     def test_suggested_manifest_lists_only_actual_result_changes(self) -> None:
         (self.workspace / "local.txt").write_text("my edit\n", encoding="utf-8")
         self._push_shared_file("suggested-manifest", "shared.txt", "latest\n")
@@ -127,6 +134,7 @@ class TestWorkspaceMerge(unittest.TestCase):
         preview = self.service.start_preview("alice", "alice/sample", self.workspace)
 
         self.assertTrue(preview.suggested_available)
+        self.assertTrue(preview.fast_forward_possible)
         self.assertEqual(
             [entry.path for entry in preview.suggested_entries],
             ["shared.txt"],

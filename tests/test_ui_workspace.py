@@ -24,7 +24,7 @@ from app.service.statement.constant import (
 )
 from app.service.statement.render import ensure_statement_language_sources
 from app.impl.run_export.import_source import import_package_as_new_problem
-from app.impl.problem.merge_op import merge_compare, merge_edit, merge_page, merge_review
+from app.impl.problem.merge_op import merge_apply, merge_compare, merge_page
 from tests.package_builders import polygon_contest_package, polygon_problem_package
 from tests.common import E2ETestBase
 
@@ -958,7 +958,22 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         self.assertTrue((alice_ws / local_marker).is_file())
         self.assertFalse((alice_ws / shared_marker).exists())
 
-    def test_merge_review_compares_lazily_and_restores_manual_selection(self) -> None:
+        preview = config.workspace_merge_service.start_preview("alice", "alice/sample", alice_ws)
+        self.assertTrue(preview.suggested_available)
+        review = merge_page(
+            _request(f"/problems/alice/sample/merge/{preview.preview_id}"),
+            "alice/sample",
+            preview.preview_id,
+            "alice",
+        )
+        review_html = review.body.decode("utf-8", errors="replace")
+        self.assertIn("Fast-forward possible.", review_html)
+        self.assertIn("merge-expanded-diffs", review_html)
+        self.assertIn("target=suggested", review_html)
+        self.assertNotIn("merge-file-browser", review_html)
+        self.assertNotIn("merge-review-layout", review_html)
+
+    def test_merge_review_expands_diffs_and_applies_manual_selection(self) -> None:
         alice_ws, _head = self._ensure_committed_head("alice/sample", "alice")
         conflict_path = f"notes/conflict-{uuid.uuid4().hex[:8]}.txt"
         (alice_ws / conflict_path).write_text("mine <script>alert(1)</script>\n", encoding="utf-8")
@@ -990,9 +1005,11 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
             "alice",
         )
         html = page.body.decode("utf-8", errors="replace")
-        self.assertIn("Review and choose", html)
-        self.assertIn("Confirm update", html)
         self.assertIn("data-merge-comparison", html)
+        self.assertIn("data-merge-manual-diffs", html)
+        self.assertIn("merge-expanded-diffs", html)
+        self.assertIn("merge-diff-choice", html)
+        self.assertNotIn("Every affected file is expanded below.", html)
         self.assertNotIn('value="latest" required checked', html)
         self.assertNotIn('value="current" required checked', html)
 
@@ -1023,14 +1040,13 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         )
         self.assertEqual(invalid.status_code, 400)
 
-        confirm = asyncio.run(
-            merge_review(
+        applied = asyncio.run(
+            merge_apply(
                 _post_form_request(
-                    f"/problems/alice/sample/merge/{preview.preview_id}/review",
+                    f"/problems/alice/sample/merge/{preview.preview_id}/apply",
                     {
                         "mode": "manual",
                         f"choice_{group_id}": "latest",
-                        "selected_entry_id": entry.entry_id,
                     },
                 ),
                 "alice/sample",
@@ -1038,28 +1054,8 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
                 "alice",
             )
         )
-        confirm_html = confirm.body.decode("utf-8", errors="replace")
-        self.assertIn("Confirm File Update", confirm_html)
-        self.assertIn("Latest shared file", confirm_html)
-
-        restored = asyncio.run(
-            merge_edit(
-                _post_form_request(
-                    f"/problems/alice/sample/merge/{preview.preview_id}/edit",
-                    {
-                        "mode": "manual",
-                        f"choice_{group_id}": "latest",
-                        "selected_entry_id": entry.entry_id,
-                    },
-                ),
-                "alice/sample",
-                preview.preview_id,
-                "alice",
-            )
-        )
-        restored_html = restored.body.decode("utf-8", errors="replace")
-        self.assertIn('value="latest" required checked', restored_html)
-        self.assertIn(f'data-selected-entry="{entry.entry_id}"', restored_html)
+        self.assertEqual(applied.status_code, 303)
+        self.assertEqual((alice_ws / conflict_path).read_text(encoding="utf-8"), "theirs & shared\n")
 
     def test_problem_page_denies_user_without_acl(self) -> None:
         private_problem = f"alice/ui-private-{uuid.uuid4().hex[:8]}"

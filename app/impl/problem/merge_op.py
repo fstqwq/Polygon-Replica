@@ -95,6 +95,7 @@ def _preview_view(preview: MergePreview) -> dict[str, object]:
         "id": preview.preview_id,
         "created_at": datetime.fromtimestamp(preview.created_at, timezone.utc).isoformat(),
         "suggested_available": preview.suggested_available,
+        "fast_forward_possible": preview.fast_forward_possible,
         "suggested_entries": [
             _entry_view(entry, "suggested") for entry in preview.suggested_entries
         ],
@@ -113,11 +114,8 @@ def _render_merge(
     user: str,
     preview: MergePreview,
     *,
-    screen: str,
     choices: dict[str, str] | None = None,
     mode: str = "",
-    selected_entry_id: str = "",
-    message: str = "",
 ):
     ctx = page_ctx(problem, user, refresh_status=False, include_recent=False)
     require_write_access(ctx)
@@ -131,11 +129,8 @@ def _render_merge(
         {
             "ctx": ctx,
             "preview": _preview_view(preview),
-            "screen": screen,
             "choices": choices or {},
             "review_mode": mode,
-            "selected_entry_id": selected_entry_id,
-            "message": message,
         },
     )
 
@@ -188,93 +183,7 @@ def merge_page(
         preview = config.workspace_merge_service.get_preview(user, problem, preview_id)
         requested_mode = str(request.query_params.get("mode") or "")
         mode = "manual" if requested_mode == "manual" or not preview.suggested_available else "suggested"
-        return _render_merge(request, problem, user, preview, screen="review", mode=mode)
-    except Exception as exc:
-        return redirect_response(f"/problems/{problem}/workspace", message=str(exc))
-
-
-async def merge_review(
-    request: Request,
-    problem: str,
-    preview_id: str,
-    user: Annotated[str, Depends(require_session_user)],
-):
-    form = None
-    try:
-        form = await request.form()
-        preview = config.workspace_merge_service.get_preview(user, problem, preview_id)
-        mode = str(form.get("mode") or "manual")
-        selected_entry_id = str(form.get("selected_entry_id") or "")
-        if mode == "suggested":
-            if not preview.suggested_available:
-                raise ValueError("a suggested result is not available")
-            return _render_merge(
-                request,
-                problem,
-                user,
-                preview,
-                screen="confirm",
-                mode=mode,
-                selected_entry_id=selected_entry_id,
-            )
-        if mode != "manual":
-            raise ValueError("select an update result")
-        choices = _form_choices(preview, form)
-        if any(side not in {"current", "latest"} for side in choices.values()):
-            raise ValueError("choose a result for every affected file")
-        return _render_merge(
-            request,
-            problem,
-            user,
-            preview,
-            screen="confirm",
-            choices=choices,
-            mode=mode,
-            selected_entry_id=selected_entry_id,
-        )
-    except Exception as exc:
-        if form is None:
-            return redirect_response(f"/problems/{problem}/merge/{preview_id}", message=str(exc))
-        try:
-            preview = config.workspace_merge_service.get_preview(user, problem, preview_id)
-            mode = str(form.get("mode") or "manual")
-            return _render_merge(
-                request,
-                problem,
-                user,
-                preview,
-                screen="review",
-                choices=_form_choices(preview, form),
-                mode=mode,
-                selected_entry_id=str(form.get("selected_entry_id") or ""),
-                message=str(exc),
-            )
-        except Exception:
-            return redirect_response(f"/problems/{problem}/workspace", message=str(exc))
-
-
-async def merge_edit(
-    request: Request,
-    problem: str,
-    preview_id: str,
-    user: Annotated[str, Depends(require_session_user)],
-):
-    try:
-        preview = config.workspace_merge_service.get_preview(user, problem, preview_id)
-        form = await request.form()
-        mode = str(form.get("mode") or "manual")
-        if mode not in {"manual", "suggested"}:
-            raise ValueError("select an update result")
-        return _render_merge(
-            request,
-            problem,
-            user,
-            preview,
-            screen="review",
-            choices=_form_choices(preview, form),
-            mode=mode,
-            selected_entry_id=str(form.get("selected_entry_id") or ""),
-        )
+        return _render_merge(request, problem, user, preview, mode=mode)
     except Exception as exc:
         return redirect_response(f"/problems/{problem}/workspace", message=str(exc))
 
@@ -315,6 +224,14 @@ async def merge_apply(
         form = await request.form()
         mode = str(form.get("mode") or "")
         choices = _form_choices(preview, form)
+        if mode == "suggested":
+            if not preview.suggested_available:
+                raise ValueError("a suggested result is not available")
+        elif mode == "manual":
+            if any(side not in {"current", "latest"} for side in choices.values()):
+                raise ValueError("choose a result for every affected file")
+        else:
+            raise ValueError("select an update result")
         affected_count = (
             len(preview.suggested_entries) if mode == "suggested" else len(preview.entries)
         )
@@ -337,20 +254,6 @@ async def merge_apply(
         return redirect_response(f"/problems/{problem}/workspace", message=message)
     except Exception as exc:
         return redirect_response(f"/problems/{problem}/merge/{preview_id}", message=str(exc))
-
-
-def merge_cancel(
-    problem: str,
-    preview_id: str,
-    user: Annotated[str, Depends(require_session_user)],
-):
-    try:
-        config.workspace_merge_service.cancel_preview(user, problem, preview_id)
-        message = "update review cancelled"
-    except Exception as exc:
-        message = str(exc)
-    return redirect_response(f"/problems/{problem}/workspace", message=message)
-
 
 def merge_undo(problem: str, user: Annotated[str, Depends(require_session_user)]):
     ctx, workspace = _workspace_context(problem, user)
