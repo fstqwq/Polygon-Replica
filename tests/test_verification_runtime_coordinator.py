@@ -57,6 +57,7 @@ def _task_row(
 class _InMemoryTaskStore:
     def __init__(self, rows: list[dict[str, object]], edges: list[tuple[str, str]]) -> None:
         self._rows = [dict(row) for row in rows]
+        self._edges = list(edges)
         self._fail_flag = False
         self._fail_reason = ""
         self._lock = threading.Lock()
@@ -84,6 +85,21 @@ class _InMemoryTaskStore:
                 if str(row["id"]) == task_id and str(row["status"]) == VerificationTaskStore.TASK_QUEUED:
                     row["status"] = VerificationTaskStore.TASK_LEASED
                     return
+
+    def requeue_leased_tasks(self, verification_id: str, judgehost_task_ids: list[str]) -> list[str]:
+        allowed = set(judgehost_task_ids)
+        changed: list[str] = []
+        with self._lock:
+            for row in self._rows:
+                if (
+                    str(row.get("verification_id") or "") == verification_id
+                    and str(row.get("status") or "") == VerificationTaskStore.TASK_LEASED
+                    and str(row.get("judgehost_task_id") or "") in allowed
+                ):
+                    row["status"] = VerificationTaskStore.TASK_QUEUED
+                    row["started_at"] = ""
+                    changed.append(str(row["id"]))
+        return changed
 
     def save_task_result(
         self,
@@ -142,6 +158,25 @@ class _InMemoryTaskStore:
                 output_ref=str(result["output_ref"]),
                 answer_correct=bool(result["answer_correct"]),
             )
+            if (
+                str(result["status"]) == VerificationTaskStore.TASK_DONE
+                and str(result["verdict"]).upper() == "SK"
+            ):
+                stack = [str(result["task_id"])]
+                while stack:
+                    parent_id = stack.pop()
+                    for edge_parent, child_id in self._edges:
+                        if edge_parent != parent_id:
+                            continue
+                        stack.append(child_id)
+                        for row in self._rows:
+                            if str(row["id"]) != child_id:
+                                continue
+                            if str(row["status"]) == VerificationTaskStore.TASK_PENDING:
+                                row["status"] = VerificationTaskStore.TASK_DONE
+                                row["verdict"] = "SK"
+                                row["feedback_text"] = "skipped because generate-input was skipped"
+                            break
 
     def cancel_unfinished_tasks(self, verification_id: str, *, reason: str) -> None:
         with self._lock:
@@ -306,6 +341,84 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
             thread.join(timeout=2.0)
             self.assertFalse(thread.is_alive())
 
+    def test_runtime_coordinator_skips_entire_downstream_subtree_after_generate_skip(self) -> None:
+        store = _InMemoryTaskStore(
+            rows=[
+                _task_row(
+                    "vt-generate",
+                    task_kind="generate-input",
+                    status=VerificationTaskStore.TASK_PENDING,
+                    queue_index=1,
+                    source_path="generators/gen.cpp",
+                    logical_run_id="logical-generate",
+                ),
+                _task_row(
+                    "vt-main",
+                    task_kind="main-correct",
+                    status=VerificationTaskStore.TASK_PENDING,
+                    queue_index=2,
+                    source_path="solutions/main.cpp",
+                    logical_run_id="logical-main",
+                ),
+                _task_row(
+                    "vt-solution",
+                    task_kind="solution-run",
+                    status=VerificationTaskStore.TASK_PENDING,
+                    queue_index=3,
+                    source_path="solutions/other.cpp",
+                    logical_run_id="logical-solution",
+                ),
+            ],
+            edges=[("vt-generate", "vt-main"), ("vt-main", "vt-solution")],
+        )
+        publish_order: list[str] = []
+
+        def _publish(row: dict[str, object]) -> TaskPublishResult:
+            task_id = str(row["id"])
+            publish_order.append(task_id)
+            return TaskPublishResult(
+                task_id=task_id,
+                run_id="",
+                judgehost_task_id="",
+                terminal_result=TaskExecutionResult(
+                    task_id=task_id,
+                    status=VerificationTaskStore.TASK_DONE,
+                    verdict="SK",
+                    run_id="",
+                    judgehost_task_id="",
+                    runtime_sec=None,
+                    cpu_sec=None,
+                    wall_sec=None,
+                    memory_kb=None,
+                    compile_log="",
+                    diagnostics_json="[]",
+                    error_text="",
+                    feedback_text="duplicate generator invocation; skipped, same as 001.in",
+                    output_ref="",
+                ),
+            )
+
+        coordinator = VerificationRuntimeCoordinator(
+            "ver-runtime-skip-subtree",
+            task_store=store,
+            callbacks=VerificationRuntimeCallbacks(
+                publish_task=_publish,
+                probe_task_case_cache=lambda _task_ids: set(),
+                resolve_case_result=lambda _task_id, _test_name: None,
+                cancel_execution=lambda _reason: None,
+                close_logical_runs=lambda _run_ids: None,
+            ),
+            edges=[("vt-generate", "vt-main"), ("vt-main", "vt-solution")],
+        )
+
+        coordinator.run()
+
+        self.assertEqual(publish_order, ["vt-generate"])
+        rows = {str(row["id"]): row for row in store.list_rows("ver-runtime-skip-subtree")}
+        for task_id in ("vt-generate", "vt-main", "vt-solution"):
+            self.assertEqual(str(rows[task_id]["status"]), VerificationTaskStore.TASK_DONE)
+            self.assertEqual(str(rows[task_id]["verdict"]), "SK")
+
     def test_runtime_coordinator_actively_probes_cached_cases_after_identity_registration(self) -> None:
         total_tasks = 257
         store = _InMemoryTaskStore(
@@ -413,6 +526,60 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
         finally:
             if thread.is_alive():
                 coordinator.enqueue_cancel("test shutdown")
+            thread.join(timeout=2.0)
+            self.assertFalse(thread.is_alive())
+
+    def test_runtime_coordinator_requeues_leases_reported_by_expiry_reconciliation(self) -> None:
+        store = _InMemoryTaskStore(
+            rows=[
+                {
+                    **_task_row(
+                        "vt-expired",
+                        task_kind="solution-run",
+                        status=VerificationTaskStore.TASK_LEASED,
+                        queue_index=1,
+                        logical_run_id="logical-expired",
+                    ),
+                    "run_id": "r-expired",
+                    "judgehost_task_id": "jt-expired",
+                }
+            ],
+            edges=[],
+        )
+        reconcile_calls = 0
+
+        def _reconcile() -> list[str]:
+            nonlocal reconcile_calls
+            reconcile_calls += 1
+            return ["jt-expired"] if reconcile_calls == 1 else []
+
+        callbacks = VerificationRuntimeCallbacks(
+            publish_task=lambda _row: (_ for _ in ()).throw(RuntimeError("unexpected publish")),
+            probe_task_case_cache=lambda _task_ids: set(),
+            resolve_case_result=lambda _task_id, _test_name: None,
+            cancel_execution=lambda _reason: None,
+            close_logical_runs=lambda _run_ids: None,
+            reconcile_expired_leases=_reconcile,
+        )
+        coordinator = VerificationRuntimeCoordinator(
+            "verification",
+            task_store=store,
+            callbacks=callbacks,
+            edges=[],
+        )
+        thread = threading.Thread(target=coordinator.run, daemon=True)
+        thread.start()
+        try:
+            self._wait_until(
+                lambda: str(store.list_rows("verification")[0]["status"])
+                == VerificationTaskStore.TASK_QUEUED,
+                timeout=2.0,
+                interval=0.01,
+                message="expired lease was not requeued",
+            )
+            self.assertGreaterEqual(reconcile_calls, 1)
+        finally:
+            coordinator.enqueue_cancel("test shutdown")
             thread.join(timeout=2.0)
             self.assertFalse(thread.is_alive())
 

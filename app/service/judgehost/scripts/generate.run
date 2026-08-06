@@ -24,10 +24,49 @@ if [ "$ARGS_PAYLOAD" = "$CMD_PAYLOAD" ]; then
   ARGS_PAYLOAD="$(printf '%s' "$CMD_PAYLOAD" | sed -e 's/^\$SUBMISSION_BIN[[:space:]]*//')"
 fi
 
-if [ -n "$ARGS_PAYLOAD" ]; then
-  # Payload is shell-quoted by backend. Preserve the original command vector
-  # (`sudo -n runguard ... -- program`) and append payload args after it.
-  exec sh -c "exec \"\$@\" $ARGS_PAYLOAD" sh "$@" </dev/null >"$PROGOUT"
+REPEAT_OUT="${PROGOUT}.repeat.$$"
+REPEAT_MARKER="${PROGOUT}.repeatability-failed"
+trap 'rm -f "$REPEAT_OUT"' EXIT
+rm -f "$REPEAT_OUT" "$REPEAT_MARKER"
+
+run_generator() {
+  output="$1"
+  shift
+  if [ -n "$ARGS_PAYLOAD" ]; then
+    # Payload is shell-quoted by backend. Preserve the original command vector
+    # (`sudo -n runguard ... -- program`) and append payload args after it.
+    sh -c "exec \"\$@\" $ARGS_PAYLOAD" sh "$@" </dev/null >"$output"
+    return $?
+  fi
+  "$@" </dev/null >"$output"
+}
+
+set +e
+run_generator "$PROGOUT" "$@"
+FIRST_RC=$?
+run_generator "$REPEAT_OUT" "$@"
+SECOND_RC=$?
+set -e
+
+if [ "$FIRST_RC" -ne 0 ] || [ "$SECOND_RC" -ne 0 ]; then
+  echo "generator execution failed" >&2
+  if [ "$FIRST_RC" -ne 0 ]; then
+    exit "$FIRST_RC"
+  fi
+  exit "$SECOND_RC"
 fi
 
-exec "$@" </dev/null >"$PROGOUT"
+set +e
+cmp -s "$PROGOUT" "$REPEAT_OUT"
+CMP_RC=$?
+set -e
+if [ "$CMP_RC" -eq 0 ]; then
+  exit 0
+fi
+if [ "$CMP_RC" -eq 1 ]; then
+  : >"$REPEAT_MARKER"
+  exit 0
+fi
+
+echo "unable to compare generator outputs" >&2
+exit 43

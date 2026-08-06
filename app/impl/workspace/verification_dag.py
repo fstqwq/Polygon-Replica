@@ -96,6 +96,7 @@ class TaskExecutionContext:
     run_verification_payload_base: dict[str, object]
     generate_verification_payload_base: dict[str, object]
     bypass_case_result_cache: bool
+    task_store: VerificationTaskStore | None = None
 
 
 def _workspace_mode_and_pass_limit(problem_id: int, workspace_id: int) -> tuple[str, int]:
@@ -187,6 +188,8 @@ def _build_graph(
     queue_index = 1
     main_ids: dict[str, str] = {}
     generator_run_ids: dict[tuple[str, str, str, str], str] = {}
+    generator_owner_by_invocation: dict[tuple[object, ...], str] = {}
+    generator_test_name_by_id: dict[str, str] = {}
     for test_name in test_names:
         test_plan = test_plan_by_name.get(test_name)
         if test_plan is None:
@@ -207,6 +210,20 @@ def _build_graph(
             generator_run_id = allocate_run_id()
             generator_run_ids[generator_key] = generator_run_id
         generate_id = task_store.allocate_id()
+        invocation_key: tuple[object, ...] = (
+            *generator_key,
+            test_plan.execution_input_file.identity,
+            test_plan.source_kind == "manual",
+        )
+        owner_generate_id = generator_owner_by_invocation.get(invocation_key)
+        generator_owner_by_invocation.setdefault(invocation_key, generate_id)
+        duplicate_feedback = ""
+        if owner_generate_id is not None:
+            duplicate_feedback = (
+                "duplicate generator invocation; skipped, same as "
+                f"{generator_test_name_by_id[owner_generate_id]}"
+            )
+        generator_test_name_by_id[generate_id] = test_name
         tasks.append(
             {
                 "id": generate_id,
@@ -217,9 +234,13 @@ def _build_graph(
                 "expected_behavior": "accepted",
                 "queue_index": queue_index,
                 "status": VerificationTaskStore.TASK_PENDING,
+                "verdict": "SK" if owner_generate_id is not None else "",
+                "feedback_text": duplicate_feedback,
             }
         )
         queue_index += 1
+        if owner_generate_id is not None:
+            edges.append((owner_generate_id, generate_id))
         main_id = task_store.allocate_id()
         tasks.append(
             {
@@ -422,6 +443,7 @@ def _logical_run_summary(
     saw_failed = False
     saw_cancelled = False
     saw_done = False
+    skipped_test_count = 0
     for row in ordered_rows:
         status = str(row["status"])
         if status == VerificationTaskStore.TASK_PENDING:
@@ -436,7 +458,10 @@ def _logical_run_summary(
             saw_cancelled = True
         elif status == VerificationTaskStore.TASK_DONE:
             saw_done = True
-        if status in {VerificationTaskStore.TASK_DONE, VerificationTaskStore.TASK_FAILED}:
+        is_skipped = str(row["verdict"] or "").upper() == "SK"
+        if is_skipped and status == VerificationTaskStore.TASK_DONE:
+            skipped_test_count += 1
+        elif status in {VerificationTaskStore.TASK_DONE, VerificationTaskStore.TASK_FAILED}:
             test_row = _task_row_to_test_row(row)
             tests.append(test_row)
             max_time_ms = max(max_time_ms, int(test_row.get("time_user_ms") or 0))
@@ -464,7 +489,7 @@ def _logical_run_summary(
         run_status = Status.PENDING.value
     elif saw_failed or saw_cancelled:
         run_status = Status.FAILED.value
-    elif saw_done and len(tests) >= len(test_names):
+    elif saw_done and len(tests) + skipped_test_count >= len(test_names):
         run_status = Status.OK.value
     elif saw_done:
         run_status = Status.RUNNING.value
@@ -480,6 +505,7 @@ def _logical_run_summary(
         "task_kind": logical_run.task_kind,
         "tests": tests,
         "tests_total": len(test_names),
+        "skipped_tests": skipped_test_count,
         "compile_log": compile_log,
         "compile_diagnostics": list(compile_diagnostics),
         "error": error_text,
@@ -728,12 +754,103 @@ def _empty_task_result(
     )
 
 
+def _skipped_downstream_task_result(task_row: VerificationTaskRow) -> TaskPublishResult:
+    task_id = str(task_row["id"])
+    return TaskPublishResult(
+        task_id=task_id,
+        run_id="",
+        judgehost_task_id="",
+        terminal_result=TaskExecutionResult(
+            task_id=task_id,
+            status=VerificationTaskStore.TASK_DONE,
+            verdict="SK",
+            run_id="",
+            judgehost_task_id="",
+            runtime_sec=None,
+            cpu_sec=None,
+            wall_sec=None,
+            memory_kb=None,
+            compile_log="",
+            diagnostics_json="[]",
+            error_text="",
+            feedback_text="skipped because generate-input was skipped",
+            output_ref="",
+            answer_correct=False,
+        ),
+    )
+
+
 def _publish_generate_task(task_row: VerificationTaskRow, *, execution: TaskExecutionContext, test_plan: VerificationTestPlan) -> TaskPublishResult:
     task_id = str(task_row["id"])
     test_name = str(task_row["test_name"])
     logical_run_id = str(task_row["logical_run_id"])
     run_id = allocate_run_id()
     try:
+        predecessor_task_id = str(task_row["predecessor_task_id"] or "")
+        if predecessor_task_id and str(task_row["verdict"] or "").upper() == "SK":
+            task_store = execution.task_store or config.verification_task_store
+            owner = None
+            if task_store is not None:
+                owner = next(
+                    (
+                        row
+                        for row in task_store.list_rows(execution.verification_id)
+                        if str(row["id"] or "") == predecessor_task_id
+                    ),
+                    None,
+                )
+            if owner is None or str(owner["status"] or "") != VerificationTaskStore.TASK_DONE:
+                reason = "duplicate generator owner result is unavailable"
+                result = _empty_task_result(
+                    task_id=task_id,
+                    status=VerificationTaskStore.TASK_FAILED,
+                    verdict="FL",
+                    run_id=run_id,
+                    judgehost_task_id="",
+                    error_text=reason,
+                    fail_flag_reason=verification_task_fail_reason(task_row, error_text=reason),
+                )
+                return TaskPublishResult(
+                    task_id=task_id,
+                    run_id=run_id,
+                    judgehost_task_id="",
+                    terminal_result=result,
+                )
+            owner_output_ref = str(owner["output_ref"] or "")
+            if owner_output_ref:
+                config.verification_service.update_verification_artifact_refs(
+                    execution.verification_id,
+                    test_name,
+                    {"input_ref": owner_output_ref},
+                )
+            feedback_text = str(task_row["feedback_text"] or "")
+            if not feedback_text:
+                feedback_text = (
+                    "duplicate generator invocation; skipped, same as "
+                    f"{owner['test_name']}"
+                )
+            return TaskPublishResult(
+                task_id=task_id,
+                run_id=run_id,
+                judgehost_task_id="",
+                terminal_result=TaskExecutionResult(
+                    task_id=task_id,
+                    status=VerificationTaskStore.TASK_DONE,
+                    verdict="SK",
+                    run_id=run_id,
+                    judgehost_task_id="",
+                    runtime_sec=None,
+                    cpu_sec=None,
+                    wall_sec=None,
+                    memory_kb=None,
+                    compile_log="",
+                    diagnostics_json="[]",
+                    error_text="",
+                    feedback_text=feedback_text,
+                    output_ref=owner_output_ref,
+                    answer_correct=False,
+                ),
+            )
         prepared = prepared_payload_for_uploaded_source(
             source_label=test_plan.execution_source_name,
             run_id=run_id,
@@ -803,6 +920,8 @@ def _publish_generate_task(task_row: VerificationTaskRow, *, execution: TaskExec
 
 
 def _publish_run_task(task_row: VerificationTaskRow, *, execution: TaskExecutionContext) -> TaskPublishResult:
+    if str(task_row["verdict"] or "").upper() == "SK":
+        return _skipped_downstream_task_result(task_row)
     task_id = str(task_row["id"])
     task_kind = str(task_row["task_kind"])
     source_path = str(task_row["source_path"])
@@ -898,6 +1017,11 @@ def _publish_run_task(task_row: VerificationTaskRow, *, execution: TaskExecution
 
 
 def _publish_task(task_row: VerificationTaskRow, *, execution: TaskExecutionContext) -> TaskPublishResult:
+    if (
+        str(task_row["task_kind"] or "") != TASK_GENERATE_INPUT
+        and str(task_row["verdict"] or "").upper() == "SK"
+    ):
+        return _skipped_downstream_task_result(task_row)
     test_name = str(task_row["test_name"])
     test_plan = execution.test_plan_by_name.get(test_name)
     if test_plan is None:
@@ -1112,6 +1236,7 @@ def run_workspace_verification_dag(
             run_verification_payload_base=execution_plan.run_verification_payload_base,
             generate_verification_payload_base=execution_plan.generate_verification_payload_base,
             bypass_case_result_cache=bool(bypass_case_result_cache),
+            task_store=task_store,
         )
 
         def _refresh_state() -> tuple[
@@ -1173,6 +1298,9 @@ def run_workspace_verification_dag(
                 verification_id,
                 logical_run_ids,
             ),
+            reconcile_expired_leases=lambda: config.judgehost_task_service.reconcile_expired_verification_leases(
+                verification_id,
+            ),
         )
         coordinator = VerificationRuntimeCoordinator(
             verification_id,
@@ -1194,6 +1322,29 @@ def run_workspace_verification_dag(
         _status, summary, _counts, rows, fail_flag, fail_reason = _refresh_state()
         record = config.verification_service.verification_record(verification_id) or {}
         detail = config.verification_service.verification_detail(verification_id)
+        repeatability_row = next(
+            (
+                row
+                for row in rows
+                if str(row["task_kind"] or "") == TASK_GENERATE_INPUT
+                and "generator output differs between two runs"
+                in str(row["error_text"] or row["feedback_text"] or "")
+            ),
+            None,
+        )
+        if repeatability_row is not None:
+            detail = dict(detail)
+            detail.update(
+                {
+                    "error": "generator output differs between two runs",
+                    "failed_step": "validation",
+                    "failed_check": "generator-repeatability",
+                    "failed_test": str(repeatability_row["test_name"] or ""),
+                    "validation_status": "failed",
+                    "validated_count": 0,
+                }
+            )
+            config.verification_service.persist_verification_detail(verification_id, detail)
         if _status == Status.OK.value and sanity_checks:
             sanity_status = SANITY_RUNNING
             updated_detail = dict(detail)

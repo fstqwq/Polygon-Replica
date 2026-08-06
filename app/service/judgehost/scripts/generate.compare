@@ -54,6 +54,27 @@ else
   fi
 fi
 
+repeatability_failed() {
+  for candidate in \
+      "${TEAMOUT_SRC}.repeatability-failed" \
+      "${FEEDBACK}/../program.out.repeatability-failed" \
+      "program.out.repeatability-failed" \
+      "${FEEDBACK}/program.out.repeatability-failed"
+  do
+    if [ -n "$candidate" ] && [ -f "$candidate" ]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+if [ "$VALIDATE_INPUT" -eq 0 ] && repeatability_failed; then
+  printf '%s\n' \
+    'generator output differs between two runs' \
+    >"$FEEDBACK/judgemessage.txt"
+  exit 43
+fi
+
 VALIDATOR_BIN="$HERE/validator"
 VALIDATOR_SRC="$HERE/validator.cpp"
 compile_validator() {

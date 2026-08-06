@@ -772,14 +772,29 @@ class BatchSchedulerResultMixin:
                 }
             return result
 
-    def release_host_leases(self, hostname: str, *, now_text: str) -> HostLeaseRelease:
+    def release_host_leases(
+        self,
+        hostname: str,
+        *,
+        now_text: str,
+        verification_id: str = "",
+    ) -> HostLeaseRelease:
         with self._lock:
-            self._drop_host_telemetry_batch_locked(hostname)
-            affinity_ids = self._affinity_batches_by_host.pop(hostname, ())
+            if not verification_id:
+                self._drop_host_telemetry_batch_locked(hostname)
+            affinity_ids = () if verification_id else self._affinity_batches_by_host.pop(hostname, ())
             context_batch_ids = set(affinity_ids)
             affected_batch_ids = set(context_batch_ids)
             terminal_task_ids: set[str] = set()
-            case_ids = list(self._leased_case_ids_by_host.get(hostname, ()))
+            case_ids = [
+                case_id
+                for case_id in self._leased_case_ids_by_host.get(hostname, ())
+                if not verification_id
+                or (
+                    case_id in self._cases
+                    and self._batches[self._cases[case_id].batch_id].verification_id == verification_id
+                )
+            ]
             workdirs: set[tuple[int, int]] = set()
             for case_id in case_ids:
                 case = self._cases[case_id]

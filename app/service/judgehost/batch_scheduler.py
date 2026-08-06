@@ -721,6 +721,14 @@ class BatchScheduler(BatchSchedulerResultMixin):
                 if case_ids
             }
 
+    def cases_for_host(self, hostname: str) -> list[JudgehostCaseRow]:
+        with self._lock:
+            return [
+                self._case_row(self._cases[case_id])
+                for case_id in self._leased_case_ids_by_host.get(hostname, ())
+                if case_id in self._cases
+            ]
+
     def _drop_host_telemetry_batch_locked(self, hostname: str) -> None:
         telemetry = self._host_telemetry.get(hostname)
         if telemetry is None or telemetry.active_batch is None:

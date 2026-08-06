@@ -314,7 +314,7 @@ def _verification_task_rows_failure_hint(verification_id: str) -> str:
             "tests": [
                 {"test": row["test_name"], "verdict": row["verdict"]}
                 for row in current_rows
-                if row["verdict"]
+                if row["verdict"] and str(row["verdict"]).upper() != "SK"
             ],
             "error": next((row["error_text"] for row in current_rows if row["error_text"]), ""),
         }

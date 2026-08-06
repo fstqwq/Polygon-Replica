@@ -26,6 +26,8 @@ def run_verdict_short(verdict: str) -> str:
         return "RE"
     if verdict in {"FAIL", "FAILED", "FL"}:
         return "FL"
+    if verdict == "SK":
+        return "SK"
     if verdict in {"", "-", "--"}:
         return "--"
     return "FL"
@@ -53,7 +55,7 @@ def run_actual_failed_codes(run_status: str, summary: dict | None) -> list[str]:
     if tests is not None:
         for row in tests:
             code = run_verdict_short(row["verdict"])
-            if code not in {"", "--", "AC"}:
+            if code not in {"", "--", "AC", "SK"}:
                 verdicts.append(code)
     if verdicts:
         priority = {"CE": 0, "TL": 1, "RE": 2, "WA": 3, "FL": 4}
@@ -165,6 +167,8 @@ def generation_status_text(status: str, verdict: str) -> str:
         return "generator RE"
     if verdict_token in {"CE", "COMPILE_ERROR", "COMPILE ERROR"}:
         return "generator CE"
+    if verdict_token == "SK":
+        return "skipped"
     if verdict_token in {"FL", "FAIL", "FAILED"}:
         return "validator failed"
     if status == "done":

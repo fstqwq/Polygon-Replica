@@ -493,6 +493,80 @@ class TestJudgehostScripts(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(prog_out.read_text(encoding="utf-8"), "no-extra-args\n")
 
+    def test_domjudge_generate_run_script_marks_nondeterministic_output(self) -> None:
+        service = config.judgehost_task_service
+        script_text = service.toolkit.run_script(
+            False,
+            main_correct=False,
+            compile_only=False,
+            generate_mode=True,
+        ).decode("utf-8")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            run_script = root / "run"
+            test_in = root / "001.in"
+            prog_out = root / "program.out"
+            state = root / "counter"
+            runner = root / "program"
+            run_script.write_text(script_text, encoding="utf-8")
+            os.chmod(run_script, 0o755)
+            test_in.write_text('"$SUBMISSION_BIN"\n', encoding="utf-8")
+            runner.write_text(
+                "#!/bin/sh\n"
+                "set -eu\n"
+                "state=counter\n"
+                "count=0\n"
+                "if [ -f \"$state\" ]; then count=$(cat \"$state\"); fi\n"
+                "count=$((count + 1))\n"
+                "printf '%s' \"$count\" >\"$state\"\n"
+                "printf '%s\\n' \"$count\"\n",
+                encoding="utf-8",
+            )
+            os.chmod(runner, 0o755)
+            result = subprocess.run(
+                [str(run_script), str(test_in), str(prog_out), str(runner)],
+                text=True,
+                capture_output=True,
+                check=False,
+                cwd=root,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(prog_out.read_text(encoding="utf-8"), "1\n")
+            self.assertTrue((root / "program.out.repeatability-failed").exists())
+            self.assertFalse(list(root.glob("program.out.repeat.[0-9]*")))
+
+    def test_domjudge_generate_compare_script_rejects_repeatability_marker(self) -> None:
+        service = config.judgehost_task_service
+        script_text = service.toolkit.compare_script(generate_mode=True).decode("utf-8")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            compare_script = root / "run"
+            test_in = root / "001.in"
+            test_ans = root / "001.ans"
+            feedback = root / "feedback"
+            team_out = root / "program.out"
+            validator = root / "validator"
+            compare_script.write_text(script_text, encoding="utf-8")
+            os.chmod(compare_script, 0o755)
+            test_in.write_text("", encoding="utf-8")
+            test_ans.write_text("", encoding="utf-8")
+            team_out.write_text("42\n", encoding="utf-8")
+            (root / "program.out.repeatability-failed").write_text("", encoding="utf-8")
+            validator.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            os.chmod(validator, 0o755)
+            result = subprocess.run(
+                [str(compare_script), str(test_in), str(test_ans), str(feedback), str(team_out)],
+                text=True,
+                capture_output=True,
+                check=False,
+                cwd=root,
+            )
+            self.assertEqual(result.returncode, 43, result.stderr)
+            self.assertEqual(
+                (feedback / "judgemessage.txt").read_text(encoding="utf-8"),
+                "generator output differs between two runs\n",
+            )
+
     def test_domjudge_generate_compare_script_runs_validator(self) -> None:
         service = config.judgehost_task_service
         script_text = service.toolkit.compare_script(generate_mode=True).decode("utf-8")

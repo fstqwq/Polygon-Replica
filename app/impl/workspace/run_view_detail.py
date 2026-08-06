@@ -515,7 +515,10 @@ def build_run_detail_context(
             max_memory_kb = 0
             for row in grouped_rows:
                 row_status = str(row['status'] or '')
-                if row_status in {VerificationTaskStore.TASK_DONE, VerificationTaskStore.TASK_FAILED}:
+                if (
+                    row_status in {VerificationTaskStore.TASK_DONE, VerificationTaskStore.TASK_FAILED}
+                    and str(row['verdict'] or '').upper() != 'SK'
+                ):
                     runtime_ms = 0 if row['runtime_sec'] is None else max(0, int(round(float(row['runtime_sec']) * 1000.0)))
                     cpu_ms = runtime_ms if row['cpu_sec'] is None else max(0, int(round(float(row['cpu_sec']) * 1000.0)))
                     wall_ms = cpu_ms if row['wall_sec'] is None else max(0, int(round(float(row['wall_sec']) * 1000.0)))

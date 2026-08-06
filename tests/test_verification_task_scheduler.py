@@ -272,9 +272,23 @@ class TestVerificationTaskScheduler(E2ETestBase):
                 ),
                 execution=execution,
             )
+            skipped_row = _task_row(
+                "vt-main-skipped",
+                task_kind=TASK_MAIN_CORRECT,
+                status=VerificationTaskStore.TASK_PENDING,
+                queue_index=4,
+                source_path="solutions/std.cpp",
+                logical_run_id="main",
+            )
+            skipped_row["verdict"] = "SK"
+            skipped = _publish_run_task(skipped_row, execution=execution)
 
         self.assertEqual([call["bypass_case_result_cache"] for call in calls], [True, True, True])
         self.assertEqual(prepare_template.call_count, 2)
+        self.assertIsNotNone(skipped.terminal_result)
+        assert skipped.terminal_result is not None
+        self.assertEqual(skipped.terminal_result.verdict, "SK")
+        self.assertEqual(len(calls), 3)
 
     def test_verification_artifact_descriptors_are_cached_across_sources(self) -> None:
         from app.impl.workspace.verification_dag import _verification_required_file
@@ -742,10 +756,17 @@ class TestVerificationTaskScheduler(E2ETestBase):
         self.assertEqual(len(generate), 2)
         self.assertEqual(len(main), 2)
         self.assertEqual(len(solution), 2)
-        self.assertEqual(len(graph.edges), 4)
+        self.assertEqual(len(graph.edges), 5)
         self.assertEqual({str(row["source_path"]) for row in generate}, {"generators/gen.cpp"})
         self.assertEqual(len({str(row["logical_run_id"]) for row in generate}), 1)
         self.assertTrue(str(generate[0]["logical_run_id"]))
+        self.assertEqual(str(generate[0]["verdict"]), "")
+        self.assertEqual(str(generate[1]["verdict"]), "SK")
+        self.assertEqual(
+            str(generate[1]["feedback_text"]),
+            "duplicate generator invocation; skipped, same as 001.in",
+        )
+        self.assertIn((str(generate[0]["id"]), str(generate[1]["id"])), graph.edges)
 
 
 
@@ -1146,12 +1167,103 @@ class TestVerificationTaskScheduler(E2ETestBase):
         self.assertEqual(len(diagnostics_rows), 1)
         self.assertTrue(bool(diagnostics_rows[0].get("message_truncated")))
         self.assertLessEqual(len(str(diagnostics_rows[0].get("message") or "").encode("utf-8")), limit)
-        task_store.set_fail_flag(verification_id, reason=oversized)
-        fail_flag, fail_reason = task_store.fail_state(verification_id)
-        self.assertTrue(fail_flag)
-        self.assertLessEqual(len(fail_reason.encode("utf-8")), limit)
-        self.assertTrue(fail_reason.endswith("..."))
 
+    def test_task_store_deduplicates_generated_content_and_skips_descendants(self) -> None:
+        verification_id = f"ver-generated-dedup-{self.test_id}"
+        self._insert_verification_row(verification_id)
+        task_store = config.verification_task_store
+        task_store.replace_graph(
+            verification_id,
+            tasks=[
+                {
+                    "id": "vt-generate-owner",
+                    "task_kind": "generate-input",
+                    "source_path": "generators/gen.cpp",
+                    "logical_run_id": "r-generate",
+                    "test_name": "001.in",
+                    "expected_behavior": "accepted",
+                    "queue_index": 1,
+                    "status": VerificationTaskStore.TASK_PENDING,
+                },
+                {
+                    "id": "vt-generate-duplicate",
+                    "task_kind": "generate-input",
+                    "source_path": "generators/gen.cpp",
+                    "logical_run_id": "r-generate",
+                    "test_name": "002.in",
+                    "expected_behavior": "accepted",
+                    "queue_index": 2,
+                    "status": VerificationTaskStore.TASK_PENDING,
+                },
+                {
+                    "id": "vt-main-duplicate",
+                    "task_kind": "main-correct",
+                    "source_path": "solutions/accepted.cpp",
+                    "logical_run_id": "r-main",
+                    "test_name": "002.in",
+                    "expected_behavior": "accepted",
+                    "queue_index": 3,
+                    "status": VerificationTaskStore.TASK_PENDING,
+                },
+                {
+                    "id": "vt-solution-duplicate",
+                    "task_kind": "solution-run",
+                    "source_path": "solutions/wa.cpp",
+                    "logical_run_id": "r-wa",
+                    "test_name": "002.in",
+                    "expected_behavior": "wrong_answer",
+                    "queue_index": 4,
+                    "status": VerificationTaskStore.TASK_PENDING,
+                },
+            ],
+            edges=[
+                ("vt-generate-duplicate", "vt-main-duplicate"),
+                ("vt-main-duplicate", "vt-solution-duplicate"),
+            ],
+        )
+        task_store.save_task_result(
+            "vt-generate-owner",
+            status=VerificationTaskStore.TASK_DONE,
+            verdict="OK",
+            run_id="r-owner",
+            judgehost_task_id="jt-owner",
+            runtime_sec=0.01,
+            cpu_sec=0.01,
+            wall_sec=0.01,
+            memory_kb=1,
+            compile_log="",
+            diagnostics_json="[]",
+            error_text="",
+            feedback_text="",
+            output_ref="blob://same-generated-input",
+        )
+        task_store.save_task_result(
+            "vt-generate-duplicate",
+            status=VerificationTaskStore.TASK_DONE,
+            verdict="OK",
+            run_id="r-duplicate",
+            judgehost_task_id="jt-duplicate",
+            runtime_sec=0.01,
+            cpu_sec=0.01,
+            wall_sec=0.01,
+            memory_kb=1,
+            compile_log="",
+            diagnostics_json="[]",
+            error_text="",
+            feedback_text="",
+            output_ref="blob://same-generated-input",
+        )
+        rows = {str(row["id"]): row for row in task_store.list_rows(verification_id)}
+        self.assertEqual(str(rows["vt-generate-owner"]["verdict"]), "OK")
+        self.assertEqual(str(rows["vt-generate-duplicate"]["verdict"]), "SK")
+        self.assertIn("duplicate generated input; skipped", str(rows["vt-generate-duplicate"]["feedback_text"]))
+        for task_id in ("vt-main-duplicate", "vt-solution-duplicate"):
+            self.assertEqual(str(rows[task_id]["status"]), VerificationTaskStore.TASK_DONE)
+            self.assertEqual(str(rows[task_id]["verdict"]), "SK")
+            self.assertEqual(
+                str(rows[task_id]["feedback_text"]),
+                "skipped because generate-input was skipped",
+            )
     def test_startup_cancel_task_graph_verifications_reconciles_stale_rows(self) -> None:
         from app.impl.auth.internal.runtime import _startup_cancel_task_graph_verifications
 

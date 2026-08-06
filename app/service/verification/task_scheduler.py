@@ -45,6 +45,7 @@ class VerificationRuntimeCallbacks:
     resolve_case_result: Callable[[str, str], dict[str, object] | None]
     cancel_execution: Callable[[str], None]
     close_logical_runs: Callable[[list[str]], None]
+    reconcile_expired_leases: Callable[[], list[str]] = lambda: []
 
 
 @dataclass(frozen=True)
@@ -187,6 +188,50 @@ class _IncrementalDagState:
                 self._enqueue_if_ready(child_id)
         return True
 
+    def mark_skipped(self, task_id: str, *, feedback_text: str) -> bool:
+        previous = self.status_by_id[task_id]
+        if previous in _TERMINAL_TASK_STATUSES:
+            return False
+        self.status_by_id[task_id] = VerificationTaskStore.TASK_DONE
+        row = self.rows_by_id[task_id]
+        row["status"] = VerificationTaskStore.TASK_DONE
+        row["verdict"] = "SK"
+        row["feedback_text"] = feedback_text
+        self.terminal_count += 1
+        logical_run_id = self.logical_run_id_by_task_id[task_id]
+        remaining = self.remaining_tasks_by_logical_run[logical_run_id] - 1
+        if remaining < 0:
+            raise RuntimeError("verification logical run task count underflow")
+        if remaining == 0:
+            self.remaining_tasks_by_logical_run.pop(logical_run_id, None)
+            self.completed_logical_run_ids.append(logical_run_id)
+        else:
+            self.remaining_tasks_by_logical_run[logical_run_id] = remaining
+        return True
+
+    def set_result_metadata(self, task_id: str, *, verdict: str, feedback_text: str) -> None:
+        row = self.rows_by_id[task_id]
+        row["verdict"] = verdict
+        row["feedback_text"] = feedback_text
+
+    def requeue(self, task_id: str) -> bool:
+        if self.status_by_id[task_id] != VerificationTaskStore.TASK_LEASED:
+            return False
+        self.status_by_id[task_id] = VerificationTaskStore.TASK_QUEUED
+        self.rows_by_id[task_id]["status"] = VerificationTaskStore.TASK_QUEUED
+        return True
+
+    def descendants(self, task_id: str) -> set[str]:
+        descendants: set[str] = set()
+        stack = list(self.dependents_by_parent.get(task_id, []))
+        while stack:
+            child_id = stack.pop()
+            if child_id in descendants:
+                continue
+            descendants.add(child_id)
+            stack.extend(self.dependents_by_parent.get(child_id, []))
+        return descendants
+
     def take_completed_logical_runs(self) -> list[str]:
         values = list(self.completed_logical_run_ids)
         self.completed_logical_run_ids.clear()
@@ -213,8 +258,8 @@ def _save_result(
     verification_id: str,
     task_store: VerificationTaskStore,
     result: TaskExecutionResult,
-) -> None:
-    _save_results(verification_id=verification_id, task_store=task_store, results=[result])
+) -> set[str]:
+    return _save_results(verification_id=verification_id, task_store=task_store, results=[result])
 
 
 def _save_results(
@@ -222,8 +267,8 @@ def _save_results(
     verification_id: str,
     task_store: VerificationTaskStore,
     results: list[TaskExecutionResult],
-) -> None:
-    task_store.save_task_results(
+) -> set[str]:
+    raw_skipped_task_ids = task_store.save_task_results(
         [
             {
                 "task_id": result.task_id,
@@ -245,9 +290,13 @@ def _save_results(
             for result in results
         ]
     )
+    skipped_task_ids = set(raw_skipped_task_ids or ())
     for result in results:
+        if result.status == VerificationTaskStore.TASK_DONE and result.verdict.upper() == "SK":
+            skipped_task_ids.add(result.task_id)
         if result.fail_flag_reason:
             task_store.set_fail_flag(verification_id, reason=result.fail_flag_reason)
+    return set(skipped_task_ids or ())
 
 
 class VerificationRuntimeCoordinator:
@@ -309,12 +358,26 @@ class VerificationRuntimeCoordinator:
         self.enqueue_bootstrap()
         deferred: _VerificationEvent | None = None
         while True:
-            event = self._events.get() if deferred is None else deferred
+            if deferred is None:
+                try:
+                    event = self._events.get(timeout=10.0)
+                except queue.Empty:
+                    self._reconcile_expired_leases()
+                    self._close_completed_logical_runs()
+                    if self._is_terminal():
+                        return
+                    continue
+            else:
+                event = deferred
             deferred = None
             if event.kind not in {"case_reported", "task_terminal"}:
                 terminal = self._handle_event(event)
+                if not terminal:
+                    self._reconcile_expired_leases()
                 self._close_completed_logical_runs()
                 if terminal:
+                    return
+                if self._is_terminal():
                     return
                 continue
             events = [event]
@@ -332,14 +395,69 @@ class VerificationRuntimeCoordinator:
                     break
                 events.append(candidate)
             terminal = self._handle_terminal_events(events)
+            if not terminal:
+                self._reconcile_expired_leases()
             self._close_completed_logical_runs()
             if terminal:
                 return
+            if self._is_terminal():
+                return
+
+    def _reconcile_expired_leases(self) -> bool:
+        judgehost_task_ids = self._callbacks.reconcile_expired_leases()
+        if not judgehost_task_ids:
+            return False
+        task_ids = self._task_store.requeue_leased_tasks(
+            self.verification_id,
+            judgehost_task_ids,
+        )
+        changed = False
+        for task_id in task_ids:
+            changed = self._dag.requeue(task_id) or changed
+        return changed
 
     def _close_completed_logical_runs(self) -> None:
         logical_run_ids = self._dag.take_completed_logical_runs()
         if logical_run_ids:
             self._callbacks.close_logical_runs(logical_run_ids)
+
+    def _apply_saved_results(
+        self,
+        results: list[tuple[str, TaskExecutionResult]],
+        *,
+        skipped_task_ids: set[str],
+    ) -> None:
+        for task_id in tuple(skipped_task_ids):
+            row = self._dag.rows_by_id.get(task_id)
+            if row is not None and str(row["task_kind"] or "") == "generate-input":
+                skipped_task_ids.update(self._dag.descendants(task_id))
+        for task_id, result in results:
+            if task_id in skipped_task_ids:
+                feedback_text = (
+                    result.feedback_text
+                    if result.verdict.upper() == "SK" and result.feedback_text
+                    else "skipped because generate-input was skipped"
+                )
+                self._dag.set_result_metadata(
+                    task_id,
+                    verdict="SK",
+                    feedback_text=feedback_text,
+                )
+                self._dag.mark_skipped(task_id, feedback_text=feedback_text)
+                continue
+            self._dag.set_result_metadata(
+                task_id,
+                verdict=result.verdict,
+                feedback_text=result.feedback_text,
+            )
+            self._dag.transition(task_id, result.status)
+        for task_id in skipped_task_ids:
+            if task_id not in self._dag.rows_by_id:
+                continue
+            self._dag.mark_skipped(
+                task_id,
+                feedback_text="skipped because generate-input was skipped",
+            )
 
     def _handle_terminal_events(self, events: list[_VerificationEvent]) -> bool:
         from app.service.verification.task_result_finalize import finalize_verification_task_result
@@ -387,13 +505,12 @@ class VerificationRuntimeCoordinator:
                 prepared_task_ids.add(task_id)
         if not prepared:
             return False
-        _save_results(
+        skipped_task_ids = _save_results(
             verification_id=self.verification_id,
             task_store=self._task_store,
             results=[result for _task_id, result in prepared],
         )
-        for task_id, result in prepared:
-            self._dag.transition(task_id, result.status)
+        self._apply_saved_results(prepared, skipped_task_ids=skipped_task_ids)
         self._publish_ready_rows()
         self._apply_fail_flag()
         if self._is_terminal():
@@ -477,7 +594,7 @@ class VerificationRuntimeCoordinator:
                 self._dag.transition(task_id, VerificationTaskStore.TASK_QUEUED)
                 self._cache_probe_task_ids[published.judgehost_task_id] = None
             else:
-                _save_result(
+                skipped_task_ids = _save_result(
                     verification_id=self.verification_id,
                     task_store=self._task_store,
                     result=published.terminal_result,
@@ -487,7 +604,10 @@ class VerificationRuntimeCoordinator:
                     run_id=published.terminal_result.run_id,
                     judgehost_task_id=published.terminal_result.judgehost_task_id,
                 )
-                self._dag.transition(task_id, published.terminal_result.status)
+                self._apply_saved_results(
+                    [(task_id, published.terminal_result)],
+                    skipped_task_ids=skipped_task_ids,
+                )
             published_count += 1
             changed = True
             if not self._events.empty():
@@ -537,12 +657,15 @@ class VerificationRuntimeCoordinator:
             TaskExecutionResult,
             final_result["final_result"] if "final_result" in final_result else final_result,
         )
-        _save_result(
+        skipped_task_ids = _save_result(
             verification_id=self.verification_id,
             task_store=self._task_store,
             result=execution_result,
         )
-        self._dag.transition(task_id, execution_result.status)
+        self._apply_saved_results(
+            [(task_id, execution_result)],
+            skipped_task_ids=skipped_task_ids,
+        )
         return True
 
     def _finalize_terminal_task(self, judgehost_task_id: str) -> bool:
@@ -559,12 +682,15 @@ class VerificationRuntimeCoordinator:
             from app.service.verification.task_result_finalize import finalize_verification_task_result
 
             final_result = finalize_verification_task_result(row, result=result)
-            _save_result(
+            skipped_task_ids = _save_result(
                 verification_id=self.verification_id,
                 task_store=self._task_store,
                 result=final_result,
             )
-            self._dag.transition(str(row["id"]), final_result.status)
+            self._apply_saved_results(
+                [(str(row["id"]), final_result)],
+                skipped_task_ids=skipped_task_ids,
+            )
             changed = True
         return changed
 

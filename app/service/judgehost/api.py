@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 
 from app.db import DB, now_iso
 from app.runtime_value import RuntimeValues
@@ -17,6 +18,7 @@ from app.service.judgehost.enqueue import TaskEnqueue
 from app.service.judgehost.result import ResultProcessor
 from app.service.judgehost.state import JudgehostState
 from app.service.judgehost.task_queue import TaskQueue
+from app.service.judgehost.runtime import parse_iso_utc
 from app.service.judgehost.toolkit import DomjudgeToolkit
 
 
@@ -230,6 +232,42 @@ class Judgehost:
         )
         for batch_id in ready_batch_ids:
             self._result._domjudge_finalize_batch_if_ready(batch_id)
+
+    def reconcile_expired_verification_leases(self, verification_id: str) -> list[str]:
+        if not verification_id:
+            return []
+        now_dt = datetime.now(timezone.utc)
+        now_text = now_iso()
+        with self._state.state_lock:
+            stale_hosts: list[str] = []
+            for hostname, row in self._state.hosts_state.items():
+                seen_at = parse_iso_utc(row.get("last_seen_at"))
+                if seen_at is None:
+                    continue
+                if (now_dt - seen_at).total_seconds() > float(self._state.online_window_sec):
+                    stale_hosts.append(str(hostname))
+        released_task_ids: set[str] = set()
+        for hostname in stale_hosts:
+            selected_task_ids: set[str] = set()
+            for case in self._state.batch_scheduler.cases_for_host(hostname):
+                if str(case["status"] or "") != "leased":
+                    continue
+                batch = self._state.batch_scheduler.fetch_batch(int(case["batch_id"]))
+                if batch is None or str(batch["verification_id"] or "") != verification_id:
+                    continue
+                task_id = str(case["task_id"] or "")
+                if task_id:
+                    selected_task_ids.add(task_id)
+            if not selected_task_ids:
+                continue
+            release = self._state.batch_scheduler.release_host_leases(
+                hostname,
+                now_text=now_text,
+                verification_id=verification_id,
+            )
+            self._result.finalize_host_lease_release(release)
+            released_task_ids.update(selected_task_ids)
+        return sorted(released_task_ids)
 
     def touch_verification_runtime(self, verification_id: str) -> None:
         self._terminal_cleanup.touch(verification_id)

@@ -409,6 +409,103 @@ class VerificationTaskStore:
                 started_at=current.started_at or now_iso(),
             )
 
+    def requeue_leased_tasks(
+        self,
+        verification_id: str,
+        judgehost_task_ids: list[str],
+    ) -> list[str]:
+        allowed = {str(task_id) for task_id in judgehost_task_ids if str(task_id)}
+        if not allowed:
+            return []
+        with self._runtime_lock.read_lock():
+            candidates = [
+                (task_id, runtime)
+                for task_id, runtime in self._runtime_by_task_id.items()
+                if runtime.status == self.TASK_LEASED
+                and runtime.judgehost_task_id in allowed
+            ]
+        eligible: list[tuple[str, _RuntimeTaskState]] = []
+        for task_id, runtime in candidates:
+            row = self.db.fetch_one(
+                "SELECT verification_id, final_status FROM verification_tasks WHERE id=?",
+                [task_id],
+            )
+            if row is None or str(row["verification_id"] or "") != verification_id:
+                continue
+            if str(row["final_status"] or ""):
+                continue
+            eligible.append((task_id, runtime))
+        changed: list[str] = []
+        with self._runtime_lock.write_lock():
+            for task_id, observed in eligible:
+                runtime = self._runtime_by_task_id.get(task_id)
+                if runtime != observed:
+                    continue
+                self._runtime_by_task_id[task_id] = _RuntimeTaskState(
+                    status=self.TASK_QUEUED,
+                    run_id=runtime.run_id,
+                    judgehost_task_id=runtime.judgehost_task_id,
+                    started_at="",
+                )
+                changed.append(task_id)
+        return changed
+
+    def _skip_pending_descendants(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        verification_id: str,
+        root_task_ids: set[str],
+        feedback_text: str,
+    ) -> set[str]:
+        if not root_task_ids:
+            return set()
+        rows = conn.execute(
+            """
+            SELECT id, predecessor_task_id, final_status
+            FROM verification_tasks
+            WHERE verification_id=?
+            """,
+            [verification_id],
+        ).fetchall()
+        children_by_parent: dict[str, list[str]] = {}
+        final_status_by_id: dict[str, str] = {}
+        for row in rows:
+            task_id = str(row["id"] or "")
+            parent_id = str(row["predecessor_task_id"] or "")
+            final_status_by_id[task_id] = str(row["final_status"] or "")
+            if parent_id:
+                children_by_parent.setdefault(parent_id, []).append(task_id)
+
+        with self._runtime_lock.read_lock():
+            active_task_ids = set(self._runtime_by_task_id)
+        skipped: set[str] = set()
+        stack = list(root_task_ids)
+        while stack:
+            parent_id = stack.pop()
+            for child_id in children_by_parent.get(parent_id, []):
+                stack.append(child_id)
+                if child_id in active_task_ids or final_status_by_id.get(child_id, ""):
+                    continue
+                conn.execute(
+                    """
+                    UPDATE verification_tasks
+                    SET final_status=?, verdict=?, feedback_text=?, finished_at=?
+                    WHERE id=? AND final_status=''
+                    """,
+                    [
+                        self.TASK_DONE,
+                        "SK",
+                        self._normalize_display_text(feedback_text),
+                        now_iso(),
+                        child_id,
+                    ],
+                )
+                if conn.execute("SELECT changes()").fetchone()[0] > 0:
+                    skipped.add(child_id)
+                    final_status_by_id[child_id] = self.TASK_DONE
+        return skipped
+
     def save_task_result(
         self,
         task_id: str,
@@ -428,45 +525,31 @@ class VerificationTaskStore:
         output_ref: str,
         answer_correct: bool = False,
     ) -> None:
-        with self._runtime_lock.read_lock():
-            logical_run_id = self._logical_run_id_by_task_id.get(task_id, "")
-        finished_at = now_iso() if status in {self.TASK_DONE, self.TASK_FAILED, self.TASK_CANCELLED} else None
-        limit_bytes = self._limit_bytes()
-        safe_compile_log = bounded_display_text(compile_log, limit_bytes=limit_bytes)
-        safe_error_text = bounded_display_text(error_text, limit_bytes=limit_bytes)
-        safe_feedback_text = bounded_display_text(feedback_text, limit_bytes=limit_bytes)
-        safe_diagnostics_json = normalize_diagnostics_json_text(
-            diagnostics_json,
-            message_limit=limit_bytes,
-        )
-        self.db.execute(
-            """
-            UPDATE verification_tasks
-            SET final_status=?, verdict=?, runtime_sec=?, cpu_sec=?, wall_sec=?, memory_kb=?, answer_correct=?, logical_run_id=?, compile_log=?, diagnostics_json=?, error_text=?, feedback_text=?, output_ref=?, finished_at=?
-            WHERE id=? AND final_status=''
-            """,
+        self.save_task_results(
             [
-                status,
-                verdict,
-                runtime_sec,
-                cpu_sec,
-                wall_sec,
-                memory_kb,
-                1 if bool(answer_correct) else 0,
-                logical_run_id,
-                safe_compile_log,
-                safe_diagnostics_json,
-                safe_error_text,
-                safe_feedback_text,
-                output_ref,
-                finished_at,
-                task_id,
-            ],
+                {
+                    "task_id": task_id,
+                    "status": status,
+                    "verdict": verdict,
+                    "run_id": run_id,
+                    "judgehost_task_id": judgehost_task_id,
+                    "runtime_sec": runtime_sec,
+                    "cpu_sec": cpu_sec,
+                    "wall_sec": wall_sec,
+                    "memory_kb": memory_kb,
+                    "compile_log": compile_log,
+                    "diagnostics_json": diagnostics_json,
+                    "error_text": error_text,
+                    "feedback_text": feedback_text,
+                    "output_ref": output_ref,
+                    "answer_correct": answer_correct,
+                }
+            ]
         )
 
-    def save_task_results(self, results: list[dict[str, object]]) -> None:
+    def save_task_results(self, results: list[dict[str, object]]) -> set[str]:
         if not results:
-            return
+            return set()
         limit_bytes = self._limit_bytes()
         task_ids = [str(result["task_id"]) for result in results]
         with self._runtime_lock.read_lock():
@@ -474,39 +557,119 @@ class VerificationTaskStore:
                 task_id: self._logical_run_id_by_task_id.get(task_id, "")
                 for task_id in task_ids
             }
-        params: list[list[object]] = []
-        for result in results:
-            status = str(result["status"])
-            task_id = str(result["task_id"])
-            finished_at = (
-                now_iso()
-                if status in {self.TASK_DONE, self.TASK_FAILED, self.TASK_CANCELLED}
-                else None
-            )
-            params.append(
-                [
-                    status,
-                    str(result["verdict"]),
-                    result["runtime_sec"],
-                    result["cpu_sec"],
-                    result["wall_sec"],
-                    result["memory_kb"],
-                    1 if bool(result["answer_correct"]) else 0,
-                    logical_run_ids[task_id],
-                    bounded_display_text(str(result["compile_log"]), limit_bytes=limit_bytes),
-                    normalize_diagnostics_json_text(
-                        str(result["diagnostics_json"]),
-                        message_limit=limit_bytes,
-                    ),
-                    bounded_display_text(str(result["error_text"]), limit_bytes=limit_bytes),
-                    bounded_display_text(str(result["feedback_text"]), limit_bytes=limit_bytes),
-                    str(result["output_ref"]),
-                    finished_at,
-                    task_id,
-                ]
-            )
+        normalized_results = [
+            {
+                "task_id": str(result["task_id"]),
+                "status": str(result["status"]),
+                "verdict": str(result["verdict"]),
+                "runtime_sec": result["runtime_sec"],
+                "cpu_sec": result["cpu_sec"],
+                "wall_sec": result["wall_sec"],
+                "memory_kb": result["memory_kb"],
+                "answer_correct": bool(result["answer_correct"]),
+                "compile_log": bounded_display_text(str(result["compile_log"]), limit_bytes=limit_bytes),
+                "diagnostics_json": normalize_diagnostics_json_text(
+                    str(result["diagnostics_json"]),
+                    message_limit=limit_bytes,
+                ),
+                "error_text": bounded_display_text(str(result["error_text"]), limit_bytes=limit_bytes),
+                "feedback_text": bounded_display_text(str(result["feedback_text"]), limit_bytes=limit_bytes),
+                "output_ref": str(result["output_ref"]),
+            }
+            for result in results
+        ]
+        skipped_task_ids: set[str] = set()
 
         def _tx(conn: sqlite3.Connection) -> None:
+            rows = conn.execute(
+                f"""
+                SELECT id, verification_id, task_kind, test_name, final_status
+                FROM verification_tasks
+                WHERE id IN ({','.join('?' for _ in task_ids)})
+                """,
+                task_ids,
+            ).fetchall()
+            rows_by_id = {str(row["id"]): row for row in rows}
+            owner_by_output_ref: dict[tuple[str, str], tuple[str, str]] = {}
+            existing_owner_by_key: dict[tuple[str, str], tuple[str, str] | None] = {}
+            effective_params: list[list[object]] = []
+            content_duplicate_roots: set[str] = set()
+            for result in normalized_results:
+                task_id = str(result["task_id"])
+                row = rows_by_id.get(task_id)
+                if row is None:
+                    continue
+                verification_id = str(row["verification_id"] or "")
+                task_kind = str(row["task_kind"] or "")
+                output_ref = str(result["output_ref"])
+                effective_verdict = str(result["verdict"])
+                effective_feedback = str(result["feedback_text"])
+                if (
+                    task_kind == "generate-input"
+                    and str(result["status"]) == self.TASK_DONE
+                    and effective_verdict.upper() != "SK"
+                    and output_ref
+                ):
+                    owner_key = (verification_id, output_ref)
+                    owner = owner_by_output_ref.get(owner_key)
+                    if owner is None:
+                        if owner_key not in existing_owner_by_key:
+                            owner_row = conn.execute(
+                                """
+                                SELECT id, test_name
+                                FROM verification_tasks
+                                WHERE verification_id=? AND task_kind='generate-input'
+                                  AND final_status=? AND UPPER(verdict)<>? AND output_ref=?
+                                ORDER BY finished_at ASC, id ASC
+                                LIMIT 1
+                                """,
+                                [verification_id, self.TASK_DONE, "SK", output_ref],
+                            ).fetchone()
+                            existing_owner_by_key[owner_key] = (
+                                None
+                                if owner_row is None
+                                else (str(owner_row["id"]), str(owner_row["test_name"] or ""))
+                            )
+                        owner = existing_owner_by_key[owner_key]
+                    if owner is None:
+                        owner_by_output_ref[owner_key] = (task_id, str(row["test_name"] or ""))
+                    elif owner[0] != task_id:
+                        effective_verdict = "SK"
+                        effective_feedback = (
+                            "duplicate generated input; skipped, same as "
+                            f"{owner[1]}"
+                        )
+                        content_duplicate_roots.add(task_id)
+                if (
+                    task_kind == "generate-input"
+                    and str(result["status"]) == self.TASK_DONE
+                    and effective_verdict.upper() == "SK"
+                ):
+                    content_duplicate_roots.add(task_id)
+                finished_at = (
+                    now_iso()
+                    if str(result["status"]) in {self.TASK_DONE, self.TASK_FAILED, self.TASK_CANCELLED}
+                    else None
+                )
+                effective_params.append(
+                    [
+                        result["status"],
+                        effective_verdict,
+                        result["runtime_sec"],
+                        result["cpu_sec"],
+                        result["wall_sec"],
+                        result["memory_kb"],
+                        1 if bool(result["answer_correct"]) else 0,
+                        logical_run_ids[task_id],
+                        result["compile_log"],
+                        result["diagnostics_json"],
+                        result["error_text"],
+                        self._normalize_display_text(effective_feedback),
+                        output_ref,
+                        finished_at,
+                        task_id,
+                    ]
+                )
             conn.executemany(
                 """
                 UPDATE verification_tasks
@@ -516,10 +679,46 @@ class VerificationTaskStore:
                     finished_at=?
                 WHERE id=? AND final_status=''
                 """,
-                params,
+                effective_params,
             )
+            for task_id in content_duplicate_roots:
+                skipped_task_ids.add(task_id)
+            for result in normalized_results:
+                task_id = str(result["task_id"])
+                row = rows_by_id.get(task_id)
+                if row is None or str(row["task_kind"] or "") != "generate-input":
+                    continue
+                if str(result["status"]) == self.TASK_DONE and (
+                    task_id in content_duplicate_roots or str(result["verdict"]).upper() == "SK"
+                ):
+                    skipped_task_ids.add(task_id)
+            for verification_id in {
+                str(rows_by_id[task_id]["verification_id"] or "")
+                for task_id in skipped_task_ids
+                if task_id in rows_by_id
+            }:
+                roots = {
+                    task_id
+                    for task_id in skipped_task_ids
+                    if task_id in rows_by_id
+                    and str(rows_by_id[task_id]["verification_id"] or "") == verification_id
+                }
+                skipped_task_ids.update(
+                    self._skip_pending_descendants(
+                        conn,
+                        verification_id=verification_id,
+                        root_task_ids=roots,
+                        feedback_text="skipped because generate-input was skipped",
+                    )
+                )
 
         self.db.write_transaction(_tx)
+        if skipped_task_ids:
+            with self._runtime_lock.write_lock():
+                for task_id in skipped_task_ids:
+                    self._remove_judgehost_indexes_locked(task_id)
+                    self._runtime_by_task_id.pop(task_id, None)
+        return skipped_task_ids
 
     def overwrite_task_result(
         self,
