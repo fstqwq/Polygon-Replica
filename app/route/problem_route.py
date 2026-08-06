@@ -38,6 +38,8 @@ from app.impl.problem.history import history_page
 from app.impl.problem.merge_op import (
     merge_apply,
     merge_cancel,
+    merge_compare,
+    merge_edit,
     merge_file,
     merge_page,
     merge_review,
@@ -406,6 +408,9 @@ router.add_api_route(
     "/problems/{problem:path}/merge/{preview_id}/review", merge_review, methods=["POST"]
 )
 router.add_api_route(
+    "/problems/{problem:path}/merge/{preview_id}/edit", merge_edit, methods=["POST"]
+)
+router.add_api_route(
     "/problems/{problem:path}/merge/{preview_id}/apply", merge_apply, methods=["POST"]
 )
 router.add_api_route(
@@ -413,5 +418,10 @@ router.add_api_route(
 )
 router.add_api_route(
     "/problems/{problem:path}/merge/{preview_id}/file/{entry_id}", merge_file, methods=["GET"]
+)
+router.add_api_route(
+    "/problems/{problem:path}/merge/{preview_id}/compare/{entry_id}",
+    merge_compare,
+    methods=["GET"],
 )
 router.add_api_route("/problems/{problem:path}/merge/undo", merge_undo, methods=["POST"])

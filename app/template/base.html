@@ -23,7 +23,7 @@
   {% if part == 'access' %}{% set inferred_problem_title.value = 'Manage Access' %}{% endif %}
   {% if part == 'files' %}{% set inferred_problem_title.value = 'Files' %}{% endif %}
   {% if part == 'workspace' %}{% set inferred_problem_title.value = 'My Files' %}{% endif %}
-  {% if part == 'merge' %}{% set inferred_problem_title.value = 'Merge Latest Revision' %}{% endif %}
+  {% if part == 'merge' %}{% set inferred_problem_title.value = 'Review Shared Changes' %}{% endif %}
   {% if part == 'history' %}{% set inferred_problem_title.value = 'Revision History' %}{% endif %}
   {% endif %}
   {% endfor %}
@@ -249,7 +249,7 @@
           {% if ctx.workspace_needs_update %}
           <div class="workspace-update-row">
             <form class="inline-form action-link-form" method="post" action="/problems/{{ ctx.problem.slug }}/merge/start">
-              <button class="button-link workspace-side-button" type="submit" {% if not ctx.access.can_write %}disabled title="{{ ctx.access.write_block_reason }}"{% endif %}>Merge latest revision</button>
+              <button class="button-link workspace-side-button" type="submit" {% if not ctx.access.can_write %}disabled title="{{ ctx.access.write_block_reason }}"{% endif %}>Review latest shared changes</button>
             </form>
           </div>
           {% endif %}

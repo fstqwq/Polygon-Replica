@@ -5,6 +5,7 @@
     "test_judgehost_identity.py",
     "test_judgehost_simulation.py",
     "test_judgehost_scheduler.py",
+    "test_merge_diff.py",
     "test_polygon_package_import.py",
     "test_polygon_package_rules.py",
     "test_public_contracts.py",

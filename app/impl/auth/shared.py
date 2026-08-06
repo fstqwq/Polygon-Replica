@@ -317,7 +317,13 @@ def template_response(request: Request, template_name: str, context: dict | None
     raw_cookie = str(request.cookies.get(_C.FLASH_COOKIE_NAME, "") or "").strip()
     queue = _decode_flash_queue(raw_cookie)
     fallback_message = _normalize_flash_message(payload.get("message", ""))
-    message = queue[0] if queue else fallback_message
+    ctx = payload.get("ctx")
+    auto_update_message = ""
+    if isinstance(ctx, dict):
+        auto_update_message = _normalize_flash_message(
+            ctx.get("workspace_auto_update_message", "")
+        )
+    message = auto_update_message or (queue[0] if queue else fallback_message)
     message_ts = int(time.time() * 1000)
     payload["message"] = message
     payload["message_level"] = _flash_message_level(message)
@@ -325,7 +331,11 @@ def template_response(request: Request, template_name: str, context: dict | None
     payload["message_event_id"] = _flash_message_event_id(message, scope=f"{payload['message_source']}:{message_ts}")
     payload["message_ts"] = message_ts
     response = config.templates.TemplateResponse(request, template_name, payload)
-    if queue:
+    if auto_update_message and queue:
+        # The update happened while rendering this response. Show it now without
+        # consuming an older redirect message that still belongs to the user.
+        set_flash_cookie(response, queue)
+    elif queue:
         set_flash_cookie(response, queue[1:])
     elif raw_cookie:
         set_flash_cookie(response, [])

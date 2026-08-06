@@ -4,6 +4,25 @@
 <h1 class="page-title">My Files</h1>
 {% include "_flash_message.html" %}
 {% set sudo_popup_next = '/problems/' ~ ctx.problem.slug ~ '/workspace?sudo_popup_done=1' %}
+{% if ctx.workspace_has_merge_undo %}
+{% set merge_affected_count = ctx.workspace_merge_result.get('affected_count', 0) | int %}
+<section class="workspace-merge-result" aria-label="Latest shared update result">
+  <div>
+    <h2>Latest Shared Version Applied</h2>
+    {% if change_rows %}
+    <p>Review {{ ctx.workspace_changes.total }} changed file{% if ctx.workspace_changes.total != 1 %}s{% endif %} before sharing.</p>
+    {% else %}
+    <p>Your files now match the latest shared version.</p>
+    {% endif %}
+  </div>
+  <div class="workspace-merge-result-actions">
+    {% if change_rows %}<a class="button-link" href="#file-changes">Review changed files</a>{% endif %}
+    <form class="inline-form" method="post" action="/problems/{{ ctx.problem.slug }}/merge/undo" data-confirm-message="Restore {{ merge_affected_count }} file{% if merge_affected_count != 1 %}s{% endif %} from before this update? Undo is only available until the updated files are edited or shared.">
+      <button class="btn" type="submit">Undo this update</button>
+    </form>
+  </div>
+</section>
+{% endif %}
 
 <div class="grid">
   <section>
@@ -15,23 +34,18 @@
 
     {% if ctx.workspace_needs_update %}
     <form method="post" action="/problems/{{ ctx.problem.slug }}/merge/start">
-      <button class="btn" type="submit" {% if not ctx.access.can_write %}disabled title="{{ ctx.access.write_block_reason }}"{% endif %}>Merge latest revision</button>
-    </form>
-    {% endif %}
-    {% if ctx.workspace_has_merge_undo %}
-    <form class="inline-form" method="post" action="/problems/{{ ctx.problem.slug }}/merge/undo" data-confirm-message="Restore the files that existed before the last merge?">
-      <button class="btn" type="submit">Undo last merge</button>
+      <button class="btn" type="submit" {% if not ctx.access.can_write %}disabled title="{{ ctx.access.write_block_reason }}"{% endif %}>Review latest shared changes</button>
     </form>
     {% endif %}
 
     <h2>Commit</h2>
     {% if ctx.workspace_needs_update %}
-    <p class="warn">A newer shared revision exists. Merge it before committing.</p>
+    <p class="warn">A newer shared revision exists. Review it before committing.</p>
     {% endif %}
     <form class="form-row" method="post" action="/problems/{{ ctx.problem.slug }}/revision/commit">
       <label for="revision-message">Message</label>
       <input id="revision-message" name="message" required />
-      <button class="btn" type="submit" {% if not ctx.access.can_write or ctx.workspace_needs_update %}disabled title="{{ ctx.access.write_block_reason if not ctx.access.can_write else 'Merge the latest revision first' }}"{% endif %}>Commit and share revision</button>
+      <button class="btn" type="submit" {% if not ctx.access.can_write or ctx.workspace_needs_update %}disabled title="{{ ctx.access.write_block_reason if not ctx.access.can_write else 'Review the latest shared changes first' }}"{% endif %}>Commit and share revision</button>
     </form>
 
     {% if change_rows %}
@@ -63,7 +77,7 @@
     {% endif %}
   </section>
 
-  <section>
+  <section id="file-changes">
     <div class="workspace-section-head">
       <h2>File Changes</h2>
       {% if ctx.access.can_write %}

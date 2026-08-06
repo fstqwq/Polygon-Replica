@@ -148,16 +148,25 @@ class TestPublicContracts(unittest.TestCase):
     def test_merge_ui_uses_result_language_and_has_no_default_file_choice(self) -> None:
         source = (ROOT / "app" / "template" / "merge.html").read_text(encoding="utf-8")
         for label in [
-            "Use this suggested result",
-            "Choose files one by one",
+            "Review and choose",
+            "Confirm update",
+            "Review suggested update",
+            "Choose complete files instead",
             "Keep my files unchanged",
             "Use the latest shared file",
             "Keep my current file",
         ]:
             self.assertIn(label, source)
-        self.assertNotIn(" checked", source)
+        self.assertNotIn('value="latest" required checked', source)
+        self.assertNotIn('value="current" required checked', source)
+        self.assertNotIn("File group", source)
+        self.assertNotIn("Step 3", source)
         for implementation_term in ["rebase", "commit hash", "bare repo", "uncommitted"]:
             self.assertNotIn(implementation_term, source.lower())
+
+        script = (ROOT / "app" / "static" / "merge.js").read_text(encoding="utf-8")
+        self.assertIn("textContent", script)
+        self.assertNotIn("innerHTML", script)
 
     def test_old_danger_link_variants_removed_from_templates_and_styles(self) -> None:
         offenders: list[str] = []

@@ -24,6 +24,7 @@ from app.service.statement.constant import (
 )
 from app.service.statement.render import ensure_statement_language_sources
 from app.impl.run_export.import_source import import_package_as_new_problem
+from app.impl.problem.merge_op import merge_compare, merge_edit, merge_page, merge_review
 from tests.package_builders import polygon_contest_package, polygon_problem_package
 from tests.common import E2ETestBase
 
@@ -896,8 +897,8 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         status_text = run_git(["git", "-C", str(ws), "status", "--short", "--untracked-files=all"]).stdout
         self.assertIn(rel, status_text)
 
-    def test_update_working_copy_shows_only_when_upstream_is_newer(self) -> None:
-        self._ensure_committed_head("alice/sample", "alice")
+    def test_clean_workspace_auto_updates_once_when_shared_version_advances(self) -> None:
+        alice_ws, _head = self._ensure_committed_head("alice/sample", "alice")
         initial = general_page(_request("/problems/alice/sample/general"), "alice/sample", "alice")
         self.assertEqual(initial.status_code, 200)
         initial_html = initial.body.decode("utf-8", errors="replace")
@@ -919,7 +920,146 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         refreshed = general_page(_request("/problems/alice/sample/general"), "alice/sample", "alice")
         self.assertEqual(refreshed.status_code, 200)
         refreshed_html = refreshed.body.decode("utf-8", errors="replace")
-        self.assertIn("/problems/alice/sample/merge/start", refreshed_html)
+        self.assertNotIn("/problems/alice/sample/merge/start", refreshed_html)
+        self.assertIn("Updated to the latest shared version.", refreshed_html)
+        self.assertEqual((alice_ws / marker).read_text(encoding="utf-8"), "upstream update\n")
+        audit_row = db_fetch_one(
+            "SELECT COUNT(*) AS c FROM audit_log WHERE action='workspace.merge.auto_update'"
+        )
+        self.assertIsNotNone(audit_row)
+        self.assertEqual(int(audit_row["c"]), 1)
+
+        repeated = general_page(_request("/problems/alice/sample/general"), "alice/sample", "alice")
+        repeated_html = repeated.body.decode("utf-8", errors="replace")
+        self.assertNotIn("Updated to the latest shared version.", repeated_html)
+
+    def test_dirty_workspace_requires_review_when_shared_version_advances(self) -> None:
+        alice_ws, old_head = self._ensure_committed_head("alice/sample", "alice")
+        local_marker = f"notes/local-{uuid.uuid4().hex[:8]}.txt"
+        (alice_ws / local_marker).write_text("local edit\n", encoding="utf-8")
+
+        workspace_service.grant_repo_access("alice/sample", "bob", "owner")
+        bob_ws = Path(workspace_service.ensure_workspace("alice/sample", "bob"))
+        self.assertEqual(run_git(["git", "fetch", "origin", "main"], cwd=bob_ws).returncode, 0)
+        self.assertEqual(run_git(["git", "reset", "--hard", "origin/main"], cwd=bob_ws).returncode, 0)
+        self.assertEqual(run_git(["git", "config", "user.name", "Bob"], cwd=bob_ws).returncode, 0)
+        self.assertEqual(run_git(["git", "config", "user.email", "bob@example.com"], cwd=bob_ws).returncode, 0)
+        shared_marker = f"notes/shared-{uuid.uuid4().hex[:8]}.txt"
+        (bob_ws / shared_marker).write_text("shared edit\n", encoding="utf-8")
+        self.assertEqual(run_git(["git", "add", shared_marker], cwd=bob_ws).returncode, 0)
+        self.assertEqual(run_git(["git", "commit", "-m", "shared update"], cwd=bob_ws).returncode, 0)
+        self.assertEqual(run_git(["git", "push", "origin", "main"], cwd=bob_ws).returncode, 0)
+
+        response = general_page(_request("/problems/alice/sample/general"), "alice/sample", "alice")
+        html = response.body.decode("utf-8", errors="replace")
+        self.assertIn("/problems/alice/sample/merge/start", html)
+        self.assertNotIn("Updated to the latest shared version.", html)
+        self.assertEqual(run_git(["git", "rev-parse", "HEAD"], cwd=alice_ws).stdout.strip(), old_head)
+        self.assertTrue((alice_ws / local_marker).is_file())
+        self.assertFalse((alice_ws / shared_marker).exists())
+
+    def test_merge_review_compares_lazily_and_restores_manual_selection(self) -> None:
+        alice_ws, _head = self._ensure_committed_head("alice/sample", "alice")
+        conflict_path = f"notes/conflict-{uuid.uuid4().hex[:8]}.txt"
+        (alice_ws / conflict_path).write_text("mine <script>alert(1)</script>\n", encoding="utf-8")
+
+        workspace_service.grant_repo_access("alice/sample", "bob", "owner")
+        bob_ws = Path(workspace_service.ensure_workspace("alice/sample", "bob"))
+        self.assertEqual(run_git(["git", "fetch", "origin", "main"], cwd=bob_ws).returncode, 0)
+        self.assertEqual(run_git(["git", "reset", "--hard", "origin/main"], cwd=bob_ws).returncode, 0)
+        self.assertEqual(run_git(["git", "config", "user.name", "Bob"], cwd=bob_ws).returncode, 0)
+        self.assertEqual(run_git(["git", "config", "user.email", "bob@example.com"], cwd=bob_ws).returncode, 0)
+        (bob_ws / conflict_path).write_text("theirs & shared\n", encoding="utf-8")
+        self.assertEqual(run_git(["git", "add", conflict_path], cwd=bob_ws).returncode, 0)
+        self.assertEqual(run_git(["git", "commit", "-m", "conflicting file"], cwd=bob_ws).returncode, 0)
+        self.assertEqual(run_git(["git", "push", "origin", "main"], cwd=bob_ws).returncode, 0)
+
+        preview = config.workspace_merge_service.start_preview(
+            "alice",
+            "alice/sample",
+            alice_ws,
+        )
+        self.assertFalse(preview.suggested_available)
+        entry = next(row for row in preview.entries if row.path == conflict_path)
+        group_id = entry.group_id
+
+        page = merge_page(
+            _request(f"/problems/alice/sample/merge/{preview.preview_id}"),
+            "alice/sample",
+            preview.preview_id,
+            "alice",
+        )
+        html = page.body.decode("utf-8", errors="replace")
+        self.assertIn("Review and choose", html)
+        self.assertIn("Confirm update", html)
+        self.assertIn("data-merge-comparison", html)
+        self.assertNotIn('value="latest" required checked', html)
+        self.assertNotIn('value="current" required checked', html)
+
+        comparison = merge_compare(
+            _request(
+                f"/problems/alice/sample/merge/{preview.preview_id}/compare/{entry.entry_id}",
+                "target=latest",
+            ),
+            "alice/sample",
+            preview.preview_id,
+            entry.entry_id,
+            "alice",
+        )
+        self.assertEqual(comparison.status_code, 200)
+        payload = json.loads(comparison.body)
+        self.assertEqual(payload["path"], conflict_path)
+        self.assertEqual(payload["rows"][0]["operation"], "replace")
+
+        invalid = merge_compare(
+            _request(
+                f"/problems/alice/sample/merge/{preview.preview_id}/compare/{entry.entry_id}",
+                "target=invalid",
+            ),
+            "alice/sample",
+            preview.preview_id,
+            entry.entry_id,
+            "alice",
+        )
+        self.assertEqual(invalid.status_code, 400)
+
+        confirm = asyncio.run(
+            merge_review(
+                _post_form_request(
+                    f"/problems/alice/sample/merge/{preview.preview_id}/review",
+                    {
+                        "mode": "manual",
+                        f"choice_{group_id}": "latest",
+                        "selected_entry_id": entry.entry_id,
+                    },
+                ),
+                "alice/sample",
+                preview.preview_id,
+                "alice",
+            )
+        )
+        confirm_html = confirm.body.decode("utf-8", errors="replace")
+        self.assertIn("Confirm File Update", confirm_html)
+        self.assertIn("Latest shared file", confirm_html)
+
+        restored = asyncio.run(
+            merge_edit(
+                _post_form_request(
+                    f"/problems/alice/sample/merge/{preview.preview_id}/edit",
+                    {
+                        "mode": "manual",
+                        f"choice_{group_id}": "latest",
+                        "selected_entry_id": entry.entry_id,
+                    },
+                ),
+                "alice/sample",
+                preview.preview_id,
+                "alice",
+            )
+        )
+        restored_html = restored.body.decode("utf-8", errors="replace")
+        self.assertIn('value="latest" required checked', restored_html)
+        self.assertIn(f'data-selected-entry="{entry.entry_id}"', restored_html)
 
     def test_problem_page_denies_user_without_acl(self) -> None:
         private_problem = f"alice/ui-private-{uuid.uuid4().hex[:8]}"

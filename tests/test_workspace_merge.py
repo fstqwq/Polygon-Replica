@@ -67,6 +67,71 @@ class TestWorkspaceMerge(unittest.TestCase):
         self._configure(path)
         return path
 
+    def _push_shared_file(self, clone_name: str, rel_path: str, content: str) -> str:
+        shared = self._shared_clone(clone_name)
+        target = shared / rel_path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
+        self._git(shared, "add", rel_path)
+        self._git(shared, "commit", "-m", clone_name)
+        self._git(shared, "push", "origin", "main")
+        return self._git(shared, "rev-parse", "HEAD")
+
+    def test_clean_workspace_advances_without_preview_or_undo(self) -> None:
+        latest_head = self._push_shared_file(
+            "auto-update",
+            "shared.txt",
+            "latest\n",
+        )
+
+        self.assertTrue(self.service.advance_clean_workspace(self.workspace))
+        self.assertEqual(self._git(self.workspace, "rev-parse", "HEAD"), latest_head)
+        self.assertEqual(
+            (self.workspace / "shared.txt").read_text(encoding="utf-8"),
+            "latest\n",
+        )
+        self.assertFalse(self.service.has_active_preview(self.workspace))
+        self.assertFalse(self.service.has_undo(self.workspace))
+        self.assertFalse(self.service.advance_clean_workspace(self.workspace))
+
+    def test_dirty_or_diverged_workspace_does_not_advance(self) -> None:
+        initial_head = self._git(self.workspace, "rev-parse", "HEAD")
+        self._push_shared_file("dirty-shared", "shared.txt", "latest\n")
+        (self.workspace / "local.txt").write_text("mine\n", encoding="utf-8")
+
+        self.assertFalse(self.service.advance_clean_workspace(self.workspace))
+        self.assertEqual(self._git(self.workspace, "rev-parse", "HEAD"), initial_head)
+
+        self._git(self.workspace, "add", "local.txt")
+        self._git(self.workspace, "commit", "-m", "local-only")
+        diverged_head = self._git(self.workspace, "rev-parse", "HEAD")
+        self.assertFalse(self.service.advance_clean_workspace(self.workspace))
+        self.assertEqual(self._git(self.workspace, "rev-parse", "HEAD"), diverged_head)
+
+    def test_active_preview_blocks_clean_workspace_auto_update(self) -> None:
+        initial_head = self._git(self.workspace, "rev-parse", "HEAD")
+        self._push_shared_file("preview-shared", "shared.txt", "latest\n")
+        preview = self.service.start_preview("alice", "alice/sample", self.workspace)
+
+        self.assertTrue(self.service.has_active_preview(self.workspace))
+        self.assertFalse(self.service.advance_clean_workspace(self.workspace))
+        self.assertEqual(self._git(self.workspace, "rev-parse", "HEAD"), initial_head)
+
+        self.service.cancel_preview("alice", "alice/sample", preview.preview_id)
+        self.assertTrue(self.service.advance_clean_workspace(self.workspace))
+
+    def test_suggested_manifest_lists_only_actual_result_changes(self) -> None:
+        (self.workspace / "local.txt").write_text("my edit\n", encoding="utf-8")
+        self._push_shared_file("suggested-manifest", "shared.txt", "latest\n")
+
+        preview = self.service.start_preview("alice", "alice/sample", self.workspace)
+
+        self.assertTrue(preview.suggested_available)
+        self.assertEqual(
+            [entry.path for entry in preview.suggested_entries],
+            ["shared.txt"],
+        )
+
     def test_suggested_merge_is_atomic_and_undo_restores_current_files(self) -> None:
         old_head = self._git(self.workspace, "rev-parse", "HEAD")
         (self.workspace / "local.txt").write_text("my edit\n", encoding="utf-8")
@@ -85,6 +150,10 @@ class TestWorkspaceMerge(unittest.TestCase):
         self.assertEqual((self.workspace / "local.txt").read_text(encoding="utf-8"), "my edit\n")
         self.assertEqual((self.workspace / "shared.txt").read_text(encoding="utf-8"), "latest\n")
         self.assertTrue(self.service.has_undo(self.workspace))
+        self.assertEqual(
+            self.service.undo_context(self.workspace),
+            {"mode": "suggested", "affected_count": 1},
+        )
 
         self.service.undo(self.workspace)
         self.assertEqual(self._git(self.workspace, "rev-parse", "HEAD"), old_head)
@@ -122,6 +191,37 @@ class TestWorkspaceMerge(unittest.TestCase):
         os.symlink(self.workspace / "local.txt", self.workspace / "linked.txt")
         with self.assertRaisesRegex(ValueError, "symbolic links"):
             self.service.start_preview("alice", "alice/sample", self.workspace)
+
+    def test_binary_preview_is_download_only(self) -> None:
+        (self.workspace / "local.txt").write_text("mine\n", encoding="utf-8")
+        shared = self._shared_clone("shared-binary")
+        (shared / "payload.bin").write_bytes(b"binary\0payload")
+        self._git(shared, "add", "payload.bin")
+        self._git(shared, "commit", "-m", "binary")
+        self._git(shared, "push", "origin", "main")
+
+        preview = self.service.start_preview("alice", "alice/sample", self.workspace)
+        entry = next(row for row in preview.suggested_entries if row.path == "payload.bin")
+        comparison = self.service.comparison(
+            "alice",
+            "alice/sample",
+            preview.preview_id,
+            entry.entry_id,
+            "suggested",
+        )
+
+        self.assertEqual(entry.suggested.content_kind, "binary")
+        self.assertTrue(comparison.binary)
+        self.assertEqual(comparison.rows, ())
+        path, descriptor = self.service.entry_file(
+            "alice",
+            "alice/sample",
+            preview.preview_id,
+            entry.entry_id,
+            "suggested",
+        )
+        self.assertEqual(path.read_bytes(), b"binary\0payload")
+        self.assertEqual(descriptor.content_kind, "binary")
 
     def test_unborn_workspace_can_merge_and_undo_first_shared_revision(self) -> None:
         unborn = self.root / "unborn"

@@ -1,91 +1,160 @@
 {% extends "base.html" %}
+{% block body_class %} merge-page{% endblock %}
 {% block content %}
-<h1 class="page-title">Merge Latest Revision</h1>
+<h1 class="page-title">Review Shared Changes</h1>
 {% include "_flash_message.html" %}
 
-<nav class="merge-steps" aria-label="Merge progress">
-  <span class="{{ 'active' if step == 1 else '' }}">1. Preview</span>
-  <span class="{{ 'active' if step == 2 else '' }}">2. Choose files</span>
-  <span class="{{ 'active' if step == 3 else '' }}">3. Confirm</span>
+<nav class="merge-steps" aria-label="Update progress">
+  <span class="{{ 'active' if screen == 'review' else 'complete' }}"{% if screen == 'review' %} aria-current="step"{% endif %}>Review and choose</span>
+  <span class="{{ 'active' if screen == 'confirm' else '' }}"{% if screen == 'confirm' %} aria-current="step"{% endif %}>Confirm update</span>
 </nav>
 
-{% if message %}<p class="warn">{{ message }}</p>{% endif %}
+{% if screen == 'review' %}
+<section class="merge-review-card" data-merge-review data-mode="{{ review_mode }}" data-selected-entry="{{ selected_entry_id }}">
+  <div class="merge-review-head">
+    <div>
+      <h2>{{ 'Suggested Update' if review_mode == 'suggested' else 'Choose Complete Files' }}</h2>
+      {% if review_mode == 'suggested' %}
+      <p>The suggested result combines the latest shared version with your current files. Review every changed file before continuing.</p>
+      {% else %}
+      <p>Choose which complete version to keep for every affected group. Nothing is selected by default.</p>
+      {% endif %}
+    </div>
+    <strong class="merge-file-count">
+      {{ preview.suggested_affected_count if review_mode == 'suggested' else preview.manual_affected_count }} affected
+      file{% if (preview.suggested_affected_count if review_mode == 'suggested' else preview.manual_affected_count) != 1 %}s{% endif %}
+    </strong>
+  </div>
 
-{% if step == 1 %}
-<section class="merge-choice-grid">
-  <article class="merge-choice-card">
-    <h2>Suggested Result</h2>
-    {% if preview.suggested_available %}
-    <p>The latest shared revision and your current files can be combined without a text conflict. Review the result after it is applied; automatic combination cannot prove the program remains correct.</p>
-    <form method="post" action="/problems/{{ ctx.problem.slug }}/merge/{{ preview.id }}/review">
-      <input type="hidden" name="mode" value="suggested" />
-      <button class="btn" type="submit">Use this suggested result</button>
-    </form>
-    {% else %}
-    <p>Some files need an explicit choice. Choose which complete file version to keep.</p>
-    {% endif %}
-    <a class="button-link" href="/problems/{{ ctx.problem.slug }}/merge/{{ preview.id }}?mode=manual">Choose files one by one</a>
-  </article>
-  <article class="merge-choice-card">
-    <h2>Keep Current Files</h2>
-    <p>Cancel this preview without changing your workspace.</p>
-    <form method="post" action="/problems/{{ ctx.problem.slug }}/merge/{{ preview.id }}/cancel">
-      <button class="btn" type="submit">Keep my files unchanged</button>
-    </form>
-  </article>
-</section>
+  <form method="post" action="/problems/{{ ctx.problem.slug }}/merge/{{ preview.id }}/review" data-merge-form>
+    <input type="hidden" name="mode" value="{{ review_mode }}" />
+    <input type="hidden" name="selected_entry_id" value="{{ selected_entry_id }}" data-selected-entry-input />
+    <div class="merge-review-layout">
+      <div class="merge-file-browser" aria-label="Affected files">
+        {% if review_mode == 'suggested' %}
+          {% for entry in preview.suggested_entries %}
+          <button
+            type="button"
+            class="merge-file-select merge-file-{{ entry.change_kind }}"
+            data-entry-id="{{ entry.entry_id }}"
+            data-compare-url="/problems/{{ ctx.problem.slug }}/merge/{{ preview.id }}/compare/{{ entry.entry_id }}?target=suggested"
+          >
+            <span class="merge-change-kind">{{ entry.change_label }}</span>
+            <code>{{ entry.path }}</code>
+          </button>
+          {% else %}
+          <p>The suggested result does not change any visible file.</p>
+          {% endfor %}
+        {% else %}
+          {% for group in preview.groups %}
+          <fieldset class="merge-file-group">
+            <legend>
+              {% if group.entries|length == 1 %}<code>{{ group.entries[0].path }}</code>{% else %}Related paths{% endif %}
+            </legend>
+            {% if group.entries|length > 1 %}
+            <p class="merge-group-note">One choice applies to all {{ group.entries|length }} related paths.</p>
+            {% endif %}
+            <div class="merge-group-files">
+              {% for entry in group.entries %}
+              <button
+                type="button"
+                class="merge-file-select merge-file-{{ entry.change_kind }}"
+                data-entry-id="{{ entry.entry_id }}"
+                data-compare-url="/problems/{{ ctx.problem.slug }}/merge/{{ preview.id }}/compare/{{ entry.entry_id }}?target=latest"
+              >
+                <span class="merge-change-kind">{{ entry.change_label }}</span>
+                <code>{{ entry.path }}</code>
+              </button>
+              <noscript>
+                {% if entry.current %}<a href="/problems/{{ ctx.problem.slug }}/merge/{{ preview.id }}/file/{{ entry.entry_id }}?side=current">Open my current file</a>{% endif %}
+                {% if entry.latest %}<a href="/problems/{{ ctx.problem.slug }}/merge/{{ preview.id }}/file/{{ entry.entry_id }}?side=latest">Open latest shared file</a>{% endif %}
+              </noscript>
+              {% endfor %}
+            </div>
+            <div class="merge-side-choice">
+              <label><input type="radio" name="choice_{{ group.id }}" value="latest" required {% if choices.get(group.id) == 'latest' %}checked{% endif %}/> Use the latest shared file{% if group.entries|length > 1 %}s{% endif %}</label>
+              <label><input type="radio" name="choice_{{ group.id }}" value="current" required {% if choices.get(group.id) == 'current' %}checked{% endif %}/> Keep my current file{% if group.entries|length > 1 %}s{% endif %}</label>
+            </div>
+          </fieldset>
+          {% endfor %}
+        {% endif %}
+      </div>
 
-{% elif step == 2 %}
-<section id="manual-choices" class="merge-manual-section">
-  <h2>Choose Files One by One</h2>
-  <p>{{ preview.affected_count }} affected file{% if preview.affected_count != 1 %}s{% endif %}. Every group requires a choice; nothing is selected by default.</p>
-  <form method="post" action="/problems/{{ ctx.problem.slug }}/merge/{{ preview.id }}/review">
-    <input type="hidden" name="mode" value="manual" />
-    {% for group in preview.groups %}
-    <fieldset class="merge-file-group">
-      <legend>File group {{ loop.index }}</legend>
-      {% for entry in group.entries %}
-      <div class="merge-file-row">
-        <code>{{ entry.path }}</code>
-        <span class="merge-file-links">
-          {% if entry.current %}<a target="_blank" rel="noopener" href="/problems/{{ ctx.problem.slug }}/merge/{{ preview.id }}/file/{{ entry.entry_id }}?side=current">View my current file</a>{% else %}<span>Not in my files</span>{% endif %}
-          {% if entry.latest %}<a target="_blank" rel="noopener" href="/problems/{{ ctx.problem.slug }}/merge/{{ preview.id }}/file/{{ entry.entry_id }}?side=latest">View latest shared file</a>{% else %}<span>Not in latest revision</span>{% endif %}
-        </span>
-      </div>
-      {% endfor %}
-      <div class="merge-side-choice">
-        <label><input type="radio" name="choice_{{ group.id }}" value="latest" required /> Use the latest shared file{% if group.entries|length > 1 %}s{% endif %}</label>
-        <label><input type="radio" name="choice_{{ group.id }}" value="current" required /> Keep my current file{% if group.entries|length > 1 %}s{% endif %}</label>
-      </div>
-    </fieldset>
-    {% else %}
-    <p>No file differs from the latest shared revision.</p>
-    {% endfor %}
-    <button class="btn" type="submit">Review selected result</button>
+      <section class="merge-comparison" aria-live="polite" aria-busy="false" data-merge-comparison>
+        <div class="merge-comparison-empty" data-merge-empty>Select a file to compare.</div>
+        <div class="merge-comparison-error" data-merge-error hidden></div>
+        <div class="merge-comparison-content" data-merge-content hidden>
+          <div class="merge-comparison-title-row">
+            <div>
+              <span class="merge-change-kind" data-merge-kind></span>
+              <code data-merge-path></code>
+            </div>
+            <span class="merge-comparison-message" data-merge-message></span>
+          </div>
+          <div class="merge-diff-head">
+            <div><strong data-merge-left-label></strong> <a data-merge-left-open hidden>Open full file</a></div>
+            <div><strong data-merge-right-label></strong> <a data-merge-right-open hidden>Open full file</a></div>
+          </div>
+          <div class="merge-diff" data-merge-rows></div>
+        </div>
+      </section>
+    </div>
+
+    <div class="merge-actions">
+      <button class="btn primary-action" type="submit">
+        {{ 'Review suggested update' if review_mode == 'suggested' else 'Review selected update' }}
+      </button>
+      {% if preview.suggested_available %}
+        {% if review_mode == 'suggested' %}
+        <a class="button-link" href="/problems/{{ ctx.problem.slug }}/merge/{{ preview.id }}?mode=manual">Choose complete files instead</a>
+        {% else %}
+        <a class="button-link" href="/problems/{{ ctx.problem.slug }}/merge/{{ preview.id }}">Use suggested result instead</a>
+        {% endif %}
+      {% endif %}
+    </div>
+  </form>
+  <form class="merge-cancel-form" method="post" action="/problems/{{ ctx.problem.slug }}/merge/{{ preview.id }}/cancel">
+    <button class="button-link" type="submit">Keep my files unchanged</button>
   </form>
 </section>
-{% elif step == 3 %}
+
+{% elif screen == 'confirm' %}
 <section class="merge-confirm-card">
   <h2>Confirm File Update</h2>
   {% if review_mode == 'suggested' %}
-  <p>The suggested result will replace your workspace files. This does not publish a revision.</p>
+  <p>The suggested result will update {{ preview.suggested_affected_count }} file{% if preview.suggested_affected_count != 1 %}s{% endif %}. This does not publish a shared revision.</p>
+  <ul class="merge-confirm-list">
+    {% for entry in preview.suggested_entries %}
+    <li><span class="merge-change-kind">{{ entry.change_label }}</span> <code>{{ entry.path }}</code>{% if entry.content_kind == 'binary' %} <span class="merge-content-kind">binary file</span>{% elif entry.content_kind == 'large' %} <span class="merge-content-kind">large file</span>{% endif %}</li>
+    {% endfor %}
+  </ul>
   {% else %}
-  <p>The complete file choices below will replace your workspace files. This does not publish a revision.</p>
-  <ul>
+  <p>Your complete-file choices will update {{ preview.manual_affected_count }} file{% if preview.manual_affected_count != 1 %}s{% endif %}. This does not publish a shared revision.</p>
+  <ul class="merge-confirm-list">
     {% for group in preview.groups %}
-    <li><code>{{ group.entries | map(attribute='path') | join(', ') }}</code>: {{ 'latest shared file' if choices[group.id] == 'latest' else 'my current file' }}</li>
+    <li>
+      <strong>{{ 'Latest shared file' if choices[group.id] == 'latest' else 'My current file' }}</strong>:
+      {% for entry in group.entries %}<span class="merge-change-kind">{{ entry.change_label }}</span> <code>{{ entry.path }}</code>{% if entry.content_kind == 'binary' %} <span class="merge-content-kind">binary file</span>{% elif entry.content_kind == 'large' %} <span class="merge-content-kind">large file</span>{% endif %}{% if not loop.last %}, {% endif %}{% endfor %}
+    </li>
     {% endfor %}
   </ul>
   {% endif %}
-  <p>A one-level Undo will be available until you edit or commit the merged files.</p>
-  <form method="post" action="/problems/{{ ctx.problem.slug }}/merge/{{ preview.id }}/apply">
-    <input type="hidden" name="mode" value="{{ review_mode }}" />
-    {% for group_id, side in choices.items() %}<input type="hidden" name="choice_{{ group_id }}" value="{{ side }}" />{% endfor %}
-    <div class="form-row">
-      <button class="btn" type="submit">Confirm and update my files</button>
-      <a class="button-link" href="/problems/{{ ctx.problem.slug }}/merge/{{ preview.id }}">Back</a>
-    </div>
-  </form>
+  <p>An Undo action will remain available until these files are edited or shared.</p>
+  <div class="merge-actions">
+    <form method="post" action="/problems/{{ ctx.problem.slug }}/merge/{{ preview.id }}/apply">
+      <input type="hidden" name="mode" value="{{ review_mode }}" />
+      {% for group_id, side in choices.items() %}<input type="hidden" name="choice_{{ group_id }}" value="{{ side }}" />{% endfor %}
+      <button class="btn primary-action" type="submit">Update my files</button>
+    </form>
+    <form method="post" action="/problems/{{ ctx.problem.slug }}/merge/{{ preview.id }}/edit">
+      <input type="hidden" name="mode" value="{{ review_mode }}" />
+      <input type="hidden" name="selected_entry_id" value="{{ selected_entry_id }}" />
+      {% for group_id, side in choices.items() %}<input type="hidden" name="choice_{{ group_id }}" value="{{ side }}" />{% endfor %}
+      <button class="button-link" type="submit">Back to review</button>
+    </form>
+  </div>
 </section>
 {% endif %}
+
+<script src="/static/merge.js?v=20260806-01" defer></script>
 {% endblock %}

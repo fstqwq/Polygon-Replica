@@ -1,11 +1,12 @@
 from __future__ import annotations
-from app.impl.auth.session import require_session_user
+
+import logging
 from pathlib import Path
 from typing import Annotated, TypedDict, cast
 
-from fastapi import HTTPException, Request, Depends
+from fastapi import Depends, HTTPException, Request
 
-from app.impl.auth.session import has_sudo_session
+from app.impl.auth.session import has_sudo_session, require_session_user
 from app.impl.auth.shared import template_response
 from app.impl.runtime.config import config
 
@@ -28,6 +29,7 @@ from app.impl.workspace.context import count_label
 from app.impl.workspace.context_operation import (
     _solutions_status_context,
     _tests_spec_status_context,
+    audit,
 )
 from app.impl.workspace.context_component_status import (
     checker_status_context,
@@ -41,6 +43,7 @@ from app.impl.workspace.problem_config import read_problem_config
 from app.service.repository.revision import git_commit_count, workspace_revision_info
 
 _C = config.constants
+logger = logging.getLogger(__name__)
 
 
 class SystemLimitRow(TypedDict):
@@ -85,7 +88,28 @@ def page_ctx(problem: str, user: str, include_branches: bool=True, refresh_statu
     ctx['branches_truncated'] = False
     ctx['branch_limit'] = 1
     workspace_path = Path(ctx['workspace']['path'])
-    ctx['workspace_has_merge_undo'] = config.workspace_merge_service.has_undo(workspace_path)
+    auto_updated = False
+    if refresh_status:
+        try:
+            auto_updated = config.workspace_merge_service.advance_clean_workspace(workspace_path)
+        except Exception:
+            logger.exception("clean workspace auto-update failed for %s", problem)
+        if auto_updated:
+            try:
+                audit(
+                    int(ctx['user']['id']),
+                    int(ctx['problem']['id']),
+                    'workspace.merge.auto_update',
+                    {},
+                )
+            except Exception:
+                logger.exception("clean workspace auto-update audit failed for %s", problem)
+    ctx['workspace_auto_update_message'] = (
+        'Updated to the latest shared version.' if auto_updated else ''
+    )
+    undo_context = config.workspace_merge_service.undo_context(workspace_path)
+    ctx['workspace_merge_result'] = undo_context or {}
+    ctx['workspace_has_merge_undo'] = undo_context is not None
     if refresh_status:
         live_status: dict[str, object] | None = None
         try:

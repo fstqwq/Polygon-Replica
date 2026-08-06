@@ -14,6 +14,12 @@ from pathlib import Path, PurePosixPath
 from app.service.platform.fs.op import extract_git_archive
 from app.service.platform.git_process import run_git
 from app.service.platform.workspace_path import is_hidden_workspace_path
+from app.service.repository.merge_diff import (
+    MAX_DIFF_BYTES,
+    MergeComparison,
+    MergeDiffSide,
+    compare_merge_files,
+)
 from app.service.repository.workspace import WorkspaceService, atomic_swap_workspace
 from app.setting import Settings
 
@@ -24,6 +30,7 @@ class MergeFile:
     size: int
     sha256: str
     executable: bool
+    content_kind: str
 
 
 @dataclass(frozen=True)
@@ -33,6 +40,7 @@ class MergeEntry:
     path: str
     current: MergeFile | None
     latest: MergeFile | None
+    suggested: MergeFile | None
 
 
 @dataclass(frozen=True)
@@ -48,6 +56,10 @@ class MergePreview:
     root: Path
     entries: tuple[MergeEntry, ...]
     groups: tuple[tuple[str, tuple[str, ...]], ...]
+    suggested_entries: tuple[MergeEntry, ...]
+    current_manifest: tuple[MergeFile, ...]
+    latest_manifest: tuple[MergeFile, ...]
+    suggested_manifest: tuple[MergeFile, ...]
     suggested_available: bool
 
 
@@ -99,6 +111,61 @@ class WorkspaceMergeService:
     def shared_revision_advanced(cls, workspace: Path) -> bool:
         return cls.current_head(workspace) != cls.latest_shared_head(workspace)
 
+    def has_active_preview(self, workspace: Path) -> bool:
+        with self._lock:
+            self._prune_expired_locked()
+            preview_id = self._preview_by_workspace.get(str(workspace))
+            return preview_id is not None and preview_id in self._previews
+
+    def advance_clean_workspace(self, workspace: Path) -> bool:
+        """Fast-forward a clean workspace without creating merge or undo state."""
+        with self._workspace_service.workspace_lock(workspace):
+            current_head = self.current_head(workspace)
+            latest_head = self.latest_shared_head(workspace)
+            if not latest_head or current_head == latest_head:
+                return False
+            with self._lock:
+                self._prune_expired_locked()
+                preview_id = self._preview_by_workspace.get(str(workspace))
+                if preview_id is not None and preview_id in self._previews:
+                    return False
+            status = run_git(
+                [
+                    "git",
+                    "-C",
+                    str(workspace),
+                    "status",
+                    "--porcelain",
+                    "--untracked-files=all",
+                ]
+            )
+            if status.returncode != 0:
+                raise RuntimeError(status.stderr or status.stdout or "failed to inspect current files")
+            if status.stdout.strip():
+                return False
+            self._git(workspace, "fetch", "--quiet", "origin", latest_head)
+            if current_head:
+                ancestor = run_git(
+                    [
+                        "git",
+                        "-C",
+                        str(workspace),
+                        "merge-base",
+                        "--is-ancestor",
+                        current_head,
+                        latest_head,
+                    ]
+                )
+                if ancestor.returncode != 0:
+                    return False
+                self._git(workspace, "merge", "--ff-only", "--quiet", latest_head)
+            else:
+                self._git(workspace, "reset", "--hard", latest_head)
+            if self.current_head(workspace) != latest_head:
+                raise RuntimeError("failed to update current files to the latest shared version")
+            self.clear_undo(workspace)
+            return True
+
     @staticmethod
     def _is_hidden(rel: PurePosixPath) -> bool:
         return is_hidden_workspace_path(tuple(rel.parts))
@@ -131,9 +198,22 @@ class WorkspaceMergeService:
         return rows
 
     @staticmethod
-    def _copy_and_hash(source: Path, target: Path) -> tuple[int, str]:
+    def _content_kind(size: int, preview: bytes) -> str:
+        if size > MAX_DIFF_BYTES:
+            return "large"
+        if b"\0" in preview:
+            return "binary"
+        try:
+            preview.decode("utf-8")
+        except UnicodeDecodeError:
+            return "binary"
+        return "text"
+
+    @classmethod
+    def _copy_and_hash(cls, source: Path, target: Path) -> tuple[int, str, str]:
         digest = hashlib.sha256()
         size = 0
+        preview = bytearray()
         target.parent.mkdir(parents=True, exist_ok=True)
         with source.open("rb") as src, target.open("wb") as dst:
             while True:
@@ -142,9 +222,11 @@ class WorkspaceMergeService:
                     break
                 digest.update(chunk)
                 size += len(chunk)
+                if len(preview) <= MAX_DIFF_BYTES:
+                    preview.extend(chunk[: MAX_DIFF_BYTES + 1 - len(preview)])
                 dst.write(chunk)
         shutil.copystat(source, target, follow_symlinks=False)
-        return size, digest.hexdigest()
+        return size, digest.hexdigest(), cls._content_kind(size, bytes(preview))
 
     @classmethod
     def _capture_tree(cls, source: Path, target: Path) -> dict[str, MergeFile]:
@@ -153,9 +235,15 @@ class WorkspaceMergeService:
         target.mkdir(parents=True)
         manifest: dict[str, MergeFile] = {}
         for rel, path in cls._visible_files(source):
-            size, identity = cls._copy_and_hash(path, target / rel)
+            size, identity, content_kind = cls._copy_and_hash(path, target / rel)
             mode = path.stat().st_mode
-            manifest[rel] = MergeFile(rel, size, identity, bool(mode & stat.S_IXUSR))
+            manifest[rel] = MergeFile(
+                rel,
+                size,
+                identity,
+                bool(mode & stat.S_IXUSR),
+                content_kind,
+            )
         return manifest
 
     @classmethod
@@ -164,6 +252,7 @@ class WorkspaceMergeService:
         for rel, path in cls._visible_files(root):
             digest = hashlib.sha256()
             size = 0
+            preview = bytearray()
             with path.open("rb") as fh:
                 while True:
                     chunk = fh.read(4 * 1024 * 1024)
@@ -171,11 +260,14 @@ class WorkspaceMergeService:
                         break
                     digest.update(chunk)
                     size += len(chunk)
+                    if len(preview) <= MAX_DIFF_BYTES:
+                        preview.extend(chunk[: MAX_DIFF_BYTES + 1 - len(preview)])
             manifest[rel] = MergeFile(
                 rel,
                 size,
                 digest.hexdigest(),
                 bool(path.stat().st_mode & stat.S_IXUSR),
+                cls._content_kind(size, bytes(preview)),
             )
         return manifest
 
@@ -261,8 +353,14 @@ class WorkspaceMergeService:
 
     @staticmethod
     def _group_entries(
-        current: dict[str, MergeFile], latest: dict[str, MergeFile]
-    ) -> tuple[tuple[MergeEntry, ...], tuple[tuple[str, tuple[str, ...]], ...]]:
+        current: dict[str, MergeFile],
+        latest: dict[str, MergeFile],
+        suggested: dict[str, MergeFile],
+    ) -> tuple[
+        tuple[MergeEntry, ...],
+        tuple[tuple[str, tuple[str, ...]], ...],
+        tuple[MergeEntry, ...],
+    ]:
         paths = sorted(path for path in set(current) | set(latest) if current.get(path) != latest.get(path))
         parent = {path: path for path in paths}
 
@@ -308,9 +406,34 @@ class WorkspaceMergeService:
             for path in rows:
                 entry_number += 1
                 entries.append(
-                    MergeEntry(f"e{entry_number:04d}", group_id, path, current.get(path), latest.get(path))
+                    MergeEntry(
+                        f"e{entry_number:04d}",
+                        group_id,
+                        path,
+                        current.get(path),
+                        latest.get(path),
+                        suggested.get(path),
+                    )
                 )
-        return tuple(entries), tuple(group_rows)
+        suggested_entries = tuple(
+            MergeEntry(
+                f"s{number:04d}",
+                "",
+                path,
+                current.get(path),
+                latest.get(path),
+                suggested.get(path),
+            )
+            for number, path in enumerate(
+                sorted(
+                    path
+                    for path in set(current) | set(suggested)
+                    if current.get(path) != suggested.get(path)
+                ),
+                start=1,
+            )
+        )
+        return tuple(entries), tuple(group_rows), suggested_entries
 
     def _drop_preview(self, preview: MergePreview) -> None:
         self._previews.pop(preview.preview_id, None)
@@ -364,7 +487,8 @@ class WorkspaceMergeService:
             suggested_available = self._build_merge_repo(
                 current_tree, shared_origin, latest_head, merge_repo
             )
-            entries, groups = self._group_entries(current, latest)
+            suggested = self._manifest(merge_repo) if suggested_available else {}
+            entries, groups, suggested_entries = self._group_entries(current, latest, suggested)
             preview = MergePreview(
                 preview_id,
                 actor,
@@ -377,6 +501,10 @@ class WorkspaceMergeService:
                 root,
                 entries,
                 groups,
+                suggested_entries,
+                tuple(current[path] for path in sorted(current)),
+                tuple(latest[path] for path in sorted(latest)),
+                tuple(suggested[path] for path in sorted(suggested)),
                 suggested_available,
             )
             with self._lock:
@@ -478,7 +606,12 @@ class WorkspaceMergeService:
 
     @classmethod
     def _prepare_candidate(
-        cls, workspace: Path, result_tree: Path, latest_head: str
+        cls,
+        workspace: Path,
+        result_tree: Path,
+        latest_head: str,
+        mode: str,
+        affected_count: int,
     ) -> Path:
         candidate = workspace.parent / f".{workspace.name}.merge-candidate-{uuid.uuid4().hex}"
         shutil.copytree(workspace, candidate, symlinks=True)
@@ -520,6 +653,8 @@ class WorkspaceMergeService:
                 f"old_head={old_head}\n"
                 f"post_head={latest_head}\n"
                 f"post_fingerprint={post_fingerprint}\n"
+                f"mode={mode}\n"
+                f"affected_count={affected_count}\n"
             )
             (metadata_dir / "undo").write_text(metadata, encoding="utf-8")
             return candidate
@@ -537,13 +672,42 @@ class WorkspaceMergeService:
             key, separator, value = line.partition("=")
             if separator:
                 rows[key] = value
-        required = {"undo_commit", "old_head", "post_head", "post_fingerprint"}
+        required = {
+            "undo_commit",
+            "old_head",
+            "post_head",
+            "post_fingerprint",
+            "mode",
+            "affected_count",
+        }
         if set(rows) != required:
+            raise RuntimeError("merge undo metadata is invalid")
+        if rows["mode"] not in {"suggested", "manual"}:
+            raise RuntimeError("merge undo metadata is invalid")
+        try:
+            affected_count = int(rows["affected_count"])
+        except ValueError as exc:
+            raise RuntimeError("merge undo metadata is invalid") from exc
+        if affected_count < 0:
             raise RuntimeError("merge undo metadata is invalid")
         return rows
 
     def has_undo(self, workspace: Path) -> bool:
-        return (workspace / ".git" / "polygon-replica" / "undo").is_file()
+        try:
+            self._undo_metadata(workspace)
+            return True
+        except (OSError, RuntimeError, ValueError):
+            return False
+
+    def undo_context(self, workspace: Path) -> dict[str, object] | None:
+        try:
+            metadata = self._undo_metadata(workspace)
+        except (OSError, RuntimeError, ValueError):
+            return None
+        return {
+            "mode": metadata["mode"],
+            "affected_count": int(metadata["affected_count"]),
+        }
 
     def clear_undo(self, workspace: Path) -> None:
         run_git(["git", "-C", str(workspace), "update-ref", "-d", self._UNDO_REF])
@@ -579,7 +743,16 @@ class WorkspaceMergeService:
                 if self.latest_shared_head(preview.workspace) != preview.latest_head:
                     raise RuntimeError("a newer shared revision is available; create a new merge preview")
                 self._disk_preflight(preview.workspace, result_tree)
-                candidate = self._prepare_candidate(preview.workspace, result_tree, preview.latest_head)
+                affected_count = (
+                    len(preview.suggested_entries) if mode == "suggested" else len(preview.entries)
+                )
+                candidate = self._prepare_candidate(
+                    preview.workspace,
+                    result_tree,
+                    preview.latest_head,
+                    mode,
+                    affected_count,
+                )
                 atomic_swap_workspace(preview.workspace, candidate)
                 candidate = None
         finally:
@@ -619,15 +792,80 @@ class WorkspaceMergeService:
         self, actor: str, problem: str, preview_id: str, entry_id: str, side: str
     ) -> tuple[Path, MergeFile]:
         preview = self.get_preview(actor, problem, preview_id)
-        entry = next((row for row in preview.entries if row.entry_id == entry_id), None)
+        entry = next(
+            (
+                row
+                for row in (*preview.entries, *preview.suggested_entries)
+                if row.entry_id == entry_id
+            ),
+            None,
+        )
         if entry is None or side not in {"current", "latest", "suggested"}:
             raise ValueError("merge preview file is invalid")
-        descriptor = entry.current if side == "current" else entry.latest
-        if side == "suggested":
-            descriptor = self._manifest(preview.root / "suggested").get(entry.path)
+        descriptor = {
+            "current": entry.current,
+            "latest": entry.latest,
+            "suggested": entry.suggested,
+        }[side]
         if descriptor is None:
             raise ValueError("this side does not contain the selected file")
         path = preview.root / side / entry.path
         if not path.is_file() or path.is_symlink():
             raise ValueError("merge preview file is missing")
         return path, descriptor
+
+    @staticmethod
+    def _change_kind(left: MergeFile | None, right: MergeFile | None) -> str:
+        if left is None:
+            return "added"
+        if right is None:
+            return "deleted"
+        if left.sha256 != right.sha256:
+            return "modified"
+        if left.executable != right.executable:
+            return "mode"
+        return "unchanged"
+
+    def comparison(
+        self,
+        actor: str,
+        problem: str,
+        preview_id: str,
+        entry_id: str,
+        target: str,
+    ) -> MergeComparison:
+        preview = self.get_preview(actor, problem, preview_id)
+        if target not in {"latest", "suggested"}:
+            raise ValueError("merge comparison target is invalid")
+        if target == "suggested" and not preview.suggested_available:
+            raise ValueError("a suggested result is not available")
+        rows = preview.suggested_entries if target == "suggested" else preview.entries
+        entry = next((row for row in rows if row.entry_id == entry_id), None)
+        if entry is None:
+            raise ValueError("merge preview file is invalid")
+        right_descriptor = entry.suggested if target == "suggested" else entry.latest
+        left_path = preview.root / "current" / entry.path if entry.current is not None else None
+        right_path = preview.root / target / entry.path if right_descriptor is not None else None
+        base_url = f"/problems/{problem}/merge/{preview_id}/file/{entry_id}"
+        left_side = MergeDiffSide(
+            "My current file",
+            entry.current is not None,
+            entry.current.size if entry.current is not None else 0,
+            entry.current.executable if entry.current is not None else False,
+            f"{base_url}?side=current" if entry.current is not None else "",
+        )
+        right_side = MergeDiffSide(
+            "Suggested result" if target == "suggested" else "Latest shared file",
+            right_descriptor is not None,
+            right_descriptor.size if right_descriptor is not None else 0,
+            right_descriptor.executable if right_descriptor is not None else False,
+            f"{base_url}?side={target}" if right_descriptor is not None else "",
+        )
+        return compare_merge_files(
+            path=entry.path,
+            change_kind=self._change_kind(entry.current, right_descriptor),
+            left_path=left_path,
+            left_side=left_side,
+            right_path=right_path,
+            right_side=right_side,
+        )
