@@ -100,16 +100,21 @@
               {% endif %}
             </td>
             <td>
-              {% if row.changed %}
+              {% if row.pending_restart %}
+              <span class="warn">pending restart</span>
+              <div class="muted">Running: <code>{{ row.effective_display }}</code></div>
+              {% elif row.changed %}
               <span class="danger">override</span>
+              {% else %}
+              <span class="muted">default</span>
+              {% endif %}
+              {% if row.changed %}
               <div>
                 <label class="muted">
                   <input type="checkbox" name="config_reset_{{ row.key }}" value="1" />
                   use default
                 </label>
               </div>
-              {% else %}
-              <span class="muted">default</span>
               {% endif %}
             </td>
           </tr>

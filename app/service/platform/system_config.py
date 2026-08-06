@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 import threading
 from typing import TypedDict
 
@@ -17,6 +18,7 @@ _ADMIN_CONFIG_SPECS = dict(_RUNTIME_DEFAULTS.ADMIN_CONFIG_SPECS)
 
 _BOOL_TRUE = {"1", "true", "yes", "on", "y"}
 _BOOL_FALSE = {"0", "false", "no", "off", "n"}
+_COOKIE_NAME_RE = re.compile(r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$")
 
 
 AdminConfigSpec = TypedDict(
@@ -32,6 +34,7 @@ AdminConfigSpec = TypedDict(
         "impact": str,
         "choices": list[object] | tuple[object, ...] | set[object],
         "ascii": str,
+        "format": str,
     },
     total=False,
 )
@@ -94,12 +97,16 @@ class SystemConfigService:
         self._admin_defaults: dict[str, object] = dict(_ADMIN_CONFIG_DEFAULTS)
         self._admin_specs: dict[str, AdminConfigSpec] = dict(_ADMIN_CONFIG_SPECS)
         self._effective_values: dict[str, object] = dict(self._admin_defaults)
+        self._persisted_values: dict[str, object] = dict(self._admin_defaults)
 
-    def refresh(self) -> dict[str, object]:
+    def refresh(self, *, include_restart_required: bool = False) -> dict[str, object]:
         with self._lock:
-            overrides = self._load_overrides_locked()
-            effective = dict(self._admin_defaults)
-            effective.update(overrides)
+            persisted = self._load_persisted_values_locked()
+            effective = persisted if include_restart_required else dict(self._effective_values)
+            for key, spec in self._admin_specs.items():
+                if include_restart_required or not bool(spec.get("restart_required", False)):
+                    effective[key] = persisted[key]
+            self._persisted_values = persisted
             self._effective_values = effective
             return dict(effective)
 
@@ -119,9 +126,10 @@ class SystemConfigService:
     def ui_sections(self) -> list[dict[str, object]]:
         with self._lock:
             effective = dict(self._effective_values)
+            persisted = dict(self._persisted_values)
         buckets: dict[str, list[dict[str, object]]] = {}
         for key, spec in self._admin_specs.items():
-            row = self._config_row(key, spec, effective)
+            row = self._config_row(key, spec, persisted, effective)
             category = row["category"]
             if category in buckets:
                 buckets[category].append(row)
@@ -177,7 +185,7 @@ class SystemConfigService:
 
     def validate_patch(self, payload: dict[str, object]) -> SystemConfigPatchPreview:
         with self._lock:
-            before = dict(self._effective_values)
+            before = dict(self._persisted_values)
         normalized: dict[str, object] = {}
         for payload_key, raw_value in payload.items():
             key = payload_key.strip()
@@ -186,6 +194,12 @@ class SystemConfigService:
             normalized[key] = self._normalize_value(key, raw_value)
         after = dict(before)
         after.update(normalized)
+        cookie_names = {
+            key: str(after[key])
+            for key in ("AUTH_COOKIE_NAME", "SUDO_COOKIE_NAME", "FLASH_COOKIE_NAME")
+        }
+        if len(set(cookie_names.values())) != len(cookie_names):
+            raise ValueError("AUTH_COOKIE_NAME, SUDO_COOKIE_NAME, and FLASH_COOKIE_NAME must be distinct")
         diff_rows = self._diff_rows(before, after)
         return {
             "normalized": normalized,
@@ -200,14 +214,14 @@ class SystemConfigService:
         after = dict(preview["after"])
         self._persist_overrides(after, actor_user_id)
         effective = self.refresh()
-        diff_rows = self._diff_rows(
-            dict(preview["before"]),
-            dict(effective),
-        )
+        diff_rows = self._diff_rows(dict(preview["before"]), after)
+        with self._lock:
+            persisted = dict(self._persisted_values)
         return {
             "changed": len(diff_rows),
             "diff": diff_rows,
             "effective": effective,
+            "persisted": persisted,
         }
 
     def reset(self) -> dict[str, object]:
@@ -230,9 +244,16 @@ class SystemConfigService:
             return self._CATEGORY_ORDER.index(token)
         return len(self._CATEGORY_ORDER) + 1
 
-    def _config_row(self, key: str, spec: AdminConfigSpec, effective: dict[str, object]) -> dict[str, object]:
+    def _config_row(
+        self,
+        key: str,
+        spec: AdminConfigSpec,
+        persisted: dict[str, object],
+        effective: dict[str, object],
+    ) -> dict[str, object]:
         default_value = self._admin_defaults[key]
-        current_value = effective.get(key, default_value)
+        current_value = persisted.get(key, default_value)
+        effective_value = effective.get(key, default_value)
         kind = spec.get("type", "str")
         restart_required = spec.get("restart_required", False)
         impact = spec.get("impact")
@@ -259,9 +280,12 @@ class SystemConfigService:
             "choices": choices,
             "default_value": default_value,
             "current_value": current_value,
+            "effective_value": effective_value,
             "default_display": self._display_value(kind, default_value),
             "current_display": self._display_value(kind, current_value),
+            "effective_display": self._display_value(kind, effective_value),
             "changed": current_value != default_value,
+            "pending_restart": bool(restart_required and current_value != effective_value),
             "input_name": f"config_{key}",
         }
 
@@ -302,7 +326,7 @@ class SystemConfigService:
             updated_at=now_iso(),
         )
 
-    def _load_overrides_locked(self) -> dict[str, object]:
+    def _load_persisted_values_locked(self) -> dict[str, object]:
         rows = self._store.override_rows()
         overrides: dict[str, object] = {}
         for row in rows:
@@ -323,7 +347,9 @@ class SystemConfigService:
             if normalized == self._admin_defaults[key]:
                 continue
             overrides[key] = normalized
-        return overrides
+        persisted = dict(self._admin_defaults)
+        persisted.update(overrides)
+        return persisted
 
     def _normalize_value(self, key: str, raw_value: object) -> object:
         if key not in self._admin_specs:
@@ -399,6 +425,8 @@ class SystemConfigService:
 
     def _normalize_str(self, raw_value: object, key: str, spec: AdminConfigSpec) -> str:
         value = "" if raw_value is None else str(raw_value)
+        if spec.get("format") == "cookie-name" and _COOKIE_NAME_RE.fullmatch(value) is None:
+            raise ValueError(f"{key} must be a valid HTTP cookie token")
         ascii_mode = spec.get("ascii")
         if ascii_mode is None:
             ascii_mode = "printable"

@@ -11,6 +11,7 @@ from starlette.responses import PlainTextResponse
 from app.service.auth.password_hash import password_verifier_storage_hash
 from app import main_constant
 from app.impl.auth.password_envelope import PasswordEnvelopeStore
+from app.impl.root.auth_pages import logout
 from tests.common import E2ETestBase
 
 from tests.ui_support import (
@@ -1472,6 +1473,108 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         self.assertTrue(messages)
         self.assertIn("JUDGEHOST_API_TOKEN must contain only visible ASCII characters", messages[0])
         self.assertNotEqual(str(config.system_config_service.get("JUDGEHOST_API_TOKEN") or ""), bad_token)
+
+    def test_branding_config_renders_unicode_escaped_values_and_optional_tagline(self) -> None:
+        db_execute("UPDATE users SET is_system_admin=0")
+        db_execute("UPDATE users SET is_system_admin=1 WHERE username=?", ["alice"])
+        workspace_service.clear_identity_caches()
+        self.addCleanup(config.reload_runtime_values, include_restart_required=True)
+        self.addCleanup(settings_system_config_reset, user="alice")
+
+        config.system_config_service.apply_patch(
+            {
+                "UI_BRAND_NAME": "团队 <brand>",
+                "UI_BRAND_TAGLINE": "Tagline & details",
+                "UI_BROWSER_TITLE": "控制台 & title",
+            },
+            actor_user_id=int(db_fetch_one("SELECT id FROM users WHERE username=?", ["alice"])["id"]),
+        )
+        config.reload_runtime_values()
+
+        rendered = settings_page(_request("/settings"), user="alice")
+        html = rendered.body.decode("utf-8", errors="replace")
+        self.assertIn("<title>控制台 &amp; title</title>", html)
+        self.assertIn("团队 &lt;brand&gt;", html)
+        self.assertIn("Tagline &amp; details", html)
+
+        config.system_config_service.apply_patch(
+            {"UI_BRAND_TAGLINE": ""},
+            actor_user_id=int(db_fetch_one("SELECT id FROM users WHERE username=?", ["alice"])["id"]),
+        )
+        config.reload_runtime_values()
+        without_tagline = settings_page(_request("/settings"), user="alice")
+        without_tagline_html = without_tagline.body.decode("utf-8", errors="replace")
+        self.assertNotIn('class="tagline"', without_tagline_html)
+
+    def test_cookie_names_validate_distinct_http_tokens(self) -> None:
+        service = config.system_config_service
+        with self.assertRaisesRegex(ValueError, "valid HTTP cookie token"):
+            service.validate_patch({"AUTH_COOKIE_NAME": "invalid cookie"})
+        with self.assertRaisesRegex(ValueError, "must be distinct"):
+            service.validate_patch(
+                {
+                    "AUTH_COOKIE_NAME": "same-cookie",
+                    "SUDO_COOKIE_NAME": "same-cookie",
+                }
+            )
+
+    def test_restart_cookie_names_wait_for_restart_and_apply_to_auth_flow(self) -> None:
+        db_execute("UPDATE users SET is_system_admin=0")
+        db_execute("UPDATE users SET is_system_admin=1 WHERE username=?", ["alice"])
+        workspace_service.clear_identity_caches()
+        self.addCleanup(config.reload_runtime_values, include_restart_required=True)
+        self.addCleanup(settings_system_config_reset, user="alice")
+        config.system_config_service.reset()
+        config.reload_runtime_values(include_restart_required=True)
+
+        admin = db_fetch_one("SELECT id FROM users WHERE username=?", ["alice"])
+        self.assertIsNotNone(admin)
+        old_auth_name = str(config.constants.AUTH_COOKIE_NAME)
+        old_sudo_name = str(config.constants.SUDO_COOKIE_NAME)
+        old_flash_name = str(config.constants.FLASH_COOKIE_NAME)
+        custom_names = {
+            "AUTH_COOKIE_NAME": "test_auth_cookie",
+            "SUDO_COOKIE_NAME": "test_sudo_cookie",
+            "FLASH_COOKIE_NAME": "test_flash_cookie",
+        }
+        config.system_config_service.apply_patch(custom_names, actor_user_id=int(admin["id"]))
+
+        self.assertEqual(str(config.constants.AUTH_COOKIE_NAME), old_auth_name)
+        self.assertEqual(str(config.system_config_service.get("AUTH_COOKIE_NAME")), old_auth_name)
+        auth_row = next(
+            row
+            for section in config.system_config_service.ui_sections()
+            for row in section["rows"]
+            if row["key"] == "AUTH_COOKIE_NAME"
+        )
+        self.assertEqual(auth_row["current_value"], custom_names["AUTH_COOKIE_NAME"])
+        self.assertEqual(auth_row["effective_value"], old_auth_name)
+        self.assertTrue(auth_row["pending_restart"])
+
+        config.reload_runtime_values()
+        self.assertEqual(str(config.constants.AUTH_COOKIE_NAME), old_auth_name)
+        config.reload_runtime_values(include_restart_required=True)
+        self.assertEqual(str(config.constants.AUTH_COOKIE_NAME), custom_names["AUTH_COOKIE_NAME"])
+        self.assertEqual(str(config.constants.SUDO_COOKIE_NAME), custom_names["SUDO_COOKIE_NAME"])
+        self.assertEqual(str(config.constants.FLASH_COOKIE_NAME), custom_names["FLASH_COOKIE_NAME"])
+
+        username = self.random_id("cookie")
+        registration = _register_with_password_envelope(username, "StrongPass123")
+        set_cookie = _response_set_cookie_blob(registration)
+        self.assertIn(f"{custom_names['AUTH_COOKIE_NAME']}=", set_cookie)
+        token = _cookie_value_from_response(registration, custom_names["AUTH_COOKIE_NAME"])
+        logout_response = logout(
+            _request_with_cookie(
+                "/logout",
+                f"{custom_names['AUTH_COOKIE_NAME']}={token}",
+            )
+        )
+        logout_set_cookie = _response_set_cookie_blob(logout_response)
+        self.assertIn(f"{custom_names['AUTH_COOKIE_NAME']}=", logout_set_cookie)
+        self.assertIn(f"{custom_names['FLASH_COOKIE_NAME']}=", logout_set_cookie)
+        self.assertNotEqual(str(config.constants.AUTH_COOKIE_NAME), old_auth_name)
+        self.assertNotEqual(str(config.constants.SUDO_COOKIE_NAME), old_sudo_name)
+        self.assertNotEqual(str(config.constants.FLASH_COOKIE_NAME), old_flash_name)
 
     def test_settings_config_category_update_allows_printable_ascii_compile_flags(self) -> None:
         db_execute("UPDATE users SET is_system_admin=0")

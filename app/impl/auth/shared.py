@@ -289,6 +289,9 @@ def json_error_response(message: str = "", status_code: int = 400, **payload: ob
 
 def template_response(request: Request, template_name: str, context: dict | None = None):
     payload = dict(context or {})
+    payload.setdefault("ui_brand_name", str(_C.UI_BRAND_NAME))
+    payload.setdefault("ui_brand_tagline", str(_C.UI_BRAND_TAGLINE))
+    payload.setdefault("ui_browser_title", str(_C.UI_BROWSER_TITLE))
     runtime_judgehost = _runtime_judgehost_health_profile()
     if "runtime_judgehost_health_summary" not in payload:
         payload["runtime_judgehost_health_summary"] = runtime_judgehost.get(

@@ -1,7 +1,7 @@
 <div class="brand-row">
   <div class="brand">
-    <a class="logo" href="/problems"><span class="accent-gradient-text logo-gradient-text">not polygon</span></a>
-    <div class="tagline">Unprofessional way to prepare programming contest problems</div>
+    <a class="logo" href="/problems"><span class="accent-gradient-text logo-gradient-text">{{ ui_brand_name }}</span></a>
+    {% if ui_brand_tagline %}<div class="tagline">{{ ui_brand_tagline }}</div>{% endif %}
   </div>
   <div id="top-event-slot" class="top-event-slot" aria-live="polite" aria-atomic="true"></div>
   <div class="top-actions">

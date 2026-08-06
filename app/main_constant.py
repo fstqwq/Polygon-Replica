@@ -1,5 +1,8 @@
 """Default runtime constants and admin-editable config metadata."""
 
+# The declarative configuration table is intentionally kept in one module.
+# pylint: disable=too-many-lines
+
 from __future__ import annotations
 
 import re
@@ -23,7 +26,7 @@ WORKSPACE_HISTORY_LIMIT = 120
 SOLUTION_LIST_LIMIT = 256
 SOLUTION_NOTE_CHAR_LIMIT = 4096
 
-AUTH_COOKIE_NAME = "polygonlike_session"
+AUTH_COOKIE_NAME = "polygon_replica_session"
 AUTH_COOKIE_MAX_AGE = 30 * 24 * 60 * 60
 AUTH_COOKIE_SECURE = True
 AUTH_EMAIL_ALLOW_REGEX = r"^[a-z0-9_-]+@(?:gmail\.com|(?:[a-z0-9-]+\.)*sjtu\.edu\.cn)$"
@@ -36,10 +39,10 @@ AUTH_REGISTER_EMAIL_GLOBAL_WINDOW_SEC = 24 * 60 * 60
 AUTH_REGISTER_EMAIL_GLOBAL_MAX = 100
 AUTH_REGISTER_EMAIL_SEND_WINDOW_SEC = 5
 AUTH_REGISTER_EMAIL_SEND_MAX = 1
-SUDO_COOKIE_NAME = "polygonlike_sudo_session"
+SUDO_COOKIE_NAME = "polygon_replica_sudo_session"
 SUDO_COOKIE_MAX_AGE = 5 * 60
 SUDO_SCOPE_DESTRUCTIVE = "destructive"
-FLASH_COOKIE_NAME = "polygonlike_flash_queue"
+FLASH_COOKIE_NAME = "polygon_replica_flash_queue"
 FLASH_COOKIE_MAX_AGE = 24 * 60 * 60
 FLASH_QUEUE_MAX_ITEMS = 16
 FLASH_MESSAGE_MAX_LEN = 512
@@ -47,6 +50,10 @@ PASSWORD_FORM_CSRF_TTL_SEC = 900
 LOGIN_RATE_LIMIT_WINDOW_SEC = 300.0
 LOGIN_RATE_LIMIT_BLOCK_SEC = 300.0
 LOGIN_RATE_LIMIT_MAX_FAILURES = 8
+
+UI_BRAND_NAME = "not polygon"
+UI_BRAND_TAGLINE = "Unprofessional way to prepare programming contest problems"
+UI_BROWSER_TITLE = "Polygon-Replica"
 
 PROBLEM_ID_RULE_MESSAGE = (
     "invalid problem id. Use <owner>/<slug> with lowercased words separated by dash "
@@ -373,11 +380,45 @@ ADMIN_CONFIG_SPECS: dict[str, dict[str, object]] = {
         "max": 65536,
         "description": "Max solution metadata note length.",
     },
+    "UI_BRAND_NAME": {
+        "type": "str",
+        "min": 1,
+        "max": 80,
+        "ascii": "none",
+        "category": "UI",
+        "description": "Brand name shown in the application header.",
+    },
+    "UI_BRAND_TAGLINE": {
+        "type": "str",
+        "min": 0,
+        "max": 200,
+        "ascii": "none",
+        "category": "UI",
+        "description": "Optional tagline shown beside the brand name.",
+    },
+    "UI_BROWSER_TITLE": {
+        "type": "str",
+        "min": 1,
+        "max": 120,
+        "ascii": "none",
+        "category": "UI",
+        "description": "Browser title suffix used throughout the application.",
+    },
     "AUTH_COOKIE_MAX_AGE": {
         "type": "int",
         "min": 60,
         "max": 31536000,
         "description": "Session cookie max age in seconds.",
+    },
+    "AUTH_COOKIE_NAME": {
+        "type": "str",
+        "min": 1,
+        "max": 128,
+        "format": "cookie-name",
+        "category": "Auth",
+        "restart_required": True,
+        "impact": "restart",
+        "description": "Session cookie name; takes effect after restart.",
     },
     "AUTH_COOKIE_SECURE": {
         "type": "bool",
@@ -450,11 +491,31 @@ ADMIN_CONFIG_SPECS: dict[str, dict[str, object]] = {
         "max": 86400,
         "description": "Sudo-mode token max age in seconds.",
     },
+    "SUDO_COOKIE_NAME": {
+        "type": "str",
+        "min": 1,
+        "max": 128,
+        "format": "cookie-name",
+        "category": "Auth",
+        "restart_required": True,
+        "impact": "restart",
+        "description": "Sudo cookie name; takes effect after restart.",
+    },
     "FLASH_COOKIE_MAX_AGE": {
         "type": "int",
         "min": 60,
         "max": 31536000,
         "description": "Flash cookie max age in seconds.",
+    },
+    "FLASH_COOKIE_NAME": {
+        "type": "str",
+        "min": 1,
+        "max": 128,
+        "format": "cookie-name",
+        "category": "Auth",
+        "restart_required": True,
+        "impact": "restart",
+        "description": "Flash message cookie name; takes effect after restart.",
     },
     "FLASH_QUEUE_MAX_ITEMS": {
         "type": "int",

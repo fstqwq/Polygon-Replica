@@ -91,8 +91,10 @@ class RuntimeConfig:
             return existing
         return secrets.token_hex(32).encode("utf-8")
 
-    def reload_runtime_values(self) -> dict[str, object]:
-        runtime_overrides = self.system_config_service.refresh()
+    def reload_runtime_values(self, *, include_restart_required: bool = False) -> dict[str, object]:
+        runtime_overrides = self.system_config_service.refresh(
+            include_restart_required=include_restart_required,
+        )
         effective = build_runtime_values(runtime_overrides)
         self.constants.replace(effective.to_dict())
         configure_runtime_values(self.constants)
@@ -114,7 +116,7 @@ class RuntimeConfig:
         self.verification_task_store = VerificationTaskStore(self.db)
         self.system_config_service = SystemConfigService(self.db)
         self.smtp_config_service = SmtpConfigService(self.db)
-        runtime_overrides = self.system_config_service.refresh()
+        runtime_overrides = self.system_config_service.refresh(include_restart_required=True)
         self.constants = build_runtime_values(runtime_overrides)
         self.db.apply_runtime_values(self.constants)
         configure_runtime_values(self.constants)
