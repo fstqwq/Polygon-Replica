@@ -1313,7 +1313,7 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
             "hosts": [
                 {
                     "hostname": "judgehost-lastseen-time",
-                    "peer_addr": "203.0.113.10:1234",
+                    "peer_addr": "203.0.113.10",
                     "enabled": True,
                     "online": True,
                     "age_sec": 3,
@@ -1341,7 +1341,7 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         html = resp.body.decode("utf-8", errors="replace")
         self.assertIn("judgehost-lastseen-time", html)
         self.assertIn('class="settings-judgehost-hostname"', html)
-        self.assertIn('class="muted settings-judgehost-peer-addr">203.0.113.10:1234</div>', html)
+        self.assertIn('class="muted settings-judgehost-peer-addr">203.0.113.10</div>', html)
         self.assertNotIn('class="muted settings-judgehost-hostname"', html)
         self.assertIn("Count", html)
         self.assertIn("Last Judging", html)
