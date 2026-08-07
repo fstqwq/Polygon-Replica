@@ -412,7 +412,11 @@ def _build_problem_nav_status(ctx: dict) -> dict[str, dict[str, object]]:
     verification_display_raw = cast(str | None, verification_status.get('display'))
     verification_mode = verification_mode_raw or verification_display_raw or 'none'
     verification_display = verification_display_raw or 'none'
-    nav['run'] = {'text': verification_display, 'danger': verification_mode in {'none', 'failed'}, 'warn': verification_mode == 'stale'}
+    nav['run'] = {
+        'text': verification_display,
+        'danger': verification_mode in {'none', 'failed'},
+        'warn': bool(verification_status.get('warn')),
+    }
     workspace_row = cast(dict[str, object], ctx['workspace'])
     problem_row = cast(dict[str, object], ctx['problem'])
     workspace_id = _to_int(_row_value(workspace_row, 'id', 0))

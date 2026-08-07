@@ -433,7 +433,8 @@ def _verification_status_context(
     if source_error_text and _verification_error_prefers_source_hint(error_text):
         error_text = source_error_text
     mode = 'stale' if stale else last_status
-    display = "ok" if mode == "pass" else mode
+    result_display = "ok" if last_status == "pass" else last_status
+    display = f"{result_display} (stale)" if stale else result_display
     if mode == "pass" and sanity_status == "warning":
         display = "ok (has warning)"
     elif mode == "pass" and sanity_status == "failed":
@@ -442,7 +443,7 @@ def _verification_status_context(
     return {
         'mode': mode,
         'display': display,
-        'warn': bool((not stale) and mode == "pass" and sanity_attention),
+        'warn': bool(stale or (mode == "pass" and sanity_attention)),
         'last_status': last_status,
         'run_id': run_id,
         'run_ids': ','.join(run_ids),

@@ -63,7 +63,7 @@ from app.impl.problem.setting import (
     settings_user_system_admin_update,
     settings_worker_queue_snapshot,
 )
-from app.impl.problem.solution import solutions_create_template, solutions_delete, solutions_editor_page, solutions_page, solutions_rename, solutions_save_source, solutions_set_tag
+from app.impl.problem.solution import solutions_delete, solutions_editor_page, solutions_page, solutions_rename, solutions_save_source, solutions_set_tag
 from app.impl.problem.validator import (
     validator_page,
     validator_rename_source,
@@ -175,11 +175,6 @@ router.add_api_route(
     methods=["GET"],
     response_class=HTMLResponse,
     name="problem_solutions",
-)
-router.add_api_route(
-    "/problems/{problem:path}/solutions/create-template",
-    solutions_create_template,
-    methods=["POST"],
 )
 router.add_api_route(
     "/problems/{problem:path}/solutions/editor",

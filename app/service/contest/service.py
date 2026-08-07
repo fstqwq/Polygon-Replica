@@ -387,8 +387,6 @@ class ContestService:
                     "last_updated_at": str(row["last_updated_at"]),
                     "role": self._normalize_role(str(row["role"])),
                     "problem_count": problem_count,
-                    "problem_slugs_preview": str(row["problem_slugs_preview"]),
-                    "problem_preview_truncated": problem_count > 5,
                     "dirty_problem_count": dirty_problem_count,
                     "has_dirty": dirty_problem_count > 0,
                 }

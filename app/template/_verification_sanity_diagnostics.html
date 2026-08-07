@@ -27,7 +27,7 @@
     <p class="{{ 'verification-task-fail' if detail_sanity.status == 'failed' else 'verification-task-warn' }}">{{ detail_sanity.reason }}</p>
     {% endif %}
     {% if detail_sanity.tasks %}
-    <table class="verification-sanity-task-table">
+    <table class="table-base table-compact verification-sanity-task-table">
       <thead>
         <tr>
           <th>Check</th>

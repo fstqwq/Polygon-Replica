@@ -16,7 +16,7 @@
   <p class="muted">Showing first {{ tests_editor.shown }} of {{ tests_editor.total }} {% if tests_editor.total == 1 %}test{% else %}tests{% endif %}.</p>
   {% endif %}
   {% if tests_editor.rows %}
-  <table class="tests-editor-table">
+  <table class="table-base table-rows tests-editor-table">
     <colgroup>
       <col class="tests-col-test" />
       <col class="tests-col-preview" />
@@ -57,12 +57,14 @@
         {% endif %}
       </td>
       <td class="tests-editor-actions-cell">
-        <a class="linkish" href="#tests-edit-popup-{{ row.index }}" data-popup-open="tests-edit-popup-{{ row.index }}">Edit</a>
-        <a class="linkish" href="#tests-reindex-popup-{{ row.index }}" data-popup-open="tests-reindex-popup-{{ row.index }}">Reindex</a>
-        <form class="inline-form" method="post" action="/problems/{{ ctx.problem.slug }}/tests/spec/delete" data-confirm-message="Delete test #{{ row.index }} ({{ row.id }})? This cannot be undone; uncommitted changes will be lost.">
-          <input type="hidden" name="index" value="{{ row.index }}" />
-          <a href="#" class="linkish danger-link" data-submit-form="1">Delete</a>
-        </form>
+        <div class="tests-editor-actions">
+          <a class="linkish" href="#tests-edit-popup-{{ row.index }}" data-popup-open="tests-edit-popup-{{ row.index }}">Edit</a>
+          <a class="linkish" href="#tests-reindex-popup-{{ row.index }}" data-popup-open="tests-reindex-popup-{{ row.index }}">Reindex</a>
+          <form class="inline-form" method="post" action="/problems/{{ ctx.problem.slug }}/tests/spec/delete" data-confirm-message="Delete test #{{ row.index }} ({{ row.id }})? This cannot be undone; uncommitted changes will be lost.">
+            <input type="hidden" name="index" value="{{ row.index }}" />
+            <a href="#" class="linkish danger-link" data-submit-form="1">Delete</a>
+          </form>
+        </div>
       </td>
     </tr>
     {% endfor %}

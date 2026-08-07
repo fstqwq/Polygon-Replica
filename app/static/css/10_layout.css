@@ -305,10 +305,6 @@ body.problem-layout:not(.verification-compact) {
   padding-left: var(--space-3);
 }
 
-.problem-section-action-tab-verification {
-  margin-left: var(--space-4);
-}
-
 .problem-section-tab-action-form {
   position: relative;
   z-index: 1;
@@ -623,10 +619,6 @@ body.verification-compact .page-grid.page-grid-wide .verification-lifecycle-step
   width: auto;
 }
 
-body.verification-compact .page-grid.page-grid-wide .verification-lifecycle-step-facts {
-  width: auto;
-}
-
 @media (max-width: 960px) {
   body.problem-layout:not(.verification-compact) .page-grid {
     grid-template-columns: minmax(0, 1fr);
@@ -677,4 +669,9 @@ section,
 section {
   padding: var(--space-4);
   min-width: 0;
+}
+
+.content-section-plain {
+  border: 0;
+  padding: 0;
 }

@@ -33,7 +33,7 @@
   <title>{% if page_title %}{{ page_title }} - {% endif %}{{ ui_browser_title }}</title>
   <link rel="icon" href="/static/favicon.ico?v=20260427-01" sizes="any" />
   <link rel="icon" href="/static/favicon.png?v=20260427-01" type="image/png" />
-  <link rel="stylesheet" href="/static/style.css?v=20260808-33" />
+  <link rel="stylesheet" href="/static/style.css?v=20260808-38" />
   <script src="/static/ui.js?v=20260808-33" defer></script>
 </head>
 <body class="problem-layout{% if ctx.topbar_max_1400 %} topbar-max-1400{% endif %}{% block body_class %}{% endblock %}">
@@ -161,7 +161,7 @@
           <input class="page-target" type="hidden" name="page" value="{{ verification_page_target.value }}" />
           <button class="problem-section-tab-action-control" type="submit" {% if not ctx.access.can_write %}disabled title="{{ ctx.access.write_block_reason }}"{% endif %}>Start</button>
         </form>
-        <span class="problem-section-tab-status {{ 'section-tab-status-danger' if verification_mode in ['none', 'failed'] else 'section-tab-status-warn' if verification_mode == 'stale' or verification_warn else '' }}">{{ verification_status }}</span>
+        <span class="problem-section-tab-status {{ 'section-tab-status-danger' if verification_mode in ['none', 'failed'] else 'section-tab-status-warn' if verification_warn else '' }}">{{ verification_status }}</span>
       </div>
       {% set export_nav = nav_status.get('export', {}) %}
       <div class="section-tab problem-section-tab problem-section-action-tab">
@@ -210,7 +210,7 @@
             {% for row in ctx.workspace_changes.rows %}
             <li class="change-item change-{{ row.kind }}">
               <code class="change-code">{{ row.code }}</code>
-              <a href="/problems/{{ ctx.problem.slug }}/workspace?path={{ row.link_path }}&src=workspace">{{ row.path }}</a>
+              <a href="/problems/{{ ctx.problem.slug }}/workspace?path={{ row.link_path }}&src=workspace" title="{{ row.path }}">{{ row.path }}</a>
             </li>
             {% endfor %}
           </ul>

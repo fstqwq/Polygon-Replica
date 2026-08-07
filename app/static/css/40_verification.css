@@ -418,29 +418,6 @@ section.verification-header-section {
   word-break: break-word;
 }
 
-.verification-lifecycle-step-facts {
-  width: 100%;
-  border-collapse: collapse;
-  margin-top: 4px;
-  table-layout: fixed;
-}
-
-.verification-lifecycle-step-facts th,
-.verification-lifecycle-step-facts td {
-  font-size: var(--font-size-ui-xs);
-  padding: 0.25em 0.5em;
-  text-align: left;
-  border-top: 1px solid var(--line);
-  vertical-align: top;
-}
-
-.verification-lifecycle-step-facts th {
-  width: 132px;
-  color: var(--muted);
-  font-weight: 600;
-  white-space: nowrap;
-}
-
 .verification-lifecycle-step-notes {
   margin: 4px 0 0;
   padding-left: var(--space-6);
@@ -597,16 +574,6 @@ body.verification-compact .run-details-page-compact .verification-detail-wrap {
 
 .verification-sanity-detail-link {
   margin-left: var(--space-2);
-}
-
-.verification-sanity-popup .verification-sanity-task-table {
-  width: 100%;
-}
-
-.verification-sanity-popup .verification-sanity-task-table th,
-.verification-sanity-popup .verification-sanity-task-table td {
-  text-align: left;
-  vertical-align: top;
 }
 
 .verification-sanity-popup .verification-sanity-task-table p {
@@ -911,10 +878,7 @@ body.verification-compact .run-details-page-compact .verification-detail-wrap {
 }
 
 .sol-metrics {
-  width: 100%;
-  border-collapse: collapse;
   table-layout: fixed;
-  font-size: var(--font-size-ui-sm);
 }
 
 .sol-metrics col.status-col {
@@ -923,20 +887,6 @@ body.verification-compact .run-details-page-compact .verification-detail-wrap {
 
 .sol-metrics col.fb-col {
   width: auto;
-}
-
-.sol-metrics th,
-.sol-metrics td {
-  border: 1px solid var(--line);
-  padding: 4px 8px;
-  text-align: left;
-  overflow-wrap: anywhere;
-}
-
-.sol-metrics th {
-  background: var(--surface-alt);
-  color: var(--muted);
-  font-weight: 600;
 }
 
 .sol-metrics td.status-cell.tone-ok,

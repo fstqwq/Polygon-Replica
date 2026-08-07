@@ -28,7 +28,6 @@ from app.impl.problem.file import (
 from app.impl.problem.generator import generator_rename_source, generator_save_source
 from app.impl.problem.interactor import interactor_rename_source, interactor_save_source
 from app.impl.problem.solution import (
-    solutions_create_template,
     solutions_delete,
     solutions_rename,
     solutions_save_source,
@@ -663,20 +662,6 @@ class TestSecurity(E2ETestBase):
         self.assertTrue((ws / default_rel).exists())
         self.assertFalse((ws / "validators/renamed_validator.cpp").exists())
         self.assertIn("validator source is required", self._first_flash_message(resp).lower())
-
-    def test_solutions_create_template_path_traversal_stays_in_workspace(self) -> None:
-        marker = suite_root() / f"solution-template-escape-{uuid.uuid4().hex[:8]}.cpp"
-        marker.unlink(missing_ok=True)
-        resp = solutions_create_template(
-            problem="alice/sample",
-            user="alice",
-            path="../../" + marker.name,
-        )
-        self.assertEqual(resp.status_code, 303)
-        self.assertFalse(marker.exists())
-        ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
-        self.assertTrue((ws / "solutions" / "accepted.cpp").exists())
-        self.assertTrue((ws / "solutions" / "accepted.cpp.desc").exists())
 
     def test_solutions_save_source_rejects_path_traversal_escape(self) -> None:
         marker = suite_root() / f"solution-save-escape-{uuid.uuid4().hex[:8]}.py"

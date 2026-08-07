@@ -11,7 +11,7 @@
 
 {% include "_flash_message.html" %}
 
-<section aria-label="Contest list">
+<section class="content-section-plain" aria-label="Contest list">
   {% if entries %}
   <table class="table-base">
     <tr>
@@ -24,12 +24,7 @@
     <tr class="{% if row.has_dirty %}table-row-dirty{% endif %}">
       <td><a href="/contests/{{ row.slug }}/overview">{{ row.title }}</a> - <code>{{ row.slug }}</code></td>
       <td>{{ row.role }}</td>
-      <td>
-        {{ row.problem_count }}
-        {% if row.problem_slugs_preview %}
-        <span class="muted">({{ row.problem_slugs_preview }}{% if row.problem_preview_truncated %}, ...{% endif %})</span>
-        {% endif %}
-      </td>
+      <td>{{ row.problem_count }}</td>
       <td>{{ row.created_at | local_time }}</td>
     </tr>
     {% endfor %}

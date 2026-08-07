@@ -106,17 +106,6 @@ class ContestDiskStore:
                        WHERE cp.contest_id=c.id
                    ) AS problem_count,
                    (
-                       SELECT group_concat(x.slug, ', ')
-                       FROM (
-                           SELECT p.slug AS slug
-                           FROM contest_problems cp
-                           JOIN problems p ON p.id=cp.problem_id
-                           WHERE cp.contest_id=c.id
-                           ORDER BY p.slug ASC
-                           LIMIT 5
-                       ) x
-                   ) AS problem_slugs_preview,
-                   (
                        SELECT COUNT(*)
                        FROM contest_problems cp3
                        JOIN workspaces w ON w.problem_id=cp3.problem_id AND w.user_id=?
@@ -153,17 +142,6 @@ class ContestDiskStore:
                        FROM contest_problems cp
                        WHERE cp.contest_id=c.id
                    ) AS problem_count,
-                   (
-                       SELECT group_concat(x.slug, ', ')
-                       FROM (
-                           SELECT p.slug AS slug
-                           FROM contest_problems cp
-                           JOIN problems p ON p.id=cp.problem_id
-                           WHERE cp.contest_id=c.id
-                           ORDER BY p.slug ASC
-                           LIMIT 5
-                       ) x
-                   ) AS problem_slugs_preview,
                    (
                        SELECT COUNT(*)
                        FROM contest_problems cp3

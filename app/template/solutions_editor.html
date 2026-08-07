@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% block content %}
-<h1 class="page-title">Solution Editor</h1>
+<h1 class="page-title">Solutions</h1>
 {% include "_flash_message.html" %}
 {% set editor_error = message if message_level == 'error' else '' %}
 
@@ -14,11 +14,22 @@
 {% set expected_class = "tag-select-neutral" %}
 {% endif %}
 
-<section class="solution-editor-panel">
-  <h2>Edit Source</h2>
-  <form id="solution-save-form" class="form-stack" method="post" action="/problems/{{ ctx.problem.slug }}/solutions/save-source" data-code-editor-guard="1">
+<section class="component-workbench solution-editor-panel">
+  <div class="component-workbench-head">
+    <div>
+      <h2>{{ "Solution source" if selected_exists else "New solution" }}</h2>
+    </div>
+    {% if selected_exists %}<code class="component-workbench-path">{{ selected }}</code>{% endif %}
+  </div>
+  <form id="solution-save-form" class="form-stack component-source-form" method="post" action="/problems/{{ ctx.problem.slug }}/solutions/save-source" data-code-editor-guard="1">
+    {% if selected_exists %}
     <input type="hidden" name="source_path" value="{{ selected }}" />
-    <p><strong>Source:</strong> <code>{{ selected }}</code></p>
+    {% else %}
+    <div class="form-row component-source-path-field">
+      <label for="solution-source-path">File</label>
+      <input id="solution-source-path" name="source_path" value="{{ selected }}" required />
+    </div>
+    {% endif %}
     <div class="form-row">
       <label for="solution-expected-behavior">Expected</label>
       <select
@@ -32,15 +43,15 @@
         {% endfor %}
       </select>
     </div>
-    <textarea name="content" data-code-editor="1" data-code-path="{{ selected }}" data-code-height="640">{{ content }}</textarea>
+    <textarea name="content" data-code-editor="1" data-code-path="{{ selected }}" data-code-height="420">{{ content }}</textarea>
     {% if content_truncated %}
     <p class="muted">Showing first {{ content_char_limit }} characters.</p>
     {% endif %}
-    <div class="form-row">
-      <button class="btn" id="solution-save-submit" type="submit">Save Source</button>
-      <a class="button-link" href="/problems/{{ ctx.problem.slug }}/solutions?path={{ selected }}">Back to Solution Files</a>
+    <div class="form-row component-editor-actions">
+      <button class="btn primary-action" id="solution-save-submit" type="submit">Save solution</button>
+      <a class="linkish" href="/problems/{{ ctx.problem.slug }}/solutions?path={{ selected }}">Back to solutions</a>
     </div>
-    <p id="solution-save-error" class="danger component-editor-error" data-component-editor-error="1"{% if not editor_error %} hidden{% endif %}>{{ editor_error }}</p>
+    <div id="solution-save-error" class="flash flash-inline component-editor-error" data-component-editor-error="1"{% if not editor_error %} hidden{% endif %}>{{ editor_error }}</div>
   </form>
 </section>
 {% endblock %}

@@ -1,17 +1,17 @@
 {% extends "base.html" %}
 {% block content %}
-<h1 class="page-title">Solutions</h1>
+<div class="page-title-inline component-page-title">
+  <h1 class="page-title">Solutions</h1>
+  {% if entries %}
+  <a class="button-link" href="/problems/{{ ctx.problem.slug }}/solutions/editor?path={{ solution_create_default_path }}">Add solution</a>
+  {% endif %}
+</div>
 {% include "_flash_message.html" %}
-<section>
-    <h2>Solutions</h2>
-    {% if entries and (not accepted_source_exists) %}
+{% if entries %}
+<section class="content-section-plain" aria-label="Solution files">
+    {% if not accepted_source_exists %}
     <p class="flash"><span class="danger">Main correct solution is required.</span></p>
     {% endif %}
-    <form class="form-row" method="post" action="/problems/{{ ctx.problem.slug }}/solutions/create-template">
-      <label for="solution-create-path">New file</label>
-      <input id="solution-create-path" name="path" placeholder="{{ solution_create_default_path }}" />
-      <button class="btn" type="submit">Add Solution</button>
-    </form>
     {% if entries_truncated %}
     <p class="muted">Showing first {{ entries_limit }} {% if entries_limit == 1 %}solution{% else %}solutions{% endif %}.</p>
     {% endif %}
@@ -57,21 +57,29 @@
           </form>
         </td>
         <td class="solutions-actions-cell">
-          <form class="inline-form solutions-rename-form" method="post" action="/problems/{{ ctx.problem.slug }}/solutions/rename">
-            <input type="hidden" name="old_path" value="{{ row.source_path }}" />
-            <input name="new_path" value="{{ row.file_name }}" aria-label="Rename {{ row.source_path }}" />
-            <a href="#" class="linkish" data-submit-form="1">Rename</a>
-          </form>
-          <form class="inline-form solutions-delete-form" method="post" action="/problems/{{ ctx.problem.slug }}/solutions/delete" data-confirm-message="Delete {{ row.source_path }}? This cannot be undone; uncommitted changes will be lost.">
-            <input type="hidden" name="source_path" value="{{ row.source_path }}" />
-            <a href="#" class="linkish danger-link" data-submit-form="1">Delete</a>
-          </form>
+          <div class="solutions-actions">
+            <form class="inline-form solutions-rename-form" method="post" action="/problems/{{ ctx.problem.slug }}/solutions/rename">
+              <input type="hidden" name="old_path" value="{{ row.source_path }}" />
+              <input name="new_path" value="{{ row.file_name }}" aria-label="Rename {{ row.source_path }}" />
+              <a href="#" class="linkish" data-submit-form="1">Rename</a>
+            </form>
+            <form class="inline-form solutions-delete-form" method="post" action="/problems/{{ ctx.problem.slug }}/solutions/delete" data-confirm-message="Delete {{ row.source_path }}? This cannot be undone; uncommitted changes will be lost.">
+              <input type="hidden" name="source_path" value="{{ row.source_path }}" />
+              <a href="#" class="linkish danger-link" data-submit-form="1">Delete</a>
+            </form>
+          </div>
         </td>
       </tr>
       {% endfor %}
     </table>
-    {% if not entries %}
-    <p class="muted">Add a source under <code>solutions/</code>.</p>
-    {% endif %}
-  </section>
+ </section>
+{% else %}
+<section class="component-empty-state">
+  <div>
+    <h2>No solutions</h2>
+    <p class="muted">Add a source to define expected behavior.</p>
+  </div>
+  <a class="button-link primary-action" href="/problems/{{ ctx.problem.slug }}/solutions/editor?path={{ solution_create_default_path }}">Add solution</a>
+</section>
+{% endif %}
 {% endblock %}

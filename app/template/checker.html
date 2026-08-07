@@ -45,7 +45,7 @@
   <form class="form-stack checker-standard-form" method="post" action="/problems/{{ ctx.problem.slug }}/checker/set-standard">
     <select id="standard-checker-name" name="checker_name" aria-label="Standard checker">
       {% for checker in standard_checker_options %}
-      <option value="{{ checker.value }}" data-description="{{ checker.description }}" {% if checker.value == selected_standard_checker %}selected{% endif %}>{{ checker.value }}</option>
+      <option value="{{ checker.value }}" data-description="{{ checker.description }}" {% if checker.value == selected_standard_checker %}selected{% endif %}>{{ checker.value }} — {{ checker.description }}</option>
       {% endfor %}
     </select>
     {% if selected_standard_description %}<p id="standard-checker-description" class="muted checker-standard-description" data-standard-checker-description="1">{{ selected_standard_description }}.</p>{% endif %}

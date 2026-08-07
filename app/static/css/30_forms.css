@@ -695,7 +695,6 @@ textarea.textarea-md {
 }
 
 .table-base .linkish,
-.tests-editor-table .linkish,
 .verification-list-table .linkish,
 .verification-actions > a,
 .workspace-side-link,
@@ -737,6 +736,39 @@ textarea.textarea-md {
 .table-base th {
   background: var(--surface);
   border-bottom-color: var(--line-strong);
+}
+
+.table-base.table-rows {
+  border: 1px solid var(--line);
+  border-collapse: separate;
+  border-spacing: 0;
+  background: var(--surface);
+}
+
+.table-base.table-rows th,
+.table-base.table-rows td {
+  border: 0;
+  padding: var(--space-3) var(--space-4);
+}
+
+.table-base.table-rows tr:first-child th {
+  background: var(--surface-alt);
+  border-bottom: 1px solid var(--line-strong);
+}
+
+.table-base.table-rows tr + tr td {
+  border-top: 1px solid var(--line);
+}
+
+.table-base.table-compact th,
+.table-base.table-compact td {
+  padding: 4px 8px;
+}
+
+.table-base.table-compact th {
+  background: var(--surface-alt);
+  color: var(--muted);
+  font-weight: 600;
 }
 
 .problem-list-table .problem-list-head {

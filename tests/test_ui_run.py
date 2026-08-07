@@ -837,7 +837,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         )
         self.assertIn('action="/problems/alice/sample/tests/spec/reindex"', html)
         self.assertIn('action="/problems/alice/sample/tests/spec/add-manual-upload"', html)
-        self.assertIn('class="tests-editor-table"', html)
+        self.assertIn('class="table-base table-rows tests-editor-table"', html)
         self.assertIn("<th>Test</th>", html)
         self.assertIn('data-sample-output-validate-group="1"', html)
         self.assertIn('data-sample-toggle="1"', html)
@@ -845,7 +845,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         self.assertNotIn("Move Down", html)
         self.assertIn('placeholder="3&#10;1 2 3"', html)
         self.assertIn('placeholder="gen 10 1&#10;gen 20 2"', html)
-        self.assertIn("Template: each submission input as plain text.", html)
+        self.assertIn("One plain-text submission input per file.", html)
         self.assertNotIn("Batch Manual", html)
         self.assertNotIn("Batch Generator", html)
 
@@ -1114,11 +1114,11 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
 
         page = general_page(_request(f"/problems/{problem}/statement"), problem, "alice")
         html = page.body.decode("utf-8", errors="replace")
-        self.assertIn('class="problem-section-tab-title">Verification</span>', html)
+        self.assertIn('class="problem-section-tab-title problem-section-tab-title-link"', html)
         self.assertRegex(html, r'action="/problems/[^"]+/verification/start"')
         self.assertRegex(
             html,
-            r'class="problem-section-tab-status section-tab-status-warn">\s*stale\s*</span>',
+            r'class="problem-section-tab-status section-tab-status-warn">\s*ok \(stale\)\s*</span>',
         )
         self.assertIn("changed: verification inputs", html)
 
@@ -1136,12 +1136,12 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             workspace_id=workspace_id,
             build_id=self.random_id("b-verify-stale-general"),
             kind=Kind.ALL,
-            status="ok",
+            status="failed",
             created_at="2026-02-23T00:00:00Z",
             finished_at="2026-02-23T00:00:01Z",
             runs=[],
             summary_extra={
-                "status": "pass",
+                "status": "failed",
                 "signature": signature,
             },
         )
@@ -1159,11 +1159,11 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
 
         page = general_page(_request(f"/problems/{problem}/statement"), problem, "alice")
         html = page.body.decode("utf-8", errors="replace")
-        self.assertIn('class="problem-section-tab-title">Verification</span>', html)
+        self.assertIn('class="problem-section-tab-title problem-section-tab-title-link"', html)
         self.assertRegex(html, r'action="/problems/[^"]+/verification/start"')
         self.assertRegex(
             html,
-            r'class="problem-section-tab-status section-tab-status-warn">\s*stale\s*</span>',
+            r'class="problem-section-tab-status section-tab-status-warn">\s*failed \(stale\)\s*</span>',
         )
         self.assertIn("changed: verification inputs", html)
 
@@ -4556,7 +4556,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         self.assertNotIn("<th>Source</th>", detail_html)
         self.assertNotIn("<th>Command</th>", detail_html)
         self.assertNotIn("<th>Validator</th>", detail_html)
-        self.assertRegex(detail_html, r"(?s)<table class=\"sol-metrics\">.*?<th>Status</th>.*?<th>Feedback</th>")
+        self.assertRegex(detail_html, r"(?s)<table class=\"table-base table-compact sol-metrics\">.*?<th>Status</th>.*?<th>Feedback</th>")
         self.assertIn('<span class="vmeta">2ms (3ms wall)</span>', detail_html)
         self.assertIn('<span class="vmeta">1MB</span>', detail_html)
 
@@ -5208,6 +5208,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         self.assertIn("Sanity", html)
         self.assertIn("Sanity check", html)
         self.assertIn("verification-sanity-detail-popup", html)
+        self.assertIn('class="table-base table-compact verification-sanity-task-table"', html)
         self.assertIn(">details</a>", html)
         self.assertNotIn("Ran 1 of 1 sanity checks.", html)
         self.assertIn("Custom sample output", html)
@@ -5898,5 +5899,5 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         page = run_page(_request("/problems/alice/sample/run"), "alice/sample", "alice")
         self.assertEqual(page.status_code, 200)
         html = page.body.decode("utf-8", errors="replace")
-        self.assertIn('class="problem-section-tab-title">Verification</span>', html)
+        self.assertIn('class="problem-section-tab-title problem-section-tab-title-link"', html)
         self.assertIn(">failed</span>", html)

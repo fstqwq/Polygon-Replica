@@ -11,13 +11,9 @@ from fastapi.responses import JSONResponse
 from app.impl.auth.shared import redirect_response, set_flash_cookie, template_response
 from app.impl.contest.workspace_scope import contest_workspace_context_from_request
 from app.impl.runtime.config import config
-from app.impl.problem.shared import (
-    MAIN_CORRECT_EXPECTED_LABEL,
-    MAIN_CORRECT_EXPECTED_VALUE,
-    _normalize_component_create_path,
-)
+from app.impl.problem.shared import MAIN_CORRECT_EXPECTED_LABEL, MAIN_CORRECT_EXPECTED_VALUE
 from app.impl.workspace.context_operation import audit, list_solution_entries, normalize_optional_component_source_path_safe, read_build_config, read_text_safe_limited, resolve_build_accepted_solution_source, solution_metadata_entry, workspace_rel_file_exists, write_build_config
-from app.impl.workspace.solution import ensure_solution_metadata_for_source, normalize_solution_source_path_required, solution_behavior_options
+from app.impl.workspace.solution import normalize_solution_source_path_required, solution_behavior_options
 from app.impl.workspace.access import require_write_access
 from app.impl.workspace.context_ui import page_ctx
 from app.main_util import enforce_textarea_max_bytes
@@ -62,35 +58,15 @@ def solutions_page(request: Request, problem: str, user: Annotated[str, Depends(
             effective_expected = MAIN_CORRECT_EXPECTED_VALUE
         row_view['expected_behavior_effective'] = effective_expected
         entries_view.append(row_view)
-    solution_create_default_path = 'accepted.cpp'
+    existing_paths = {str(row['source_path']) for row in entries}
+    solution_create_default_path = 'solutions/accepted.cpp'
+    if solution_create_default_path in existing_paths:
+        suffix = 1
+        solution_create_default_path = 'solutions/solution.cpp'
+        while solution_create_default_path in existing_paths:
+            suffix += 1
+            solution_create_default_path = f'solutions/solution_{suffix}.cpp'
     return template_response(request, 'solutions.html', {'ctx': ctx, 'entries': entries_view, 'entries_truncated': entries_truncated, 'entries_limit': _C.SOLUTION_LIST_LIMIT, 'selected': selected, 'selected_entry': selected_entry, 'expected_behavior_options': expected_behavior_options, 'accepted_source': accepted_source, 'accepted_source_exists': accepted_source_exists, 'solution_create_default_path': solution_create_default_path})
-
-def solutions_create_template(problem: str, user: Annotated[str, Depends(require_session_user)], path: str=Form('accepted.cpp')):
-    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
-    require_write_access(ctx)
-    workspace = Path(ctx['workspace']['path'])
-    msg = 'solution file created'
-    target = 'solutions/accepted.cpp'
-    metadata_created = False
-    try:
-        target = _normalize_component_create_path(path, 'solutions', 'accepted.cpp')
-        with config.workspace_service.workspace_lock(workspace):
-            target_abs = safe_workspace_path(workspace, target)
-            if target_abs.exists() and target_abs.is_dir():
-                raise ValueError('solution source target is a directory')
-            if target_abs.exists() and target_abs.is_file() and (target_abs.stat().st_size > 0):
-                msg = 'solution source already exists; not overwritten'
-            else:
-                config.git_service.write_file(workspace, target, '')
-                metadata_created = ensure_solution_metadata_for_source(workspace, target)
-                if metadata_created:
-                    msg = 'solution file and metadata created'
-        audit(ctx['user']['id'], ctx['problem']['id'], 'solutions.create_template', {'path': target})
-    except (ValueError, OSError) as exc:
-        msg = str(exc)
-    except HTTPException as exc:
-        msg = str(exc.detail)
-    return redirect_response(f'/problems/{problem}/solutions/editor?path={quote_plus(target)}', status_code=303, message=msg)
 
 def solutions_editor_page(request: Request, problem: str, user: Annotated[str, Depends(require_session_user)]):
     ctx = page_ctx(

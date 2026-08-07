@@ -482,7 +482,8 @@
   list-style: none;
   font-size: var(--font-size-ui-sm);
   max-height: 320px;
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
   scrollbar-gutter: stable;
 }
 
@@ -492,7 +493,19 @@
 }
 
 .change-item {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
   margin: 2px 0;
+}
+
+.change-item > a {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .change-code {

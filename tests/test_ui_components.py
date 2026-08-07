@@ -27,7 +27,6 @@ from tests.ui_support import (
     interactor_save_source,
     json,
     quote_plus,
-    solutions_create_template,
     solutions_delete,
     solutions_editor_page,
     solutions_page,
@@ -218,6 +217,21 @@ class TestUIComponents(UIHelpersMixin, E2ETestBase):
         self.assertEqual(resp.status_code, 200)
         html = resp.body.decode("utf-8", errors="replace")
         self.assertIn("std::wcmp.cpp", html)
+
+    def test_checker_page_describes_standard_checkers_in_select_options(self) -> None:
+        resp = checker_page(
+            _request(f"/problems/{self.problem}/checker"), self.problem, self.user
+        )
+        self.assertEqual(resp.status_code, 200)
+        html = resp.body.decode("utf-8", errors="replace")
+        self.assertIn(
+            "std::wcmp.cpp — ordered sequence of tokens",
+            html,
+        )
+        self.assertIn(
+            "std::rcmp9.cpp — double sequence, abs/rel error &lt;= 1e-9",
+            html,
+        )
 
     def test_checker_page_supports_source_save_without_files_page(self) -> None:
         ws = Path(workspace_service.ensure_workspace(self.problem, self.user))
@@ -833,46 +847,21 @@ class TestUIComponents(UIHelpersMixin, E2ETestBase):
         )
         self.assertEqual(after.status_code, 200)
 
-    def test_solutions_page_supports_template_action(self) -> None:
-        ws = Path(workspace_service.ensure_workspace(self.problem, self.user))
-        target_rel = "solutions/new_wa.cpp"
-        (ws / target_rel).unlink(missing_ok=True)
-        (ws / f"{target_rel}.desc").unlink(missing_ok=True)
-
+    def test_solutions_page_links_to_blank_editor(self) -> None:
         page = solutions_page(
             _request(f"/problems/{self.problem}/solutions"), self.problem, self.user
         )
         self.assertEqual(page.status_code, 200)
-
-        create = solutions_create_template(
-            problem=self.problem, user=self.user, path="new_wa.cpp"
+        html = page.body.decode("utf-8", errors="replace")
+        self.assertIn('class="solutions-actions"', html)
+        self.assertIn("Rename", html)
+        self.assertIn("Delete", html)
+        html = page.body.decode("utf-8", errors="replace")
+        self.assertIn(
+            f'/problems/{self.problem}/solutions/editor?path=solutions/accepted.cpp',
+            html,
         )
-        self.assertEqual(create.status_code, 303)
-        location = create.headers.get("location", "")
-        self.assertIn(f"/problems/{self.problem}/solutions/editor", location)
-        self.assertIn("path=solutions%2Fnew_wa.cpp", location)
-        self.assertTrue((ws / target_rel).exists())
-        self.assertEqual("", (ws / target_rel).read_text(encoding="utf-8"))
-        desc_text = (ws / f"{target_rel}.desc").read_text(encoding="utf-8")
-        self.assertIn("expected: wrong_answer", desc_text)
-
-    def test_solutions_template_action_supports_python_path(self) -> None:
-        ws = Path(workspace_service.ensure_workspace(self.problem, self.user))
-        target_rel = "solutions/new_py.py"
-        (ws / target_rel).unlink(missing_ok=True)
-        (ws / f"{target_rel}.desc").unlink(missing_ok=True)
-
-        create = solutions_create_template(
-            problem=self.problem, user=self.user, path="new_py.py"
-        )
-        self.assertEqual(create.status_code, 303)
-        location = create.headers.get("location", "")
-        self.assertIn(f"/problems/{self.problem}/solutions/editor", location)
-        self.assertIn("path=solutions%2Fnew_py.py", location)
-        self.assertTrue((ws / target_rel).exists())
-        self.assertEqual("", (ws / target_rel).read_text(encoding="utf-8"))
-        desc_text = (ws / f"{target_rel}.desc").read_text(encoding="utf-8")
-        self.assertIn("expected: unknown", desc_text)
+        self.assertNotIn("/solutions/create-template", html)
 
     def test_solutions_page_includes_rename_and_delete_actions(self) -> None:
         ws = Path(workspace_service.ensure_workspace(self.problem, self.user))
@@ -888,10 +877,22 @@ class TestUIComponents(UIHelpersMixin, E2ETestBase):
         self.assertEqual(page.status_code, 200)
 
     def test_solutions_page_uses_table_base_plus_solutions_table_class(self) -> None:
+        ws = Path(workspace_service.ensure_workspace(self.problem, self.user))
+        source = ws / "solutions/table_contract.cpp"
+        source.parent.mkdir(parents=True, exist_ok=True)
+        source.write_text("int main(){return 0;}\n", encoding="utf-8")
         page = solutions_page(
             _request(f"/problems/{self.problem}/solutions"), self.problem, self.user
         )
         self.assertEqual(page.status_code, 200)
+        html = page.body.decode("utf-8", errors="replace")
+        self.assertIn('<h1 class="page-title">Solutions</h1>', html)
+        self.assertIn(
+            '<section class="content-section-plain" aria-label="Solution files">',
+            html,
+        )
+        self.assertIn('class="table-base solutions-table"', html)
+        self.assertNotIn("<h2>Solutions</h2>", html)
 
     def test_solutions_set_tag_main_correct_updates_main_config(self) -> None:
         ws = Path(workspace_service.ensure_workspace(self.problem, self.user))
@@ -1040,12 +1041,6 @@ class TestUIComponents(UIHelpersMixin, E2ETestBase):
         (ws / target_rel).unlink(missing_ok=True)
         (ws / f"{target_rel}.desc").unlink(missing_ok=True)
 
-        created = solutions_create_template(
-            problem=self.problem, user=self.user, path=target_rel
-        )
-        self.assertEqual(created.status_code, 303)
-        self.assertIn("/solutions/editor", created.headers.get("location", ""))
-
         editor = solutions_editor_page(
             _request(
                 f"/problems/{self.problem}/solutions/editor", f"path={target_rel}"
@@ -1054,6 +1049,11 @@ class TestUIComponents(UIHelpersMixin, E2ETestBase):
             self.user,
         )
         self.assertEqual(editor.status_code, 200)
+        self.assertFalse((ws / target_rel).exists())
+        editor_html = editor.body.decode("utf-8", errors="replace")
+        self.assertIn("<h2>New solution</h2>", editor_html)
+        self.assertIn('name="source_path" value="solutions/editor_case.cpp"', editor_html)
+        self.assertIn("Save solution", editor_html)
 
         updated_content = "int main(){return 42;}\n"
         saved = solutions_save_source(
@@ -1076,7 +1076,7 @@ class TestUIComponents(UIHelpersMixin, E2ETestBase):
             (ws / f"{target_rel}.desc").read_text(encoding="utf-8"),
         )
         messages = _flash_messages_from_response(saved)
-        self.assertEqual(messages, ["solution source saved."])
+        self.assertEqual(messages, ["solution source and metadata saved."])
 
         toast_page = solutions_editor_page(
             _request_with_cookie(
