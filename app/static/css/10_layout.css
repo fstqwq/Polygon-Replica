@@ -501,10 +501,6 @@
   max-width: var(--layout-max-width);
 }
 
-.problem-page-frame.single-column {
-  max-width: var(--layout-max-width);
-}
-
 .page-grid {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 280px;

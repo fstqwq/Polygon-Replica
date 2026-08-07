@@ -126,8 +126,6 @@ def _render_merge(
         contest_workspace=contest_workspace_context_from_request(request),
     )
     require_write_access(ctx)
-    ctx["page_single_column"] = True
-    ctx["page_wide_content"] = True
     ctx["merge_ui"] = True
     ctx["page_title"] = "Update Workspace"
     return template_response(

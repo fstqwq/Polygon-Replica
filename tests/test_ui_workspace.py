@@ -1009,6 +1009,7 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
             "alice",
         )
         html = page.body.decode("utf-8", errors="replace")
+        self.assertIn('<div class="page-grid">', html)
         self.assertIn("data-merge-comparison", html)
         self.assertIn("data-merge-manual-diffs", html)
         self.assertIn("merge-expanded-diffs", html)

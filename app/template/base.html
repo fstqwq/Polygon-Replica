@@ -53,7 +53,7 @@
     {% include "_topbar_common.html" %}
   </header>
 
-  <div class="problem-page-frame{% if ctx.page_wide_content %} page-frame-wide{% endif %}{% if ctx.page_single_column %} single-column{% endif %}">
+  <div class="problem-page-frame{% if ctx.page_wide_content %} page-frame-wide{% endif %}">
     {% set nav_status = ctx.nav_status if ctx.nav_status is defined else {} %}
     {% set problem_mode = ctx.problem_mode if ctx.problem_mode is defined else "pass-fail" %}
     {% set statement_meta_nav = nav_status.get('statement_languages', {}) %}
@@ -226,7 +226,7 @@
         </a>
       </div>
     </nav>
-    <div class="page-grid{% if ctx.page_wide_content %} page-grid-wide{% endif %}{% if ctx.page_single_column %} single-column{% endif %}">
+    <div class="page-grid{% if ctx.page_wide_content %} page-grid-wide{% endif %}">
       <main class="content-shell">
         <div class="container">{% block content %}{% endblock %}</div>
       </main>
