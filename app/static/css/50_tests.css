@@ -483,9 +483,3 @@ select.tag-select.tag-select-neutral {
   white-space: normal;
   overflow-wrap: anywhere;
 }
-
-.component-editor-error {
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  word-break: break-word;
-}

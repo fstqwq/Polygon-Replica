@@ -1697,22 +1697,14 @@
   }
 
   var suppressCodeEditorBeforeUnload = false;
+  var CODE_EDITOR_READY_EVENT = "polygonlike:code-editor-ready";
 
   function suppressCodeEditorUnloadOnce() {
     suppressCodeEditorBeforeUnload = true;
   }
 
   function findCodeMirrorEditorForTextarea(textarea) {
-    if (!textarea) return null;
-    var prev = textarea.previousElementSibling;
-    if (prev && prev.CodeMirror) return prev.CodeMirror;
-    var next = textarea.nextElementSibling;
-    if (next && next.CodeMirror) return next.CodeMirror;
-    var parent = textarea.parentElement;
-    if (!parent) return null;
-    var wrappers = parent.querySelectorAll(".CodeMirror");
-    if (wrappers.length !== 1) return null;
-    return wrappers[0] && wrappers[0].CodeMirror ? wrappers[0].CodeMirror : null;
+    return textarea && textarea.__polygonCodeMirror ? textarea.__polygonCodeMirror : null;
   }
 
   function syncCodeEditorsInForm(form) {
@@ -1767,15 +1759,15 @@
     var forms = Array.prototype.slice.call(document.querySelectorAll("form[data-code-editor-guard='1']"));
     if (!forms.length) return;
 
-    function bindCodeMirrorDirtyTracking(form) {
-      form.querySelectorAll("textarea[data-code-editor='1']").forEach(function (ta) {
-        if (ta.dataset.codeEditorGuardBound === "1") return;
-        var cm = findCodeMirrorEditorForTextarea(ta);
-        if (!cm || typeof cm.on !== "function") return;
-        ta.dataset.codeEditorGuardBound = "1";
-        cm.on("change", function () {
-          markCodeEditorFormDirty(form);
-        });
+    function bindCodeMirrorDirtyTracking(textarea) {
+      if (!textarea || textarea.dataset.codeEditorGuardBound === "1") return;
+      var form = textarea.closest("form[data-code-editor-guard='1']");
+      if (!form || forms.indexOf(form) < 0) return;
+      var editor = findCodeMirrorEditorForTextarea(textarea);
+      if (!editor || typeof editor.on !== "function") return;
+      textarea.dataset.codeEditorGuardBound = "1";
+      editor.on("change", function () {
+        markCodeEditorFormDirty(form);
       });
     }
 
@@ -1794,12 +1786,11 @@
         if (String(target.type || "").toLowerCase() === "hidden") return;
         markCodeEditorFormDirty(form);
       });
-      bindCodeMirrorDirtyTracking(form);
-      [400, 1200, 2400].forEach(function (delayMs) {
-        window.setTimeout(function () {
-          bindCodeMirrorDirtyTracking(form);
-        }, delayMs);
-      });
+      form.querySelectorAll("textarea[data-code-editor='1']").forEach(bindCodeMirrorDirtyTracking);
+    });
+
+    document.addEventListener(CODE_EDITOR_READY_EVENT, function (event) {
+      bindCodeMirrorDirtyTracking(event.detail && event.detail.textarea);
     });
 
     window.addEventListener("beforeunload", function (event) {
@@ -2338,22 +2329,9 @@
     var fieldLabelByName = Object.create(null);
     var isFormSubmitting = false;
 
-    function findCodeMirrorEditor(textarea) {
-      if (!textarea) return null;
-      var prev = textarea.previousElementSibling;
-      if (prev && prev.CodeMirror) return prev.CodeMirror;
-      var next = textarea.nextElementSibling;
-      if (next && next.CodeMirror) return next.CodeMirror;
-      var parent = textarea.parentElement;
-      if (!parent) return null;
-      var wrappers = parent.querySelectorAll(".CodeMirror");
-      if (wrappers.length !== 1) return null;
-      return wrappers[0] && wrappers[0].CodeMirror ? wrappers[0].CodeMirror : null;
-    }
-
     function syncCodeEditor(textarea) {
       if (!textarea) return;
-      var cm = findCodeMirrorEditor(textarea);
+      var cm = findCodeMirrorEditorForTextarea(textarea);
       if (!cm || typeof cm.save !== "function") return;
       cm.save();
     }
@@ -2563,7 +2541,7 @@
       if (!textarea) return;
       var safeValue = String(value || "");
       textarea.value = safeValue;
-      var cm = findCodeMirrorEditor(textarea);
+      var cm = findCodeMirrorEditorForTextarea(textarea);
       if (!cm || typeof cm.setValue !== "function") return;
       cm.setValue(safeValue);
     }
@@ -2746,7 +2724,7 @@
             updateDirtyState(fieldName);
           });
         }
-        var cm = findCodeMirrorEditor(field);
+        var cm = findCodeMirrorEditorForTextarea(field);
         if (!cm || typeof cm.on !== "function") return;
         if (field.dataset.statementDraftCodeMirrorBound === "1") return;
         field.dataset.statementDraftCodeMirrorBound = "1";
@@ -2795,9 +2773,10 @@
     }
 
     bindEditorListeners();
-    // Editor wrappers may attach after first paint; retry several times.
-    [400, 1200, 2400, 4800].forEach(function (delayMs) {
-      window.setTimeout(bindEditorListeners, delayMs);
+    document.addEventListener(CODE_EDITOR_READY_EVENT, function (event) {
+      var textarea = event.detail && event.detail.textarea;
+      if (!textarea || textarea.form !== form) return;
+      bindEditorListeners();
     });
 
     listFieldNames().forEach(function (fieldName) {

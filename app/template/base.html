@@ -33,16 +33,8 @@
   <title>{% if page_title %}{{ page_title }} - {% endif %}{{ ui_browser_title }}</title>
   <link rel="icon" href="/static/favicon.ico?v=20260427-01" sizes="any" />
   <link rel="icon" href="/static/favicon.png?v=20260427-01" type="image/png" />
-  <link rel="stylesheet" href="/static/style.css?v=20260806-02" />
-  <script src="/static/ui.js?v=20260422-01" defer></script>
-  <link rel="stylesheet" href="/static/vendor/codemirror/lib/codemirror.min.css?v=20260410-23" />
-  <script src="/static/vendor/codemirror/lib/codemirror.min.js?v=20260410-23" defer></script>
-  <script src="/static/vendor/codemirror/addon/edit/matchbrackets.min.js?v=20260410-23" defer></script>
-  <script src="/static/vendor/codemirror/addon/edit/closebrackets.min.js?v=20260410-23" defer></script>
-  <script src="/static/vendor/codemirror/mode/clike/clike.min.js?v=20260410-23" defer></script>
-  <script src="/static/vendor/codemirror/mode/python/python.min.js?v=20260410-23" defer></script>
-  <script src="/static/vendor/codemirror/mode/stex/stex.min.js?v=20260410-23" defer></script>
-  <script src="/static/vendor/codemirror/mode/javascript/javascript.min.js?v=20260410-23" defer></script>
+  <link rel="stylesheet" href="/static/style.css?v=20260807-01" />
+  <script src="/static/ui.js?v=20260807-01" defer></script>
 </head>
 <body class="problem-layout{% if ctx.topbar_max_1400 %} topbar-max-1400{% endif %}{% block body_class %}{% endblock %}">
   {% set flash_presenter = 'topbar' %}
@@ -322,6 +314,6 @@
   {% endcall %}
   {% include "_page_profile.html" %}
 
-  <script src="/static/editor_init.js?v=20260417-12" defer></script>
+  <script src="/static/editor_init.js?v=20260807-01" defer></script>
 </body>
 </html>

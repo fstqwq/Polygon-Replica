@@ -61,6 +61,22 @@ def _is_db_handle(node: ast.AST) -> bool:
 
 
 class TestPublicContracts(unittest.TestCase):
+    def test_code_editor_assets_have_one_lazy_loading_owner(self) -> None:
+        base_source = (ROOT / "app" / "template" / "base.html").read_text(encoding="utf-8-sig")
+        editor_source = (ROOT / "app" / "static" / "editor_init.js").read_text(encoding="utf-8-sig")
+        ui_source = UI_JS_PATH.read_text(encoding="utf-8-sig")
+        forms_source = (ROOT / "app" / "static" / "css" / "30_forms.css").read_text(encoding="utf-8-sig")
+        tests_source = (ROOT / "app" / "static" / "css" / "50_tests.css").read_text(encoding="utf-8-sig")
+
+        self.assertNotIn("/static/vendor/codemirror", base_source)
+        self.assertIn('var TARGET_SELECTOR = "textarea[data-code-editor=\'1\']";', editor_source)
+        self.assertIn('var EDITOR_READY_EVENT = "polygonlike:code-editor-ready";', editor_source)
+        self.assertEqual(ui_source.count("function findCodeMirrorEditorForTextarea("), 1)
+        self.assertNotIn("[400, 1200, 2400]", ui_source)
+        self.assertNotIn("[400, 1200, 2400, 4800]", ui_source)
+        self.assertIn(".component-editor-error {", forms_source)
+        self.assertNotIn(".component-editor-error {", tests_source)
+
     def test_run_detail_popup_title_uses_safe_canonical_test_metadata(self) -> None:
         ui_source = UI_JS_PATH.read_text(encoding="utf-8-sig")
 

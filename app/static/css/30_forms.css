@@ -478,6 +478,12 @@ textarea.textarea-md {
   min-height: 220px;
 }
 
+.component-editor-error {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
 /* Button tiers: use .btn/.button-link for default actions, add .primary-action for primary actions, and use .linkish/.danger-link for ghost or destructive links. */
 .btn,
 .button-link {
