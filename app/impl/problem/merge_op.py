@@ -11,6 +11,7 @@ from fastapi.responses import FileResponse, JSONResponse
 
 from app.impl.auth.session import require_session_user
 from app.impl.auth.shared import json_error_response, redirect_response, template_response
+from app.impl.contest.workspace_scope import contest_workspace_context_from_request
 from app.impl.runtime.config import config
 from app.impl.workspace.access import require_write_access
 from app.impl.workspace.context_operation import audit
@@ -117,7 +118,13 @@ def _render_merge(
     choices: dict[str, str] | None = None,
     mode: str = "",
 ):
-    ctx = page_ctx(problem, user, refresh_status=False, include_recent=False)
+    ctx = page_ctx(
+        problem,
+        user,
+        refresh_status=False,
+        include_recent=False,
+        contest_workspace=contest_workspace_context_from_request(request),
+    )
     require_write_access(ctx)
     ctx["page_single_column"] = True
     ctx["page_wide_content"] = True

@@ -42,6 +42,7 @@ router.add_api_route(
     contest_overview_page,
     methods=["GET"],
     response_class=HTMLResponse,
+    name="contest_overview",
 )
 
 router.add_api_route(

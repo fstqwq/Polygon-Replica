@@ -11,6 +11,7 @@ from fastapi.responses import FileResponse
 from starlette.background import BackgroundTask
 
 from app.impl.auth.shared import redirect_response, template_response
+from app.impl.contest.workspace_scope import contest_workspace_context_from_request
 from app.impl.runtime.config import config
 from app.impl.tests_spec.shared import (
     parse_gen_script_lines,
@@ -49,7 +50,11 @@ from app.service.problem.test_spec import (
 
 
 def render_tests_page(request: Request, problem: str, user: Annotated[str, Depends(require_session_user)]):
-    ctx = page_ctx(problem, user)
+    ctx = page_ctx(
+        problem,
+        user,
+        contest_workspace=contest_workspace_context_from_request(request),
+    )
     workspace = Path(ctx['workspace']['path'])
     tests_editor_error = ''
     tests_gen_script = {'text': '', 'count': 0}
@@ -571,6 +576,5 @@ async def upload_test_payload(
         except Exception:
             pass
     return redirect_response(f'/problems/{problem}/tests', status_code=303, message=msg)
-
 
 

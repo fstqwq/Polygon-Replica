@@ -216,6 +216,23 @@ class WorkspaceDiskStore:
             return None
         return str(row["role"])
 
+    def repo_roles(self, problem_ids: list[int], user_id: int) -> dict[int, str]:
+        safe_problem_ids = sorted(
+            {problem_id for problem_id in map(int, problem_ids) if problem_id > 0}
+        )
+        if not safe_problem_ids:
+            return {}
+        placeholders = ",".join("?" for _problem_id in safe_problem_ids)
+        rows = self.db.fetch_all(
+            f"""
+            SELECT problem_id,role
+            FROM repo_acl
+            WHERE user_id=? AND problem_id IN ({placeholders})
+            """,
+            [int(user_id), *safe_problem_ids],
+        )
+        return {int(row["problem_id"]): str(row["role"]) for row in rows}
+
     def problem_owner_count(self, problem_id: int) -> int:
         row = self.db.fetch_one(
             "SELECT COUNT(*) AS c FROM repo_acl WHERE problem_id=? AND role='owner'",

@@ -9,6 +9,7 @@ from tests.db_helpers import (
 )
 
 from app.service.platform.git_process import run_git
+from starlette.requests import Request
 
 from tests.common import E2ETestBase
 from tests.ui_support import (
@@ -37,6 +38,14 @@ from tests.ui_support import (
     config,
     workspace_service,
 )
+
+
+def _app_request(path: str) -> Request:
+    from app.main import app
+
+    request = _request(path)
+    request.scope["app"] = app
+    return request
 
 
 class TestUIContests(UIHelpersMixin, E2ETestBase):
@@ -86,7 +95,7 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
         self.assertEqual(admin_row["role"], "admin")
 
         overview = contest_overview_page(
-            _request(f"/contests/{contest_slug}/overview"),
+            _app_request(f"/contests/{contest_slug}/overview"),
             contest_slug,
             "alice",
         )
@@ -164,7 +173,7 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
         self.assertEqual(len(after_remove), 1)
 
         overview = contest_overview_page(
-            _request(f"/contests/{contest_slug}/overview"),
+            _app_request(f"/contests/{contest_slug}/overview"),
             contest_slug,
             "alice",
         )
@@ -174,7 +183,7 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
         self.assertIn("Contest Problems", overview_html)
 
         problems_page = contest_problems_page(
-            _request(f"/contests/{contest_slug}/problems"),
+            _app_request(f"/contests/{contest_slug}/problems"),
             contest_slug,
             "alice",
         )
@@ -292,7 +301,7 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
         workspace_service.clear_identity_caches()
 
         page = contest_problems_page(
-            _request(f"/contests/{contest_slug}/problems"),
+            _app_request(f"/contests/{contest_slug}/problems"),
             contest_slug,
             "alice",
         )
@@ -526,7 +535,7 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
         config.contest_service.set_statement_default_language(contest_id, actor_user_id, "english")
 
         overview = contest_overview_page(
-            _request(f"/contests/{contest_slug}/overview"),
+            _app_request(f"/contests/{contest_slug}/overview"),
             contest_slug,
             "alice",
         )
@@ -583,7 +592,7 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
         write_contest_job_summary(contest_id, running_job_id, {"job_type": "pdf", "results": [], "language": "english"})
 
         overview = contest_overview_page(
-            _request(f"/contests/{contest_slug}/overview"),
+            _app_request(f"/contests/{contest_slug}/overview"),
             contest_slug,
             "alice",
         )
@@ -635,7 +644,7 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
         )
 
         problems_page = contest_problems_page(
-            _request(f"/contests/{contest_slug}/problems?job_id={change_job_id}"),
+            _app_request(f"/contests/{contest_slug}/problems?job_id={change_job_id}"),
             contest_slug,
             "alice",
             job_id=change_job_id,

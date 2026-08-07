@@ -42,6 +42,7 @@
     "test_contest_access_actions.py",
     "test_contest_builds.py",
     "test_contest_problem_actions.py",
+    "test_contest_workspace_scope.py",
     "test_export.py",
     "test_judgehost_service.py",
     "test_maintenance_http.py",

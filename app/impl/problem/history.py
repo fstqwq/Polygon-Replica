@@ -7,6 +7,7 @@ from typing import Annotated
 from fastapi import Request, Depends
 
 from app.impl.auth.shared import template_response
+from app.impl.contest.workspace_scope import contest_workspace_context_from_request
 from app.impl.runtime.config import config
 from app.impl.workspace.context_ui import page_ctx
 
@@ -14,7 +15,11 @@ _C = config.constants
 
 
 def history_page(request: Request, problem: str, user: Annotated[str, Depends(require_session_user)]):
-    ctx = page_ctx(problem, user)
+    ctx = page_ctx(
+        problem,
+        user,
+        contest_workspace=contest_workspace_context_from_request(request),
+    )
     workspace = Path(ctx['workspace']['path'])
     commits: list[dict] = []
     message = ''

@@ -2,7 +2,7 @@ from __future__ import annotations
 from app.impl.auth.session import require_session_user
 from typing import Annotated
 
-from fastapi import APIRouter, Request, Depends
+from fastapi import Request, Depends
 from fastapi.responses import HTMLResponse
 
 from app.impl.workspace.context_ui import render_workspace_page
@@ -75,8 +75,9 @@ from app.impl.problem.validator import (
 )
 from app.impl.problem.workspace_op import problem_delete, switch_workspace, workspace_delete
 from app.impl.preview.preview import preview_page
+from app.route.problem_scoped_router import ProblemScopedRouter
 
-router = APIRouter()
+router = ProblemScopedRouter()
 
 def access_admin_page(request: Request, problem: str, user: Annotated[str, Depends(require_session_user)]):
     return render_workspace_page(request, problem, user, show_access_admin=True)
@@ -86,6 +87,7 @@ router.add_api_route(
     preview_page,
     methods=["GET"],
     response_class=HTMLResponse,
+    name="problem_statement",
 )
 router.add_api_route(
     "/problems/{problem:path}/statement/save",
@@ -97,6 +99,7 @@ router.add_api_route(
     generators_page,
     methods=["GET"],
     response_class=HTMLResponse,
+    name="problem_generators",
 )
 router.add_api_route(
     "/problems/{problem:path}/generators/create-template",
@@ -118,6 +121,7 @@ router.add_api_route(
     checker_page,
     methods=["GET"],
     response_class=HTMLResponse,
+    name="problem_checker",
 )
 router.add_api_route(
     "/problems/{problem:path}/checker/view-standard",
@@ -150,6 +154,7 @@ router.add_api_route(
     validator_page,
     methods=["GET"],
     response_class=HTMLResponse,
+    name="problem_validator",
 )
 router.add_api_route(
     "/problems/{problem:path}/validator/create-template",
@@ -171,6 +176,7 @@ router.add_api_route(
     interactor_page,
     methods=["GET"],
     response_class=HTMLResponse,
+    name="problem_interactor",
 )
 router.add_api_route(
     "/problems/{problem:path}/interactor/create-template",
@@ -192,6 +198,7 @@ router.add_api_route(
     solutions_page,
     methods=["GET"],
     response_class=HTMLResponse,
+    name="problem_solutions",
 )
 router.add_api_route(
     "/problems/{problem:path}/solutions/create-template",
@@ -321,6 +328,7 @@ router.add_api_route(
     files_page,
     methods=["GET"],
     response_class=HTMLResponse,
+    name="problem_files",
 )
 router.add_api_route(
     "/problems/{problem:path}/files/save",
@@ -367,12 +375,14 @@ router.add_api_route(
     render_workspace_page,
     methods=["GET"],
     response_class=HTMLResponse,
+    name="problem_workspace",
 )
 router.add_api_route(
     "/problems/{problem:path}/access",
     access_admin_page,
     methods=["GET"],
     response_class=HTMLResponse,
+    name="problem_access",
 )
 router.add_api_route(
     "/problems/{problem:path}/access/grant",
@@ -389,6 +399,7 @@ router.add_api_route(
     history_page,
     methods=["GET"],
     response_class=HTMLResponse,
+    name="problem_history",
 )
 router.add_api_route(
     "/problems/{problem:path}/revision/commit",

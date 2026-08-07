@@ -13,6 +13,7 @@ from fastapi.responses import FileResponse
 from starlette.background import BackgroundTask
 
 from app.impl.auth.shared import redirect_response, template_response
+from app.impl.contest.workspace_scope import contest_workspace_context_from_request
 from app.impl.runtime.config import config
 from app.impl.workspace.access import require_write_access
 from app.service.repository.revision import git_commit_count, verification_source_display
@@ -156,7 +157,11 @@ def _resolve_export_archive_path(
     )
 
 def export_page(request: Request, problem: str, user: Annotated[str, Depends(require_session_user)]):
-    ctx = page_ctx(problem, user)
+    ctx = page_ctx(
+        problem,
+        user,
+        contest_workspace=contest_workspace_context_from_request(request),
+    )
     workspace_id = ctx['workspace']['id']
     problem_id = int(ctx['problem']['id'])
     actor_user_id = int(ctx["user"]["id"])

@@ -8,6 +8,10 @@ from fastapi import Depends, HTTPException, Request
 
 from app.impl.auth.session import has_sudo_session, require_session_user
 from app.impl.auth.shared import template_response
+from app.impl.contest.workspace_scope import (
+    ContestWorkspaceContext,
+    contest_workspace_context_from_request,
+)
 from app.impl.runtime.config import config
 
 from app.main_util import normalize_workspace_rel_path
@@ -69,7 +73,15 @@ def _system_limit_info() -> SystemLimitInfo:
     }
 
 
-def page_ctx(problem: str, user: str, include_branches: bool=True, refresh_status: bool=True, include_recent: bool=True, include_workspace_changes: bool=True) -> dict:
+def page_ctx(
+    problem: str,
+    user: str,
+    include_branches: bool = True,
+    refresh_status: bool = True,
+    include_recent: bool = True,
+    include_workspace_changes: bool = True,
+    contest_workspace: ContestWorkspaceContext | None = None,
+) -> dict:
     _ = include_branches
     try:
         problem_id, user_id = config.workspace_service.page_identity(problem, user)
@@ -214,6 +226,7 @@ def page_ctx(problem: str, user: str, include_branches: bool=True, refresh_statu
     latest_verification = ctx.get('latest_artifact_verification')
     ctx['latest_verification_version'] = artifact_version_number(latest_verification['id']) if latest_verification else None
     ctx['nav_status'] = _build_problem_nav_status(ctx)
+    ctx['contest_workspace'] = contest_workspace
     return ctx
 
 def _build_problem_nav_status(ctx: dict) -> dict[str, dict[str, object]]:
@@ -428,7 +441,11 @@ def _build_problem_nav_status(ctx: dict) -> dict[str, dict[str, object]]:
     return nav
 
 def render_workspace_page(request: Request, problem: str, user: Annotated[str, Depends(require_session_user)], *, show_access_admin: bool=False):
-    ctx = page_ctx(problem, user)
+    ctx = page_ctx(
+        problem,
+        user,
+        contest_workspace=contest_workspace_context_from_request(request),
+    )
     workspace = Path(ctx['workspace']['path'])
     message = ''
     has_destructive_sudo = has_sudo_session(

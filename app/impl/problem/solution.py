@@ -9,6 +9,7 @@ from fastapi import Form, HTTPException, Request, Depends
 from fastapi.responses import JSONResponse
 
 from app.impl.auth.shared import redirect_response, set_flash_cookie, template_response
+from app.impl.contest.workspace_scope import contest_workspace_context_from_request
 from app.impl.runtime.config import config
 from app.impl.problem.shared import (
     MAIN_CORRECT_EXPECTED_LABEL,
@@ -36,7 +37,11 @@ _C = config.constants
 
 
 def solutions_page(request: Request, problem: str, user: Annotated[str, Depends(require_session_user)]):
-    ctx = page_ctx(problem, user)
+    ctx = page_ctx(
+        problem,
+        user,
+        contest_workspace=contest_workspace_context_from_request(request),
+    )
     workspace = Path(ctx['workspace']['path'])
     entries, entries_truncated = list_solution_entries(workspace)
     selected = normalize_workspace_rel_path(request.query_params.get('path'))
@@ -88,7 +93,11 @@ def solutions_create_template(problem: str, user: Annotated[str, Depends(require
     return redirect_response(f'/problems/{problem}/solutions/editor?path={quote_plus(target)}', status_code=303, message=msg)
 
 def solutions_editor_page(request: Request, problem: str, user: Annotated[str, Depends(require_session_user)]):
-    ctx = page_ctx(problem, user)
+    ctx = page_ctx(
+        problem,
+        user,
+        contest_workspace=contest_workspace_context_from_request(request),
+    )
     workspace = Path(ctx['workspace']['path'])
     entries, entries_truncated = list_solution_entries(workspace)
     requested = normalize_workspace_rel_path(request.query_params.get('path'))
@@ -294,4 +303,3 @@ def solutions_delete(problem: str, user: Annotated[str, Depends(require_session_
     except HTTPException as exc:
         msg = str(exc.detail)
     return redirect_response(f'/problems/{problem}/solutions', status_code=303, message=msg)
-

@@ -9,6 +9,7 @@ from fastapi.responses import FileResponse
 
 from app.impl.auth.session import require_session_user
 from app.impl.auth.shared import redirect_response, template_response
+from app.impl.contest.workspace_scope import contest_workspace_context_from_request
 from app.impl.runtime.config import config
 from app.impl.workspace.access import require_write_access
 from app.impl.workspace.context_operation import (
@@ -46,7 +47,11 @@ def _files_redirect_href(
     return f'/problems/{problem}/files?' + '&'.join(query_parts)
 
 def files_page(request: Request, problem: str, user: Annotated[str, Depends(require_session_user)]):
-    ctx = page_ctx(problem, user)
+    ctx = page_ctx(
+        problem,
+        user,
+        contest_workspace=contest_workspace_context_from_request(request),
+    )
     workspace = Path(ctx['workspace']['path'])
     selected = normalize_workspace_rel_path(request.query_params.get('path'))
     line_raw = request.query_params.get('line')
@@ -361,4 +366,3 @@ def files_download(problem: str, user: Annotated[str, Depends(require_session_us
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return FileResponse(file_path, filename=file_path.name)
-

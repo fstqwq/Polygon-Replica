@@ -10,6 +10,7 @@ from fastapi import File, Form, HTTPException, Request, UploadFile, Depends
 from app.db import now_iso
 from app.impl.auth.session import require_session_user
 from app.impl.auth.shared import redirect_response, template_response
+from app.impl.contest.workspace_scope import contest_workspace_context_from_request
 from app.impl.runtime.config import config
 from app.impl.workspace.access import require_write_access
 from app.impl.workspace.context_job import start_verification_job
@@ -59,7 +60,15 @@ def _truthy_form_token(value: str) -> bool:
 
 
 def run_page(request: Request, problem: str, user: Annotated[str, Depends(require_session_user)]):
-    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=True, include_workspace_changes=True)
+    ctx = page_ctx(
+        problem,
+        user,
+        include_branches=False,
+        refresh_status=False,
+        include_recent=True,
+        include_workspace_changes=True,
+        contest_workspace=contest_workspace_context_from_request(request),
+    )
     workspace = Path(ctx['workspace']['path'])
     _, general_cfg, _ = read_problem_config(workspace)
     execute_mode = general_cfg['mode']
@@ -84,7 +93,15 @@ def run_page(request: Request, problem: str, user: Annotated[str, Depends(requir
     return template_response(request, 'run.html', {'ctx': ctx, 'runs': runs})
 
 def run_new_page(request: Request, problem: str, user: Annotated[str, Depends(require_session_user)]):
-    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=True, include_workspace_changes=True)
+    ctx = page_ctx(
+        problem,
+        user,
+        include_branches=False,
+        refresh_status=False,
+        include_recent=True,
+        include_workspace_changes=True,
+        contest_workspace=contest_workspace_context_from_request(request),
+    )
     workspace = Path(ctx['workspace']['path'])
     workspace_id = int(ctx['workspace']['id'])
     active_verification = latest_workspace_verification(int(ctx['problem']['id']), workspace_id, ok_only=True)
@@ -120,7 +137,15 @@ def run_new_page(request: Request, problem: str, user: Annotated[str, Depends(re
     )
 
 def run_details_page(request: Request, problem: str, user: Annotated[str, Depends(require_session_user)]):
-    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=True, include_workspace_changes=True)
+    ctx = page_ctx(
+        problem,
+        user,
+        include_branches=False,
+        refresh_status=False,
+        include_recent=True,
+        include_workspace_changes=True,
+        contest_workspace=contest_workspace_context_from_request(request),
+    )
     workspace = Path(ctx['workspace']['path'])
     _, general_cfg, _ = read_problem_config(workspace)
     execute_mode = general_cfg['mode']
@@ -141,7 +166,15 @@ def run_details_page(request: Request, problem: str, user: Annotated[str, Depend
     return template_response(request, 'run_details.html', {'ctx': detail_page_ctx, **detail_ctx})
 
 def run_details_test_fragment(request: Request, problem: str, user: Annotated[str, Depends(require_session_user)]):
-    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=True, include_workspace_changes=True)
+    ctx = page_ctx(
+        problem,
+        user,
+        include_branches=False,
+        refresh_status=False,
+        include_recent=True,
+        include_workspace_changes=True,
+        contest_workspace=contest_workspace_context_from_request(request),
+    )
     workspace = Path(ctx['workspace']['path'])
     _, general_cfg, _ = read_problem_config(workspace)
     execute_mode = general_cfg['mode']

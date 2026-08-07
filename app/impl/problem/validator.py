@@ -7,6 +7,7 @@ from typing import Annotated
 from fastapi import Form, HTTPException, Request, Depends
 
 from app.impl.auth.shared import json_error_response, json_redirect_response, redirect_response, template_response
+from app.impl.contest.workspace_scope import contest_workspace_context_from_request
 from app.impl.problem.compile_check import judgehost_compile_check_error
 from app.impl.problem.shared import rename_component_source
 from app.impl.runtime.config import config
@@ -21,7 +22,11 @@ _C = config.constants
 
 
 def validator_page(request: Request, problem: str, user: Annotated[str, Depends(require_session_user)]):
-    ctx = page_ctx(problem, user)
+    ctx = page_ctx(
+        problem,
+        user,
+        contest_workspace=contest_workspace_context_from_request(request),
+    )
     workspace = Path(ctx['workspace']['path'])
     validator_status = validator_status_context(workspace)
     repo_source = validator_status['repo_source'] if isinstance(validator_status.get('repo_source'), str) and validator_status['repo_source'] else 'validators/validator.cpp'
@@ -138,7 +143,6 @@ def validator_save_source(
             return json_redirect_response(redirect_url, msg)
         return json_error_response(msg)
     return redirect_response(redirect_url, status_code=303, message=msg)
-
 
 
 

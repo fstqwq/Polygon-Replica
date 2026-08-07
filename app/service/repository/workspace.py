@@ -391,8 +391,14 @@ class WorkspaceService:
             details=details,
         )
 
-    def access_context(self, problem_id: int, user_id: int) -> dict[str, object]:
-        if self.user_is_system_admin(int(user_id)):
+    @classmethod
+    def _access_context_for_role(
+        cls,
+        role: str | None,
+        *,
+        system_admin: bool,
+    ) -> dict[str, object]:
+        if system_admin:
             return {
                 "role": "admin",
                 "can_read": True,
@@ -402,7 +408,6 @@ class WorkspaceService:
                 "write_block_reason": "",
                 "manage_block_reason": "",
             }
-        role = self._store.repo_role(int(problem_id), int(user_id))
         if role is None:
             return {
                 "role": "none",
@@ -413,7 +418,7 @@ class WorkspaceService:
                 "write_block_reason": "write access required",
                 "manage_block_reason": "owner or admin access required",
             }
-        if role not in self.ACCESS_ROLES:
+        if role not in cls.ACCESS_ROLES:
             raise RuntimeError("invalid repo role")
         can_write = role in {"admin", "owner", "write"}
         return {
@@ -424,6 +429,34 @@ class WorkspaceService:
             "read_block_reason": "",
             "write_block_reason": "" if can_write else "read-only access",
             "manage_block_reason": "" if role in {"admin", "owner"} else "owner or admin access required",
+        }
+
+    def access_context(self, problem_id: int, user_id: int) -> dict[str, object]:
+        safe_user_id = int(user_id)
+        return self._access_context_for_role(
+            self._store.repo_role(int(problem_id), safe_user_id),
+            system_admin=self.user_is_system_admin(safe_user_id),
+        )
+
+    def access_contexts(
+        self,
+        problem_ids: list[int],
+        user_id: int,
+    ) -> dict[int, dict[str, object]]:
+        safe_problem_ids = list(
+            dict.fromkeys(int(problem_id) for problem_id in problem_ids)
+        )
+        if not safe_problem_ids:
+            return {}
+        safe_user_id = int(user_id)
+        system_admin = self.user_is_system_admin(safe_user_id)
+        roles = {} if system_admin else self._store.repo_roles(safe_problem_ids, safe_user_id)
+        return {
+            problem_id: self._access_context_for_role(
+                roles.get(problem_id),
+                system_admin=system_admin,
+            )
+            for problem_id in safe_problem_ids
         }
 
     def access_entries(self, problem_id: int) -> list[dict[str, str]]:

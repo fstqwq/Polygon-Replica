@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from fastapi import APIRouter
 from fastapi.responses import HTMLResponse
 
 from app.impl.tests_spec.routes import (
@@ -16,14 +15,16 @@ from app.impl.tests_spec.routes import (
     upload_test_payload,
 )
 from app.impl.tests_spec.verification import verification_start
+from app.route.problem_scoped_router import ProblemScopedRouter
 
-router = APIRouter()
+router = ProblemScopedRouter()
 
 router.add_api_route(
     "/problems/{problem:path}/tests",
     render_tests_page,
     methods=["GET"],
     response_class=HTMLResponse,
+    name="problem_tests",
 )
 router.add_api_route(
     "/problems/{problem:path}/tests/spec/add-manual",

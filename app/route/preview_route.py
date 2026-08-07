@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from fastapi import APIRouter
 from fastapi.responses import HTMLResponse
 
 from app.impl.preview.preview import (
@@ -17,8 +16,9 @@ from app.impl.preview.preview import (
     statement_compile_asset_delete,
     statement_templates_reset,
 )
+from app.route.problem_scoped_router import ProblemScopedRouter
 
-router = APIRouter()
+router = ProblemScopedRouter()
 
 router.add_api_route(
     "/problems/{problem:path}/preview",

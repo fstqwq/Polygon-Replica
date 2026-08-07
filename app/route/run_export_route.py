@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from fastapi import APIRouter
 from fastapi.responses import HTMLResponse
 
 from app.impl.run_export.artifact import artifact_file, export_file
@@ -15,14 +14,16 @@ from app.impl.run_export.run import (
     run_page,
     run_rejudge,
 )
+from app.route.problem_scoped_router import ProblemScopedRouter
 
-router = APIRouter()
+router = ProblemScopedRouter()
 
 router.add_api_route(
     "/problems/{problem:path}/run",
     run_page,
     methods=["GET"],
     response_class=HTMLResponse,
+    name="problem_run",
 )
 router.add_api_route(
     "/problems/{problem:path}/run/new",
@@ -62,6 +63,7 @@ router.add_api_route(
     export_page,
     methods=["GET"],
     response_class=HTMLResponse,
+    name="problem_export",
 )
 router.add_api_route(
     "/problems/{problem:path}/export/create",

@@ -7,6 +7,7 @@ from typing import Annotated
 from fastapi import Form, HTTPException, Request, Depends
 
 from app.impl.auth.shared import json_error_response, json_redirect_response, redirect_response, template_response
+from app.impl.contest.workspace_scope import contest_workspace_context_from_request
 from app.impl.problem.compile_check import judgehost_compile_check_error
 from app.impl.runtime.config import config
 from app.impl.problem.shared import rename_component_source
@@ -22,7 +23,11 @@ _C = config.constants
 
 
 def checker_page(request: Request, problem: str, user: Annotated[str, Depends(require_session_user)]):
-    ctx = page_ctx(problem, user)
+    ctx = page_ctx(
+        problem,
+        user,
+        contest_workspace=contest_workspace_context_from_request(request),
+    )
     if ctx.get('problem_mode') == 'interactive':
         return redirect_response(f'/problems/{problem}/interactor', status_code=303, message='interactive problem uses an interactor; checker section hidden')
     workspace = Path(ctx['workspace']['path'])
@@ -46,7 +51,11 @@ def checker_page(request: Request, problem: str, user: Annotated[str, Depends(re
     return template_response(request, 'checker.html', {'ctx': ctx, 'checker_status': checker_status, 'standard_checker_options': standard_checker_options, 'selected_standard_checker': selected_standard, 'repo_source': repo_source, 'repo_content': repo_content, 'repo_content_truncated': repo_content_truncated, 'content_char_limit': _C.WORKSPACE_FILE_VIEW_CHAR_LIMIT})
 
 def checker_view_standard(request: Request, problem: str, user: Annotated[str, Depends(require_session_user)], checker_name: str=''):
-    ctx = page_ctx(problem, user)
+    ctx = page_ctx(
+        problem,
+        user,
+        contest_workspace=contest_workspace_context_from_request(request),
+    )
     if ctx.get('problem_mode') == 'interactive':
         return redirect_response(f'/problems/{problem}/interactor', status_code=303, message='interactive problem uses an interactor; checker section hidden')
     workspace = Path(ctx['workspace']['path'])
@@ -204,7 +213,6 @@ def checker_save_source(
             return json_redirect_response(redirect_url, msg)
         return json_error_response(msg)
     return redirect_response(redirect_url, status_code=303, message=msg)
-
 
 
 
