@@ -2,7 +2,7 @@
 {% from "_component_dialogs.html" import ui_popup %}
 {% block content %}
 <div class="page-title-inline root-page-title-inline">
-  <h1 class="page-title">Problems</h1>
+  <h1 class="page-title">My Problems</h1>
   <div class="root-title-links" aria-label="Problems actions">
     <a class="linkish" href="#problem-open-popup" data-popup-open="problem-open-popup">Open/Create</a>
     <a class="linkish" href="#problem-import-popup" data-popup-open="problem-import-popup">Import Problem Package</a>
@@ -11,12 +11,11 @@
 
 {% include "_flash_message.html" %}
 
-<section>
-  <h2>My Problems</h2>
+<section aria-label="Problem list">
   {% if entries %}
   <table class="table-base problem-list-table">
     <tr>
-      <th class="problem-list-head">Problem</th>
+      <th class="problem-list-head">Problem ID</th>
       <th>Role</th>
       <th>Revision</th>
       <th>Updated</th>

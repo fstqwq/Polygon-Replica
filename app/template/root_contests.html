@@ -2,7 +2,7 @@
 {% from "_component_dialogs.html" import ui_popup %}
 {% block content %}
 <div class="page-title-inline root-page-title-inline">
-  <h1 class="page-title">Contests</h1>
+  <h1 class="page-title">My Contests</h1>
   <div class="root-title-links" aria-label="Contests actions">
     <a class="linkish" href="#contest-create-popup" data-popup-open="contest-create-popup">Create Contest</a>
     <a class="linkish" href="#contest-import-popup" data-popup-open="contest-import-popup">Import Polygon Contest Package</a>
@@ -11,12 +11,11 @@
 
 {% include "_flash_message.html" %}
 
-<section>
-  <h2>My Contests</h2>
+<section aria-label="Contest list">
   {% if entries %}
   <table class="table-base">
     <tr>
-      <th>Contest</th>
+      <th>Title</th>
       <th>Role</th>
       <th>Problems</th>
       <th>Created</th>
