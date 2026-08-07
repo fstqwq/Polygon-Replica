@@ -782,7 +782,7 @@ section.verification-header-section {
 }
 
 .verification-detail-table .tone-running .vmeta {
-  color: #2563eb;
+  color: var(--tag-info-fg);
   font-weight: 600;
 }
 

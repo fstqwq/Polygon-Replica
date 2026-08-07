@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 import logging
+import re
 import unittest
 from pathlib import Path
 from tests.assertion_helpers import assert_html_contract
@@ -61,6 +62,21 @@ def _is_db_handle(node: ast.AST) -> bool:
 
 
 class TestPublicContracts(unittest.TestCase):
+    def test_ui_colors_are_owned_by_global_tokens(self) -> None:
+        color_literal = re.compile(r"#[0-9a-fA-F]{3,8}\b|(?:rgb|hsl)a?\(")
+        offenders: list[str] = []
+        for path in sorted((ROOT / "app" / "static" / "css").glob("*.css")):
+            if path.name == "00_tokens.css":
+                continue
+            for line_number, line in enumerate(path.read_text(encoding="utf-8-sig").splitlines(), start=1):
+                if color_literal.search(line):
+                    offenders.append(f"{path.name}:{line_number}")
+        self.assertEqual(offenders, [])
+
+        token_source = TOKENS_PATH.read_text(encoding="utf-8-sig")
+        for stale_color in ["#f6eff4", "#fffafd", "#d8c4d3", "#6d3a5f"]:
+            self.assertNotIn(stale_color, token_source.lower())
+
     def test_code_editor_assets_have_one_lazy_loading_owner(self) -> None:
         base_source = (ROOT / "app" / "template" / "base.html").read_text(encoding="utf-8-sig")
         editor_source = (ROOT / "app" / "static" / "editor_init.js").read_text(encoding="utf-8-sig")

@@ -476,12 +476,12 @@
 
 .accent-gradient-text {
   font-weight: 700;
-  color: var(--accent-soft-1);
+  color: var(--brand-gradient-start);
   background-image: linear-gradient(
     90deg,
-    var(--accent-soft-1) 0%,
-    var(--accent-soft-2) 52%,
-    var(--accent-soft-3) 100%
+    var(--brand-gradient-start) 0%,
+    var(--brand-gradient-middle) 52%,
+    var(--brand-gradient-end) 100%
   );
   background-size: 100% 100%;
   -webkit-background-clip: text;

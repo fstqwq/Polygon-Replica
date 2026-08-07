@@ -14,6 +14,7 @@
   }
 
   var CORE_CSS = assetUrl(LOCAL_BASE + "/lib/codemirror.min.css");
+  var THEME_CSS = "/static/css/25_code_editor.css?v=20260807-03";
   var CORE_JS = assetUrl(LOCAL_BASE + "/lib/codemirror.min.js");
   var ADDON_JS = [
     assetUrl(LOCAL_BASE + "/addon/edit/matchbrackets.min.js"),
@@ -144,7 +145,12 @@
     });
   }
 
-  Promise.all([loadStylesheet(CORE_CSS), loadScript(CORE_JS)])
+  Promise.all([
+    loadStylesheet(CORE_CSS).then(function () {
+      return loadStylesheet(THEME_CSS);
+    }),
+    loadScript(CORE_JS),
+  ])
     .then(function () {
       return Promise.all(editorDependencyScripts().map(loadScript));
     })

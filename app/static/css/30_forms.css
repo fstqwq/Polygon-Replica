@@ -467,17 +467,6 @@ textarea.textarea-md {
   min-height: 180px;
 }
 
-.CodeMirror {
-  border: 1px solid var(--field-border);
-  background: var(--surface);
-  font-family: Consolas, "Courier New", monospace;
-  font-size: var(--font-size-ui-sm);
-}
-
-.CodeMirror-scroll {
-  min-height: 220px;
-}
-
 .component-editor-error {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -649,6 +638,6 @@ tr.verification-row-failed > td {
 }
 
 .problem-list-table tbody tr.table-row-dirty > td {
-  background: #f8d7da;
-  border-color: #e9b2bb;
+  background: var(--surface-danger);
+  border-color: var(--tag-fail-border);
 }

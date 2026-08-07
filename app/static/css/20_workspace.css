@@ -274,8 +274,8 @@
 }
 
 .switch-toggle > input:checked + .switch-track {
-  background: #16a34a;
-  border-color: #15803d;
+  background: var(--control-active-bg);
+  border-color: var(--control-active-border);
 }
 
 .switch-toggle > input:checked + .switch-track::after {
@@ -609,7 +609,7 @@
 
 .workspace-diff-line-del {
   background: var(--surface-danger);
-  color: #991b1b;
+  color: var(--danger-link-hover-color);
 }
 
 .workspace-diff-line-hunk {
@@ -813,12 +813,12 @@ body.merge-page .container {
 
 .merge-diff-cell-delete,
 .merge-diff-cell-replace.merge-diff-cell-left {
-  background: var(--danger-soft, #fff0f0);
+  background: var(--surface-danger);
 }
 
 .merge-diff-cell-insert,
 .merge-diff-cell-replace.merge-diff-cell-right {
-  background: var(--success-soft, #edf9f0);
+  background: var(--surface-success);
 }
 
 .merge-diff-inline-change {
