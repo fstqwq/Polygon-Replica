@@ -532,6 +532,7 @@ class TestJudgehostScripts(unittest.TestCase):
             )
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(prog_out.read_text(encoding="utf-8"), "1\n")
+            self.assertEqual(state.read_text(encoding="utf-8"), "2")
             self.assertTrue((root / "program.out.repeatability-failed").exists())
             self.assertFalse(list(root.glob("program.out.repeat.[0-9]*")))
 
