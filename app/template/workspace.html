@@ -30,7 +30,7 @@
     {% set local_rev_raw = ws_revision.get('local') if ws_revision else none %}
     {% set published_rev_raw = ws_revision.get('upstream') if ws_revision else none %}
     <h2>Revision</h2>
-    <p>Base: <strong>{{ ('v' ~ local_rev_raw) if local_rev_raw is not none else 'no revision' }}</strong>. Upstream: <strong>{{ ('v' ~ published_rev_raw) if published_rev_raw is not none else 'none' }}</strong>.</p>
+    <p>Base <strong>{{ ('v' ~ local_rev_raw) if local_rev_raw is not none else 'no revision' }}</strong> / Upstream <strong>{{ ('v' ~ published_rev_raw) if published_rev_raw is not none else 'none' }}</strong></p>
 
     {% if ctx.workspace_needs_update %}
     <form method="post" action="/problems/{{ ctx.problem.slug }}/merge/start">

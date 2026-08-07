@@ -598,7 +598,7 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         assert_html_contract(
             self,
             html,
-            contains=("Workspace", "Upstream:", "Publish new revision"),
+            contains=("Workspace", "Upstream", "Publish new revision"),
             excludes=("/problems/alice/sample/git/pull", "My Files", "Commit and share revision"),
             label="workspace controls",
         )
