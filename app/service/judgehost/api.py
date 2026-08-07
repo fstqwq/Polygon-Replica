@@ -114,12 +114,6 @@ class Judgehost:
     def check_api_basic(self, username: str, password: str) -> bool:
         return self._core.check_api_basic(username, password)
 
-    def bind_request_peer_hostname(self, peer_addr: str, hostname: str) -> None:
-        return self._core.bind_request_peer_hostname(peer_addr, hostname)
-
-    def hostname_for_request_peer(self, peer_addr: str) -> str:
-        return self._core.hostname_for_request_peer(peer_addr)
-
     def prepare_enqueue_payload(self, **kwargs) -> dict[str, object]:
         return self._enqueue.prepare_enqueue_payload(**kwargs)
 
@@ -433,5 +427,4 @@ class Judgehost:
         self._state.task_registry.reset()
         with self._state.state_lock:
             self._state.hosts_state.clear()
-            self._state.peer_hostname_by_client_addr.clear()
         self._state.batch_scheduler.reset()

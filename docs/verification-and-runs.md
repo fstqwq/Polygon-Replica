@@ -153,6 +153,18 @@ Current important endpoints:
 - `POST /api/v4/judgehosts/internal-error`
 
 Authentication is separate from session auth and uses judgehost credentials.
+Those credentials are the complete service-side judgehost identity: Basic or
+Bearer authentication is checked against `JUDGEHOST_API_USERNAME` and
+`JUDGEHOST_API_TOKEN`. The service deliberately does not infer or bind a
+judgehost identity from `request.client`, source IP/port, reverse-proxy headers,
+or NAT address.
+
+The hostname in registration, fetch, and callback payloads/paths remains a
+logical scheduler label. It owns leases, selects host affinity, and keys
+telemetry; it is not an authentication principal. The file endpoints do not
+require a prior peer registration: testcase files resolve by the existing
+`testcase_id` index, executable files by the existing `(kind, script_id)` index,
+and source files by their existing 9.0.0 or main route ID.
 
 ## Judgehost Lifecycle
 

@@ -782,7 +782,7 @@ class TestJudgehostService(E2ETestBase):
         compile_run_text = compile_run.payload.path.read_text(encoding="utf-8", errors="replace")
         self.assertIn('exec g++ -x c++ -Wall -O2 -std=gnu++20 -static -pipe -DDOMJUDGE -I. "$MAIN" -o "$DEST"', compile_run_text)
 
-        testcase_files = service.domjudge_get_testcase_files(testcase_id, hostname="judgehost-official")
+        testcase_files = service.domjudge_get_testcase_files(testcase_id)
         self.assertEqual(len(testcase_files), 2)
         self.assertEqual({item.filename for item in testcase_files}, {"input", "output"})
         case_row = judgehost_fetch_case(service, judgetask_id)
@@ -1222,7 +1222,7 @@ class TestJudgehostService(E2ETestBase):
         for row in rows:
             testcase_id = int(row.get("testcase_id") or 0)
             self.assertGreater(testcase_id, 0)
-            files = service.domjudge_get_testcase_files(testcase_id, hostname="judgehost-notrunc")
+            files = service.domjudge_get_testcase_files(testcase_id)
             self.assertEqual({item.filename for item in files}, {"input", "output"})
             input_text = next(
                 item.payload.path.read_text(encoding="utf-8", errors="replace")
@@ -1916,7 +1916,7 @@ class TestJudgehostService(E2ETestBase):
         self.assertEqual(cached_testcase_id_b, testcase_id_b)
         self.assertEqual(cached_testcase_id_a, cached_testcase_id_b)
 
-    def test_domjudge_testcase_files_resolve_by_stable_id_and_host_lease(self) -> None:
+    def test_domjudge_testcase_files_resolve_by_stable_id_without_host_lease(self) -> None:
         service = config.judgehost_task_service
         old_enabled = service.state.enabled
         old_token = service.state.api_token
@@ -1983,8 +1983,8 @@ class TestJudgehostService(E2ETestBase):
         self.assertGreater(testcase_id_b, 0)
         self.assertNotEqual(testcase_id_a, testcase_id_b)
 
-        files_a = service.domjudge_get_testcase_files(testcase_id_a, hostname="judgehost-host-a")
-        files_b = service.domjudge_get_testcase_files(testcase_id_b, hostname="judgehost-host-b")
+        files_a = service.domjudge_get_testcase_files(testcase_id_a)
+        files_b = service.domjudge_get_testcase_files(testcase_id_b)
         input_a = next(item.payload.path.read_text(encoding="utf-8") for item in files_a if item.filename == "input")
         input_b = next(item.payload.path.read_text(encoding="utf-8") for item in files_b if item.filename == "input")
         self.assertEqual(input_a, "alpha\n")
@@ -3460,7 +3460,7 @@ class TestJudgehostService(E2ETestBase):
         self.assertEqual(hosts_after, hosts_before)
         self.assertNotIn("judgehost", hosts_after)
 
-    def test_domjudge_testcase_files_endpoint_uses_request_peer_hostname_binding(self) -> None:
+    def test_domjudge_testcase_files_endpoint_allows_authenticated_no_peer_access(self) -> None:
         from app.main import app
 
         service = config.judgehost_task_service
@@ -3497,26 +3497,38 @@ class TestJudgehostService(E2ETestBase):
                 expected_behavior="accepted",
                 verification_source="run.execute",
             )
-            fetch_resp = client.post(
-                "/api/v4/judgehosts/fetch-work",
-                data={"hostname": "judgehost-peer", "max_batchsize": "1"},
-                headers={"Authorization": "Bearer test-token"},
-            )
-            self.assertEqual(fetch_resp.status_code, 200)
-            tasks = fetch_resp.json()
+            service.domjudge_register_host("judgehost-no-peer")
+            tasks = service.domjudge_fetch_work("judgehost-no-peer", max_batchsize=1)
             self.assertEqual(len(tasks), 1)
             testcase_id = int(tasks[0].get("testcase_id") or 0)
+            submit_id = str(tasks[0].get("submitid") or "")
+            contest_id = str(tasks[0].get("contestid") or "")
             self.assertGreater(testcase_id, 0)
             testcase_resp = client.get(
                 f"/api/v4/judgehosts/get_files/testcase/{testcase_id}",
+                headers={
+                    "Authorization": "Bearer test-token",
+                    "X-Forwarded-For": "203.0.113.44",
+                },
+            )
+            source_resp_90 = client.get(
+                f"/api/v4/judgehosts/get_files/source/{submit_id}",
+                headers={"Authorization": "Bearer test-token"},
+            )
+            source_resp_main = client.get(
+                f"/api/v4/judgehosts/get_files/source/{contest_id}/{submit_id}",
                 headers={"Authorization": "Bearer test-token"},
             )
         self.assertEqual(testcase_resp.status_code, 200)
+        self.assertEqual(source_resp_90.status_code, 200)
+        self.assertEqual(source_resp_main.status_code, 200)
+        self.assertEqual(source_resp_90.json()[0]["filename"], "ac.cpp")
+        self.assertEqual(source_resp_main.json()[0]["filename"], "ac.cpp")
         files = testcase_resp.json()
         input_blob = next(str(item.get("content") or "") for item in files if str(item.get("filename") or "") == "input")
         self.assertEqual(base64.b64decode(input_blob).decode("utf-8", errors="replace"), "peer-input\n")
 
-    def test_domjudge_executable_files_endpoint_uses_request_peer_hostname_binding(self) -> None:
+    def test_domjudge_executable_files_endpoint_allows_authenticated_no_peer_access(self) -> None:
         from app.main import app
 
         service = config.judgehost_task_service
@@ -3552,19 +3564,17 @@ class TestJudgehostService(E2ETestBase):
                 expected_behavior="accepted",
                 verification_source="run.execute",
             )
-            fetch_resp = client.post(
-                "/api/v4/judgehosts/fetch-work",
-                data={"hostname": "judgehost-peer-script", "max_batchsize": "1"},
-                headers={"Authorization": "Bearer test-token"},
-            )
-            self.assertEqual(fetch_resp.status_code, 200)
-            tasks = fetch_resp.json()
+            service.domjudge_register_host("judgehost-no-peer-script")
+            tasks = service.domjudge_fetch_work("judgehost-no-peer-script", max_batchsize=1)
             self.assertEqual(len(tasks), 1)
             compare_script_id = int(tasks[0].get("compare_script_id") or 0)
             self.assertGreater(compare_script_id, 0)
             compare_resp = client.get(
                 f"/api/v4/judgehosts/get_files/compare/{compare_script_id}",
-                headers={"Authorization": "Bearer test-token"},
+                headers={
+                    "Authorization": "Bearer test-token",
+                    "X-Forwarded-For": "198.51.100.27",
+                },
             )
         self.assertEqual(compare_resp.status_code, 200)
         files = compare_resp.json()

@@ -1112,26 +1112,20 @@ class BatchScheduler(BatchSchedulerResultMixin):
     def testcase_refs(
         self,
         testcase_id: int,
-        *,
-        hostname: str,
     ) -> tuple[dict[str, object] | None, str]:
-        safe_host = str(hostname or "").strip()
         token = int(testcase_id)
         with self._lock:
-            if not safe_host:
-                return None, "missing-host"
             candidates = [
                 self._cases[case_id]
                 for case_id in self._case_ids_by_testcase.get(token, ())
                 if self._cases[case_id].status in {"leased", "reporting"}
-                and self._cases[case_id].lease_owner == safe_host
             ]
             if not candidates:
                 return None, "missing"
             case = max(candidates, key=lambda row: (row.updated_at, row.id))
             return (
                 {"input_ref": case.input_ref, "answer_ref": case.answer_ref},
-                "leased-host-testcase-id",
+                "leased-testcase-id",
             )
 
     def active_script_hashes(self, kind: str, script_id: int) -> set[str]:

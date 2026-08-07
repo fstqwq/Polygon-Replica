@@ -51,7 +51,6 @@ class JudgehostState:
         default=lambda _verification_id: None,
     )
     hosts_state: dict[str, dict[str, object]] = field(default_factory=dict)
-    peer_hostname_by_client_addr: dict[str, str] = field(default_factory=dict)
     batch_scheduler: BatchScheduler = field(default_factory=BatchScheduler)
 
     def __post_init__(self) -> None:

@@ -208,6 +208,18 @@ Distinct submission identities prevent host-level per-user process accounting fr
 across judgehost containers. Keep the `JUDGEDAEMON_USERNAME` and `JUDGEDAEMON_PASSWORD` values
 aligned with Settings.
 
+The configured Basic/Bearer credentials are the judgehost service identity. The
+server does not bind them to a source IP, source port, reverse-proxy address, or
+NAT path. A daemon hostname remains a stable logical label for registration,
+lease ownership, affinity, callbacks, and telemetry only. Testcase and
+executable downloads are authorized by those credentials and resolved by their
+protocol IDs; they do not require a prior peer registration.
+
+This deployment change is limited to the Polygon-Replica service and admin
+panel. It does not repair judgedaemon filesystem failures such as read-only
+mount cleanup, same-path copy/hardlink conflicts, or mkdir races; those daemon
+changes are tracked separately.
+
 For consistent judgedaemon performance, consider isolating judgehost CPU cores with
 `isolcpus` and disabling turbo boost on hosts dedicated to judging.
 

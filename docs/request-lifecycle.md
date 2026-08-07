@@ -67,6 +67,14 @@ The judgehost API under `/api/v4/*` uses a separate auth path.
 It does not use the browser session cookie.
 
 Current judgehost auth accepts configured credentials for DOMjudge-compatible clients.
+The credential pair is the only judgehost authentication identity: the configured
+`JUDGEHOST_API_USERNAME` and `JUDGEHOST_API_TOKEN` are checked through Basic or
+Bearer authentication. The service does not bind credentials to the request's
+source IP, source port, reverse-proxy address, or any other peer value.
+
+The `hostname` sent by a daemon is a logical scheduling label. It is retained for
+host registration, lease ownership, affinity, callbacks, and telemetry, but it is
+not an authentication principal and it is not required to authorize file access.
 
 ## Route Groups
 
@@ -131,6 +139,12 @@ Rejudge is exposed as **Rejudge Without Cache** because it deletes matching case
 - `/api/v4/judgehosts/add-judging-run/{hostname}/{judgetask_id}`
 - `/api/v4/judgehosts/add-debug-info/{hostname}/{judgetask_id}`
 - `/api/v4/judgehosts/internal-error`
+
+The source download endpoints resolve the existing 9.0.0 and main route forms by
+their protocol IDs. Testcase downloads resolve the active testcase by
+`testcase_id`; executable downloads resolve the active script by `(file_type,
+script_id)`. An authenticated request may come from a different connection,
+reverse proxy, or NAT path without first registering that connection's peer.
 
 ## Sync vs Async Work
 

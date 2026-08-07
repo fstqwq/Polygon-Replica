@@ -132,17 +132,13 @@ class ResultProcessor:
     def domjudge_get_testcase_files(
         self,
         testcase_id: int,
-        *,
-        hostname: str,
     ) -> list[DomjudgeDownloadFile]:
         token = int(testcase_id)
-        safe_host = self._core.normalize_hostname(hostname)
-        row, resolution_source = self._s.batch_scheduler.testcase_refs(token, hostname=safe_host)
+        row, resolution_source = self._s.batch_scheduler.testcase_refs(token)
         if row is None:
             _diag_logger.warning(
-                "judgehost.get_testcase_files testcase_id=%s host=%s resolved=missing",
+                "judgehost.get_testcase_files testcase_id=%s resolved=missing",
                 token,
-                safe_host,
             )
             raise RuntimeError("testcase files not found")
         input_ref = domjudge_text(row["input_ref"])
@@ -151,9 +147,8 @@ class ResultProcessor:
         answer_file = self._s.runtime_blob_store.descriptor(answer_ref)
         if input_file is None or answer_file is None:
             _diag_logger.warning(
-                "judgehost.get_testcase_files testcase_id=%s host=%s resolved=%s exists=%s input=%s answer=%s",
+                "judgehost.get_testcase_files testcase_id=%s resolved=%s exists=%s input=%s answer=%s",
                 token,
-                safe_host,
                 resolution_source,
                 False,
                 input_ref,
@@ -161,9 +156,8 @@ class ResultProcessor:
             )
             raise RuntimeError("testcase files not found")
         logger.debug(
-            "judgehost.get_testcase_files testcase_id=%s host=%s resolved=%s exists=%s input=%s answer=%s",
+            "judgehost.get_testcase_files testcase_id=%s resolved=%s exists=%s input=%s answer=%s",
             token,
-            safe_host,
             resolution_source,
             True,
             input_ref,
