@@ -1340,7 +1340,16 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         html = resp.text
         self.assertIn("<title>Statements - Polygon-Replica</title>", html)
         self.assertIn('<h1 class="page-title">Statements</h1>', html)
-        self.assertIn('<strong class="submenu-status-heading">Statements</strong>', html)
+        self.assertIn('<span class="problem-section-tab-title">Statements</span>', html)
+        self.assertIn('class="section-tabs problem-section-tabs"', html)
+        self.assertIn('data-problem-nav="1"', html)
+        self.assertIn('class="problem-context-meta-icon"', html)
+        self.assertIn('aria-label="Edit time and memory limits"', html)
+        self.assertNotIn('class="workbench-return-link"', html)
+        self.assertNotIn('data-page="access"', html)
+        self.assertIn('class="workspace-card-head"', html)
+        self.assertIn('class="workspace-side-link" href="/problems/alice/sample/access">Manage access</a>', html)
+        self.assertNotIn('class="problem-submenu"', html)
         self.assertNotIn("<title>Statement Name Tex Title - Polygon-Replica</title>", html)
         self.assertNotIn("<title>sample - Polygon-Replica</title>", html)
 

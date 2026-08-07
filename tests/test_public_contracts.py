@@ -209,7 +209,8 @@ class TestPublicContracts(unittest.TestCase):
             source,
             contains=(
                 "choose files one by one",
-                "Update workspace",
+                "Apply Selected Versions",
+                "Apply Proposed Update",
                 "Use the published file",
                 "Keep the workspace file",
                 "Fast-forward possible.",

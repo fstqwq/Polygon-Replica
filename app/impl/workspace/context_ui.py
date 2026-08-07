@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 from typing import Annotated, TypedDict, cast
+from urllib.parse import quote
 
 from fastapi import Depends, HTTPException, Request
 
@@ -431,9 +432,32 @@ def _build_problem_nav_status(ctx: dict) -> dict[str, dict[str, object]]:
             export_revision = git_commit_count(Path(workspace_path_text), export_source_commit)
     if export_revision is not None and export_revision > 0:
         export_outdated = head_revision is not None and head_revision > 0 and (export_revision != head_revision)
-        nav['export'] = {'text': f'built for v{export_revision}', 'danger': bool(export_outdated)}
+        export_nav: dict[str, object] = {'text': f'built for v{export_revision}', 'danger': bool(export_outdated)}
     else:
-        nav['export'] = {'text': 'missing', 'danger': True}
+        export_nav = {'text': 'missing', 'danger': True}
+    if workspace_head and workspace_id > 0 and problem_id > 0:
+        current_export = config.export_service.latest_workspace_export_for_source(
+            problem_id,
+            workspace_id,
+            workspace_head,
+        )
+        if current_export is not None:
+            export_id = cast(str, current_export['id'])
+            export_filename = Path(cast(str, current_export['filename'])).name
+            problem_slug = cast(str | None, _row_value(problem_row, 'slug', '')) or ''
+            archive_path = config.export_service.export_archive_path(
+                problem_id,
+                workspace_id,
+                export_id,
+                problem_slug,
+                export_filename,
+            )
+            if archive_path is not None:
+                export_nav['download_href'] = (
+                    f'/problems/{quote(problem_slug, safe="/")}/exports/'
+                    f'{quote(export_id, safe="")}/{quote(export_filename, safe="")}'
+                )
+    nav['export'] = export_nav
     access_role = cast(str | None, cast(dict[str, object], ctx['access']).get('role')) or 'none'
     nav['access'] = {'text': access_role, 'danger': False}
     nav['workspace'] = nav['access']

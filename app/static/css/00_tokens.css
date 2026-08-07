@@ -105,10 +105,6 @@ body {
   line-height: 1.45;
 }
 
-body.problem-layout {
-  min-width: 1400px;
-}
-
 a {
   color: var(--link);
   text-decoration: none;
@@ -158,6 +154,14 @@ pre {
   margin: 0;
 }
 
+.page-title-actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-4);
+  white-space: nowrap;
+}
+
 .page-title-inline-status {
   grid-template-columns: auto auto;
   justify-content: start;
@@ -174,6 +178,19 @@ pre {
   flex-shrink: 0;
   overflow-wrap: normal;
   word-break: keep-all;
+}
+
+@media (max-width: 640px) {
+  .page-title-inline {
+    grid-template-columns: minmax(0, 1fr);
+    align-items: start;
+  }
+
+  .page-title-actions {
+    justify-content: flex-start;
+    flex-wrap: wrap;
+    white-space: normal;
+  }
 }
 
 .root-page-title-inline {

@@ -1,13 +1,13 @@
 {% extends "base.html" %}
 {% block body_class %} merge-page{% endblock %}
 {% block content %}
-<h1 class="page-title">Update Workspace</h1>
+<h1 class="page-title">Review Published Changes</h1>
 {% include "_flash_message.html" %}
 
 <section class="merge-review-card" data-merge-review>
   <div class="merge-review-head">
     <div>
-      <h2>{{ 'Proposed Merged Version' if review_mode == 'suggested' else 'Choose Complete Files' }}</h2>
+      <h2>{{ 'Review Proposed Update' if review_mode == 'suggested' else 'Choose Which Version to Keep' }}</h2>
       {% if review_mode == 'suggested' %}
       {% if preview.fast_forward_possible %}
       <p><strong>Fast-forward possible.</strong> You can also <a href="/problems/{{ ctx.problem.slug }}/merge/{{ preview.id }}?mode=manual">choose files one by one</a>.</p>
@@ -99,7 +99,7 @@
     {% endif %}
 
     <div class="merge-actions">
-      <button class="btn primary-action" type="submit">Update workspace</button>
+      <button class="btn primary-action" type="submit">{{ 'Apply Proposed Update' if review_mode == 'suggested' else 'Apply Selected Versions' }}</button>
       {% if preview.suggested_available and review_mode != 'suggested' %}
         <a class="button-link" href="/problems/{{ ctx.problem.slug }}/merge/{{ preview.id }}">Use proposed merged version instead</a>
       {% endif %}

@@ -2,25 +2,33 @@
 {% block content %}
 <div class="page-title-inline">
   <h1 class="page-title">Verification</h1>
-  <a class="text-nowrap" href="/problems/{{ ctx.problem.slug }}/run/new">Start customized verification</a>
+  <div class="page-title-actions">
+    <form class="inline-form" method="post" action="/problems/{{ ctx.problem.slug }}/verification/start">
+      <input class="page-target" type="hidden" name="page" value="run" />
+      <button class="btn primary-action" type="submit" {% if not ctx.access.can_write %}disabled title="{{ ctx.access.write_block_reason }}"{% endif %}>Start verification</button>
+    </form>
+    <a class="text-nowrap" href="/problems/{{ ctx.problem.slug }}/run/new">Customize verification</a>
+  </div>
 </div>
 {% include "_flash_message.html" %}
 {% if runs %}
+<div class="verification-list-wrap">
 <table class="table-base verification-list-table">
   <tr>
-    <th>Created</th>
-    <th>Source</th>
+    <th class="verification-list-created-head">Created</th>
+    <th class="verification-list-source-head">Source</th>
     <th class="verification-list-kind-head">Kind</th>
     <th class="verification-list-status-head">Status</th>
     <th class="verification-list-reason-head">Reason</th>
-    <th>Actions</th>
+    <th class="verification-list-actions-head">Actions</th>
   </tr>
   {% for r in runs %}
+  {% set created_parts = (r.created_at | local_time).split(' ', 1) %}
   <tr class="{{ 'verification-row-failed' if r.is_failed else '' }}">
-    <td>
-      <a href="/problems/{{ ctx.problem.slug }}/run/details?verification_id={{ r.id }}">{{ r.created_at | local_time }}</a>
+    <td class="verification-list-created-cell">
+      <a href="/problems/{{ ctx.problem.slug }}/run/details?verification_id={{ r.id }}"><span class="verification-list-created-date">{{ created_parts[0] }}</span>{% if created_parts|length > 1 %} <span class="verification-list-created-time">{{ created_parts[1] }}</span>{% endif %}</a>
     </td>
-    <td>{{ r.source_display }}</td>
+    <td class="verification-list-source-cell">{{ r.source_display }}</td>
     <td class="verification-list-kind-cell">{{ r.kind }}</td>
     <td class="verification-list-status-cell">
       {% if r.status_tone == "warn" %}
@@ -65,7 +73,8 @@
   </tr>
   {% endfor %}
 </table>
+</div>
 {% else %}
-<p class="muted">No verification yet. Start one from <a href="/problems/{{ ctx.problem.slug }}/run/new">Run solutions</a>.</p>
+<p class="muted">No verification yet. Start the default verification above, or <a href="/problems/{{ ctx.problem.slug }}/run/new">customize a verification</a>.</p>
 {% endif %}
 {% endblock %}

@@ -127,7 +127,7 @@ def _render_merge(
     )
     require_write_access(ctx)
     ctx["merge_ui"] = True
-    ctx["page_title"] = "Update Workspace"
+    ctx["page_title"] = "Review Published Changes"
     return template_response(
         request,
         "merge.html",

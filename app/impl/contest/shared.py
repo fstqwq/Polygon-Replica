@@ -56,19 +56,18 @@ _CONTEST_CJK_PREAMBLE_LINES = [
 ]
 
 
-def _contest_nav(contest_slug: str, active: str) -> list[dict[str, str]]:
+def _contest_nav(contest_slug: str, active: str) -> list[dict[str, str | bool]]:
     base = f"/contests/{contest_slug}"
     return [
-        {"key": "overview", "label": "Overview", "href": f"{base}/overview", "active": "1" if active == "overview" else "0"},
-        {"key": "problems", "label": "Problems", "href": f"{base}/problems", "active": "1" if active == "problems" else "0"},
-        {"key": "readiness", "label": "Readiness", "href": f"{base}/readiness", "active": "1" if active == "readiness" else "0"},
-        {"key": "properties", "label": "Properties", "href": f"{base}/properties", "active": "1" if active == "properties" else "0"},
-        {"key": "access", "label": "Access", "href": f"{base}/access", "active": "1" if active == "access" else "0"},
+        {"key": "overview", "label": "Overview", "href": f"{base}/overview", "active": active == "overview"},
+        {"key": "problems", "label": "Problems", "href": f"{base}/problems", "active": active == "problems"},
+        {"key": "properties", "label": "Properties", "href": f"{base}/properties", "active": active == "properties"},
+        {"key": "access", "label": "Access", "href": f"{base}/access", "active": active == "access"},
         {
             "key": "packages",
             "label": "Statements & Builds",
             "href": f"{base}/packages",
-            "active": "1" if active == "packages" else "0",
+            "active": active == "packages",
         },
     ]
 

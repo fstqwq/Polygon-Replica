@@ -23,7 +23,7 @@
   {% if part == 'access' %}{% set inferred_problem_title.value = 'Manage Access' %}{% endif %}
   {% if part == 'files' %}{% set inferred_problem_title.value = 'Files' %}{% endif %}
   {% if part == 'workspace' %}{% set inferred_problem_title.value = 'Workspace' %}{% endif %}
-  {% if part == 'merge' %}{% set inferred_problem_title.value = 'Update Workspace' %}{% endif %}
+  {% if part == 'merge' %}{% set inferred_problem_title.value = 'Review Published Changes' %}{% endif %}
   {% if part == 'history' %}{% set inferred_problem_title.value = 'Revision History' %}{% endif %}
   {% endif %}
   {% endfor %}
@@ -33,8 +33,8 @@
   <title>{% if page_title %}{{ page_title }} - {% endif %}{{ ui_browser_title }}</title>
   <link rel="icon" href="/static/favicon.ico?v=20260427-01" sizes="any" />
   <link rel="icon" href="/static/favicon.png?v=20260427-01" type="image/png" />
-  <link rel="stylesheet" href="/static/style.css?v=20260807-02" />
-  <script src="/static/ui.js?v=20260807-01" defer></script>
+  <link rel="stylesheet" href="/static/style.css?v=20260808-29" />
+  <script src="/static/ui.js?v=20260808-29" defer></script>
 </head>
 <body class="problem-layout{% if ctx.topbar_max_1400 %} topbar-max-1400{% endif %}{% block body_class %}{% endblock %}">
   {% set flash_presenter = 'topbar' %}
@@ -45,7 +45,7 @@
     {% include "_topbar_common.html" %}
   </header>
 
-  <div class="problem-page-frame{% if ctx.page_wide_content %} page-frame-wide{% endif %}">
+  <div class="workbench-frame{% if ctx.page_wide_content %} page-frame-wide{% endif %}">
     {% set nav_status = ctx.nav_status if ctx.nav_status is defined else {} %}
     {% set problem_mode = ctx.problem_mode if ctx.problem_mode is defined else "pass-fail" %}
     {% set statement_meta_nav = nav_status.get('statement_languages', {}) %}
@@ -73,149 +73,108 @@
     {% endif %}
     {% endfor %}
     {% endif %}
-    <div class="problem-context-bar">
-      <div class="problem-context-identity">
-        <h1 class="problem-context-title">{{ ctx.problem.slug }}</h1>
-        <button
-          class="problem-copy-button problem-context-copy-button"
-          type="button"
-          data-copy-text="{{ ctx.problem.slug }}"
-          data-copy-label="Copy problem slug"
-          data-copy-done-label="Copied problem slug"
-          aria-label="Copy problem slug"
-        >
-          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-            <path fill="currentColor" d="M16 1H4C2.9 1 2 1.9 2 3V15H4V3H16V1ZM19 5H8C6.9 5 6 5.9 6 7V21C6 22.1 6.9 23 8 23H19C20.1 23 21 22.1 21 21V7C21 5.9 20.1 5 19 5ZM19 21H8V7H19V21Z"></path>
-          </svg>
-        </button>
+    <div class="workbench-context-bar problem-context-bar">
+      <div class="problem-context-main">
+        <div class="problem-context-identity">
+          <h1 class="problem-context-title">{{ ctx.problem.slug }}</h1>
+          <button
+            class="problem-copy-button problem-context-copy-button"
+            type="button"
+            data-copy-text="{{ ctx.problem.slug }}"
+            data-copy-label="Copy problem slug"
+            data-copy-done-label="Copied problem slug"
+            aria-label="Copy problem slug"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <path fill="currentColor" d="M16 1H4C2.9 1 2 1.9 2 3V15H4V3H16V1ZM19 5H8C6.9 5 6 5.9 6 7V21C6 22.1 6.9 23 8 23H19C20.1 23 21 22.1 21 21V7C21 5.9 20.1 5 19 5ZM19 21H8V7H19V21Z"></path>
+            </svg>
+          </button>
+        </div>
+        {% if ctx.general_cfg is defined %}
+        <div class="problem-context-meta">
+          <a
+            class="problem-context-meta-pill problem-context-meta-pill-action"
+            href="#statement-settings-popup"
+            data-popup-open="statement-settings-popup"
+            aria-label="Edit time and memory limits"
+            title="Edit time and memory limits"
+          >
+            <svg class="problem-context-meta-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <path fill="currentColor" d="M19.14 12.94c.04-.31.06-.63.06-.94s-.02-.63-.07-.94l2.03-1.58-1.92-3.32-2.39.96a7.18 7.18 0 0 0-1.62-.94L14.87 3h-3.84l-.36 3.18c-.58.24-1.12.55-1.62.94l-2.39-.96-1.92 3.32 2.03 1.58c-.05.31-.08.64-.08.94s.03.63.08.94l-2.03 1.58 1.92 3.32 2.39-.96c.5.39 1.04.7 1.62.94l.36 3.18h3.84l.36-3.18c.58-.24 1.12-.55 1.62-.94l2.39.96 1.92-3.32-2.02-1.58ZM12.95 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7Z"></path>
+            </svg>
+            <span class="problem-context-meta-pill-item">{{ ctx.general_cfg.time_limit_ms }}ms</span>
+            <span class="problem-context-meta-pill-item">{{ ctx.general_cfg.memory_limit_mb }}MB</span>
+            {% if ctx.general_cfg.pass_limit > 1 %}
+            <span class="problem-context-meta-pill-item accent-gradient-text">{{ ctx.general_cfg.pass_limit }} passes</span>
+            {% endif %}
+            {% if ctx.general_cfg.mode != 'pass-fail' %}
+            <span class="problem-context-meta-pill-item accent-gradient-text">{{ ctx.general_cfg.mode }}</span>
+            {% endif %}
+          </a>
+        </div>
+        {% endif %}
       </div>
-      {% if ctx.general_cfg is defined %}
-      <div class="problem-context-meta">
-        <a
-          class="problem-context-meta-pill problem-context-meta-pill-action"
-          href="#statement-settings-popup"
-          data-popup-open="statement-settings-popup"
-          aria-label="Edit metadata"
-        >
-          <span class="problem-context-meta-pill-item">{{ ctx.general_cfg.time_limit_ms }}ms</span>
-          <span class="problem-context-meta-pill-item">{{ ctx.general_cfg.memory_limit_mb }}MB</span>
-          {% if ctx.general_cfg.pass_limit > 1 %}
-          <span class="problem-context-meta-pill-item accent-gradient-text">{{ ctx.general_cfg.pass_limit }} passes</span>
-          {% endif %}
-          {% if ctx.general_cfg.mode != 'pass-fail' %}
-          <span class="problem-context-meta-pill-item accent-gradient-text">{{ ctx.general_cfg.mode }}</span>
-          {% endif %}
-        </a>
-      </div>
-      {% endif %}
     </div>
-    <nav class="problem-submenu" aria-label="Problem sections">
-      <div class="problem-submenu-item">
-        <a data-page="statement" href="/problems/{{ ctx.problem.slug }}/statement">
-          <span class="submenu-head-line">
-              <strong class="submenu-status-heading">Statements</strong>
-          </span>
-          <span class="submenu-detail-line {{ 'submenu-status-danger' if statement_meta_nav.get('danger') else 'submenu-status-warn' if statement_meta_nav.get('warn') else '' }}">{{ statement_meta_nav.get("text", "-") }}</span>
-        </a>
-      </div>
+    <nav class="section-tabs problem-section-tabs" aria-label="Problem sections" data-problem-nav="1">
+      <a class="section-tab problem-section-tab" data-page="statement" href="/problems/{{ ctx.problem.slug }}/statement">
+        <span class="problem-section-tab-title">Statements</span>
+        <span class="problem-section-tab-status {{ 'section-tab-status-danger' if statement_meta_nav.get('danger') else 'section-tab-status-warn' if statement_meta_nav.get('warn') else '' }}">{{ statement_meta_nav.get("text", "-") }}</span>
+      </a>
       {% set checker_nav = nav_status.get('checker', {}) %}
       {% if problem_mode != "interactive" %}
-      <div class="problem-submenu-item">
-        <a data-page="checker" href="/problems/{{ ctx.problem.slug }}/checker">
-          <span class="submenu-head-line">
-            <span class="submenu-title">Checker</span>
-          </span>
-          <span
-            class="submenu-detail-line {{ 'submenu-status-danger' if checker_nav.get('danger') else '' }}"
-            {% if checker_nav.get('hint') %}data-tooltip="{{ checker_nav.get('hint') }}" aria-label="checker details"{% endif %}
-          >{{ checker_nav.get("text", "-") }}</span>
-        </a>
-      </div>
+      <a class="section-tab problem-section-tab" data-page="checker" href="/problems/{{ ctx.problem.slug }}/checker">
+        <span class="problem-section-tab-title">Checker</span>
+        <span class="problem-section-tab-status {{ 'section-tab-status-danger' if checker_nav.get('danger') else '' }}" {% if checker_nav.get('hint') %}data-tooltip="{{ checker_nav.get('hint') }}" aria-label="checker details"{% endif %}>{{ checker_nav.get("text", "-") }}</span>
+      </a>
       {% endif %}
       {% if problem_mode == "interactive" %}
-      <div class="problem-submenu-item">
-        <a data-page="interactor" href="/problems/{{ ctx.problem.slug }}/interactor">
-          <span class="submenu-head-line">
-            <span class="submenu-title">Interactor</span>
-          </span>
-          <span class="submenu-detail-line {{ 'submenu-status-danger' if nav_status.get('interactor', {}).get('danger') else '' }}">{{ nav_status.get("interactor", {}).get("text", "-") }}</span>
-        </a>
-      </div>
+      <a class="section-tab problem-section-tab" data-page="interactor" href="/problems/{{ ctx.problem.slug }}/interactor">
+        <span class="problem-section-tab-title">Interactor</span>
+        <span class="problem-section-tab-status {{ 'section-tab-status-danger' if nav_status.get('interactor', {}).get('danger') else '' }}">{{ nav_status.get("interactor", {}).get("text", "-") }}</span>
+      </a>
       {% endif %}
-      <div class="problem-submenu-item">
-        <a data-page="validator" href="/problems/{{ ctx.problem.slug }}/validator">
-          <span class="submenu-head-line">
-            <span class="submenu-title">Validator</span>
-          </span>
-          <span class="submenu-detail-line {{ 'submenu-status-danger' if nav_status.get('validator', {}).get('danger') else '' }}">{{ nav_status.get("validator", {}).get("text", "-") }}</span>
-        </a>
-      </div>
-      <div class="problem-submenu-item">
-        <a data-page="generators" href="/problems/{{ ctx.problem.slug }}/generators">
-          <span class="submenu-head-line">
-            <span class="submenu-title">Generators</span>
-          </span>
-          <span class="submenu-detail-line {{ 'submenu-status-danger' if nav_status.get('generators', {}).get('danger') else '' }}">{{ nav_status.get("generators", {}).get("text", "-") }}</span>
-        </a>
-      </div>
-      <div class="problem-submenu-item">
-        <a data-page="solutions" href="/problems/{{ ctx.problem.slug }}/solutions">
-          <span class="submenu-head-line">
-            <span class="submenu-title">Solutions</span>
-          </span>
-          <span class="submenu-detail-line {{ 'submenu-status-danger' if nav_status.get('solutions', {}).get('danger') else '' }}">
-            {{ nav_status.get("solutions", {}).get("text", "-") }}
-          </span>
-        </a>
-      </div>
-      <div class="problem-submenu-item">
-        <a data-page="tests" href="/problems/{{ ctx.problem.slug }}/tests">
-          <span class="submenu-head-line">
-            <span class="submenu-title">Tests</span>
-          </span>
-          <span class="submenu-detail-line {{ 'submenu-status-danger' if tests_nav.get('danger') else '' }}">
+      <a class="section-tab problem-section-tab" data-page="validator" href="/problems/{{ ctx.problem.slug }}/validator">
+        <span class="problem-section-tab-title">Validator</span>
+        <span class="problem-section-tab-status {{ 'section-tab-status-danger' if nav_status.get('validator', {}).get('danger') else '' }}">{{ nav_status.get("validator", {}).get("text", "-") }}</span>
+      </a>
+      <a class="section-tab problem-section-tab" data-page="generators" href="/problems/{{ ctx.problem.slug }}/generators">
+        <span class="problem-section-tab-title">Generators</span>
+        <span class="problem-section-tab-status {{ 'section-tab-status-danger' if nav_status.get('generators', {}).get('danger') else '' }}">{{ nav_status.get("generators", {}).get("text", "-") }}</span>
+      </a>
+      <a class="section-tab problem-section-tab" data-page="solutions" href="/problems/{{ ctx.problem.slug }}/solutions">
+        <span class="problem-section-tab-title">Solutions</span>
+        <span class="problem-section-tab-status {{ 'section-tab-status-danger' if nav_status.get('solutions', {}).get('danger') else '' }}">{{ nav_status.get("solutions", {}).get("text", "-") }}</span>
+      </a>
+      <a class="section-tab problem-section-tab" data-page="tests" href="/problems/{{ ctx.problem.slug }}/tests">
+        <span class="problem-section-tab-title">Tests</span>
+        <span class="problem-section-tab-status {{ 'section-tab-status-danger' if tests_nav.get('danger') else '' }}">
             {% if tests_nav.get('has_counts') %}
-            {{ tests_nav.get('total', 0) }} ({% set sample_count = tests_nav.get('sample', 0) | int %}{% if tests_nav.get('sample_zero') %}<span class="submenu-status-danger">no sample</span>{% elif sample_count == 1 %}1 sample{% else %}{{ sample_count }} samples{% endif %})
+            {{ tests_nav.get('total', 0) }} ({% set sample_count = tests_nav.get('sample', 0) | int %}{% if tests_nav.get('sample_zero') %}<span class="section-tab-status-danger">no sample</span>{% elif sample_count == 1 %}1 sample{% else %}{{ sample_count }} samples{% endif %})
             {% else %}
             {{ tests_nav.get("text", "-") }}
             {% endif %}
-          </span>
-        </a>
+        </span>
+      </a>
+      <div class="section-tab problem-section-tab problem-section-action-tab problem-section-action-tab-verification">
+        <a class="problem-section-tab-title problem-section-tab-title-link" data-page="run" href="/problems/{{ ctx.problem.slug }}/run" {% if verification_tooltip %}data-tooltip="{{ verification_tooltip }}" aria-label="verification {{ verification_mode }} details"{% endif %}>Verification</a>
+        <form class="problem-section-tab-action-form" method="post" action="/problems/{{ ctx.problem.slug }}/verification/start">
+          <input class="page-target" type="hidden" name="page" value="{{ verification_page_target.value }}" />
+          <button class="problem-section-tab-action-control" type="submit" {% if not ctx.access.can_write %}disabled title="{{ ctx.access.write_block_reason }}"{% endif %}>Start</button>
+        </form>
+        <span class="problem-section-tab-status {{ 'section-tab-status-danger' if verification_mode in ['none', 'failed'] else 'section-tab-status-warn' if verification_mode == 'stale' or verification_warn else '' }}">{{ verification_status }}</span>
       </div>
-      <div class="problem-submenu-item problem-submenu-item-run">
-        <div class="problem-submenu-run-block">
-          <span class="submenu-head-line" {% if verification_tooltip %}data-tooltip="{{ verification_tooltip }}" aria-label="verification {{ verification_mode }} details"{% endif %}>
-            <a data-page="run" class="submenu-head-link" href="/problems/{{ ctx.problem.slug }}/run">
-              <strong class="submenu-status-heading">Verification</strong>
-            </a>
-            <form class="inline-form verification-start-form" method="post" action="/problems/{{ ctx.problem.slug }}/verification/start">
-              <input class="page-target" type="hidden" name="page" value="{{ verification_page_target.value }}" />
-              <a class="linkish status-inline-link" href="#" data-submit-form="1" {% if not ctx.access.can_write %}aria-disabled="true" title="{{ ctx.access.write_block_reason }}"{% endif %}>(start)</a>
-            </form>
-          </span>
-          <a
-            data-page="run"
-            class="submenu-detail-line problem-submenu-run-status {{ 'submenu-status-danger' if verification_mode in ['none', 'failed'] else 'submenu-status-warn' if verification_mode == 'stale' or verification_warn else '' }}"
-            href="/problems/{{ ctx.problem.slug }}/run"
-            {% if verification_tooltip %}data-tooltip="{{ verification_tooltip }}" aria-label="verification {{ verification_mode }} details"{% endif %}
-          >{{ verification_status }}</a>
-        </div>
-      </div>
-      <div class="problem-submenu-item">
-        <a data-page="export" href="/problems/{{ ctx.problem.slug }}/export">
-          <span class="submenu-head-line">
-            <span class="submenu-title">Packages</span>
-          </span>
-          <span class="submenu-detail-line {{ 'submenu-status-danger' if nav_status.get('export', {}).get('danger') else '' }}">{{ nav_status.get("export", {}).get("text", "-") }}</span>
-        </a>
-      </div>
-      <div class="problem-submenu-item">
-        <a data-page="access" href="/problems/{{ ctx.problem.slug }}/access">
-          <span class="submenu-head-line">
-            <span class="submenu-title">Manage access</span>
-          </span>
-          <span class="submenu-detail-line {{ 'submenu-status-danger' if nav_status.get('access', nav_status.get('workspace', {})).get('danger') else '' }}">{{ nav_status.get("access", nav_status.get("workspace", {})).get("text", "-") }}</span>
-        </a>
+      {% set export_nav = nav_status.get('export', {}) %}
+      <div class="section-tab problem-section-tab problem-section-action-tab">
+        <a class="problem-section-tab-title problem-section-tab-title-link" data-page="export" href="/problems/{{ ctx.problem.slug }}/export">Packages</a>
+        {% if export_nav.get('download_href') %}
+        <a class="problem-section-tab-action-control" href="{{ export_nav.get('download_href') }}">Download</a>
+        {% else %}
+        <form class="problem-section-tab-action-form" method="post" action="/problems/{{ ctx.problem.slug }}/export/create">
+          <input type="hidden" name="export_type" value="icpc" />
+          <button class="problem-section-tab-action-control" type="submit" {% if not ctx.access.can_write or not ctx.workspace.head_commit %}disabled title="{{ ctx.access.write_block_reason if not ctx.access.can_write else 'Commit changes before building a package' }}"{% endif %}>Build</button>
+        </form>
+        {% endif %}
+        <span class="problem-section-tab-status {{ 'section-tab-status-danger' if export_nav.get('danger') else '' }}">{{ export_nav.get("text", "-") }}</span>
       </div>
     </nav>
     <div class="page-grid{% if ctx.page_wide_content %} page-grid-wide{% endif %}">
@@ -224,34 +183,26 @@
       </main>
       <aside class="side-panel">
         <section class="action-card">
-          <h3>Workspace</h3>
+          <div class="workspace-card-head">
+            <h3>Workspace</h3>
+            <a class="workspace-side-link" href="/problems/{{ ctx.problem.slug }}/access"{% if current_path.endswith('/access') %} aria-current="page"{% endif %}>Manage access</a>
+          </div>
           {% set ws_revision = ctx.workspace_revision if ctx.workspace_revision is defined else {} %}
           {% set local_rev_raw = ws_revision.get('local') if ws_revision else none %}
           {% set published_rev_raw = ws_revision.get('upstream') if ws_revision else none %}
           {% set local_rev = ('v' ~ local_rev_raw) if local_rev_raw is not none else 'none' %}
           {% set published_rev = ('v' ~ published_rev_raw) if published_rev_raw is not none else 'none' %}
-          <div class="workspace-revision{{ ' workspace-revision-alert' if ctx.workspace_revision_alert else '' }}">
-            <div class="workspace-revision-head">
-              {% if ctx.workspace_needs_update %}
-              <span class="workspace-revision-state">new revision available</span>
-              {% endif %}
-            </div>
-            <p class="workspace-revision-inline">Base <strong>{{ local_rev }}</strong> / Upstream <strong>{{ published_rev }}</strong></p>
-          </div>
-          {% if ctx.workspace_needs_update %}
-          <div class="workspace-update-row">
-            <form class="inline-form action-link-form" method="post" action="/problems/{{ ctx.problem.slug }}/merge/start">
-              <button class="button-link workspace-side-button" type="submit" {% if not ctx.access.can_write %}disabled title="{{ ctx.access.write_block_reason }}"{% endif %}>Review published changes</button>
-            </form>
-          </div>
-          {% endif %}
-          <div class="workspace-links">
-            <a class="workspace-side-link" href="/problems/{{ ctx.problem.slug }}/history">View Revision History</a>
-            <span class="workspace-link-sep" aria-hidden="true">/</span>
-            <a class="workspace-side-link" href="/problems/{{ ctx.problem.slug }}/files">Browse Files</a>
+          <div class="workspace-revision">
+            <p class="workspace-revision-inline{{ ' revision-alert' if ctx.workspace_revision_alert else '' }}">Base <strong>{{ local_rev }}</strong> / Upstream <strong>{{ published_rev }}</strong></p>
           </div>
           <div class="workspace-actions">
+            {% if ctx.workspace_needs_update %}
+            <form class="action-link-form" method="post" action="/problems/{{ ctx.problem.slug }}/merge/start">
+              <button class="button-link primary-action workspace-side-button" type="submit" {% if not ctx.access.can_write %}disabled title="{{ ctx.access.write_block_reason }}"{% endif %}>Review published changes</button>
+            </form>
+            {% else %}
             <a class="button-link primary-action workspace-side-button" href="/problems/{{ ctx.problem.slug }}/workspace">Review and publish</a>
+            {% endif %}
           </div>
           {% if ctx.workspace_changes.total > 0 %}
           {{ change_badges(ctx.workspace_changes.counts) }}
@@ -269,6 +220,11 @@
           {% if not ctx.access.can_write %}
           <p>Files are read-only.</p>
           {% endif %}
+          <div class="workspace-links workspace-card-nav">
+            <a class="workspace-side-link" href="/problems/{{ ctx.problem.slug }}/files">Browse Files</a>
+            <span class="workspace-link-sep" aria-hidden="true">/</span>
+            <a class="workspace-side-link" href="/problems/{{ ctx.problem.slug }}/history">Revision History</a>
+          </div>
         </section>
       </aside>
     </div>

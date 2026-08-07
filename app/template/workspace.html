@@ -34,7 +34,7 @@
 
     {% if ctx.workspace_needs_update %}
     <form method="post" action="/problems/{{ ctx.problem.slug }}/merge/start">
-      <button class="btn" type="submit" {% if not ctx.access.can_write %}disabled title="{{ ctx.access.write_block_reason }}"{% endif %}>Review published changes</button>
+      <button class="btn primary-action" type="submit" {% if not ctx.access.can_write %}disabled title="{{ ctx.access.write_block_reason }}"{% endif %}>Review published changes</button>
     </form>
     {% endif %}
 
@@ -45,7 +45,7 @@
     <form class="form-row" method="post" action="/problems/{{ ctx.problem.slug }}/revision/commit">
       <label for="revision-message">Message</label>
       <input id="revision-message" name="message" required />
-      <button class="btn" type="submit" {% if not ctx.access.can_write or ctx.workspace_needs_update %}disabled title="{{ ctx.access.write_block_reason if not ctx.access.can_write else 'Review the published changes first' }}"{% endif %}>Publish new revision</button>
+      <button class="btn{% if not ctx.workspace_needs_update %} primary-action{% endif %}" type="submit" {% if not ctx.access.can_write or ctx.workspace_needs_update %}disabled title="{{ ctx.access.write_block_reason if not ctx.access.can_write else 'Review the published changes first' }}"{% endif %}>Publish new revision</button>
     </form>
 
     {% if change_rows %}

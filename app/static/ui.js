@@ -599,7 +599,9 @@
   }
 
   function initNavActiveState() {
-    var pageLinks = document.querySelectorAll("a[data-page]");
+    var problemNav = document.querySelector("[data-problem-nav='1']");
+    if (!problemNav) return;
+    var pageLinks = problemNav.querySelectorAll("a[data-page]");
     if (!pageLinks.length) return;
 
     var parts = window.location.pathname
@@ -689,9 +691,16 @@
     pageLinks.forEach(function (el) {
       if (el.getAttribute("data-page") === page) {
         el.classList.add("active");
+        el.setAttribute("aria-current", "page");
       }
     });
-    document.querySelectorAll(".problem-submenu-item").forEach(function (item) {
+    problemNav.querySelectorAll(".problem-section-tab").forEach(function (item) {
+      var pageLink = item.matches("a[data-page]") ? item : item.querySelector("a[data-page]");
+      if (pageLink && pageLink.classList.contains("active")) {
+        item.classList.add("active");
+      }
+    });
+    problemNav.querySelectorAll(".problem-section-action-tab").forEach(function (item) {
       var pageLink = item.querySelector("a[data-page]");
       if (pageLink && pageLink.classList.contains("active")) {
         item.classList.add("active");

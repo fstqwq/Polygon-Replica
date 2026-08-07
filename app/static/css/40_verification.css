@@ -1,3 +1,13 @@
+.verification-list-wrap {
+  width: 100%;
+  overflow-x: auto;
+}
+
+.verification-list-table {
+  min-width: 46rem;
+  table-layout: auto;
+}
+
 .verification-list-table td {
   vertical-align: middle;
 }
@@ -5,6 +15,20 @@
 .verification-list-table th {
   background: var(--surface);
   border-bottom-color: var(--line-strong);
+}
+
+.verification-list-table .verification-list-created-head,
+.verification-list-table .verification-list-created-cell {
+  width: 1%;
+  min-width: 9rem;
+  white-space: nowrap;
+}
+
+.verification-list-table .verification-list-source-head,
+.verification-list-table .verification-list-source-cell {
+  width: 1%;
+  min-width: 5.5rem;
+  white-space: nowrap;
 }
 
 .verification-list-table .verification-list-kind-head,
@@ -17,30 +41,59 @@
 
 .verification-list-table .verification-list-reason-head,
 .verification-list-table .verification-list-reason-cell {
-  width: 34rem;
-  max-width: 34rem;
+  width: auto;
+  min-width: 9rem;
 }
 
 .verification-list-table .verification-list-reason-cell {
-  min-width: 0;
+  max-width: 28rem;
 }
 
 .verification-list-reason-text {
   display: block;
-  width: 34rem;
-  max-width: 34rem;
+  max-width: 100%;
   overflow: hidden;
   overflow-wrap: anywhere;
   word-break: break-word;
   line-height: 1.35;
 }
 
+.verification-list-table .verification-list-actions-head,
 .verification-actions {
+  width: 1%;
+  min-width: 12rem;
   white-space: nowrap;
 }
 
 .verification-inline-action {
   margin-left: var(--space-3);
+}
+
+@media (max-width: 960px) {
+  .verification-list-created-date,
+  .verification-list-created-time {
+    display: block;
+  }
+
+  .verification-list-table .verification-list-created-head,
+  .verification-list-table .verification-list-created-cell {
+    min-width: 6.5rem;
+  }
+
+  .verification-actions {
+    white-space: normal;
+  }
+
+  .verification-actions > a,
+  .verification-actions > .verification-inline-action {
+    display: block;
+    width: max-content;
+  }
+
+  .verification-actions > .verification-inline-action {
+    margin-top: 2px;
+    margin-left: 0;
+  }
 }
 
 .verification-detail-topline {
@@ -448,30 +501,29 @@ section.verification-header-section {
   overflow-y: hidden;
 }
 
-.run-details-page.run-details-page-compact .verification-detail-wrap {
+body.verification-compact .run-details-page-compact .verification-detail-wrap {
   width: auto;
   min-width: 0;
   overflow: visible;
 }
 
-.run-details-page.run-details-page-compact .verification-detail-table {
-  min-width: 980px;
-}
-
 .verification-detail-table {
-  width: max-content;
-  min-width: max(100%, 980px);
-  table-layout: fixed;
   border-collapse: collapse;
   border-spacing: 0;
   border: 1px solid var(--line);
+}
+
+.verification-detail-table-compact {
+  width: max-content;
+  min-width: max(100%, 980px);
+  table-layout: fixed;
 }
 
 .verification-detail-table col.verification-col-test {
   width: 72px;
 }
 
-.verification-detail-table col.verification-col-solution {
+.verification-detail-table-compact col.verification-col-solution {
   width: 74px;
 }
 

@@ -1114,13 +1114,11 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
 
         page = general_page(_request(f"/problems/{problem}/statement"), problem, "alice")
         html = page.body.decode("utf-8", errors="replace")
+        self.assertIn('class="problem-section-tab-title">Verification</span>', html)
+        self.assertRegex(html, r'action="/problems/[^"]+/verification/start"')
         self.assertRegex(
             html,
-            r'<strong class="submenu-status-heading">Verification</strong>[\s\S]*?action="/problems/[^"]+/verification/start"[\s\S]*?<a\s+data-page="run"\s+class="submenu-detail-line problem-submenu-run-status submenu-status-warn"[^>]*>\s*stale\s*</a>',
-        )
-        self.assertRegex(
-            html,
-            r'<a\s+data-page="run"\s+class="submenu-detail-line problem-submenu-run-status submenu-status-warn"[^>]*data-tooltip="[^"]*changed: verification inputs[^"]*"[^>]*>\s*stale\s*</a>',
+            r'class="problem-section-tab-status section-tab-status-warn">\s*stale\s*</span>',
         )
         self.assertIn("changed: verification inputs", html)
 
@@ -1161,13 +1159,11 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
 
         page = general_page(_request(f"/problems/{problem}/statement"), problem, "alice")
         html = page.body.decode("utf-8", errors="replace")
+        self.assertIn('class="problem-section-tab-title">Verification</span>', html)
+        self.assertRegex(html, r'action="/problems/[^"]+/verification/start"')
         self.assertRegex(
             html,
-            r'<strong class="submenu-status-heading">Verification</strong>[\s\S]*?action="/problems/[^"]+/verification/start"[\s\S]*?<a\s+data-page="run"\s+class="submenu-detail-line problem-submenu-run-status submenu-status-warn"[^>]*>\s*stale\s*</a>',
-        )
-        self.assertRegex(
-            html,
-            r'<a\s+data-page="run"\s+class="submenu-detail-line problem-submenu-run-status submenu-status-warn"[^>]*data-tooltip="[^"]*changed: verification inputs[^"]*"[^>]*>\s*stale\s*</a>',
+            r'class="problem-section-tab-status section-tab-status-warn">\s*stale\s*</span>',
         )
         self.assertIn("changed: verification inputs", html)
 
@@ -3002,7 +2998,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         html = page.body.decode("utf-8", errors="replace")
         self.assertRegex(
             html,
-            r'<strong class="submenu-status-heading">Verification</strong>[\s\S]*?<a\s+data-page="run"\s+class="submenu-detail-line problem-submenu-run-status [^"]*"[^>]*>\s*running\s*</a>',
+            r'class="problem-section-tab-status [^"]*">\s*running\s*</span>',
         )
 
     def test_verification_start_shows_running_on_first_statement_render(self) -> None:
@@ -3037,7 +3033,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             html = page.body.decode("utf-8", errors="replace")
             self.assertRegex(
                 html,
-                r'<strong class="submenu-status-heading">Verification</strong>[\s\S]*?<a\s+data-page="run"\s+class="submenu-detail-line problem-submenu-run-status [^"]*"[^>]*>\s*running\s*</a>',
+                r'class="problem-section-tab-status [^"]*">\s*running\s*</span>',
             )
             row = config.verification_service.list_workspace_verification_rows(
                 problem_id,
@@ -3805,6 +3801,73 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         self.assertFalse(run_export_impl._run_detail_use_compact_layout({"detail_columns": ten_columns}))
         many_columns = [{"title": f"s{i}.py"} for i in range(11)]
         self.assertTrue(run_export_impl._run_detail_use_compact_layout({"detail_columns": many_columns}))
+
+    def test_run_detail_render_contract_switches_at_eleven_columns(self) -> None:
+        ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
+        problem_id = int(ctx["problem"]["id"])
+        workspace_id = int(ctx["workspace"]["id"])
+
+        for column_count in (10, 11, 12):
+            with self.subTest(column_count=column_count):
+                verification_id = f"ver-wide-{column_count}-{uuid.uuid4().hex[:8]}"
+                tasks: list[dict[str, object]] = []
+                for index in range(column_count):
+                    run_id = f"r-wide-{column_count}-{index}"
+                    source = f"solutions/solution-{index:02d}.cpp"
+                    tasks.append(
+                        {
+                            "id": f"vt-wide-{column_count}-{index}",
+                            "task_kind": "solution-run",
+                            "source_path": source,
+                            "logical_run_id": run_id,
+                            "test_name": "001.in",
+                            "expected_behavior": "accepted",
+                            "status": VerificationTaskStore.TASK_DONE,
+                            "verdict": "OK",
+                            "runtime_sec": (index + 1) / 1000,
+                            "cpu_sec": (index + 1) / 1000,
+                            "wall_sec": (index + 1) / 1000,
+                            "memory_kb": 1024 + index,
+                        }
+                    )
+                config.verification_service.begin_verification_record(
+                    verification_id=verification_id,
+                    problem_id=problem_id,
+                    workspace_id=workspace_id,
+                    signature="",
+                    kind=Kind.ALL,
+                    status="ok",
+                    detail={
+                        "status": "ok",
+                        "mode": "pass-fail",
+                        "tests_meta_rows": [
+                            {
+                                "test_name": "001.in",
+                                "kind": "manual",
+                                "id": "001",
+                            }
+                        ],
+                    },
+                )
+                config.verification_task_store.replace_graph(verification_id, tasks=tasks, edges=[])
+
+                page = run_details_page(
+                    _request("/problems/alice/sample/run/details", f"verification_id={verification_id}"),
+                    "alice/sample",
+                    "alice",
+                )
+                self.assertEqual(page.status_code, 200)
+                html = page.body.decode("utf-8", errors="replace")
+                if column_count >= 11:
+                    self.assertIn("verification-compact", html)
+                    self.assertIn("page-grid-wide", html)
+                    self.assertIn("verification-detail-table-compact", html)
+                    self.assertNotIn("verification-detail-table-regular", html)
+                else:
+                    self.assertNotIn("verification-compact", html)
+                    self.assertNotIn("page-grid-wide", html)
+                    self.assertIn("verification-detail-table-regular", html)
+                    self.assertNotIn("verification-detail-table-compact", html)
 
     def test_run_details_transcript_preview_shows_download_link(self) -> None:
         workspace_service.ensure_workspace("alice/sample", "alice")
@@ -5587,6 +5650,56 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         run_resp = run_page(_request("/problems/alice/sample/run"), "alice/sample", "alice")
         run_html = run_resp.body.decode("utf-8", errors="replace")
         self.assertIn(f"/problems/alice/sample/run/details?verification_id=ver-{run_id}", run_html)
+        self.assertEqual(run_html.count('action="/problems/alice/sample/verification/start"'), 2)
+        self.assertIn(
+            'class="section-tab problem-section-tab problem-section-action-tab problem-section-action-tab-verification"',
+            run_html,
+        )
+        self.assertIn('class="problem-section-tab-action-control" type="submit"', run_html)
+        self.assertIn('action="/problems/alice/sample/export/create"', run_html)
+        self.assertIn('>Build</button>', run_html)
+        self.assertIn('class="verification-list-wrap"', run_html)
+        self.assertIn('class="verification-list-created-cell"', run_html)
+        self.assertIn('class="verification-list-created-date"', run_html)
+        self.assertIn('class="verification-list-created-time"', run_html)
+        self.assertIn('class="verification-list-source-cell"', run_html)
+
+    def test_problem_nav_downloads_package_built_for_current_workspace(self) -> None:
+        workspace = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
+        marker = workspace / "notes" / f"package-nav-{uuid.uuid4().hex[:8]}.txt"
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text("package nav fixture\n", encoding="utf-8")
+        with config.workspace_service.workspace_lock(workspace):
+            head_commit = config.git_service.commit(
+                workspace,
+                "Prepare package navigation fixture",
+                "alice",
+                "alice@example.test",
+            )
+        self.assertTrue(head_commit)
+        current_export = {
+            "id": "exp current",
+            "verification_id": "ver-current",
+            "export_type": "icpc",
+            "filename": "sample current.zip",
+            "sha256": "abc",
+            "size_bytes": 123,
+            "source_commit": head_commit,
+            "created_at": "2026-08-08T00:00:00Z",
+        }
+        with (
+            patch.object(config.export_service, "latest_workspace_source_commit", return_value=head_commit),
+            patch.object(config.export_service, "latest_workspace_export_for_source", return_value=current_export),
+            patch.object(config.export_service, "export_archive_path", return_value=Path("/tmp/sample-current.zip")),
+        ):
+            response = run_page(_request("/problems/alice/sample/run"), "alice/sample", "alice")
+        html = response.body.decode("utf-8", errors="replace")
+        self.assertIn(
+            'href="/problems/alice/sample/exports/exp%20current/sample%20current.zip">Download</a>',
+            html,
+        )
+        self.assertNotIn('action="/problems/alice/sample/export/create"', html)
+
     def test_run_verification_details_prefers_verification_record_over_audit(self) -> None:
         from app.impl.workspace.run_view_lifecycle_card import load_verification_detail_summary
 
@@ -5785,5 +5898,5 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         page = run_page(_request("/problems/alice/sample/run"), "alice/sample", "alice")
         self.assertEqual(page.status_code, 200)
         html = page.body.decode("utf-8", errors="replace")
-        self.assertIn('class="submenu-status-heading">Verification</strong>', html)
-        self.assertIn(">failed</a>", html)
+        self.assertIn('class="problem-section-tab-title">Verification</span>', html)
+        self.assertIn(">failed</span>", html)

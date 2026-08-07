@@ -6,37 +6,41 @@
   <title>{{ ctx.contest.title }} - {{ ui_browser_title }}</title>
   <link rel="icon" href="/static/favicon.ico?v=20260427-01" sizes="any" />
   <link rel="icon" href="/static/favicon.png?v=20260427-01" type="image/png" />
-  <link rel="stylesheet" href="/static/style.css?v=20260807-02" />
+  <link rel="stylesheet" href="/static/style.css?v=20260808-29" />
 </head>
-<body>
+<body class="contest-layout">
   {% set flash_presenter = 'topbar' %}
   <header class="topbar">
     {% set top_user = ctx.user %}
     {% set top_settings_href = '/settings' %}
     {% set top_active_main = 'contests' %}
     {% include "_topbar_common.html" %}
-    <nav class="problem-submenu">
-      {% for item in ctx.contest_nav %}
-      <div class="problem-submenu-item">
-        <a data-page="{{ item.key }}" href="{{ item.href }}">
-          <span class="submenu-title">{{ item.label }}</span>
-          <span class="submenu-status">{{ 'active' if item.active == '1' else '' }}</span>
-        </a>
-      </div>
-      {% endfor %}
-    </nav>
-    <div class="problem-context-bar">
-      <strong class="problem-context-name">{{ ctx.contest.title }}</strong>
-      <span class="problem-context-slug">#{{ ctx.contest.slug }}</span>
-    </div>
   </header>
 
-  <div class="page-grid single-column">
-    <main class="content-shell">
-      <div class="container">{% block content %}{% endblock %}</div>
-    </main>
+  <div class="workbench-frame workbench-frame-readable">
+    <div class="workbench-context-bar contest-context-bar">
+      <div class="contest-context-identity">
+        <strong class="contest-context-name">{{ ctx.contest.title }}</strong>
+        <code class="contest-context-slug">{{ ctx.contest.slug }}</code>
+      </div>
+    </div>
+    <nav class="section-tabs" aria-label="Contest sections">
+      {% for item in ctx.contest_nav %}
+      <a
+        class="section-tab{% if item.active %} active{% endif %}"
+        href="{{ item.href }}"
+        {% if item.active %}aria-current="page"{% endif %}
+      >{{ item.label }}</a>
+      {% endfor %}
+    </nav>
+
+    <div class="page-grid single-column">
+      <main class="content-shell">
+        <div class="container">{% block content %}{% endblock %}</div>
+      </main>
+    </div>
   </div>
   {% include "_page_profile.html" %}
-  <script src="/static/ui.js?v=20260807-01" defer></script>
+  <script src="/static/ui.js?v=20260808-29" defer></script>
 </body>
 </html>

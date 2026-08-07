@@ -35,30 +35,6 @@
   padding: var(--space-3);
 }
 
-.workspace-revision-alert {
-  border: 0;
-  background: transparent;
-}
-
-.workspace-revision-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-3);
-}
-
-.workspace-revision-title {
-  font-size: var(--font-size-ui-md);
-  font-weight: 700;
-}
-
-.workspace-revision-state {
-  color: var(--danger);
-  font-size: var(--font-size-ui-sm);
-  font-weight: 700;
-  white-space: nowrap;
-}
-
 .workspace-revision-inline {
   margin: 0;
   padding: 2px 0 0;
@@ -70,20 +46,19 @@
   word-break: keep-all;
 }
 
-.workspace-update-row {
-  display: flex;
-  margin: 0 0 var(--space-4);
-}
-
-.workspace-update-row .action-link-form {
-  display: flex;
-  width: 100%;
+.workspace-revision-inline.revision-alert {
+  color: var(--danger);
 }
 
 .workspace-actions {
   display: grid;
   gap: var(--space-2);
-  margin: 0 0 var(--space-4);
+  margin: 0 0 var(--space-3);
+}
+
+.workspace-actions .action-link-form {
+  display: flex;
+  width: 100%;
 }
 
 .workspace-side-button {
@@ -91,15 +66,13 @@
   justify-content: flex-start;
 }
 
-.workspace-actions .button-link:not(.primary-action),
-.workspace-update-row .button-link {
+.workspace-actions .button-link:not(.primary-action) {
   background: var(--surface-alt);
   border-color: var(--line-strong);
   color: var(--text);
 }
 
-.workspace-actions .button-link:not(.primary-action):hover:not([aria-disabled="true"]),
-.workspace-update-row .button-link:hover:not(:disabled) {
+.workspace-actions .button-link:not(.primary-action):hover:not([aria-disabled="true"]) {
   background: var(--surface-hover);
 }
 
@@ -126,10 +99,33 @@
   margin: 0 0 var(--space-2);
 }
 
+.workspace-card-nav {
+  margin: var(--space-4) 0 0;
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--line);
+}
+
 .workspace-side-link {
   font-size: var(--font-size-ui-md);
   line-height: 1.35;
   white-space: nowrap;
+}
+
+.workspace-card-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin: 0 0 var(--space-3);
+}
+
+.workspace-card-head > h3 {
+  margin: 0;
+}
+
+.workspace-card-head .workspace-side-link {
+  font-size: var(--font-size-ui-sm);
+  font-weight: 600;
 }
 
 .revision-history-table .revision-history-col-tight {

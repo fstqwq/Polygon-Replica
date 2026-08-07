@@ -424,7 +424,9 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
         self.assertEqual(packages_page.status_code, 200)
         packages_html = packages_page.body.decode("utf-8", errors="replace")
         self.assertIn("Statements &amp; Builds", packages_html)
-        self.assertIn('<span class="submenu-title">Statements &amp; Builds</span>', packages_html)
+        self.assertIn('class="section-tab active"', packages_html)
+        self.assertIn('aria-current="page"', packages_html)
+        self.assertNotIn('class="problem-submenu"', packages_html)
 
     def test_contest_overview_best_effort_infers_location_and_date_from_statements(self) -> None:
         contest_slug = f"ui-contest-overview-{uuid.uuid4().hex[:8]}"
