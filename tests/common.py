@@ -89,6 +89,12 @@ def ensure_local_env() -> None:
         root / "var" / "lib" / "polygon-replica" / "artifacts"
     )
     os.environ["POLYGON_REPLICA_CACHE_ROOT"] = str(root / "var" / "cache" / "polygon-replica")
+    os.environ["POLYGON_REPLICA_CONTEST_SOURCE_ROOT"] = str(
+        root / "var" / "lib" / "polygon-replica" / "contest-sources"
+    )
+    os.environ["POLYGON_REPLICA_BACKUP_ROOT"] = str(
+        root / "var" / "backups" / "polygon-replica"
+    )
     os.environ["POLYGON_REPLICA_AUTH_COOKIE_SECURE"] = "1"
 
 
@@ -198,6 +204,8 @@ def _clear_runtime_files() -> None:
         Path(config.settings.workspace_root),
         Path(config.settings.artifacts_root),
         Path(config.settings.cache_root),
+        Path(config.settings.contest_source_root),
+        Path(config.settings.backup_root),
     }
     for root in roots:
         _rmtree_retry(root)

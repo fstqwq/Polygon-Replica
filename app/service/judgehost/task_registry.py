@@ -112,6 +112,16 @@ class JudgehostTaskRegistry:
                 "failed": self._status_counts["failed"],
             }
 
+    def maintenance_counts(self) -> dict[str, int]:
+        """Return each active admission state without aggregation."""
+
+        with self._lock.read_lock():
+            return {
+                "queued": self._status_counts["enqueuing"] + self._status_counts["queued"],
+                "leased": self._status_counts["leased"],
+                "reporting": self._status_counts["reporting"],
+            }
+
     def transition(
         self,
         task_id: str,

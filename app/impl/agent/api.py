@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import re
 from pathlib import Path
 from typing import cast
@@ -525,39 +524,6 @@ async def agent_verification_detail(request: Request, verification_id: str):
     return _plain_text(body, status_code=status_code)
 
 
-def _find_export_event(*, problem_id: int, actor_user_id: int, export_task_id: str) -> dict[str, object] | None:
-    for row in config.export_service.export_audit_rows(int(problem_id), int(actor_user_id), limit=200):
-        raw = str(row.get("details_json") or "")
-        if not raw:
-            continue
-        try:
-            payload = json.loads(raw)
-        except Exception:
-            continue
-        if not isinstance(payload, dict):
-            continue
-        if str(payload.get("export_task_id") or "") != str(export_task_id or ""):
-            continue
-        payload["created_at"] = str(row.get("created_at") or "")
-        return payload
-    return None
-
-
-def _find_export_record_for_event(*, problem_id: int, workspace_id: int, event: dict[str, object]) -> dict[str, object] | None:
-    filename = str(event.get("filename") or "")
-    export_type = str(event.get("export_type") or "")
-    source_commit = str(event.get("source_commit") or "")
-    for row in config.export_service.workspace_exports(int(problem_id), int(workspace_id), limit=100):
-        if str(row.get("filename") or "") != filename:
-            continue
-        if str(row.get("export_type") or "") != export_type:
-            continue
-        if str(row.get("source_commit") or "") != source_commit:
-            continue
-        return dict(row)
-    return None
-
-
 async def agent_export_start(request: Request):
     identity = require_agent_token(request, min_scope="readonly")
     ctx = _agent_problem_ctx(identity)
@@ -570,16 +536,7 @@ async def agent_export_start(request: Request):
     if not workspace_head:
         return json_error_response("no committed revision; commit changes first", status_code=400)
     source_commit = workspace_head
-    export_task_id = f"exp-api-{Path(verification_id).name}" if verification_id else f"exp-api-{allocate_run_id()}"
-    initial_details: dict[str, object] = {
-        "status": "running",
-        "verification_id": verification_id,
-        "export_type": export_type,
-        "source_commit": source_commit,
-        "filename": "",
-        "error": "",
-        "export_task_id": export_task_id,
-    }
+    export_job_id = f"exp-api-{Path(verification_id).name}" if verification_id else f"exp-api-{allocate_run_id()}"
     try:
         started = start_export_job(
             identity.problem_slug,
@@ -590,64 +547,73 @@ async def agent_export_start(request: Request):
             source_commit=source_commit,
             requested_verification_id=verification_id,
             requested_export_type=export_type,
-            export_task_id=export_task_id,
-            initial_details=initial_details,
+            export_job_id=export_job_id,
         )
         if not started:
             return json_error_response("export already running for this source", status_code=409)
-        audit(int(identity.user_id), int(identity.problem_id), "agent.export.start", {"export_task_id": export_task_id, "export_type": export_type})
-        return _json_body({"export_id": export_task_id, "status": "queued"})
+        return _json_body({"job_id": export_job_id, "status": "queued"})
     except ValueError as exc:
         return json_error_response(str(exc), status_code=400)
     except RuntimeError as exc:
         return json_error_response(str(exc), status_code=400)
 
 
-async def agent_export_status(request: Request, export_id: str):
+async def agent_export_status(request: Request, job_id: str):
     identity = require_agent_token(request, min_scope="readonly")
     ctx = _agent_problem_ctx(identity)
-    event = _find_export_event(problem_id=int(identity.problem_id), actor_user_id=int(identity.user_id), export_task_id=export_id)
-    if event is None:
+    job = config.export_service.export_job(
+        int(identity.problem_id),
+        int(ctx["workspace"]["id"]),
+        int(identity.user_id),
+        job_id,
+    )
+    if job is None:
         return json_error_response("export not found", status_code=404)
-    status = str(event.get("status") or "")
+    status = str(job.get("status") or "")
     payload: dict[str, object] = {
-        "export_id": export_id,
+        "job_id": job_id,
         "status": status,
-        "created_at": str(event.get("created_at") or ""),
-        "export_type": str(event.get("export_type") or ""),
-        "source_commit": str(event.get("source_commit") or ""),
-        "error": str(event.get("error") or ""),
+        "created_at": str(job.get("created_at") or ""),
+        "started_at": str(job.get("started_at") or ""),
+        "finished_at": str(job.get("finished_at") or ""),
+        "export_type": str(job.get("export_type") or ""),
+        "source_commit": str(job.get("source_commit") or ""),
+        "error": str(job.get("error") or ""),
     }
-    if status == "ok":
-        record = _find_export_record_for_event(problem_id=int(identity.problem_id), workspace_id=int(ctx["workspace"]["id"]), event=event)
-        if record is not None:
-            payload["download_path"] = f"/agent/v1/export/{export_id}/download"
-            payload["filename"] = str(record.get("filename") or "")
+    if status == "succeeded" and str(job.get("export_id") or "") and str(job.get("filename") or ""):
+        payload["download_path"] = f"/agent/v1/export/{job_id}/download"
+        payload["filename"] = str(job.get("filename") or "")
     return _json_body(payload)
 
 
-async def agent_export_download(request: Request, export_id: str):
+async def agent_export_download(request: Request, job_id: str):
     identity = require_agent_token(request, min_scope="readonly")
     ctx = _agent_problem_ctx(identity)
-    event = _find_export_event(problem_id=int(identity.problem_id), actor_user_id=int(identity.user_id), export_task_id=export_id)
-    if event is None or str(event.get("status") or "") != "ok":
+    job = config.export_service.export_job(
+        int(identity.problem_id),
+        int(ctx["workspace"]["id"]),
+        int(identity.user_id),
+        job_id,
+    )
+    if job is None or str(job.get("status") or "") != "succeeded":
         return json_error_response("export not ready", status_code=404)
-    record = _find_export_record_for_event(problem_id=int(identity.problem_id), workspace_id=int(ctx["workspace"]["id"]), event=event)
-    if record is None:
+    artifact_id = str(job.get("export_id") or "")
+    filename = str(job.get("filename") or "")
+    if not artifact_id or not filename:
         return json_error_response("export not ready", status_code=404)
     archive_path = config.export_service.export_archive_path(
         int(identity.problem_id),
         int(ctx["workspace"]["id"]),
-        str(record["id"]),
+        artifact_id,
         identity.problem_slug,
-        str(record["filename"]),
+        filename,
     )
     if archive_path is None:
         return json_error_response("export not ready", status_code=404)
     return Response(
         content=archive_path.read_bytes(),
         media_type="application/zip",
-        headers={"Content-Disposition": f'attachment; filename="{Path(str(record["filename"]).strip()).name}"'},
+        headers={"Content-Disposition": f'attachment; filename="{Path(filename).name}"'},
     )
 
 

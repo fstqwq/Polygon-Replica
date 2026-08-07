@@ -305,6 +305,10 @@ class ContestService:
                 except OSError:
                     break
                 current = current.parent
+            try:
+                root.rmdir()
+            except OSError:
+                pass
         self._store.delete_attachment_row(int(contest_id), safe_key)
         return safe_key
 
@@ -324,16 +328,13 @@ class ContestService:
         return base
 
     def contest_sources_base(self) -> Path:
-        base = (self.settings.cache_root / "contest-sources").resolve()
-        base.mkdir(parents=True, exist_ok=True)
-        return base
+        return self.settings.contest_source_root.resolve()
 
     def contest_source_root(self, contest_slug: str) -> Path:
         base = self.contest_sources_base()
         root = (base / str(contest_slug).strip()).resolve()
         if not self._path_within(base, root):
             raise ValueError("invalid contest source path")
-        root.mkdir(parents=True, exist_ok=True)
         return root
 
     def job_root(self, contest_slug: str, job_id: str) -> Path:

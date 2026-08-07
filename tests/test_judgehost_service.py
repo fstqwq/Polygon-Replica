@@ -3480,6 +3480,151 @@ class TestJudgehostService(E2ETestBase):
         self.assertEqual(hosts_after, hosts_before)
         self.assertNotIn("judgehost", hosts_after)
 
+    def test_maintenance_returns_raw_503_but_fetch_work_keeps_returning_empty_200(self) -> None:
+        from app.main import app
+
+        service = config.judgehost_task_service
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
+        gate = config.maintenance_service.admission_gate
+
+        with TestClient(app) as client:
+            with gate.locked():
+                gate.close_locked()
+            try:
+                ordinary = client.get("/")
+                self.assertEqual(ordinary.status_code, 503)
+                self.assertEqual(ordinary.headers.get("retry-after"), "5")
+                self.assertEqual(ordinary.headers.get("cache-control"), "no-store")
+                self.assertIn("text/plain", ordinary.headers.get("content-type", ""))
+                self.assertNotIn("<html", ordinary.text.lower())
+
+                agent = client.get("/agent/v1/auth/status")
+                self.assertEqual(agent.status_code, 503)
+                self.assertEqual(agent.headers.get("retry-after"), "5")
+
+                maintenance = client.get("/maintenance")
+                self.assertEqual(maintenance.status_code, 200)
+                self.assertIn("text/plain", maintenance.headers.get("content-type", ""))
+
+                runtime_config = client.get(
+                    "/api/v4/config",
+                    headers={"Authorization": "Bearer test-token"},
+                )
+                self.assertEqual(runtime_config.status_code, 200, runtime_config.text)
+                languages = client.get(
+                    "/api/v4/languages",
+                    headers={"Authorization": "Bearer test-token"},
+                )
+                self.assertEqual(languages.status_code, 200, languages.text)
+                heartbeat = client.post(
+                    "/api/v4/judgehosts",
+                    data={"hostname": "judgehost-maintenance"},
+                    headers={"Authorization": "Bearer test-token"},
+                )
+                self.assertEqual(heartbeat.status_code, 200, heartbeat.text)
+
+                for _index in range(3):
+                    fetch = client.post(
+                        "/api/v4/judgehosts/fetch-work",
+                        data={"hostname": "judgehost-maintenance", "max_batchsize": "1"},
+                        headers={"Authorization": "Bearer test-token"},
+                    )
+                    self.assertEqual(fetch.status_code, 200, fetch.text)
+                    self.assertEqual(fetch.json(), [])
+            finally:
+                with gate.locked():
+                    gate.open_locked()
+
+    def test_fetch_work_long_poll_does_not_hold_maintenance_admission_lock(self) -> None:
+        service = config.judgehost_task_service
+        scheduler = service.state.batch_scheduler
+        gate = config.maintenance_service.admission_gate
+        waiting = threading.Event()
+        release = threading.Event()
+        closed = threading.Event()
+        result: list[list[dict[str, object]]] = []
+
+        def wait_without_holding_admission(_timeout_sec: float) -> bool:
+            waiting.set()
+            release.wait(timeout=2)
+            return False
+
+        with patch.object(
+            scheduler,
+            "wait_for_ready_batch",
+            side_effect=wait_without_holding_admission,
+        ):
+            with gate.locked():
+                gate.open_locked()
+            fetch_thread = threading.Thread(
+                target=lambda: result.append(
+                    service.domjudge_fetch_work(
+                        "judgehost-maintenance-long-poll",
+                        max_batchsize=1,
+                    )
+                )
+            )
+            fetch_thread.start()
+            self.assertTrue(waiting.wait(timeout=2))
+
+            def close_admission() -> None:
+                with gate.locked():
+                    gate.close_locked()
+                    closed.set()
+
+            close_thread = threading.Thread(target=close_admission)
+            close_thread.start()
+            try:
+                self.assertTrue(closed.wait(timeout=1))
+                release.set()
+                fetch_thread.join(timeout=2)
+                self.assertFalse(fetch_thread.is_alive())
+                self.assertEqual(result, [[]])
+            finally:
+                release.set()
+                fetch_thread.join(timeout=2)
+                close_thread.join(timeout=2)
+                with gate.locked():
+                    gate.open_locked()
+
+    def test_fetch_work_does_not_wait_for_busy_maintenance_admission_lock(self) -> None:
+        service = config.judgehost_task_service
+        gate = config.maintenance_service.admission_gate
+        locked = threading.Event()
+        release = threading.Event()
+
+        def hold_admission() -> None:
+            with gate.locked():
+                gate.open_locked()
+                locked.set()
+                release.wait(timeout=2)
+
+        holder = threading.Thread(target=hold_admission)
+        holder.start()
+        try:
+            self.assertTrue(locked.wait(timeout=1))
+            started = time.monotonic()
+            result = service.domjudge_fetch_work(
+                "judgehost-maintenance-busy-lock",
+                max_batchsize=1,
+            )
+            elapsed = time.monotonic() - started
+            self.assertEqual(result, [])
+            self.assertLess(elapsed, 0.5)
+        finally:
+            release.set()
+            holder.join(timeout=2)
+            with gate.locked():
+                gate.open_locked()
+
     def test_domjudge_testcase_files_endpoint_allows_authenticated_no_peer_access(self) -> None:
         from app.main import app
 

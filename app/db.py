@@ -414,6 +414,26 @@ CREATE TABLE IF NOT EXISTS exports (
     FOREIGN KEY(problem_id) REFERENCES problems(id)
 );
 
+CREATE TABLE IF NOT EXISTS export_jobs (
+    id TEXT PRIMARY KEY,
+    problem_id INTEGER NOT NULL,
+    workspace_id INTEGER NOT NULL,
+    actor_user_id INTEGER NOT NULL,
+    verification_id TEXT NOT NULL DEFAULT '',
+    export_type TEXT NOT NULL,
+    source_commit TEXT NOT NULL,
+    status TEXT NOT NULL CHECK(status IN ('queued','running','succeeded','failed')),
+    export_id TEXT,
+    error TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    started_at TEXT,
+    finished_at TEXT,
+    FOREIGN KEY(problem_id) REFERENCES problems(id),
+    FOREIGN KEY(workspace_id) REFERENCES workspaces(id),
+    FOREIGN KEY(actor_user_id) REFERENCES users(id),
+    FOREIGN KEY(export_id) REFERENCES exports(id) ON DELETE SET NULL
+);
+
 CREATE TABLE IF NOT EXISTS audit_log (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     actor_user_id INTEGER,
@@ -478,10 +498,14 @@ CREATE INDEX IF NOT EXISTS idx_verification_sanity_check_messages_verification_c
 CREATE INDEX IF NOT EXISTS idx_verification_tests_meta_verification_ordinal ON verification_tests_meta(verification_id, ordinal);
 CREATE INDEX IF NOT EXISTS idx_verification_tasks_verification_task ON verification_tasks(verification_id, task_kind, source_path, test_name, id);
 CREATE INDEX IF NOT EXISTS idx_verification_tasks_verification_predecessor ON verification_tasks(verification_id, predecessor_task_id);
+CREATE INDEX IF NOT EXISTS idx_verification_tasks_predecessor ON verification_tasks(predecessor_task_id);
 CREATE INDEX IF NOT EXISTS idx_verification_tasks_verification_final ON verification_tasks(verification_id, final_status, task_kind);
 CREATE INDEX IF NOT EXISTS idx_verification_artifact_refs_verification_updated ON verification_artifact_refs(verification_id, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_exports_problem_created ON exports(problem_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_exports_verification_created ON exports(verification_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_export_jobs_workspace_actor_created ON export_jobs(workspace_id, actor_user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_export_jobs_problem_created ON export_jobs(problem_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_export_jobs_export ON export_jobs(export_id);
 CREATE INDEX IF NOT EXISTS idx_audit_problem_created ON audit_log(problem_id, created_at DESC);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_normalized_unique ON users(email_normalized) WHERE email_normalized <> '';
 CREATE INDEX IF NOT EXISTS idx_auth_sessions_user_created ON auth_sessions(user_id, created_at DESC);
@@ -497,6 +521,77 @@ CREATE INDEX IF NOT EXISTS idx_agent_access_requests_session_status_created ON a
 CREATE INDEX IF NOT EXISTS idx_agent_tokens_user_problem_active ON agent_tokens(user_id, problem_id, revoked_at, expires_at);
 CREATE INDEX IF NOT EXISTS idx_system_config_updated ON system_config(updated_at DESC);
 """
+
+
+def _split_sql_statements(script: str) -> tuple[str, ...]:
+    """Split a trusted SQLite schema script without executing implicit commits."""
+
+    statements: list[str] = []
+    pending = ""
+    for line in script.splitlines(keepends=True):
+        pending += line
+        if sqlite3.complete_statement(pending):
+            statement = pending.strip()
+            if statement:
+                statements.append(statement)
+            pending = ""
+    if pending.strip():
+        raise RuntimeError("incomplete SQLite schema statement")
+    return tuple(statements)
+
+
+def _table_name_from_create(statement: str) -> str | None:
+    prefix = "CREATE TABLE IF NOT EXISTS "
+    if not statement.upper().startswith(prefix):
+        return None
+    return statement[len(prefix) :].split("(", 1)[0].strip()
+
+
+def _table_name_from_create_index(statement: str) -> str:
+    marker = " ON "
+    marker_index = statement.upper().find(marker)
+    if marker_index < 0:
+        raise RuntimeError(f"invalid SQLite index statement: {statement!r}")
+    return statement[marker_index + len(marker) :].split("(", 1)[0].strip()
+
+
+_CURRENT_TABLE_STATEMENTS = {
+    table_name: statement
+    for statement in _split_sql_statements(SCHEMA)
+    if (table_name := _table_name_from_create(statement)) is not None
+}
+_CURRENT_INDEX_STATEMENTS = tuple(_split_sql_statements(SCHEMA_INDEXES))
+
+
+def current_schema_statements_for_tables(
+    table_names: Iterable[str],
+) -> tuple[str, ...]:
+    """Return current CREATE TABLE statements in canonical schema order."""
+
+    requested = frozenset(table_names)
+    missing = sorted(requested.difference(_CURRENT_TABLE_STATEMENTS))
+    if missing:
+        raise RuntimeError(
+            f"tables are absent from the current SQLite schema: {', '.join(missing)}"
+        )
+    return tuple(
+        statement
+        for table_name, statement in _CURRENT_TABLE_STATEMENTS.items()
+        if table_name in requested
+    )
+
+
+def current_index_statements_for_tables(
+    table_names: Iterable[str],
+) -> tuple[str, ...]:
+    """Return current CREATE INDEX statements for the selected tables."""
+
+    requested = frozenset(table_names)
+    return tuple(
+        statement
+        for statement in _CURRENT_INDEX_STATEMENTS
+        if _table_name_from_create_index(statement) in requested
+    )
 
 CURRENT_SCHEMA_COLUMNS: dict[str, tuple[str, ...]] = {
     "problems": ("id", "slug", "repo_name", "created_at"),
@@ -764,6 +859,21 @@ CURRENT_SCHEMA_COLUMNS: dict[str, tuple[str, ...]] = {
         "source_commit",
         "created_at",
     ),
+    "export_jobs": (
+        "id",
+        "problem_id",
+        "workspace_id",
+        "actor_user_id",
+        "verification_id",
+        "export_type",
+        "source_commit",
+        "status",
+        "export_id",
+        "error",
+        "created_at",
+        "started_at",
+        "finished_at",
+    ),
     "audit_log": ("id", "actor_user_id", "problem_id", "action", "details_json", "created_at"),
     "system_config": ("key", "value_json", "updated_at", "updated_by_user_id"),
     "smtp_config": (
@@ -916,6 +1026,53 @@ class DB:
                     continue
                 raise
         raise RuntimeError("write transaction failed")
+
+    def write_schema_reset_transaction(
+        self,
+        fn: Callable[[sqlite3.Connection], _TxResult],
+    ) -> _TxResult:
+        """Atomically replace tables, validating foreign keys before commit.
+
+        SQLite implements ``DROP TABLE`` as an implicit row delete while foreign
+        keys are enabled. A cleanup that replaces whole tables therefore needs a
+        dedicated connection with enforcement disabled before its transaction
+        begins. Every normal connection still enables enforcement in
+        :meth:`_prepare_connection`.
+        """
+
+        for attempt in range(max(1, int(self.LOCK_RETRY_ATTEMPTS))):
+            try:
+                with self.conn() as conn:
+                    conn.execute("PRAGMA foreign_keys=OFF")
+                    foreign_keys = conn.execute("PRAGMA foreign_keys").fetchone()
+                    if foreign_keys is None or int(foreign_keys[0]) != 0:
+                        raise RuntimeError(
+                            "could not disable SQLite foreign keys for schema reset"
+                        )
+                    conn.execute("BEGIN IMMEDIATE")
+                    try:
+                        result = fn(conn)
+                        violations = conn.execute(
+                            "PRAGMA foreign_key_check"
+                        ).fetchmany(10)
+                        if violations:
+                            details = [tuple(row) for row in violations]
+                            raise RuntimeError(
+                                "foreign key violations after schema reset: "
+                                f"{details!r}"
+                            )
+                        conn.commit()
+                    except Exception:
+                        conn.rollback()
+                        raise
+                    conn.execute("PRAGMA foreign_keys=ON")
+                    return result
+            except sqlite3.OperationalError as exc:
+                if is_sqlite_locked_error(exc) and attempt + 1 < int(self.LOCK_RETRY_ATTEMPTS):
+                    time.sleep(self.LOCK_RETRY_BASE_SEC * float(attempt + 1))
+                    continue
+                raise
+        raise RuntimeError("schema reset transaction failed")
 
     def execute(self, sql: str, params: Iterable[Any] = ()) -> None:
         """Execute a write statement with lock retry handling."""

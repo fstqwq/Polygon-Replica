@@ -12,12 +12,15 @@ services:
       - srv:/srv/polygon-replica
       - var:/var/lib/polygon-replica
       - cache:/tmp/polygon-replica
+      - "${POLYGON_REPLICA_BACKUP_HOST_DIR:?set POLYGON_REPLICA_BACKUP_HOST_DIR}:/var/backups/polygon-replica"
     environment:
       POLYGON_REPLICA_DB: /var/lib/polygon-replica/metadata.db
       POLYGON_REPLICA_BARE_ROOT: /srv/polygon-replica/git
       POLYGON_REPLICA_WORKSPACE_ROOT: /srv/polygon-replica/workspaces
       POLYGON_REPLICA_ARTIFACTS_ROOT: /srv/polygon-replica/export
       POLYGON_REPLICA_CACHE_ROOT: /tmp/polygon-replica
+      POLYGON_REPLICA_CONTEST_SOURCE_ROOT: /var/lib/polygon-replica/contest-sources
+      POLYGON_REPLICA_BACKUP_ROOT: /var/backups/polygon-replica
       POLYGON_REPLICA_AUTH_COOKIE_SECURE: "1"
     # bubblewrap inside the container needs unrestricted user-namespace
     # access. Host kernel must also have unprivileged userns enabled; see

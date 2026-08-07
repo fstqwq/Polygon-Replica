@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Callable
 
 from app.db import DB
-from app.service.disk.export_store import ExportStore
+from app.service.disk.export_store import ExportJobRow, ExportStore
 from app.service.platform.hashing import sha256_file
 from app.service.platform.runtime_blob_store import PayloadFile
 from app.service.platform.fs.op import extract_git_archive, remove_symlinks
@@ -82,12 +82,6 @@ class ExportService:
     def latest_workspace_source_commit(self, problem_id: int, workspace_id: int) -> str:
         return self._store.latest_workspace_source_commit(problem_id, workspace_id)
 
-    def download_source_commit(self, problem_id: int, workspace_id: int, verification_id: str, filename: str) -> str:
-        return self._store.download_source_commit(int(problem_id), int(workspace_id), verification_id, filename)
-
-    def workspace_exports(self, problem_id: int, workspace_id: int, *, limit: int) -> list[dict[str, object]]:
-        return self._store.workspace_exports(int(problem_id), int(workspace_id), limit=limit)
-
     def export_archive_path(self, problem_id: int, workspace_id: int, export_id: str, problem_slug: str, filename: str) -> Path | None:
         row = self._store.export_archive_row(int(problem_id), int(workspace_id), export_id)
         if row is None:
@@ -104,8 +98,87 @@ class ExportService:
             return None
         return candidate
 
-    def export_audit_rows(self, problem_id: int, actor_user_id: int, *, limit: int) -> list[dict[str, str]]:
-        return self._store.export_audit_rows(int(problem_id), int(actor_user_id), limit=limit)
+    def workspace_export_jobs(
+        self,
+        problem_id: int,
+        workspace_id: int,
+        actor_user_id: int,
+        *,
+        limit: int,
+    ) -> list[ExportJobRow]:
+        return self._store.workspace_export_jobs(
+            int(problem_id),
+            int(workspace_id),
+            int(actor_user_id),
+            limit=limit,
+        )
+
+    def export_job(
+        self,
+        problem_id: int,
+        workspace_id: int,
+        actor_user_id: int,
+        job_id: str,
+    ) -> ExportJobRow | None:
+        return self._store.export_job(
+            int(problem_id),
+            int(workspace_id),
+            int(actor_user_id),
+            job_id,
+        )
+
+    def create_export_job(
+        self,
+        *,
+        job_id: str,
+        problem_id: int,
+        workspace_id: int,
+        actor_user_id: int,
+        verification_id: str,
+        export_type: str,
+        source_commit: str,
+    ) -> None:
+        self._store.create_export_job(
+            job_id=job_id,
+            problem_id=int(problem_id),
+            workspace_id=int(workspace_id),
+            actor_user_id=int(actor_user_id),
+            verification_id=verification_id,
+            export_type=export_type,
+            source_commit=source_commit,
+        )
+
+    def mark_export_job_running(
+        self,
+        job_id: str,
+        *,
+        verification_id: str,
+        source_commit: str,
+    ) -> None:
+        self._store.mark_export_job_running(
+            job_id,
+            verification_id=verification_id,
+            source_commit=source_commit,
+        )
+
+    def mark_export_job_succeeded(
+        self,
+        job_id: str,
+        *,
+        verification_id: str,
+        export_id: str,
+    ) -> None:
+        self._store.mark_export_job_succeeded(
+            job_id,
+            verification_id=verification_id,
+            export_id=export_id,
+        )
+
+    def mark_export_job_failed(self, job_id: str, error: str) -> None:
+        self._store.mark_export_job_failed(job_id, error)
+
+    def fail_interrupted_export_jobs(self) -> int:
+        return self._store.fail_interrupted_export_jobs()
 
     def _yaml_quote(self, value: str) -> str:
         return "'" + value.replace("'", "''") + "'"
@@ -452,41 +525,6 @@ class ExportService:
             return value if value >= 0 else None
         except Exception:
             return None
-
-    def _cleanup_previous_revision_exports(
-        self,
-        *,
-        problem_slug: str,
-        problem_id: int,
-        workspace_id: int | None,
-        export_type: str,
-        source_commit: str,
-        keep_export_id: str,
-    ) -> None:
-        if workspace_id is None:
-            return
-        rows = self._store.duplicate_exports(
-            problem_id=int(problem_id),
-            workspace_id=int(workspace_id),
-            export_type=export_type,
-            source_commit=source_commit,
-            keep_export_id=keep_export_id,
-        )
-        for row in rows:
-            old_id = row["id"]
-            old_filename = row["filename"]
-            if old_id and old_filename:
-                try:
-                    old_file = self._export_path(problem_slug, old_id, old_filename).resolve()
-                    if old_file.exists() and old_file.is_file() and (not old_file.is_symlink()):
-                        old_file.unlink()
-                    old_dir = old_file.parent
-                    if old_dir.exists() and old_dir.is_dir() and (not old_dir.is_symlink()):
-                        old_dir.rmdir()
-                except Exception:
-                    pass
-            if old_id:
-                self._store.delete_export(old_id)
 
     def _load_problem_config(self, snapshot: Path) -> dict:
         cfg_path = snapshot / "config" / "problem.json"
@@ -1145,14 +1183,6 @@ class ExportService:
                 sha256=digest,
                 size_bytes=int(out.stat().st_size),
                 source_commit=stored_source_commit,
-            )
-            self._cleanup_previous_revision_exports(
-                problem_slug=str(problem_row["slug"]),
-                problem_id=int(problem_row["id"]),
-                workspace_id=resolved_workspace_id,
-                export_type=resolved_export_type,
-                source_commit=stored_source_commit,
-                keep_export_id=export_id,
             )
             return out
         finally:

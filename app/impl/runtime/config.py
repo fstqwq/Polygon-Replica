@@ -34,6 +34,11 @@ from app.service.runtime.state_service import RuntimeStateService
 from app.service.problem import test_spec
 from app.service.runtime import toolchain
 from app.service.platform.worker_queue import WorkerFuture, WorkerQueueService
+from app.service.platform.maintenance import (
+    ArtifactCleanupService,
+    MaintenanceCoordinator,
+    validate_runtime_startup_preconditions,
+)
 from app.service.repository import workspace
 from app.setting import Settings, load_settings
 from app.service.platform import workspace_path
@@ -61,6 +66,8 @@ class RuntimeConfig:
     judgehost_task_service: Judgehost = field(init=False)
     export_service: ExportService = field(init=False)
     worker_queue_service: WorkerQueueService = field(init=False)
+    artifact_cleanup_service: ArtifactCleanupService = field(init=False)
+    maintenance_service: MaintenanceCoordinator = field(init=False)
     system_config_service: SystemConfigService = field(init=False)
     smtp_config_service: SmtpConfigService = field(init=False)
     runtime_state_service: RuntimeStateService = field(init=False)
@@ -91,6 +98,16 @@ class RuntimeConfig:
             return existing
         return secrets.token_hex(32).encode("utf-8")
 
+    def _reset_process_job_tracking(self) -> None:
+        with self.preview_lock:
+            self.preview_inflight.clear()
+        with self.export_lock:
+            self.export_workers.clear()
+            self.export_inflight.clear()
+        with self.verification_lock:
+            self.verification_workers.clear()
+            self.verification_inflight.clear()
+
     def reload_runtime_values(self, *, include_restart_required: bool = False) -> dict[str, object]:
         runtime_overrides = self.system_config_service.refresh(
             include_restart_required=include_restart_required,
@@ -112,6 +129,7 @@ class RuntimeConfig:
         return runtime_overrides
 
     def __post_init__(self) -> None:
+        validate_runtime_startup_preconditions(self.settings)
         self.db = DB(self.settings.db_path)
         self.verification_task_store = VerificationTaskStore(self.db)
         self.system_config_service = SystemConfigService(self.db)
@@ -178,16 +196,34 @@ class RuntimeConfig:
             self.tex_compile_service,
             artifact_file_resolver=self.runtime_blob_store.descriptor,
         )
-        durable_log_raw = str(self.constants.WORKER_QUEUE_DURABLE_LOG or "").strip()
         durable_log_path = self.settings.cache_root / "runtime" / "worker-queue-events.jsonl"
-        if durable_log_raw:
-            durable_log_path = Path(durable_log_raw).expanduser().resolve()
         self.worker_queue_service = WorkerQueueService(
             worker_count=int(self.constants.WORKER_QUEUE_THREADS),
             history_limit=int(self.constants.WORKER_QUEUE_HISTORY_LIMIT),
             queue_capacity=int(self.constants.WORKER_QUEUE_CAPACITY),
             durable_history_limit=int(self.constants.WORKER_QUEUE_DURABLE_HISTORY_LIMIT),
             durable_log_path=durable_log_path,
+        )
+        self.artifact_cleanup_service = ArtifactCleanupService(
+            self.db,
+            self.settings,
+            self.runtime_cache_index,
+            self.runtime_blob_store,
+            self.worker_queue_service,
+            self.judgehost_task_service,
+            self.verification_task_store,
+            self._reset_process_job_tracking,
+        )
+        self.maintenance_service = MaintenanceCoordinator(
+            self.artifact_cleanup_service,
+            self.worker_queue_service,
+            self.judgehost_task_service,
+        )
+        self.worker_queue_service.set_admission_gate(
+            self.maintenance_service.admission_gate
+        )
+        self.judgehost_task_service.set_admission_gate(
+            self.maintenance_service.admission_gate
         )
         self.password_form_csrf_secret = self._resolve_password_form_csrf_secret()
 config = RuntimeConfig()

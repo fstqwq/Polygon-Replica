@@ -36,6 +36,8 @@ The bundled installer prepares runtime state under:
 ```text
 /srv/polygon-replica
 /var/lib/polygon-replica
+/var/lib/polygon-replica/contest-sources
+/var/backups/polygon-replica
 /tmp/polygon-replica
 ```
 
@@ -89,7 +91,33 @@ export POLYGON_REPLICA_BARE_ROOT=/srv/polygon-replica/git
 export POLYGON_REPLICA_WORKSPACE_ROOT=/srv/polygon-replica/workspaces
 export POLYGON_REPLICA_ARTIFACTS_ROOT=/srv/polygon-replica/export
 export POLYGON_REPLICA_CACHE_ROOT=/tmp/polygon-replica
+export POLYGON_REPLICA_CONTEST_SOURCE_ROOT=/var/lib/polygon-replica/contest-sources
+export POLYGON_REPLICA_BACKUP_ROOT=/var/backups/polygon-replica
 ```
+
+Contest sources are durable files outside Git and outside the generated artifact
+and runtime cache roots. Operator-managed archives under `backup_root` are
+permanent and are never touched by artifact cleanup.
+
+## Administrator Artifact Cleanup
+
+The Settings admin panel exposes one globally exclusive cleanup action. The
+confirmation deliberately includes generated previews, exports, export jobs,
+contest build artifacts, verification results, runtime cache, and all earlier
+audit history. It never deletes Git bare repositories, workspaces, contest source
+attachments, permanent backups, users, ACLs, contest definitions, or system/SMTP
+configuration.
+
+Admission is fail-fast: active HTTP work, queued/running worker jobs, or queued,
+leased, or reporting judgehost work produces `409` with busy counts. Accepted
+cleanup runs in a dedicated thread and redirects the administrator to the raw
+`/maintenance` status page. Ordinary UI, API, and Agent API requests receive raw
+`503` with `Retry-After: 5`; authenticated `/api/v4/*` endpoints remain available,
+and `fetch-work` returns `200 []` while dispatch is paused.
+
+The admission lock and maintenance state are process-local. Run exactly one app
+process/container; multi-process uvicorn workers and multiple app replicas are not
+supported by this cleanup design.
 
 DOMjudge executable scripts and retained payloads are immutable blobs under
 `cache_root/runtime/blobs`. Process-local cache metadata indexes those blobs.
@@ -248,7 +276,7 @@ HTTP redirect to /login or /problems
 Check runtime paths:
 
 ```bash
-ls -ld /srv/polygon-replica /var/lib/polygon-replica /tmp/polygon-replica
+ls -ld /srv/polygon-replica /var/lib/polygon-replica /var/lib/polygon-replica/contest-sources /tmp/polygon-replica
 ```
 
 ## Upgrade

@@ -5,20 +5,23 @@ from typing import TypedDict
 from app.db import DB, now_iso
 
 
-class WorkspaceExportRow(TypedDict):
+class ExportJobRow(TypedDict):
     id: str
+    problem_id: int
+    workspace_id: int
+    actor_user_id: int
     verification_id: str
     export_type: str
+    source_commit: str
+    status: str
+    export_id: str
+    error: str
+    created_at: str
+    started_at: str
+    finished_at: str
     filename: str
     sha256: str
     size_bytes: int
-    source_commit: str
-    created_at: str
-
-
-class ExportAuditRow(TypedDict):
-    created_at: str
-    details_json: str
 
 
 class WorkspaceExportContext(TypedDict):
@@ -29,11 +32,6 @@ class WorkspaceExportContext(TypedDict):
 class ProblemExportRow(TypedDict):
     id: int
     slug: str
-
-
-class DuplicateExportRow(TypedDict):
-    id: str
-    filename: str
 
 
 class ExportArchiveRow(TypedDict):
@@ -48,10 +46,11 @@ class ExportStore:
     def latest_workspace_source_commit(self, problem_id: int, workspace_id: int) -> str:
         row = self.db.fetch_one(
             """
-            SELECT source_commit
-            FROM exports
-            WHERE problem_id=? AND workspace_id=?
-            ORDER BY created_at DESC
+            SELECT j.source_commit
+            FROM export_jobs AS j
+            JOIN exports AS e ON e.id=j.export_id
+            WHERE j.problem_id=? AND j.workspace_id=? AND j.status='succeeded'
+            ORDER BY j.finished_at DESC,j.created_at DESC,j.id DESC
             LIMIT 1
             """,
             [problem_id, workspace_id],
@@ -60,74 +59,212 @@ class ExportStore:
             return ""
         return str(row["source_commit"] or "")
 
-    def download_source_commit(
+    def workspace_export_jobs(
         self,
         problem_id: int,
         workspace_id: int,
-        verification_id: str,
-        filename: str,
-    ) -> str:
-        row = self.db.fetch_one(
-            """
-            SELECT source_commit
-            FROM exports
-            WHERE problem_id=? AND workspace_id=? AND verification_id=? AND filename=?
-            ORDER BY created_at DESC
-            LIMIT 1
-            """,
-            [problem_id, workspace_id, verification_id, filename],
-        )
-        if row is None:
-            return ""
-        return str(row["source_commit"] or "")
-
-    def workspace_exports(self, problem_id: int, workspace_id: int, *, limit: int) -> list[WorkspaceExportRow]:
+        actor_user_id: int,
+        *,
+        limit: int,
+    ) -> list[ExportJobRow]:
         rows = self.db.fetch_all(
             """
-            SELECT id,verification_id,export_type,filename,sha256,size_bytes,source_commit,created_at
-            FROM exports
-            WHERE problem_id=? AND workspace_id=?
-            ORDER BY created_at DESC
+            SELECT
+                j.id,j.problem_id,j.workspace_id,j.actor_user_id,j.verification_id,
+                j.export_type,j.source_commit,j.status,j.export_id,j.error,
+                j.created_at,j.started_at,j.finished_at,
+                e.filename,e.sha256,e.size_bytes
+            FROM export_jobs AS j
+            LEFT JOIN exports AS e ON e.id=j.export_id
+            WHERE j.problem_id=? AND j.workspace_id=? AND j.actor_user_id=?
+            ORDER BY j.created_at DESC,j.id DESC
             LIMIT ?
             """,
-            [problem_id, workspace_id, max(1, int(limit))],
+            [problem_id, workspace_id, actor_user_id, max(1, int(limit))],
         )
-        items: list[WorkspaceExportRow] = []
+        items: list[ExportJobRow] = []
         for row in rows:
             items.append(
                 {
                     "id": str(row["id"]),
+                    "problem_id": int(row["problem_id"]),
+                    "workspace_id": int(row["workspace_id"]),
+                    "actor_user_id": int(row["actor_user_id"]),
                     "verification_id": str(row["verification_id"] or ""),
                     "export_type": str(row["export_type"] or ""),
+                    "source_commit": str(row["source_commit"] or ""),
+                    "status": str(row["status"] or ""),
+                    "export_id": str(row["export_id"] or ""),
+                    "error": str(row["error"] or ""),
+                    "created_at": str(row["created_at"] or ""),
+                    "started_at": str(row["started_at"] or ""),
+                    "finished_at": str(row["finished_at"] or ""),
                     "filename": str(row["filename"] or ""),
                     "sha256": str(row["sha256"] or ""),
                     "size_bytes": int(row["size_bytes"] or 0),
-                    "source_commit": str(row["source_commit"] or ""),
-                    "created_at": str(row["created_at"] or ""),
                 }
             )
         return items
 
-    def export_audit_rows(self, problem_id: int, actor_user_id: int, *, limit: int) -> list[ExportAuditRow]:
+    def export_job(
+        self,
+        problem_id: int,
+        workspace_id: int,
+        actor_user_id: int,
+        job_id: str,
+    ) -> ExportJobRow | None:
         rows = self.db.fetch_all(
             """
-            SELECT created_at,details_json
-            FROM audit_log
-            WHERE problem_id=? AND actor_user_id=? AND action='export.create'
-            ORDER BY created_at DESC
-            LIMIT ?
+            SELECT
+                j.id,j.problem_id,j.workspace_id,j.actor_user_id,j.verification_id,
+                j.export_type,j.source_commit,j.status,j.export_id,j.error,
+                j.created_at,j.started_at,j.finished_at,
+                e.filename,e.sha256,e.size_bytes
+            FROM export_jobs AS j
+            LEFT JOIN exports AS e ON e.id=j.export_id
+            WHERE j.id=? AND j.problem_id=? AND j.workspace_id=? AND j.actor_user_id=?
+            LIMIT 1
             """,
-            [problem_id, actor_user_id, max(1, int(limit))],
+            [job_id, problem_id, workspace_id, actor_user_id],
         )
-        items: list[ExportAuditRow] = []
-        for row in rows:
-            items.append(
-                {
-                    "created_at": str(row["created_at"] or ""),
-                    "details_json": str(row["details_json"] or ""),
-                }
+        if not rows:
+            return None
+        row = rows[0]
+        return {
+            "id": str(row["id"]),
+            "problem_id": int(row["problem_id"]),
+            "workspace_id": int(row["workspace_id"]),
+            "actor_user_id": int(row["actor_user_id"]),
+            "verification_id": str(row["verification_id"] or ""),
+            "export_type": str(row["export_type"] or ""),
+            "source_commit": str(row["source_commit"] or ""),
+            "status": str(row["status"] or ""),
+            "export_id": str(row["export_id"] or ""),
+            "error": str(row["error"] or ""),
+            "created_at": str(row["created_at"] or ""),
+            "started_at": str(row["started_at"] or ""),
+            "finished_at": str(row["finished_at"] or ""),
+            "filename": str(row["filename"] or ""),
+            "sha256": str(row["sha256"] or ""),
+            "size_bytes": int(row["size_bytes"] or 0),
+        }
+
+    def create_export_job(
+        self,
+        *,
+        job_id: str,
+        problem_id: int,
+        workspace_id: int,
+        actor_user_id: int,
+        verification_id: str,
+        export_type: str,
+        source_commit: str,
+    ) -> None:
+        self.db.execute(
+            """
+            INSERT INTO export_jobs(
+                id,problem_id,workspace_id,actor_user_id,verification_id,
+                export_type,source_commit,status,export_id,error,
+                created_at,started_at,finished_at
             )
-        return items
+            VALUES(?,?,?,?,?,?,?,'queued',NULL,'',?,NULL,NULL)
+            """,
+            [
+                job_id,
+                problem_id,
+                workspace_id,
+                actor_user_id,
+                verification_id,
+                export_type,
+                source_commit,
+                now_iso(),
+            ],
+        )
+
+    def mark_export_job_running(
+        self,
+        job_id: str,
+        *,
+        verification_id: str,
+        source_commit: str,
+    ) -> None:
+        now_text = now_iso()
+
+        def transaction(connection) -> None:
+            row = connection.execute(
+                "SELECT status FROM export_jobs WHERE id=?",
+                [job_id],
+            ).fetchone()
+            if row is None:
+                raise RuntimeError(f"export job not found: {job_id}")
+            if str(row["status"]) != "queued":
+                raise RuntimeError(f"export job is not queued: {job_id}")
+            connection.execute(
+                """
+                UPDATE export_jobs
+                SET status='running',verification_id=?,source_commit=?,started_at=?,error=''
+                WHERE id=?
+                """,
+                [verification_id, source_commit, now_text, job_id],
+            )
+
+        self.db.write_transaction(transaction)
+
+    def mark_export_job_succeeded(
+        self,
+        job_id: str,
+        *,
+        verification_id: str,
+        export_id: str,
+    ) -> None:
+        now_text = now_iso()
+
+        def transaction(connection) -> None:
+            row = connection.execute(
+                "SELECT status FROM export_jobs WHERE id=?",
+                [job_id],
+            ).fetchone()
+            if row is None:
+                raise RuntimeError(f"export job not found: {job_id}")
+            if str(row["status"]) != "running":
+                raise RuntimeError(f"export job is not running: {job_id}")
+            connection.execute(
+                """
+                UPDATE export_jobs
+                SET status='succeeded',verification_id=?,export_id=?,error='',finished_at=?
+                WHERE id=?
+                """,
+                [verification_id, export_id, now_text, job_id],
+            )
+
+        self.db.write_transaction(transaction)
+
+    def mark_export_job_failed(self, job_id: str, error: str) -> None:
+        now_text = now_iso()
+        self.db.execute(
+            """
+            UPDATE export_jobs
+            SET status='failed',error=?,finished_at=?
+            WHERE id=? AND status IN ('queued','running')
+            """,
+            [error, now_text, job_id],
+        )
+
+    def fail_interrupted_export_jobs(self) -> int:
+        now_text = now_iso()
+
+        def transaction(connection) -> int:
+            cursor = connection.execute(
+                """
+                UPDATE export_jobs
+                SET status='failed',error='interrupted by application restart',finished_at=?
+                WHERE status IN ('queued','running')
+                """,
+                [now_text],
+            )
+            return max(0, int(cursor.rowcount))
+
+        return int(self.db.write_transaction(transaction))
 
     def workspace_export_context(self, workspace_id: int) -> WorkspaceExportContext | None:
         row = self.db.fetch_one(
@@ -145,37 +282,6 @@ class ExportStore:
             "username": str(row["username"] or ""),
             "path": str(row["path"] or ""),
         }
-
-    def duplicate_exports(
-        self,
-        *,
-        problem_id: int,
-        workspace_id: int,
-        export_type: str,
-        source_commit: str,
-        keep_export_id: str,
-    ) -> list[DuplicateExportRow]:
-        rows = self.db.fetch_all(
-            """
-            SELECT exports.id,exports.filename
-            FROM exports
-            WHERE exports.problem_id=? AND exports.workspace_id=? AND exports.export_type=? AND exports.source_commit=? AND exports.id<>?
-            ORDER BY exports.created_at DESC
-            """,
-            [int(problem_id), int(workspace_id), export_type, source_commit, keep_export_id],
-        )
-        items: list[DuplicateExportRow] = []
-        for row in rows:
-            items.append(
-                {
-                    "id": str(row["id"] or ""),
-                    "filename": str(row["filename"] or ""),
-                }
-            )
-        return items
-
-    def delete_export(self, export_id: str) -> None:
-        self.db.execute("DELETE FROM exports WHERE id=?", [export_id])
 
     def export_archive_row(self, problem_id: int, workspace_id: int, export_id: str) -> ExportArchiveRow | None:
         row = self.db.fetch_one(

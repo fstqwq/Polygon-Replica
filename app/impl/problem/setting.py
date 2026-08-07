@@ -129,7 +129,40 @@ def settings_page(request: Request, user: Annotated[str, Depends(require_session
             'admin_password_csrf_token': issue_password_form_csrf_token('settings-admin-password'),
             'admin_password_iters': int(_C.PASSWORD_HASH_ITERS),
             'admin_password_salt': secrets.token_hex(16),
+            'maintenance_status': config.maintenance_service.snapshot(),
         },
+    )
+
+
+def settings_artifacts_cleanup(user: Annotated[str, Depends(require_session_user)]):
+    """Start the exclusive, administrator-controlled artifact cleanup."""
+
+    ctx, actor_user_id = _settings_system_admin_ctx(user)
+    _ = ctx
+    started = config.maintenance_service.start_cleanup(actor_user_id=actor_user_id)
+    if started.accepted:
+        return RedirectResponse(
+            "/maintenance",
+            status_code=303,
+            headers={"Cache-Control": "no-store"},
+        )
+    if started.reason == "already_running":
+        return RedirectResponse(
+            "/maintenance",
+            status_code=303,
+            headers={"Cache-Control": "no-store"},
+        )
+    return JSONResponse(
+        {
+            "error": started.reason,
+            "busy": dict(started.busy),
+        },
+        headers={"Cache-Control": "no-store"},
+        status_code=(
+            409
+            if started.reason == "busy"
+            else 500
+        ),
     )
 
 def settings_smtp_update(

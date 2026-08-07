@@ -61,6 +61,8 @@ def _setup_config_rows() -> list[dict[str, str]]:
         {'name': 'POLYGON_REPLICA_WORKSPACE_ROOT', 'value': str(config.settings.workspace_root)},
         {'name': 'POLYGON_REPLICA_ARTIFACTS_ROOT', 'value': str(config.settings.artifacts_root)},
         {'name': 'POLYGON_REPLICA_CACHE_ROOT', 'value': str(config.settings.cache_root)},
+        {'name': 'POLYGON_REPLICA_CONTEST_SOURCE_ROOT', 'value': str(config.settings.contest_source_root)},
+        {'name': 'POLYGON_REPLICA_BACKUP_ROOT', 'value': str(config.settings.backup_root)},
     ]
 
 

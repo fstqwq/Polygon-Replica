@@ -56,6 +56,7 @@ from app.impl.problem.setting import (
     settings_judgehost_runtime_update,
     settings_judgehost_snapshot,
     settings_page,
+    settings_artifacts_cleanup,
     settings_password_update,
     settings_smtp_test,
     settings_smtp_update,
@@ -228,6 +229,11 @@ router.add_api_route(
     settings_page,
     methods=["GET"],
     response_class=HTMLResponse,
+)
+router.add_api_route(
+    "/settings/artifacts/cleanup",
+    settings_artifacts_cleanup,
+    methods=["POST"],
 )
 router.add_api_route(
     "/settings/password",

@@ -48,6 +48,25 @@ from app.service.platform.git_process import run_git
 class TestBackendMinimal(E2ETestBase):
     seed_default_workspace = True
 
+    def _create_export_job(
+        self,
+        ctx: dict[str, object],
+        *,
+        job_id: str,
+        verification_id: str,
+        export_type: str,
+        source_commit: str,
+    ) -> None:
+        config.export_service.create_export_job(
+            job_id=job_id,
+            problem_id=int(ctx["problem"]["id"]),
+            workspace_id=int(ctx["workspace"]["id"]),
+            actor_user_id=int(ctx["user"]["id"]),
+            verification_id=verification_id,
+            export_type=export_type,
+            source_commit=source_commit,
+        )
+
     def _statement_title(self, workspace: Path, language: str = "english") -> str:
         return statement_title_for_language(
             workspace,
@@ -1103,6 +1122,15 @@ class TestBackendMinimal(E2ETestBase):
 
     def test_export_worker_propagates_exception(self) -> None:
         ctx = config.workspace_service.workspace_context(self.problem, self.user, include_recent=False)
+        job_id = self.random_id("exp-invalid")
+        source_commit = str(ctx["workspace"].get("head_commit") or "")
+        self._create_export_job(
+            ctx,
+            job_id=job_id,
+            verification_id="",
+            export_type="invalid-type",
+            source_commit=source_commit,
+        )
         with self.assertRaises(ValueError):
             _run_export_create_worker(
                 self.problem,
@@ -1110,9 +1138,10 @@ class TestBackendMinimal(E2ETestBase):
                 actor_user_id=int(ctx["user"]["id"]),
                 problem_id=int(ctx["problem"]["id"]),
                 workspace_id=int(ctx["workspace"]["id"]),
-                source_commit=str(ctx["workspace"].get("head_commit") or ""),
+                source_commit=source_commit,
                 requested_verification_id="",
                 requested_export_type="invalid-type",
+                export_job_id=job_id,
             )
 
     def test_icpc_export_reuses_complete_artifacts_without_verification(self) -> None:
@@ -1138,10 +1167,19 @@ class TestBackendMinimal(E2ETestBase):
             "001.in",
             {"input_ref": input_ref, "answer_ref": answer_ref},
         )
+        job_id = self.random_id("exp-reuse-artifacts")
+        self._create_export_job(
+            ctx,
+            job_id=job_id,
+            verification_id="",
+            export_type="icpc",
+            source_commit=source_commit,
+        )
         with (
             patch("app.impl.workspace.context_job._icpc_required_test_ids_for_commit", return_value=["001"]),
             patch("app.impl.workspace.context_job.run_workspace_verification_dag", side_effect=AssertionError("full verification should not run")),
             patch.object(config.export_service, "create_export", return_value=Path("package.zip")) as create_export,
+            patch.object(config.export_service, "mark_export_job_succeeded", return_value=None),
         ):
             _run_export_create_worker(
                 self.problem,
@@ -1152,6 +1190,7 @@ class TestBackendMinimal(E2ETestBase):
                 source_commit=source_commit,
                 requested_verification_id="",
                 requested_export_type="icpc",
+                export_job_id=job_id,
             )
         create_export.assert_called_once()
         self.assertEqual(create_export.call_args.args[1], verification_id)
@@ -1199,6 +1238,14 @@ class TestBackendMinimal(E2ETestBase):
                 {"input_ref": fresh_input_ref, "answer_ref": fresh_answer_ref},
             )
 
+        job_id = self.random_id("exp-stale-artifacts")
+        self._create_export_job(
+            ctx,
+            job_id=job_id,
+            verification_id="",
+            export_type="icpc",
+            source_commit=source_commit,
+        )
         with (
             patch("app.impl.workspace.context_job._icpc_required_test_ids_for_commit", return_value=["001"]),
             patch(
@@ -1207,6 +1254,7 @@ class TestBackendMinimal(E2ETestBase):
             ),
             patch("app.impl.workspace.context_job.run_workspace_verification_dag", side_effect=fake_run_workspace_verification_dag),
             patch.object(config.export_service, "create_export", return_value=Path("package.zip")) as create_export,
+            patch.object(config.export_service, "mark_export_job_succeeded", return_value=None),
         ):
             _run_export_create_worker(
                 self.problem,
@@ -1217,6 +1265,7 @@ class TestBackendMinimal(E2ETestBase):
                 source_commit=source_commit,
                 requested_verification_id="",
                 requested_export_type="icpc",
+                export_job_id=job_id,
             )
         self.assertTrue(seen["verification_id"])
         create_export.assert_called_once()
@@ -1254,6 +1303,14 @@ class TestBackendMinimal(E2ETestBase):
                 {"input_ref": input_ref, "answer_ref": answer_ref},
             )
 
+        job_id = self.random_id("exp-generate-artifacts")
+        self._create_export_job(
+            ctx,
+            job_id=job_id,
+            verification_id="",
+            export_type="icpc",
+            source_commit=source_commit,
+        )
         with (
             patch("app.impl.workspace.context_job._icpc_required_test_ids_for_commit", return_value=["001"]),
             patch(
@@ -1268,6 +1325,7 @@ class TestBackendMinimal(E2ETestBase):
             ),
             patch("app.impl.workspace.context_job.run_workspace_verification_dag", side_effect=fake_run_workspace_verification_dag),
             patch.object(config.export_service, "create_export", return_value=Path("package.zip")) as create_export,
+            patch.object(config.export_service, "mark_export_job_succeeded", return_value=None),
         ):
             _run_export_create_worker(
                 self.problem,
@@ -1278,6 +1336,7 @@ class TestBackendMinimal(E2ETestBase):
                 source_commit=source_commit,
                 requested_verification_id="",
                 requested_export_type="icpc",
+                export_job_id=job_id,
             )
         self.assertEqual(seen["kind"], Kind.CUSTOM.value)
         self.assertTrue(seen["skip_sanity"])

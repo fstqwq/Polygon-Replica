@@ -17,11 +17,15 @@ Polygon-Replica separates authored sources from runtime state and generated arti
 At a high level:
 
 - Problem sources are Git-backed, and each user edits through an isolated workspace.
-- SQLite stores metadata and job state; generated artifacts stay outside Git on local filesystem roots.
+- Contest source attachments use a separate durable filesystem root and never enter Git.
+- SQLite stores metadata and job state; generated artifacts stay outside Git on a cleanup-safe filesystem root.
+- Runtime caches are isolated from both durable source roots and generated artifacts.
 - Verification, custom runs, exports, and contest builds run as async worker jobs.
 - All code compilations, testcase generations, and judgings run through DOMjudge-style judgedaemon infrastructure.
 
-This keeps authored problem files versioned while keeping generated PDFs, verification outputs, snapshots, and export archives outside Git.
+This keeps authored problem files versioned and contest attachments durable while
+keeping generated PDFs, verification outputs, snapshots, export archives, and
+runtime caches safe to remove from the administrator cleanup workflow.
 
 ## Deployment
 

@@ -114,7 +114,6 @@ WORKER_QUEUE_THREADS = 4
 WORKER_QUEUE_HISTORY_LIMIT = 1024
 WORKER_QUEUE_CAPACITY = 512
 WORKER_QUEUE_DURABLE_HISTORY_LIMIT = 20000
-WORKER_QUEUE_DURABLE_LOG = ""
 DB_SQL_TRACE_ENABLED = False
 JUDGEHOST_ENABLE = False
 JUDGEHOST_API_TOKEN = ""
@@ -903,12 +902,6 @@ ADMIN_CONFIG_SPECS: dict[str, dict[str, object]] = {
         "min": 256,
         "max": 200000,
         "description": "Worker durable event replay limit.",
-        "restart_required": True,
-        "impact": "restart",
-    },
-    "WORKER_QUEUE_DURABLE_LOG": {
-        "type": "str",
-        "description": "Worker durable event log file path (empty uses default cache path).",
         "restart_required": True,
         "impact": "restart",
     },

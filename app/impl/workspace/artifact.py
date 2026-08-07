@@ -9,7 +9,6 @@ from app.impl.runtime.config import config
 from app.main_util import contains_symlink_component
 from app.service.platform.process import is_canonical_artifact_id
 from app.service.platform.runtime_blob_store import PayloadFile
-from app.service.repository.revision import git_commit_count
 
 
 def artifact_version_number(artifact_id: str | None) -> int | None:
@@ -152,26 +151,6 @@ def browser_file_response(file_path: Path) -> FileResponse:
     if suffix in text_like_suffixes:
         return FileResponse(file_path, filename=file_path.name, media_type="text/plain; charset=utf-8", headers=headers)
     return FileResponse(file_path, filename=file_path.name, headers=headers)
-
-
-def export_download_filename(ctx: dict, verification_id: str, stored_filename: str) -> str | None:
-    archive_name = Path(stored_filename).name.strip()
-    if not verification_id or not archive_name:
-        return None
-    source_commit = config.export_service.download_source_commit(
-        int(ctx["problem"]["id"]),
-        int(ctx["workspace"]["id"]),
-        verification_id,
-        archive_name,
-    )
-    if not source_commit:
-        return None
-    revision = git_commit_count(Path(ctx["workspace"]["path"]), source_commit) if source_commit else None
-    revision_display = f"v{revision}" if revision is not None and revision >= 0 else "v?"
-    problem_slug = ctx["problem"]["slug"]
-    if not problem_slug:
-        return None
-    return f"{problem_slug}-{revision_display}.zip"
 
 
 def workspace_verification_id_for_run(ctx: dict, run_id: str) -> str:

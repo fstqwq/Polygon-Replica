@@ -82,6 +82,21 @@ class TestPublicContracts(unittest.TestCase):
         self.assertIn('data-gen-script-run-uid-base="1"', settings_source)
         self.assertIn("base + DAEMON_ID", settings_source)
 
+    def test_generated_judgehost_command_uses_unconfigured_latest_image(self) -> None:
+        command_source = UI_JS_PATH.read_text(encoding="utf-8-sig")
+        documentation = "\n".join(
+            [
+                (ROOT / "README.md").read_text(encoding="utf-8-sig"),
+                (ROOT / "docs" / "docker.md").read_text(encoding="utf-8-sig"),
+            ]
+        )
+
+        self.assertIn("domjudge/judgehost:latest", command_source)
+        self.assertIn("domjudge/judgehost:latest", documentation)
+        self.assertNotIn("domjudge/judgehost:9.0.0", command_source)
+        self.assertNotIn("domjudge/judgehost:9.0.0", documentation)
+        self.assertNotIn("POLYGON_REPLICA_JUDGEHOST_IMAGE", command_source)
+
     def test_uvicorn_access_filter_only_suppresses_successful_fetch_poll(self) -> None:
         from app.service.platform.http_logging import UvicornAccessFilter
 

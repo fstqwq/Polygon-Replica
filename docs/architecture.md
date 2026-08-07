@@ -93,13 +93,16 @@ This is current fact, not a target design.
 
 ## Storage Model
 
-Three storage backends matter in day-to-day execution.
+The runtime separates durable source, cleanup-safe generated state, and runtime
+cache. SQLite spans durable metadata and cleanup-safe job/result rows.
 
 | Backend | Purpose | Current role |
 |---------|---------|--------------|
-| SQLite | metadata | users, problems, workspaces, verifications, verification_tasks, previews, exports, contests, audit log, runtime config |
+| SQLite | metadata | durable users/problems/workspaces/contests/config plus cleanup-safe verification, preview, export job/export, contest job/artifact, and audit rows |
 | Git bare repos | source of truth | problem sources only |
-| Filesystem | derived payloads | snapshots, preview PDFs, export archives, runtime blobs |
+| Durable filesystem | non-Git source and backup | contest source attachments and operator-managed migration backups |
+| Generated filesystem | derived payloads | export archives, contest build products, and temporary workspace snapshot downloads |
+| Cache filesystem | startup-scoped derived/runtime payloads | preview PDFs, verification logs/artifacts, snapshots, JudgeFS/runtime blobs, judgehost workdirs, and worker cache |
 
 ## Current Filesystem Layout
 
@@ -136,13 +139,30 @@ and immutable blobs have an independent startup-scoped lifetime.
 
 ### Artifacts root
 
-`artifacts_root` is still used for durable export and contest files.
+`artifacts_root` contains generated export and contest files plus temporary
+workspace snapshot downloads. Every child is eligible for administrator cleanup.
 
 ```text
 <artifacts_root>/
   exports/
   contests/
+  snapshots/
 ```
+
+### Contest source and backup roots
+
+```text
+<contest_source_root>/
+  <contest-slug>/
+    ... uploaded source attachments ...
+
+<backup_root>/
+  contest-sources-pre-migration-<UTC>.tar.gz
+  contest-sources-pre-migration-<UTC>.tar.gz.sha256
+```
+
+Both roots are durable, disjoint from Git, artifacts, and cache, and are never
+visited by artifact cleanup.
 
 ## Verification Artifact Read Model
 
@@ -173,3 +193,6 @@ At startup the runtime layer:
 - starts the worker queue
 
 This means cache-root data is operationally derived, not durable truth.
+
+Export jobs left queued/running by a process restart are marked failed rather
+than resumed.

@@ -189,6 +189,8 @@ class TestContestBuilds(ContestActionBase):
         self.assertEqual(save_resp.status_code, 303)
         self.assertIn("source_path=olymp.sty", str(save_resp.headers.get("location", "")))
         source_root = config.contest_service.contest_source_root(contest_slug)
+        self.assertIn(config.settings.contest_source_root.resolve(), source_root.parents)
+        self.assertNotIn(config.settings.cache_root.resolve(), source_root.parents)
         self.assertEqual(
             (source_root / "statements" / "english" / "olymp.sty").read_text(encoding="utf-8"),
             "% custom contest style\n",
@@ -247,6 +249,51 @@ class TestContestBuilds(ContestActionBase):
             path="logos/logo.png",
         )
         self.assertEqual(file_resp.status_code, 200)
+
+    def test_contest_source_upload_delete_is_filesystem_reversible(self) -> None:
+        contest_slug, contest_id, actor_user_id = self.create_contest(
+            "reversible-source"
+        )
+        contest_root = config.settings.contest_source_root / contest_slug
+        self.assertFalse(contest_root.exists())
+
+        page = contest_packages_page(
+            _request(f"/contests/{contest_slug}/packages"),
+            contest_slug,
+            "alice",
+        )
+        self.assertEqual(page.status_code, 200)
+        default_source = contest_statement_source_file(
+            contest=contest_slug,
+            user="alice",
+            language="english",
+            path="statements.tex",
+        )
+        self.assertEqual(default_source.status_code, 200)
+        self.assertFalse(contest_root.exists())
+
+        key = config.contest_service.write_statement_source_file(
+            contest_id=contest_id,
+            contest_slug=contest_slug,
+            actor_user_id=actor_user_id,
+            key="statements/english/smoke-test.txt",
+            package_bytes=b"temporary contest source smoke test\n",
+        )
+        self.assertTrue(contest_root.is_dir())
+
+        config.contest_service.delete_statement_source_file(
+            contest_id=contest_id,
+            contest_slug=contest_slug,
+            key=key,
+        )
+
+        self.assertFalse(contest_root.exists())
+        self.assertIsNone(
+            db_fetch_one(
+                "SELECT id FROM contest_attachments WHERE contest_id=? AND key=?",
+                [contest_id, key],
+            )
+        )
 
     def test_contest_packages_queues_selected_problem_language(self) -> None:
         problem_slug = f"alice/contest-language-{uuid.uuid4().hex[:8]}"

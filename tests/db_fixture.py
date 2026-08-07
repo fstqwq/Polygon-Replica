@@ -34,6 +34,8 @@ def _settings() -> Settings:
         workspace_root=_PROCESS_ROOT / "workspaces",
         artifacts_root=_PROCESS_ROOT / "artifacts",
         cache_root=_PROCESS_ROOT / "cache",
+        contest_source_root=_PROCESS_ROOT / "contest-sources",
+        backup_root=_PROCESS_ROOT / "backups",
     )
 
 

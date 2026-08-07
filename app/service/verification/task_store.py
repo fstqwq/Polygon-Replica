@@ -856,3 +856,14 @@ class VerificationTaskStore:
         with self._runtime_lock.read_lock():
             fail_reason = self._fail_reason_by_verification_id.get(verification_id, "")
         return (bool(fail_reason), fail_reason)
+
+    def reset_runtime_state(self) -> None:
+        """Forget all process-local indexes after exclusive artifact cleanup."""
+
+        with self._runtime_lock.write_lock():
+            self._runtime_by_task_id.clear()
+            self._logical_run_id_by_task_id.clear()
+            self._test_name_by_task_id.clear()
+            self._task_id_by_judgehost_case.clear()
+            self._task_ids_by_judgehost_task.clear()
+            self._fail_reason_by_verification_id.clear()

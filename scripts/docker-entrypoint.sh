@@ -7,7 +7,9 @@ mkdir -p \
   "$POLYGON_REPLICA_BARE_ROOT" \
   "$POLYGON_REPLICA_WORKSPACE_ROOT" \
   "$POLYGON_REPLICA_ARTIFACTS_ROOT" \
-  "$POLYGON_REPLICA_CACHE_ROOT"
+  "$POLYGON_REPLICA_CACHE_ROOT" \
+  "$POLYGON_REPLICA_CONTEST_SOURCE_ROOT" \
+  "$POLYGON_REPLICA_BACKUP_ROOT"
 
 # Quick bubblewrap probe so misconfigured hosts fail loudly rather than
 # crashing later inside a verification job.

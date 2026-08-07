@@ -9,6 +9,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, TypedDict, cast
 
+from app.service.platform.admission import MaintenanceAdmissionGate
+
 
 WorkerFunc = Callable[[], None]
 WorkerPayload = tuple[str, str, WorkerFunc]
@@ -117,6 +119,7 @@ class WorkerQueueService:
         self._record_order: list[str] = []
         self._futures: dict[str, WorkerFuture] = {}
         self._dedupe: dict[str, WorkerFuture] = {}
+        self._admission_gate: MaintenanceAdmissionGate | None = None
         self._sentinel = object()
         if self._durable_log_path is not None:
             try:
@@ -348,6 +351,55 @@ class WorkerQueueService:
             self._started = False
             self._workers = []
 
+    def set_admission_gate(self, gate: MaintenanceAdmissionGate | None) -> None:
+        """Install a process-local admission gate for new jobs."""
+
+        with self._lock:
+            self._admission_gate = gate
+
+    def active_counts(self) -> dict[str, int]:
+        """Return queued/running counts without truncating job history."""
+
+        with self._lock:
+            return {
+                "queued": sum(1 for record in self._records.values() if record.status == "queued"),
+                "running": sum(1 for record in self._records.values() if record.status == "running"),
+            }
+
+    def reset_runtime_history(self) -> None:
+        """Forget completed worker history after an exclusive cleanup."""
+
+        with self._lock:
+            active = [
+                record.id
+                for record in self._records.values()
+                if record.status in {"queued", "running"}
+            ]
+            if active:
+                raise RuntimeError("cannot reset worker history while jobs are active")
+            self._records.clear()
+            self._record_order.clear()
+            self._futures.clear()
+            self._dedupe.clear()
+            if self._durable_log_path is not None:
+                try:
+                    self._durable_log_path.unlink(missing_ok=True)
+                except OSError as exc:
+                    raise RuntimeError(f"cannot clear worker queue durable history: {exc}") from exc
+
+    def _maintenance_rejection(
+        self,
+        *,
+        name: str,
+        job_type: str,
+        queue_name: str,
+    ) -> tuple[WorkerFuture, bool, str]:
+        _ = (name, job_type, queue_name)
+        future = WorkerFuture(f"wq-{uuid.uuid4().hex[:12]}")
+        error = RuntimeError("maintenance in progress: worker admission is closed")
+        future._mark_done(error)
+        return (future, False, "maintenance")
+
     def submit(
         self,
         *,
@@ -359,6 +411,40 @@ class WorkerQueueService:
     ) -> tuple[WorkerFuture, bool, str]:
         if not callable(fn):
             raise ValueError("worker job fn must be callable")
+        with self._lock:
+            gate = self._admission_gate
+        if gate is None:
+            return self._submit_without_admission(
+                name=name,
+                fn=fn,
+                job_type=job_type,
+                queue_name=queue_name,
+                dedupe_key=dedupe_key,
+            )
+        with gate.locked():
+            if not gate.is_open_locked():
+                return self._maintenance_rejection(
+                    name=name,
+                    job_type=job_type,
+                    queue_name=queue_name,
+                )
+            return self._submit_without_admission(
+                name=name,
+                fn=fn,
+                job_type=job_type,
+                queue_name=queue_name,
+                dedupe_key=dedupe_key,
+            )
+
+    def _submit_without_admission(
+        self,
+        *,
+        name: str,
+        fn: WorkerFunc,
+        job_type: str,
+        queue_name: str,
+        dedupe_key: str,
+    ) -> tuple[WorkerFuture, bool, str]:
         if not self._started:
             self.start()
         safe_name = safe_name_text if (safe_name_text := str(name).strip() if name is not None else "") else "job"

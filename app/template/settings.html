@@ -34,6 +34,39 @@
   <section class="settings-admin-panel">
     <h2>System Admin Panel</h2>
     <p class="muted">Active system admins: {{ active_system_admin_count }}</p>
+    {% set cleanup_status = maintenance_status if maintenance_status else {} %}
+    <section class="info-card settings-artifact-cleanup-card">
+      <div class="settings-card-head">
+        <h3>Derived Artifact Storage</h3>
+      </div>
+      <p class="muted">
+        Remove generated previews, exports, export jobs, verification results, contest build
+        artifacts, runtime cache, and all audit history recorded before this cleanup. Git
+        repositories, workspaces, contest sources, backups, and core metadata are preserved.
+      </p>
+      <p class="muted">
+        status=<code>{{ cleanup_status.get('status', 'idle') }}</code>
+        {% if cleanup_status.get('stage') %}; stage=<code>{{ cleanup_status.get('stage') }}</code>{% endif %}
+      </p>
+      {% if cleanup_status.get('status') == 'failed' %}
+      <p class="danger">Last cleanup failed: {{ cleanup_status.get('error', 'unknown error') }}</p>
+      {% elif cleanup_status.get('status') == 'succeeded' %}
+      {% set cleanup_result = cleanup_status.get('result', {}) %}
+      <p class="muted">
+        Last cleanup completed in <code>{{ cleanup_result.get('duration_ms', 0) }} ms</code>;
+        deleted <code>{{ cleanup_result.get('deleted_row_total', 0) }}</code> rows;
+        reclaimed <code>{{ cleanup_result.get('reclaimed_bytes', {}) }}</code>.
+      </p>
+      {% endif %}
+      <form
+        class="form-stack"
+        method="post"
+        action="/settings/artifacts/cleanup"
+        data-confirm-message="Delete all generated artifacts, generated jobs, runtime caches, and ALL PREVIOUS AUDIT HISTORY? Git repositories, workspaces, contest sources, backups, and core metadata will be kept. The whole site will be briefly unavailable."
+      >
+        <button class="btn danger-link" type="submit">Clear Generated Artifacts</button>
+      </form>
+    </section>
     <section class="info-card settings-admin-users-card">
       <div class="settings-card-head">
         <h3>User Administration</h3>

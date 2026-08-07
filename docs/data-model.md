@@ -35,6 +35,10 @@ erDiagram
     problems ||--o{ verifications : has
     problems ||--o{ previews : has
     problems ||--o{ exports : has
+    problems ||--o{ export_jobs : requests
+    workspaces ||--o{ export_jobs : runs
+    users ||--o{ export_jobs : starts
+    exports ||--o{ export_jobs : completes
     verifications ||--o{ verification_tasks : contains
     verifications ||--o{ verification_selected_tests : records
     verifications ||--o{ verification_source_paths : records
@@ -200,6 +204,20 @@ Current columns:
 
 The database records export metadata. The archive bytes stay on the filesystem.
 
+#### `export_jobs`
+
+`export_jobs` is the sole lifecycle model for package generation. Its status is
+one of `queued`, `running`, `succeeded`, or `failed`. A succeeded job points
+directly to its `exports` row through nullable `export_id`; deleting an export
+sets that link to `NULL`. Agent status/download and the Export Activity UI query
+this table and never reconstruct lifecycle state from audit records.
+
+Successful products are not deduplicated by filename or source commit. Jobs and
+their products remain available until the administrator runs artifact cleanup.
+
+Old `exports` rows are intentionally not backfilled. They remain stored until
+the first administrator cleanup but do not appear in the new Activity list.
+
 ### Contests
 
 | Table | Purpose |
@@ -216,7 +234,7 @@ The database records export metadata. The archive bytes stay on the filesystem.
 
 | Table | Purpose |
 |-------|---------|
-| `audit_log` | audit trail |
+| `audit_log` | current audit epoch; cleanup preserves its start/result records and removes all earlier history |
 | `system_config` | runtime-config overrides |
 
 ## Current Pattern for Verification Results

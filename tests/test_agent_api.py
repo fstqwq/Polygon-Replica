@@ -137,6 +137,113 @@ class TestAgentAPI(E2ETestBase):
                 archive.writestr(rel, data)
         return buffer.getvalue()
 
+    def test_export_status_and_download_resolve_export_job_directly(self) -> None:
+        username = self.random_id("agent-export-job")
+        _password, auth_cookie = self._issue_auth_cookie(username)
+        self._grant_problem_owner(username)
+        ctx = workspace_service.workspace_context(
+            self.problem,
+            username,
+            include_recent=False,
+        )
+        problem_id = int(ctx["problem"]["id"])
+        workspace_id = int(ctx["workspace"]["id"])
+        actor_user_id = int(ctx["user"]["id"])
+        job_id = "agent-export-job-direct"
+        export_id = "e-agent-export-direct"
+        filename = "agent-package.zip"
+        archive = config.export_service._export_path(
+            self.problem,
+            export_id,
+            filename,
+        )
+        archive.parent.mkdir(parents=True, exist_ok=True)
+        archive.write_bytes(b"agent export payload")
+        db_execute(
+            """
+            INSERT INTO exports(
+                id,problem_id,verification_id,workspace_id,export_type,
+                filename,sha256,size_bytes,source_commit,created_at
+            ) VALUES(?,?,?,?,?,?,?,?,?,?)
+            """,
+            [
+                export_id,
+                problem_id,
+                "",
+                workspace_id,
+                "native",
+                filename,
+                "d" * 64,
+                archive.stat().st_size,
+                "c" * 40,
+                "2026-08-08T00:00:00Z",
+            ],
+        )
+        config.export_service.create_export_job(
+            job_id=job_id,
+            problem_id=problem_id,
+            workspace_id=workspace_id,
+            actor_user_id=actor_user_id,
+            verification_id="",
+            export_type="native",
+            source_commit="c" * 40,
+        )
+        config.export_service.mark_export_job_running(
+            job_id,
+            verification_id="",
+            source_commit="c" * 40,
+        )
+        config.export_service.mark_export_job_succeeded(
+            job_id,
+            verification_id="",
+            export_id=export_id,
+        )
+        db_execute(
+            """
+            INSERT INTO audit_log(
+                actor_user_id,problem_id,action,details_json,created_at
+            ) VALUES(?,?,?,?,?)
+            """,
+            [
+                actor_user_id,
+                problem_id,
+                "export.create",
+                '{"status":"failed","error":"must-not-be-read"}',
+                "2026-08-08T00:00:01Z",
+            ],
+        )
+
+        with TestClient(app, raise_server_exceptions=False) as client:
+            connect = self._connect_agent(client, auth_cookie)
+            register = self._register_agent(
+                client,
+                str(connect["register_url"]),
+                desktop_id="D-export-job",
+            )
+            _request_id, token = self._approve_token(
+                client,
+                auth_cookie=auth_cookie,
+                agent_session_id=str(register["agent_session_id"]),
+                identity_hash=str(register["identity_hash"]),
+            )
+            status = client.get(
+                f"/agent/v1/export/{job_id}/status",
+                headers=self._bearer(token),
+            )
+            self.assertEqual(status.status_code, 200, status.text)
+            payload = status.json()
+            self.assertEqual(str(payload.get("job_id") or ""), job_id)
+            self.assertEqual(str(payload.get("status") or ""), "succeeded")
+            self.assertEqual(str(payload.get("filename") or ""), filename)
+            self.assertNotIn("must-not-be-read", status.text)
+
+            download = client.get(
+                f"/agent/v1/export/{job_id}/download",
+                headers=self._bearer(token),
+            )
+            self.assertEqual(download.status_code, 200, download.text)
+            self.assertEqual(download.content, b"agent export payload")
+
     @staticmethod
     def _zip_entries(payload: bytes) -> dict[str, bytes]:
         with zipfile.ZipFile(io.BytesIO(payload), "r") as archive:
@@ -818,8 +925,9 @@ class TestAgentAPI(E2ETestBase):
                 json={"export_type": "icpc"},
             )
             self.assertEqual(fresh_icpc_export.status_code, 200, fresh_icpc_export.text)
-            fresh_export_id = str(fresh_icpc_export.json().get("export_id") or "")
-            fresh_export_status = client.get(f"/agent/v1/export/{fresh_export_id}/status", headers=self._bearer(readonly_token))
+            fresh_export_job_id = str(fresh_icpc_export.json().get("job_id") or "")
+            self.assertRegex(fresh_export_job_id, r"^exp-api-")
+            fresh_export_status = client.get(f"/agent/v1/export/{fresh_export_job_id}/status", headers=self._bearer(readonly_token))
             self.assertEqual(fresh_export_status.status_code, 200, fresh_export_status.text)
             self.assertEqual(str(fresh_export_status.json().get("source_commit") or ""), head)
 
@@ -829,8 +937,9 @@ class TestAgentAPI(E2ETestBase):
                 json={"export_type": "native"},
             )
             self.assertEqual(fresh_native_export.status_code, 200, fresh_native_export.text)
-            fresh_native_id = str(fresh_native_export.json().get("export_id") or "")
-            fresh_native_status = client.get(f"/agent/v1/export/{fresh_native_id}/status", headers=self._bearer(readonly_token))
+            fresh_native_job_id = str(fresh_native_export.json().get("job_id") or "")
+            self.assertRegex(fresh_native_job_id, r"^exp-api-")
+            fresh_native_status = client.get(f"/agent/v1/export/{fresh_native_job_id}/status", headers=self._bearer(readonly_token))
             self.assertEqual(fresh_native_status.status_code, 200, fresh_native_status.text)
             self.assertEqual(str(fresh_native_status.json().get("source_commit") or ""), head)
 

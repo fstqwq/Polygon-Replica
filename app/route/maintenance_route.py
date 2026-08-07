@@ -1,0 +1,54 @@
+from __future__ import annotations
+
+from fastapi import APIRouter
+from fastapi.responses import PlainTextResponse, RedirectResponse
+
+from app.impl.runtime.config import config
+
+
+router = APIRouter()
+
+
+@router.get("/maintenance", include_in_schema=False)
+def maintenance_page():
+    snapshot = config.maintenance_service.snapshot()
+    status = str(snapshot.get("status") or "idle")
+    if status == "succeeded":
+        return RedirectResponse(
+            "/settings?cleanup=success",
+            status_code=303,
+            headers={"Cache-Control": "no-store"},
+        )
+    if status == "idle":
+        return PlainTextResponse(
+            "No site-wide maintenance operation is running.\n",
+            headers={"Cache-Control": "no-store"},
+        )
+    if status == "failed":
+        result = snapshot.get("result") or {}
+        completed_stage = (
+            str(result.get("completed_stage") or "none")
+            if isinstance(result, dict)
+            else "none"
+        )
+        body = (
+            "Site-wide artifact cleanup failed.\n"
+            f"operation_id: {snapshot.get('operation_id') or 'unknown'}\n"
+            f"stage: {snapshot.get('stage') or 'unknown'}\n"
+            f"completed_stage: {completed_stage}\n"
+            f"error: {snapshot.get('error') or 'unknown error'}\n"
+            "An administrator may retry the cleanup from Settings.\n"
+        )
+        return PlainTextResponse(body, headers={"Cache-Control": "no-store"})
+    body = (
+        "The site is in maintenance mode.\n"
+        f"status: {status}\n"
+        f"operation_id: {snapshot.get('operation_id') or 'unknown'}\n"
+        f"stage: {snapshot.get('stage') or 'starting'}\n"
+        f"started_at: {snapshot.get('started_at') or 'unknown'}\n"
+        "Please retry after this page refreshes.\n"
+    )
+    return PlainTextResponse(
+        body,
+        headers={"Cache-Control": "no-store", "Refresh": "2"},
+    )

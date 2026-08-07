@@ -47,6 +47,8 @@ class TestWorkspaceMerge(unittest.TestCase):
             workspace_root=self.root,
             artifacts_root=self.root / "artifacts",
             cache_root=self.root / "cache",
+            contest_source_root=self.root / "contest-sources",
+            backup_root=self.root / "backups",
         )
         workspace_service = cast(WorkspaceService, _WorkspaceLockStub())
         self.service = WorkspaceMergeService(settings, workspace_service)

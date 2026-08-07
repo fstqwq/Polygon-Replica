@@ -88,13 +88,18 @@ RUNTIME_DIRS=(
   /srv/polygon-replica/export
   /var/lib/polygon-replica
   /var/lib/polygon-replica/tls
+  /var/lib/polygon-replica/contest-sources
   /tmp/polygon-replica
+  /var/backups/polygon-replica
 )
 "${SUDO[@]}" install -d -m 0755 "${RUNTIME_DIRS[@]}"
+"${SUDO[@]}" chmod 0700 /var/backups/polygon-replica
 "${SUDO[@]}" chown -R "${RUNTIME_USER}:${RUNTIME_GROUP}" \
   /srv/polygon-replica \
   /var/lib/polygon-replica \
   /tmp/polygon-replica
+"${SUDO[@]}" chown -R "${RUNTIME_USER}:${RUNTIME_GROUP}" \
+  /var/backups/polygon-replica
 
 echo "[3/6] Probing bubblewrap root-switch capability..."
 PROBE_CMD=(bwrap --die-with-parent --new-session --ro-bind / / --chdir / -- /bin/sh -lc 'true')
@@ -259,6 +264,8 @@ export POLYGON_REPLICA_BARE_ROOT=/srv/polygon-replica/git
 export POLYGON_REPLICA_WORKSPACE_ROOT=/srv/polygon-replica/workspaces
 export POLYGON_REPLICA_ARTIFACTS_ROOT=/srv/polygon-replica/export
 export POLYGON_REPLICA_CACHE_ROOT=/tmp/polygon-replica
+export POLYGON_REPLICA_CONTEST_SOURCE_ROOT=/var/lib/polygon-replica/contest-sources
+export POLYGON_REPLICA_BACKUP_ROOT=/var/backups/polygon-replica
 export POLYGON_REPLICA_TLS_KEY_PATH=/var/lib/polygon-replica/tls/dev-localhost.key
 export POLYGON_REPLICA_TLS_CERT_PATH=/var/lib/polygon-replica/tls/dev-localhost.crt
 EOF

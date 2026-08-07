@@ -4,6 +4,7 @@ import json
 import logging
 import re
 import time
+from contextlib import nullcontext
 from typing import cast
 from typing import TypedDict
 
@@ -21,6 +22,7 @@ from app.service.judgehost.runtime import (
     domjudge_verdict_from_runresult,
 )
 from app.service.platform.runtime_blob_store import PayloadFile
+from app.service.platform.admission import MaintenanceAdmissionGate
 from app.service.run.runtime import RUN_TEST_NAME_RE
 from app.service.verification.task_scheduler import (
     COORDINATOR_BATCH_SIZE,
@@ -607,52 +609,116 @@ class DispatchHandler(DispatchCacheMixin):
         )
         return out
 
-    def domjudge_fetch_work(self, hostname: str, max_batchsize: int | None = None) -> list[dict[str, object]]:
+    def domjudge_fetch_work(
+        self,
+        hostname: str,
+        max_batchsize: int | None = None,
+        *,
+        admission_gate: MaintenanceAdmissionGate | None = None,
+    ) -> list[dict[str, object]]:
         safe_host = self._core.normalize_hostname(hostname)
-        if not self._queue._host_enabled_conn(hostname=safe_host):
-            self._queue._record_host_event_conn(hostname=safe_host, action="disabled")
-            return []
-        self._result.retry_due_finalizations(limit=1)
-        cap = self._s.fetch_batch_size if max_batchsize is None else max(1, min(256, int(max_batchsize)))
+        cap = (
+            self._s.fetch_batch_size
+            if max_batchsize is None
+            else max(1, min(256, int(max_batchsize)))
+        )
         deadline = time.monotonic() + self._CACHE_PROBE_BUDGET_SEC
         first_transition = True
         long_poll_used = False
+        initialized = False
         while first_transition or time.monotonic() < deadline:
             first_transition = False
-            batch_row = self._s.batch_scheduler.select_ready_batch(safe_host)
-            if batch_row is None:
-                if not long_poll_used:
-                    long_poll_used = True
-                    if self._s.batch_scheduler.wait_for_ready_batch(
-                        self._s.fetch_long_poll_sec
+            admission_scope = (
+                nullcontext(True)
+                if admission_gate is None
+                else admission_gate.try_locked()
+            )
+            with admission_scope as admission_acquired:
+                if (
+                    not admission_acquired
+                    or (
+                        admission_gate is not None
+                        and not admission_gate.is_open_locked()
+                    )
+                ):
+                    return []
+                if not initialized:
+                    initialized = True
+                    if not self._queue._host_enabled_conn(hostname=safe_host):
+                        self._queue._record_host_event_conn(
+                            hostname=safe_host,
+                            action="disabled",
+                        )
+                        return []
+                    self._result.retry_due_finalizations(limit=1)
+                batch_row = self._s.batch_scheduler.select_ready_batch(safe_host)
+                if batch_row is not None:
+                    batch_id = int(batch_row["batch_id"])
+                    processed = self._domjudge_apply_cache_shortcuts_for_batch(
+                        batch_id,
+                        hostname=safe_host,
+                        limit=COORDINATOR_BATCH_SIZE,
+                        deadline=deadline,
+                    )
+                    refreshed = self._s.batch_scheduler.fetch_batch(batch_id)
+                    if (
+                        refreshed is None
+                        or domjudge_lower_text(refreshed["status"]) != "open"
                     ):
-                        deadline = time.monotonic() + self._CACHE_PROBE_BUDGET_SEC
-                        first_transition = True
                         continue
-                self._queue._record_host_event_conn(hostname=safe_host, action="fetch")
-                return []
-            batch_id = int(batch_row["batch_id"])
-            processed = self._domjudge_apply_cache_shortcuts_for_batch(
-                batch_id,
-                hostname=safe_host,
-                limit=COORDINATOR_BATCH_SIZE,
-                deadline=deadline,
+                    needs_materialization = (
+                        domjudge_lower_text(refreshed["materialization_state"])
+                        != "ready"
+                        and self._s.batch_scheduler.batch_case_count(
+                            batch_id,
+                            status="pending",
+                        )
+                        > 0
+                    )
+                    if (
+                        needs_materialization
+                        and not self._domjudge_materialize_batch(batch_id)
+                    ):
+                        return []
+                    leased_cases = self._domjudge_lease_cases(
+                        batch_id,
+                        safe_host,
+                        cap,
+                    )
+                    if leased_cases:
+                        return leased_cases
+                    self._result._domjudge_finalize_batch_if_ready(batch_id)
+                    if processed == 0:
+                        return []
+                    continue
+
+            if not long_poll_used:
+                long_poll_used = True
+                if self._s.batch_scheduler.wait_for_ready_batch(
+                    self._s.fetch_long_poll_sec
+                ):
+                    deadline = time.monotonic() + self._CACHE_PROBE_BUDGET_SEC
+                    first_transition = True
+                    continue
+            admission_scope = (
+                nullcontext(True)
+                if admission_gate is None
+                else admission_gate.try_locked()
             )
-            refreshed = self._s.batch_scheduler.fetch_batch(batch_id)
-            if refreshed is None or domjudge_lower_text(refreshed["status"]) != "open":
-                continue
-            needs_materialization = (
-                domjudge_lower_text(refreshed["materialization_state"]) != "ready"
-                and self._s.batch_scheduler.batch_case_count(batch_id, status="pending") > 0
-            )
-            if needs_materialization and not self._domjudge_materialize_batch(batch_id):
-                return []
-            leased_cases = self._domjudge_lease_cases(batch_id, safe_host, cap)
-            if leased_cases:
-                return leased_cases
-            self._result._domjudge_finalize_batch_if_ready(batch_id)
-            if processed == 0:
-                break
+            with admission_scope as admission_acquired:
+                if (
+                    not admission_acquired
+                    or (
+                        admission_gate is not None
+                        and not admission_gate.is_open_locked()
+                    )
+                ):
+                    return []
+                self._queue._record_host_event_conn(
+                    hostname=safe_host,
+                    action="fetch",
+                )
+            return []
         return []
 
     def probe_task_case_cache(self, task_ids: list[str]) -> set[str]:

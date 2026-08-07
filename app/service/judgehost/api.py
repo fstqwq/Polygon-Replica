@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 
 from app.db import DB, now_iso
 from app.runtime_value import RuntimeValues
+from app.service.platform.admission import MaintenanceAdmissionGate
 from app.service.platform.fs.layout import FsManager
 from app.service.platform.runtime_blob_store import RuntimeBlobStore
 from app.service.platform.runtime_cache_index import RuntimeCacheIndex
@@ -65,6 +66,7 @@ class Judgehost:
             self._state.batch_scheduler,
         )
         self._state.touch_verification_runtime = self._terminal_cleanup.touch
+        self._admission_gate: MaintenanceAdmissionGate | None = None
         self.apply_runtime_values(constants)
 
     @property
@@ -121,10 +123,36 @@ class Judgehost:
         return self._enqueue.prepare_execution_template(**kwargs)
 
     def enqueue_task(self, **kwargs) -> str:
-        return self._enqueue.enqueue_task(**kwargs)
+        gate = self._admission_gate
+        if gate is None:
+            return self._enqueue.enqueue_task(**kwargs)
+        with gate.locked():
+            self._require_admission_locked(gate)
+            return self._enqueue.enqueue_task(**kwargs)
 
     def enqueue_compile_only_task(self, **kwargs) -> str:
-        return self._enqueue.enqueue_compile_only_task(**kwargs)
+        gate = self._admission_gate
+        if gate is None:
+            return self._enqueue.enqueue_compile_only_task(**kwargs)
+        with gate.locked():
+            self._require_admission_locked(gate)
+            return self._enqueue.enqueue_compile_only_task(**kwargs)
+
+    def set_admission_gate(self, gate: MaintenanceAdmissionGate | None) -> None:
+        self._admission_gate = gate
+
+    @staticmethod
+    def _require_admission_locked(gate: MaintenanceAdmissionGate) -> None:
+        if not gate.is_open_locked():
+            raise RuntimeError("maintenance in progress: judgehost admission is closed")
+
+    def busy_counts(self) -> dict[str, int]:
+        counts = self._state.task_registry.maintenance_counts()
+        return {
+            "queued": int(counts.get("queued", 0)),
+            "leased": int(counts.get("leased", 0)),
+            "reporting": int(counts.get("reporting", 0)),
+        }
 
     def report_result(self, *args, **kwargs):
         return self._queue.report_result(*args, **kwargs)
@@ -285,7 +313,14 @@ class Judgehost:
         return self._dispatch.domjudge_register_host(*args, **kwargs)
 
     def domjudge_fetch_work(self, *args, **kwargs):
-        return self._dispatch.domjudge_fetch_work(*args, **kwargs)
+        gate = self._admission_gate
+        if gate is None:
+            return self._dispatch.domjudge_fetch_work(*args, **kwargs)
+        return self._dispatch.domjudge_fetch_work(
+            *args,
+            admission_gate=gate,
+            **kwargs,
+        )
 
     def probe_task_case_cache(self, task_ids: list[str]) -> set[str]:
         return self._dispatch.probe_task_case_cache(task_ids)
@@ -427,6 +462,7 @@ class Judgehost:
         return self.resolve_artifact_blob(output_diff_ref)
 
     def reset_runtime_state(self) -> None:
+        self._terminal_cleanup.reset()
         self._state.task_registry.reset()
         with self._state.state_lock:
             self._state.hosts_state.clear()

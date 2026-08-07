@@ -479,15 +479,31 @@ def prepare_icpc_export_verification(
     return generated_verification_id
 
 
-def _run_export_create_worker(problem: str, user: str, *, actor_user_id: int, problem_id: int, workspace_id: int, source_commit: str, requested_verification_id: str, requested_export_type: str, export_task_id: str = "") -> None:
+def _run_export_create_worker(
+    problem: str,
+    user: str,
+    *,
+    actor_user_id: int,
+    problem_id: int,
+    workspace_id: int,
+    source_commit: str,
+    requested_verification_id: str,
+    requested_export_type: str,
+    export_job_id: str = "",
+) -> None:
+    if not export_job_id:
+        raise ValueError("export_job_id is required")
     safe_requested_verification_id = normalize_run_id_token(requested_verification_id)
     safe_export_type = requested_export_type or 'icpc'
     effective_source_commit = _export_source_commit(safe_export_type, source_commit)
     if safe_export_type == "icpc" and not safe_requested_verification_id:
         safe_requested_verification_id = allocate_verification_id()
-    details: dict[str, object] = {'status': 'failed', 'verification_id': safe_requested_verification_id, 'export_type': safe_export_type, 'source_commit': effective_source_commit, 'filename': '', 'error': '', 'export_task_id': export_task_id}
-    worker_error: Exception | None = None
     try:
+        config.export_service.mark_export_job_running(
+            export_job_id,
+            verification_id=safe_requested_verification_id,
+            source_commit=effective_source_commit,
+        )
         if safe_export_type not in {'icpc', 'native'}:
             raise ValueError('unsupported package type')
         if not effective_source_commit:
@@ -502,7 +518,6 @@ def _run_export_create_worker(problem: str, user: str, *, actor_user_id: int, pr
                 source_commit=effective_source_commit,
                 requested_verification_id=safe_requested_verification_id,
             )
-            details['verification_id'] = safe_requested_verification_id
         out = config.export_service.create_export(
             problem,
             safe_requested_verification_id,
@@ -510,40 +525,84 @@ def _run_export_create_worker(problem: str, user: str, *, actor_user_id: int, pr
             workspace_id=int(workspace_id),
             source_commit=effective_source_commit,
         )
-        details['status'] = 'ok'
-        details['filename'] = out.name
+        config.export_service.mark_export_job_succeeded(
+            export_job_id,
+            verification_id=safe_requested_verification_id,
+            export_id=out.parent.name,
+        )
     except Exception as exc:
-        details['status'] = 'failed'
-        details['error'] = str(exc)
-        worker_error = exc
-    audit(actor_user_id, problem_id, 'export.create', details)
-    if worker_error is not None:
-        raise worker_error
+        config.export_service.mark_export_job_failed(export_job_id, str(exc))
+        raise
 
-def start_export_job(problem: str, user: str, *, actor_user_id: int, problem_id: int, workspace_id: int, source_commit: str, requested_verification_id: str, requested_export_type: str, export_task_id: str = "", initial_details: dict[str, object] | None=None) -> bool:
+
+def start_export_job(
+    problem: str,
+    user: str,
+    *,
+    actor_user_id: int,
+    problem_id: int,
+    workspace_id: int,
+    source_commit: str,
+    requested_verification_id: str,
+    requested_export_type: str,
+    export_job_id: str,
+) -> bool:
+    if not export_job_id:
+        raise ValueError("export_job_id is required")
     key = _export_workspace_key(problem_id, workspace_id, source_commit, requested_export_type)
     with config.export_lock:
         if key in config.export_inflight:
             return False
         config.export_inflight.add(key)
-    if initial_details is not None:
-        try:
-            audit(actor_user_id, problem_id, 'export.create', initial_details)
-        except Exception:
-            with config.export_lock:
-                config.export_inflight.discard(key)
-            raise
+    job_created = False
+    try:
+        config.export_service.create_export_job(
+            job_id=export_job_id,
+            problem_id=problem_id,
+            workspace_id=workspace_id,
+            actor_user_id=actor_user_id,
+            verification_id=requested_verification_id,
+            export_type=requested_export_type,
+            source_commit=source_commit,
+        )
+        job_created = True
+        audit(
+            actor_user_id,
+            problem_id,
+            'export.create',
+            {
+                'export_job_id': export_job_id,
+                'export_type': requested_export_type,
+                'source_commit': source_commit,
+            },
+        )
+    except Exception as exc:
+        if job_created:
+            config.export_service.mark_export_job_failed(export_job_id, str(exc))
+        with config.export_lock:
+            config.export_inflight.discard(key)
+        raise
     worker_ref: list[object] = [None]
 
     def _runner() -> None:
         try:
-            _run_export_create_worker(problem, user, actor_user_id=actor_user_id, problem_id=problem_id, workspace_id=workspace_id, source_commit=source_commit, requested_verification_id=requested_verification_id, requested_export_type=requested_export_type, export_task_id=export_task_id)
+            _run_export_create_worker(
+                problem,
+                user,
+                actor_user_id=actor_user_id,
+                problem_id=problem_id,
+                workspace_id=workspace_id,
+                source_commit=source_commit,
+                requested_verification_id=requested_verification_id,
+                requested_export_type=requested_export_type,
+                export_job_id=export_job_id,
+            )
         finally:
             worker = worker_ref[0]
-            if worker is not None:
-                with config.export_lock:
+            with config.export_lock:
+                config.export_inflight.discard(key)
+                if worker is not None:
                     config.export_workers.discard(worker)
-                    config.export_inflight.discard(key)
     thread_name = key.replace(':', '-')
     try:
         worker, queued, submit_reason = config.worker_queue_service.submit(
@@ -557,12 +616,24 @@ def start_export_job(problem: str, user: str, *, actor_user_id: int, problem_id:
         if not queued:
             with config.export_lock:
                 config.export_inflight.discard(key)
+            config.export_service.mark_export_job_failed(
+                export_job_id,
+                f'export queue rejected ({submit_reason})',
+            )
             if submit_reason == 'dedupe_inflight':
                 return False
             raise RuntimeError(f'export queue rejected ({submit_reason})')
         with config.export_lock:
             config.export_workers.add(worker)
+            if not worker.is_alive():
+                config.export_workers.discard(worker)
+                config.export_inflight.discard(key)
     except Exception:
+        if job_created:
+            config.export_service.mark_export_job_failed(
+                export_job_id,
+                'export queue submission failed',
+            )
         with config.export_lock:
             worker = worker_ref[0]
             if worker is not None:

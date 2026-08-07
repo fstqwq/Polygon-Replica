@@ -3,7 +3,6 @@ from __future__ import annotations
 import shutil
 import time
 import warnings
-from pathlib import Path
 
 from app.db import now_iso
 from app.impl.runtime.config import config
@@ -178,10 +177,7 @@ def _startup_clear_all_caches() -> None:
             root.mkdir(parents=True, exist_ok=True)
         except Exception as exc:
             warnings.warn(f"startup {label} recreate failed: {exc}", RuntimeWarning)
-    durable_log_raw = str(_C.WORKER_QUEUE_DURABLE_LOG or "").strip()
     durable_log = (config.fs_manager.runtime_root / "worker-queue-events.jsonl").resolve()
-    if durable_log_raw:
-        durable_log = Path(durable_log_raw).expanduser().resolve()
     try:
         durable_log.unlink(missing_ok=True)
     except Exception as exc:
@@ -202,6 +198,7 @@ def _startup_reset_runtime_state() -> None:
 
 def startup() -> None:
     config.runtime_state_service.initialize_metadata()
+    config.export_service.fail_interrupted_export_jobs()
     config.verification_service.apply_runtime_values(config.constants)
     _startup_reset_runtime_state()
     config.worker_queue_service.start()

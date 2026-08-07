@@ -18,7 +18,11 @@ from tests.ui_support import _flash_messages_from_response, _request
 import app.impl.run_export.export as export_page_module
 import app.impl.run_export.import_source as export_import_module
 from app.impl.run_export.import_source import import_package_as_new_problem
-from app.impl.workspace.context_job import _icpc_verification_has_complete_artifacts, _run_export_create_worker
+from app.impl.workspace.context_job import (
+    _icpc_verification_has_complete_artifacts,
+    _run_export_create_worker,
+    start_export_job,
+)
 from app.impl.runtime.config import config
 import app.service.importing.native as native_import_module
 from app.service.platform.git_process import run_git
@@ -33,6 +37,25 @@ workspace_service = config.workspace_service
 
 
 class TestExport(E2ETestBase):
+    def _create_export_job(
+        self,
+        *,
+        ctx: dict[str, object],
+        job_id: str,
+        verification_id: str,
+        export_type: str,
+        source_commit: str,
+    ) -> None:
+        config.export_service.create_export_job(
+            job_id=job_id,
+            problem_id=int(ctx["problem"]["id"]),
+            workspace_id=int(ctx["workspace"]["id"]),
+            actor_user_id=int(ctx["user"]["id"]),
+            verification_id=verification_id,
+            export_type=export_type,
+            source_commit=source_commit,
+        )
+
     def _seed_export_tests(self, workspace: Path, token: str) -> list[str]:
         tracked = [
             f"tests/manual/{token}.in",
@@ -45,6 +68,132 @@ class TestExport(E2ETestBase):
             encoding="utf-8",
         )
         return tracked
+
+    def test_export_jobs_have_canonical_states_and_restart_fails_active_jobs(self) -> None:
+        ctx = workspace_service.workspace_context(
+            self.problem,
+            self.user,
+            include_recent=False,
+        )
+        problem_id = int(ctx["problem"]["id"])
+        workspace_id = int(ctx["workspace"]["id"])
+        actor_user_id = int(ctx["user"]["id"])
+        for job_id in ("job-queued", "job-running", "job-failed", "job-succeeded"):
+            self._create_export_job(
+                ctx=ctx,
+                job_id=job_id,
+                verification_id="",
+                export_type="native",
+                source_commit="a" * 40,
+            )
+        export_service.mark_export_job_running(
+            "job-running",
+            verification_id="",
+            source_commit="a" * 40,
+        )
+        export_service.mark_export_job_failed("job-failed", "expected failure")
+        db_execute(
+            """
+            INSERT INTO exports(
+                id,problem_id,verification_id,workspace_id,export_type,
+                filename,sha256,size_bytes,source_commit,created_at
+            ) VALUES(?,?,?,?,?,?,?,?,?,?)
+            """,
+            [
+                "export-succeeded",
+                problem_id,
+                "",
+                workspace_id,
+                "native",
+                "package.zip",
+                "b" * 64,
+                1,
+                "a" * 40,
+                "2026-08-08T00:00:00Z",
+            ],
+        )
+        export_service.mark_export_job_running(
+            "job-succeeded",
+            verification_id="",
+            source_commit="a" * 40,
+        )
+        export_service.mark_export_job_succeeded(
+            "job-succeeded",
+            verification_id="",
+            export_id="export-succeeded",
+        )
+
+        rows = export_service.workspace_export_jobs(
+            problem_id,
+            workspace_id,
+            actor_user_id,
+            limit=10,
+        )
+        states = {str(row["id"]): str(row["status"]) for row in rows}
+        self.assertEqual(
+            states,
+            {
+                "job-queued": "queued",
+                "job-running": "running",
+                "job-failed": "failed",
+                "job-succeeded": "succeeded",
+            },
+        )
+        db_execute("DELETE FROM exports WHERE id=?", ["export-succeeded"])
+        succeeded_without_product = export_service.export_job(
+            problem_id,
+            workspace_id,
+            actor_user_id,
+            "job-succeeded",
+        )
+        self.assertIsNotNone(succeeded_without_product)
+        self.assertEqual(str(succeeded_without_product["status"]), "succeeded")
+        self.assertEqual(str(succeeded_without_product["export_id"]), "")
+
+        self.assertEqual(export_service.fail_interrupted_export_jobs(), 2)
+        for job_id in ("job-queued", "job-running"):
+            row = export_service.export_job(
+                problem_id,
+                workspace_id,
+                actor_user_id,
+                job_id,
+            )
+            self.assertIsNotNone(row)
+            self.assertEqual(str(row["status"]), "failed")
+            self.assertIn("application restart", str(row["error"]))
+
+    def test_export_queue_rejection_persists_failed_job(self) -> None:
+        ctx = workspace_service.workspace_context(
+            self.problem,
+            self.user,
+            include_recent=False,
+        )
+        with patch.object(
+            config.worker_queue_service,
+            "submit",
+            return_value=(object(), False, "queue_full"),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "queue rejected"):
+                start_export_job(
+                    self.problem,
+                    self.user,
+                    actor_user_id=int(ctx["user"]["id"]),
+                    problem_id=int(ctx["problem"]["id"]),
+                    workspace_id=int(ctx["workspace"]["id"]),
+                    source_commit="c" * 40,
+                    requested_verification_id="",
+                    requested_export_type="native",
+                    export_job_id="job-queue-rejected",
+                )
+        row = export_service.export_job(
+            int(ctx["problem"]["id"]),
+            int(ctx["workspace"]["id"]),
+            int(ctx["user"]["id"]),
+            "job-queue-rejected",
+        )
+        self.assertIsNotNone(row)
+        self.assertEqual(str(row["status"]), "failed")
+        self.assertIn("queue rejected", str(row["error"]))
 
     def _insert_complete_export_artifacts(self, verification_id: str, test_id: str = "001") -> None:
         test_name = f"{test_id}.in"
@@ -253,6 +402,14 @@ class TestExport(E2ETestBase):
         )
         ctx = workspace_service.workspace_context(self.problem, self.user, include_recent=False)
         verification_id = f"ver-export-auto-{token}"
+        export_job_id = f"exp-test-{token}"
+        self._create_export_job(
+            ctx=ctx,
+            job_id=export_job_id,
+            verification_id=verification_id,
+            export_type="icpc",
+            source_commit=head,
+        )
 
         def _fake_dag(_problem: str, _user: str, **kwargs) -> None:
             self.assertEqual(str(kwargs["source_commit"]), head)
@@ -288,7 +445,7 @@ class TestExport(E2ETestBase):
                 source_commit=head,
                 requested_verification_id=verification_id,
                 requested_export_type="icpc",
-                export_task_id=f"exp-test-{token}",
+                export_job_id=export_job_id,
             )
 
         export_row = db_fetch_one(
@@ -315,6 +472,14 @@ class TestExport(E2ETestBase):
         )
         ctx = workspace_service.workspace_context(self.problem, self.user, include_recent=False)
         verification_id = f"ver-export-fail-{token}"
+        export_job_id = f"exp-test-fail-{token}"
+        self._create_export_job(
+            ctx=ctx,
+            job_id=export_job_id,
+            verification_id=verification_id,
+            export_type="icpc",
+            source_commit=head,
+        )
 
         def _fake_dag(_problem: str, _user: str, **kwargs) -> None:
             config.verification_service.begin_verification_record(
@@ -345,7 +510,7 @@ class TestExport(E2ETestBase):
                     source_commit=head,
                     requested_verification_id=verification_id,
                     requested_export_type="icpc",
-                    export_task_id=f"exp-test-fail-{token}",
+                    export_job_id=export_job_id,
                 )
 
         export_count = int(db_fetch_one("SELECT COUNT(*) AS c FROM exports WHERE source_commit=?", [head])["c"])
@@ -364,6 +529,14 @@ class TestExport(E2ETestBase):
         )
         ctx = workspace_service.workspace_context(self.problem, self.user, include_recent=False)
         verification_id = f"ver-export-warn-{token}"
+        export_job_id = f"exp-test-warn-{token}"
+        self._create_export_job(
+            ctx=ctx,
+            job_id=export_job_id,
+            verification_id=verification_id,
+            export_type="icpc",
+            source_commit=head,
+        )
 
         def _fake_dag(_problem: str, _user: str, **kwargs) -> None:
             config.verification_service.begin_verification_record(
@@ -399,20 +572,14 @@ class TestExport(E2ETestBase):
                 source_commit=head,
                 requested_verification_id=verification_id,
                 requested_export_type="icpc",
-                export_task_id=f"exp-test-warn-{token}",
+                export_job_id=export_job_id,
             )
 
         export_count = int(db_fetch_one("SELECT COUNT(*) AS c FROM exports WHERE source_commit=?", [head])["c"])
         self.assertEqual(export_count, 1)
 
-    def test_export_validation_fallback_requires_explicit_verification_id(self) -> None:
-        resolved = export_page_module._resolve_export_verification_id(
-            problem_id=1,
-            workspace_id=1,
-            verification_id="",
-            source_commit="abc123def456",
-        )
-        self.assertEqual(resolved, "")
+    def test_export_activity_has_no_verification_fallback(self) -> None:
+        self.assertFalse(hasattr(export_page_module, "_resolve_export_verification_id"))
 
     def test_build_validation_status_respects_explicit_unknown_metadata(self) -> None:
         status = export_page_module.build_validation_status(
@@ -758,7 +925,13 @@ class TestExport(E2ETestBase):
             self.assertNotIn("problem_format_version", problem_yaml)
         export_row = db_fetch_one("SELECT id FROM exports WHERE filename=?", [archive.name])
         self.assertIsNotNone(export_row)
-        summary = export_page_module._export_archive_summary(self.problem, str(export_row["id"]), archive.name)
+        summary = export_page_module._export_archive_summary(
+            self.problem,
+            int(ctx["problem"]["id"]),
+            int(ctx["workspace"]["id"]),
+            str(export_row["id"]),
+            archive.name,
+        )
         self.assertEqual(int(summary.get("tests_total") or 0), 2)
         self.assertEqual(int(summary.get("solutions_total") or 0), 1)
 
@@ -1539,8 +1712,7 @@ class TestExport(E2ETestBase):
         self.assertTrue(requested_verification_id.startswith("ver-"))
         self.assertNotEqual(requested_verification_id, "client-provided-id-is-ignored")
         self.assertEqual(str(start_job.call_args.kwargs["source_commit"]), head)
-        initial_details = dict(start_job.call_args.kwargs["initial_details"])
-        self.assertEqual(str(initial_details["verification_id"]), requested_verification_id)
+        self.assertTrue(str(start_job.call_args.kwargs["export_job_id"]).startswith("exp-"))
 
     def test_native_export_route_requires_committed_revision(self) -> None:
         resp = export_page_module.export_create(self.problem, self.user, verification_id="", export_type="native")
@@ -1568,64 +1740,67 @@ class TestExport(E2ETestBase):
             source_commit=head,
         )
         self.assertTrue(archive.exists())
+        self._create_export_job(
+            ctx=ctx,
+            job_id="task-ok",
+            verification_id="",
+            export_type="native",
+            source_commit=head,
+        )
+        export_service.mark_export_job_running(
+            "task-ok",
+            verification_id="",
+            source_commit=head,
+        )
+        export_service.mark_export_job_succeeded(
+            "task-ok",
+            verification_id="",
+            export_id=archive.parent.name,
+        )
+        self._create_export_job(
+            ctx=ctx,
+            job_id="task-running",
+            verification_id="",
+            export_type="native",
+            source_commit=head,
+        )
+        export_service.mark_export_job_running(
+            "task-running",
+            verification_id="",
+            source_commit=head,
+        )
         db_execute(
-            "INSERT INTO audit_log(actor_user_id,problem_id,action,details_json,created_at) VALUES(?,?,?,?,?)",
+            """
+            INSERT INTO audit_log(
+                actor_user_id,problem_id,action,details_json,created_at
+            ) VALUES(?,?,?,?,?)
+            """,
             [
                 int(ctx["user"]["id"]),
                 int(ctx["problem"]["id"]),
                 "export.create",
-                json.dumps(
-                    {
-                        "status": "running",
-                        "export_type": "native",
-                        "source_commit": head,
-                        "verification_id": "",
-                        "filename": "",
-                        "error": "",
-                        "export_task_id": "task-ok",
-                    }
-                ),
-                "2026-04-12T02:09:02Z",
+                json.dumps({"status": "failed", "error": "legacy-audit-marker"}),
+                "2026-04-12T02:09:05Z",
             ],
         )
         db_execute(
-            "INSERT INTO audit_log(actor_user_id,problem_id,action,details_json,created_at) VALUES(?,?,?,?,?)",
+            """
+            INSERT INTO exports(
+                id,problem_id,verification_id,workspace_id,export_type,
+                filename,sha256,size_bytes,source_commit,created_at
+            ) VALUES(?,?,?,?,?,?,?,?,?,?)
+            """,
             [
-                int(ctx["user"]["id"]),
+                "legacy-export-without-job",
                 int(ctx["problem"]["id"]),
-                "export.create",
-                json.dumps(
-                    {
-                        "status": "ok",
-                        "export_type": "native",
-                        "source_commit": head,
-                        "verification_id": "",
-                        "filename": archive.name,
-                        "error": "",
-                        "export_task_id": "task-ok",
-                    }
-                ),
-                "2026-04-12T02:09:03Z",
-            ],
-        )
-        db_execute(
-            "INSERT INTO audit_log(actor_user_id,problem_id,action,details_json,created_at) VALUES(?,?,?,?,?)",
-            [
-                int(ctx["user"]["id"]),
-                int(ctx["problem"]["id"]),
-                "export.create",
-                json.dumps(
-                    {
-                        "status": "running",
-                        "export_type": "native",
-                        "source_commit": head,
-                        "verification_id": "",
-                        "filename": "",
-                        "error": "",
-                        "export_task_id": "task-running",
-                    }
-                ),
-                "2026-04-12T02:09:04Z",
+                "",
+                int(ctx["workspace"]["id"]),
+                "native",
+                "legacy-only.zip",
+                "e" * 64,
+                1,
+                "f" * 40,
+                "2026-04-12T02:09:06Z",
             ],
         )
 
@@ -1647,7 +1822,9 @@ class TestExport(E2ETestBase):
         self.assertIn(f'/problems/{self.problem}/export/import', html)
         self.assertIn(">running<", html)
         self.assertEqual(html.count(">RUNNING<"), 1)
-        self.assertEqual(html.count(">OK<"), 1)
+        self.assertEqual(html.count(">SUCCEEDED<"), 1)
+        self.assertNotIn("legacy-audit-marker", html)
+        self.assertNotIn("legacy-only.zip", html)
         revision = run_git(["git", "-C", str(ws), "rev-list", "--count", head]).stdout.strip()
         self.assertIn(f">v{revision}<", html)
         self.assertNotIn(f">{head[:8]}<", html)
@@ -1655,26 +1832,14 @@ class TestExport(E2ETestBase):
     def test_export_page_failed_activity_keeps_export_error_over_verification_warning(self) -> None:
         ctx = workspace_service.workspace_context(self.problem, self.user, include_recent=False)
         export_error = "export missing verification answer artifact: 001.ans"
-        db_execute(
-            "INSERT INTO audit_log(actor_user_id,problem_id,action,details_json,created_at) VALUES(?,?,?,?,?)",
-            [
-                int(ctx["user"]["id"]),
-                int(ctx["problem"]["id"]),
-                "export.create",
-                json.dumps(
-                    {
-                        "status": "failed",
-                        "export_type": "icpc",
-                        "source_commit": "abc123",
-                        "verification_id": "ver-export-warning-hidden",
-                        "filename": "",
-                        "error": export_error,
-                        "export_task_id": "task-failed-answer",
-                    }
-                ),
-                "2026-04-12T02:10:00Z",
-            ],
+        self._create_export_job(
+            ctx=ctx,
+            job_id="task-failed-answer",
+            verification_id="ver-export-warning-hidden",
+            export_type="icpc",
+            source_commit="abc123",
         )
+        export_service.mark_export_job_failed("task-failed-answer", export_error)
 
         with patch.object(
             export_page_module,
@@ -1974,7 +2139,7 @@ class TestExport(E2ETestBase):
             content = zf.read("problem.yaml").decode("utf-8", errors="replace")
             self.assertNotIn("problem_format_version:", content)
 
-    def test_export_keeps_only_latest_record_per_revision(self) -> None:
+    def test_export_products_remain_available_until_artifact_cleanup(self) -> None:
         ws = Path(self._workspace_path())
         token = uuid.uuid4().hex[:8]
         rel = f"solutions/ac_latest_{token}.cpp"
@@ -2002,6 +2167,7 @@ class TestExport(E2ETestBase):
             source_commit=head,
         )
         self.assertTrue(second.exists())
+        self.assertTrue(first.exists())
         self.assertEqual(first.name, second.name)
 
         ctx = workspace_service.workspace_context(self.problem, self.user, include_recent=False)
@@ -2016,8 +2182,11 @@ class TestExport(E2ETestBase):
             """,
             [problem_id, workspace_id, head],
         )
-        self.assertEqual(len(rows), 1)
-        self.assertEqual(str(rows[0]["verification_id"]), "")
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(
+            {str(row["verification_id"]) for row in rows},
+            {""},
+        )
 
     def test_export_includes_statement_pdf_when_export_compile_succeeds(self) -> None:
         ws = Path(self._workspace_path())
@@ -2089,7 +2258,13 @@ class TestExport(E2ETestBase):
             ],
         )
 
-        summary = export_page_module._export_archive_summary(self.problem, "e-summary-pdf", archive.name)
+        summary = export_page_module._export_archive_summary(
+            self.problem,
+            problem_id,
+            workspace_id,
+            "e-summary-pdf",
+            archive.name,
+        )
 
         self.assertTrue(summary["available"])
         self.assertTrue(summary["has_pdf"])

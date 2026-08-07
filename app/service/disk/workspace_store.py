@@ -811,6 +811,7 @@ class WorkspaceDiskStore:
                         if token and token not in collected_run_ids:
                             collected_run_ids.append(token)
             conn.execute("DELETE FROM contest_problems WHERE problem_id=?", [int(problem_id)])
+            conn.execute("DELETE FROM export_jobs WHERE problem_id=?", [int(problem_id)])
             conn.execute("DELETE FROM exports WHERE problem_id=?", [int(problem_id)])
             conn.execute("DELETE FROM previews WHERE problem_id=?", [int(problem_id)])
             conn.execute(

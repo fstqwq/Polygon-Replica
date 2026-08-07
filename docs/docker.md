@@ -57,6 +57,8 @@ into the container by adding it to the `environment:` block:
 From the repository root:
 
 ```bash
+sudo install -d -o 1000 -g 1000 -m 0700 /var/backups/polygon-replica
+printf '%s\n' 'POLYGON_REPLICA_BACKUP_HOST_DIR=/var/backups/polygon-replica' >> .env
 sudo docker compose build
 sudo docker compose up -d
 sudo docker compose logs -f app
@@ -65,6 +67,13 @@ sudo docker compose logs -f app
 The container exposes the web app on `127.0.0.1:8001`. Volumes
 `srv`, `var`, and `cache` hold the same content as the host paths under
 `/srv/polygon-replica`, `/var/lib/polygon-replica`, and `/tmp/polygon-replica`.
+Contest sources are stored at `/var/lib/polygon-replica/contest-sources` in the
+durable `var` volume and are not part of Git or the cleanup cache.
+`POLYGON_REPLICA_BACKUP_HOST_DIR` is bind-mounted at
+`/var/backups/polygon-replica`; create it with UID/GID 1000 ownership before the
+first `docker compose up`. It is not a named volume and cleanup never accesses it.
+The Compose variable is required so a missing bind mount cannot silently place
+permanent backups inside the checkout or an anonymous container layer.
 
 The entrypoint runs a bubblewrap probe and exits non-zero if user namespaces
 are not available. If you see that error, recheck the sysctl prep above.
@@ -142,7 +151,27 @@ sudo docker run --rm \
   /srv/polygon-replica /var/lib/polygon-replica
 ```
 
-The `cache` volume is regeneration-safe and does not need backups.
+The `cache` volume is regeneration-safe and does not need backups. Contest sources
+live in the durable `var` volume; operator-managed backup archives live in the
+required host bind mount.
+
+## Administrator Artifact Cleanup
+
+A system administrator can start cleanup from Settings. It removes generated
+previews, export jobs and archives,
+contest build jobs and artifacts, verification results, runtime cache, and every
+audit entry preceding that cleanup. Git repositories, workspaces, contest source
+attachments, backup archives, users, ACLs, contest definitions, and configuration
+remain untouched.
+
+Cleanup is globally exclusive. A busy worker, judgehost lease/report, or ordinary
+HTTP request causes an immediate `409`; the app does not wait or cancel work.
+Once admitted, ordinary UI/API requests receive raw `503` responses with
+`Retry-After: 5`. Authenticated judgehost `fetch-work` polling remains healthy and
+returns `200 []` until maintenance finishes.
+
+This coordination is process-local. Keep a single app container and do not scale
+the service to multiple replicas while this cleanup implementation is in use.
 
 ## Troubleshooting
 

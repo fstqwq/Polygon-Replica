@@ -60,7 +60,10 @@ RUN install -d -o judgehost -g judgehost -m 0755 \
         /srv/polygon-replica/export \
         /var/lib/polygon-replica \
         /var/lib/polygon-replica/tls \
-        /tmp/polygon-replica
+        /var/lib/polygon-replica/contest-sources \
+        /var/backups/polygon-replica \
+        /tmp/polygon-replica \
+    && chmod 0700 /var/backups/polygon-replica
 
 WORKDIR /opt/polygon-replica
 USER judgehost
@@ -81,6 +84,8 @@ ENV POLYGON_REPLICA_DB=/var/lib/polygon-replica/metadata.db \
     POLYGON_REPLICA_WORKSPACE_ROOT=/srv/polygon-replica/workspaces \
     POLYGON_REPLICA_ARTIFACTS_ROOT=/srv/polygon-replica/export \
     POLYGON_REPLICA_CACHE_ROOT=/tmp/polygon-replica \
+    POLYGON_REPLICA_CONTEST_SOURCE_ROOT=/var/lib/polygon-replica/contest-sources \
+    POLYGON_REPLICA_BACKUP_ROOT=/var/backups/polygon-replica \
     POLYGON_REPLICA_AUTH_COOKIE_SECURE=1
 
 EXPOSE 8001

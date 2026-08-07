@@ -11,7 +11,9 @@ from starlette.responses import PlainTextResponse
 from app.service.auth.password_hash import password_verifier_storage_hash
 from app import main_constant
 from app.impl.auth.password_envelope import PasswordEnvelopeStore
+from app.impl.problem.setting import settings_artifacts_cleanup
 from app.impl.root.auth_pages import logout
+from app.service.platform.maintenance import CleanupStart
 from tests.common import E2ETestBase
 
 from tests.ui_support import (
@@ -1124,6 +1126,39 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         self.assertIn("Judging", html)
         self.assertIn("User Administration", html)
         self.assertIn("Reset User Password", html)
+        self.assertIn('/settings/artifacts/cleanup', html)
+        self.assertIn("ALL PREVIOUS AUDIT HISTORY", html)
+
+    def test_artifact_cleanup_admin_action_redirects_or_returns_busy_counts(self) -> None:
+        db_execute("UPDATE users SET is_system_admin=0")
+        db_execute("UPDATE users SET is_system_admin=1 WHERE username=?", ["alice"])
+        workspace_service.clear_identity_caches()
+
+        with patch.object(
+            config.maintenance_service,
+            "start_cleanup",
+            return_value=CleanupStart(True, "started", {}),
+        ):
+            accepted = settings_artifacts_cleanup(user="alice")
+        self.assertEqual(accepted.status_code, 303)
+        self.assertEqual(accepted.headers.get("location"), "/maintenance")
+
+        busy_counts = {
+            "worker_queued": 1,
+            "worker_running": 0,
+            "judgehost_queued": 0,
+            "judgehost_leased": 0,
+            "judgehost_reporting": 0,
+            "inflight_requests": 0,
+        }
+        with patch.object(
+            config.maintenance_service,
+            "start_cleanup",
+            return_value=CleanupStart(False, "busy", busy_counts),
+        ):
+            busy = settings_artifacts_cleanup(user="alice")
+        self.assertEqual(busy.status_code, 409)
+        self.assertIn(b'"worker_queued":1', busy.body)
 
     def test_settings_page_system_admin_can_search_user_list(self) -> None:
         match_user = self.random_id("lookupa")

@@ -6,10 +6,46 @@ import threading
 import unittest
 from pathlib import Path
 
+from app.service.platform.admission import MaintenanceAdmissionGate
 from app.service.platform.worker_queue import WorkerQueueService
 
 
 class TestWorkerQueueService(unittest.TestCase):
+    def test_admission_close_and_submit_share_one_atomic_boundary(self) -> None:
+        service = WorkerQueueService(worker_count=1, queue_capacity=4, history_limit=64)
+        gate = MaintenanceAdmissionGate()
+        service.set_admission_gate(gate)
+        submitted = threading.Event()
+        result: list[tuple[object, bool, str]] = []
+
+        def _submit() -> None:
+            result.append(
+                service.submit(
+                    name="must-not-run",
+                    fn=lambda: submitted.set(),
+                    queue_name="test",
+                    job_type="run",
+                )
+            )
+
+        try:
+            with gate.locked():
+                thread = threading.Thread(target=_submit)
+                thread.start()
+                gate.close_locked()
+            thread.join(timeout=2)
+            self.assertFalse(thread.is_alive())
+            self.assertEqual(len(result), 1)
+            self.assertFalse(result[0][1])
+            self.assertEqual(result[0][2], "maintenance")
+            self.assertFalse(submitted.is_set())
+            self.assertEqual(service.active_counts(), {"queued": 0, "running": 0})
+            self.assertEqual(service.snapshot(limit=20).get("jobs"), [])
+        finally:
+            with gate.locked():
+                gate.open_locked()
+            service.stop()
+
     def test_submit_rejects_when_queue_is_full(self) -> None:
         service = WorkerQueueService(worker_count=1, queue_capacity=1, history_limit=64)
         started = threading.Event()
@@ -130,4 +166,3 @@ class TestWorkerQueueService(unittest.TestCase):
             self.assertEqual(str(top_codes[0].get("code") or ""), "compile_error")
         finally:
             service.stop()
-

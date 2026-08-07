@@ -6,7 +6,7 @@ import shutil
 import uuid
 import zipfile
 from pathlib import Path
-from typing import Annotated, TypedDict, cast
+from typing import Annotated, cast
 
 from fastapi import Form, Request, Depends
 from fastapi.responses import FileResponse
@@ -19,23 +19,12 @@ from app.service.repository.revision import git_commit_count, verification_sourc
 from app.impl.workspace.context_job import start_export_job
 from app.impl.workspace.context_job_helper import allocate_verification_id
 from app.impl.workspace.context_ui import page_ctx
-from app.impl.workspace.context_operation import audit
 from app.impl.run_export.query import (
     _verification_runtime_progress,
     _count_label,
     _verification_href,
 )
 from app.service.verification.validation_status import build_validation_status
-
-
-class ExportAuditDetails(TypedDict):
-    status: str
-    export_type: str
-    source_commit: str
-    verification_id: str
-    filename: str
-    error: str
-    export_task_id: str
 
 
 def _export_type_display(export_type: str) -> str:
@@ -50,111 +39,13 @@ def _source_revision_display(workspace: Path, source_commit: str, revision_cache
     return verification_source_display(workspace, source_commit, revision_cache)
 
 
-def _parse_export_audit_details(raw: str | None) -> ExportAuditDetails:
-    details: dict[str, object] = {}
-    if raw is not None:
-        text = raw.strip()
-        if text:
-            try:
-                details = cast(dict[str, object], json.loads(text))
-            except Exception:
-                details = {}
-    status = cast(str | None, details.get("status"))
-    export_type = cast(str | None, details.get("export_type"))
-    source_commit = cast(str | None, details.get("source_commit"))
-    verification_id = cast(str | None, details.get("verification_id"))
-    filename = cast(str | None, details.get("filename"))
-    error = cast(str | None, details.get("error"))
-    export_task_id = cast(str | None, details.get("export_task_id"))
-    return {
-        "status": "unknown" if status is None else status,
-        "export_type": "icpc" if export_type is None else export_type,
-        "source_commit": "" if source_commit is None else source_commit,
-        "verification_id": "" if verification_id is None else verification_id,
-        "filename": "" if filename is None else filename.strip(),
-        "error": "" if error is None else error.strip(),
-        "export_task_id": "" if export_task_id is None else export_task_id.strip(),
-    }
-
-
-def _export_recent_events(
-    problem_id: int,
-    actor_user_id: int,
-    *,
-    problem_slug: str,
-    username: str,
-    workspace: Path,
-    revision_cache: dict[str, int | None],
-    limit: int = 20,
-) -> list[dict[str, object]]:
-    cap = max(1, min(100, int(limit)))
-    rows = config.export_service.export_audit_rows(int(problem_id), int(actor_user_id), limit=cap)
-    result: list[dict[str, object]] = []
-    for row in rows:
-        item = dict(row)
-        details = _parse_export_audit_details(cast(str | None, item.get("details_json")))
-        status = details["status"]
-        source_commit = details["source_commit"]
-        verification_id = details["verification_id"]
-        filename = details["filename"]
-        error_text = details["error"]
-        detail = filename if filename else (error_text if error_text else "-")
-        runtime_progress = _verification_runtime_progress(
-            problem_id=int(problem_id),
-            problem_slug=problem_slug,
-            username=username,
-            verification_id=verification_id,
-            event_status=status,
-        )
-        runtime_detail = runtime_progress["detail"]
-        log_href = runtime_progress["log_href"]
-        use_runtime_detail = bool(runtime_detail) and (
-            status == "running"
-            or not error_text
-            or error_text.startswith("verification failed:")
-        )
-        if use_runtime_detail:
-            detail = runtime_detail
-        verification_href = _verification_href(
-            problem_id=int(problem_id),
-            problem_slug=problem_slug,
-            username=username,
-            verification_id=verification_id,
-        )
-        result.append(
-            {
-                "created_at": item.get("created_at"),
-                "status": status,
-                "export_type": details["export_type"],
-                "source_commit": source_commit,
-                "source_display": _source_revision_display(workspace, source_commit, revision_cache),
-                "verification_id": verification_id or "-",
-                "export_task_id": details["export_task_id"],
-                "filename": filename,
-                "detail": detail,
-                "running": status == "running",
-                "verification_href": verification_href,
-                "log_href": log_href,
-            }
-        )
-    return result
-
-def _resolve_export_verification_id(
-    *,
+def _export_archive_summary(
+    problem: str,
     problem_id: int,
     workspace_id: int,
-    verification_id: str,
-    source_commit: str,
-) -> str:
-    safe_verification_id = str(verification_id or "")
-    if safe_verification_id:
-        return safe_verification_id
-    _ = problem_id
-    _ = workspace_id
-    _ = source_commit
-    return ""
-
-def _export_archive_summary(problem: str, export_id: str, filename: str) -> dict[str, object]:
+    export_id: str,
+    filename: str,
+) -> dict[str, object]:
     result: dict[str, object] = {
         "available": False,
         "has_pdf": False,
@@ -165,7 +56,13 @@ def _export_archive_summary(problem: str, export_id: str, filename: str) -> dict
     archive_name = Path(filename.strip()).name
     if not export_id or not archive_name:
         return result
-    archive_path = _resolve_export_archive_path(problem, export_id, archive_name)
+    archive_path = _resolve_export_archive_path(
+        problem,
+        problem_id,
+        workspace_id,
+        export_id,
+        archive_name,
+    )
     if archive_path is None:
         return result
     if not archive_path.exists() or not archive_path.is_file() or archive_path.is_symlink():
@@ -240,19 +137,19 @@ def _export_archive_summary(problem: str, export_id: str, filename: str) -> dict
     result["tests_total"] = int(tests_total)
     return result
 
-def _resolve_export_archive_path(problem: str, export_id: str, filename: str) -> Path | None:
+def _resolve_export_archive_path(
+    problem: str,
+    problem_id: int,
+    workspace_id: int,
+    export_id: str,
+    filename: str,
+) -> Path | None:
     archive_name = Path(filename.strip()).name
     if (not export_id) or (not archive_name):
         return None
-    problem_id = config.workspace_service.known_problem_id(problem)
-    if problem_id is None:
-        return None
-    owner = problem.split("/", 1)[0]
-    workspace_ctx = config.workspace_service.workspace_context(problem, owner, include_recent=False)
-    workspace_id = int(workspace_ctx["workspace"]["id"])
     return config.export_service.export_archive_path(
-        int(problem_id),
-        int(workspace_id),
+        problem_id,
+        workspace_id,
         export_id,
         problem,
         archive_name,
@@ -279,39 +176,36 @@ def export_page(request: Request, problem: str, user: Annotated[str, Depends(req
         if head_commit
         else 'Native (requires committed revision)'
     )
-    exports_rows = config.export_service.workspace_exports(int(ctx['problem']['id']), int(workspace_id), limit=40)
+    job_rows = config.export_service.workspace_export_jobs(
+        problem_id,
+        int(workspace_id),
+        actor_user_id,
+        limit=40,
+    )
     revision_cache: dict[str, int | None] = {}
     verification_meta_cache: dict[str, dict[str, object] | None] = {}
     archive_summary_cache: dict[tuple[str, str], dict[str, object]] = {}
-    exports: list[dict[str, object]] = []
-    for row in exports_rows:
+    activity_rows: list[dict[str, object]] = []
+    for row in job_rows:
         item = dict(row)
-        source_commit = cast(str | None, item.get("source_commit"))
-        if source_commit is None:
-            source_commit = ""
-        item['source_display'] = _source_revision_display(workspace, source_commit, revision_cache)
-        stored_filename = cast(str | None, item.get("filename"))
-        if stored_filename is None:
-            stored_filename = ""
-        else:
-            stored_filename = Path(stored_filename.strip()).name
+        source_commit = cast(str, item["source_commit"])
+        source_display = _source_revision_display(workspace, source_commit, revision_cache)
+        stored_filename = Path(cast(str, item["filename"])).name if item["filename"] else ""
+        export_id = cast(str, item["export_id"])
+        status = cast(str, item["status"])
+        error_text = cast(str, item["error"])
+        verification_id = cast(str, item["verification_id"])
         problem_slug = cast(str, ctx["problem"]["slug"])
         fallback_stem = Path(problem_slug).name
         if not fallback_stem:
             fallback_stem = "problem"
         native_export = cast(str, item["export_type"]) == "native"
-        if native_export and item["source_display"] == "Workspace":
-            item['display_filename'] = stored_filename or f"{fallback_stem}.zip"
+        if native_export and source_display == "Workspace":
+            display_filename = stored_filename or f"{fallback_stem}.zip"
         elif native_export:
-            item['display_filename'] = stored_filename or f"{fallback_stem}-native-{item['source_display']}.zip"
+            display_filename = stored_filename or f"{fallback_stem}-native-{source_display}.zip"
         else:
-            item['display_filename'] = stored_filename or f"{fallback_stem}-{item['source_display']}.zip"
-        verification_id = _resolve_export_verification_id(
-            problem_id=problem_id,
-            workspace_id=int(workspace_id),
-            verification_id=cast(str | None, item.get("verification_id")) or "",
-            source_commit=source_commit,
-        )
+            display_filename = stored_filename or f"{fallback_stem}-{source_display}.zip"
         verification_meta = verification_meta_cache.get(verification_id)
         if verification_id and (verification_meta is None) and (verification_id not in verification_meta_cache):
             verification_meta = config.verification_service.workspace_verification_detail(
@@ -320,75 +214,65 @@ def export_page(request: Request, problem: str, user: Annotated[str, Depends(req
                 verification_id,
             )
             verification_meta_cache[verification_id] = verification_meta
-        validation_status = build_validation_status(verification_meta)
-        summary_bits: list[str] = [validation_status]
-        summary_key = (cast(str, item["id"]), stored_filename)
-        archive_summary = archive_summary_cache.get(summary_key)
-        if archive_summary is None:
-            archive_summary = _export_archive_summary(problem, summary_key[0], summary_key[1])
-            archive_summary_cache[summary_key] = archive_summary
-        tests_total = archive_summary.get("tests_total")
-        if bool(archive_summary.get("available")):
-            summary_bits.insert(0, "has pdf" if bool(archive_summary.get("has_pdf")) else "no pdf")
-            solutions_total = archive_summary.get("solutions_total")
-            solutions_correct = archive_summary.get("solutions_correct")
-            if solutions_total is not None and solutions_correct is not None:
-                summary_bits.append(f"{_count_label(solutions_total, 'solution')} ({solutions_correct} correct)")
-        if tests_total is not None:
-            summary_bits.append(_count_label(tests_total, "test"))
-        item["summary_display"] = f"{item['source_display']} ({', '.join(summary_bits)})" if summary_bits else item["source_display"]
-        item["activity_detail"] = f"{item['display_filename']} ({', '.join(summary_bits)})" if summary_bits else item["display_filename"]
-        exports.append(item)
-    export_events = _export_recent_events(
-        problem_id,
-        actor_user_id,
-        problem_slug=ctx["problem"]["slug"],
-        username=ctx["user"]["username"],
-        workspace=workspace,
-        revision_cache=revision_cache,
-        limit=20,
-    )
-    export_row_index: dict[tuple[str, str, str], dict[str, object]] = {}
-    for item in exports:
-        export_row_index[(cast(str, item["export_type"]), cast(str, item["source_commit"]), cast(str, item["filename"]))] = item
-    activity_rows: list[dict[str, object]] = []
-    seen_task_ids: set[str] = set()
-    for e in export_events:
-        task_id = cast(str, e["export_task_id"])
-        if task_id:
-            if task_id in seen_task_ids:
-                continue
-            seen_task_ids.add(task_id)
-        status = cast(str, e["status"])
-        export_row = export_row_index.get(
-            (
-                cast(str, e["export_type"]),
-                cast(str, e["source_commit"]),
-                cast(str, e["filename"]),
-            )
+        runtime_progress = _verification_runtime_progress(
+            problem_id=problem_id,
+            problem_slug=problem_slug,
+            username=cast(str, ctx["user"]["username"]),
+            verification_id=verification_id,
+            event_status=status,
         )
-        if status == "ok" and export_row is not None:
-            activity_rows.append(
-                {
-                    "created_at": export_row["created_at"],
-                    "type_display": _export_type_display(cast(str, export_row["export_type"])),
-                    "source_display": export_row["source_display"],
-                    "status": "ok",
-                    "detail": export_row["activity_detail"],
-                    "open_href": f"/problems/{ctx['problem']['slug']}/exports/{export_row['id']}/{export_row['filename']}",
-                    "open_label": "zip",
-                }
-            )
-            continue
+        verification_href = _verification_href(
+            problem_id=problem_id,
+            problem_slug=problem_slug,
+            username=cast(str, ctx["user"]["username"]),
+            verification_id=verification_id,
+        )
+        detail = error_text or status
+        open_href = verification_href
+        open_label = "open"
+        if status == "succeeded" and export_id and stored_filename:
+            validation_status = build_validation_status(verification_meta)
+            summary_bits: list[str] = [validation_status]
+            summary_key = (export_id, stored_filename)
+            archive_summary = archive_summary_cache.get(summary_key)
+            if archive_summary is None:
+                archive_summary = _export_archive_summary(
+                    problem,
+                    problem_id,
+                    int(workspace_id),
+                    export_id,
+                    stored_filename,
+                )
+                archive_summary_cache[summary_key] = archive_summary
+            tests_total = archive_summary.get("tests_total")
+            if bool(archive_summary.get("available")):
+                summary_bits.insert(0, "has pdf" if bool(archive_summary.get("has_pdf")) else "no pdf")
+                solutions_total = archive_summary.get("solutions_total")
+                solutions_correct = archive_summary.get("solutions_correct")
+                if solutions_total is not None and solutions_correct is not None:
+                    summary_bits.append(f"{_count_label(solutions_total, 'solution')} ({solutions_correct} correct)")
+            if tests_total is not None:
+                summary_bits.append(_count_label(tests_total, "test"))
+            detail = f"{display_filename} ({', '.join(summary_bits)})" if summary_bits else display_filename
+            open_href = f"/problems/{problem_slug}/exports/{export_id}/{stored_filename}"
+            open_label = "zip"
+        elif status == "succeeded":
+            detail = "artifact unavailable"
+        elif runtime_progress["detail"] and (
+            status == "running"
+            or not error_text
+            or error_text.startswith("verification failed:")
+        ):
+            detail = runtime_progress["detail"]
         activity_rows.append(
             {
-                "created_at": e["created_at"],
-                "type_display": _export_type_display(cast(str, e["export_type"])),
-                "source_display": e["source_display"],
+                "created_at": item["created_at"],
+                "type_display": _export_type_display(cast(str, item["export_type"])),
+                "source_display": source_display,
                 "status": status,
-                "detail": "running" if status == "running" else e["detail"],
-                "open_href": e["verification_href"],
-                "open_label": "open",
+                "detail": detail,
+                "open_href": open_href,
+                "open_label": open_label,
             }
         )
     return template_response(
@@ -416,16 +300,7 @@ def export_create(problem: str, user: Annotated[str, Depends(require_session_use
         requested_export_type = 'icpc'
     source_commit = head_commit
     export_verification_id = allocate_verification_id() if requested_export_type == "icpc" else ""
-    export_task_id = f"exp-{uuid.uuid4().hex[:12]}"
-    initial_details: dict[str, object] = {
-        'status': 'running',
-        'verification_id': export_verification_id,
-        'export_type': requested_export_type,
-        'source_commit': source_commit,
-        'filename': '',
-        'error': '',
-        'export_task_id': export_task_id,
-    }
+    export_job_id = f"exp-{uuid.uuid4().hex[:12]}"
     try:
         if requested_export_type not in {'icpc', 'native'}:
             raise ValueError('unsupported package type')
@@ -440,19 +315,12 @@ def export_create(problem: str, user: Annotated[str, Depends(require_session_use
             source_commit=source_commit,
             requested_verification_id=export_verification_id,
             requested_export_type=requested_export_type,
-            export_task_id=export_task_id,
-            initial_details=initial_details,
+            export_job_id=export_job_id,
         )
         msg = 'package generation queued' if started else 'package generation already running for this source'
     except ValueError as exc:
-        initial_details['status'] = 'failed'
-        initial_details['error'] = str(exc)
-        audit(ctx['user']['id'], ctx['problem']['id'], 'export.create', initial_details)
         msg = str(exc)
     except Exception as exc:
-        initial_details['status'] = 'failed'
-        initial_details['error'] = str(exc)
-        audit(ctx['user']['id'], ctx['problem']['id'], 'export.create', initial_details)
         msg = str(exc)
     return redirect_response(f'/problems/{problem}/export', status_code=303, message=msg)
 

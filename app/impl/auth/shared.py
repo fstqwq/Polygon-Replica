@@ -80,6 +80,7 @@ config.templates.env.filters["local_time"] = _format_local_time
 _STATUS_LABEL_MAP: dict[str, str] = {
     "ok": "OK",
     "success": "SUCCESS",
+    "succeeded": "SUCCEEDED",
     "failed": "FAILED",
     "error": "ERROR",
     "running": "RUNNING",

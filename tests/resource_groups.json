@@ -23,6 +23,7 @@
     "test_judgehost_lifecycle.py"
   ],
   "workspace": [
+    "test_artifact_cleanup.py",
     "test_statement_default_restore.py",
     "test_testlib_source.py",
     "test_workspace_merge.py"
@@ -43,6 +44,7 @@
     "test_contest_problem_actions.py",
     "test_export.py",
     "test_judgehost_service.py",
+    "test_maintenance_http.py",
     "test_polygon_package_preview.py",
     "test_preview.py",
     "test_security.py",

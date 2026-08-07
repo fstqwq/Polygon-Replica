@@ -55,6 +55,14 @@ class JudgehostTerminalCleanup:
     def touch(self, verification_id: str) -> None:
         self._touch(verification_id, create=False)
 
+    def reset(self) -> None:
+        """Discard scheduled terminal cleanup after an exclusive runtime reset."""
+
+        with self._condition:
+            self._deadlines.clear()
+            self._generation_by_verification.clear()
+            self._condition.notify_all()
+
     def _touch(self, verification_id: str, *, create: bool) -> None:
         if not verification_id:
             return
