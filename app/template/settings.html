@@ -357,7 +357,12 @@
         {% for row in jh_hosts %}
         <tr data-judgehost-row="1" data-judgehost-hostname="{{ row.get('hostname', '') | lower }}" data-judgehost-status="{% if not row.get('enabled') %}disabled{% elif row.get('online') %}online{% else %}offline{% endif %}" data-judgehost-enabled="{{ 'yes' if row.get('enabled') else 'no' }}">
           <td>{{ loop.index }}</td>
-          <td><span class="muted settings-judgehost-hostname">{{ row.get('hostname', '') }}</span></td>
+          <td>
+            <div class="settings-judgehost-hostname">{{ row.get('hostname', '') }}</div>
+            {% if row.get('peer_addr') %}
+            <div class="muted settings-judgehost-peer-addr">{{ row.get('peer_addr') }}</div>
+            {% endif %}
+          </td>
           <td>{{ 'yes' if row.get('enabled') else 'no' }}</td>
           <td>
             {% if not row.get('enabled') %}

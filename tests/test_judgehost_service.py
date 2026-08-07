@@ -611,6 +611,26 @@ class TestJudgehostService(E2ETestBase):
         self.assertIsNotNone(host)
         self.assertFalse(bool(host.get("enabled")))
 
+    def test_host_status_keeps_latest_peer_ip_as_display_telemetry(self) -> None:
+        service = config.judgehost_task_service
+        self._reset_task_queue_state(service)
+        host = "judgehost-peer-display"
+        service.domjudge_register_host(host)
+        service.record_host_peer_addr(host, "203.0.113.10")
+
+        rows = service.status().get("hosts")
+        self.assertIsInstance(rows, list)
+        row = next(item for item in rows if str(item.get("hostname") or "") == host)
+        self.assertEqual(str(row.get("peer_addr") or ""), "203.0.113.10")
+
+        service.set_host_enabled(host, False)
+        rows_after = service.status().get("hosts")
+        self.assertIsInstance(rows_after, list)
+        row_after = next(
+            item for item in rows_after if str(item.get("hostname") or "") == host
+        )
+        self.assertEqual(str(row_after.get("peer_addr") or ""), "203.0.113.10")
+
     def test_wait_for_task_result_keeps_transient_runs_out_of_durable_artifact_paths(self) -> None:
         service = config.judgehost_task_service
         self._reset_task_queue_state(service)

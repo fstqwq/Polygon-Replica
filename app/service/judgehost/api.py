@@ -144,6 +144,9 @@ class Judgehost:
     def wait_for_task(self, *args, **kwargs):
         return self._queue.wait_for_task(*args, **kwargs)
 
+    def record_host_peer_addr(self, hostname: str, peer_addr: str) -> None:
+        self._queue.record_host_peer_addr(hostname, peer_addr)
+
     def set_host_enabled(self, hostname: str, enabled: bool) -> dict[str, int]:
         release = self._queue.set_host_enabled(hostname, enabled)
         self._result.finalize_host_lease_release(release)

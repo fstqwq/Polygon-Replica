@@ -72,6 +72,21 @@ class TaskQueue:
             row["last_run_id"] = run_id
             row["update_count"] = row["update_count"] + 1
 
+    def record_host_peer_addr(self, hostname: str, peer_addr: str) -> None:
+        """Keep the latest source IP as display-only host telemetry.
+
+        The address is never used to authenticate a request or resolve a file;
+        the explicit hostname remains the only scheduling/lease label.
+        """
+        safe_host = self._core.normalize_hostname(hostname)
+        safe_peer_addr = str(peer_addr or "").strip()
+        if not safe_peer_addr:
+            return
+        with self._s.state_lock:
+            row = self._s.hosts_state.get(safe_host)
+            if row is not None:
+                row["peer_addr"] = safe_peer_addr
+
     def _host_enabled_conn(self, conn=None, hostname: str = "") -> bool:
         if not hostname:
             return True
@@ -454,6 +469,7 @@ class TaskQueue:
             rows_out.append(
                 {
                     "hostname": hostname,
+                    "peer_addr": str(row.get("peer_addr") or ""),
                     "enabled": enabled_flag,
                     "online": is_online,
                     "age_sec": age_sec,
@@ -481,6 +497,7 @@ class TaskQueue:
             current_row = dict(self._s.hosts_state.get(hostname, {}))
             self._s.hosts_state[hostname] = {
                 "hostname": hostname,
+                "peer_addr": str(current_row.get("peer_addr") or ""),
                 "enabled": bool(enabled),
                 "first_seen_at": str(current_row.get("first_seen_at") or now_text),
                 "last_seen_at": str(current_row.get("last_seen_at") or now_text),

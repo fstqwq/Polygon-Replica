@@ -54,6 +54,19 @@ def _hostname_from_payload(payload: JudgehostPayload, *, required: bool = False)
     return hostname
 
 
+def _request_peer_ip(request: Request) -> str:
+    client = request.client
+    if client is None:
+        return ""
+    return str(client.host or "").strip()
+
+
+def _record_host_peer_ip(service, request: Request, hostname: str) -> None:
+    peer_ip = _request_peer_ip(request)
+    if peer_ip:
+        service.record_host_peer_addr(hostname, peer_ip)
+
+
 _FORM_BINARY_KEYS = {
     "output_run",
     "output_error",
@@ -243,6 +256,7 @@ async def domjudge_judgehosts_post(request: Request):
     if not hostname:
         raise HTTPException(status_code=400, detail="hostname is required")
     rows = await _run_service_call(service.domjudge_register_host, hostname)
+    _record_host_peer_ip(service, request, hostname)
     return JSONResponse(rows)
 
 
@@ -255,6 +269,7 @@ async def domjudge_fetch_work(request: Request):
         tasks = await _run_service_call(service.domjudge_fetch_work, hostname, max_batchsize=max_batchsize)
     except (OSError, RuntimeError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    _record_host_peer_ip(service, request, hostname)
     return JSONResponse(tasks)
 
 
@@ -313,6 +328,7 @@ async def domjudge_check_versions(request: Request, judgetask_id: int):
         compiler=(payload.get("compiler") or "").strip(),
         runner=(payload.get("runner") or "").strip(),
     )
+    _record_host_peer_ip(service, request, hostname)
     return JSONResponse(result)
 
 
@@ -323,6 +339,7 @@ async def domjudge_update_judging(request: Request, hostname: str, judgetask_id:
         await _run_service_call(service.domjudge_update_judging, hostname, judgetask_id, payload)
     except RuntimeError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    _record_host_peer_ip(service, request, hostname)
     return JSONResponse({})
 
 
@@ -335,6 +352,7 @@ async def domjudge_add_judging_run(request: Request, hostname: str, judgetask_id
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    _record_host_peer_ip(service, request, hostname)
     return JSONResponse(int(result))
 
 
@@ -361,4 +379,5 @@ async def domjudge_add_debug_info(request: Request, hostname: str, judgetask_id:
         judgetask_id=judgetask_id,
         payload=payload,
     )
+    _record_host_peer_ip(service, request, hostname)
     return JSONResponse({})
