@@ -36,7 +36,7 @@
     {% endfor %}
   </table>
   {% else %}
-  <p class="muted">No contests yet.</p>
+  <p class="muted">No contests.</p>
   {% endif %}
   <p class="muted">Showing up to {{ entries_limit }} {% if entries_limit == 1 %}contest{% else %}contests{% endif %}.</p>
 </section>
@@ -58,7 +58,7 @@
 {% endcall %}
 
 {% call ui_popup('contest-import-popup', 'Import Polygon Contest Package', title_tag='h3', title_class='') %}
-      <p class="muted">Upload a Polygon contest package zip. The importer will parse package contents first, then open a review page where you can adjust contest slug, contest title, and each imported problem slug before final import.</p>
+      <p class="muted">Upload a Polygon contest zip, then review its contest and problem slugs.</p>
       <p class="muted">For Polygon standard (Windows) packages, test inputs and displayed sample outputs are normalized to LF during import.</p>
       <form class="form-stack" method="post" enctype="multipart/form-data" action="/contests/import">
         <div class="form-row">

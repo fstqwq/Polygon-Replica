@@ -7,7 +7,7 @@
   <p><strong>{{ access_request.agent_name }}</strong></p>
   <p class="muted">Desktop: <code>{{ access_request.desktop_id }}</code> | Connected: {{ access_request.init_ts }}</p>
   <p>Requesting access to: <code>{{ access_request.problem_slug }}</code></p>
-  <p class="muted">This approval is linked to your current login and expires at {{ access_request.expires_at | local_time }}.</p>
+  <p class="muted">Valid for this login until {{ access_request.expires_at | local_time }}.</p>
   <form method="post" action="/agent/approve/{{ access_request.id }}" class="form-stack">
     <label for="scope">Scope</label>
     <select id="scope" name="scope">

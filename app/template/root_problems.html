@@ -40,7 +40,7 @@
     {% endfor %}
   </table>
   {% else %}
-  <p class="muted">No participating problems found.</p>
+  <p class="muted">No problems.</p>
   {% endif %}
   <p class="muted">Showing up to {{ entries_limit }} {% if entries_limit == 1 %}problem{% else %}problems{% endif %}.</p>
 </section>
@@ -60,7 +60,7 @@
 {% endcall %}
 
 {% call ui_popup('problem-import-popup', 'Import Problem Package As New Problem', title_tag='h3', title_class='') %}
-      <p class="muted">Upload a Polygon linux, ICPC, or native zip package to create a new problem and import statement/tests/components into that new workspace.</p>
+      <p class="muted">Upload a Polygon Linux, ICPC, or native zip to create a problem.</p>
       <form
         id="polygon-import-form"
         class="form-row"
@@ -71,7 +71,7 @@
       >
         <label for="polygon-import-slug">New problem slug segment (optional)</label>
         <input id="polygon-import-slug" name="problem_slug" value="" placeholder="auto from package filename" />
-        <p id="polygon-import-slug-hint" class="muted form-row-hint-offset">Stored as &lt;your-user&gt;/&lt;slug&gt;; full problem id is 64 characters max. Selecting a package will auto-suggest an available slug.</p>
+        <p id="polygon-import-slug-hint" class="muted form-row-hint-offset">Stored as &lt;your-user&gt;/&lt;slug&gt;, up to 64 characters. A slug is suggested after selection.</p>
         <label for="polygon-import-package">Package (.zip)</label>
         <input id="polygon-import-package" type="file" name="package_upload" accept=".zip,application/zip" required />
         <button class="btn" type="submit">Import As New Problem</button>

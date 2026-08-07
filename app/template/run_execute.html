@@ -23,7 +23,7 @@
             </label>
             {% endfor %}
           {% else %}
-          <p class="muted">No solution files found in <code>solutions/</code>.</p>
+          <p class="muted">No solutions in <code>solutions/</code>.</p>
           {% endif %}
         </div>
       </div>
@@ -42,7 +42,7 @@
             </label>
             {% endfor %}
           {% else %}
-          <p class="muted">No tests list available yet.</p>
+          <p class="muted">No tests.</p>
           {% endif %}
         </div>
         {% if test_options_source %}
@@ -64,6 +64,6 @@
   {% if test_options_truncated %}
   <p class="muted">Showing first available tests only.</p>
   {% endif %}
-  <p class="muted solution-pick-help">Select one or more solutions. Select tests only when you need partial runs; leave tests empty to run all tests.</p>
+  <p class="muted solution-pick-help">Select solutions. Leave tests empty to run all tests.</p>
 </section>
 {% endblock %}

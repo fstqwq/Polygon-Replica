@@ -562,7 +562,8 @@ class TestBackendMinimal(E2ETestBase):
 
         page = preview_page(_request(f"/problems/{self.problem}/statement"), self.problem, self.user)
         html = page.body.decode("utf-8", errors="replace")
-        self.assertIn("Statement language missing.", html)
+        self.assertIn("Add a language to start.", html)
+        self.assertNotIn("Statement language missing.", html)
         self.assertIn("Add language", html)
         self.assertNotIn("Delete current language", html)
         self.assertNotIn("Compile Statement", html)
@@ -576,7 +577,8 @@ class TestBackendMinimal(E2ETestBase):
         self.assertEqual(resp.status_code, 200)
         html = resp.body.decode("utf-8", errors="replace")
         self.assertIn("Language</strong>: missing", html)
-        self.assertIn("Statement language missing.", html)
+        self.assertIn("Add a language to start.", html)
+        self.assertNotIn("Statement language missing.", html)
         self.assertIn("Add language", html)
         self.assertNotIn('id="statement-language-select"', html)
         self.assertNotIn("Delete Current", html)
@@ -879,7 +881,7 @@ class TestBackendMinimal(E2ETestBase):
             self.user,
         )
         html = resp.body.decode("utf-8", errors="replace")
-        self.assertIn("Preview artifacts expired from cache. Recompile to regenerate the PDF and latex.log.", html)
+        self.assertIn("Recompile to restore the preview.", html)
         self.assertNotIn("PDF is ready.", html)
         self.assertNotIn("Open in a new tab", html)
         self.assertNotIn('class="pdf-preview"', html)

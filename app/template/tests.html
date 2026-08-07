@@ -68,7 +68,7 @@
     {% endfor %}
   </table>
   {% else %}
-  <p class="muted">No tests in <code>{{ tests_editor.path }}</code> yet.</p>
+  <p class="muted">Add a test to start.</p>
   {% endif %}
 </section>
 
@@ -100,7 +100,7 @@
           <option value="gen" {{ "selected" if row.kind == "gen" else "" }}>gen</option>
         </select>
         <label><input type="checkbox" name="sample" value="1" data-sample-toggle="1" {{ "checked" if row.sample else "" }} /> sample</label>
-        <p class="muted">Sample custom input/output: leave any blank for generated input/output.</p>
+        <p class="muted">Leave sample input/output blank to generate them.</p>
         <label for="edit-test-sample-input-{{ row.index }}">Sample Input (optional)</label>
         <textarea id="edit-test-sample-input-{{ row.index }}" class="textarea-sm" name="sample_input" placeholder="Leave blank for generated input">{{ row.sample_input }}</textarea>
         <label for="edit-test-sample-output-{{ row.index }}">Sample Output (optional)</label>
@@ -122,7 +122,7 @@
         <input type="hidden" name="source_index" value="{{ row.index }}" />
         <label for="tests-reindex-target-popup-{{ row.index }}">Target position</label>
         <input id="tests-reindex-target-popup-{{ row.index }}" type="number" name="target_index" min="1" max="{{ tests_editor.summary.total if tests_editor.summary.total else 1 }}" value="{{ row.index }}" />
-        <p class="muted">Move this test to a new position. Other tests keep relative order.</p>
+        <p class="muted">Choose a new position.</p>
         <button class="btn" type="submit">Reindex</button>
       </form>
 {% endcall %}
@@ -133,7 +133,7 @@
         <label for="add-manual-id-popup">ID (optional, auto = next)</label>
         <input id="add-manual-id-popup" type="text" name="test_id" />
         <label><input type="checkbox" name="sample" value="1" data-sample-toggle="1" /> sample</label>
-        <p class="muted">Sample custom input/output: leave any blank for generated input/output.</p>
+        <p class="muted">Leave sample input/output blank to generate them.</p>
         <label for="add-manual-sample-input-popup">Sample Input (optional)</label>
         <textarea id="add-manual-sample-input-popup" class="textarea-sm" name="sample_input" placeholder="Leave blank for generated input"></textarea>
         <label for="add-manual-sample-output-popup">Sample Output (optional)</label>
@@ -142,7 +142,7 @@
         <label data-sample-output-validate-group="1" hidden><input type="checkbox" name="sample_output_validate" value="1" checked disabled /> Validate custom output</label>
         <label for="add-manual-input-popup">Data (<code>manual input</code>)</label>
         <textarea id="add-manual-input-popup" class="textarea-md" name="manual_input" placeholder="3&#10;1 2 3"></textarea>
-        <p class="muted">Template: each submission input as plain text.</p>
+        <p class="muted">One plain-text submission input per file.</p>
         <button class="btn" type="submit">Add Manual</button>
       </form>
 {% endcall %}
@@ -152,7 +152,7 @@
         <label for="add-manual-upload-id-popup">ID (optional, auto = next)</label>
         <input id="add-manual-upload-id-popup" type="text" name="test_id" />
         <label><input type="checkbox" name="sample" value="1" data-sample-toggle="1" /> sample</label>
-        <p class="muted">Sample custom input/output: leave any blank for generated input/output.</p>
+        <p class="muted">Leave sample input/output blank to generate them.</p>
         <label for="add-manual-upload-sample-input-popup">Sample Input (optional)</label>
         <textarea id="add-manual-upload-sample-input-popup" class="textarea-sm" name="sample_input" placeholder="Leave blank for generated input"></textarea>
         <label for="add-manual-upload-sample-output-popup">Sample Output (optional)</label>
@@ -180,7 +180,7 @@
         data-code-height="220"
         data-code-wrap="1"
       >{{ tests_gen_script.text if tests_gen_script else "" }}</textarea>
-      <p class="muted">One command per line. Save to add/remove generator tests while keeping manual tests unchanged.</p>
+      <p class="muted">One command per line. Manual tests are kept.</p>
       <button class="btn" type="submit">Save Gen Script</button>
     </form>
   </section>

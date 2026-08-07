@@ -127,7 +127,7 @@
         {% if admin_user_rows|length == 1 %}user{% else %}users{% endif %}.
       </p>
       {% else %}
-      <p class="muted">No users matched the current filter.</p>
+      <p class="muted">No matching users.</p>
       {% endif %}
       <form class="form-stack" method="post" action="/settings/users/system-admin">
         <div class="settings-inline-fields">
@@ -443,7 +443,7 @@
       </tbody>
     </table>
     {% else %}
-    <p class="muted">No judgehost heartbeat/fetch/report observed yet.</p>
+    <p class="muted">No judgehost activity.</p>
     {% endif %}
     <h3>Configuration Center</h3>
     <p class="muted">Total overrides: {{ admin_config_changed_total }}</p>
@@ -470,7 +470,7 @@
     <p class="muted">Quick entry: <a href="/settings/config/{{ admin_default_category_slug }}">open first category</a></p>
     {% endif %}
     {% else %}
-    <p class="muted">No editable system config keys were found.</p>
+    <p class="muted">No editable keys.</p>
     {% endif %}
     <form
       method="post"

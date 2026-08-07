@@ -159,7 +159,7 @@
       {% endif %}
       {% else %}
       <tr>
-        <td colspan="{{ detail_columns|length + 1 }}"><span class="muted">No per-test details yet.</span></td>
+        <td colspan="{{ detail_columns|length + 1 }}"><span class="muted">No test details.</span></td>
       </tr>
       {% endif %}
       </tbody>
@@ -182,7 +182,7 @@
   </div>
 </section>
 {% call ui_popup('run-test-detail-popup', 'Test Details', dialog_class='verification-detail-popup', content_id='run-test-detail-popup-content') %}
-      <p class="muted verification-detail-loading">Click to load test details.</p>
+      <p class="muted verification-detail-loading">Select a test for details.</p>
 {% endcall %}
 
 <section>
@@ -244,11 +244,11 @@
 {% else %}
 <section>
   {% if detail_running or detail_status == "running" %}
-  <p class="muted">Per-test details will appear once verification runs report testcase results.</p>
+  <p class="muted">Test details appear as runs finish.</p>
   {% elif verification_id or detail_task_counts %}
-  <p class="muted">Per-test details will appear once verification runs report testcase results.</p>
+  <p class="muted">Test details appear as runs finish.</p>
   {% else %}
-  <p class="muted">No verification selected. Open <a href="/problems/{{ ctx.problem.slug }}/run">Verification</a> and choose one.</p>
+  <p class="muted">Choose a <a href="/problems/{{ ctx.problem.slug }}/run">verification</a>.</p>
   {% endif %}
 </section>
 <section>

@@ -1369,7 +1369,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         self.assertIn("id=\"solution-paths\"", html)
         self.assertIn("type=\"checkbox\" name=\"solution_paths\"", html)
         self.assertIn("id=\"test-names\"", html)
-        self.assertTrue(("type=\"checkbox\" name=\"test_names\"" in html) or ("No tests list available yet." in html))
+        self.assertTrue(("type=\"checkbox\" name=\"test_names\"" in html) or ("No tests." in html))
         self.assertIn("id=\"solution-select-all\"", html)
         self.assertIn("id=\"solution-select-clear\"", html)
         self.assertIn("id=\"test-select-all\"", html)
@@ -1521,7 +1521,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         page = run_page(_request("/problems/alice/sample/run"), "alice/sample", "alice")
         self.assertEqual(page.status_code, 200)
         html = page.body.decode("utf-8", errors="replace")
-        self.assertIn("No verification yet.", html)
+        self.assertIn("Start a verification", html)
         self.assertNotIn("page-grid-wide", html)
 
 
@@ -3789,7 +3789,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         page = run_details_page(_request("/problems/alice/sample/run/details"), "alice/sample", "alice")
         self.assertEqual(page.status_code, 200)
         html = page.body.decode("utf-8", errors="replace")
-        self.assertIn("No verification selected.", html)
+        self.assertIn("Choose a", html)
         self.assertNotIn("page-grid-wide", html)
 
     def test_run_detail_compact_layout_only_depends_on_eleven_columns(self) -> None:
@@ -4285,7 +4285,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         )
         self.assertIn(f"/problems/alice/sample/artifacts/{verification_id}/output/", detail_html)
         self.assertIn("/001.out", detail_html)
-        self.assertNotIn("(output file missing)", detail_html)
+        self.assertNotIn("(output missing)", detail_html)
         self.assertNotIn(">missing<", detail_html)
         input_download = run_export_impl.artifact_file(
             "alice/sample",
@@ -5119,7 +5119,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         page = run_details_page(_request("/problems/alice/sample/run/details", f"verification_id={verification_id}"), "alice/sample", "alice")
         self.assertEqual(page.status_code, 200)
         html = page.body.decode("utf-8", errors="replace")
-        self.assertNotIn("No per-test details yet.", html)
+        self.assertNotIn("No test details.", html)
         self.assertIn("001.in", html)
         self.assertIn('vcode">FL</span>', html)
 

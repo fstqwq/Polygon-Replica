@@ -63,8 +63,7 @@
 
 {% if statement_language_missing %}
 <div class="flash">
-  <strong>Statement language missing.</strong>
-  Add a language to start editing or compiling statements.
+  Add a language to start.
 </div>
 {% else %}
 <div class="statement-preview-toolbar">
@@ -98,10 +97,10 @@
 </div>
 {% endif %}
 {% if preview_is_missing %}
-<p class="muted statement-preview-message">Preview artifacts expired from cache. Recompile to regenerate the PDF and latex.log.</p>
+<p class="muted statement-preview-message">Recompile to restore the preview.</p>
 {% endif %}
 {% if preview_id and (not pdf_exists) and (not preview_is_missing) and (not preview_compile_failed) %}
-<p class="muted statement-preview-message">Latest preview has no PDF output.</p>
+<p class="muted statement-preview-message">No PDF output.</p>
 {% endif %}
 <section class="statement-editor-main">
   <form
@@ -166,7 +165,7 @@
     {% endif %}
     {% endfor %}
     {% if not interaction_section_enabled %}
-    <p class="muted">Interaction Protocol section is disabled because current mode is <code>{{ statement_mode }}</code>. Switch mode to <code>interactive</code> to edit it.</p>
+    <p class="muted">Switch to <code>interactive</code> mode to edit this section.</p>
     {% endif %}
     <button class="btn" type="submit">Save Statement</button>
   </form>
@@ -202,7 +201,7 @@
 {% call ui_popup('statement-draft-popup', 'Draft History', overlay_class='statement-draft-popup') %}
       <p class="muted" data-statement-draft-status="1">Loading local drafts...</p>
       <p class="flash" data-statement-draft-error="1" hidden></p>
-      <p class="muted" data-statement-draft-empty="1" hidden>No local drafts yet.</p>
+      <p class="muted" data-statement-draft-empty="1" hidden>No drafts.</p>
       <div class="statement-draft-list" data-statement-draft-list="1"></div>
 {% endcall %}
 
@@ -214,7 +213,7 @@
         {% endif %}
         <label for="statement-language-add">Language token</label>
         <input id="statement-language-add" type="text" name="language" placeholder="chinese" required />
-        <p class="muted">Priority stays <code>english</code>, then <code>chinese</code>, then alphabetical.</p>
+        <p class="muted">Order: <code>english</code>, <code>chinese</code>, then alphabetical.</p>
         <button class="btn" type="submit">Add Language</button>
       </form>
 {% endcall %}
@@ -225,7 +224,7 @@
     <div class="statement-assets-card-head">
       <h2>Statement attachments</h2>
     </div>
-    <p class="muted statement-assets-card-copy">Stored under <code>{{ statement_assets_dir }}/</code>. Shared across all statement languages, used while compiling the statement, and kept out of contestant package attachments.</p>
+    <p class="muted statement-assets-card-copy">Compile-only files shared by all statement languages.</p>
     <div class="statement-assets-card-body">
       <div class="form-block statement-assets-upload-block">
         <form id="statement-assets-upload-form" class="form-stack" method="post" enctype="multipart/form-data" action="/problems/{{ ctx.problem.slug }}/statement/assets/upload">
@@ -270,7 +269,7 @@
         {% endfor %}
         {% else %}
         <tr>
-          <td colspan="2" class="muted">No compile-only assets in <code>{{ statement_assets_dir }}/</code>.</td>
+          <td colspan="2" class="muted">No compile-only assets.</td>
         </tr>
         {% endif %}
       </table>
@@ -281,7 +280,7 @@
     <div class="statement-assets-card-head">
       <h2>Contestant attachments</h2>
     </div>
-    <p class="muted statement-assets-card-copy">Stored under <code>attachments/</code>. Imported from and exported to ICPC packages.</p>
+    <p class="muted statement-assets-card-copy">Files included in ICPC packages.</p>
     <div class="statement-assets-card-body">
       <div class="form-block statement-assets-upload-block">
         <form id="contestant-attachments-upload-form" class="form-stack" method="post" enctype="multipart/form-data" action="/problems/{{ ctx.problem.slug }}/statement/attachments/upload">
@@ -326,7 +325,7 @@
         {% endfor %}
         {% else %}
         <tr>
-          <td colspan="2" class="muted">No files in <code>attachments/</code>.</td>
+          <td colspan="2" class="muted">No contestant attachments.</td>
         </tr>
         {% endif %}
       </table>

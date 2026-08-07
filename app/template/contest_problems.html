@@ -30,7 +30,7 @@
     </table>
     <button class="btn" type="submit">Add Selected</button>
     {% else %}
-    <p class="muted">No available problems matched the current filter.</p>
+    <p class="muted">No matching problems.</p>
     {% endif %}
   </form>
 </section>
@@ -76,13 +76,13 @@
     </div>
   </form>
   {% else %}
-  <p class="muted">No problems in contest.</p>
+  <p class="muted">No problems.</p>
   {% endif %}
 </section>
 
 <section>
   <h2>Change TL/ML (Commit Required)</h2>
-  <p class="muted">Each selected problem applies source updates and creates one commit with message: <code>contest {{ ctx.contest.slug }}: bulk update TL/ML</code>.</p>
+  <p class="muted">Updates and commits each selected problem.</p>
   {% if problem_rows %}
   <form method="post" action="/contests/{{ ctx.contest.slug }}/problems/change-general">
     <table class="table-base">

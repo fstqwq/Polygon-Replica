@@ -496,7 +496,7 @@ class TestAgentAPI(E2ETestBase):
             self.assertEqual(disconnected_poll.status_code, 401)
             sessions_page = client.get("/agent/sessions", headers={"cookie": auth_cookie}, follow_redirects=False)
             self.assertEqual(sessions_page.status_code, 200)
-            self.assertIn("No connected agents.", sessions_page.text)
+            self.assertIn("No agents connected.", sessions_page.text)
             self.assertNotIn("Disconnected at", sessions_page.text)
 
     def test_agent_token_revocation_and_disconnect_invalidate_access(self) -> None:

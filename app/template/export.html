@@ -17,7 +17,7 @@
   </section>
   <section class="info-card">
     <h2>Download Snapshot</h2>
-    <p class="muted">Download the workspace files as a temporary native zip. This file is not recorded in export activity.</p>
+    <p class="muted">Download a temporary native zip. It is not added to export activity.</p>
     <form class="form-row" method="post" action="/problems/{{ ctx.problem.slug }}/export/snapshot">
       <button class="btn" type="submit">Download Snapshot</button>
     </form>
@@ -56,7 +56,7 @@
     {% endfor %}
   </table>
   {% else %}
-  <p class="muted">No export activity yet.</p>
+  <p class="muted">No exports.</p>
   {% endif %}
 </section>
 {% endblock %}

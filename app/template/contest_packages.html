@@ -8,9 +8,9 @@
   <h2>Build Statements and Packages</h2>
   <p><strong>Problems in contest:</strong> {{ problem_count }}</p>
   {% if not ctx.access.can_write %}
-  <p class="muted">Write access is required to start contest jobs.</p>
+  <p class="muted">Write access required.</p>
   {% elif problem_count <= 0 %}
-  <p class="muted">Add at least one problem before running contest jobs.</p>
+  <p class="muted">Add a problem to start.</p>
   {% else %}
   <div class="contest-build-grid">
     <article class="contest-build-card">
@@ -56,7 +56,7 @@
 
 <section>
   <h2>Statement Sources</h2>
-  <p class="muted">These files are copied into <code>statements/{{ contest_statement_language }}/</code> when building the contest PDF. Edit text sources such as <code>statements.tex</code> or <code>olymp.sty</code>, and upload external resources such as logos or images for TeX to reference.</p>
+  <p class="muted">Edit TeX sources and upload referenced resources for the contest PDF.</p>
   {% if contest_statement_source_error %}
   <p class="flash">{{ contest_statement_source_error }}</p>
   {% endif %}
@@ -86,7 +86,7 @@
     <textarea id="contest-statement-source-content" name="content" rows="18" spellcheck="false">{{ contest_statement_selected_text }}</textarea>
     <button class="btn primary-action" type="submit">Save Source</button>
     {% else %}
-    <p class="muted">Selected file is not a text source. Upload a replacement below.</p>
+    <p class="muted">Upload a text source.</p>
     {% endif %}
   </form>
 
@@ -99,7 +99,7 @@
     <button class="btn" type="submit">Upload Source/Resource</button>
   </form>
   {% else %}
-  <p class="muted">Write access is required to edit contest statement sources.</p>
+  <p class="muted">Write access required.</p>
   {% endif %}
 
   <h3>Stored Files</h3>
@@ -135,7 +135,7 @@
     {% endfor %}
   </table>
   {% else %}
-  <p class="muted">No stored contest statement source files for this language. The build will use generated defaults until you save or upload files.</p>
+  <p class="muted">Save or upload a source to replace the generated defaults.</p>
   {% endif %}
 </section>
 
@@ -177,7 +177,7 @@
     {% endfor %}
   </table>
   {% else %}
-  <p class="muted">No contest jobs yet.</p>
+  <p class="muted">No jobs.</p>
   {% endif %}
 </section>
 
@@ -225,14 +225,14 @@
     {% endfor %}
   </table>
   {% else %}
-  <p class="muted">No per-problem report was produced for this output.</p>
+  <p class="muted">No problem report.</p>
   {% endif %}
   {% endfor %}
   {% else %}
-  <p class="muted">This job has not produced output reports yet.</p>
+  <p class="muted">Report pending.</p>
   {% endif %}
   {% else %}
-  <p class="muted">This job has not produced a report yet.</p>
+  <p class="muted">Report pending.</p>
   {% endif %}
 </section>
 {% endif %}
@@ -269,7 +269,7 @@
     {% endfor %}
   </table>
   {% else %}
-  <p class="muted">No contest artifacts yet.</p>
+  <p class="muted">No artifacts.</p>
   {% endif %}
 </section>
 {% endblock %}

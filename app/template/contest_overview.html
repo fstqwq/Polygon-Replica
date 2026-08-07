@@ -12,7 +12,7 @@
   {% if latest_job %}
   <p><strong>Latest job:</strong> <code>{{ latest_job.id }}</code> / {{ latest_job.job_type }} / {{ latest_job.status | status_label }} / {{ latest_job.created_at | local_time }}</p>
   {% else %}
-  <p class="muted">No contest jobs yet.</p>
+  <p class="muted">No jobs.</p>
   {% endif %}
 </section>
 
@@ -45,7 +45,7 @@
     {% endfor %}
   </table>
   {% else %}
-  <p class="muted">No problems in contest.</p>
+  <p class="muted">No problems.</p>
   {% endif %}
 </section>
 {% endblock %}

@@ -20,8 +20,8 @@
   {% if selected_diff_truncated %}<p>Only the first {{ diff_char_limit }} characters are shown.</p>{% endif %}
   {% if selected_diff_lines %}
   <pre class="workspace-diff-view">{% for row in selected_diff_lines %}<span class="workspace-diff-line workspace-diff-line-{{ row.kind }}">{{ row.text }}</span>{% endfor %}</pre>
-  {% else %}<p>No text changes in this revision.</p>{% endif %}
+  {% else %}<p>No text changes.</p>{% endif %}
   {% endif %}
-  {% else %}<p>No revisions yet.</p>{% endif %}
+  {% else %}<p>No revisions.</p>{% endif %}
 </section>
 {% endblock %}

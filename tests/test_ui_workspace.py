@@ -1948,7 +1948,7 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         self.assertEqual(resp.status_code, 200)
         html = resp.body.decode("utf-8", errors="replace")
         self.assertIn("Revision History", html)
-        self.assertIn("No revisions yet.", html)
+        self.assertIn("No revisions.", html)
         self.assertNotIn("ambiguous argument 'HEAD'", html)
         self.assertNotIn("unknown revision or path not in the working tree", html)
 

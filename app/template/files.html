@@ -31,7 +31,7 @@
       {% endfor %}
     </table>
     {% if not browse_dirs and not browse_files %}
-    <p class="muted">No repository entries matched this folder.</p>
+    <p class="muted">No entries.</p>
     {% endif %}
   </section>
 
@@ -52,7 +52,7 @@
     </div>
     {% endif %}
     {% if selected_missing %}
-    <p class="flash">Selected file does not exist yet.</p>
+    <p class="flash">Create this file to start.</p>
     {% if selected_template_kind %}
     <form class="form-row files-template-form" method="post" action="/problems/{{ ctx.problem.slug }}/files/create-template">
       <input type="hidden" name="path" value="{{ selected }}" />
@@ -62,7 +62,7 @@
     </form>
     {% endif %}
     {% elif selected_is_dir %}
-    <p class="flash">Selected path is a directory. Choose a file to edit.</p>
+    <p class="flash">Choose a file to edit.</p>
     {% endif %}
     {% if selected_is_binary and (not selected_missing) and (not selected_is_dir) %}
     <p class="flash">Binary file is read-only in text editor.</p>
@@ -70,7 +70,7 @@
     <p class="muted">PDF preview:</p>
     <iframe class="pdf-preview files-pdf-preview" src="/problems/{{ ctx.problem.slug }}/files/download?path={{ selected }}"></iframe>
     {% else %}
-    <p class="muted">This file is binary{% if selected_media_type %} ({{ selected_media_type }}){% endif %}. Use download/upload actions to manage it.</p>
+    <p class="muted">Use download or upload for this binary file{% if selected_media_type %} ({{ selected_media_type }}){% endif %}.</p>
     {% endif %}
     {% else %}
       {% if line_focus %}

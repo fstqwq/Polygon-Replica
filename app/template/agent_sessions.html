@@ -14,7 +14,7 @@
     <div class="agent-connect-head">
       <div>
         <h2 class="agent-card-title">Connect to Agent</h2>
-        <p class="muted">Create a one-time registration URL and pass it to your agent implementation.</p>
+        <p class="muted">Create a one-time registration URL for your agent.</p>
       </div>
       <button class="btn" type="button" data-agent-connect-button="1">Connect to Agent</button>
     </div>
@@ -82,7 +82,7 @@
           </tbody>
         </table>
         {% else %}
-        <p class="muted">No authorized problems.</p>
+        <p class="muted">No problem access.</p>
         {% endif %}
       </div>
     </section>
@@ -90,7 +90,7 @@
   </div>
   {% else %}
   <section class="info-card agent-empty-card">
-    <p class="muted">No connected agents.</p>
+    <p class="muted">No agents connected.</p>
   </section>
   {% endif %}
 </div>

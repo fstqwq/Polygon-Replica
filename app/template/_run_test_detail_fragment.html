@@ -108,7 +108,7 @@
           {% endfor %}
         </div>
         {% if final_row.interactive_transcript.truncated %}
-        <div class="muted">Transcript preview truncated.</div>
+        <div class="muted">Transcript truncated.</div>
         {% endif %}
       </div>
       {% else %}
@@ -124,7 +124,7 @@
       <div class="muted">Showing first {{ final_row.output_preview.limit }} bytes.</div>
       {% endif %}
       {% elif not has_diagnostics %}
-      <p class="muted empty-text">(output file missing)</p>
+      <p class="muted empty-text">(output missing)</p>
       {% endif %}
       {% endif %}
     </div>
@@ -135,7 +135,7 @@
       <strong class="sol-title">{{ col.title }}</strong>
       <span class="muted">-</span>
     </div>
-    <p class="muted">No detail.</p>
+    <p class="muted">No details.</p>
   </section>
   {% endif %}
   {% endfor %}
