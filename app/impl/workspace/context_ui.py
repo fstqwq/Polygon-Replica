@@ -105,7 +105,7 @@ def page_ctx(problem: str, user: str, include_branches: bool=True, refresh_statu
             except Exception:
                 logger.exception("clean workspace auto-update audit failed for %s", problem)
     ctx['workspace_auto_update_message'] = (
-        'Updated to the latest shared version.' if auto_updated else ''
+        'Workspace updated to the published revision.' if auto_updated else ''
     )
     undo_context = config.workspace_merge_service.undo_context(workspace_path)
     ctx['workspace_merge_result'] = undo_context or {}

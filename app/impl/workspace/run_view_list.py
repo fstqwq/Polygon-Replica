@@ -5,7 +5,7 @@ from pathlib import Path
 
 from app.impl.auth.shared import parse_iso_utc
 from app.impl.runtime.config import config
-from app.service.repository.revision import git_commit_count
+from app.service.repository.revision import verification_source_display
 from app.service.platform.error_text import bounded_display_text, normalize_display_text
 from app.service.problem.solution_metadata import infer_expected_behavior_from_name, normalize_expected_behavior
 from app.service.verification.runtime import coerce_int, normalize_problem_mode
@@ -181,16 +181,6 @@ def _verification_row_to_list_item(row: dict[str, object]) -> dict[str, object] 
     }
 
 
-def _verification_source_display(source_commit: str, workspace: Path, revision_cache: dict[str, int | None]) -> str:
-    commit = str(source_commit or "")
-    if not commit:
-        return "current files"
-    if commit not in revision_cache:
-        revision_cache[commit] = git_commit_count(workspace, commit)
-    revision = revision_cache[commit]
-    return f"v{revision}" if revision is not None and revision >= 0 else "v?"
-
-
 def run_list_rows(problem_id: int, workspace_id: int, workspace: Path, limit: int = 40, actor_user_id: int | None = None) -> list[dict]:
     _ = actor_user_id
     limit_cap = max(1, int(limit))
@@ -207,9 +197,9 @@ def run_list_rows(problem_id: int, workspace_id: int, workspace: Path, limit: in
         item = _verification_row_to_list_item(row)
         if item is None:
             continue
-        item["source_display"] = _verification_source_display(
-            str(row.get("source_commit") or ""),
+        item["source_display"] = verification_source_display(
             workspace,
+            str(row.get("source_commit") or ""),
             revision_cache,
         )
         token = str(item["id"])

@@ -1,23 +1,23 @@
 {% extends "base.html" %}
 {% from "_component_dialogs.html" import change_badges %}
 {% block content %}
-<h1 class="page-title">My Files</h1>
+<h1 class="page-title">Workspace</h1>
 {% include "_flash_message.html" %}
 {% set sudo_popup_next = '/problems/' ~ ctx.problem.slug ~ '/workspace?sudo_popup_done=1' %}
 {% if ctx.workspace_has_merge_undo %}
 {% set merge_affected_count = ctx.workspace_merge_result.get('affected_count', 0) | int %}
-<section class="workspace-merge-result" aria-label="Latest shared update result">
+<section class="workspace-merge-result" aria-label="Workspace update result">
   <div>
-    <h2>Latest Shared Version Applied</h2>
+    <h2>Workspace Updated</h2>
     {% if change_rows %}
-    <p>Review {{ ctx.workspace_changes.total }} changed file{% if ctx.workspace_changes.total != 1 %}s{% endif %} before sharing.</p>
+    <p>Review {{ ctx.workspace_changes.total }} changed file{% if ctx.workspace_changes.total != 1 %}s{% endif %} before publishing.</p>
     {% else %}
-    <p>Your files now match the latest shared version.</p>
+    <p>Workspace now matches the published revision.</p>
     {% endif %}
   </div>
   <div class="workspace-merge-result-actions">
     {% if change_rows %}<a class="button-link" href="#file-changes">Review changed files</a>{% endif %}
-    <form class="inline-form" method="post" action="/problems/{{ ctx.problem.slug }}/merge/undo" data-confirm-message="Restore {{ merge_affected_count }} file{% if merge_affected_count != 1 %}s{% endif %} from before this update? Undo is only available until the updated files are edited or shared.">
+    <form class="inline-form" method="post" action="/problems/{{ ctx.problem.slug }}/merge/undo" data-confirm-message="Restore {{ merge_affected_count }} file{% if merge_affected_count != 1 %}s{% endif %} from before this update? Undo is only available until the updated files are edited or published.">
       <button class="btn" type="submit">Undo this update</button>
     </form>
   </div>
@@ -28,24 +28,24 @@
   <section>
     {% set ws_revision = ctx.workspace_revision if ctx.workspace_revision is defined else {} %}
     {% set local_rev_raw = ws_revision.get('local') if ws_revision else none %}
-    {% set shared_rev_raw = ws_revision.get('upstream') if ws_revision else none %}
+    {% set published_rev_raw = ws_revision.get('upstream') if ws_revision else none %}
     <h2>Revision</h2>
-    <p>My files are based on <strong>{{ ('v' ~ local_rev_raw) if local_rev_raw is not none else 'no revision' }}</strong>. Latest shared revision: <strong>{{ ('v' ~ shared_rev_raw) if shared_rev_raw is not none else 'none' }}</strong>.</p>
+    <p>Workspace base: <strong>{{ ('v' ~ local_rev_raw) if local_rev_raw is not none else 'no revision' }}</strong>. Latest published revision: <strong>{{ ('v' ~ published_rev_raw) if published_rev_raw is not none else 'none' }}</strong>.</p>
 
     {% if ctx.workspace_needs_update %}
     <form method="post" action="/problems/{{ ctx.problem.slug }}/merge/start">
-      <button class="btn" type="submit" {% if not ctx.access.can_write %}disabled title="{{ ctx.access.write_block_reason }}"{% endif %}>Review latest shared changes</button>
+      <button class="btn" type="submit" {% if not ctx.access.can_write %}disabled title="{{ ctx.access.write_block_reason }}"{% endif %}>Review published changes</button>
     </form>
     {% endif %}
 
-    <h2>Commit</h2>
+    <h2>Publish</h2>
     {% if ctx.workspace_needs_update %}
-    <p class="warn">A newer shared revision exists. Review it before committing.</p>
+    <p class="warn">A newer published revision exists. Review it before publishing.</p>
     {% endif %}
     <form class="form-row" method="post" action="/problems/{{ ctx.problem.slug }}/revision/commit">
       <label for="revision-message">Message</label>
       <input id="revision-message" name="message" required />
-      <button class="btn" type="submit" {% if not ctx.access.can_write or ctx.workspace_needs_update %}disabled title="{{ ctx.access.write_block_reason if not ctx.access.can_write else 'Review the latest shared changes first' }}"{% endif %}>Commit and share revision</button>
+      <button class="btn" type="submit" {% if not ctx.access.can_write or ctx.workspace_needs_update %}disabled title="{{ ctx.access.write_block_reason if not ctx.access.can_write else 'Review the published changes first' }}"{% endif %}>Publish new revision</button>
     </form>
 
     {% if change_rows %}
@@ -62,7 +62,7 @@
           class="form-stack danger-zone-delete"
           method="post"
           action="/problems/{{ ctx.problem.slug }}/problem/delete"
-          data-confirm-message="Delete problem {{ ctx.problem.slug }} permanently? Repository, workspaces and artifacts will be removed; current file changes will be lost."
+          data-confirm-message="Delete problem {{ ctx.problem.slug }} permanently? Repository, workspaces and artifacts will be removed; workspace changes will be lost."
           data-sudo-gated="1"
           data-sudo-required="{{ '0' if has_destructive_sudo else '1' }}"
           data-sudo-url="/sudo?next={{ sudo_popup_next | urlencode }}"
@@ -81,8 +81,8 @@
     <div class="workspace-section-head">
       <h2>File Changes</h2>
       {% if ctx.access.can_write %}
-      <form class="inline-form workspace-section-head-action" method="post" action="/problems/{{ ctx.problem.slug }}/workspace/delete" data-confirm-message="Delete my current files for {{ ctx.problem.slug }}? File changes will be lost.">
-        <button class="btn danger-link" type="submit">Delete My Files</button>
+      <form class="inline-form workspace-section-head-action" method="post" action="/problems/{{ ctx.problem.slug }}/workspace/delete" data-confirm-message="Delete workspace files for {{ ctx.problem.slug }}? File changes will be lost.">
+        <button class="btn danger-link" type="submit">Delete Workspace Files</button>
       </form>
       {% endif %}
     </div>
@@ -98,7 +98,7 @@
     {% if selected_path %}
     <p>Selected: <code>{{ selected_path }}</code></p>
     {% if ctx.access.can_write %}
-    <form class="inline-form" method="post" action="/problems/{{ ctx.problem.slug }}/git/discard-path" data-confirm-message="Discard current changes for {{ selected_path }}?">
+    <form class="inline-form" method="post" action="/problems/{{ ctx.problem.slug }}/git/discard-path" data-confirm-message="Discard workspace changes for {{ selected_path }}?">
       <input type="hidden" name="path" value="{{ selected_path }}" />
       <button class="btn danger-link" type="submit">Discard file changes</button>
     </form>

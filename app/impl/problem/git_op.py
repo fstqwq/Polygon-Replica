@@ -32,8 +32,8 @@ def revision_commit(
     commit_head = ""
     try:
         with config.workspace_service.workspace_lock(workspace):
-            if config.workspace_merge_service.shared_revision_advanced(workspace):
-                raise RuntimeError("a newer shared revision is available; merge it before committing")
+            if config.workspace_merge_service.published_revision_advanced(workspace):
+                raise RuntimeError("a newer published revision is available; update the workspace before publishing")
             commit_head = config.git_service.commit(
                 workspace, message, user, f"{user}@polygon-replica.local"
             )
@@ -52,11 +52,11 @@ def revision_commit(
             "revision.commit",
             {"message": message, "head": commit_head},
         )
-        msg = "revision committed and shared"
+        msg = "revision published"
     except Exception as exc:
         err = str(exc)
         if any(token in err.lower() for token in ("non-fast-forward", "fetch first", "rejected")):
-            msg = "a newer shared revision is available; merge it before committing"
+            msg = "a newer published revision is available; update the workspace before publishing"
         else:
             msg = err
     return redirect_response(f"/problems/{problem}/workspace", message=msg)

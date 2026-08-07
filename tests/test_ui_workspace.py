@@ -25,6 +25,7 @@ from app.service.statement.constant import (
 from app.service.statement.render import ensure_statement_language_sources
 from app.impl.run_export.import_source import import_package_as_new_problem
 from app.impl.problem.merge_op import merge_apply, merge_compare, merge_page
+from tests.assertion_helpers import assert_html_contract
 from tests.package_builders import polygon_contest_package, polygon_problem_package
 from tests.common import E2ETestBase
 
@@ -594,10 +595,13 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         resp = workspace_page(_request("/problems/alice/sample/workspace"), "alice/sample", "alice")
         self.assertEqual(resp.status_code, 200)
         html = resp.body.decode("utf-8", errors="replace")
-        self.assertIn("My Files", html)
-        self.assertIn("Latest shared revision", html)
-        self.assertNotIn("/problems/alice/sample/git/pull", html)
-        self.assertIn("Commit and share revision", html)
+        assert_html_contract(
+            self,
+            html,
+            contains=("Workspace", "Latest published revision", "Publish new revision"),
+            excludes=("/problems/alice/sample/git/pull", "My Files", "Commit and share revision"),
+            label="workspace controls",
+        )
         self.assertNotIn("rebase", html.lower())
         self.assertNotIn("Problem Access", html)
         self.assertNotIn("<h2>Access</h2>", html)
@@ -753,7 +757,7 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         self.assertIn('data-sudo-required="1"', html)
         self.assertIn('data-sudo-url="/sudo?next=', html)
         self.assertIn("sudo_popup_done%3D1", html)
-        self.assertIn("Delete My Files", html)
+        self.assertIn("Delete Workspace Files", html)
         self.assertIn("Delete Problem", html)
 
     def test_workspace_page_marks_delete_forms_ready_when_sudo_cookie_exists(self) -> None:
@@ -890,7 +894,7 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         self.assertIn("/problems/alice/sample/workspace", loc)
         messages = _flash_messages_from_response(resp)
         self.assertTrue(messages)
-        self.assertIn("newer shared revision", messages[0])
+        self.assertIn("newer published revision", messages[0])
 
         head_after = run_git(["git", "-C", str(ws), "rev-parse", "HEAD"]).stdout.strip()
         self.assertEqual(head_after, head_before)
@@ -921,7 +925,7 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         self.assertEqual(refreshed.status_code, 200)
         refreshed_html = refreshed.body.decode("utf-8", errors="replace")
         self.assertNotIn("/problems/alice/sample/merge/start", refreshed_html)
-        self.assertIn("Updated to the latest shared version.", refreshed_html)
+        self.assertIn("Workspace updated to the published revision.", refreshed_html)
         self.assertEqual((alice_ws / marker).read_text(encoding="utf-8"), "upstream update\n")
         audit_row = db_fetch_one(
             "SELECT COUNT(*) AS c FROM audit_log WHERE action='workspace.merge.auto_update'"
@@ -931,7 +935,7 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
 
         repeated = general_page(_request("/problems/alice/sample/general"), "alice/sample", "alice")
         repeated_html = repeated.body.decode("utf-8", errors="replace")
-        self.assertNotIn("Updated to the latest shared version.", repeated_html)
+        self.assertNotIn("Workspace updated to the published revision.", repeated_html)
 
     def test_dirty_workspace_requires_review_when_shared_version_advances(self) -> None:
         alice_ws, old_head = self._ensure_committed_head("alice/sample", "alice")
@@ -953,7 +957,7 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         response = general_page(_request("/problems/alice/sample/general"), "alice/sample", "alice")
         html = response.body.decode("utf-8", errors="replace")
         self.assertIn("/problems/alice/sample/merge/start", html)
-        self.assertNotIn("Updated to the latest shared version.", html)
+        self.assertNotIn("Workspace updated to the published revision.", html)
         self.assertEqual(run_git(["git", "rev-parse", "HEAD"], cwd=alice_ws).stdout.strip(), old_head)
         self.assertTrue((alice_ws / local_marker).is_file())
         self.assertFalse((alice_ws / shared_marker).exists())
@@ -1016,7 +1020,7 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         comparison = merge_compare(
             _request(
                 f"/problems/alice/sample/merge/{preview.preview_id}/compare/{entry.entry_id}",
-                "target=latest",
+                "target=published",
             ),
             "alice/sample",
             preview.preview_id,
@@ -1046,7 +1050,7 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
                     f"/problems/alice/sample/merge/{preview.preview_id}/apply",
                     {
                         "mode": "manual",
-                        f"choice_{group_id}": "latest",
+                        f"choice_{group_id}": "published",
                     },
                 ),
                 "alice/sample",
@@ -1352,7 +1356,7 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
             ("/problems/alice/sample/checker", "Checker"),
             ("/problems/alice/sample/validator", "Validator"),
             ("/problems/alice/sample/files", "Files"),
-            ("/problems/alice/sample/workspace", "My Files"),
+            ("/problems/alice/sample/workspace", "Workspace"),
             ("/problems/alice/sample/history", "Revision History"),
         ]
         with TestClient(app) as client:
@@ -1399,8 +1403,8 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         self.assertIn(">alice/</span>", html)
         self.assertIn(">sample</span>", html)
         self.assertNotIn(">sample</a> - <code>alice/sample</code>", html)
-        self.assertIn("v0 / latest shared v0", html)
-        self.assertIn("none / latest shared missing", html)
+        self.assertIn("Workspace base v0 / latest published v0", html)
+        self.assertIn("Workspace base none / latest published missing", html)
         self.assertIn("revision-alert", html)
 
     def test_workspace_page_header_uses_slug_link_and_copy_button(self) -> None:
@@ -1995,7 +1999,7 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         self.assertEqual(response.status_code, 303)
         messages = _flash_messages_from_response(response)
         self.assertTrue(messages)
-        self.assertIn("revision committed and shared", messages[0])
+        self.assertIn("revision published", messages[0])
         self.assertEqual(
             run_git(["git", "-C", str(ws), "rev-parse", "HEAD"]).returncode,
             0,

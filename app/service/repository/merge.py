@@ -38,8 +38,8 @@ class MergeEntry:
     entry_id: str
     group_id: str
     path: str
-    current: MergeFile | None
-    latest: MergeFile | None
+    workspace: MergeFile | None
+    published: MergeFile | None
     suggested: MergeFile | None
 
 
@@ -49,16 +49,16 @@ class MergePreview:
     actor: str
     problem: str
     workspace: Path
-    current_head: str
-    latest_head: str
+    workspace_base_head: str
+    published_head: str
     workspace_fingerprint: str
     created_at: float
     root: Path
     entries: tuple[MergeEntry, ...]
     groups: tuple[tuple[str, tuple[str, ...]], ...]
     suggested_entries: tuple[MergeEntry, ...]
-    current_manifest: tuple[MergeFile, ...]
-    latest_manifest: tuple[MergeFile, ...]
+    workspace_manifest: tuple[MergeFile, ...]
+    published_manifest: tuple[MergeFile, ...]
     suggested_manifest: tuple[MergeFile, ...]
     suggested_available: bool
     fast_forward_possible: bool
@@ -84,40 +84,40 @@ class WorkspaceMergeService:
         return proc.stdout.strip()
 
     @classmethod
-    def current_head(cls, workspace: Path) -> str:
+    def workspace_base_head(cls, workspace: Path) -> str:
         proc = run_git(["git", "-C", str(workspace), "rev-parse", "--verify", "HEAD"])
         if proc.returncode != 0:
             return ""
         return proc.stdout.strip()
 
     @classmethod
-    def _shared_origin(cls, workspace: Path) -> str:
+    def _published_origin(cls, workspace: Path) -> str:
         origin = cls._git(workspace, "remote", "get-url", "origin")
         if not origin:
-            raise RuntimeError("shared revision source is missing")
+            raise RuntimeError("published revision source is missing")
         return origin
 
     @classmethod
-    def latest_shared_head(cls, workspace: Path) -> str:
-        origin = cls._shared_origin(workspace)
+    def published_head(cls, workspace: Path) -> str:
+        origin = cls._published_origin(workspace)
         proc = run_git(["git", "ls-remote", origin, "refs/heads/main"])
         if proc.returncode != 0:
-            raise RuntimeError(proc.stderr or proc.stdout or "failed to read the latest shared revision")
+            raise RuntimeError(proc.stderr or proc.stdout or "failed to read the published revision")
         line = next((row for row in proc.stdout.splitlines() if row.strip()), "")
         if not line:
             return ""
         return line.split()[0]
 
     @classmethod
-    def shared_revision_advanced(cls, workspace: Path) -> bool:
-        return cls.current_head(workspace) != cls.latest_shared_head(workspace)
+    def published_revision_advanced(cls, workspace: Path) -> bool:
+        return cls.workspace_base_head(workspace) != cls.published_head(workspace)
 
     def advance_clean_workspace(self, workspace: Path) -> bool:
         """Fast-forward a clean workspace without creating merge or undo state."""
         with self._workspace_service.workspace_lock(workspace):
-            current_head = self.current_head(workspace)
-            latest_head = self.latest_shared_head(workspace)
-            if not latest_head or current_head == latest_head:
+            workspace_base_head = self.workspace_base_head(workspace)
+            published_head = self.published_head(workspace)
+            if not published_head or workspace_base_head == published_head:
                 return False
             status = run_git(
                 [
@@ -130,11 +130,11 @@ class WorkspaceMergeService:
                 ]
             )
             if status.returncode != 0:
-                raise RuntimeError(status.stderr or status.stdout or "failed to inspect current files")
+                raise RuntimeError(status.stderr or status.stdout or "failed to inspect workspace files")
             if status.stdout.strip():
                 return False
-            self._git(workspace, "fetch", "--quiet", "origin", latest_head)
-            if current_head:
+            self._git(workspace, "fetch", "--quiet", "origin", published_head)
+            if workspace_base_head:
                 ancestor = run_git(
                     [
                         "git",
@@ -142,17 +142,17 @@ class WorkspaceMergeService:
                         str(workspace),
                         "merge-base",
                         "--is-ancestor",
-                        current_head,
-                        latest_head,
+                        workspace_base_head,
+                        published_head,
                     ]
                 )
                 if ancestor.returncode != 0:
                     return False
-                self._git(workspace, "merge", "--ff-only", "--quiet", latest_head)
+                self._git(workspace, "merge", "--ff-only", "--quiet", published_head)
             else:
-                self._git(workspace, "reset", "--hard", latest_head)
-            if self.current_head(workspace) != latest_head:
-                raise RuntimeError("failed to update current files to the latest shared version")
+                self._git(workspace, "reset", "--hard", published_head)
+            if self.workspace_base_head(workspace) != published_head:
+                raise RuntimeError("failed to update workspace to the published revision")
             self.clear_undo(workspace)
             return True
 
@@ -295,10 +295,10 @@ class WorkspaceMergeService:
             shutil.copy2(path, destination)
 
     @classmethod
-    def _assert_shared_tree_has_no_symlinks(cls, repo: Path, revision: str) -> None:
+    def _assert_published_tree_has_no_symlinks(cls, repo: Path, revision: str) -> None:
         proc = run_git(["git", "-C", str(repo), "ls-tree", "-r", revision])
         if proc.returncode != 0:
-            raise RuntimeError(proc.stderr or proc.stdout or "failed to inspect the latest shared revision")
+            raise RuntimeError(proc.stderr or proc.stdout or "failed to inspect the published revision")
         for line in proc.stdout.splitlines():
             if line.startswith("120000 "):
                 path = line.split("\t", 1)[-1]
@@ -307,15 +307,15 @@ class WorkspaceMergeService:
     @classmethod
     def _build_merge_repo(
         cls,
-        current_tree: Path,
-        shared_origin: str,
-        latest_head: str,
+        workspace_tree: Path,
+        published_origin: str,
+        published_head: str,
         target: Path,
     ) -> bool:
-        cls._git(target, "remote", "set-url", "origin", shared_origin)
-        cls._git(target, "fetch", "origin", f"{latest_head}:refs/remotes/origin/main")
+        cls._git(target, "remote", "set-url", "origin", published_origin)
+        cls._git(target, "fetch", "origin", f"{published_head}:refs/remotes/origin/main")
         cls._clear_visible_tree(target)
-        cls._copy_tree(current_tree, target)
+        cls._copy_tree(workspace_tree, target)
         cls._git(target, "config", "user.name", "Polygon Replica")
         cls._git(target, "config", "user.email", "merge@polygon-replica.local")
         cls._git(target, "add", "-f", "--all", "--", ".")
@@ -343,15 +343,15 @@ class WorkspaceMergeService:
 
     @staticmethod
     def _group_entries(
-        current: dict[str, MergeFile],
-        latest: dict[str, MergeFile],
+        workspace: dict[str, MergeFile],
+        published: dict[str, MergeFile],
         suggested: dict[str, MergeFile],
     ) -> tuple[
         tuple[MergeEntry, ...],
         tuple[tuple[str, tuple[str, ...]], ...],
         tuple[MergeEntry, ...],
     ]:
-        paths = sorted(path for path in set(current) | set(latest) if current.get(path) != latest.get(path))
+        paths = sorted(path for path in set(workspace) | set(published) if workspace.get(path) != published.get(path))
         parent = {path: path for path in paths}
 
         def find(path: str) -> str:
@@ -400,8 +400,8 @@ class WorkspaceMergeService:
                         f"e{entry_number:04d}",
                         group_id,
                         path,
-                        current.get(path),
-                        latest.get(path),
+                        workspace.get(path),
+                        published.get(path),
                         suggested.get(path),
                     )
                 )
@@ -410,15 +410,15 @@ class WorkspaceMergeService:
                 f"s{number:04d}",
                 "",
                 path,
-                current.get(path),
-                latest.get(path),
+                workspace.get(path),
+                published.get(path),
                 suggested.get(path),
             )
             for number, path in enumerate(
                 sorted(
                     path
-                    for path in set(current) | set(suggested)
-                    if current.get(path) != suggested.get(path)
+                    for path in set(workspace) | set(suggested)
+                    if workspace.get(path) != suggested.get(path)
                 ),
                 start=1,
             )
@@ -441,8 +441,8 @@ class WorkspaceMergeService:
     def start_preview(self, actor: str, problem: str, workspace: Path) -> MergePreview:
         preview_id = secrets.token_urlsafe(24)
         root = self._root / preview_id
-        current_tree = root / "current"
-        latest_tree = root / "latest"
+        workspace_tree = root / "workspace"
+        published_tree = root / "published"
         merge_repo = root / "suggested"
         self._root.mkdir(parents=True, exist_ok=True)
         workspace_size = self._tree_size(workspace)
@@ -453,12 +453,12 @@ class WorkspaceMergeService:
         root.mkdir(parents=True, exist_ok=False)
         try:
             with self._workspace_service.workspace_lock(workspace):
-                current_head = self.current_head(workspace)
-                latest_head = self.latest_shared_head(workspace)
-                if not latest_head:
-                    raise RuntimeError("there is no shared revision to merge")
-                shared_origin = self._shared_origin(workspace)
-                current = self._capture_tree(workspace, current_tree)
+                workspace_base_head = self.workspace_base_head(workspace)
+                published_head = self.published_head(workspace)
+                if not published_head:
+                    raise RuntimeError("there is no published revision to merge")
+                published_origin = self._published_origin(workspace)
+                workspace_manifest = self._capture_tree(workspace, workspace_tree)
                 merge_clone = run_git(
                     ["git", "clone", "--no-hardlinks", str(workspace), str(merge_repo)]
                 )
@@ -466,48 +466,48 @@ class WorkspaceMergeService:
                     raise RuntimeError(
                         merge_clone.stderr or merge_clone.stdout or "failed to create merge preview"
                     )
-            fingerprint = self._fingerprint(current_head, current)
-            clone = run_git(["git", "clone", "--no-checkout", shared_origin, str(root / "shared-repo")])
+            fingerprint = self._fingerprint(workspace_base_head, workspace_manifest)
+            clone = run_git(["git", "clone", "--no-checkout", published_origin, str(root / "published-repo")])
             if clone.returncode != 0:
-                raise RuntimeError(clone.stderr or clone.stdout or "failed to read the latest shared revision")
-            shared_repo = root / "shared-repo"
-            self._assert_shared_tree_has_no_symlinks(shared_repo, latest_head)
+                raise RuntimeError(clone.stderr or clone.stdout or "failed to read the published revision")
+            published_repo = root / "published-repo"
+            self._assert_published_tree_has_no_symlinks(published_repo, published_head)
             fast_forward_possible = False
-            if current_head:
+            if workspace_base_head:
                 ancestor = run_git(
                     [
                         "git",
                         "-C",
-                        str(shared_repo),
+                        str(published_repo),
                         "merge-base",
                         "--is-ancestor",
-                        current_head,
-                        latest_head,
+                        workspace_base_head,
+                        published_head,
                     ]
                 )
                 fast_forward_possible = ancestor.returncode == 0
-            extract_git_archive(shared_repo, latest_head, latest_tree)
-            latest = self._manifest(latest_tree)
+            extract_git_archive(published_repo, published_head, published_tree)
+            published = self._manifest(published_tree)
             suggested_available = self._build_merge_repo(
-                current_tree, shared_origin, latest_head, merge_repo
+                workspace_tree, published_origin, published_head, merge_repo
             )
             suggested = self._manifest(merge_repo) if suggested_available else {}
-            entries, groups, suggested_entries = self._group_entries(current, latest, suggested)
+            entries, groups, suggested_entries = self._group_entries(workspace_manifest, published, suggested)
             preview = MergePreview(
                 preview_id,
                 actor,
                 problem,
                 workspace,
-                current_head,
-                latest_head,
+                workspace_base_head,
+                published_head,
                 fingerprint,
                 time.time(),
                 root,
                 entries,
                 groups,
                 suggested_entries,
-                tuple(current[path] for path in sorted(current)),
-                tuple(latest[path] for path in sorted(latest)),
+                tuple(workspace_manifest[path] for path in sorted(workspace_manifest)),
+                tuple(published[path] for path in sorted(published)),
                 tuple(suggested[path] for path in sorted(suggested)),
                 suggested_available,
                 fast_forward_possible,
@@ -555,16 +555,16 @@ class WorkspaceMergeService:
     @classmethod
     def _manual_result(cls, preview: MergePreview, choices: dict[str, str], target: Path) -> None:
         group_ids = {group_id for group_id, _paths in preview.groups}
-        if set(choices) != group_ids or any(side not in {"current", "latest"} for side in choices.values()):
+        if set(choices) != group_ids or any(side not in {"workspace", "published"} for side in choices.values()):
             raise ValueError("choose a result for every affected file")
-        shutil.copytree(preview.root / "latest", target)
+        shutil.copytree(preview.root / "published", target)
         for group_id, paths in preview.groups:
-            if choices[group_id] == "latest":
+            if choices[group_id] == "published":
                 continue
             for rel in sorted(paths, key=lambda value: (value.count("/"), value), reverse=True):
                 cls._remove_path(target / rel)
             for rel in paths:
-                source = preview.root / "current" / rel
+                source = preview.root / "workspace" / rel
                 if source.is_file():
                     destination = target / rel
                     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -609,7 +609,7 @@ class WorkspaceMergeService:
         cls,
         workspace: Path,
         result_tree: Path,
-        latest_head: str,
+        published_head: str,
         mode: str,
         affected_count: int,
     ) -> Path:
@@ -618,7 +618,7 @@ class WorkspaceMergeService:
         try:
             git_dir = candidate / ".git"
             cls._remove_git_operation_state(git_dir)
-            old_head = cls.current_head(candidate)
+            old_head = cls.workspace_base_head(candidate)
             if old_head:
                 cls._git(candidate, "reset", "--mixed", "HEAD")
             cls._git(candidate, "config", "user.name", "Polygon Replica")
@@ -639,19 +639,19 @@ class WorkspaceMergeService:
             if reset_hidden.returncode != 0:
                 raise RuntimeError(reset_hidden.stderr or reset_hidden.stdout or "failed to prepare undo")
             cls._git(candidate, "commit", "--allow-empty", "-m", "Local merge undo snapshot")
-            undo_commit = cls.current_head(candidate)
+            undo_commit = cls.workspace_base_head(candidate)
             cls._git(candidate, "update-ref", cls._UNDO_REF, undo_commit)
-            cls._git(candidate, "fetch", "origin", latest_head)
-            cls._git(candidate, "reset", "--hard", latest_head)
+            cls._git(candidate, "fetch", "origin", published_head)
+            cls._git(candidate, "reset", "--hard", published_head)
             cls._clear_visible_tree(candidate)
             cls._copy_tree(result_tree, candidate)
-            post_fingerprint = cls._fingerprint(latest_head, cls._manifest(candidate))
+            post_fingerprint = cls._fingerprint(published_head, cls._manifest(candidate))
             metadata_dir = git_dir / "polygon-replica"
             metadata_dir.mkdir(parents=True, exist_ok=True)
             metadata = (
                 f"undo_commit={undo_commit}\n"
                 f"old_head={old_head}\n"
-                f"post_head={latest_head}\n"
+                f"post_head={published_head}\n"
                 f"post_fingerprint={post_fingerprint}\n"
                 f"mode={mode}\n"
                 f"affected_count={affected_count}\n"
@@ -727,7 +727,7 @@ class WorkspaceMergeService:
         try:
             if mode == "suggested":
                 if not preview.suggested_available:
-                    raise ValueError("a suggested result is not available; choose files one by one")
+                    raise ValueError("a proposed merged version is not available; choose files one by one")
                 result_tree.mkdir(parents=True)
                 self._copy_tree(preview.root / "suggested", result_tree)
             elif mode == "manual":
@@ -736,12 +736,12 @@ class WorkspaceMergeService:
                 raise ValueError("select a merge result")
             self._validate_result_tree(result_tree)
             with self._workspace_service.workspace_lock(preview.workspace):
-                current_head = self.current_head(preview.workspace)
-                current_manifest = self._manifest(preview.workspace)
-                if current_head != preview.current_head or self._fingerprint(current_head, current_manifest) != preview.workspace_fingerprint:
-                    raise RuntimeError("your files changed after this preview; create a new merge preview")
-                if self.latest_shared_head(preview.workspace) != preview.latest_head:
-                    raise RuntimeError("a newer shared revision is available; create a new merge preview")
+                workspace_base_head = self.workspace_base_head(preview.workspace)
+                workspace_manifest = self._manifest(preview.workspace)
+                if workspace_base_head != preview.workspace_base_head or self._fingerprint(workspace_base_head, workspace_manifest) != preview.workspace_fingerprint:
+                    raise RuntimeError("your workspace changed after this preview; create a new merge preview")
+                if self.published_head(preview.workspace) != preview.published_head:
+                    raise RuntimeError("a newer published revision is available; create a new merge preview")
                 self._disk_preflight(preview.workspace, result_tree)
                 affected_count = (
                     len(preview.suggested_entries) if mode == "suggested" else len(preview.entries)
@@ -749,7 +749,7 @@ class WorkspaceMergeService:
                 candidate = self._prepare_candidate(
                     preview.workspace,
                     result_tree,
-                    preview.latest_head,
+                    preview.published_head,
                     mode,
                     affected_count,
                 )
@@ -765,10 +765,10 @@ class WorkspaceMergeService:
         candidate: Path | None = None
         with self._workspace_service.workspace_lock(workspace):
             metadata = self._undo_metadata(workspace)
-            current_head = self.current_head(workspace)
-            fingerprint = self._fingerprint(current_head, self._manifest(workspace))
-            if current_head != metadata["post_head"] or fingerprint != metadata["post_fingerprint"]:
-                raise RuntimeError("your files changed after the merge; undo is no longer safe")
+            workspace_base_head = self.workspace_base_head(workspace)
+            fingerprint = self._fingerprint(workspace_base_head, self._manifest(workspace))
+            if workspace_base_head != metadata["post_head"] or fingerprint != metadata["post_fingerprint"]:
+                raise RuntimeError("your workspace changed after the update; undo is no longer safe")
             self._disk_preflight(workspace, workspace)
             candidate = workspace.parent / f".{workspace.name}.merge-candidate-{uuid.uuid4().hex}"
             shutil.copytree(workspace, candidate, symlinks=True)
@@ -800,11 +800,11 @@ class WorkspaceMergeService:
             ),
             None,
         )
-        if entry is None or side not in {"current", "latest", "suggested"}:
+        if entry is None or side not in {"workspace", "published", "suggested"}:
             raise ValueError("merge preview file is invalid")
         descriptor = {
-            "current": entry.current,
-            "latest": entry.latest,
+            "workspace": entry.workspace,
+            "published": entry.published,
             "suggested": entry.suggested,
         }[side]
         if descriptor is None:
@@ -835,27 +835,27 @@ class WorkspaceMergeService:
         target: str,
     ) -> MergeComparison:
         preview = self.get_preview(actor, problem, preview_id)
-        if target not in {"latest", "suggested"}:
+        if target not in {"published", "suggested"}:
             raise ValueError("merge comparison target is invalid")
         if target == "suggested" and not preview.suggested_available:
-            raise ValueError("a suggested result is not available")
+            raise ValueError("a proposed merged version is not available")
         rows = preview.suggested_entries if target == "suggested" else preview.entries
         entry = next((row for row in rows if row.entry_id == entry_id), None)
         if entry is None:
             raise ValueError("merge preview file is invalid")
-        right_descriptor = entry.suggested if target == "suggested" else entry.latest
-        left_path = preview.root / "current" / entry.path if entry.current is not None else None
+        right_descriptor = entry.suggested if target == "suggested" else entry.published
+        left_path = preview.root / "workspace" / entry.path if entry.workspace is not None else None
         right_path = preview.root / target / entry.path if right_descriptor is not None else None
         base_url = f"/problems/{problem}/merge/{preview_id}/file/{entry_id}"
         left_side = MergeDiffSide(
-            "My current file",
-            entry.current is not None,
-            entry.current.size if entry.current is not None else 0,
-            entry.current.executable if entry.current is not None else False,
-            f"{base_url}?side=current" if entry.current is not None else "",
+            "Workspace file",
+            entry.workspace is not None,
+            entry.workspace.size if entry.workspace is not None else 0,
+            entry.workspace.executable if entry.workspace is not None else False,
+            f"{base_url}?side=workspace" if entry.workspace is not None else "",
         )
         right_side = MergeDiffSide(
-            "Suggested result" if target == "suggested" else "Latest shared file",
+            "Proposed merged version" if target == "suggested" else "Published file",
             right_descriptor is not None,
             right_descriptor.size if right_descriptor is not None else 0,
             right_descriptor.executable if right_descriptor is not None else False,
@@ -863,7 +863,7 @@ class WorkspaceMergeService:
         )
         return compare_merge_files(
             path=entry.path,
-            change_kind=self._change_kind(entry.current, right_descriptor),
+            change_kind=self._change_kind(entry.workspace, right_descriptor),
             left_path=left_path,
             left_side=left_side,
             right_path=right_path,

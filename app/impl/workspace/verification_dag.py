@@ -8,6 +8,7 @@ from typing import cast
 
 from app.db import now_iso
 from app.impl.runtime.config import config
+from app.service.repository.revision import workspace_verification_source
 from app.service.problem.solution_metadata import normalize_expected_behavior
 from app.service.platform.runtime_blob_store import PayloadFile, RuntimeBlobStore
 from app.service.verification.source import resolve_source
@@ -1075,6 +1076,7 @@ def run_workspace_verification_dag(
     workspace_path = Path(workspace_path_text).resolve()
     if (not workspace_path.exists()) or (not workspace_path.is_dir()) or workspace_path.is_symlink():
         raise RuntimeError("workspace path is unavailable")
+    record_source = str(source_commit or "").strip() or workspace_verification_source(workspace_head)
     task_store = config.verification_task_store
     layout = config.fs_manager.prepare_verification_layout(verification_id)
     snapshot_root = snapshot_root_override
@@ -1114,7 +1116,7 @@ def run_workspace_verification_dag(
             problem_id=problem_id,
             workspace_id=workspace_id,
             signature=signature,
-            source_commit=source_commit,
+            source_commit=record_source,
             kind=kind,
             status=Status.FAILED.value,
         )
@@ -1203,7 +1205,7 @@ def run_workspace_verification_dag(
             problem_id=problem_id,
             workspace_id=workspace_id,
             signature=signature,
-            source_commit=source_commit,
+            source_commit=record_source,
             kind=effective_kind,
             status=Status.RUNNING.value,
         )

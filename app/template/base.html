@@ -22,8 +22,8 @@
   {% if part == 'export' %}{% set inferred_problem_title.value = 'Packages' %}{% endif %}
   {% if part == 'access' %}{% set inferred_problem_title.value = 'Manage Access' %}{% endif %}
   {% if part == 'files' %}{% set inferred_problem_title.value = 'Files' %}{% endif %}
-  {% if part == 'workspace' %}{% set inferred_problem_title.value = 'My Files' %}{% endif %}
-  {% if part == 'merge' %}{% set inferred_problem_title.value = 'Review Shared Changes' %}{% endif %}
+  {% if part == 'workspace' %}{% set inferred_problem_title.value = 'Workspace' %}{% endif %}
+  {% if part == 'merge' %}{% set inferred_problem_title.value = 'Update Workspace' %}{% endif %}
   {% if part == 'history' %}{% set inferred_problem_title.value = 'Revision History' %}{% endif %}
   {% endif %}
   {% endfor %}
@@ -232,24 +232,24 @@
       </main>
       <aside class="side-panel">
         <section class="action-card">
-          <h3>My Files</h3>
+          <h3>Workspace</h3>
           {% set ws_revision = ctx.workspace_revision if ctx.workspace_revision is defined else {} %}
           {% set local_rev_raw = ws_revision.get('local') if ws_revision else none %}
-          {% set shared_rev_raw = ws_revision.get('upstream') if ws_revision else none %}
+          {% set published_rev_raw = ws_revision.get('upstream') if ws_revision else none %}
           {% set local_rev = ('v' ~ local_rev_raw) if local_rev_raw is not none else 'none' %}
-          {% set shared_rev = ('v' ~ shared_rev_raw) if shared_rev_raw is not none else 'none' %}
+          {% set published_rev = ('v' ~ published_rev_raw) if published_rev_raw is not none else 'none' %}
           <div class="workspace-revision{{ ' workspace-revision-alert' if ctx.workspace_revision_alert else '' }}">
             <div class="workspace-revision-head">
               {% if ctx.workspace_needs_update %}
               <span class="workspace-revision-state">new revision available</span>
               {% endif %}
             </div>
-            <p class="workspace-revision-inline">Based on <strong>{{ local_rev }}</strong> / latest shared <strong>{{ shared_rev }}</strong></p>
+            <p class="workspace-revision-inline">Workspace base <strong>{{ local_rev }}</strong> / latest published <strong>{{ published_rev }}</strong></p>
           </div>
           {% if ctx.workspace_needs_update %}
           <div class="workspace-update-row">
             <form class="inline-form action-link-form" method="post" action="/problems/{{ ctx.problem.slug }}/merge/start">
-              <button class="button-link workspace-side-button" type="submit" {% if not ctx.access.can_write %}disabled title="{{ ctx.access.write_block_reason }}"{% endif %}>Review latest shared changes</button>
+              <button class="button-link workspace-side-button" type="submit" {% if not ctx.access.can_write %}disabled title="{{ ctx.access.write_block_reason }}"{% endif %}>Review published changes</button>
             </form>
           </div>
           {% endif %}
@@ -259,7 +259,7 @@
             <a class="workspace-side-link" href="/problems/{{ ctx.problem.slug }}/files">Browse Files</a>
           </div>
           <div class="workspace-actions">
-            <a class="button-link primary-action workspace-side-button" href="/problems/{{ ctx.problem.slug }}/workspace">Review and commit</a>
+            <a class="button-link primary-action workspace-side-button" href="/problems/{{ ctx.problem.slug }}/workspace">Review and publish</a>
           </div>
           {% if ctx.workspace_changes.total > 0 %}
           {{ change_badges(ctx.workspace_changes.counts) }}

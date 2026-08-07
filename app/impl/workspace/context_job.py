@@ -4,10 +4,11 @@ import shutil
 from pathlib import Path
 
 from app.impl.runtime.config import config
-from app.service.verification.types import Kind, Status
-from app.service.verification.runtime import normalize_pass_limit, normalize_problem_mode
+from app.service.repository.revision import workspace_verification_source
 from app.service.problem.solution_metadata import normalize_expected_behavior
 from app.service.problem.test_spec import load_tests_spec
+from app.service.verification.types import Kind, Status
+from app.service.verification.runtime import normalize_pass_limit, normalize_problem_mode
 from app.service.verification.validation_status import build_validation_status
 
 from app.impl.workspace.context_job_helper import allocate_run_id, allocate_verification_id
@@ -146,6 +147,7 @@ def start_verification_job(
             initial_details["signature"] = signature
         initial_details.setdefault("verification_source", "verification.start")
     kind = _requested_verification_kind(selected_test_names=list(selected_test_names or []))
+    record_source = str(source_commit or "").strip() or workspace_verification_source(workspace_head)
     with config.verification_lock:
         if key in config.verification_inflight:
             return False
@@ -169,7 +171,7 @@ def start_verification_job(
         problem_id=problem_id,
         workspace_id=workspace_id,
         signature=signature,
-        source_commit=source_commit,
+        source_commit=record_source,
         kind=kind,
         status=Status.RUNNING.value,
         detail=detail,

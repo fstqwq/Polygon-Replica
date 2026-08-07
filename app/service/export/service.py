@@ -412,7 +412,7 @@ class ExportService:
         problem_slug: str,
         tmp_root: Path,
     ) -> Path:
-        """Copy the workspace working tree to a temp snapshot using native-import path rules."""
+        """Copy the workspace tree to a temp snapshot using native-import path rules."""
         workspace = self._workspace_path_for_export(workspace_id, problem_slug)
         snapshot = tmp_root / "_source"
         snapshot.mkdir(parents=True, exist_ok=True)

@@ -15,7 +15,7 @@ from starlette.background import BackgroundTask
 from app.impl.auth.shared import redirect_response, template_response
 from app.impl.runtime.config import config
 from app.impl.workspace.access import require_write_access
-from app.service.repository.revision import git_commit_count
+from app.service.repository.revision import git_commit_count, verification_source_display
 from app.impl.workspace.context_job import start_export_job
 from app.impl.workspace.context_job_helper import allocate_verification_id
 from app.impl.workspace.context_ui import page_ctx
@@ -47,12 +47,7 @@ def _export_type_display(export_type: str) -> str:
 
 
 def _source_revision_display(workspace: Path, source_commit: str, revision_cache: dict[str, int | None]) -> str:
-    if not source_commit:
-        return "current files"
-    if source_commit not in revision_cache:
-        revision_cache[source_commit] = git_commit_count(workspace, source_commit)
-    revision = revision_cache[source_commit]
-    return f"v{revision}" if revision is not None and revision >= 0 else "v?"
+    return verification_source_display(workspace, source_commit, revision_cache)
 
 
 def _parse_export_audit_details(raw: str | None) -> ExportAuditDetails:
@@ -294,13 +289,7 @@ def export_page(request: Request, problem: str, user: Annotated[str, Depends(req
         source_commit = cast(str | None, item.get("source_commit"))
         if source_commit is None:
             source_commit = ""
-        revision = None
-        if source_commit:
-            item['source_display'] = _source_revision_display(workspace, source_commit, revision_cache)
-            revision = revision_cache[source_commit]
-        else:
-            item['source_display'] = _source_revision_display(workspace, source_commit, revision_cache)
-        item['revision'] = revision
+        item['source_display'] = _source_revision_display(workspace, source_commit, revision_cache)
         stored_filename = cast(str | None, item.get("filename"))
         if stored_filename is None:
             stored_filename = ""
@@ -311,7 +300,7 @@ def export_page(request: Request, problem: str, user: Annotated[str, Depends(req
         if not fallback_stem:
             fallback_stem = "problem"
         native_export = cast(str, item["export_type"]) == "native"
-        if native_export and item["source_display"] == "working tree":
+        if native_export and item["source_display"] == "Workspace":
             item['display_filename'] = stored_filename or f"{fallback_stem}.zip"
         elif native_export:
             item['display_filename'] = stored_filename or f"{fallback_stem}-native-{item['source_display']}.zip"

@@ -17,13 +17,13 @@
   </section>
   <section class="info-card">
     <h2>Download Snapshot</h2>
-    <p class="muted">Download the current working tree as a temporary native zip. This file is not recorded in export activity.</p>
+    <p class="muted">Download the workspace files as a temporary native zip. This file is not recorded in export activity.</p>
     <form class="form-row" method="post" action="/problems/{{ ctx.problem.slug }}/export/snapshot">
       <button class="btn" type="submit">Download Snapshot</button>
     </form>
   </section>
   <section class="info-card">
-    <h2>Import Into My Files</h2>
+    <h2>Import Into Workspace</h2>
     <p class="muted">Package files overwrite same-path local files. Paths absent from the package are kept.</p>
     <form class="form-row" method="post" enctype="multipart/form-data" action="/problems/{{ ctx.problem.slug }}/export/import">
       <label for="workspace-import-package">Package (.zip)</label>

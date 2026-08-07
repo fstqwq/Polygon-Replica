@@ -5,14 +5,14 @@
 ```mermaid
 graph LR
     Create[Create or import] --> Edit[Edit files]
-    Edit --> Merge[Merge latest revision]
-    Merge --> Commit[Commit and share revision]
+    Edit --> Merge[Update from published revision]
+    Merge --> Commit[Publish revision]
     Commit --> Verify[Verification or run]
     Verify --> Export[Export package]
     Edit --> Preview[Compile statement preview]
 ```
 
-A problem is created from scratch or imported from an external package. Users edit sources in separate workspaces, merge the latest shared revision, commit the result, then run verification or export.
+A problem is created from scratch or imported from an external package. Users edit sources in separate workspaces, update from the published revision, publish the result, then run verification or export.
 
 ## Git-Backed Source of Truth
 
@@ -156,11 +156,11 @@ not a global problem name.
 
 ## Revision Operations Exposed in the UI
 
-The workspace pages expose Commit, Merge, revision history, and a one-level Undo for the most recent Merge.
+The workspace pages expose Publish, workspace update, revision history, and a one-level Undo for the most recent update.
 
-Merge first creates a runtime-only preview. The preview captures the user's complete visible file tree and the latest shared revision without changing the workspace. A clean three-way result may be accepted as a suggestion; otherwise every affected file group requires an explicit whole-file choice. Applying a preview rechecks the workspace and shared revision, builds a complete candidate beside the workspace, and switches directories under a recoverable transaction journal.
+Merge first creates a runtime-only preview. The preview captures the user's complete visible workspace tree and the published revision without changing the workspace. A clean three-way result may be accepted as a suggestion; otherwise every affected file group requires an explicit whole-file choice. Applying a preview rechecks the workspace and published revision, builds a complete candidate beside the workspace, and switches directories under a recoverable transaction journal.
 
-The preview expires after 30 minutes or service restart. Undo is local, covers all visible files and executable bits, and remains safe only while the post-Merge workspace has not changed. A later successful Merge replaces the previous Undo snapshot. Commit is blocked when a newer shared revision exists, so users must Merge before publishing.
+The preview expires after 30 minutes or service restart. Undo is local, covers all visible files and executable bits, and remains safe only while the post-update workspace has not changed. A later successful update replaces the previous Undo snapshot. Publishing is blocked when a newer published revision exists, so users must update the workspace before publishing.
 
 ## Access Control
 

@@ -53,9 +53,9 @@ def _entry_view(
     *,
     change_kind: str = "",
 ) -> dict[str, object]:
-    right = entry.suggested if target == "suggested" else entry.latest
-    kind = change_kind or _change_kind(entry.current, right)
-    descriptors = [row for row in (entry.current, right) if row is not None]
+    right = entry.suggested if target == "suggested" else entry.published
+    kind = change_kind or _change_kind(entry.workspace, right)
+    descriptors = [row for row in (entry.workspace, right) if row is not None]
     content_kind = "text"
     if any(row.content_kind == "binary" for row in descriptors):
         content_kind = "binary"
@@ -75,8 +75,8 @@ def _entry_view(
             "unchanged": "Unchanged",
         }[kind],
         "content_kind": content_kind,
-        "current": _file_view(entry.current),
-        "latest": _file_view(entry.latest),
+        "workspace": _file_view(entry.workspace),
+        "published": _file_view(entry.published),
         "suggested": _file_view(entry.suggested),
     }
 
@@ -89,7 +89,7 @@ def _preview_view(preview: MergePreview) -> dict[str, object]:
     for entry in preview.entries:
         kind = "type-conflict" if group_sizes[entry.group_id] > 1 else ""
         entries_by_group[entry.group_id].append(
-            _entry_view(entry, "latest", change_kind=kind)
+            _entry_view(entry, "published", change_kind=kind)
         )
     return {
         "id": preview.preview_id,
@@ -122,7 +122,7 @@ def _render_merge(
     ctx["page_single_column"] = True
     ctx["page_wide_content"] = True
     ctx["merge_ui"] = True
-    ctx["page_title"] = "Review Shared Changes"
+    ctx["page_title"] = "Update Workspace"
     return template_response(
         request,
         "merge.html",
@@ -159,7 +159,7 @@ def merge_start(problem: str, user: Annotated[str, Depends(require_session_user)
             )
             return redirect_response(
                 f"/problems/{problem}/workspace",
-                message="Updated to the latest shared version.",
+                message="Workspace updated to the published revision.",
             )
         preview = config.workspace_merge_service.start_preview(user, problem, workspace)
         audit(
@@ -197,7 +197,7 @@ def merge_compare(
 ):
     try:
         _workspace_context(problem, user)
-        target = str(request.query_params.get("target") or "latest")
+        target = str(request.query_params.get("target") or "published")
         comparison = config.workspace_merge_service.comparison(
             user,
             problem,
@@ -226,9 +226,9 @@ async def merge_apply(
         choices = _form_choices(preview, form)
         if mode == "suggested":
             if not preview.suggested_available:
-                raise ValueError("a suggested result is not available")
+                raise ValueError("a proposed merged version is not available")
         elif mode == "manual":
-            if any(side not in {"current", "latest"} for side in choices.values()):
+            if any(side not in {"workspace", "published"} for side in choices.values()):
                 raise ValueError("choose a result for every affected file")
         else:
             raise ValueError("select an update result")
@@ -246,11 +246,11 @@ async def merge_apply(
         changed_count = int(changes.get("total") or 0)
         if changed_count:
             message = (
-                f"Updated to the latest shared version; review {changed_count} changed "
-                f"file{'s' if changed_count != 1 else ''} before sharing"
+                f"Workspace updated to the published revision; review {changed_count} changed "
+                f"file{'s' if changed_count != 1 else ''} before publishing"
             )
         else:
-            message = "Updated to the latest shared version; your files now match it"
+            message = "Workspace now matches the published revision."
         return redirect_response(f"/problems/{problem}/workspace", message=message)
     except Exception as exc:
         return redirect_response(f"/problems/{problem}/merge/{preview_id}", message=str(exc))

@@ -179,7 +179,7 @@ class TestWorkspaceMerge(unittest.TestCase):
 
         preview = self.service.start_preview("alice", "alice/sample", self.workspace)
         self.assertFalse(preview.suggested_available)
-        choices = {group_id: "latest" for group_id, _paths in preview.groups}
+        choices = {group_id: "published" for group_id, _paths in preview.groups}
         self.service.apply_preview("alice", "alice/sample", preview.preview_id, "manual", choices)
         self.assertEqual((self.workspace / "same.txt").read_text(encoding="utf-8"), "theirs\n")
 
@@ -240,7 +240,7 @@ class TestWorkspaceMerge(unittest.TestCase):
         (unborn / "local-only.txt").write_text("mine\n", encoding="utf-8")
 
         preview = self.service.start_preview("alice", "alice/unborn", unborn)
-        choices = {group_id: "current" for group_id, _paths in preview.groups}
+        choices = {group_id: "workspace" for group_id, _paths in preview.groups}
         self.service.apply_preview("alice", "alice/unborn", preview.preview_id, "manual", choices)
         self.assertNotEqual(self._git(unborn, "rev-parse", "HEAD"), "")
         self.assertEqual((unborn / "local-only.txt").read_text(encoding="utf-8"), "mine\n")

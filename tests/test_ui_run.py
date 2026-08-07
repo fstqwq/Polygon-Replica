@@ -13,7 +13,9 @@ from urllib.parse import parse_qs, urlparse
 from app.main_util import TEXTAREA_MAX_BYTES
 from app.service.statement.render import statement_title_for_language
 from app.service.statement.signature import statement_sources_signature
+from app.service.repository.revision import workspace_verification_source
 from tests.common import E2ETestBase
+from tests.assertion_helpers import assert_html_contract
 
 from tests.ui_support import (
     Path,
@@ -1635,6 +1637,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             workspace_id=workspace_id,
             kind=Kind.ALL,
             status="ok",
+            source_commit=workspace_verification_source(head),
             created_at="2026-03-03T00:00:00Z",
         )
         self._insert_stage_verification(
@@ -1650,15 +1653,22 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         rows = workspace_impl.run_list_rows(problem_id, workspace_id, ws, limit=10, actor_user_id=int(ctx["user"]["id"]))
         working_row = next(item for item in rows if str(item.get("id") or "") == working_id)
         revision_row = next(item for item in rows if str(item.get("id") or "") == revision_id)
-        self.assertEqual(str(working_row.get("source_display") or ""), "current files")
-        self.assertRegex(str(revision_row.get("source_display") or ""), r"^v[1-9][0-9]*$")
+        self.assertRegex(str(working_row.get("source_display") or ""), r"^Workspace \(on v[1-9][0-9]*\)$")
+        self.assertRegex(str(revision_row.get("source_display") or ""), r"^Published v[1-9][0-9]*$")
 
         resp = run_page(_request("/problems/alice/sample/run"), "alice/sample", "alice")
         html = resp.body.decode("utf-8", errors="replace")
-        self.assertIn("<th>Source</th>", html)
-        self.assertNotIn("<th>Finished</th>", html)
-        self.assertIn("current files", html)
-        self.assertIn(str(revision_row.get("source_display") or ""), html)
+        assert_html_contract(
+            self,
+            html,
+            contains=(
+                "<th>Source</th>",
+                "Workspace (on v",
+                str(revision_row.get("source_display") or ""),
+            ),
+            excludes=("<th>Finished</th>", "current files"),
+            label="verification source list",
+        )
 
     def test_rejudge_unavailable_consistent_between_list_and_details_while_running(self) -> None:
         ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
@@ -4937,12 +4947,21 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         self.assertEqual(page.status_code, 200)
         page_html = page.body.decode("utf-8", errors="replace")
         self.assertEqual(config.constants.RUN_DETAIL_TEST_LIST_LIMIT, 999)
-        for index in range(205, 214):
-            test_name = f"{index:03d}.in"
-            self.assertIn(
-                f'data-test-name="{test_name}" data-test-source-kind="generated" data-test-command="gen {index}" data-run-id="bulk-solution"',
+        visible_rows = set(
+            re.findall(
+                r'data-test-name="(20[5-9]\.in|21[0-3]\.in)" data-test-source-kind="generated" '
+                r'data-test-command="gen (20[5-9]|21[0-3])" data-run-id="bulk-solution"',
                 page_html,
             )
+        )
+        self.assertEqual(
+            {name for name, _command_index in visible_rows},
+            {f"{index:03d}.in" for index in range(205, 214)},
+        )
+        self.assertEqual(
+            {int(command_index) for _name, command_index in visible_rows},
+            set(range(205, 214)),
+        )
         self.assertNotIn("Showing first 200", page_html)
 
     def test_run_details_page_shows_main_correct_compile_diagnostics_text(self) -> None:

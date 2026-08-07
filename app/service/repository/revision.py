@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import unquote, urlparse
-from typing import TypedDict
+from typing import Literal, TypedDict
 
 from app.service.platform.git_process import run_git
 
@@ -20,6 +21,53 @@ class WorkspaceRevisionInfo(TypedDict):
     missing: bool
     ahead_count: int | None
     behind_count: int | None
+
+
+@dataclass(frozen=True)
+class VerificationSource:
+    kind: Literal["commit", "workspace"]
+    base_commit: str
+
+
+_WORKSPACE_SOURCE_PREFIX = "workspace:"
+
+
+def workspace_verification_source(base_commit: str | None) -> str:
+    """Encode a workspace snapshot source without pretending it is a commit source."""
+    safe_commit = str(base_commit or "").strip()
+    return f"{_WORKSPACE_SOURCE_PREFIX}{safe_commit}" if safe_commit else "workspace"
+
+
+def parse_verification_source(source_ref: str | None) -> VerificationSource:
+    """Decode the persisted verification source union at the application boundary."""
+    safe_source = str(source_ref or "").strip()
+    if safe_source == "workspace":
+        return VerificationSource("workspace", "")
+    if safe_source.startswith(_WORKSPACE_SOURCE_PREFIX):
+        return VerificationSource("workspace", safe_source[len(_WORKSPACE_SOURCE_PREFIX):])
+    return VerificationSource("commit", safe_source)
+
+
+def verification_source_display(
+    workspace: Path,
+    source_ref: str | None,
+    revision_cache: dict[str, int | None],
+) -> str:
+    """Render a persisted verification source for user-facing run/export lists."""
+    source = parse_verification_source(source_ref)
+    if source.kind == "workspace":
+        if not source.base_commit:
+            return "Workspace"
+        if source.base_commit not in revision_cache:
+            revision_cache[source.base_commit] = git_commit_count(workspace, source.base_commit)
+        revision = revision_cache[source.base_commit]
+        return f"Workspace (on v{revision})" if revision is not None else "Workspace (on v?)"
+    if not source.base_commit:
+        return "Workspace"
+    if source.base_commit not in revision_cache:
+        revision_cache[source.base_commit] = git_commit_count(workspace, source.base_commit)
+    revision = revision_cache[source.base_commit]
+    return f"Published v{revision}" if revision is not None else "Published v?"
 
 
 def git_commit_count(workspace: Path, rev: str) -> int | None:
@@ -155,8 +203,8 @@ def workspace_revision_info(
         upstream_higher = behind_count > 0
     missing = local_version is None or upstream_version is None
     local_text = f"v{local_version}" if local_version is not None else "none"
-    shared_text = f"v{upstream_version}" if upstream_version is not None else "missing"
-    display = f"{local_text} / latest shared {shared_text}"
+    published_text = f"v{upstream_version}" if upstream_version is not None else "missing"
+    display = f"Workspace base {local_text} / latest published {published_text}"
     highlight = bool(upstream_higher or missing)
     return {
         "local": local_version,
@@ -168,4 +216,3 @@ def workspace_revision_info(
         "ahead_count": ahead_count,
         "behind_count": behind_count,
     }
-

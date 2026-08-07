@@ -4,6 +4,7 @@ import ast
 import logging
 import unittest
 from pathlib import Path
+from tests.assertion_helpers import assert_html_contract
 
 ROOT = Path(__file__).resolve().parents[1]
 STYLE_PATH = ROOT / "app" / "static" / "style.css"
@@ -156,27 +157,35 @@ class TestPublicContracts(unittest.TestCase):
 
     def test_merge_ui_uses_result_language_and_has_no_default_file_choice(self) -> None:
         source = (ROOT / "app" / "template" / "merge.html").read_text(encoding="utf-8")
-        for label in [
-            "choose files one by one",
-            "Update my files",
-            "Use the latest shared file",
-            "Keep my current file",
-            "Fast-forward possible.",
-        ]:
-            self.assertIn(label, source)
-        self.assertNotIn("Choose complete files instead", source)
-        self.assertNotIn("Keep my files unchanged", source)
-        self.assertNotIn("Each comparison shows", source)
-        self.assertNotIn("Review and choose", source)
-        self.assertNotIn("Confirm update", source)
-        self.assertNotIn("Confirm File Update", source)
-        self.assertNotIn("merge-file-browser", source)
-        self.assertNotIn("merge-review-layout", source)
-        self.assertNotIn("data-selected-entry", source)
-        self.assertNotIn('value="latest" required checked', source)
-        self.assertNotIn('value="current" required checked', source)
-        self.assertNotIn("File group", source)
-        self.assertNotIn("Step 3", source)
+        assert_html_contract(
+            self,
+            source,
+            contains=(
+                "choose files one by one",
+                "Update workspace",
+                "Use the published file",
+                "Keep the workspace file",
+                "Fast-forward possible.",
+            ),
+            excludes=(
+                "Choose complete files instead",
+                "Keep my files unchanged",
+                "Each comparison shows",
+                "Review and choose",
+                "Confirm update",
+                "Confirm File Update",
+                "merge-file-browser",
+                "merge-review-layout",
+                "data-selected-entry",
+                'value="published" required checked',
+                'value="workspace" required checked',
+                "File group",
+                "Step 3",
+                "latest shared",
+                "current files",
+            ),
+            label="merge template contract",
+        )
         for implementation_term in ["rebase", "commit hash", "bare repo", "uncommitted"]:
             self.assertNotIn(implementation_term, source.lower())
 

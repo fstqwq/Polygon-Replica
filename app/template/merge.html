@@ -1,18 +1,18 @@
 {% extends "base.html" %}
 {% block body_class %} merge-page{% endblock %}
 {% block content %}
-<h1 class="page-title">Review Shared Changes</h1>
+<h1 class="page-title">Update Workspace</h1>
 {% include "_flash_message.html" %}
 
 <section class="merge-review-card" data-merge-review>
   <div class="merge-review-head">
     <div>
-      <h2>{{ 'Suggested Update' if review_mode == 'suggested' else 'Choose Complete Files' }}</h2>
+      <h2>{{ 'Proposed Merged Version' if review_mode == 'suggested' else 'Choose Complete Files' }}</h2>
       {% if review_mode == 'suggested' %}
       {% if preview.fast_forward_possible %}
       <p><strong>Fast-forward possible.</strong> You can also <a href="/problems/{{ ctx.problem.slug }}/merge/{{ preview.id }}?mode=manual">choose files one by one</a>.</p>
       {% else %}
-      <p>The suggested result combines the latest shared version with your current files. Review every changed file before continuing.</p>
+      <p>The proposed result combines the published revision with your workspace. Review every changed file before continuing.</p>
       {% endif %}
       {% endif %}
     </div>
@@ -25,7 +25,7 @@
   <form method="post" action="/problems/{{ ctx.problem.slug }}/merge/{{ preview.id }}/apply" data-merge-form>
     <input type="hidden" name="mode" value="{{ review_mode }}" />
     {% if review_mode == 'suggested' %}
-    <div class="merge-expanded-diffs" aria-label="Suggested file comparisons">
+    <div class="merge-expanded-diffs" aria-label="Proposed merged file comparisons">
       {% for entry in preview.suggested_entries %}
       <section class="merge-comparison" aria-live="polite" aria-busy="false" data-merge-comparison data-compare-url="/problems/{{ ctx.problem.slug }}/merge/{{ preview.id }}/compare/{{ entry.entry_id }}?target=suggested">
         <div class="merge-comparison-empty" data-merge-empty>Loading comparison...</div>
@@ -46,7 +46,7 @@
         </div>
       </section>
       {% else %}
-      <p>The suggested result does not change any visible file.</p>
+      <p>The proposed merged version does not change any visible file.</p>
       {% endfor %}
     </div>
     {% else %}
@@ -60,7 +60,7 @@
         <p class="merge-group-note">One choice applies to all {{ group.entries|length }} related paths.</p>
         {% endif %}
         {% for entry in group.entries %}
-        <section class="merge-comparison" aria-live="polite" aria-busy="false" data-merge-comparison data-compare-url="/problems/{{ ctx.problem.slug }}/merge/{{ preview.id }}/compare/{{ entry.entry_id }}?target=latest">
+        <section class="merge-comparison" aria-live="polite" aria-busy="false" data-merge-comparison data-compare-url="/problems/{{ ctx.problem.slug }}/merge/{{ preview.id }}/compare/{{ entry.entry_id }}?target=published">
           <div class="merge-comparison-empty" data-merge-empty>Loading comparison...</div>
           <div class="merge-comparison-error" data-merge-error hidden></div>
           <div class="merge-comparison-content" data-merge-content hidden>
@@ -74,7 +74,7 @@
             <div class="merge-diff-head">
               <div>
                 {% if loop.first %}
-                <label class="merge-diff-choice"><input type="radio" name="choice_{{ group.id }}" value="current" aria-label="Keep my current file" required {% if choices.get(group.id) == 'current' %}checked{% endif %}/><strong data-merge-left-label></strong></label>
+                <label class="merge-diff-choice"><input type="radio" name="choice_{{ group.id }}" value="workspace" aria-label="Keep the workspace file" required {% if choices.get(group.id) == 'workspace' %}checked{% endif %}/><strong data-merge-left-label></strong></label>
                 {% else %}
                 <strong data-merge-left-label></strong>
                 {% endif %}
@@ -82,7 +82,7 @@
               </div>
               <div>
                 {% if loop.first %}
-                <label class="merge-diff-choice"><input type="radio" name="choice_{{ group.id }}" value="latest" aria-label="Use the latest shared file" required {% if choices.get(group.id) == 'latest' %}checked{% endif %}/><strong data-merge-right-label></strong></label>
+                <label class="merge-diff-choice"><input type="radio" name="choice_{{ group.id }}" value="published" aria-label="Use the published file" required {% if choices.get(group.id) == 'published' %}checked{% endif %}/><strong data-merge-right-label></strong></label>
                 {% else %}
                 <strong data-merge-right-label></strong>
                 {% endif %}
@@ -99,9 +99,9 @@
     {% endif %}
 
     <div class="merge-actions">
-      <button class="btn primary-action" type="submit">Update my files</button>
+      <button class="btn primary-action" type="submit">Update workspace</button>
       {% if preview.suggested_available and review_mode != 'suggested' %}
-        <a class="button-link" href="/problems/{{ ctx.problem.slug }}/merge/{{ preview.id }}">Use suggested result instead</a>
+        <a class="button-link" href="/problems/{{ ctx.problem.slug }}/merge/{{ preview.id }}">Use proposed merged version instead</a>
       {% endif %}
     </div>
   </form>
