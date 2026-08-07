@@ -60,6 +60,15 @@ def _is_db_handle(node: ast.AST) -> bool:
 
 
 class TestPublicContracts(unittest.TestCase):
+    def test_run_detail_popup_title_uses_safe_canonical_test_metadata(self) -> None:
+        ui_source = UI_JS_PATH.read_text(encoding="utf-8-sig")
+
+        self.assertIn('document.createTextNode("Test Details: " + testName)', ui_source)
+        self.assertIn('commandText.className = "verification-test-title-command";', ui_source)
+        self.assertIn('commandText.textContent = command || "gen";', ui_source)
+        self.assertNotIn("solutionTitle", ui_source)
+        self.assertNotIn("popupTitle.innerHTML", ui_source)
+
     def test_generated_judgehost_commands_isolate_submission_uids(self) -> None:
         ui_source = UI_JS_PATH.read_text(encoding="utf-8-sig")
         settings_source = SETTINGS_TEMPLATE_PATH.read_text(encoding="utf-8-sig")

@@ -1,3 +1,6 @@
+{% if row.generation_alert %}
+<p class="test-generation-alert {{ 'tone-fail' if row.generation_alert.alert_severity == 'error' else 'tone-warn' }}">{{ row.generation_alert.alert_message }}</p>
+{% endif %}
 <div class="test-grid">
   <div class="preview-card">
     <div class="preview-head">
@@ -32,42 +35,7 @@
     {% endif %}
   </div>
 </div>
-{% if row.generate_detail %}
-{% set generate = row.generate_detail %}
-<div class="preview-card generation-detail-card">
-  <div class="preview-head">
-    <strong>Generation of {{ row.test_name }}: {{ generate.title_suffix }}</strong>
-  </div>
-  <table class="sol-metrics generation-metrics">
-    <colgroup>
-      <col class="generation-status-col" />
-      <col class="generation-feedback-col" />
-    </colgroup>
-    <thead>
-      <tr>
-        <th>Status</th>
-        <th>Feedback</th>
-      </tr>
-    </thead>
-    <tbody>
-      <tr>
-        <td class="status-cell tone-{{ generate.tone }}">
-          <div class="status-inline">
-            <span class="vcode">{{ generate.status_text }}</span>
-          </div>
-        </td>
-        <td class="fb-cell{{ ' empty-text' if (generate.feedback_display or '-') == '(empty)' else '' }}">{{ generate.feedback_display or '-' }}</td>
-      </tr>
-    </tbody>
-  </table>
-  {% if generate.error_text %}
-  <div class="generation-detail-block">
-    <span class="generation-detail-label">Error</span>
-    <pre class="compile-diagnostics-log generation-detail-error">{{ generate.error_text }}</pre>
-  </div>
-  {% endif %}
-</div>
-{% endif %}
+{% if not row.generation_skipped %}
 <div class="sol-list">
   {% for cell in row.cells %}
   {% set col = detail_columns[loop.index0] %}
@@ -172,3 +140,4 @@
   {% endif %}
   {% endfor %}
 </div>
+{% endif %}

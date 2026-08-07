@@ -46,6 +46,10 @@ from app.impl.workspace.run_view_lifecycle_card import (
     load_verification_detail_summary,
     _verification_tests_meta_stats,
 )
+from app.impl.workspace.run_test_generation import (
+    build_test_generation_views,
+    generation_warning_message,
+)
 from app.impl.workspace.context_verification import (
     _expected_status_rule,
     _status_rule_expected_display,
@@ -62,7 +66,6 @@ from app.impl.workspace.run_view_list import (
     _run_timeout_ms_from_summary,
 )
 from app.impl.workspace.run_display import (
-    generation_status_text,
     rewrite_failure_reason_with_source,
     verification_solution_failure_hint,
     run_actual_display,
@@ -292,60 +295,6 @@ def _detail_sanity_context(
         "checked_count": int(payload["sanity_checked_count"]),
     }
 
-
-def _generate_detail_from_task_row(
-    row: VerificationTaskRow,
-    *,
-    tests_meta_row: dict[str, object] | None,
-) -> dict[str, object]:
-    status = str(row['status'] or '')
-    verdict = str(row['verdict'] or '')
-    if status == VerificationTaskStore.TASK_DONE:
-        status_text = generation_status_text(status, verdict)
-        tone = 'ok'
-    elif status == VerificationTaskStore.TASK_FAILED:
-        status_text = generation_status_text(status, verdict)
-        tone = 'fail'
-    elif status == VerificationTaskStore.TASK_LEASED:
-        status_text = generation_status_text(status, verdict)
-        tone = 'running'
-    elif status in {VerificationTaskStore.TASK_QUEUED, VerificationTaskStore.TASK_PENDING}:
-        status_text = generation_status_text(status, verdict)
-        tone = 'neutral'
-    elif status == VerificationTaskStore.TASK_CANCELLED:
-        status_text = generation_status_text(status, verdict)
-        tone = 'neutral'
-    else:
-        status_text = generation_status_text(status, verdict)
-        tone = 'neutral'
-    runtime_ms = 0 if row['runtime_sec'] is None else max(0, int(round(float(row['runtime_sec']) * 1000.0)))
-    memory_kb = 0 if row['memory_kb'] is None else max(0, int(row['memory_kb']))
-    meta = dict(tests_meta_row or {})
-    source_path = str(row['source_path'] or '') or str(meta.get('source') or '')
-    command = str(meta.get('command') or '')
-    is_manual_validation = bool(str(meta.get('kind') or '') == 'manual' or source_path == 'manual_validate.cpp')
-    display_source = 'manual validation' if is_manual_validation else source_path
-    display_command = '' if is_manual_validation else command
-    title_suffix = 'manual' if is_manual_validation else (display_command or 'gen')
-    return {
-        'source_path': source_path,
-        'command': command,
-        'display_source': display_source,
-        'display_command': display_command,
-        'title_suffix': title_suffix,
-        'status': status,
-        'verdict': verdict,
-        'runtime_ms': runtime_ms,
-        'memory_kb': memory_kb,
-        'error_text': bounded_display_text(str(row['error_text'] or '')),
-        'feedback_text': bounded_display_text(str(row['feedback_text'] or '')),
-        'tone': tone,
-        'status_text': status_text,
-        'feedback_display': bounded_display_text(str(row['feedback_text'] or '')) or '-',
-    }
-
-def _generate_detail_is_visible(row: VerificationTaskRow) -> bool:
-    return str(row['status'] or '') == VerificationTaskStore.TASK_FAILED
 
 def build_run_detail_context(
     ctx: dict,
@@ -766,65 +715,6 @@ def build_run_detail_context(
         )
         return bool(safe_source)
 
-    def _stage_note_status(*, short: str, kind: str, run_status: str) -> tuple[str, str]:
-        short_token = (short or '').upper()
-        kind_token = (kind or '')
-        run_token = (run_status or '')
-        if run_token == 'cancelled':
-            return ('neutral', 'cancelled')
-        if kind_token == 'ok' or short_token == 'AC':
-            return ('ok', 'ok')
-        if kind_token == 'fail':
-            return ('fail', 'failed')
-        if short_token == '..' or run_token == 'running':
-            return ('running', 'running')
-        if short_token == '--' and run_token in {'queued', 'pending'}:
-            return ('pending', 'pending')
-        if short_token not in {'', '--'}:
-            return ('fail', 'failed')
-        return ('pending', 'pending')
-
-    def _generate_stage_note_from_rows(rows: list[VerificationTaskRow]) -> dict[str, dict[str, str]]:
-        target: dict[str, dict[str, str]] = {}
-        for row in rows:
-            if str(row['task_kind'] or '') != _TASK_KIND_GENERATE_INPUT:
-                continue
-            status = str(row['status'] or '')
-            if status == VerificationTaskStore.TASK_DONE:
-                short = 'AC'
-                kind = 'ok'
-            elif status == VerificationTaskStore.TASK_FAILED:
-                short = 'FL'
-                kind = 'fail'
-            elif status == VerificationTaskStore.TASK_LEASED:
-                short = '..'
-                kind = 'neutral'
-            else:
-                short = '--'
-                kind = 'neutral'
-            tone, status_label = _stage_note_status(short=short, kind=kind, run_status=status)
-            test_name = normalize_run_test_name_token(str(row['test_name'] or ''))
-            if not test_name:
-                continue
-            if status_label == 'running':
-                text = '.. generating'
-            elif status_label == 'failed':
-                text = 'failed'
-            elif status_label == 'cancelled':
-                text = 'cancelled'
-            elif status_label == 'ok':
-                text = 'ready'
-            else:
-                text = ''
-            detail = bounded_display_text(str(row['error_text'] or '')) or bounded_display_text(str(row['feedback_text'] or ''))
-            target[test_name] = {
-                'tone': tone,
-                'status_label': status_label,
-                'text': text,
-                'detail': detail,
-            }
-        return target
-
     def _test_name_cell(
         *,
         actual_test_name: str,
@@ -878,6 +768,8 @@ def build_run_detail_context(
             kind = 'ok'
         elif tone == 'fail':
             kind = 'fail'
+        elif tone == 'warn':
+            kind = 'warn'
         elif is_placeholder:
             kind = 'neutral'
         return {
@@ -891,10 +783,25 @@ def build_run_detail_context(
 
     columns: list[dict] = []
     all_tests: set[str] = set()
-    row_generate_notes: dict[str, dict[str, str]] = {}
+    tests_meta_by_test_name: dict[str, dict[str, object]] = {}
+    for item in cast(list[object], verification_details.get('tests_meta_rows') or []):
+        if not isinstance(item, dict):
+            continue
+        test_name = normalize_run_test_name_token(str(item.get('test_name') or ''))
+        if test_name and test_name not in tests_meta_by_test_name:
+            tests_meta_by_test_name[test_name] = dict(item)
+    test_generation_views = build_test_generation_views(task_rows, tests_meta_by_test_name)
+    row_generate_notes: dict[str, dict[str, str]] = {
+        test_name: {
+            'tone': str(view['tone']),
+            'status_label': str(view['status_label']),
+            'text': str(view['table_text']),
+            'detail': str(view['alert_message'] or view['detail']),
+        }
+        for test_name, view in test_generation_views.items()
+    }
     task_graph_task_status_by_run_and_test: dict[tuple[str, str], str] = {}
     if has_task_graph:
-        row_generate_notes = _generate_stage_note_from_rows(task_rows)
         task_graph_task_status_by_run_and_test = _task_graph_task_status_by_run_and_test(task_rows, task_graph_key_by_source)
         for row in task_rows:
             test_name = normalize_run_test_name_token(str(row['test_name'] or ''))
@@ -1240,7 +1147,6 @@ def build_run_detail_context(
                 deduped_order.append(source_key)
             deduped_columns_by_source[source_key] = col
         columns = [deduped_columns_by_source[key] for key in deduped_order]
-    ordered_tests = sorted(all_tests, key=_run_test_sort_key)
     status_summary = _verification_status_summary(columns)
     if verification_details:
         overall_status = verification_details.get('status') or (verification_record['status'] if verification_record is not None else '') or ''
@@ -1302,6 +1208,7 @@ def build_run_detail_context(
     if has_task_graph:
         detail_is_main_correct_run = False
     ordered_tests = sorted(all_tests, key=_run_test_sort_key)
+    generation_diagnostic_message = generation_warning_message(test_generation_views, ordered_tests)
     known_tests_by_index: dict[int, str] = {}
     for test_name in ordered_tests:
         try:
@@ -1323,20 +1230,6 @@ def build_run_detail_context(
             continue
     display_test_total = max(max(known_tests_by_index.keys(), default=0), tests_meta_total, column_tests_total)
     row_index_by_test = {name: idx for idx, name in enumerate(ordered_tests, start=1)}
-    tests_meta_by_test_name: dict[str, dict[str, object]] = {}
-    for item in cast(list[object], verification_details.get('tests_meta_rows') or []):
-        if not isinstance(item, dict):
-            continue
-        test_name = normalize_run_test_name_token(str(item.get('test_name') or ''))
-        if test_name and test_name not in tests_meta_by_test_name:
-            tests_meta_by_test_name[test_name] = dict(item)
-    generate_task_by_test_name: dict[str, VerificationTaskRow] = {}
-    for row in task_rows:
-        if str(row['task_kind'] or '') != _TASK_KIND_GENERATE_INPUT:
-            continue
-        test_name = normalize_run_test_name_token(str(row['test_name'] or ''))
-        if test_name:
-            generate_task_by_test_name[test_name] = row
     detail_rows: list[dict] = []
     if not include_row_details:
         row_entries: list[tuple[int, str, str, bool]] = []
@@ -1350,53 +1243,53 @@ def build_run_detail_context(
         for idx, actual_test_name, display_name, is_placeholder in row_entries:
             cells: list[dict] = []
             has_detail = False
-            generate_task_row = generate_task_by_test_name.get(actual_test_name) if actual_test_name else None
-            has_generate_detail = bool(
-                generate_task_row is not None and _generate_detail_is_visible(generate_task_row)
-            )
-            for col in columns:
-                cell = col['tests_map'].get(actual_test_name) if actual_test_name else None
-                if cell is None:
-                    if has_task_graph and actual_test_name:
-                        task_status = task_graph_task_status_by_run_and_test.get((str(col.get('id') or ''), actual_test_name), '')
-                        cells.append(_missing_solution_cell(task_status))
-                    else:
-                        col_status = (col.get('status') or '')
-                        missing_running = col_status == 'running'
-                        missing_pending = col_status in {'queued', 'pending'}
-                        cells.append(
-                            {
-                                'text': '..' if (missing_running or missing_pending) else '--',
-                                'short': '..' if (missing_running or missing_pending) else '--',
-                                'metrics': 'running' if missing_running else '' if missing_pending else '-',
-                                'kind': 'running' if missing_running else 'neutral',
-                                'text_tone': '',
-                                'detail': None,
-                            }
-                        )
-                    continue
-                if bool(cell.get('detail_available')):
-                    has_detail = True
-                cells.append(
-                    {
-                        'text': (cell.get('text') or '--'),
-                        'short': (cell.get('short') or cell.get('text') or '--'),
-                        'metrics': (cell.get('metrics') or '-'),
-                        'time_display': (cell.get('time_display') or ''),
-                        'time_tone': (cell.get('time_tone') or ''),
-                        'memory_display': (cell.get('memory_display') or ''),
-                        'kind': (cell.get('kind') or 'neutral'),
-                        'text_tone': (cell.get('text_tone') or ''),
-                        'detail': None,
-                    }
-                )
+            generation_view = test_generation_views.get(actual_test_name) if actual_test_name else None
+            generation_terminal = bool(generation_view is not None and generation_view['terminal'])
+            generation_skipped = bool(generation_view is not None and generation_view['skipped'])
+            if not generation_skipped:
+                for col in columns:
+                    cell = col['tests_map'].get(actual_test_name) if actual_test_name else None
+                    if cell is None:
+                        if has_task_graph and actual_test_name:
+                            task_status = task_graph_task_status_by_run_and_test.get((str(col.get('id') or ''), actual_test_name), '')
+                            cells.append(_missing_solution_cell(task_status))
+                        else:
+                            col_status = (col.get('status') or '')
+                            missing_running = col_status == 'running'
+                            missing_pending = col_status in {'queued', 'pending'}
+                            cells.append(
+                                {
+                                    'text': '..' if (missing_running or missing_pending) else '--',
+                                    'short': '..' if (missing_running or missing_pending) else '--',
+                                    'metrics': 'running' if missing_running else '' if missing_pending else '-',
+                                    'kind': 'running' if missing_running else 'neutral',
+                                    'text_tone': '',
+                                    'detail': None,
+                                }
+                            )
+                        continue
+                    if bool(cell.get('detail_available')):
+                        has_detail = True
+                    cells.append(
+                        {
+                            'text': (cell.get('text') or '--'),
+                            'short': (cell.get('short') or cell.get('text') or '--'),
+                            'metrics': (cell.get('metrics') or '-'),
+                            'time_display': (cell.get('time_display') or ''),
+                            'time_tone': (cell.get('time_tone') or ''),
+                            'memory_display': (cell.get('memory_display') or ''),
+                            'kind': (cell.get('kind') or 'neutral'),
+                            'text_tone': (cell.get('text_tone') or ''),
+                            'detail': None,
+                        }
+                    )
             generate_note = dict(row_generate_notes.get(actual_test_name or display_name) or {})
             test_cell = _test_name_cell(
                 actual_test_name=actual_test_name,
                 fallback_name=display_name,
                 is_placeholder=bool(is_placeholder),
                 note=generate_note,
-                has_detail=bool(has_detail or has_generate_detail),
+                has_detail=bool(has_detail or generation_terminal),
             )
             detail_rows.append(
                 {
@@ -1407,7 +1300,11 @@ def build_run_detail_context(
                     'is_placeholder': bool(is_placeholder),
                     'row_id': f'test-detail-{idx}',
                     'cells': cells,
-                    'has_detail': bool((has_detail or has_generate_detail) and (not is_placeholder)),
+                    'has_detail': bool((has_detail or generation_terminal) and (not is_placeholder)),
+                    'test_source_kind': '' if generation_view is None else generation_view['source_kind'],
+                    'test_command': '' if generation_view is None else generation_view['command'],
+                    'generation_skipped': generation_skipped,
+                    'generation_message': '' if generation_view is None else generation_view['alert_message'],
                 }
             )
     else:
@@ -1460,13 +1357,11 @@ def build_run_detail_context(
             row_index = int(row_index_by_test.get(test_name) or 0)
             if row_index <= 0:
                 continue
-            generate_task_row = generate_task_by_test_name.get(test_name)
-            generate_detail = (
-                _generate_detail_from_task_row(
-                    generate_task_row,
-                    tests_meta_row=tests_meta_by_test_name.get(test_name),
-                )
-                if generate_task_row is not None and _generate_detail_is_visible(generate_task_row)
+            generation_view = test_generation_views.get(test_name)
+            generation_terminal = bool(generation_view is not None and generation_view['terminal'])
+            generation_alert = (
+                generation_view
+                if generation_view is not None and generation_view['alert_message']
                 else None
             )
             input_rel = f'tests/{test_name}'
@@ -1578,7 +1473,7 @@ def build_run_detail_context(
                 fallback_name=test_name,
                 is_placeholder=False,
                 note=generate_note,
-                has_detail=bool(generate_detail is not None or any((cell.get('detail') is not None for cell in cells))),
+                has_detail=bool(generation_terminal or any((cell.get('detail') is not None for cell in cells))),
             )
             detail_rows.append(
                 {
@@ -1590,9 +1485,18 @@ def build_run_detail_context(
                     'row_id': f'test-detail-{row_index}',
                     'input_preview': input_preview,
                     'answer_preview': answer_preview,
-                    'generate_detail': generate_detail,
+                    'generate_detail': (
+                        generation_view
+                        if generation_view is not None
+                        and generation_view['status'] == VerificationTaskStore.TASK_FAILED
+                        else None
+                    ),
+                    'generation_alert': generation_alert,
+                    'generation_skipped': bool(generation_view is not None and generation_view['skipped']),
+                    'test_source_kind': '' if generation_view is None else generation_view['source_kind'],
+                    'test_command': '' if generation_view is None else generation_view['command'],
                     'cells': cells,
-                    'has_detail': bool(generate_detail is not None or any((cell.get('detail') is not None for cell in cells))),
+                    'has_detail': bool(generation_terminal or any((cell.get('detail') is not None for cell in cells))),
                 }
             )
     rejudge_context = _run_rejudge_context_for_entries(columns, workspace)
@@ -1734,5 +1638,9 @@ def build_run_detail_context(
         'detail_fail_flag': detail_fail_flag,
         'detail_fail_reason': detail_fail_reason,
         'detail_sanity': detail_sanity,
+        'detail_generation_diagnostic': {
+            'title': 'Test generation',
+            'message': generation_diagnostic_message,
+        } if generation_diagnostic_message else None,
         'detail_verification_logs': verification_logs,
     }

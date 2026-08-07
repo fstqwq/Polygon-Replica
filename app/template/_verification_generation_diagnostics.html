@@ -1,0 +1,9 @@
+{% if detail_generation_diagnostic %}
+{% set ns.has_diag = true %}
+<div class="compile-diagnostics-card verification-generation-diagnostics">
+  <div class="compile-diagnostics-head">
+    <div><strong>{{ detail_generation_diagnostic.title }}</strong></div>
+  </div>
+  <p class="verification-task-warn">{{ detail_generation_diagnostic.message }}</p>
+</div>
+{% endif %}

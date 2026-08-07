@@ -6,6 +6,7 @@ import asyncio
 import base64
 import io
 import os
+import re
 from unittest.mock import patch
 from urllib.parse import parse_qs, urlparse
 
@@ -2373,7 +2374,8 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         html = page.body.decode("utf-8", errors="replace")
         self.assertIn("wa.cpp", html)
         self.assertIn("accepted.cpp", html)
-        self.assertIn('data-solution-title="wa.cpp"', html)
+        self.assertNotIn("data-solution-title=", html)
+        self.assertIn(f'data-run-id="{solution_run_id}"', html)
         self.assertIn('data-test-name="001.in"', html)
         self.assertIn("running", html)
 
@@ -4401,8 +4403,9 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
                     {
                         "index": 1,
                         "test_name": "001.in",
+                        "kind": "gen",
                         "source": "generators/random_tree.cpp",
-                        "command": "random_tree 10 20",
+                        "command": 'random_tree 10 <20> & "quoted"',
                     }
                 ],
             },
@@ -4479,6 +4482,16 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             edges=[],
         )
 
+        page = run_details_page(
+            _request("/problems/alice/sample/run/details", f"verification_id={verification_id}"),
+            "alice/sample",
+            "alice",
+        )
+        self.assertEqual(page.status_code, 200)
+        page_html = page.body.decode("utf-8", errors="replace")
+        self.assertIn('data-test-source-kind="generated"', page_html)
+        self.assertIn('data-test-command="random_tree 10 &lt;20&gt; &amp; &#34;quoted&#34;"', page_html)
+
         detail = run_details_test_fragment(
             _request("/problems/alice/sample/run/details/test-fragment", f"verification_id={verification_id}&test=001.in"),
             "alice/sample",
@@ -4488,6 +4501,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         detail_html = detail.body.decode("utf-8", errors="replace")
         self.assertNotIn("Generation of 001.in", detail_html)
         self.assertNotIn("generation-metrics", detail_html)
+        self.assertNotIn("test-generation-alert", detail_html)
         self.assertNotIn("tree is valid", detail_html)
         self.assertNotIn("<th>Source</th>", detail_html)
         self.assertNotIn("<th>Command</th>", detail_html)
@@ -4521,6 +4535,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
                     {
                         "index": 1,
                         "test_name": "001.in",
+                        "kind": "gen",
                         "source": "generators/random_tree.cpp",
                         "command": "random_tree 10 20",
                     }
@@ -4567,7 +4582,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         page_html = page.body.decode("utf-8", errors="replace")
         self.assertRegex(
             page_html,
-            r'(?s)<td class="tcell tone-fail"[^>]*>\s*<a href="#run-test-detail-popup" data-popup-open="run-test-detail-popup" data-test-name="001\.in">001\.in</a>',
+            r'(?s)<td class="tcell tone-fail"[^>]*>\s*<a href="#run-test-detail-popup" data-popup-open="run-test-detail-popup" data-test-name="001\.in" data-test-source-kind="generated" data-test-command="random_tree 10 20">001\.in</a>',
         )
 
         detail = run_details_test_fragment(
@@ -4577,11 +4592,9 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         )
         self.assertEqual(detail.status_code, 200)
         detail_html = detail.body.decode("utf-8", errors="replace")
-        self.assertIn("<strong>Generation of 001.in: random_tree 10 20</strong>", detail_html)
-        self.assertRegex(detail_html, r"(?s)<table class=\"sol-metrics generation-metrics\">.*?<th>Status</th>.*?<th>Feedback</th>")
-        self.assertRegex(detail_html, r"(?s)<td class=\"status-cell tone-fail\">.*?<span class=\"vcode\">validator failed</span>")
-        self.assertRegex(detail_html, r"(?s)<td class=\"fb-cell\">-</td>")
-        self.assertIn("Error", detail_html)
+        self.assertNotIn("Generation of 001.in", detail_html)
+        self.assertNotIn("generation-metrics", detail_html)
+        self.assertIn('<p class="test-generation-alert tone-fail">validator rejected generated test</p>', detail_html)
         self.assertIn("validator rejected generated test", detail_html)
 
     def test_run_test_detail_fragment_hides_manual_validate_placeholder_source(self) -> None:
@@ -4631,9 +4644,30 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
                     "error_text": "",
                     "feedback_text": "manual input valid",
                     "output_ref": "",
+                },
+                {
+                    "id": f"vt-manual-solution-{uuid.uuid4().hex[:8]}",
+                    "task_kind": "solution-run",
+                    "source_path": "solutions/tmp.cpp",
+                    "logical_run_id": "manual-solution",
+                    "test_name": "001.in",
+                    "expected_behavior": "accepted",
+                    "status": VerificationTaskStore.TASK_PENDING,
                 }
             ],
             edges=[],
+        )
+
+        page = run_details_page(
+            _request("/problems/alice/sample/run/details", f"verification_id={verification_id}"),
+            "alice/sample",
+            "alice",
+        )
+        self.assertEqual(page.status_code, 200)
+        page_html = page.body.decode("utf-8", errors="replace")
+        self.assertRegex(
+            page_html,
+            r'(?s)<td class="tcell tone-ok"[^>]*>\s*<a href="#run-test-detail-popup" data-popup-open="run-test-detail-popup" data-test-name="001\.in" data-test-source-kind="manual" data-test-command="">001\.in</a>',
         )
 
         detail = run_details_test_fragment(
@@ -4644,9 +4678,272 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         self.assertEqual(detail.status_code, 200)
         detail_html = detail.body.decode("utf-8", errors="replace")
         self.assertNotIn("Generation of 001.in", detail_html)
+        self.assertNotIn("test-generation-alert", detail_html)
         self.assertNotIn("manual_validate.cpp", detail_html)
         self.assertNotIn("<th>Command</th>", detail_html)
         self.assertNotIn("<th>Source</th>", detail_html)
+
+    def test_run_details_render_duplicate_generation_rows_and_combined_diagnostics(self) -> None:
+        workspace_service.ensure_workspace("alice/sample", "alice")
+        ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
+        workspace_id = int(ctx["workspace"]["id"])
+        problem_id = int(ctx["problem"]["id"])
+        workspace = Path(str(ctx["workspace"]["path"]))
+        (workspace / "solutions").mkdir(parents=True, exist_ok=True)
+        (workspace / "solutions" / "tmp.cpp").write_text("int main(){return 0;}\n", encoding="utf-8")
+
+        verification_id = f"ver-duplicate-detail-{uuid.uuid4().hex[:8]}"
+        tests_meta_rows = [
+            {
+                "index": index,
+                "test_name": f"{index:03d}.in",
+                "kind": "gen",
+                "source": "generators/gen.cpp",
+                "command": f"gen {index}",
+            }
+            for index in range(1, 7)
+        ]
+        config.verification_service.begin_verification_record(
+            verification_id=verification_id,
+            problem_id=problem_id,
+            workspace_id=workspace_id,
+            signature="",
+            kind=Kind.ALL,
+            status="ok",
+            detail={"status": "ok", "tests_meta_rows": tests_meta_rows},
+        )
+
+        def generate_task(
+            task_id: str,
+            test_name: str,
+            *,
+            status: str,
+            verdict: str,
+            output_ref: str = "",
+            error_text: str = "",
+            feedback_text: str = "",
+        ) -> dict[str, object]:
+            return {
+                "id": task_id,
+                "task_kind": "generate-input",
+                "source_path": "generators/gen.cpp",
+                "logical_run_id": "generator",
+                "test_name": test_name,
+                "expected_behavior": "accepted",
+                "status": status,
+                "verdict": verdict,
+                "output_ref": output_ref,
+                "error_text": error_text,
+                "feedback_text": feedback_text,
+            }
+
+        tasks: list[dict[str, object]] = [
+            generate_task(
+                "vt-gen-exact-owner",
+                "001.in",
+                status=VerificationTaskStore.TASK_DONE,
+                verdict="AC",
+                output_ref="blob://exact",
+            ),
+            generate_task(
+                "vt-gen-exact-duplicate",
+                "002.in",
+                status=VerificationTaskStore.TASK_DONE,
+                verdict="SK",
+                output_ref="blob://exact",
+                feedback_text="duplicate generator invocation; skipped, same as 001.in",
+            ),
+            generate_task(
+                "vt-gen-content-owner",
+                "003.in",
+                status=VerificationTaskStore.TASK_DONE,
+                verdict="AC",
+                output_ref="blob://content",
+            ),
+            generate_task(
+                "vt-gen-content-duplicate",
+                "004.in",
+                status=VerificationTaskStore.TASK_DONE,
+                verdict="SK",
+                output_ref="blob://content",
+                feedback_text="duplicate generated input; skipped, same as 003.in",
+            ),
+            generate_task(
+                "vt-gen-unresolved",
+                "005.in",
+                status=VerificationTaskStore.TASK_DONE,
+                verdict="SK",
+                output_ref="blob://unresolved",
+            ),
+            generate_task(
+                "vt-gen-cancelled",
+                "006.in",
+                status=VerificationTaskStore.TASK_CANCELLED,
+                verdict="",
+                error_text="generation cancelled by operator",
+            ),
+        ]
+        for index in range(1, 7):
+            is_duplicate = index in {2, 4, 5}
+            tasks.append(
+                {
+                    "id": f"vt-sol-{index:03d}",
+                    "task_kind": "solution-run",
+                    "source_path": "solutions/tmp.cpp",
+                    "logical_run_id": "tmp-solution",
+                    "test_name": f"{index:03d}.in",
+                    "expected_behavior": "accepted",
+                    "status": (
+                        VerificationTaskStore.TASK_CANCELLED
+                        if index == 6
+                        else VerificationTaskStore.TASK_DONE
+                    ),
+                    "verdict": "SK" if is_duplicate else "OK",
+                    "output_ref": "" if is_duplicate else f"blob://solution-{index}",
+                }
+            )
+        config.verification_task_store.replace_graph(
+            verification_id,
+            tasks=tasks,
+            edges=[("vt-gen-exact-owner", "vt-gen-exact-duplicate")],
+        )
+
+        page = run_details_page(
+            _request("/problems/alice/sample/run/details", f"verification_id={verification_id}"),
+            "alice/sample",
+            "alice",
+        )
+        self.assertEqual(page.status_code, 200)
+        page_html = page.body.decode("utf-8", errors="replace")
+        for test_name, owner_name in [("002.in", "001.in"), ("004.in", "003.in")]:
+            self.assertRegex(
+                page_html,
+                rf'(?s)<td class="tcell tone-warn"[^>]*>\s*<a [^>]*data-test-name="{re.escape(test_name)}"[^>]*>{re.escape(test_name)}</a>\s*</td>\s*<td class="verification-detail-duplicate-cell tone-warn" colspan="1">duplicate of {re.escape(owner_name)}</td>',
+            )
+        self.assertRegex(
+            page_html,
+            r'(?s)<td class="tcell tone-warn"[^>]*>\s*<a [^>]*data-test-name="005\.in"[^>]*>005\.in</a>\s*</td>\s*<td class="verification-detail-duplicate-cell tone-warn" colspan="1">skipped \(duplicate owner unavailable\)</td>',
+        )
+        self.assertRegex(
+            page_html,
+            r'(?s)<td class="tcell tone-neutral"[^>]*>\s*<a [^>]*data-test-name="006\.in"[^>]*>006\.in</a>',
+        )
+        self.assertEqual(page_html.count("<strong>Test generation</strong>"), 1)
+        self.assertIn(
+            "002.in duplicate of 001.in; 004.in duplicate of 003.in; 005.in skipped (duplicate owner unavailable)",
+            page_html,
+        )
+
+        duplicate_detail = run_details_test_fragment(
+            _request(
+                "/problems/alice/sample/run/details/test-fragment",
+                f"verification_id={verification_id}&test=004.in",
+            ),
+            "alice/sample",
+            "alice",
+        )
+        self.assertEqual(duplicate_detail.status_code, 200)
+        duplicate_html = duplicate_detail.body.decode("utf-8", errors="replace")
+        self.assertIn('<p class="test-generation-alert tone-warn">duplicate of 003.in</p>', duplicate_html)
+        self.assertIn("Input 004.in", duplicate_html)
+        self.assertIn("Answer", duplicate_html)
+        self.assertNotIn('class="sol-list"', duplicate_html)
+        self.assertNotIn("generation-metrics", duplicate_html)
+
+        cancelled_detail = run_details_test_fragment(
+            _request(
+                "/problems/alice/sample/run/details/test-fragment",
+                f"verification_id={verification_id}&test=006.in",
+            ),
+            "alice/sample",
+            "alice",
+        )
+        self.assertEqual(cancelled_detail.status_code, 200)
+        cancelled_html = cancelled_detail.body.decode("utf-8", errors="replace")
+        self.assertIn(
+            '<p class="test-generation-alert tone-warn">generation cancelled by operator</p>',
+            cancelled_html,
+        )
+
+    def test_run_details_default_limit_keeps_213_solution_results_visible(self) -> None:
+        workspace_service.ensure_workspace("alice/sample", "alice")
+        ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
+        workspace_id = int(ctx["workspace"]["id"])
+        problem_id = int(ctx["problem"]["id"])
+        workspace = Path(str(ctx["workspace"]["path"]))
+        (workspace / "solutions").mkdir(parents=True, exist_ok=True)
+        (workspace / "solutions" / "bulk.cpp").write_text("int main(){return 0;}\n", encoding="utf-8")
+
+        verification_id = f"ver-detail-limit-{uuid.uuid4().hex[:8]}"
+        tests_meta_rows = [
+            {
+                "index": index,
+                "test_name": f"{index:03d}.in",
+                "kind": "gen",
+                "source": "generators/gen.cpp",
+                "command": f"gen {index}",
+            }
+            for index in range(1, 214)
+        ]
+        config.verification_service.begin_verification_record(
+            verification_id=verification_id,
+            problem_id=problem_id,
+            workspace_id=workspace_id,
+            signature="",
+            kind=Kind.ALL,
+            status="ok",
+            detail={"status": "ok", "tests_meta_rows": tests_meta_rows},
+        )
+        tasks: list[dict[str, object]] = []
+        for index in range(1, 214):
+            test_name = f"{index:03d}.in"
+            tasks.extend(
+                [
+                    {
+                        "id": f"vt-limit-gen-{index:03d}",
+                        "task_kind": "generate-input",
+                        "source_path": "generators/gen.cpp",
+                        "logical_run_id": "bulk-generator",
+                        "test_name": test_name,
+                        "expected_behavior": "accepted",
+                        "status": VerificationTaskStore.TASK_DONE,
+                        "verdict": "AC",
+                        "output_ref": f"blob://input-{index}",
+                    },
+                    {
+                        "id": f"vt-limit-sol-{index:03d}",
+                        "task_kind": "solution-run",
+                        "source_path": "solutions/bulk.cpp",
+                        "logical_run_id": "bulk-solution",
+                        "test_name": test_name,
+                        "expected_behavior": "accepted",
+                        "status": VerificationTaskStore.TASK_DONE,
+                        "verdict": "OK",
+                        "runtime_sec": 0.001,
+                        "cpu_sec": 0.001,
+                        "wall_sec": 0.001,
+                        "memory_kb": 256,
+                        "output_ref": f"blob://output-{index}",
+                    },
+                ]
+            )
+        config.verification_task_store.replace_graph(verification_id, tasks=tasks, edges=[])
+
+        page = run_details_page(
+            _request("/problems/alice/sample/run/details", f"verification_id={verification_id}"),
+            "alice/sample",
+            "alice",
+        )
+        self.assertEqual(page.status_code, 200)
+        page_html = page.body.decode("utf-8", errors="replace")
+        self.assertEqual(config.constants.RUN_DETAIL_TEST_LIST_LIMIT, 999)
+        for index in range(205, 214):
+            test_name = f"{index:03d}.in"
+            self.assertIn(
+                f'data-test-name="{test_name}" data-test-source-kind="generated" data-test-command="gen {index}" data-run-id="bulk-solution"',
+                page_html,
+            )
+        self.assertNotIn("Showing first 200", page_html)
 
     def test_run_details_page_shows_main_correct_compile_diagnostics_text(self) -> None:
         workspace_service.ensure_workspace("alice/sample", "alice")

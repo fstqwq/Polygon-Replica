@@ -1135,21 +1135,36 @@
         });
     }
 
+    function renderTestTitle(testName, sourceKind, command) {
+      popupTitle.textContent = "";
+      if (!testName) {
+        popupTitle.textContent = "Test Details";
+        return;
+      }
+      popupTitle.appendChild(document.createTextNode("Test Details: " + testName));
+      if (sourceKind === "manual") {
+        popupTitle.appendChild(document.createTextNode(" (manual)"));
+        return;
+      }
+      if (sourceKind !== "generated") return;
+      popupTitle.appendChild(document.createTextNode(" (generated: "));
+      var commandText = document.createElement("span");
+      commandText.className = "verification-test-title-command";
+      commandText.textContent = command || "gen";
+      popupTitle.appendChild(commandText);
+      popupTitle.appendChild(document.createTextNode(")"));
+    }
+
     toggles.forEach(function (el) {
       el.addEventListener("click", function (ev) {
         ev.preventDefault();
         var testName = String(el.getAttribute("data-test-name") || "").trim();
         var runId = String(el.getAttribute("data-run-id") || "").trim();
-        var solutionTitle = String(el.getAttribute("data-solution-title") || "").trim();
+        var sourceKind = String(el.getAttribute("data-test-source-kind") || "").trim();
+        var command = String(el.getAttribute("data-test-command") || "").trim();
         activeTestName = testName;
         activeRunId = runId;
-        if (testName && solutionTitle) {
-          popupTitle.textContent = "Test " + testName + " - " + solutionTitle;
-        } else if (testName) {
-          popupTitle.textContent = "Test Details: " + testName;
-        } else {
-          popupTitle.textContent = "Test Details";
-        }
+        renderTestTitle(testName, sourceKind, command);
         ensureLoaded(testName, runId);
       });
     });
