@@ -40,32 +40,8 @@ def validator_page(request: Request, problem: str, user: Annotated[str, Depends(
     except HTTPException:
         repo_content = ''
         repo_content_truncated = False
-    if (not repo_exists) and (not repo_content):
-        repo_content = template_for_kind('validator')
-    return template_response(request, 'validator.html', {'ctx': ctx, 'validator_status': validator_status, 'repo_source': repo_source, 'repo_content': repo_content, 'repo_content_truncated': repo_content_truncated, 'content_char_limit': _C.WORKSPACE_FILE_VIEW_CHAR_LIMIT})
-
-def validator_create_template(problem: str, user: Annotated[str, Depends(require_session_user)], path: str=Form('validators/validator.cpp')):
-    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
-    require_write_access(ctx)
-    workspace = Path(ctx['workspace']['path'])
-    msg = 'validator template created'
-    target = 'validators/validator.cpp'
-    try:
-        target = normalize_component_source_path(path, 'validators', 'validator.cpp')
-        with config.workspace_service.workspace_lock(workspace):
-            target_abs = safe_workspace_path(workspace, target)
-            if target_abs.exists() and target_abs.is_dir():
-                raise ValueError('validator source target is a directory')
-            if target_abs.exists() and target_abs.is_file() and (target_abs.stat().st_size > 0):
-                msg = 'validator source already exists; not overwritten'
-            else:
-                config.git_service.write_file(workspace, target, template_for_kind('validator'))
-        audit(ctx['user']['id'], ctx['problem']['id'], 'validator.create_template', {'path': target})
-    except (ValueError, OSError) as exc:
-        msg = str(exc)
-    except HTTPException as exc:
-        msg = str(exc.detail)
-    return redirect_response(f'/problems/{problem}/validator', status_code=303, message=msg)
+    starter_content = template_for_kind('validator') if not repo_exists else ''
+    return template_response(request, 'validator.html', {'ctx': ctx, 'validator_status': validator_status, 'repo_source': repo_source, 'repo_content': repo_content, 'starter_content': starter_content, 'repo_content_truncated': repo_content_truncated, 'content_char_limit': _C.WORKSPACE_FILE_VIEW_CHAR_LIMIT})
 
 def validator_rename_source(
     problem: str,
@@ -143,6 +119,3 @@ def validator_save_source(
             return json_redirect_response(redirect_url, msg)
         return json_error_response(msg)
     return redirect_response(redirect_url, status_code=303, message=msg)
-
-
-

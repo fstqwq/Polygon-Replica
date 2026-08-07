@@ -209,10 +209,166 @@ form {
   gap: var(--space-4);
 }
 
+.component-workbench {
+  display: grid;
+  gap: var(--space-4);
+}
+
+.component-workbench-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-4);
+}
+
+.component-workbench-head h2,
+.component-workbench-head p {
+  margin: 0;
+}
+
+.component-workbench-head > div {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.component-workbench-path {
+  max-width: 55%;
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--line);
+  background: var(--surface-alt);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.component-source-path-field > label {
+  flex: 0 0 auto;
+}
+
+.component-source-path-field > input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.component-editor-actions {
+  margin-top: 0;
+}
+
 .checker-section-title {
   display: inline-flex;
   align-items: center;
   gap: var(--space-3);
+}
+
+.checker-standard-panel {
+  display: grid;
+  gap: var(--space-4);
+  border-color: var(--line-strong);
+}
+
+.checker-standard-head,
+.checker-custom-entry,
+.generator-list-head,
+.component-empty-state {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-4);
+}
+
+.checker-standard-head h2,
+.checker-standard-head p,
+.checker-custom-entry h2,
+.checker-custom-entry p,
+.generator-list-head h2,
+.component-empty-state h2,
+.component-empty-state p {
+  margin: 0;
+}
+
+.checker-standard-head > div,
+.checker-custom-entry > div,
+.component-empty-state > div {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.checker-standard-form {
+  max-width: 680px;
+}
+
+.checker-standard-description {
+  margin: calc(-1 * var(--space-2)) 0 0;
+}
+
+.checker-custom-entry {
+  align-items: center;
+  background: var(--surface-alt);
+}
+
+.component-page-title {
+  align-items: center;
+}
+
+.generator-workbench {
+  display: grid;
+  grid-template-columns: minmax(230px, 0.42fr) minmax(0, 1fr);
+  gap: var(--space-4);
+  align-items: start;
+}
+
+.generator-workbench-list-only {
+  grid-template-columns: minmax(0, 620px);
+}
+
+.generator-list-panel,
+.generator-editor-panel {
+  min-width: 0;
+}
+
+.generator-list-head {
+  align-items: baseline;
+  margin-bottom: var(--space-3);
+}
+
+.generator-source-table td:last-child,
+.generator-source-table th:last-child {
+  width: 1%;
+  white-space: nowrap;
+}
+
+.generator-source-table tr.is-selected td {
+  background: var(--surface-selected);
+}
+
+.generator-first-editor {
+  max-width: 960px;
+}
+
+.component-empty-state {
+  align-items: center;
+  min-height: 120px;
+  padding: var(--space-6);
+  border: 1px dashed var(--line-strong);
+  background: var(--surface-alt);
+}
+
+@media (max-width: 960px) {
+  .component-workbench-head,
+  .checker-standard-head,
+  .checker-custom-entry,
+  .component-empty-state {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .component-workbench-path {
+    max-width: 100%;
+  }
+
+  .generator-workbench {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 .run-kind-chip {

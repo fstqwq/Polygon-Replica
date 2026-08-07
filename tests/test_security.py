@@ -25,8 +25,8 @@ from app.impl.problem.file import (
     files_save,
     files_upload,
 )
-from app.impl.problem.generator import generator_create_template, generator_rename_source
-from app.impl.problem.interactor import interactor_create_template, interactor_rename_source, interactor_save_source
+from app.impl.problem.generator import generator_rename_source, generator_save_source
+from app.impl.problem.interactor import interactor_rename_source, interactor_save_source
 from app.impl.problem.solution import (
     solutions_create_template,
     solutions_delete,
@@ -34,7 +34,7 @@ from app.impl.problem.solution import (
     solutions_save_source,
     solutions_set_tag,
 )
-from app.impl.problem.validator import validator_create_template, validator_rename_source, validator_save_source
+from app.impl.problem.validator import validator_rename_source, validator_save_source
 from app.impl.run_export.artifact import artifact_file
 from app.impl.run_export.run import run_cancel, run_execute
 from app.impl.root.auth_pages import auth_password_meta, login_page
@@ -546,31 +546,24 @@ class TestSecurity(E2ETestBase):
         self.assertEqual(denied.exception.status_code, 400)
         self.assertIn("invalid path", str(denied.exception.detail).lower())
 
-    def test_generator_create_template_path_traversal_stays_in_workspace(self) -> None:
-        marker = suite_root() / f"generator-template-escape-{uuid.uuid4().hex[:8]}.cpp"
+    def test_generator_save_source_path_traversal_stays_in_workspace(self) -> None:
+        marker = suite_root() / f"generator-save-escape-{uuid.uuid4().hex[:8]}.cpp"
         marker.unlink(missing_ok=True)
-        resp = generator_create_template(
-            problem="alice/sample",
-            user="alice",
-            path="../../" + marker.name,
-        )
+        content = "int main(){return 0;}\n"
+        with patch("app.impl.problem.generator.judgehost_compile_check_error", return_value=""):
+            resp = generator_save_source(
+                problem="alice/sample",
+                user="alice",
+                path="../../" + marker.name,
+                content=content,
+            )
         self.assertEqual(resp.status_code, 303)
         self.assertFalse(marker.exists())
         ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
-        self.assertTrue((ws / "generators" / "generator.cpp").exists())
-
-    def test_validator_create_template_path_traversal_stays_in_workspace(self) -> None:
-        marker = suite_root() / f"validator-template-escape-{uuid.uuid4().hex[:8]}.cpp"
-        marker.unlink(missing_ok=True)
-        resp = validator_create_template(
-            problem="alice/sample",
-            user="alice",
-            path="../../" + marker.name,
+        self.assertEqual(
+            (ws / "generators" / "generator.cpp").read_text(encoding="utf-8"),
+            content,
         )
-        self.assertEqual(resp.status_code, 303)
-        self.assertFalse(marker.exists())
-        ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
-        self.assertTrue((ws / "validators" / "validator.cpp").exists())
 
     def test_validator_save_source_path_traversal_stays_in_workspace(self) -> None:
         marker = suite_root() / f"validator-save-escape-{uuid.uuid4().hex[:8]}.cpp"
@@ -589,19 +582,6 @@ class TestSecurity(E2ETestBase):
         target = ws / "validators" / "validator.cpp"
         self.assertTrue(target.exists())
         self.assertEqual(target.read_text(encoding="utf-8"), content)
-
-    def test_interactor_create_template_path_traversal_stays_in_workspace(self) -> None:
-        marker = suite_root() / f"interactor-template-escape-{uuid.uuid4().hex[:8]}.cpp"
-        marker.unlink(missing_ok=True)
-        resp = interactor_create_template(
-            problem="alice/sample",
-            user="alice",
-            path="../../" + marker.name,
-        )
-        self.assertEqual(resp.status_code, 303)
-        self.assertFalse(marker.exists())
-        ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
-        self.assertTrue((ws / "interactors" / "interactor.cpp").exists())
 
     def test_interactor_save_source_path_traversal_stays_in_workspace(self) -> None:
         marker = suite_root() / f"interactor-save-escape-{uuid.uuid4().hex[:8]}.cpp"

@@ -8,7 +8,6 @@ from fastapi.responses import HTMLResponse
 from app.impl.workspace.context_ui import render_workspace_page
 from app.impl.problem.access import workspace_access_grant, workspace_access_revoke
 from app.impl.problem.checker import (
-    checker_create_template,
     checker_page,
     checker_rename_source,
     checker_save_source,
@@ -28,7 +27,6 @@ from app.impl.problem.file import (
 )
 from app.impl.problem.general import general_save
 from app.impl.problem.generator import (
-    generator_create_template,
     generator_rename_source,
     generator_save_source,
     generators_page,
@@ -44,7 +42,6 @@ from app.impl.problem.merge_op import (
     merge_undo,
 )
 from app.impl.problem.interactor import (
-    interactor_create_template,
     interactor_page,
     interactor_rename_source,
     interactor_save_source,
@@ -68,7 +65,6 @@ from app.impl.problem.setting import (
 )
 from app.impl.problem.solution import solutions_create_template, solutions_delete, solutions_editor_page, solutions_page, solutions_rename, solutions_save_source, solutions_set_tag
 from app.impl.problem.validator import (
-    validator_create_template,
     validator_page,
     validator_rename_source,
     validator_save_source,
@@ -102,11 +98,6 @@ router.add_api_route(
     name="problem_generators",
 )
 router.add_api_route(
-    "/problems/{problem:path}/generators/create-template",
-    generator_create_template,
-    methods=["POST"],
-)
-router.add_api_route(
     "/problems/{problem:path}/generators/save-source",
     generator_save_source,
     methods=["POST"],
@@ -135,11 +126,6 @@ router.add_api_route(
     methods=["POST"],
 )
 router.add_api_route(
-    "/problems/{problem:path}/checker/create-template",
-    checker_create_template,
-    methods=["POST"],
-)
-router.add_api_route(
     "/problems/{problem:path}/checker/save-source",
     checker_save_source,
     methods=["POST"],
@@ -157,11 +143,6 @@ router.add_api_route(
     name="problem_validator",
 )
 router.add_api_route(
-    "/problems/{problem:path}/validator/create-template",
-    validator_create_template,
-    methods=["POST"],
-)
-router.add_api_route(
     "/problems/{problem:path}/validator/save-source",
     validator_save_source,
     methods=["POST"],
@@ -177,11 +158,6 @@ router.add_api_route(
     methods=["GET"],
     response_class=HTMLResponse,
     name="problem_interactor",
-)
-router.add_api_route(
-    "/problems/{problem:path}/interactor/create-template",
-    interactor_create_template,
-    methods=["POST"],
 )
 router.add_api_route(
     "/problems/{problem:path}/interactor/save-source",

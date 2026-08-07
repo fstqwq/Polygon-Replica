@@ -1,35 +1,44 @@
 {% extends "base.html" %}
 {% from "_component_forms.html" import rename_source_form, source_editor_form %}
 {% block content %}
-<h1 class="page-title">Generators</h1>
+<div class="page-title-inline component-page-title">
+  <h1 class="page-title">Generators</h1>
+  {% if source_rows and not new_source %}
+  <a class="button-link" href="/problems/{{ ctx.problem.slug }}/generators?new=generator.cpp">Add generator</a>
+  {% endif %}
+</div>
 {% include "_flash_message.html" %}
 {% set editor_error = message if message_level == 'error' else '' %}
 
-<div class="grid">
-  <section>
-    <h2>Generators List</h2>
-    <table class="table-base">
-      <tr><th>Path</th><th>Used in Build</th></tr>
+{% if source_rows %}
+<div class="generator-workbench{% if not show_editor %} generator-workbench-list-only{% endif %}">
+  <section class="generator-list-panel">
+    <div class="generator-list-head">
+      <h2>Sources</h2>
+      <span class="muted">{{ source_rows|length }} file{{ "s" if source_rows|length != 1 else "" }}</span>
+    </div>
+    <table class="table-base generator-source-table">
+      <thead><tr><th>Generator</th><th>Tests</th></tr></thead>
+      <tbody>
       {% for row in source_rows %}
-      <tr>
+      <tr{% if row.path == selected_source and selected_exists %} class="is-selected"{% endif %}>
         <td><a href="/problems/{{ ctx.problem.slug }}/generators?path={{ row.path }}"><code>{{ row.path }}</code></a></td>
-        <td>{{ "used" if row.configured else "unused" }}</td>
+        <td>{{ row.reference_count if row.reference_count else "Not used" }}</td>
       </tr>
       {% endfor %}
+      </tbody>
     </table>
-    {% if source_rows_truncated %}
-    {% endif %}
-    <form class="form-row" method="post" action="/problems/{{ ctx.problem.slug }}/generators/create-template">
-      <label for="generator-create-path">Create template</label>
-      <input id="generator-create-path" name="path" placeholder="{{ create_template_path_default }}" />
-      <button class="btn" type="submit">Create Generator Template</button>
-    </form>
+    {% if source_rows_truncated %}<p class="muted">Some sources are not shown.</p>{% endif %}
   </section>
 
-  <section>
-    <h2>Generator Editor</h2>
-    {% if selected_exists or editor_error %}
-    <p><strong>{{ "File path" if selected_exists else "New file" }}:</strong> <code>{{ selected_source }}</code></p>
+  {% if show_editor or editor_error %}
+  <section class="component-workbench generator-editor-panel">
+    <div class="component-workbench-head">
+      <div>
+        <h2>{{ "Generator source" if selected_exists else "New generator" }}</h2>
+      </div>
+      {% if selected_exists %}<code class="component-workbench-path">{{ selected_source }}</code>{% endif %}
+    </div>
     {% if selected_exists %}
     {{ rename_source_form(
       "/problems/" ~ ctx.problem.slug ~ "/generators/rename-source",
@@ -43,13 +52,42 @@
       repo_content,
       repo_content_truncated,
       content_char_limit,
-      "Save Generator Source",
-      '',
-      '',
-      editor_error
+      "Save generator",
+      editor_error,
+      not selected_exists,
+      "generator-source-path",
+      starter_content
     ) }}
-    {% else %}
-    {% endif %}
   </section>
+  {% endif %}
 </div>
+{% elif show_editor or editor_error %}
+<section class="component-workbench generator-editor-panel generator-first-editor">
+  <div class="component-workbench-head">
+    <div>
+      <h2>New generator</h2>
+    </div>
+  </div>
+  {{ source_editor_form(
+    "/problems/" ~ ctx.problem.slug ~ "/generators/save-source",
+    selected_source,
+    repo_content,
+    repo_content_truncated,
+    content_char_limit,
+    "Save generator",
+    editor_error,
+    true,
+    "generator-source-path",
+    starter_content
+  ) }}
+</section>
+{% else %}
+<section class="component-empty-state">
+  <div>
+    <h2>No generators</h2>
+    <p class="muted">Add a source when tests need generated input.</p>
+  </div>
+  <a class="button-link primary-action" href="/problems/{{ ctx.problem.slug }}/generators?new=generator.cpp">Add generator</a>
+</section>
+{% endif %}
 {% endblock %}

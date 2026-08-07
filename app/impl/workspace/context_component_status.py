@@ -118,21 +118,17 @@ def _resolve_generator_source_from_token_for_nav(token: str, source_paths: list[
             return stem_matches[0]
     return ''
 
-def _count_used_configured_generators(workspace: Path, configured_sources: list[str], source_paths: list[str]) -> int:
-    configured = dedupe_preserve_order(
-        [path.strip().replace('\\', '/') for path in configured_sources if path.strip()]
-    )
-    if not configured:
-        return 0
-    configured_set = set(configured)
+def _generator_reference_counts(workspace: Path, source_paths: list[str]) -> dict[str, int]:
     source_catalog = dedupe_preserve_order(
-        [*(path.strip().replace('\\', '/') for path in source_paths if path.strip()), *configured]
+        [path.strip().replace('\\', '/') for path in source_paths if path.strip()]
     )
+    counts = {path: 0 for path in source_catalog}
+    if not source_catalog:
+        return counts
     try:
         entries, _ = read_tests_spec(workspace)
     except Exception:
-        return 0
-    used: set[str] = set()
+        return counts
     for row in entries:
         if row.get('kind') != 'gen':
             continue
@@ -147,9 +143,20 @@ def _count_used_configured_generators(workspace: Path, configured_sources: list[
         except Exception:
             continue
         resolved = _resolve_generator_source_from_token_for_nav(tokens[0], source_catalog)
-        if resolved and resolved in configured_set:
-            used.add(resolved)
-    return len(used)
+        if resolved:
+            counts[resolved] = counts.get(resolved, 0) + 1
+    return counts
+
+
+def _count_used_configured_generators(workspace: Path, configured_sources: list[str], source_paths: list[str]) -> int:
+    configured = dedupe_preserve_order(
+        [path.strip().replace('\\', '/') for path in configured_sources if path.strip()]
+    )
+    reference_counts = _generator_reference_counts(
+        workspace,
+        dedupe_preserve_order([*source_paths, *configured]),
+    )
+    return sum(1 for path in configured if reference_counts.get(path, 0) > 0)
 
 def generator_status_context(workspace: Path) -> dict:
     build_cfg, _ = read_build_config(workspace)
@@ -181,13 +188,19 @@ def generator_status_context(workspace: Path) -> dict:
         repo_exists = workspace_rel_file_exists(workspace, repo_source)
     configured_set = set(configured_sources)
     all_sources = dedupe_preserve_order([*configured_sources, *generator_candidates])
+    reference_counts = _generator_reference_counts(workspace, all_sources)
     has_declared_or_discovered = bool(all_sources)
     source_rows: list[dict[str, object]] = []
     for rel in all_sources:
         exists = workspace_rel_file_exists(workspace, rel)
         if not exists:
             continue
-        source_rows.append({'path': rel, 'exists': exists, 'configured': rel in configured_set})
+        source_rows.append({
+            'path': rel,
+            'exists': exists,
+            'configured': rel in configured_set,
+            'reference_count': reference_counts.get(rel, 0),
+        })
     if repo_exists:
         mode = 'repository'
         display = _source_basename_label(repo_source)
@@ -244,5 +257,4 @@ def checker_status_context(workspace: Path) -> dict:
         'repo_source': repo_source,
         'repo_source_exists': bool(repo_exists),
     }
-
 

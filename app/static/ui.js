@@ -1872,6 +1872,31 @@
     });
   }
 
+  function initCodeStarterActions() {
+    document.querySelectorAll("[data-insert-code-starter='1']").forEach(function (button) {
+      button.addEventListener("click", function () {
+        var form = button.closest("form");
+        if (!form) return;
+        var textarea = form.querySelector("textarea[data-code-editor='1']");
+        var starter = form.querySelector("textarea[data-code-starter='1']");
+        if (!textarea || !starter) return;
+        var editor = findCodeMirrorEditorForTextarea(textarea);
+        var current = editor && typeof editor.getValue === "function" ? editor.getValue() : textarea.value;
+        if (String(current || "").trim() && !window.confirm("Replace the current draft with the starter?")) {
+          return;
+        }
+        if (editor && typeof editor.setValue === "function") {
+          editor.setValue(starter.value);
+          if (typeof editor.focus === "function") editor.focus();
+        } else {
+          textarea.value = starter.value;
+          textarea.dispatchEvent(new Event("input", { bubbles: true }));
+          textarea.focus();
+        }
+      });
+    });
+  }
+
   function initSolutionEditorAsyncSave() {
     var form = document.getElementById("solution-save-form");
     if (!form) return;
@@ -3007,6 +3032,22 @@
     });
   }
 
+  function initStandardCheckerDescription() {
+    var select = document.getElementById("standard-checker-name");
+    var description = document.querySelector("[data-standard-checker-description='1']");
+    if (!select || !description) return;
+
+    function refreshDescription() {
+      var option = select.options[select.selectedIndex];
+      var text = String((option && option.getAttribute("data-description")) || "").trim();
+      description.textContent = text ? text + "." : "";
+      description.hidden = !text;
+    }
+
+    select.addEventListener("change", refreshDescription);
+    refreshDescription();
+  }
+
   function initStatementLanguageSwitch() {
     var forms = document.querySelectorAll("form[data-statement-language-form='1']");
     if (!forms.length) return;
@@ -3093,6 +3134,7 @@
     initSudoGatedForms();
     initSubmitLinks();
     initPreviewCompileAsync();
+    initCodeStarterActions();
     initComponentSourceEditorAsyncSave();
     initSolutionEditorAsyncSave();
     initCodeEditorUnloadGuard();
@@ -3103,6 +3145,7 @@
     initSudoEnvelopeForm();
     initStatementDraftBackup();
     initStatementLanguageSwitch();
+    initStandardCheckerDescription();
     initAutoSubmitSelects();
     initPolygonImportSlugSuggest();
     initCopyTextButtons();

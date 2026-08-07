@@ -1,35 +1,34 @@
 {% extends "base.html" %}
-{% from "_component_forms.html" import create_template_form, rename_source_form, source_editor_form %}
+{% from "_component_forms.html" import rename_source_form, source_editor_form %}
 {% block content %}
 <h1 class="page-title">Interactor</h1>
 {% include "_flash_message.html" %}
 {% set editor_error = message if message_level == 'error' else '' %}
-<section>
-    <h2>Interactor Editor</h2>
-    <p><strong>{{ "File path" if interactor_status.repo_source_exists else "New file" }}:</strong> <code>{{ repo_source }}</code></p>
+<section class="component-workbench">
+    <div class="component-workbench-head">
+      <div>
+        <h2>{{ "Interactor source" if interactor_status.repo_source_exists else "New interactor" }}</h2>
+      </div>
+      {% if interactor_status.repo_source_exists %}<code class="component-workbench-path">{{ repo_source }}</code>{% endif %}
+    </div>
     {% if interactor_status.repo_source_exists %}
     {{ rename_source_form(
       "/problems/" ~ ctx.problem.slug ~ "/interactor/rename-source",
       repo_source,
       "interactor-rename-path"
     ) }}
+    {% endif %}
     {{ source_editor_form(
       "/problems/" ~ ctx.problem.slug ~ "/interactor/save-source",
       repo_source,
       repo_content,
       repo_content_truncated,
       content_char_limit,
-      "Save Interactor Source",
-      "/problems/" ~ ctx.problem.slug ~ "/interactor/create-template",
-      "Create Interactor Template",
-      editor_error
+      "Save interactor",
+      editor_error,
+      not interactor_status.repo_source_exists,
+      "interactor-source-path",
+      starter_content
     ) }}
-    {% else %}
-    {{ create_template_form(
-      "/problems/" ~ ctx.problem.slug ~ "/interactor/create-template",
-      "Create Interactor Template",
-      repo_source
-    ) }}
-    {% endif %}
 </section>
 {% endblock %}

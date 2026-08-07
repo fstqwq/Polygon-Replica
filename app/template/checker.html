@@ -1,16 +1,16 @@
 {% extends "base.html" %}
-{% from "_component_forms.html" import create_template_form, rename_source_form, source_editor_form %}
-{% macro repository_checker_section(inline_error='') -%}
-<section>
-  <h2 class="checker-section-title">Repository Checker</h2>
-  <p>
-    <strong>{{ "Current file" if checker_status.repo_source_exists else "New file" }}:</strong>
-    <code>{{ repo_source }}</code>{% if checker_status.standard_checker %} <span class="muted">(matches <code>{{ checker_status.standard_checker }}</code>)</span>{% endif %}
-  </p>
+{% from "_component_forms.html" import rename_source_form, source_editor_form %}
+{% macro custom_checker_editor(inline_error='') -%}
+<section class="component-workbench checker-custom-editor">
+  <div class="component-workbench-head">
+    <div>
+      <h2>{{ "Custom checker" if checker_status.repo_source_exists else "New custom checker" }}</h2>
+    </div>
+    {% if checker_status.repo_source_exists %}<code class="component-workbench-path">{{ repo_source }}</code>{% endif %}
+  </div>
   {% if checker_status.standard_warning %}
   <p class="flash flash-inline tone-warn">{{ checker_status.standard_warning }}</p>
   {% endif %}
-  {% if checker_status.repo_source_exists or inline_error %}
   {% if checker_status.repo_source_exists %}
   {{ rename_source_form(
     "/problems/" ~ ctx.problem.slug ~ "/checker/rename-source",
@@ -24,34 +24,34 @@
     repo_content,
     repo_content_truncated,
     content_char_limit,
-    "Save Checker Source",
-    "/problems/" ~ ctx.problem.slug ~ "/checker/create-template",
-    "Create checker.cpp template",
-    inline_error
+    "Save checker",
+    inline_error,
+    not checker_status.repo_source_exists,
+    "checker-source-path",
+    starter_content
   ) }}
-  {% else %}
-  {{ create_template_form(
-    "/problems/" ~ ctx.problem.slug ~ "/checker/create-template",
-    "Create checker.cpp template"
-  ) }}
-  {% endif %}
 </section>
 {%- endmacro %}
 
 {% macro standard_checker_section() -%}
-<section>
-  <h2 class="checker-section-title">Standard Checker</h2>
+<section class="checker-standard-panel">
+  <div class="checker-standard-head">
+    <div>
+      <h2 class="checker-section-title">Standard checker</h2>
+    </div>
+    {% if checker_status.standard_checker %}<span class="status-chip">Current: {{ checker_status.standard_checker }}</span>{% endif %}
+  </div>
   {% if standard_checker_options %}
-  <form class="form-row form-row-inline-controls" method="post" action="/problems/{{ ctx.problem.slug }}/checker/set-standard">
-    <label for="standard-checker-name">Checker</label>
-    <select id="standard-checker-name" name="checker_name">
+  <form class="form-stack checker-standard-form" method="post" action="/problems/{{ ctx.problem.slug }}/checker/set-standard">
+    <select id="standard-checker-name" name="checker_name" aria-label="Standard checker">
       {% for checker in standard_checker_options %}
-      <option value="{{ checker.value }}" {% if checker.value == selected_standard_checker %}selected{% endif %}>{{ checker.label }}</option>
+      <option value="{{ checker.value }}" data-description="{{ checker.description }}" {% if checker.value == selected_standard_checker %}selected{% endif %}>{{ checker.value }}</option>
       {% endfor %}
     </select>
+    {% if selected_standard_description %}<p id="standard-checker-description" class="muted checker-standard-description" data-standard-checker-description="1">{{ selected_standard_description }}.</p>{% endif %}
     <div class="form-row-actions">
-      <button class="btn" type="submit">Set Checker</button>
-      <button class="btn" type="submit" formaction="/problems/{{ ctx.problem.slug }}/checker/view-standard" formmethod="get">View Checker</button>
+      <button class="btn primary-action" type="submit">Use checker</button>
+      <button class="linkish-button" type="submit" formaction="/problems/{{ ctx.problem.slug }}/checker/view-standard" formmethod="get">View source</button>
     </div>
   </form>
   {% else %}
@@ -66,7 +66,17 @@
 {% set editor_error = message if message_level == 'error' else '' %}
 
 <div class="checker-layout">
-  {{ repository_checker_section(editor_error) }}
   {{ standard_checker_section() }}
+  {% if show_custom_editor or editor_error %}
+  {{ custom_checker_editor(editor_error) }}
+  {% else %}
+  <section class="checker-custom-entry">
+    <div>
+      <h2>Custom checker</h2>
+      <p class="muted">Use custom testlib logic when a standard checker is not enough.</p>
+    </div>
+    <a class="button-link" href="/problems/{{ ctx.problem.slug }}/checker?mode=custom">{{ "Customize source" if checker_status.repo_source_exists else "Write custom checker" }}</a>
+  </section>
+  {% endif %}
 </div>
 {% endblock %}

@@ -35,7 +35,11 @@ def checker_page(request: Request, problem: str, user: Annotated[str, Depends(re
     standard_checker_options = standard_checker_catalog()
     selected_standard = standard_checker if isinstance(standard_checker := checker_status.get('standard_checker'), str) else ''
     if not selected_standard and standard_checker_options:
-        selected_standard = standard_checker_options[0]['value']
+        recommended = next(
+            (row for row in standard_checker_options if row['value'] == 'std::wcmp.cpp'),
+            standard_checker_options[0],
+        )
+        selected_standard = recommended['value']
     repo_source = repo_source if isinstance(repo_source := checker_status.get('repo_source'), str) and repo_source else 'checkers/checker.cpp'
     repo_content = ''
     repo_content_truncated = False
@@ -46,9 +50,19 @@ def checker_page(request: Request, problem: str, user: Annotated[str, Depends(re
     except HTTPException:
         repo_content = ''
         repo_content_truncated = False
-    if not repo_content:
-        repo_content = template_for_kind('checker')
-    return template_response(request, 'checker.html', {'ctx': ctx, 'checker_status': checker_status, 'standard_checker_options': standard_checker_options, 'selected_standard_checker': selected_standard, 'repo_source': repo_source, 'repo_content': repo_content, 'repo_content_truncated': repo_content_truncated, 'content_char_limit': _C.WORKSPACE_FILE_VIEW_CHAR_LIMIT})
+    starter_content = template_for_kind('checker') if not checker_status.get('repo_source_exists') else ''
+    selected_standard_description = next(
+        (
+            str(row['description'])
+            for row in standard_checker_options
+            if row['value'] == selected_standard
+        ),
+        '',
+    )
+    show_custom_editor = request.query_params.get('mode') == 'custom' or bool(
+        checker_status.get('repo_source_exists') and not checker_status.get('standard_checker')
+    )
+    return template_response(request, 'checker.html', {'ctx': ctx, 'checker_status': checker_status, 'standard_checker_options': standard_checker_options, 'selected_standard_checker': selected_standard, 'selected_standard_description': selected_standard_description, 'show_custom_editor': show_custom_editor, 'repo_source': repo_source, 'repo_content': repo_content, 'starter_content': starter_content, 'repo_content_truncated': repo_content_truncated, 'content_char_limit': _C.WORKSPACE_FILE_VIEW_CHAR_LIMIT})
 
 def checker_view_standard(request: Request, problem: str, user: Annotated[str, Depends(require_session_user)], checker_name: str=''):
     ctx = page_ctx(
@@ -100,32 +114,6 @@ def checker_set_standard(problem: str, user: Annotated[str, Depends(require_sess
     except ValueError as exc:
         msg = str(exc)
     except OSError as exc:
-        msg = str(exc)
-    except HTTPException as exc:
-        msg = str(exc.detail)
-    return redirect_response(f'/problems/{problem}/checker', status_code=303, message=msg)
-
-def checker_create_template(problem: str, user: Annotated[str, Depends(require_session_user)]):
-    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
-    if ctx.get('problem_mode') == 'interactive':
-        return redirect_response(f'/problems/{problem}/interactor', status_code=303, message='interactive problem uses an interactor; checker section hidden')
-    require_write_access(ctx)
-    workspace = Path(ctx['workspace']['path'])
-    msg = 'checker template created'
-    try:
-        with config.workspace_service.workspace_lock(workspace):
-            build_cfg, cfg_path = read_build_config(workspace)
-            write_build_config(cfg_path, build_cfg)
-            checker_path = 'checkers/checker.cpp'
-            checker_abs = safe_workspace_path(workspace, checker_path)
-            if checker_abs.exists() and checker_abs.is_dir():
-                raise ValueError('checker.cpp target is a directory')
-            if checker_abs.exists() and checker_abs.is_file() and (checker_abs.stat().st_size > 0):
-                msg = 'checker.cpp already exists; not overwritten'
-            else:
-                config.git_service.write_file(workspace, checker_path, template_for_kind('checker'))
-        audit(ctx['user']['id'], ctx['problem']['id'], 'checker.create_template', {'path': 'checkers/checker.cpp'})
-    except (ValueError, OSError) as exc:
         msg = str(exc)
     except HTTPException as exc:
         msg = str(exc.detail)
@@ -213,6 +201,3 @@ def checker_save_source(
             return json_redirect_response(redirect_url, msg)
         return json_error_response(msg)
     return redirect_response(redirect_url, status_code=303, message=msg)
-
-
-

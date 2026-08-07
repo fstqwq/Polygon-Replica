@@ -1,26 +1,27 @@
-{% macro source_editor_form(action, path, content, content_truncated, content_char_limit, save_label, extra_action='', extra_label='', inline_error='') -%}
+{% macro source_editor_form(action, path, content, content_truncated, content_char_limit, save_label, inline_error='', path_editable=false, path_input_id='component-source-path', starter_content='') -%}
 <form class="form-stack component-source-form" method="post" action="{{ action }}" data-component-source-save-form="1" data-code-editor-guard="1">
+  {% if path_editable %}
+  <div class="form-row component-source-path-field">
+    <label for="{{ path_input_id }}">File</label>
+    <input id="{{ path_input_id }}" name="path" value="{{ path }}" required />
+  </div>
+  {% else %}
   <input type="hidden" name="path" value="{{ path }}" />
+  {% endif %}
+  {% if starter_content %}
+  <textarea hidden data-code-starter="1">{{ starter_content }}</textarea>
+  {% endif %}
   <textarea name="content" data-code-editor="1" data-code-path="{{ path }}" data-code-height="420">{{ content }}</textarea>
   {% if content_truncated %}
   <p class="muted">Showing first {{ content_char_limit }} characters.</p>
   {% endif %}
   <div class="form-row component-editor-actions">
-    <button class="btn" type="submit">{{ save_label }}</button>
-    {% if extra_action and extra_label %}
-    <button class="btn" type="submit" formaction="{{ extra_action }}" formmethod="post" formnovalidate>{{ extra_label }}</button>
+    <button class="btn primary-action" type="submit">{{ save_label }}</button>
+    {% if starter_content %}
+    <button class="btn" type="button" data-insert-code-starter="1">Insert testlib template</button>
     {% endif %}
   </div>
   <div class="flash flash-inline component-editor-error" data-component-editor-error="1"{% if not inline_error %} hidden{% endif %}>{{ inline_error }}</div>
-</form>
-{%- endmacro %}
-
-{% macro create_template_form(action, button_label, path='') -%}
-<form class="form-row component-create-form" method="post" action="{{ action }}">
-  {% if path %}
-  <input type="hidden" name="path" value="{{ path }}" />
-  {% endif %}
-  <button class="btn" type="submit">{{ button_label }}</button>
 </form>
 {%- endmacro %}
 

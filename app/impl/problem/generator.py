@@ -49,10 +49,25 @@ def generators_page(request: Request, problem: str, user: Annotated[str, Depends
                 continue
             if not bool(row.get('exists')):
                 continue
-            source_rows.append({'path': path, 'configured': bool(row.get('configured'))})
+            source_rows.append({
+                'path': path,
+                'configured': bool(row.get('configured')),
+                'reference_count': int(row.get('reference_count') or 0),
+            })
     requested_source = normalize_optional_component_source_path_safe(request.query_params.get('path'), 'generators', 'generator source')
+    requested_new = request.query_params.get('new')
+    new_source = ''
+    if requested_new is not None:
+        try:
+            new_source = _normalize_component_create_path(
+                requested_new or 'generator.cpp',
+                'generators',
+                'generator.cpp',
+            )
+        except ValueError:
+            new_source = 'generators/generator.cpp'
     repo_source = generator_status['repo_source'] if isinstance(generator_status.get('repo_source'), str) and generator_status['repo_source'] else 'generators/generator.cpp'
-    selected_source = requested_source or repo_source or 'generators/generator.cpp'
+    selected_source = new_source or requested_source or repo_source or 'generators/generator.cpp'
     selected_exists = workspace_rel_file_exists(workspace, selected_source)
     if selected_source and selected_exists and all((row.get('path') != selected_source for row in source_rows)):
         source_rows.insert(0, {'path': selected_source, 'configured': False})
@@ -65,39 +80,9 @@ def generators_page(request: Request, problem: str, user: Annotated[str, Depends
     except HTTPException:
         repo_content = ''
         repo_content_truncated = False
-    if not repo_content:
-        repo_content = _generator_template_for_target(selected_source)
-    create_template_path_default = Path(selected_source).name if selected_source else 'generator.cpp'
-    return template_response(request, 'generators.html', {'ctx': ctx, 'generator_status': generator_status, 'repo_source': selected_source, 'selected_source': selected_source, 'selected_exists': selected_exists, 'source_rows': source_rows, 'source_rows_truncated': bool(generator_status.get('source_rows_truncated')), 'repo_content': repo_content, 'repo_content_truncated': repo_content_truncated, 'content_char_limit': _C.WORKSPACE_FILE_VIEW_CHAR_LIMIT, 'create_template_path_default': create_template_path_default})
-
-def generator_create_template(problem: str, user: Annotated[str, Depends(require_session_user)], path: str=Form('generator.cpp')):
-    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
-    require_write_access(ctx)
-    workspace = Path(ctx['workspace']['path'])
-    msg = 'generator template created'
-    target = 'generators/generator.cpp'
-    try:
-        target = _normalize_component_create_path(path, 'generators', 'generator.cpp')
-        with config.workspace_service.workspace_lock(workspace):
-            target_abs = safe_workspace_path(workspace, target)
-            if target_abs.exists() and target_abs.is_dir():
-                raise ValueError('generator source target is a directory')
-            if target_abs.exists() and target_abs.is_file() and (target_abs.stat().st_size > 0):
-                msg = 'generator source already exists; not overwritten'
-            else:
-                config.git_service.write_file(workspace, target, _generator_template_for_target(target))
-            build_cfg, cfg_path = read_build_config(workspace)
-            generator_sources = generator_sources_from_build_cfg(build_cfg)
-            if target not in generator_sources:
-                generator_sources.append(target)
-            build_cfg['generator_sources'] = generator_sources
-            write_build_config(cfg_path, build_cfg)
-        audit(ctx['user']['id'], ctx['problem']['id'], 'generators.create_template', {'path': target})
-    except (ValueError, OSError) as exc:
-        msg = str(exc)
-    except HTTPException as exc:
-        msg = str(exc.detail)
-    return redirect_response(f'/problems/{problem}/generators?path={quote_plus(target)}', status_code=303, message=msg)
+    starter_content = _generator_template_for_target(selected_source) if not selected_exists else ''
+    show_editor = bool(selected_exists or new_source)
+    return template_response(request, 'generators.html', {'ctx': ctx, 'generator_status': generator_status, 'repo_source': selected_source, 'selected_source': selected_source, 'selected_exists': selected_exists, 'new_source': bool(new_source), 'show_editor': show_editor, 'source_rows': source_rows, 'source_rows_truncated': bool(generator_status.get('source_rows_truncated')), 'repo_content': repo_content, 'starter_content': starter_content, 'repo_content_truncated': repo_content_truncated, 'content_char_limit': _C.WORKSPACE_FILE_VIEW_CHAR_LIMIT})
 
 def generator_rename_source(
     problem: str,
@@ -178,7 +163,3 @@ def generator_save_source(
             return json_redirect_response(redirect_url, msg)
         return json_error_response(msg)
     return redirect_response(redirect_url, status_code=303, message=msg)
-
-
-
-

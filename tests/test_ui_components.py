@@ -19,11 +19,9 @@ from tests.ui_support import (
     checker_view_standard,
     files_save,
     general_page,
-    generator_create_template,
     generator_rename_source,
     generator_save_source,
     generators_page,
-    interactor_create_template,
     interactor_page,
     interactor_rename_source,
     interactor_save_source,
@@ -37,7 +35,6 @@ from tests.ui_support import (
     solutions_save_source,
     solutions_set_tag,
     uuid,
-    validator_create_template,
     validator_page,
     validator_rename_source,
     validator_save_source,
@@ -306,7 +303,7 @@ class TestUIComponents(UIHelpersMixin, E2ETestBase):
             source_abs.read_text(encoding="utf-8"), "int main(){return 0;}\n"
         )
 
-    def test_generators_page_supports_template_and_source_save(self) -> None:
+    def test_generators_page_supports_drafts_and_source_save(self) -> None:
         ws = Path(workspace_service.ensure_workspace(self.problem, self.user))
         rel_name = "gen.cpp"
         rel_second_name = "other.py"
@@ -319,14 +316,40 @@ class TestUIComponents(UIHelpersMixin, E2ETestBase):
             _request(f"/problems/{self.problem}/generators"), self.problem, self.user
         )
         self.assertEqual(page.status_code, 200)
+        empty_html = page.body.decode("utf-8", errors="replace")
+        self.assertIn("No generators", empty_html)
+        self.assertIn("?new=generator.cpp", empty_html)
+        self.assertFalse((ws / rel).exists())
 
-        created = generator_create_template(
-            problem=self.problem, user=self.user, path=rel_name
+        draft = generators_page(
+            _request(
+                f"/problems/{self.problem}/generators",
+                f"new={quote_plus(rel_name)}",
+            ),
+            self.problem,
+            self.user,
         )
+        draft_html = draft.body.decode("utf-8", errors="replace")
+        self.assertIn("New generator", draft_html)
+        self.assertIn("Insert testlib template", draft_html)
+        self.assertIn("registerGen", draft_html)
+        self.assertFalse((ws / rel).exists())
+
+        with patch(
+            "app.impl.problem.generator.judgehost_compile_check_error", return_value=""
+        ):
+            created = generator_save_source(
+                problem=self.problem,
+                user=self.user,
+                path=rel,
+                content=(
+                    '#include "testlib.h"\n'
+                    "int main(int argc,char** argv){"
+                    "registerGen(argc, argv, 1); println(1); return 0;}\n"
+                ),
+            )
         self.assertEqual(created.status_code, 303)
         self.assertTrue((ws / rel).exists())
-        created_text = (ws / rel).read_text(encoding="utf-8")
-        self.assertIn("registerGen", created_text)
         page_after_create = generators_page(
             _request(f"/problems/{self.problem}/generators"), self.problem, self.user
         )
@@ -355,14 +378,6 @@ class TestUIComponents(UIHelpersMixin, E2ETestBase):
             )
         self.assertEqual(saved.status_code, 303)
         self.assertIn("println(42)", (ws / rel).read_text(encoding="utf-8"))
-
-        created_second = generator_create_template(
-            problem=self.problem, user=self.user, path=rel_second_name
-        )
-        self.assertEqual(created_second.status_code, 303)
-        self.assertEqual(
-            (ws / rel_second).read_text(encoding="utf-8"), "#!/usr/bin/env python3\n"
-        )
 
         with patch(
             "app.impl.problem.generator.judgehost_compile_check_error", return_value=""
@@ -521,11 +536,6 @@ class TestUIComponents(UIHelpersMixin, E2ETestBase):
         (ws / rel).unlink(missing_ok=True)
         (ws / rel_bad).unlink(missing_ok=True)
 
-        created = generator_create_template(
-            problem=self.problem, user=self.user, path=rel
-        )
-        self.assertEqual(created.status_code, 303)
-
         with patch(
             "app.impl.problem.generator.judgehost_compile_check_error", return_value=""
         ):
@@ -572,11 +582,6 @@ class TestUIComponents(UIHelpersMixin, E2ETestBase):
     def test_generator_save_source_json_success_returns_redirect(self) -> None:
         ws = Path(workspace_service.ensure_workspace(self.problem, self.user))
         rel = "generators/gen_async_ok.cpp"
-        created = generator_create_template(
-            problem=self.problem, user=self.user, path=rel
-        )
-        self.assertEqual(created.status_code, 303)
-
         content = (
             '#include "testlib.h"\n'
             "int main(int argc,char** argv){"
@@ -1137,7 +1142,7 @@ class TestUIComponents(UIHelpersMixin, E2ETestBase):
         self.assertIn("std::fcmp.cpp", html)
         self.assertIn("registerTestlibCmd", html)
 
-    def test_validator_and_interactor_pages_support_template_actions(self) -> None:
+    def test_validator_and_interactor_pages_render_unsaved_starters(self) -> None:
         ws = Path(workspace_service.ensure_workspace(self.problem, self.user))
         validator_rel = "validators/validator.cpp"
         interactor_rel = "interactors/interactor.cpp"
@@ -1148,37 +1153,19 @@ class TestUIComponents(UIHelpersMixin, E2ETestBase):
             _request(f"/problems/{self.problem}/validator"), self.problem, self.user
         )
         self.assertEqual(validator_resp.status_code, 200)
+        validator_html = validator_resp.body.decode("utf-8", errors="replace")
+        self.assertIn("New validator", validator_html)
+        self.assertIn("registerValidation", validator_html)
+        self.assertFalse((ws / validator_rel).exists())
 
         interactor_resp = interactor_page(
             _request(f"/problems/{self.problem}/interactor"), self.problem, self.user
         )
         self.assertEqual(interactor_resp.status_code, 200)
-
-        validator_create = validator_create_template(
-            problem=self.problem, user=self.user, path=validator_rel
-        )
-        self.assertEqual(validator_create.status_code, 303)
-        self.assertTrue((ws / validator_rel).exists())
-        self.assertIn(
-            "registerValidation", (ws / validator_rel).read_text(encoding="utf-8")
-        )
-        validator_after_create = validator_page(
-            _request(f"/problems/{self.problem}/validator"), self.problem, self.user
-        )
-        self.assertEqual(validator_after_create.status_code, 200)
-
-        interactor_create = interactor_create_template(
-            problem=self.problem, user=self.user, path=interactor_rel
-        )
-        self.assertEqual(interactor_create.status_code, 303)
-        self.assertTrue((ws / interactor_rel).exists())
-        self.assertIn(
-            "registerInteraction", (ws / interactor_rel).read_text(encoding="utf-8")
-        )
-        interactor_after_create = interactor_page(
-            _request(f"/problems/{self.problem}/interactor"), self.problem, self.user
-        )
-        self.assertEqual(interactor_after_create.status_code, 200)
+        interactor_html = interactor_resp.body.decode("utf-8", errors="replace")
+        self.assertIn("New interactor", interactor_html)
+        self.assertIn("registerInteraction", interactor_html)
+        self.assertFalse((ws / interactor_rel).exists())
 
         with patch(
             "app.impl.problem.checker.judgehost_compile_check_error", return_value=""
