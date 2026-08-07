@@ -1,0 +1,41 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: polygon-replica-ui-e2e:local
+    container_name: polygon-replica-ui-e2e
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:18001:8001"
+    volumes:
+      - srv:/srv/polygon-replica
+      - var:/var/lib/polygon-replica
+      - cache:/tmp/polygon-replica
+    environment:
+      POLYGON_REPLICA_DB: /var/lib/polygon-replica/metadata.db
+      POLYGON_REPLICA_BARE_ROOT: /srv/polygon-replica/git
+      POLYGON_REPLICA_WORKSPACE_ROOT: /srv/polygon-replica/workspaces
+      POLYGON_REPLICA_ARTIFACTS_ROOT: /srv/polygon-replica/export
+      POLYGON_REPLICA_CACHE_ROOT: /tmp/polygon-replica
+      POLYGON_REPLICA_AUTH_COOKIE_SECURE: "1"
+    healthcheck:
+      test:
+        - CMD
+        - python3
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/login', timeout=2)"
+      interval: 5s
+      timeout: 3s
+      retries: 24
+      start_period: 10s
+    security_opt:
+      - seccomp=unconfined
+      - apparmor=unconfined
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+volumes:
+  srv:
+  var:
+  cache:
