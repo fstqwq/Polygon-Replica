@@ -31,11 +31,12 @@ from app.service.platform.http_logging import install_uvicorn_access_filter
 install_uvicorn_access_filter()
 
 
-class MaintenanceAdmissionMiddleware:
+# ASGI middleware is a single-call protocol object by design.
+class MaintenanceAdmissionMiddleware:  # pylint: disable=too-few-public-methods
     """Count admitted HTTP work until the complete ASGI response finishes."""
 
-    def __init__(self, app: ASGIApp) -> None:
-        self.app = app
+    def __init__(self, asgi_app: ASGIApp) -> None:
+        self._asgi_app = asgi_app
 
     async def __call__(
         self,
@@ -44,12 +45,12 @@ class MaintenanceAdmissionMiddleware:
         send: Send,
     ) -> None:
         if scope["type"] != "http":
-            await self.app(scope, receive, send)
+            await self._asgi_app(scope, receive, send)
             return
         maintenance = config.maintenance_service
         path = str(scope.get("path") or "")
         if maintenance.is_exempt(path):
-            await self.app(scope, receive, send)
+            await self._asgi_app(scope, receive, send)
             return
         if not maintenance.enter_request():
             response = PlainTextResponse(
@@ -64,7 +65,7 @@ class MaintenanceAdmissionMiddleware:
             await response(scope, receive, send)
             return
         try:
-            await self.app(scope, receive, send)
+            await self._asgi_app(scope, receive, send)
         finally:
             maintenance.leave_request()
 

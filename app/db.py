@@ -1,5 +1,8 @@
 """SQLite schema and connection helpers."""
 
+# The canonical DDL and its validation manifest must remain reviewable together.
+# pylint: disable=too-many-lines
+
 from __future__ import annotations
 
 import logging
@@ -555,11 +558,16 @@ def _table_name_from_create_index(statement: str) -> str:
     return statement[marker_index + len(marker) :].split("(", 1)[0].strip()
 
 
-_CURRENT_TABLE_STATEMENTS = {
-    table_name: statement
-    for statement in _split_sql_statements(SCHEMA)
-    if (table_name := _table_name_from_create(statement)) is not None
-}
+def _current_table_statements() -> dict[str, str]:
+    statements: dict[str, str] = {}
+    for statement in _split_sql_statements(SCHEMA):
+        schema_table_name = _table_name_from_create(statement)
+        if schema_table_name is not None:
+            statements[schema_table_name] = statement
+    return statements
+
+
+_CURRENT_TABLE_STATEMENTS = _current_table_statements()
 _CURRENT_INDEX_STATEMENTS = tuple(_split_sql_statements(SCHEMA_INDEXES))
 
 
