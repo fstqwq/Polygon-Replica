@@ -598,7 +598,7 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         assert_html_contract(
             self,
             html,
-            contains=("Workspace", "Latest published revision", "Publish new revision"),
+            contains=("Workspace", "Upstream:", "Publish new revision"),
             excludes=("/problems/alice/sample/git/pull", "My Files", "Commit and share revision"),
             label="workspace controls",
         )
@@ -1403,8 +1403,8 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         self.assertIn(">alice/</span>", html)
         self.assertIn(">sample</span>", html)
         self.assertNotIn(">sample</a> - <code>alice/sample</code>", html)
-        self.assertIn("Workspace base v0 / latest published v0", html)
-        self.assertIn("Workspace base none / latest published missing", html)
+        self.assertIn("Base v0 / Upstream v0", html)
+        self.assertIn("Base none / Upstream missing", html)
         self.assertIn("revision-alert", html)
 
     def test_workspace_page_header_uses_slug_link_and_copy_button(self) -> None:

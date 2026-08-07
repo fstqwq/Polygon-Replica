@@ -52,7 +52,7 @@ _STANDARD_CHECKER_CACHE_SET: frozenset[str] = frozenset()
 def _db_revision_display(local: int | None, upstream: int | None) -> str:
     local_text = f"v{local}" if local is not None else "none"
     published_text = f"v{upstream}" if upstream is not None else "missing"
-    return f"Workspace base {local_text} / latest published {published_text}"
+    return f"Base {local_text} / Upstream {published_text}"
 
 def user_participating_problems(user_id: int, limit: int=_C.API_PROBLEMS_LIST_LIMIT) -> list[dict]:
     uid = int(user_id)

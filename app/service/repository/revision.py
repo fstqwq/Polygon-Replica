@@ -204,7 +204,7 @@ def workspace_revision_info(
     missing = local_version is None or upstream_version is None
     local_text = f"v{local_version}" if local_version is not None else "none"
     published_text = f"v{upstream_version}" if upstream_version is not None else "missing"
-    display = f"Workspace base {local_text} / latest published {published_text}"
+    display = f"Base {local_text} / Upstream {published_text}"
     highlight = bool(upstream_higher or missing)
     return {
         "local": local_version,
