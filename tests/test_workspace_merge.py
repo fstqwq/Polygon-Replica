@@ -191,7 +191,7 @@ class TestWorkspaceMerge(unittest.TestCase):
         self._git(shared, "push", "origin", "main")
         preview = self.service.start_preview("alice", "alice/sample", self.workspace)
         (self.workspace / "after-preview.txt").write_text("changed\n", encoding="utf-8")
-        with self.assertRaisesRegex(RuntimeError, "files changed"):
+        with self.assertRaisesRegex(RuntimeError, "workspace changed"):
             self.service.apply_preview("alice", "alice/sample", preview.preview_id, "suggested", {})
         self.assertFalse((self.workspace / "shared.txt").exists())
 
