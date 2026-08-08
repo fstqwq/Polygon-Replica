@@ -1,30 +1,29 @@
 {% extends "contest_base.html" %}
 {% block content %}
-<h1 class="page-title">Contest Properties</h1>
+<h1 class="page-title">Properties</h1>
 
 {% include "_flash_message.html" %}
 
-<section>
-  <h2>General</h2>
-  <form class="form-stack" method="post" action="/contests/{{ ctx.contest.slug }}/properties/save">
-    <div class="form-row">
+<section class="content-section-plain contest-manage-section" aria-label="Contest properties">
+  <form class="contest-properties-form" method="post" action="/contests/{{ ctx.contest.slug }}/properties/save">
+    <div class="form-field-stack contest-property-title">
       <label for="contest-title">Title</label>
       <input id="contest-title" name="title" value="{{ ctx.contest.title }}" />
     </div>
-    <div class="form-row">
+    <div class="form-field-stack">
       <label for="contest-location">Location</label>
-      <input id="contest-location" name="location" value="{{ location }}" />
+      <input id="contest-location" name="location" value="{{ location or '' }}" />
     </div>
-    <div class="form-row">
+    <div class="form-field-stack">
       <label for="contest-date">Date</label>
-      <input id="contest-date" name="date_text" value="{{ date_text }}" placeholder="2026-02-28" />
+      <input id="contest-date" name="date_text" value="{{ date_text or '' }}" placeholder="YYYY-MM-DD" />
     </div>
-    <div class="form-row">
+    <div class="form-field-stack">
       <label>Statement Language</label>
-      <span>{{ statement_language if statement_language else "-" }}</span>
+      <output class="contest-property-value">{{ statement_language if statement_language else "Not set" }}</output>
     </div>
-    <div class="form-row">
-      <button class="btn" type="submit">Save Contest Properties</button>
+    <div class="contest-properties-actions">
+      <button class="btn primary-action" type="submit">Save properties</button>
     </div>
   </form>
 </section>

@@ -1,17 +1,42 @@
 {% extends "contest_base.html" %}
 {% block content %}
-<h1 class="page-title">Contest Access</h1>
+<h1 class="page-title">Access</h1>
 
 {% include "_flash_message.html" %}
 
-<section>
-  <h2>Members</h2>
-  <p class="muted">
+{% if ctx.access.can_manage %}
+<section class="content-section-plain contest-manage-section" aria-labelledby="contest-grant-access-heading">
+  <div class="workspace-section-head">
+    <h2 id="contest-grant-access-heading">Grant membership</h2>
+  </div>
+  <form class="contest-access-grant" method="post" action="/contests/{{ ctx.contest.slug }}/access/grant">
+    <div class="form-field-stack">
+      <label for="contest-target-user">User</label>
+      <input id="contest-target-user" name="target_user" autocomplete="off" />
+    </div>
+    <div class="form-field-stack contest-access-role-field">
+      <label for="contest-target-role">Role</label>
+      <select id="contest-target-role" name="role">
+        <option value="read">read</option>
+        <option value="write">write</option>
+      </select>
+    </div>
+    <button class="btn" type="submit">Grant or update</button>
+  </form>
+</section>
+{% endif %}
+
+<section class="content-section-plain contest-manage-section" aria-labelledby="contest-members-heading">
+  <div class="workspace-section-head">
+    <h2 id="contest-members-heading">Members</h2>
+    <span class="muted contest-member-count">{{ entries | length }} total</span>
+  </div>
+  <p class="muted contest-access-note">
     Contest membership grants problem access dynamically: read members can read roster problems, while write members and the
     contest owner can edit them. Direct problem ACLs remain independent.
   </p>
   {% if entries %}
-  <table class="table-base">
+  <table class="table-base table-compact contest-members-table">
     <tr>
       <th>User</th>
       <th>Role</th>
@@ -24,7 +49,7 @@
       <td>{{ row.role }}</td>
       <td>{{ row.created_at | local_time }}</td>
       {% if ctx.access.can_manage %}
-      <td>
+      <td class="contest-member-actions">
         {% if row.role != "owner" %}
         <form
           method="post"
@@ -33,7 +58,7 @@
           data-confirm-message="Revoke contest membership for {{ row.username }}? Contest-derived problem access ends immediately; direct problem ACLs remain unchanged."
         >
           <input type="hidden" name="target_user" value="{{ row.username }}" />
-          <button class="btn danger-link" type="submit">Revoke Contest Membership</button>
+          <button class="linkish-button danger-link" type="submit">Revoke</button>
         </form>
         {% else %}
         <span class="muted">fixed owner</span>
@@ -48,22 +73,7 @@
   {% endif %}
 </section>
 
-{% if ctx.access.can_manage %}
-<section>
-  <h2>Grant / Update Membership</h2>
-  <form class="form-row" method="post" action="/contests/{{ ctx.contest.slug }}/access/grant">
-    <label for="contest-target-user">User</label>
-    <input id="contest-target-user" name="target_user" />
-    <label for="contest-target-role">Role</label>
-    <select id="contest-target-role" name="role">
-      <option value="read">read</option>
-      <option value="write">write</option>
-    </select>
-    <button class="btn" type="submit">Grant / Update Membership</button>
-  </form>
-  <p class="muted">Derived problem access takes effect immediately and is removed with membership or roster removal.</p>
-</section>
-{% else %}
+{% if not ctx.access.can_manage %}
 <p class="muted">Owner or system admin access required.</p>
 {% endif %}
 {% endblock %}

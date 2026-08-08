@@ -637,6 +637,25 @@ body.verification-compact .page-grid.page-grid-wide .verification-lifecycle-step
   display: none;
 }
 
+.page-grid.contest-page-grid {
+  grid-template-columns: minmax(0, 1fr) 180px;
+  align-items: start;
+}
+
+.page-grid.contest-page-grid .contest-side-panel {
+  width: 180px;
+}
+
+@media (max-width: 720px) {
+  .page-grid.contest-page-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .page-grid.contest-page-grid .contest-side-panel {
+    width: auto;
+  }
+}
+
 .content-shell,
 .info-card,
 .action-card,

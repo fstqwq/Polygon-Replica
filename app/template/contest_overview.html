@@ -1,14 +1,13 @@
 {% extends "contest_base.html" %}
 {% from "_problem_slug_link.html" import problem_slug_link %}
 {% block content %}
-<h1 class="page-title">Contest Overview</h1>
+<h1 class="page-title">Problems</h1>
 
 {% include "_flash_message.html" %}
 
 <section class="content-section-plain" aria-label="Contest problem list">
-  <h2>Contest Problems</h2>
   {% if problem_rows %}
-  <table class="table-base problem-list-table">
+  <table class="table-base problem-list-table contest-problem-list-table">
     <tr>
       <th>Idx</th>
       <th class="problem-list-head">Problem ID</th>

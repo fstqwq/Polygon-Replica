@@ -59,15 +59,36 @@ _CONTEST_CJK_PREAMBLE_LINES = [
 def _contest_nav(contest_slug: str, active: str) -> list[dict[str, str | bool]]:
     base = f"/contests/{contest_slug}"
     return [
-        {"key": "overview", "label": "Overview", "href": f"{base}/overview", "active": active == "overview"},
-        {"key": "problems", "label": "Problems", "href": f"{base}/problems", "active": active == "problems"},
-        {"key": "properties", "label": "Properties", "href": f"{base}/properties", "active": active == "properties"},
-        {"key": "access", "label": "Access", "href": f"{base}/access", "active": active == "access"},
+        {"key": "problems", "label": "Problems", "href": f"{base}/overview", "active": active == "overview"},
         {
             "key": "packages",
             "label": "Statements & Builds",
             "href": f"{base}/packages",
             "active": active == "packages",
+        },
+    ]
+
+
+def _contest_manage_nav(contest_slug: str, active: str) -> list[dict[str, str | bool]]:
+    base = f"/contests/{contest_slug}"
+    return [
+        {
+            "key": "manage-problems",
+            "label": "Manage problems",
+            "href": f"{base}/problems",
+            "active": active == "problems",
+        },
+        {
+            "key": "properties",
+            "label": "Properties",
+            "href": f"{base}/properties",
+            "active": active == "properties",
+        },
+        {
+            "key": "access",
+            "label": "Access",
+            "href": f"{base}/access",
+            "active": active == "access",
         },
     ]
 
@@ -102,6 +123,10 @@ def _contest_ctx(contest_slug: str, user: str, active_page: str) -> dict:
         "access": access,
         "active_main": "contests",
         "contest_nav": _contest_nav(str(contest_row["slug"]), active_page),
+        "contest_manage_nav": _contest_manage_nav(
+            str(contest_row["slug"]),
+            active_page,
+        ),
     }
 
 
@@ -118,6 +143,7 @@ def _contest_problem_rows(contest_id: int, username: str, user_id: int) -> list[
         problem_slug = str(row["problem_slug"])
         slug_owner, _separator, slug_leaf = problem_slug.partition("/")
         problem_access = access_by_problem[problem_id]
+        can_problem_read = bool(problem_access.get("can_read"))
         can_problem_write = bool(problem_access.get("can_write"))
         readiness = config.problem_package_service.readiness(problem_id)
         published_revision = readiness["published_revision_number"]
@@ -126,7 +152,7 @@ def _contest_problem_rows(contest_id: int, username: str, user_id: int) -> list[
         tl_ms = int(_C.GENERAL_CONFIG_DEFAULTS["time_limit_ms"])
         ml_mb = int(_C.GENERAL_CONFIG_DEFAULTS["memory_limit_mb"])
         mode = str(_C.GENERAL_CONFIG_DEFAULTS["mode"])
-        if bool(problem_access.get("can_read")):
+        if can_problem_read:
             try:
                 revision = config.problem_package_service.published_revision(problem_id)
                 general_cfg = config.problem_package_service.published_config(revision)
@@ -172,6 +198,7 @@ def _contest_problem_rows(contest_id: int, username: str, user_id: int) -> list[
                 "current_is_materialized": bool(readiness["current_is_materialized"]),
                 "statement_languages": list(readiness["statement_languages"]),
                 "readiness_reason": str(readiness["missing_reason"]),
+                "can_problem_read": can_problem_read,
                 "can_problem_write": can_problem_write,
                 "created_at": row["created_at"],
             }

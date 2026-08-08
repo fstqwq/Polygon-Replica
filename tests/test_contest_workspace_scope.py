@@ -373,6 +373,16 @@ class TestContestWorkspaceScope(ContestActionBase):
     def test_page_context_and_contest_overview_expose_final_hrefs(self) -> None:
         contest_slug, contest_id, actor_user_id = self.create_contest("context")
         self._add_default_problem(contest_id, actor_user_id)
+        locked_slug = f"alice/context-locked-{self.test_id}"
+        workspace_service.ensure_problem(locked_slug)
+        locked_problem_id = workspace_service.known_problem_id(locked_slug)
+        self.assertIsNotNone(locked_problem_id)
+        config.contest_service.add_problem(
+            contest_id,
+            "B",
+            int(locked_problem_id),
+            actor_user_id,
+        )
         cookie = self._session_cookie("alice")
 
         def page_payload(_request: Request, _template: str, context: dict) -> JSONResponse:
@@ -425,6 +435,9 @@ class TestContestWorkspaceScope(ContestActionBase):
             rows[0]["href"],
             f"/problems/alice/sample/statement?contest={contest_slug}",
         )
+        self.assertEqual(rows[1]["problem_slug"], locked_slug)
+        self.assertFalse(rows[1]["can_problem_read"])
+        self.assertIsNone(rows[1]["href"])
 
     def test_scoped_problem_html_renders_contest_navigation_and_scoped_urls(self) -> None:
         contest_slug, contest_id, actor_user_id = self.create_contest("ui")

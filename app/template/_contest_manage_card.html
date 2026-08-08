@@ -1,0 +1,14 @@
+<section class="action-card contest-manage-card" aria-label="Contest management">
+  <div class="workspace-card-head">
+    <h3>Contest</h3>
+  </div>
+  <nav class="contest-manage-nav" aria-label="Contest management pages">
+    {% for item in ctx.contest_manage_nav %}
+    <a
+      class="workspace-side-link contest-manage-link{% if item.active %} active{% endif %}"
+      href="{{ item.href }}"
+      {% if item.active %}aria-current="page"{% endif %}
+    >{{ item.label }}</a>
+    {% endfor %}
+  </nav>
+</section>

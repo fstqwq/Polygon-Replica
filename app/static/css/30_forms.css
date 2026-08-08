@@ -807,6 +807,13 @@ textarea.textarea-md {
   white-space: nowrap;
 }
 
+.problem-list-table .problem-list-slug-disabled,
+.problem-list-table .problem-list-slug-disabled:hover {
+  color: var(--muted);
+  cursor: not-allowed;
+  text-decoration: none;
+}
+
 .table-base tbody tr:nth-child(even) td {
   background: var(--table-row-alt);
 }

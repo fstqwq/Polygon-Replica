@@ -1,4 +1,5 @@
 {% macro problem_slug_link(href, slug_owner, slug_leaf, owner_prefix_chars) -%}
+{% if href %}
 <a
   class="problem-slug-link problem-list-slug-link"
   href="{{ href }}"
@@ -7,4 +8,15 @@
   <span class="problem-list-slug-owner">{{ slug_owner }}/</span>
   <span class="problem-list-slug-leaf">{{ slug_leaf }}</span>
 </a>
+{% else %}
+<span
+  class="problem-slug-link problem-list-slug-link problem-list-slug-disabled"
+  style="--problem-owner-prefix-ch: {{ owner_prefix_chars }}"
+  aria-disabled="true"
+  title="No problem access"
+>
+  <span class="problem-list-slug-owner">{{ slug_owner }}/</span>
+  <span class="problem-list-slug-leaf">{{ slug_leaf }}</span>
+</span>
+{% endif %}
 {%- endmacro %}

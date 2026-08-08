@@ -233,11 +233,15 @@ def add_contest_problem_hrefs(
     result: list[dict[str, object]] = []
     for row in rows:
         item = dict(row)
-        item["href"] = build_contest_problem_href(
-            request,
-            problem_slug=str(row["problem_slug"]),
-            contest_slug=contest_slug,
-            section="statement",
+        item["href"] = (
+            build_contest_problem_href(
+                request,
+                problem_slug=str(row["problem_slug"]),
+                contest_slug=contest_slug,
+                section="statement",
+            )
+            if bool(row["can_problem_read"])
+            else None
         )
         result.append(item)
     return result

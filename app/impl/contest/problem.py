@@ -48,6 +48,25 @@ def contest_problems_page(request: Request, contest: str, user: Annotated[str, D
         limit=int(_C.API_PROBLEMS_LIST_LIMIT),
         query=query,
     )
+    available_display_rows: list[dict[str, object]] = []
+    for row in available_rows:
+        slug_owner, _separator, slug_leaf = row["problem_slug"].partition("/")
+        available_display_rows.append(
+            {
+                **row,
+                "slug_owner": slug_owner,
+                "slug_leaf": slug_leaf,
+                "href": str(request.url_for("problem_statement", problem=row["problem_slug"])),
+            }
+        )
+    owner_prefix_chars = max(
+        (len(str(row["slug_owner"])) + 1 for row in rows),
+        default=0,
+    )
+    available_owner_prefix_chars = max(
+        (len(str(row["slug_owner"])) + 1 for row in available_display_rows),
+        default=0,
+    )
     latest_job = config.contest_service.load_job(contest_id, job_id)
     return template_response(
         request,
@@ -56,7 +75,9 @@ def contest_problems_page(request: Request, contest: str, user: Annotated[str, D
             "ctx": ctx,
             "query": query,
             "problem_rows": rows,
-            "available_rows": available_rows,
+            "available_rows": available_display_rows,
+            "owner_prefix_chars": owner_prefix_chars,
+            "available_owner_prefix_chars": available_owner_prefix_chars,
             "latest_job": latest_job,
         },
     )
