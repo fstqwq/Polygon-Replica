@@ -3,7 +3,7 @@
 {% block content %}
 <h1 class="page-title">Workspace</h1>
 {% include "_flash_message.html" %}
-{% set sudo_popup_next = '/problems/' ~ ctx.problem.slug ~ '/workspace?sudo_popup_done=1' %}
+{% set sudo_popup_next = problem_href('problem_workspace', query={'sudo_popup_done': 1}) %}
 {% if ctx.workspace_has_merge_undo %}
 {% set merge_affected_count = ctx.workspace_merge_result.get('affected_count', 0) | int %}
 <section class="workspace-merge-result" aria-label="Workspace update result">
@@ -17,7 +17,7 @@
   </div>
   <div class="workspace-merge-result-actions">
     {% if change_rows %}<a class="button-link" href="#file-changes">Review changed files</a>{% endif %}
-    <form class="inline-form" method="post" action="/problems/{{ ctx.problem.slug }}/merge/undo" data-confirm-message="Restore {{ merge_affected_count }} file{% if merge_affected_count != 1 %}s{% endif %} from before this update? Undo is only available until the updated files are edited or published.">
+    <form class="inline-form" method="post" action="{{ problem_href('merge_undo') }}" data-confirm-message="Restore {{ merge_affected_count }} file{% if merge_affected_count != 1 %}s{% endif %} from before this update? Undo is only available until the updated files are edited or published.">
       <button class="btn" type="submit">Undo this update</button>
     </form>
   </div>
@@ -33,7 +33,7 @@
     <p>Base <strong>{{ ('v' ~ local_rev_raw) if local_rev_raw is not none else 'no revision' }}</strong> / Upstream <strong>{{ ('v' ~ published_rev_raw) if published_rev_raw is not none else 'none' }}</strong></p>
 
     {% if ctx.workspace_needs_update %}
-    <form method="post" action="/problems/{{ ctx.problem.slug }}/merge/start">
+    <form method="post" action="{{ problem_href('merge_start') }}">
       <button class="btn primary-action" type="submit" {% if not ctx.access.can_write %}disabled title="{{ ctx.access.write_block_reason }}"{% endif %}>Review published changes</button>
     </form>
     {% endif %}
@@ -42,7 +42,7 @@
     {% if ctx.workspace_needs_update %}
     <p class="warn">A newer published revision exists. Review it before publishing.</p>
     {% endif %}
-    <form class="form-row" method="post" action="/problems/{{ ctx.problem.slug }}/revision/commit">
+    <form class="form-row" method="post" action="{{ problem_href('revision_commit') }}">
       <label for="revision-message">Message</label>
       <input id="revision-message" name="message" required />
       <button class="btn{% if not ctx.workspace_needs_update %} primary-action{% endif %}" type="submit" {% if not ctx.access.can_write or ctx.workspace_needs_update %}disabled title="{{ ctx.access.write_block_reason if not ctx.access.can_write else 'Review the published changes first' }}"{% endif %}>Publish new revision</button>
@@ -61,7 +61,7 @@
         <form
           class="form-stack danger-zone-delete"
           method="post"
-          action="/problems/{{ ctx.problem.slug }}/problem/delete"
+          action="{{ problem_href('problem_delete') }}"
           data-confirm-message="Delete problem {{ ctx.problem.slug }} permanently? Repository, workspaces and artifacts will be removed; workspace changes will be lost."
           data-sudo-gated="1"
           data-sudo-required="{{ '0' if has_destructive_sudo else '1' }}"
@@ -81,7 +81,7 @@
     <div class="workspace-section-head">
       <h2>File Changes</h2>
       {% if ctx.access.can_write %}
-      <form class="inline-form workspace-section-head-action" method="post" action="/problems/{{ ctx.problem.slug }}/workspace/delete" data-confirm-message="Delete workspace files for {{ ctx.problem.slug }}? File changes will be lost.">
+      <form class="inline-form workspace-section-head-action" method="post" action="{{ problem_href('workspace_delete') }}" data-confirm-message="Delete workspace files for {{ ctx.problem.slug }}? File changes will be lost.">
         <button class="btn danger-link" type="submit">Delete Workspace Files</button>
       </form>
       {% endif %}
@@ -90,7 +90,7 @@
     <div class="workspace-diff-files">
       {% for row in change_rows %}
       {% set active = (row.link_path == selected_path) %}
-      <a class="workspace-diff-file workspace-diff-file-{{ row.kind }} {{ 'active' if active else '' }}" href="/problems/{{ ctx.problem.slug }}/workspace?path={{ row.link_path }}">
+      <a class="workspace-diff-file workspace-diff-file-{{ row.kind }} {{ 'active' if active else '' }}" href="{{ problem_href('problem_workspace', query={'path': row.link_path}) }}">
         <code class="change-code">{{ row.code }}</code><span>{{ row.path }}</span>
       </a>
       {% endfor %}
@@ -98,7 +98,7 @@
     {% if selected_path %}
     <p>Selected: <code>{{ selected_path }}</code></p>
     {% if ctx.access.can_write %}
-    <form class="inline-form" method="post" action="/problems/{{ ctx.problem.slug }}/git/discard-path" data-confirm-message="Discard workspace changes for {{ selected_path }}?">
+    <form class="inline-form" method="post" action="{{ problem_href('git_discard_path') }}" data-confirm-message="Discard workspace changes for {{ selected_path }}?">
       <input type="hidden" name="path" value="{{ selected_path }}" />
       <button class="btn danger-link" type="submit">Discard file changes</button>
     </form>

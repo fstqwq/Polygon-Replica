@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import TypedDict, cast
-from urllib.parse import quote_plus
 
 from app.impl.runtime.config import config
 from app.impl.workspace.context_operation import dedupe_preserve_order
@@ -15,7 +14,6 @@ from app.service.verification.task_store import VerificationTaskStore
 
 class RuntimeProgress(TypedDict):
     detail: str
-    log_href: str
 
 
 def _count_label(count: int, singular: str, plural: str | None = None) -> str:
@@ -52,14 +50,11 @@ def _build_validated_count_from_log(validate_log: Path) -> int:
 def _verification_runtime_progress(
     *,
     problem_id: int,
-    problem_slug: str,
-    username: str,
     verification_id: str,
     event_status: str,
 ) -> RuntimeProgress:
     result: RuntimeProgress = {
         "detail": "",
-        "log_href": "",
     }
     if (not verification_id) or (not is_canonical_artifact_id(verification_id)):
         return result
@@ -94,7 +89,6 @@ def _verification_runtime_progress(
     generate_log = logs_dir / "generate.log"
     validate_log = logs_dir / "validate.log"
     solve_log = logs_dir / "solve.log"
-    failure_log = logs_dir / "failure.log"
     compile_log = logs_dir / "compile.log"
     tests_total = _verification_tests_total(verification_detail)
     verification_rows = config.verification_task_store.list_rows(verification_id)
@@ -107,9 +101,6 @@ def _verification_runtime_progress(
     )
     validated_count = _build_validated_count_from_log(validate_log)
 
-    def _log_href(name: str) -> str:
-        return f"/problems/{problem_slug}/artifacts/{verification_id}/logs/{name}"
-
     if event_status == "running":
         if verification_status in {"queued", "pending"}:
             result["detail"] = "verification queued"
@@ -120,8 +111,6 @@ def _verification_runtime_progress(
         sanity_status = str(verification_detail.get("sanity_status") or "")
         if sanity_status in {"pending", "running"}:
             result["detail"] = "sanity checks running"
-            if validate_log.exists() and validate_log.is_file() and (not validate_log.is_symlink()):
-                result["log_href"] = _log_href("validate.log")
             return result
         if solve_log.exists() and solve_log.is_file() and (not solve_log.is_symlink()):
             if tests_total > 0:
@@ -132,25 +121,21 @@ def _verification_runtime_progress(
                     result["detail"] = f"generate outputs {completed_outputs}/{tests_total}"
             else:
                 result["detail"] = "generate outputs running"
-            result["log_href"] = _log_href("solve.log")
             return result
         if validate_log.exists() and validate_log.is_file() and (not validate_log.is_symlink()):
             if tests_total > 0:
                 result["detail"] = f"validate inputs {min(validated_count, tests_total)}/{tests_total}"
             else:
                 result["detail"] = "validate inputs running"
-            result["log_href"] = _log_href("validate.log")
             return result
         if generate_log.exists() and generate_log.is_file() and (not generate_log.is_symlink()):
             if tests_total > 0:
                 result["detail"] = f"generate inputs {tests_total} prepared"
             else:
                 result["detail"] = "generate inputs running"
-            result["log_href"] = _log_href("generate.log")
             return result
         if compile_log.exists() and compile_log.is_file() and (not compile_log.is_symlink()):
             result["detail"] = "compile running"
-            result["log_href"] = _log_href("compile.log")
             return result
         result["detail"] = "verification running"
         return result
@@ -171,27 +156,19 @@ def _verification_runtime_progress(
                 detail = f"{failed_step} failed"
         if detail:
             result["detail"] = detail
-        if failure_log.exists() and failure_log.is_file() and (not failure_log.is_symlink()):
-            result["log_href"] = _log_href("failure.log")
-    if event_status == "failed":
-        record = config.verification_service.verification_record(verification_id)
-        detail = str((record or {}).get("fail_reason") or verification_detail.get("error") or "").strip()
-        if detail:
-            result["detail"] = detail
     return result
 
-def _verification_href(
+def _verification_detail_available(
     *,
     problem_id: int,
-    problem_slug: str,
-    username: str,
     verification_id: str,
-) -> str:
+) -> bool:
     if (not verification_id) or (not is_canonical_artifact_id(verification_id)):
-        return ""
-    if not config.verification_service.has_export_detail_verification(int(problem_id), verification_id):
-        return ""
-    return f"/problems/{problem_slug}/run/details?verification_id={quote_plus(verification_id)}"
+        return False
+    return config.verification_service.has_export_detail_verification(
+        int(problem_id),
+        verification_id,
+    )
 
 def _rerun_solution_paths_from_verification(
     *,

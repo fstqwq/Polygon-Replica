@@ -4,7 +4,7 @@
 <div class="page-title-inline component-page-title">
   <h1 class="page-title">Generators</h1>
   {% if source_rows and not new_source %}
-  <a class="button-link" href="/problems/{{ ctx.problem.slug }}/generators?new=generator.cpp">Add generator</a>
+  <a class="button-link" href="{{ problem_href('problem_generators', query={'new': 'generator.cpp'}) }}">Add generator</a>
   {% endif %}
 </div>
 {% include "_flash_message.html" %}
@@ -22,7 +22,7 @@
       <tbody>
       {% for row in source_rows %}
       <tr{% if row.path == selected_source and selected_exists %} class="is-selected"{% endif %}>
-        <td><a href="/problems/{{ ctx.problem.slug }}/generators?path={{ row.path }}"><code>{{ row.path }}</code></a></td>
+        <td><a href="{{ problem_href('problem_generators', query={'path': row.path}) }}"><code>{{ row.path }}</code></a></td>
         <td>{{ row.reference_count if row.reference_count else "Not used" }}</td>
       </tr>
       {% endfor %}
@@ -41,13 +41,13 @@
     </div>
     {% if selected_exists %}
     {{ rename_source_form(
-      "/problems/" ~ ctx.problem.slug ~ "/generators/rename-source",
+      problem_href('generator_rename_source'),
       selected_source,
       "generator-rename-path"
     ) }}
     {% endif %}
     {{ source_editor_form(
-      "/problems/" ~ ctx.problem.slug ~ "/generators/save-source",
+      problem_href('generator_save_source'),
       selected_source,
       repo_content,
       repo_content_truncated,
@@ -69,7 +69,7 @@
     </div>
   </div>
   {{ source_editor_form(
-    "/problems/" ~ ctx.problem.slug ~ "/generators/save-source",
+    problem_href('generator_save_source'),
     selected_source,
     repo_content,
     repo_content_truncated,
@@ -87,7 +87,7 @@
     <h2>No generators</h2>
     <p class="muted">Add a source when tests need generated input.</p>
   </div>
-  <a class="button-link primary-action" href="/problems/{{ ctx.problem.slug }}/generators?new=generator.cpp">Add generator</a>
+  <a class="button-link primary-action" href="{{ problem_href('problem_generators', query={'new': 'generator.cpp'}) }}">Add generator</a>
 </section>
 {% endif %}
 {% endblock %}

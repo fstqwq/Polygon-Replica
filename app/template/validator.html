@@ -13,13 +13,13 @@
     </div>
     {% if validator_status.repo_source_exists %}
     {{ rename_source_form(
-      "/problems/" ~ ctx.problem.slug ~ "/validator/rename-source",
+      problem_href('validator_rename_source'),
       repo_source,
       "validator-rename-path"
     ) }}
     {% endif %}
     {{ source_editor_form(
-      "/problems/" ~ ctx.problem.slug ~ "/validator/save-source",
+      problem_href('validator_save_source'),
       repo_source,
       repo_content,
       repo_content_truncated,

@@ -39,12 +39,12 @@
     <h2>Editor</h2>
     <div class="inline-meta-row">
       <p><strong>File:</strong> <code>{{ selected }}</code></p>
-      <a class="button-link" href="/problems/{{ ctx.problem.slug }}/files/download?path={{ selected }}">Download file</a>
+      <a class="button-link" href="{{ problem_href('files_download', query={'path': selected}) }}">Download file</a>
     </div>
     {% if selected_can_restore_default %}
     <div class="inline-meta-row">
       <p class="muted">Restore the canonical template. Current file contents will be overwritten.</p>
-      <form class="inline-action" method="post" action="/problems/{{ ctx.problem.slug }}/files/restore-default" data-confirm-message="Restore the default contents of {{ selected }}? Current file contents will be overwritten.">
+      <form class="inline-action" method="post" action="{{ problem_href('files_restore_default') }}" data-confirm-message="Restore the default contents of {{ selected }}? Current file contents will be overwritten.">
         <input type="hidden" name="path" value="{{ selected }}" />
         <input type="hidden" name="dir" value="{{ browse_dir }}" />
         <button class="btn" type="submit" {% if not ctx.access.can_write %}disabled title="{{ ctx.access.write_block_reason }}"{% endif %}>Restore default</button>
@@ -54,7 +54,7 @@
     {% if selected_missing %}
     <p class="flash">Create this file to start.</p>
     {% if selected_template_kind %}
-    <form class="form-row files-template-form" method="post" action="/problems/{{ ctx.problem.slug }}/files/create-template">
+    <form class="form-row files-template-form" method="post" action="{{ problem_href('files_create_template') }}">
       <input type="hidden" name="path" value="{{ selected }}" />
       <input type="hidden" name="kind" value="{{ selected_template_kind }}" />
       <input type="hidden" name="dir" value="{{ browse_dir }}" />
@@ -68,7 +68,7 @@
     <p class="flash">Binary file is read-only in text editor.</p>
     {% if selected_is_pdf %}
     <p class="muted">PDF preview:</p>
-    <iframe class="pdf-preview files-pdf-preview" src="/problems/{{ ctx.problem.slug }}/files/download?path={{ selected }}"></iframe>
+    <iframe class="pdf-preview files-pdf-preview" src="{{ problem_href('files_download', query={'path': selected}) }}"></iframe>
     {% else %}
     <p class="muted">Use download or upload for this binary file{% if selected_media_type %} ({{ selected_media_type }}){% endif %}.</p>
     {% endif %}
@@ -82,7 +82,7 @@
       {% if content_truncated %}
       <p><em>Showing first {{ content_char_limit }} characters; Save is disabled for truncated file views.</em></p>
       {% endif %}
-      <form method="post" action="/problems/{{ ctx.problem.slug }}/files/save">
+      <form method="post" action="{{ problem_href('files_save') }}">
         <input type="hidden" name="path" value="{{ selected }}" />
         <input type="hidden" name="dir" value="{{ browse_dir }}" />
         <textarea
@@ -102,7 +102,7 @@
     <div class="form-stack selected-path-actions-list">
       <div class="form-block">
         <h3>Create File</h3>
-        <form class="form-stack selected-path-form" method="post" action="/problems/{{ ctx.problem.slug }}/files/new">
+        <form class="form-stack selected-path-form" method="post" action="{{ problem_href('files_new') }}">
           <div class="form-row">
             <label for="create-file-path">Path</label>
             <input id="create-file-path" name="path" value="{{ (browse_dir ~ '/' if browse_dir else (selected_parent ~ '/' if selected_parent else '')) ~ 'new-file.txt' }}" />
@@ -113,7 +113,7 @@
       </div>
       <div class="form-block">
         <h3>Upload File</h3>
-        <form class="form-stack selected-path-form" method="post" enctype="multipart/form-data" action="/problems/{{ ctx.problem.slug }}/files/upload">
+        <form class="form-stack selected-path-form" method="post" enctype="multipart/form-data" action="{{ problem_href('files_upload') }}">
           <div class="form-row">
             <label for="upload-target-path">Target path</label>
             <input id="upload-target-path" name="path" value="{{ selected }}" />
@@ -131,7 +131,7 @@
         <div class="form-stack selected-path-actions-list">
           <div class="form-block">
             <h3>Rename Path</h3>
-            <form class="form-stack selected-path-form" method="post" action="/problems/{{ ctx.problem.slug }}/files/rename">
+            <form class="form-stack selected-path-form" method="post" action="{{ problem_href('files_rename') }}">
               <div class="form-row">
                 <label for="rename-old-path">Current path</label>
                 <input id="rename-old-path" name="old_path" value="{{ selected }}" />
@@ -146,7 +146,7 @@
           </div>
           <div class="form-block">
             <h3>Delete Path</h3>
-            <form class="form-stack selected-path-form" method="post" action="/problems/{{ ctx.problem.slug }}/files/delete" data-confirm-message="Delete path {{ selected }}? This cannot be undone; uncommitted changes will be lost.">
+            <form class="form-stack selected-path-form" method="post" action="{{ problem_href('files_delete') }}" data-confirm-message="Delete path {{ selected }}? This cannot be undone; uncommitted changes will be lost.">
               <div class="form-row">
                 <label for="delete-path">Target path</label>
                 <input id="delete-path" name="path" value="{{ selected }}" />

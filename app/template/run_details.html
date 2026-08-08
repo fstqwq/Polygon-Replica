@@ -34,7 +34,7 @@
         {% if cancel_available or (rerun_solution_paths and not detail_running) %}
         <div class="verification-detail-actions">
           {% if cancel_available %}
-          <form class="inline-form verification-inline-action" method="post" action="/problems/{{ ctx.problem.slug }}/run/cancel">
+          <form class="inline-form verification-inline-action" method="post" action="{{ problem_href('run_cancel') }}">
             <input type="hidden" name="verification_id" value="{{ cancel_verification_id }}" />
             <a href="#" class="linkish danger-link" data-submit-form="1">Cancel</a>
           </form>
@@ -43,7 +43,7 @@
           <form
             class="inline-form verification-inline-action"
             method="post"
-            action="/problems/{{ ctx.problem.slug }}/run/rejudge"
+            action="{{ problem_href('run_rejudge') }}"
             data-confirm-message="Rejudge without cache? This creates a new verification, deletes matching cached case results, and does not reuse cached results."
           >
             <input type="hidden" name="verification_id" value="{{ cancel_verification_id }}" />
@@ -83,7 +83,7 @@
   <div class="verification-detail-wrap{% if not detail_table_compact %} verification-detail-wrap-regular{% endif %}">
     <table
       class="verification-detail-table{% if detail_table_compact %} verification-detail-table-compact{% else %} verification-detail-table-regular{% endif %}"
-      data-run-details-fragment="/problems/{{ ctx.problem.slug }}/run/details/test-fragment"
+      data-run-details-fragment="{{ problem_href('run_details_test_fragment') }}"
       data-verification-id="{{ cancel_verification_id or '' }}"
     >
       <colgroup>
@@ -97,8 +97,8 @@
           <th class="verification-detail-index-head">#</th>
           {% for col in detail_columns %}
           <th class="{{ 'verification-detail-unexpected' if col.expected_mismatch else '' }}" {% if col.failure_display %}title="{{ col.failure_display }}"{% endif %}>
-            {% if col.source_href %}
-            <a href="{{ col.source_href }}" class="col-link"><span class="col-title">{{ col.title }}</span></a>
+            {% if col.source_path %}
+            <a href="{{ problem_href('solutions_editor_page' if col.source_section == 'solutions' else 'problem_files', query={'path': col.source_path}) }}" class="col-link"><span class="col-title">{{ col.title }}</span></a>
             {% else %}
             <span class="col-title">{{ col.title }}</span>
             {% endif %}
@@ -200,8 +200,8 @@
   <div class="compile-diagnostics-card">
     <div class="compile-diagnostics-head">
       <div>
-        {% if col.source_href %}
-        <a href="{{ col.source_href }}"><strong>{{ col.title }}</strong></a>
+        {% if col.source_path %}
+        <a href="{{ problem_href('solutions_editor_page' if col.source_section == 'solutions' else 'problem_files', query={'path': col.source_path}) }}"><strong>{{ col.title }}</strong></a>
         {% else %}
         <strong>{{ col.title }}</strong>
         {% endif %}
@@ -248,7 +248,7 @@
   {% elif verification_id or detail_task_counts %}
   <p class="muted">Test details appear as runs finish.</p>
   {% else %}
-  <p class="muted">Choose a <a href="/problems/{{ ctx.problem.slug }}/run">verification</a>.</p>
+  <p class="muted">Choose a <a href="{{ problem_href('problem_run') }}">verification</a>.</p>
   {% endif %}
 </section>
 <section>

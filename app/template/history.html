@@ -10,7 +10,7 @@
     <tr>
       <td><code>{{ ("v" ~ c.version) if c.version else "-" }}</code></td>
       <td>{{ c.subject }}</td><td>{{ c.author }}</td><td>{{ c.date|local_time }}</td>
-      <td><a href="/problems/{{ ctx.problem.slug }}/history?revision=v{{ c.version }}">View changes</a></td>
+      <td><a href="{{ problem_href('problem_history', query={'revision': 'v' ~ c.version}) }}">View changes</a></td>
     </tr>
     {% endfor %}
   </table>

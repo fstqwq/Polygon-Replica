@@ -4,16 +4,6 @@
 {% include "_flash_message.html" %}
 {% set editor_error = message if message_level == 'error' else '' %}
 
-{% set expected_value = selected_entry.expected_behavior if selected_entry else "unknown" %}
-{% set expected_class = "tag-select-expected" %}
-{% if expected_value == "accepted" %}
-{% set expected_class = "tag-select-accepted" %}
-{% elif expected_value == "time_limit_exceeded" or expected_value == "tle_or_correct" %}
-{% set expected_class = "tag-select-time-limit-exceeded" %}
-{% elif expected_value == "unknown" %}
-{% set expected_class = "tag-select-neutral" %}
-{% endif %}
-
 <section class="component-workbench solution-editor-panel">
   <div class="component-workbench-head">
     <div>
@@ -21,7 +11,7 @@
     </div>
     {% if selected_exists %}<code class="component-workbench-path">{{ selected }}</code>{% endif %}
   </div>
-  <form id="solution-save-form" class="form-stack component-source-form" method="post" action="/problems/{{ ctx.problem.slug }}/solutions/save-source" data-code-editor-guard="1">
+  <form id="solution-save-form" class="form-stack component-source-form" method="post" action="{{ problem_href('solutions_save_source') }}" data-code-editor-guard="1">
     {% if selected_exists %}
     <input type="hidden" name="source_path" value="{{ selected }}" />
     {% else %}
@@ -34,7 +24,7 @@
       <label for="solution-expected-behavior">Expected</label>
       <select
         id="solution-expected-behavior"
-        class="tag-select {{ expected_class }}"
+        class="tag-select {{ selected_expected_behavior_class }}"
         name="expected_behavior"
         aria-label="Expected behavior for {{ selected }}"
       >
@@ -49,7 +39,7 @@
     {% endif %}
     <div class="form-row component-editor-actions">
       <button class="btn primary-action" id="solution-save-submit" type="submit">Save solution</button>
-      <a class="linkish" href="/problems/{{ ctx.problem.slug }}/solutions?path={{ selected }}">Back to solutions</a>
+      <a class="linkish" href="{{ problem_href('problem_solutions', query={'path': selected}) }}">Back to solutions</a>
     </div>
     <div id="solution-save-error" class="flash flash-inline component-editor-error" data-component-editor-error="1"{% if not editor_error %} hidden{% endif %}>{{ editor_error }}</div>
   </form>

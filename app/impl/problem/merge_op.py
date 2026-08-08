@@ -4,14 +4,17 @@ import mimetypes
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, cast
 
 from fastapi import Depends, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
 
 from app.impl.auth.session import require_session_user
 from app.impl.auth.shared import json_error_response, redirect_response, template_response
-from app.impl.contest.workspace_scope import contest_workspace_context_from_request
+from app.impl.contest.workspace_scope import (
+    contest_workspace_context_from_request,
+    problem_href_builder,
+)
 from app.impl.runtime.config import config
 from app.impl.workspace.access import require_write_access
 from app.impl.workspace.context_operation import audit
@@ -210,7 +213,22 @@ def merge_compare(
             entry_id,
             target,
         )
-        return JSONResponse(asdict(comparison))
+        payload = asdict(comparison)
+        href_builder = problem_href_builder(request, problem)
+        for side_name in ("left", "right"):
+            side = cast(dict[str, object], payload[side_name])
+            open_side = str(side.pop("open_side") or "")
+            side["open_url"] = (
+                href_builder(
+                    "merge_file",
+                    preview_id=preview_id,
+                    entry_id=entry_id,
+                    query={"side": open_side},
+                )
+                if open_side
+                else ""
+            )
+        return JSONResponse(payload)
     except HTTPException:
         raise
     except Exception as exc:

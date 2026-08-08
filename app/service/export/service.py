@@ -144,6 +144,20 @@ class ExportService:
             include_all=include_all,
         )
 
+    def latest_succeeded_workspace_export_job(
+        self,
+        problem_id: int,
+        workspace_id: int,
+        actor_user_id: int,
+        source_commit: str,
+    ) -> ExportJobRow | None:
+        return self._store.latest_succeeded_workspace_export_job(
+            int(problem_id),
+            int(workspace_id),
+            int(actor_user_id),
+            source_commit,
+        )
+
     def export_job(
         self,
         problem_id: int,

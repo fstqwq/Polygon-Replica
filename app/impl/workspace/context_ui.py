@@ -3,7 +3,6 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 from typing import Annotated, TypedDict, cast
-from urllib.parse import quote
 
 from fastapi import Depends, HTTPException, Request
 
@@ -440,27 +439,32 @@ def _build_problem_nav_status(ctx: dict) -> dict[str, dict[str, object]]:
     else:
         export_nav = {'text': 'missing', 'danger': True}
     if workspace_head and workspace_id > 0 and problem_id > 0:
-        current_export = config.export_service.latest_workspace_export_for_source(
+        actor_user_id = _to_int(_row_value(cast(dict[str, object], ctx['user']), 'id', 0))
+        current_export = config.export_service.latest_succeeded_workspace_export_job(
             problem_id,
             workspace_id,
+            actor_user_id,
             workspace_head,
         )
-        if current_export is not None:
-            export_id = cast(str, current_export['id'])
-            export_filename = Path(cast(str, current_export['filename'])).name
+        if (
+            current_export is not None
+            and current_export['export_id']
+            and current_export['filename']
+        ):
+            export_id = current_export['export_id']
+            export_filename = Path(current_export['filename']).name
             problem_slug = cast(str | None, _row_value(problem_row, 'slug', '')) or ''
-            archive_path = config.export_service.export_archive_path(
+            if config.export_service.export_archive_path(
                 problem_id,
                 workspace_id,
                 export_id,
                 problem_slug,
                 export_filename,
-            )
-            if archive_path is not None:
-                export_nav['download_href'] = (
-                    f'/problems/{quote(problem_slug, safe="/")}/exports/'
-                    f'{quote(export_id, safe="")}/{quote(export_filename, safe="")}'
-                )
+            ) is not None:
+                export_nav['download'] = {
+                    'export_id': export_id,
+                    'filename': export_filename,
+                }
     nav['export'] = export_nav
     access_role = cast(str | None, cast(dict[str, object], ctx['access']).get('role')) or 'none'
     nav['access'] = {'text': access_role, 'danger': False}

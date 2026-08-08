@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import re
+from html.parser import HTMLParser
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -15,6 +17,7 @@ from starlette.responses import JSONResponse
 from app.impl.contest.overview import contest_overview_page
 from app.impl.contest.workspace_scope import (
     ContestWorkspaceScope,
+    ProblemHrefBuilder,
     apply_problem_contest_scope,
     build_contest_problem_href,
     problem_section_for_route,
@@ -23,6 +26,28 @@ from app.impl.contest.workspace_scope import (
 from app.route.problem_scoped_router import ProblemScopedRoute
 from tests.contest_support import ContestActionBase
 from tests.ui_support import AUTH_COOKIE_NAME, config, workspace_service
+
+
+class _HtmlElements(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__()
+        self.elements: list[tuple[str, dict[str, str]]] = []
+
+    def handle_starttag(
+        self,
+        tag: str,
+        attrs: list[tuple[str, str | None]],
+    ) -> None:
+        self.elements.append(
+            (tag, {key: value or "" for key, value in attrs})
+        )
+
+    def handle_startendtag(
+        self,
+        tag: str,
+        attrs: list[tuple[str, str | None]],
+    ) -> None:
+        self.handle_starttag(tag, attrs)
 
 
 def _app_request(
@@ -214,6 +239,37 @@ class TestContestWorkspaceScope(ContestActionBase):
         self.assertNotIn(" ", href)
         self.assertIn("%2525", href)
 
+        scoped_builder = ProblemHrefBuilder(
+            request=request,
+            problem_slug=problem_slug,
+            contest_slug=contest_slug,
+        )
+        detail_href = scoped_builder(
+            "files_download",
+            query={"path": "notes/a +&?#%.txt", "line": 7},
+            fragment="selected row",
+        )
+        detail = urlsplit(detail_href)
+        self.assertEqual(
+            unquote(detail.path),
+            f"/problems/{problem_slug}/files/download",
+        )
+        self.assertEqual(
+            parse_qs(detail.query),
+            {
+                "contest": [contest_slug],
+                "line": ["7"],
+                "path": ["notes/a +&?#%.txt"],
+            },
+        )
+        self.assertEqual(unquote(detail.fragment), "selected row")
+        self.assertEqual(detail.query.count("contest="), 1)
+        with self.assertRaisesRegex(ValueError, "managed by the builder"):
+            scoped_builder(
+                "problem_files",
+                query={"contest": "different"},
+            )
+
     def test_detail_section_mapping_and_unknown_fallback(self) -> None:
         expectations = {
             "/problems/{problem:path}/preview/status": "statement",
@@ -369,6 +425,155 @@ class TestContestWorkspaceScope(ContestActionBase):
             rows[0]["href"],
             f"/problems/alice/sample/statement?contest={contest_slug}",
         )
+
+    def test_scoped_problem_html_renders_contest_navigation_and_scoped_urls(self) -> None:
+        contest_slug, contest_id, actor_user_id = self.create_contest("ui")
+        self._add_default_problem(contest_id, actor_user_id, idx="A")
+        _contest_problem_id, _problem_id, peer_slug = self.add_owned_problem(
+            contest_id,
+            actor_user_id,
+            "BB",
+            "ui-peer",
+        )
+        locked_slug = f"alice/ui-locked-{self.test_id}"
+        workspace_service.ensure_problem(locked_slug)
+        locked_problem_id = workspace_service.known_problem_id(locked_slug)
+        self.assertIsNotNone(locked_problem_id)
+        config.contest_service.add_problem(
+            contest_id,
+            "CCC",
+            int(locked_problem_id),
+            actor_user_id,
+        )
+        cookie = self._session_cookie("alice")
+
+        from app.main import app
+
+        with TestClient(app) as client:
+            scoped = client.get(
+                f"/problems/alice/sample/statement?contest={contest_slug}",
+                headers={"cookie": cookie},
+            )
+            unscoped = client.get(
+                "/problems/alice/sample/statement",
+                headers={"cookie": cookie},
+            )
+
+        self.assertEqual(scoped.status_code, 200, scoped.text)
+        document = _HtmlElements()
+        document.feed(scoped.text)
+
+        contest_main = next(
+            attrs
+            for tag, attrs in document.elements
+            if tag == "a" and attrs.get("data-main") == "contests"
+        )
+        problems_main = next(
+            attrs
+            for tag, attrs in document.elements
+            if tag == "a" and attrs.get("data-main") == "problems"
+        )
+        self.assertEqual(contest_main.get("aria-current"), "page")
+        self.assertIn("active", contest_main.get("class", "").split())
+        self.assertNotIn("active", problems_main.get("class", "").split())
+
+        cards = [
+            attrs
+            for tag, attrs in document.elements
+            if tag == "section"
+            and "contest-workspace-card" in attrs.get("class", "").split()
+        ]
+        self.assertEqual(len(cards), 1)
+        self.assertTrue(
+            any(
+                attrs.get("href") == f"/contests/{contest_slug}/overview"
+                for tag, attrs in document.elements
+                if tag == "a"
+            )
+        )
+
+        controls = [
+            (tag, attrs)
+            for tag, attrs in document.elements
+            if "contest-problem-link" in attrs.get("class", "").split()
+        ]
+        self.assertEqual(len(controls), 3)
+        active = next(
+            attrs
+            for _tag, attrs in controls
+            if "active" in attrs.get("class", "").split()
+        )
+        self.assertEqual(active.get("aria-current"), "page")
+        self.assertEqual(
+            parse_qs(urlsplit(active["href"]).query),
+            {"contest": [contest_slug]},
+        )
+        peer = next(
+            attrs
+            for tag, attrs in controls
+            if tag == "a" and peer_slug in attrs.get("title", "")
+        )
+        self.assertEqual(
+            peer["href"],
+            f"/problems/{peer_slug}/statement?contest={contest_slug}",
+        )
+        disabled_tag, disabled = next(
+            (tag, attrs)
+            for tag, attrs in controls
+            if attrs.get("aria-disabled") == "true"
+        )
+        self.assertEqual(disabled_tag, "span")
+        self.assertNotIn("href", disabled)
+
+        url_attributes = {
+            "href",
+            "action",
+            "formaction",
+            "src",
+            "data-run-details-fragment",
+            "data-compare-url",
+        }
+        for _tag, attrs in document.elements:
+            for attribute in url_attributes:
+                value = attrs.get(attribute, "")
+                if not value.startswith("/problems/"):
+                    continue
+                with self.subTest(attribute=attribute, value=value):
+                    self.assertEqual(
+                        parse_qs(urlsplit(value).query).get("contest"),
+                        [contest_slug],
+                    )
+
+        self.assertEqual(unscoped.status_code, 200, unscoped.text)
+        self.assertNotIn("contest-workspace-card", unscoped.text)
+        unscoped_document = _HtmlElements()
+        unscoped_document.feed(unscoped.text)
+        unscoped_problems_main = next(
+            attrs
+            for tag, attrs in unscoped_document.elements
+            if tag == "a" and attrs.get("data-main") == "problems"
+        )
+        self.assertEqual(unscoped_problems_main.get("aria-current"), "page")
+
+    def test_problem_templates_do_not_construct_problem_urls(self) -> None:
+        template_root = Path("app/template")
+        route_names: set[str] = set()
+        for template_path in template_root.glob("*.html"):
+            source = template_path.read_text(encoding="utf-8")
+            route_names.update(re.findall(r"problem_href\('([^']+)'", source))
+            with self.subTest(template=template_path.name):
+                self.assertNotIn("/problems/{{ ctx.problem.slug }}", source)
+                self.assertNotIn('"/problems/" ~ ctx.problem.slug', source)
+
+        from app.main import app
+
+        registered_names = {
+            route.name
+            for route in app.routes
+            if isinstance(route, APIRoute)
+        }
+        self.assertTrue(route_names)
+        self.assertEqual(route_names - registered_names, set())
 
     def test_json_redirect_and_route_contract(self) -> None:
         contest_slug, contest_id, actor_user_id = self.create_contest("contract")

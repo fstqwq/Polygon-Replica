@@ -27,7 +27,7 @@ class TestMergeDiff(unittest.TestCase):
             exists=path is not None,
             size=path.stat().st_size if path is not None else 0,
             executable=executable,
-            open_url=f"/{label}" if path is not None else "",
+            open_side=label if path is not None else "",
         )
 
     def _compare(
@@ -105,7 +105,7 @@ class TestMergeDiff(unittest.TestCase):
     def test_size_limit_does_not_open_file(self) -> None:
         payload = self.root / "large.txt"
         payload.write_text("small", encoding="utf-8")
-        oversized = MergeDiffSide("current", True, MAX_DIFF_BYTES + 1, False, "/current")
+        oversized = MergeDiffSide("current", True, MAX_DIFF_BYTES + 1, False, "current")
         missing = MergeDiffSide("latest", False, 0, False, "")
 
         with patch.object(Path, "read_bytes", side_effect=AssertionError("file was opened")):

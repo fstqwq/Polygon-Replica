@@ -598,123 +598,6 @@
       .replace(/[:|]/g, "_");
   }
 
-  function initNavActiveState() {
-    var problemNav = document.querySelector("[data-problem-nav='1']");
-    if (!problemNav) return;
-    var pageLinks = problemNav.querySelectorAll("a[data-page]");
-    if (!pageLinks.length) return;
-
-    var parts = window.location.pathname
-      .split("/")
-      .map(function (item) {
-        return String(item || "").trim();
-      })
-      .filter(function (item) {
-        return item.length > 0;
-      });
-    var page = "statement";
-    var rawPageToken = "";
-    var qp = new URLSearchParams(window.location.search);
-
-    var allowed = {
-      statement: 1,
-      files: 1,
-      generators: 1,
-      checker: 1,
-      interactor: 1,
-      validator: 1,
-      solutions: 1,
-      workspace: 1,
-      access: 1,
-      tests: 1,
-      run: 1,
-      export: 1,
-      settings: 1,
-    };
-
-    if (window.location.pathname.indexOf("/problems/") === 0) {
-      for (var idx = parts.length - 1; idx >= 0; idx -= 1) {
-        var token = parts[idx];
-        var prev = idx > 0 ? parts[idx - 1] : "";
-        if ((token === "details" || token === "test-fragment") && prev === "run") {
-          rawPageToken = "run";
-          break;
-        }
-        if (token === "preview") {
-          rawPageToken = "preview";
-          break;
-        }
-        if (token === "git" || token === "history") {
-          rawPageToken = "workspace";
-          break;
-        }
-        if (token === "artifacts") {
-          rawPageToken = "tests";
-          break;
-        }
-        if (token === "runs") {
-          rawPageToken = "run";
-          break;
-        }
-        if (allowed[token]) {
-          rawPageToken = token;
-          break;
-        }
-      }
-    }
-    if (!rawPageToken) rawPageToken = "statement";
-    page = rawPageToken;
-
-    if (page === "artifacts") page = "tests";
-    if (page === "runs") page = "run";
-    if (page === "git" || page === "history") page = "workspace";
-    if (page === "preview") page = "statement";
-
-    if (page === "files") {
-      var selectedPath = qp.get("path") || "";
-      if (selectedPath.indexOf("checkers/") === 0) page = "checker";
-      else if (selectedPath.indexOf("interactors/") === 0) page = "interactor";
-      else if (selectedPath.indexOf("validators/") === 0) page = "validator";
-      else if (selectedPath.indexOf("solutions/") === 0) page = "solutions";
-      else if (selectedPath === "generators" || selectedPath.indexOf("generators/") === 0) page = "generators";
-    }
-
-    if (!allowed[page]) page = "statement";
-
-    if (window.location.pathname.indexOf("/problems/") === 0) {
-      document.querySelectorAll("a[data-main]").forEach(function (el) {
-        if (el.getAttribute("data-main") === "problems") {
-          el.classList.add("active");
-        }
-      });
-    }
-    pageLinks.forEach(function (el) {
-      if (el.getAttribute("data-page") === page) {
-        el.classList.add("active");
-        el.setAttribute("aria-current", "page");
-      }
-    });
-    problemNav.querySelectorAll(".problem-section-tab").forEach(function (item) {
-      var pageLink = item.matches("a[data-page]") ? item : item.querySelector("a[data-page]");
-      if (pageLink && pageLink.classList.contains("active")) {
-        item.classList.add("active");
-      }
-    });
-    problemNav.querySelectorAll(".problem-section-action-tab").forEach(function (item) {
-      var pageLink = item.querySelector("a[data-page]");
-      if (pageLink && pageLink.classList.contains("active")) {
-        item.classList.add("active");
-      }
-    });
-    var targetPage = allowed[page] ? page : "statement";
-    if (rawPageToken === "preview") {
-      targetPage = "preview";
-    }
-    document.querySelectorAll("input.page-target").forEach(function (el) {
-      el.value = targetPage;
-    });
-  }
-
   function removeNode(node) {
     if (!node || !node.parentNode) return;
     node.parentNode.removeChild(node);
@@ -3119,7 +3002,6 @@
 
   onReady(function () {
     initSudoPopupBridge();
-    initNavActiveState();
     initTopEventNotice();
     initDataTooltips();
     initNetworkEstimateProfile();

@@ -54,6 +54,8 @@ def _request(
     method: str = "GET",
     headers: list[tuple[bytes, bytes]] | None = None,
 ) -> Request:
+    from app.main import app
+
     return Request(
         {
             "type": "http",
@@ -67,6 +69,7 @@ def _request(
             "server": ("testserver", 80),
             "scheme": "http",
             "root_path": "",
+            "app": app,
         }
     )
 

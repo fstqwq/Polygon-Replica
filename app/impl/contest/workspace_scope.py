@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Literal, TypedDict, cast
 from urllib.parse import parse_qsl, quote, unquote, urlencode, urlsplit, urlunsplit
@@ -67,6 +68,45 @@ class ContestWorkspaceScope:
     context: ContestWorkspaceContext
 
 
+@dataclass(frozen=True)
+class ProblemHrefBuilder:
+    request: Request
+    problem_slug: str
+    contest_slug: str | None
+
+    def __call__(
+        self,
+        route_name: str,
+        *,
+        query: Mapping[str, str | int] | None = None,
+        fragment: str = "",
+        **path_params: str | int,
+    ) -> str:
+        if "problem" in path_params:
+            raise ValueError("problem path parameter is managed by the builder")
+        encoded_path = _encoded_route_path(
+            self.request,
+            route_name=route_name,
+            path_params={
+                "problem": self.problem_slug,
+                **{key: str(value) for key, value in path_params.items()},
+            },
+        )
+        if not unquote(encoded_path).startswith("/problems/"):
+            raise ValueError("problem URL builder only accepts Problem routes")
+
+        query_items: list[tuple[str, str]] = []
+        for key, value in (query or {}).items():
+            if key == "contest":
+                raise ValueError("contest query parameter is managed by the builder")
+            query_items.append((key, str(value)))
+        if self.contest_slug is not None:
+            query_items.append(("contest", self.contest_slug))
+        query_string = urlencode(query_items)
+        encoded_fragment = quote(fragment, safe="-._~") if fragment else ""
+        return urlunsplit(("", "", encoded_path, query_string, encoded_fragment))
+
+
 _PROBLEM_ROUTE_PREFIX = "/problems/{problem:path}/"
 _PROBLEM_SECTION_ROUTE_NAMES: dict[ProblemSection, str] = {
     "statement": "problem_statement",
@@ -107,6 +147,16 @@ def problem_section_for_route(route_path: str) -> ProblemSection:
     return "statement"
 
 
+def problem_page_target_for_route(route_path: str) -> str:
+    if not route_path.startswith(_PROBLEM_ROUTE_PREFIX):
+        return "statement"
+    tail = route_path.removeprefix(_PROBLEM_ROUTE_PREFIX)
+    segment = tail.partition("/")[0]
+    if segment == "preview":
+        return "preview"
+    return problem_section_for_route(route_path)
+
+
 def _encoded_route_path(
     request: Request,
     *,
@@ -124,13 +174,11 @@ def build_contest_problem_href(
     contest_slug: str,
     section: ProblemSection,
 ) -> str:
-    path = _encoded_route_path(
-        request,
-        route_name=_PROBLEM_SECTION_ROUTE_NAMES[section],
-        path_params={"problem": problem_slug},
-    )
-    query = urlencode([("contest", contest_slug)])
-    return urlunsplit(("", "", path, query, ""))
+    return ProblemHrefBuilder(
+        request=request,
+        problem_slug=problem_slug,
+        contest_slug=contest_slug,
+    )(_PROBLEM_SECTION_ROUTE_NAMES[section])
 
 
 def build_problem_exit_href(
@@ -144,6 +192,36 @@ def build_problem_exit_href(
         route_name=_PROBLEM_SECTION_ROUTE_NAMES[section],
         path_params={"problem": problem_slug},
     )
+
+
+def problem_href_builder(request: Request, problem_slug: str) -> ProblemHrefBuilder:
+    scope = contest_workspace_scope_from_request(request)
+    return ProblemHrefBuilder(
+        request=request,
+        problem_slug=problem_slug,
+        contest_slug=None if scope is None else scope.contest_slug,
+    )
+
+
+def problem_template_navigation(
+    request: Request,
+    problem_slug: str,
+) -> dict[str, object]:
+    route = request.scope.get("route")
+    route_path = str(getattr(route, "path", ""))
+    if not route_path.startswith(_PROBLEM_ROUTE_PREFIX):
+        concrete_path = unquote(request.url.path)
+        concrete_prefix = f"/problems/{problem_slug}/"
+        if concrete_path.startswith(concrete_prefix):
+            route_path = (
+                _PROBLEM_ROUTE_PREFIX
+                + concrete_path.removeprefix(concrete_prefix)
+            )
+    return {
+        "problem_href": problem_href_builder(request, problem_slug),
+        "problem_section": problem_section_for_route(route_path),
+        "problem_page_target": problem_page_target_for_route(route_path),
+    }
 
 
 def add_contest_problem_hrefs(

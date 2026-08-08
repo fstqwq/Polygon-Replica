@@ -6,7 +6,7 @@
 <div class="grid">
   <section class="info-card">
     <h2>Export Into Package</h2>
-    <form class="form-row" method="post" action="/problems/{{ ctx.problem.slug }}/export/create">
+    <form class="form-row" method="post" action="{{ problem_href('export_create') }}">
       <label for="export-type">Type</label>
       <select id="export-type" name="export_type">
         <option value="icpc">{{ icpc_option_label }}</option>
@@ -18,14 +18,14 @@
   <section class="info-card">
     <h2>Download Snapshot</h2>
     <p class="muted">Download a temporary native zip. It is not added to export activity.</p>
-    <form class="form-row" method="post" action="/problems/{{ ctx.problem.slug }}/export/snapshot">
+    <form class="form-row" method="post" action="{{ problem_href('export_snapshot') }}">
       <button class="btn" type="submit">Download Snapshot</button>
     </form>
   </section>
   <section class="info-card">
     <h2>Import Into Workspace</h2>
     <p class="muted">Package files overwrite same-path local files. Paths absent from the package are kept.</p>
-    <form class="form-row" method="post" enctype="multipart/form-data" action="/problems/{{ ctx.problem.slug }}/export/import">
+    <form class="form-row" method="post" enctype="multipart/form-data" action="{{ problem_href('export_import') }}">
       <label for="workspace-import-package">Package (.zip)</label>
       <input id="workspace-import-package" type="file" name="package_upload" accept=".zip,application/zip" required />
       <button class="btn" type="submit">Import</button>
@@ -46,8 +46,10 @@
       <td>{{ row.source_display }}</td>
       <td>{{ row.detail }}</td>
       <td>
-        {% if row.open_href %}
-        <a href="{{ row.open_href }}">{{ row.open_label }}</a>
+        {% if row.open_kind == 'export' %}
+        <a href="{{ problem_href('export_file', export_id=row.open_export_id, filename=row.open_filename) }}">{{ row.open_label }}</a>
+        {% elif row.open_kind == 'verification' %}
+        <a href="{{ problem_href('run_details_page', query={'verification_id': row.open_verification_id}) }}">{{ row.open_label }}</a>
         {% else %}
         -
         {% endif %}

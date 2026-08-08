@@ -1,12 +1,12 @@
 {% extends "base.html" %}
 {% block content %}
 <h1 class="page-title">Run Solutions</h1>
-<p><a href="/problems/{{ ctx.problem.slug }}/run">&laquo; Back to verifications</a></p>
+<p><a href="{{ problem_href('problem_run') }}">&laquo; Back to verifications</a></p>
 {% include "_flash_message.html" %}
 
 <section>
   <h2>Execute</h2>
-  <form class="form-stack" method="post" enctype="multipart/form-data" action="/problems/{{ ctx.problem.slug }}/run/execute">
+  <form class="form-stack" method="post" enctype="multipart/form-data" action="{{ problem_href('run_execute') }}">
     <div class="run-execute-grid">
       <div class="form-row form-row-column">
         <label for="solution-paths">Solutions</label>

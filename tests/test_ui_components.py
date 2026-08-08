@@ -847,18 +847,57 @@ class TestUIComponents(UIHelpersMixin, E2ETestBase):
         )
         self.assertEqual(after.status_code, 200)
 
+    def test_solution_expected_behavior_palette_distinguishes_mixed_results(
+        self,
+    ) -> None:
+        ws = Path(workspace_service.ensure_workspace(self.problem, self.user))
+        behaviors = {
+            "mixed_tlac.cpp": "tle_or_correct",
+            "mixed_tlre.cpp": "tle_or_re",
+            "wrong.cpp": "wrong_answer",
+            "unknown.cpp": "unknown",
+        }
+        solutions_dir = ws / "solutions"
+        solutions_dir.mkdir(parents=True, exist_ok=True)
+        for filename, behavior in behaviors.items():
+            (solutions_dir / filename).write_text(
+                "int main(){return 0;}\n", encoding="utf-8"
+            )
+            (solutions_dir / f"{filename}.desc").write_text(
+                f"expected: {behavior}\n", encoding="utf-8"
+            )
+
+        page = solutions_page(
+            _request(f"/problems/{self.problem}/solutions"), self.problem, self.user
+        )
+        self.assertEqual(page.status_code, 200)
+        html = page.body.decode("utf-8", errors="replace")
+        self.assertEqual(html.count('class="tag-select tag-select-mixed"'), 2)
+        self.assertIn('class="tag-select tag-select-wrong-answer"', html)
+        self.assertIn('class="tag-select tag-select-neutral"', html)
+
+        editor = solutions_editor_page(
+            _request(
+                f"/problems/{self.problem}/solutions/editor",
+                "path=solutions%2Fmixed_tlre.cpp",
+            ),
+            self.problem,
+            self.user,
+        )
+        self.assertEqual(editor.status_code, 200)
+        editor_html = editor.body.decode("utf-8", errors="replace")
+        self.assertIn('class="tag-select tag-select-mixed"', editor_html)
+
     def test_solutions_page_links_to_blank_editor(self) -> None:
         page = solutions_page(
             _request(f"/problems/{self.problem}/solutions"), self.problem, self.user
         )
         self.assertEqual(page.status_code, 200)
         html = page.body.decode("utf-8", errors="replace")
-        self.assertIn('class="solutions-actions"', html)
-        self.assertIn("Rename", html)
-        self.assertIn("Delete", html)
-        html = page.body.decode("utf-8", errors="replace")
+        self.assertIn('class="component-empty-state"', html)
+        self.assertIn("Add solution", html)
         self.assertIn(
-            f'/problems/{self.problem}/solutions/editor?path=solutions/accepted.cpp',
+            f'/problems/{self.problem}/solutions/editor?path=solutions%2Faccepted.cpp',
             html,
         )
         self.assertNotIn("/solutions/create-template", html)

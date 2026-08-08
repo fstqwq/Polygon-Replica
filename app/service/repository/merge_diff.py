@@ -37,7 +37,7 @@ class MergeDiffSide:
     exists: bool
     size: int
     executable: bool
-    open_url: str
+    open_side: str
 
 
 @dataclass(frozen=True)

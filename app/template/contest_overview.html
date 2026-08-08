@@ -37,7 +37,7 @@
     {% for row in problem_rows %}
     <tr class="{% if row.dirty %}table-row-dirty{% endif %}">
       <td><code>{{ row.idx }}</code></td>
-      <td><a href="/problems/{{ row.problem_slug }}/statement"><code>{{ row.problem_slug }}</code> - {{ row.slug_leaf }}</a></td>
+      <td><a href="{{ row.href }}"><code>{{ row.problem_slug }}</code> - {{ row.slug_leaf }}</a></td>
       <td>{{ row.time_limit_ms }}ms / {{ row.memory_limit_mb }}MB</td>
       <td>{{ row.mode }}</td>
       <td><span class="{{ 'revision-alert' if row.revision_warn else '' }}">{{ row.revision_display }}</span></td>

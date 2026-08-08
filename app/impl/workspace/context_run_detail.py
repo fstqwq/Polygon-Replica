@@ -26,7 +26,8 @@ RunDetailPreview = TypedDict(
         "text": str,
         "truncated": bool,
         "limit": int,
-        "download_href": str,
+        "download_verification_id": str,
+        "download_rel_path": str,
         "message": str,
     },
 )
@@ -84,9 +85,22 @@ def _strip_runpipe_protocol_lines(raw: str) -> str:
     return "\n".join(kept)
 
 def _run_detail_preview_unavailable(message: str = 'missing') -> RunDetailPreview:
-    return {'available': False, 'text': '', 'truncated': False, 'limit': int(_C.RUN_DETAIL_PREVIEW_MAX_BYTES), 'download_href': '', 'message': message}
+    return {
+        'available': False,
+        'text': '',
+        'truncated': False,
+        'limit': int(_C.RUN_DETAIL_PREVIEW_MAX_BYTES),
+        'download_verification_id': '',
+        'download_rel_path': '',
+        'message': message,
+    }
 
-def _run_detail_preview_from_bytes(blob: bytes, download_href: str = "") -> RunDetailPreview:
+def _run_detail_preview_from_bytes(
+    blob: bytes,
+    *,
+    verification_id: str = "",
+    rel_path: str = "",
+) -> RunDetailPreview:
     limit = int(_C.RUN_DETAIL_PREVIEW_MAX_BYTES)
     data = blob
     clipped = len(data) > limit
@@ -100,7 +114,8 @@ def _run_detail_preview_from_bytes(blob: bytes, download_href: str = "") -> RunD
         "text": normalized,
         "truncated": bool(clipped),
         "limit": limit,
-        "download_href": download_href,
+        "download_verification_id": verification_id,
+        "download_rel_path": rel_path,
         "message": "",
     }
 
@@ -428,4 +443,3 @@ def _verification_status_summary(entries: list[dict[str, object]]) -> dict[str, 
         'matched_count': matched_count,
         'total_count': total_count,
     }
-

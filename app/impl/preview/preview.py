@@ -363,7 +363,7 @@ def preview_page(request: Request, problem: str, user: Annotated[str, Depends(re
     preview_failed_stage = ''
     preview_failure_title = 'Compile failed.'
     preview_failure_detail = ''
-    latex_log_href = ''
+    latex_log_available = False
 
     if has_statement_language and preview_id:
         lp = None
@@ -397,7 +397,7 @@ def preview_page(request: Request, problem: str, user: Annotated[str, Depends(re
         else:
             preview_id = ''
         if preview_id and lp is not None:
-            latex_log_href = f'/problems/{problem}/artifacts/{preview_id}/logs/latex.log'
+            latex_log_available = True
             raw_log, log_truncated = read_text_safe_limited(lp, _C.UI_LOG_TEXT_CHAR_LIMIT)
             redact_prefixes: list[tuple[str, str]] = [
                 (str(workspace.resolve()), '.'),
@@ -423,7 +423,7 @@ def preview_page(request: Request, problem: str, user: Annotated[str, Depends(re
             if preview_failed_stage == 'sample_sync':
                 preview_failure_title = 'Sample verification failed.'
                 preview_failure_detail = sanitize_log_text_for_ui(selected_preview_summary.get("error", ""))
-                latex_log_href = ''
+                latex_log_available = False
                 log = ''
                 log_truncated = False
                 log_refs = []
@@ -473,7 +473,7 @@ def preview_page(request: Request, problem: str, user: Annotated[str, Depends(re
             'preview_failure_title': preview_failure_title,
             'preview_failure_detail': preview_failure_detail,
             'preview_failed_stage': preview_failed_stage,
-            'latex_log_href': latex_log_href,
+            'latex_log_available': latex_log_available,
             'problem_mode_values': list(_C.GENERAL_MODE_VALUES),
             'time_limit_min_ms': _C.GENERAL_TIME_LIMIT_MIN_MS,
             'time_limit_max_ms': _C.GENERAL_TIME_LIMIT_MAX_MS,

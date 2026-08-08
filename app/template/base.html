@@ -33,15 +33,15 @@
   <title>{% if page_title %}{{ page_title }} - {% endif %}{{ ui_browser_title }}</title>
   <link rel="icon" href="/static/favicon.ico?v=20260427-01" sizes="any" />
   <link rel="icon" href="/static/favicon.png?v=20260427-01" type="image/png" />
-  <link rel="stylesheet" href="/static/style.css?v=20260808-38" />
-  <script src="/static/ui.js?v=20260808-33" defer></script>
+  <link rel="stylesheet" href="/static/style.css?v=20260808-43" />
+  <script src="/static/ui.js?v=20260808-35" defer></script>
 </head>
 <body class="problem-layout{% if ctx.topbar_max_1400 %} topbar-max-1400{% endif %}{% block body_class %}{% endblock %}">
   {% set flash_presenter = 'topbar' %}
   <header class="topbar">
     {% set top_user = ctx.user %}
     {% set top_settings_href = '/settings' %}
-    {% set top_active_main = 'problems' %}
+    {% set top_active_main = 'contests' if ctx.contest_workspace else 'problems' %}
     {% include "_topbar_common.html" %}
   </header>
 
@@ -61,18 +61,6 @@
     {% set verification_tooltip = 'changed: verification inputs' %}
     {% endif %}
     {% set tests_nav = nav_status.get('tests', {}) %}
-    {% set verification_page_target = namespace(value='statement') %}
-    {% set current_path = '' %}
-    {% if request is defined and request.url is defined %}
-    {% set current_path = request.url.path | default('') %}
-    {% set current_parts = current_path.split('/') %}
-    {% set page_candidates = ['statement', 'files', 'generators', 'checker', 'interactor', 'validator', 'solutions', 'tests', 'preview', 'run', 'export', 'access', 'history', 'workspace', 'settings'] %}
-    {% for part in current_parts | reverse %}
-    {% if verification_page_target.value == 'statement' and part in page_candidates %}
-    {% set verification_page_target.value = part %}
-    {% endif %}
-    {% endfor %}
-    {% endif %}
     <div class="workbench-context-bar problem-context-bar">
       <div class="problem-context-main">
         <div class="problem-context-identity">
@@ -116,36 +104,36 @@
       </div>
     </div>
     <nav class="section-tabs problem-section-tabs" aria-label="Problem sections" data-problem-nav="1">
-      <a class="section-tab problem-section-tab" data-page="statement" href="/problems/{{ ctx.problem.slug }}/statement">
+      <a class="section-tab problem-section-tab{{ ' active' if problem_section == 'statement' else '' }}" data-page="statement" href="{{ problem_href('problem_statement') }}"{% if problem_section == 'statement' %} aria-current="page"{% endif %}>
         <span class="problem-section-tab-title">Statements</span>
         <span class="problem-section-tab-status {{ 'section-tab-status-danger' if statement_meta_nav.get('danger') else 'section-tab-status-warn' if statement_meta_nav.get('warn') else '' }}">{{ statement_meta_nav.get("text", "-") }}</span>
       </a>
       {% set checker_nav = nav_status.get('checker', {}) %}
       {% if problem_mode != "interactive" %}
-      <a class="section-tab problem-section-tab" data-page="checker" href="/problems/{{ ctx.problem.slug }}/checker">
+      <a class="section-tab problem-section-tab{{ ' active' if problem_section == 'checker' else '' }}" data-page="checker" href="{{ problem_href('problem_checker') }}"{% if problem_section == 'checker' %} aria-current="page"{% endif %}>
         <span class="problem-section-tab-title">Checker</span>
         <span class="problem-section-tab-status {{ 'section-tab-status-danger' if checker_nav.get('danger') else '' }}" {% if checker_nav.get('hint') %}data-tooltip="{{ checker_nav.get('hint') }}" aria-label="checker details"{% endif %}>{{ checker_nav.get("text", "-") }}</span>
       </a>
       {% endif %}
       {% if problem_mode == "interactive" %}
-      <a class="section-tab problem-section-tab" data-page="interactor" href="/problems/{{ ctx.problem.slug }}/interactor">
+      <a class="section-tab problem-section-tab{{ ' active' if problem_section == 'interactor' else '' }}" data-page="interactor" href="{{ problem_href('problem_interactor') }}"{% if problem_section == 'interactor' %} aria-current="page"{% endif %}>
         <span class="problem-section-tab-title">Interactor</span>
         <span class="problem-section-tab-status {{ 'section-tab-status-danger' if nav_status.get('interactor', {}).get('danger') else '' }}">{{ nav_status.get("interactor", {}).get("text", "-") }}</span>
       </a>
       {% endif %}
-      <a class="section-tab problem-section-tab" data-page="validator" href="/problems/{{ ctx.problem.slug }}/validator">
+      <a class="section-tab problem-section-tab{{ ' active' if problem_section == 'validator' else '' }}" data-page="validator" href="{{ problem_href('problem_validator') }}"{% if problem_section == 'validator' %} aria-current="page"{% endif %}>
         <span class="problem-section-tab-title">Validator</span>
         <span class="problem-section-tab-status {{ 'section-tab-status-danger' if nav_status.get('validator', {}).get('danger') else '' }}">{{ nav_status.get("validator", {}).get("text", "-") }}</span>
       </a>
-      <a class="section-tab problem-section-tab" data-page="generators" href="/problems/{{ ctx.problem.slug }}/generators">
+      <a class="section-tab problem-section-tab{{ ' active' if problem_section == 'generators' else '' }}" data-page="generators" href="{{ problem_href('problem_generators') }}"{% if problem_section == 'generators' %} aria-current="page"{% endif %}>
         <span class="problem-section-tab-title">Generators</span>
         <span class="problem-section-tab-status {{ 'section-tab-status-danger' if nav_status.get('generators', {}).get('danger') else '' }}">{{ nav_status.get("generators", {}).get("text", "-") }}</span>
       </a>
-      <a class="section-tab problem-section-tab" data-page="solutions" href="/problems/{{ ctx.problem.slug }}/solutions">
+      <a class="section-tab problem-section-tab{{ ' active' if problem_section == 'solutions' else '' }}" data-page="solutions" href="{{ problem_href('problem_solutions') }}"{% if problem_section == 'solutions' %} aria-current="page"{% endif %}>
         <span class="problem-section-tab-title">Solutions</span>
         <span class="problem-section-tab-status {{ 'section-tab-status-danger' if nav_status.get('solutions', {}).get('danger') else '' }}">{{ nav_status.get("solutions", {}).get("text", "-") }}</span>
       </a>
-      <a class="section-tab problem-section-tab" data-page="tests" href="/problems/{{ ctx.problem.slug }}/tests">
+      <a class="section-tab problem-section-tab{{ ' active' if problem_section == 'tests' else '' }}" data-page="tests" href="{{ problem_href('problem_tests') }}"{% if problem_section == 'tests' %} aria-current="page"{% endif %}>
         <span class="problem-section-tab-title">Tests</span>
         <span class="problem-section-tab-status {{ 'section-tab-status-danger' if tests_nav.get('danger') else '' }}">
             {% if tests_nav.get('has_counts') %}
@@ -155,21 +143,22 @@
             {% endif %}
         </span>
       </a>
-      <div class="section-tab problem-section-tab problem-section-action-tab problem-section-action-tab-verification">
-        <a class="problem-section-tab-title problem-section-tab-title-link" data-page="run" href="/problems/{{ ctx.problem.slug }}/run" {% if verification_tooltip %}data-tooltip="{{ verification_tooltip }}" aria-label="verification {{ verification_mode }} details"{% endif %}>Verification</a>
-        <form class="problem-section-tab-action-form" method="post" action="/problems/{{ ctx.problem.slug }}/verification/start">
-          <input class="page-target" type="hidden" name="page" value="{{ verification_page_target.value }}" />
+      <div class="section-tab problem-section-tab problem-section-action-tab problem-section-action-tab-verification{{ ' active' if problem_section == 'run' else '' }}">
+        <a class="problem-section-tab-title problem-section-tab-title-link" data-page="run" href="{{ problem_href('problem_run') }}"{% if problem_section == 'run' %} aria-current="page"{% endif %}{% if verification_tooltip %} data-tooltip="{{ verification_tooltip }}" aria-label="verification {{ verification_mode }} details"{% endif %}>Verification</a>
+        <form class="problem-section-tab-action-form" method="post" action="{{ problem_href('verification_start') }}">
+          <input class="page-target" type="hidden" name="page" value="{{ problem_page_target }}" />
           <button class="problem-section-tab-action-control" type="submit" {% if not ctx.access.can_write %}disabled title="{{ ctx.access.write_block_reason }}"{% endif %}>Start</button>
         </form>
         <span class="problem-section-tab-status {{ 'section-tab-status-danger' if verification_mode in ['none', 'failed'] else 'section-tab-status-warn' if verification_warn else '' }}">{{ verification_status }}</span>
       </div>
       {% set export_nav = nav_status.get('export', {}) %}
-      <div class="section-tab problem-section-tab problem-section-action-tab">
-        <a class="problem-section-tab-title problem-section-tab-title-link" data-page="export" href="/problems/{{ ctx.problem.slug }}/export">Packages</a>
-        {% if export_nav.get('download_href') %}
-        <a class="problem-section-tab-action-control" href="{{ export_nav.get('download_href') }}">Download</a>
+      <div class="section-tab problem-section-tab problem-section-action-tab{{ ' active' if problem_section == 'export' else '' }}">
+        <a class="problem-section-tab-title problem-section-tab-title-link" data-page="export" href="{{ problem_href('problem_export') }}"{% if problem_section == 'export' %} aria-current="page"{% endif %}>Packages</a>
+        {% set export_download = export_nav.get('download') %}
+        {% if export_download %}
+        <a class="problem-section-tab-action-control" href="{{ problem_href('export_file', export_id=export_download.export_id, filename=export_download.filename) }}">Download</a>
         {% else %}
-        <form class="problem-section-tab-action-form" method="post" action="/problems/{{ ctx.problem.slug }}/export/create">
+        <form class="problem-section-tab-action-form" method="post" action="{{ problem_href('export_create') }}">
           <input type="hidden" name="export_type" value="icpc" />
           <button class="problem-section-tab-action-control" type="submit" {% if not ctx.access.can_write or not ctx.workspace.head_commit %}disabled title="{{ ctx.access.write_block_reason if not ctx.access.can_write else 'Commit changes before building a package' }}"{% endif %}>Build</button>
         </form>
@@ -182,10 +171,13 @@
         <div class="container">{% block content %}{% endblock %}</div>
       </main>
       <aside class="side-panel">
+        {% if ctx.contest_workspace %}
+        {% include "_contest_workspace_card.html" %}
+        {% endif %}
         <section class="action-card">
           <div class="workspace-card-head">
             <h3>Workspace</h3>
-            <a class="workspace-side-link" href="/problems/{{ ctx.problem.slug }}/access"{% if current_path.endswith('/access') %} aria-current="page"{% endif %}>Manage access</a>
+            <a class="workspace-side-link" href="{{ problem_href('problem_access') }}"{% if problem_section == 'access' %} aria-current="page"{% endif %}>Manage access</a>
           </div>
           {% set ws_revision = ctx.workspace_revision if ctx.workspace_revision is defined else {} %}
           {% set local_rev_raw = ws_revision.get('local') if ws_revision else none %}
@@ -197,11 +189,11 @@
           </div>
           <div class="workspace-actions">
             {% if ctx.workspace_needs_update %}
-            <form class="action-link-form" method="post" action="/problems/{{ ctx.problem.slug }}/merge/start">
+            <form class="action-link-form" method="post" action="{{ problem_href('merge_start') }}">
               <button class="button-link primary-action workspace-side-button" type="submit" {% if not ctx.access.can_write %}disabled title="{{ ctx.access.write_block_reason }}"{% endif %}>Review published changes</button>
             </form>
             {% else %}
-            <a class="button-link primary-action workspace-side-button" href="/problems/{{ ctx.problem.slug }}/workspace">Review and publish</a>
+            <a class="button-link primary-action workspace-side-button" href="{{ problem_href('problem_workspace') }}">Review and publish</a>
             {% endif %}
           </div>
           {% if ctx.workspace_changes.total > 0 %}
@@ -210,7 +202,7 @@
             {% for row in ctx.workspace_changes.rows %}
             <li class="change-item change-{{ row.kind }}">
               <code class="change-code">{{ row.code }}</code>
-              <a href="/problems/{{ ctx.problem.slug }}/workspace?path={{ row.link_path }}&src=workspace" title="{{ row.path }}">{{ row.path }}</a>
+              <a href="{{ problem_href('problem_workspace', query={'path': row.link_path, 'src': 'workspace'}) }}" title="{{ row.path }}">{{ row.path }}</a>
             </li>
             {% endfor %}
           </ul>
@@ -221,16 +213,16 @@
           <p>Files are read-only.</p>
           {% endif %}
           <div class="workspace-links workspace-card-nav">
-            <a class="workspace-side-link" href="/problems/{{ ctx.problem.slug }}/files">Browse Files</a>
+            <a class="workspace-side-link" href="{{ problem_href('problem_files') }}">Browse Files</a>
             <span class="workspace-link-sep" aria-hidden="true">/</span>
-            <a class="workspace-side-link" href="/problems/{{ ctx.problem.slug }}/history">Revision History</a>
+            <a class="workspace-side-link" href="{{ problem_href('problem_history') }}">Revision History</a>
           </div>
         </section>
       </aside>
     </div>
   </div>
   {% call ui_popup('statement-settings-popup', 'Edit metadata') %}
-      <form class="form-stack" method="post" action="/problems/{{ ctx.problem.slug }}/statement/save">
+      <form class="form-stack" method="post" action="{{ problem_href('general_save') }}">
         <input type="hidden" name="language" value="" />
         <div class="form-row form-row-inline-distribute">
           <div class="form-field-stack">

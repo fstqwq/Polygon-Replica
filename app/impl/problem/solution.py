@@ -31,6 +31,22 @@ from app.service.platform.workspace_path import (
 
 _C = config.constants
 
+_EXPECTED_BEHAVIOR_TAG_CLASS: dict[str, str] = {
+    MAIN_CORRECT_EXPECTED_VALUE: "tag-select-main-correct",
+    "accepted": "tag-select-accepted",
+    "wrong_answer": "tag-select-wrong-answer",
+    "tle_or_correct": "tag-select-mixed",
+    "tle_or_re": "tag-select-mixed",
+    "time_limit_exceeded": "tag-select-time-limit-exceeded",
+    "run_time_error": "tag-select-run-time-error",
+    "rejected": "tag-select-rejected",
+    "unknown": "tag-select-neutral",
+}
+
+
+def _expected_behavior_tag_class(expected_behavior: str) -> str:
+    return _EXPECTED_BEHAVIOR_TAG_CLASS.get(expected_behavior, "tag-select-expected")
+
 
 def solutions_page(request: Request, problem: str, user: Annotated[str, Depends(require_session_user)]):
     ctx = page_ctx(
@@ -57,6 +73,7 @@ def solutions_page(request: Request, problem: str, user: Annotated[str, Depends(
         if accepted_source_exists and source_path == accepted_source:
             effective_expected = MAIN_CORRECT_EXPECTED_VALUE
         row_view['expected_behavior_effective'] = effective_expected
+        row_view['expected_behavior_class'] = _expected_behavior_tag_class(effective_expected)
         entries_view.append(row_view)
     existing_paths = {str(row['source_path']) for row in entries}
     solution_create_default_path = 'solutions/accepted.cpp'
@@ -100,7 +117,8 @@ def solutions_editor_page(request: Request, problem: str, user: Annotated[str, D
         content_truncated = False
     if selected_entry is None:
         selected_entry = solution_metadata_entry(workspace, selected)
-    return template_response(request, 'solutions_editor.html', {'ctx': ctx, 'entries': entries, 'entries_truncated': entries_truncated, 'entries_limit': _C.SOLUTION_LIST_LIMIT, 'selected': selected, 'selected_entry': selected_entry, 'selected_exists': selected_exists, 'content': content, 'content_truncated': content_truncated, 'content_char_limit': _C.WORKSPACE_FILE_VIEW_CHAR_LIMIT, 'expected_behavior_options': solution_behavior_options()})
+    selected_expected_behavior = normalize_expected_behavior(selected_entry['expected_behavior'])
+    return template_response(request, 'solutions_editor.html', {'ctx': ctx, 'entries': entries, 'entries_truncated': entries_truncated, 'entries_limit': _C.SOLUTION_LIST_LIMIT, 'selected': selected, 'selected_entry': selected_entry, 'selected_exists': selected_exists, 'content': content, 'content_truncated': content_truncated, 'content_char_limit': _C.WORKSPACE_FILE_VIEW_CHAR_LIMIT, 'expected_behavior_options': solution_behavior_options(), 'selected_expected_behavior_class': _expected_behavior_tag_class(selected_expected_behavior)})
 
 def solutions_save_source(request: Request, problem: str, user: Annotated[str, Depends(require_session_user)], source_path: str=Form(...), content: str=Form(''), expected_behavior: str=Form('unknown')):
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)

@@ -209,7 +209,9 @@ def export_page(request: Request, problem: str, user: Annotated[str, Depends(req
         else:
             display_filename = stored_filename or f"{fallback_stem}-{source_display}.zip"
         detail = error_text or status
-        open_href = ""
+        open_kind = ""
+        open_export_id = ""
+        open_filename = ""
         open_label = ""
         if status == "succeeded" and export_id and stored_filename:
             summary_bits: list[str] = []
@@ -232,7 +234,9 @@ def export_page(request: Request, problem: str, user: Annotated[str, Depends(req
             if tests_total is not None:
                 summary_bits.append(_count_label(tests_total, "test"))
             detail = f"{display_filename} ({', '.join(summary_bits)})" if summary_bits else display_filename
-            open_href = f"/problems/{problem_slug}/exports/{export_id}/{stored_filename}"
+            open_kind = "export"
+            open_export_id = export_id
+            open_filename = stored_filename
             open_label = "zip"
         elif status == "succeeded":
             detail = "artifact unavailable"
@@ -243,7 +247,9 @@ def export_page(request: Request, problem: str, user: Annotated[str, Depends(req
                 "source_display": source_display,
                 "status": status,
                 "detail": detail,
-                "open_href": open_href,
+                "open_kind": open_kind,
+                "open_export_id": open_export_id,
+                "open_filename": open_filename,
                 "open_label": open_label,
             }
         )

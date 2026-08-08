@@ -2,7 +2,6 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from typing import cast
-from urllib.parse import quote_plus
 from app.impl.runtime.config import config
 from app.impl.workspace.artifact import verification_artifact_file, verification_blob_virtual_rel
 from app.impl.workspace.context import count_label
@@ -853,14 +852,17 @@ def build_run_detail_context(
         title = Path(source_for_display).name if source_for_display else ''
         if not title:
             title = run_id or 'unknown run'
-        source_href = ''
+        source_section = ''
+        source_path = ''
         source_rel = normalize_workspace_rel_path(source_for_display)
         if problem_slug and username and source_rel and workspace_rel_file_exists(workspace, source_rel):
             safe_solution = normalize_optional_component_source_path_safe(source_rel, 'solutions', 'solution path')
             if safe_solution:
-                source_href = f'/problems/{problem_slug}/solutions/editor?path={quote_plus(safe_solution)}'
+                source_section = 'solutions'
+                source_path = safe_solution
             else:
-                source_href = f'/problems/{problem_slug}/files?path={quote_plus(source_rel)}'
+                source_section = 'files'
+                source_path = source_rel
         expected_behavior = _run_expected_behavior_from_summary(summary, source_for_display)
         if expected_behavior == 'unknown':
             mapped_expected = expected_by_run_id.get(run_id)
@@ -1127,7 +1129,7 @@ def build_run_detail_context(
             if (match_reason or summary.get('error'))
             else ''
         )
-        column_payload = {'id': run_id, 'artifact_verification_id': artifact_verification_id, 'title': title, 'source': source_for_display or '-', 'source_href': source_href, 'task_kind': task_kind, 'is_main_correct_run': bool(is_main_correct_run), 'status': status, 'mode': mode, 'created_at': created_at, 'finished_at': finished_at, 'summary': summary, 'has_run_row': bool(row is not None), 'tests_map': tests_map, 'compile_log': summary.get('compile_log') or '', 'compile_diagnostics': summary.get('compile_diagnostics') or [], 'error': summary.get('error') or '', 'error_display': run_error_display(summary.get('error') or ''), 'tests_total': int(summary.get('tests_total') or len(tests_map)), 'tests_truncated': bool(summary.get('tests_truncated')), 'expected_behavior': expected_behavior, 'expected_behavior_label': expected_behavior_label(expected_behavior), 'expected_display': expected_display, 'expected_is_ac_only': bool(expected_is_ac_only), 'got_short': got_short, 'got_display': got_display, 'result_kind': result_kind, 'result_text_tone': result_text_tone, 'result_tone_class': result_tone_class, 'expected_mismatch': bool(expected_mismatch), 'matched': bool(matched), 'completed': bool(completed), 'passed_all_tests': bool(observed_pass), 'match_reason': (match_reason or ''), 'execution_skipped': bool(execution_skipped), 'execution_skipped_reason': execution_skipped_reason, 'max_time_ms': int(max_time_ms), 'max_time_display': max_time_display, 'max_time_tone': max_time_tone, 'max_memory_kb': int(max_memory_kb), 'max_memory_display': max_memory_display}
+        column_payload = {'id': run_id, 'artifact_verification_id': artifact_verification_id, 'title': title, 'source': source_for_display or '-', 'source_section': source_section, 'source_path': source_path, 'task_kind': task_kind, 'is_main_correct_run': bool(is_main_correct_run), 'status': status, 'mode': mode, 'created_at': created_at, 'finished_at': finished_at, 'summary': summary, 'has_run_row': bool(row is not None), 'tests_map': tests_map, 'compile_log': summary.get('compile_log') or '', 'compile_diagnostics': summary.get('compile_diagnostics') or [], 'error': summary.get('error') or '', 'error_display': run_error_display(summary.get('error') or ''), 'tests_total': int(summary.get('tests_total') or len(tests_map)), 'tests_truncated': bool(summary.get('tests_truncated')), 'expected_behavior': expected_behavior, 'expected_behavior_label': expected_behavior_label(expected_behavior), 'expected_display': expected_display, 'expected_is_ac_only': bool(expected_is_ac_only), 'got_short': got_short, 'got_display': got_display, 'result_kind': result_kind, 'result_text_tone': result_text_tone, 'result_tone_class': result_tone_class, 'expected_mismatch': bool(expected_mismatch), 'matched': bool(matched), 'completed': bool(completed), 'passed_all_tests': bool(observed_pass), 'match_reason': (match_reason or ''), 'execution_skipped': bool(execution_skipped), 'execution_skipped_reason': execution_skipped_reason, 'max_time_ms': int(max_time_ms), 'max_time_display': max_time_display, 'max_time_tone': max_time_tone, 'max_memory_kb': int(max_memory_kb), 'max_memory_display': max_memory_display}
         column_payload['failure_display'] = failure_display
         if not _is_solution_column_source(source_for_display):
             if include_row_details and task_kind in {_TASK_KIND_SOLUTION_RUN, _TASK_KIND_MAIN_CORRECT}:
@@ -1322,14 +1324,17 @@ def build_run_detail_context(
             safe_rel_path = (rel_path or '').lstrip('/')
             if not problem_slug or not username or (not safe_rel_path) or (not is_canonical_artifact_id(safe_verification_id)):
                 return _run_detail_preview_unavailable('missing')
-            download_href = f'/problems/{problem_slug}/artifacts/{safe_verification_id}/{safe_rel_path}'
             resolved = verification_artifact_file(safe_verification_id, safe_rel_path)
             if resolved is None:
                 return _run_detail_preview_unavailable('missing')
             payload_file, _filename = resolved
             with payload_file.path.open('rb') as stream:
                 blob = stream.read(int(_C.RUN_DETAIL_PREVIEW_MAX_BYTES) + 1)
-            return _run_detail_preview_from_bytes(blob, download_href)
+            return _run_detail_preview_from_bytes(
+                blob,
+                verification_id=safe_verification_id,
+                rel_path=safe_rel_path,
+            )
 
         def _verification_output_preview(verification_id: str, task_id: str, test_name: str) -> dict[str, object]:
             safe_verification_id = (verification_id or '')

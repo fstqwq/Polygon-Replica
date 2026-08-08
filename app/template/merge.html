@@ -10,7 +10,7 @@
       <h2>{{ 'Review Proposed Update' if review_mode == 'suggested' else 'Choose Which Version to Keep' }}</h2>
       {% if review_mode == 'suggested' %}
       {% if preview.fast_forward_possible %}
-      <p><strong>Fast-forward possible.</strong> You can also <a href="/problems/{{ ctx.problem.slug }}/merge/{{ preview.id }}?mode=manual">choose files one by one</a>.</p>
+      <p><strong>Fast-forward possible.</strong> You can also <a href="{{ problem_href('merge_page', preview_id=preview.id, query={'mode': 'manual'}) }}">choose files one by one</a>.</p>
       {% else %}
       <p>The proposed result combines the published revision with your workspace. Review every changed file before continuing.</p>
       {% endif %}
@@ -22,12 +22,12 @@
     </strong>
   </div>
 
-  <form method="post" action="/problems/{{ ctx.problem.slug }}/merge/{{ preview.id }}/apply" data-merge-form>
+  <form method="post" action="{{ problem_href('merge_apply', preview_id=preview.id) }}" data-merge-form>
     <input type="hidden" name="mode" value="{{ review_mode }}" />
     {% if review_mode == 'suggested' %}
     <div class="merge-expanded-diffs" aria-label="Proposed merged file comparisons">
       {% for entry in preview.suggested_entries %}
-      <section class="merge-comparison" aria-live="polite" aria-busy="false" data-merge-comparison data-compare-url="/problems/{{ ctx.problem.slug }}/merge/{{ preview.id }}/compare/{{ entry.entry_id }}?target=suggested">
+      <section class="merge-comparison" aria-live="polite" aria-busy="false" data-merge-comparison data-compare-url="{{ problem_href('merge_compare', preview_id=preview.id, entry_id=entry.entry_id, query={'target': 'suggested'}) }}">
         <div class="merge-comparison-empty" data-merge-empty>Loading comparison...</div>
         <div class="merge-comparison-error" data-merge-error hidden></div>
         <div class="merge-comparison-content" data-merge-content hidden>
@@ -60,7 +60,7 @@
         <p class="merge-group-note">One choice applies to all {{ group.entries|length }} related paths.</p>
         {% endif %}
         {% for entry in group.entries %}
-        <section class="merge-comparison" aria-live="polite" aria-busy="false" data-merge-comparison data-compare-url="/problems/{{ ctx.problem.slug }}/merge/{{ preview.id }}/compare/{{ entry.entry_id }}?target=published">
+        <section class="merge-comparison" aria-live="polite" aria-busy="false" data-merge-comparison data-compare-url="{{ problem_href('merge_compare', preview_id=preview.id, entry_id=entry.entry_id, query={'target': 'published'}) }}">
           <div class="merge-comparison-empty" data-merge-empty>Loading comparison...</div>
           <div class="merge-comparison-error" data-merge-error hidden></div>
           <div class="merge-comparison-content" data-merge-content hidden>
@@ -101,7 +101,7 @@
     <div class="merge-actions">
       <button class="btn primary-action" type="submit">{{ 'Apply Proposed Update' if review_mode == 'suggested' else 'Apply Selected Versions' }}</button>
       {% if preview.suggested_available and review_mode != 'suggested' %}
-        <a class="button-link" href="/problems/{{ ctx.problem.slug }}/merge/{{ preview.id }}">Use proposed merged version instead</a>
+        <a class="button-link" href="{{ problem_href('merge_page', preview_id=preview.id) }}">Use proposed merged version instead</a>
       {% endif %}
     </div>
   </form>

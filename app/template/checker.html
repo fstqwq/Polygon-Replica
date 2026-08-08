@@ -13,13 +13,13 @@
   {% endif %}
   {% if checker_status.repo_source_exists %}
   {{ rename_source_form(
-    "/problems/" ~ ctx.problem.slug ~ "/checker/rename-source",
+    problem_href('checker_rename_source'),
     repo_source,
     "checker-rename-path"
   ) }}
   {% endif %}
   {{ source_editor_form(
-    "/problems/" ~ ctx.problem.slug ~ "/checker/save-source",
+    problem_href('checker_save_source'),
     repo_source,
     repo_content,
     repo_content_truncated,
@@ -42,7 +42,8 @@
     {% if checker_status.standard_checker %}<span class="status-chip">Current: {{ checker_status.standard_checker }}</span>{% endif %}
   </div>
   {% if standard_checker_options %}
-  <form class="form-stack checker-standard-form" method="post" action="/problems/{{ ctx.problem.slug }}/checker/set-standard">
+  <form class="form-stack checker-standard-form" method="post" action="{{ problem_href('checker_set_standard') }}">
+    {% if ctx.contest_workspace %}<input type="hidden" name="contest" value="{{ ctx.contest_workspace.contest_slug }}" />{% endif %}
     <select id="standard-checker-name" name="checker_name" aria-label="Standard checker">
       {% for checker in standard_checker_options %}
       <option value="{{ checker.value }}" data-description="{{ checker.description }}" {% if checker.value == selected_standard_checker %}selected{% endif %}>{{ checker.value }} — {{ checker.description }}</option>
@@ -51,7 +52,7 @@
     {% if selected_standard_description %}<p id="standard-checker-description" class="muted checker-standard-description" data-standard-checker-description="1">{{ selected_standard_description }}.</p>{% endif %}
     <div class="form-row-actions">
       <button class="btn primary-action" type="submit">Use checker</button>
-      <button class="linkish-button" type="submit" formaction="/problems/{{ ctx.problem.slug }}/checker/view-standard" formmethod="get">View source</button>
+      <button class="linkish-button" type="submit" formaction="{{ problem_href('checker_view_standard') }}" formmethod="get">View source</button>
     </div>
   </form>
   {% else %}
@@ -75,7 +76,7 @@
       <h2>Custom checker</h2>
       <p class="muted">Use custom testlib logic when a standard checker is not enough.</p>
     </div>
-    <a class="button-link" href="/problems/{{ ctx.problem.slug }}/checker?mode=custom">{{ "Customize source" if checker_status.repo_source_exists else "Write custom checker" }}</a>
+    <a class="button-link" href="{{ problem_href('problem_checker', query={'mode': 'custom'}) }}">{{ "Customize source" if checker_status.repo_source_exists else "Write custom checker" }}</a>
   </section>
   {% endif %}
 </div>

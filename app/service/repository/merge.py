@@ -846,20 +846,19 @@ class WorkspaceMergeService:
         right_descriptor = entry.suggested if target == "suggested" else entry.published
         left_path = preview.root / "workspace" / entry.path if entry.workspace is not None else None
         right_path = preview.root / target / entry.path if right_descriptor is not None else None
-        base_url = f"/problems/{problem}/merge/{preview_id}/file/{entry_id}"
         left_side = MergeDiffSide(
             "Workspace file",
             entry.workspace is not None,
             entry.workspace.size if entry.workspace is not None else 0,
             entry.workspace.executable if entry.workspace is not None else False,
-            f"{base_url}?side=workspace" if entry.workspace is not None else "",
+            "workspace" if entry.workspace is not None else "",
         )
         right_side = MergeDiffSide(
             "Proposed merged version" if target == "suggested" else "Published file",
             right_descriptor is not None,
             right_descriptor.size if right_descriptor is not None else 0,
             right_descriptor.executable if right_descriptor is not None else False,
-            f"{base_url}?side={target}" if right_descriptor is not None else "",
+            target if right_descriptor is not None else "",
         )
         return compare_merge_files(
             path=entry.path,

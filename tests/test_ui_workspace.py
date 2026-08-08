@@ -1668,7 +1668,11 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         html = resp.body.decode("utf-8", errors="replace")
         self.assertIn("Binary file is read-only in text editor.", html)
         self.assertIn("PDF preview:", html)
-        self.assertIn(f"/problems/alice/sample/files/download?path={rel}", html)
+        self.assertIn(
+            "/problems/alice/sample/files/download?"
+            "path=statement-sections%2Fenglish%2Fproblem.pdf",
+            html,
+        )
         self.assertIn("files-pdf-preview", html)
         self.assertNotIn('data-code-editor="1"', html)
 

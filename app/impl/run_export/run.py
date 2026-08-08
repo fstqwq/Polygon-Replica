@@ -10,7 +10,10 @@ from fastapi import File, Form, HTTPException, Request, UploadFile, Depends
 from app.db import now_iso
 from app.impl.auth.session import require_session_user
 from app.impl.auth.shared import redirect_response, template_response
-from app.impl.contest.workspace_scope import contest_workspace_context_from_request
+from app.impl.contest.workspace_scope import (
+    contest_workspace_context_from_request,
+    problem_template_navigation,
+)
 from app.impl.runtime.config import config
 from app.impl.workspace.access import require_write_access
 from app.impl.workspace.context_job import start_verification_job
@@ -197,14 +200,16 @@ def run_details_test_fragment(request: Request, problem: str, user: Annotated[st
         raise HTTPException(status_code=404, detail='test detail not found')
     row = detail_rows[0]
     detail_columns = detail_ctx['detail_columns']
+    fragment_context: dict[str, object] = {
+        'ctx': ctx,
+        'row': row,
+        'detail_columns': detail_columns,
+    }
+    fragment_context.update(problem_template_navigation(request, problem))
     response = config.templates.TemplateResponse(
         request,
         '_run_test_detail_fragment.html',
-        {
-            'ctx': ctx,
-            'row': row,
-            'detail_columns': detail_columns,
-        },
+        fragment_context,
     )
     return response
 

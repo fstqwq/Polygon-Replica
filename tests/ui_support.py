@@ -248,6 +248,8 @@ def _request(
     headers: list[tuple[bytes, bytes]] | None = None,
     scheme: str = "http",
 ) -> Request:
+    from app.main import app
+
     return Request(
         {
             "type": "http",
@@ -261,6 +263,7 @@ def _request(
             "server": ("testserver", 80),
             "scheme": scheme,
             "root_path": "",
+            "app": app,
         }
     )
 

@@ -13,13 +13,13 @@
     </div>
     {% if interactor_status.repo_source_exists %}
     {{ rename_source_form(
-      "/problems/" ~ ctx.problem.slug ~ "/interactor/rename-source",
+      problem_href('interactor_rename_source'),
       repo_source,
       "interactor-rename-path"
     ) }}
     {% endif %}
     {{ source_editor_form(
-      "/problems/" ~ ctx.problem.slug ~ "/interactor/save-source",
+      problem_href('interactor_save_source'),
       repo_source,
       repo_content,
       repo_content_truncated,

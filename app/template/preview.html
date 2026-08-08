@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% from "_component_dialogs.html" import ui_popup %}
 {% block content %}
+{% set statement_return_href = problem_href('preview_page') if return_page == 'preview' else problem_href('problem_statement') %}
 {% set ns = namespace(latest=None) %}
 {% set preview_is_missing = preview_artifacts_missing %}
 {% if preview_id %}
@@ -20,11 +21,14 @@
     <form
       class="inline-form statement-language-switch-form"
       method="get"
-      action="/problems/{{ ctx.problem.slug }}/{{ return_page if return_page is defined else 'statement' }}"
+      action="{{ statement_return_href }}"
       data-statement-language-form="1"
       data-statement-language-problem="{{ ctx.problem.slug }}"
       data-statement-language-user="{{ ctx.user.username }}"
     >
+      {% if ctx.contest_workspace %}
+      <input type="hidden" name="contest" value="{{ ctx.contest_workspace.contest_slug }}" />
+      {% endif %}
       {% if preview_id %}
       <input type="hidden" name="preview_id" value="{{ preview_id }}" />
       {% endif %}
@@ -39,7 +43,7 @@
     <span class="muted"><strong>Language</strong>: missing</span>
     {% endif %}
     <a class="linkish" href="#statement-language-popup" data-popup-open="statement-language-popup">Add language</a>
-    <form class="inline-action" method="post" action="/problems/{{ ctx.problem.slug }}/statement/templates/reset" data-confirm-message="Restore statement/statements.ftl, statement/problem.tex, and statement/olymp.sty to Qiulygon defaults? This overwrites imported template/style files but keeps statement sections and attachments.">
+    <form class="inline-action" method="post" action="{{ problem_href('statement_templates_reset') }}" data-confirm-message="Restore statement/statements.ftl, statement/problem.tex, and statement/olymp.sty to Qiulygon defaults? This overwrites imported template/style files but keeps statement sections and attachments.">
       <input type="hidden" name="page" value="{{ return_page if return_page is defined else 'statement' }}" />
       <input type="hidden" name="language" value="{{ current_language }}" />
       {% if preview_id %}
@@ -48,7 +52,7 @@
       <a href="#" class="linkish danger-link" data-submit-form="1">Restore default templates</a>
     </form>
     {% if current_language %}
-    <form class="inline-action" method="post" action="/problems/{{ ctx.problem.slug }}/statement/languages/delete" data-confirm-message="Delete statement language {{ current_language }}? This removes all statement section files for that language.">
+    <form class="inline-action" method="post" action="{{ problem_href('statement_language_delete') }}" data-confirm-message="Delete statement language {{ current_language }}? This removes all statement section files for that language.">
       <input type="hidden" name="page" value="{{ return_page if return_page is defined else 'statement' }}" />
       <input type="hidden" name="language" value="{{ current_language }}" />
       {% if preview_id %}
@@ -70,19 +74,19 @@
   <form
     class="inline-form"
     method="post"
-    action="/problems/{{ ctx.problem.slug }}/preview/run"
+    action="{{ problem_href('preview_run') }}"
     data-preview-compile-form="1"
   >
     <input type="hidden" name="page" value="{{ return_page if return_page is defined else 'preview' }}" />
     <input type="hidden" name="language" value="{{ current_language }}" />
     <button class="btn primary-action" type="submit" data-preview-compile-button="1">{{ "Recompile Statement" if preview_id else "Compile Statement" }}</button>
   </form>
-  <a class="btn" href="/problems/{{ ctx.problem.slug }}/statement/source.tex?language={{ current_language }}" target="_blank" rel="noopener">Open TeX</a>
+  <a class="btn" href="{{ problem_href('statement_tex_source', query={'language': current_language}) }}" target="_blank" rel="noopener">Open TeX</a>
   {% if preview_id and pdf_exists %}
-  <a class="btn" href="/problems/{{ ctx.problem.slug }}/artifacts/{{ preview_id }}/statement_preview/statement.pdf" target="_blank" rel="noopener">Open PDF</a>
+  <a class="btn" href="{{ problem_href('artifact_file', verification_id=preview_id, rel_path='statement_preview/statement.pdf') }}" target="_blank" rel="noopener">Open PDF</a>
   {% endif %}
-  {% if latex_log_href %}
-  <a class="btn" href="{{ latex_log_href }}" target="_blank" rel="noopener">Open latex.log</a>
+  {% if latex_log_available %}
+  <a class="btn" href="{{ problem_href('artifact_file', verification_id=preview_id, rel_path='logs/latex.log') }}" target="_blank" rel="noopener">Open latex.log</a>
   {% endif %}
   {% if preview_id and pdf_exists %}
   <span class="{{ 'warn' if preview_is_stale else 'muted' }} statement-preview-status">{{ "PDF is stale; recompile after source changes." if preview_is_stale else "PDF is ready." }}</span>
@@ -105,7 +109,7 @@
 <section class="statement-editor-main">
   <form
     method="post"
-    action="/problems/{{ ctx.problem.slug }}/preview/save"
+    action="{{ problem_href('preview_save') }}"
     data-statement-draft-form="1"
     data-draft-scope-problem="{{ ctx.problem.slug }}"
     data-draft-scope-user="{{ ctx.user.username }}"
@@ -180,7 +184,7 @@
     {% endif %}
     <ul>
       {% for r in log_refs %}
-      <li><a href="/problems/{{ ctx.problem.slug }}/files?path={{ r.file }}&line={{ r.line }}">{{ r.file }}:{{ r.line }}</a> {{ r.context }}</li>
+      <li><a href="{{ problem_href('problem_files', query={'path': r.file, 'line': r.line}) }}">{{ r.file }}:{{ r.line }}</a> {{ r.context }}</li>
       {% endfor %}
     </ul>
   </details>
@@ -206,7 +210,7 @@
 {% endcall %}
 
 {% call ui_popup('statement-language-popup', 'Add Statement Language') %}
-      <form class="form-stack" method="post" action="/problems/{{ ctx.problem.slug }}/statement/languages/add">
+      <form class="form-stack" method="post" action="{{ problem_href('statement_language_add') }}">
         <input type="hidden" name="page" value="{{ return_page if return_page is defined else 'statement' }}" />
         {% if preview_id %}
         <input type="hidden" name="preview_id" value="{{ preview_id }}" />
@@ -227,7 +231,7 @@
     <p class="muted statement-assets-card-copy">Compile-only files shared by all statement languages.</p>
     <div class="statement-assets-card-body">
       <div class="form-block statement-assets-upload-block">
-        <form id="statement-assets-upload-form" class="form-stack" method="post" enctype="multipart/form-data" action="/problems/{{ ctx.problem.slug }}/statement/assets/upload">
+        <form id="statement-assets-upload-form" class="form-stack" method="post" enctype="multipart/form-data" action="{{ problem_href('statement_compile_asset_upload') }}">
           <input type="hidden" name="page" value="{{ return_page if return_page is defined else 'statement' }}" />
           <input type="hidden" name="language" value="{{ current_language }}" />
           {% if preview_id %}
@@ -252,10 +256,10 @@
         <tr>
           <td><code>{{ row.display_path }}</code></td>
           <td>
-            <a href="/problems/{{ ctx.problem.slug }}/files?dir={{ statement_assets_dir }}&path={{ row.path_q }}">Open</a>
+            <a href="{{ problem_href('problem_files', query={'dir': statement_assets_dir, 'path': row.path}) }}">Open</a>
             <span class="workspace-link-sep" aria-hidden="true">/</span>
-            <a href="/problems/{{ ctx.problem.slug }}/files/download?path={{ row.path_q }}">Download</a>
-            <form class="inline-action" method="post" action="/problems/{{ ctx.problem.slug }}/statement/assets/delete" data-confirm-message="Delete statement asset {{ row.display_path }}? This cannot be undone; uncommitted changes will be lost.">
+            <a href="{{ problem_href('files_download', query={'path': row.path}) }}">Download</a>
+            <form class="inline-action" method="post" action="{{ problem_href('statement_compile_asset_delete') }}" data-confirm-message="Delete statement asset {{ row.display_path }}? This cannot be undone; uncommitted changes will be lost.">
               <input type="hidden" name="path" value="{{ row.path }}" />
               <input type="hidden" name="page" value="{{ return_page if return_page is defined else 'statement' }}" />
               <input type="hidden" name="language" value="{{ current_language }}" />
@@ -283,7 +287,7 @@
     <p class="muted statement-assets-card-copy">Files included in ICPC packages.</p>
     <div class="statement-assets-card-body">
       <div class="form-block statement-assets-upload-block">
-        <form id="contestant-attachments-upload-form" class="form-stack" method="post" enctype="multipart/form-data" action="/problems/{{ ctx.problem.slug }}/statement/attachments/upload">
+        <form id="contestant-attachments-upload-form" class="form-stack" method="post" enctype="multipart/form-data" action="{{ problem_href('statement_attachment_upload') }}">
           <input type="hidden" name="page" value="{{ return_page if return_page is defined else 'statement' }}" />
           <input type="hidden" name="language" value="{{ current_language }}" />
           {% if preview_id %}
@@ -308,10 +312,10 @@
         <tr>
           <td><code>{{ row.display_path }}</code></td>
           <td>
-            <a href="/problems/{{ ctx.problem.slug }}/files?dir=attachments&path={{ row.path_q }}">Open</a>
+            <a href="{{ problem_href('problem_files', query={'dir': 'attachments', 'path': row.path}) }}">Open</a>
             <span class="workspace-link-sep" aria-hidden="true">/</span>
-            <a href="/problems/{{ ctx.problem.slug }}/files/download?path={{ row.path_q }}">Download</a>
-            <form class="inline-action" method="post" action="/problems/{{ ctx.problem.slug }}/statement/attachments/delete" data-confirm-message="Delete attachment {{ row.display_path }}? This cannot be undone; uncommitted changes will be lost.">
+            <a href="{{ problem_href('files_download', query={'path': row.path}) }}">Download</a>
+            <form class="inline-action" method="post" action="{{ problem_href('statement_attachment_delete') }}" data-confirm-message="Delete attachment {{ row.display_path }}? This cannot be undone; uncommitted changes will be lost.">
               <input type="hidden" name="path" value="{{ row.path }}" />
               <input type="hidden" name="page" value="{{ return_page if return_page is defined else 'statement' }}" />
               <input type="hidden" name="language" value="{{ current_language }}" />

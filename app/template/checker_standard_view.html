@@ -3,9 +3,9 @@
 <h1 class="page-title">View Standard Checker</h1>
 <p><strong>Checker:</strong> <code>{{ checker_name }}</code></p>
 <p class="muted">Source: upstream <code>third_party/upstream/testlib/checkers/</code>, {{ checker_lines }} lines.</p>
-<p><a href="/problems/{{ ctx.problem.slug }}/checker">Back to Checker</a></p>
+<p><a href="{{ problem_href('problem_checker') }}">Back to Checker</a></p>
 
-<form class="form-row" method="post" action="/problems/{{ ctx.problem.slug }}/checker/set-standard">
+<form class="form-row" method="post" action="{{ problem_href('checker_set_standard') }}">
   <input type="hidden" name="checker_name" value="{{ checker_name }}" />
   <button class="btn" type="submit">Use This Standard Checker</button>
 </form>

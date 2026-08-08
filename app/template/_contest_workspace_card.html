@@ -1,0 +1,26 @@
+{% set contest_workspace = ctx.contest_workspace %}
+<section class="action-card contest-workspace-card" aria-labelledby="contest-workspace-title">
+  <h3 id="contest-workspace-title">
+    <a href="{{ contest_workspace.contest_href }}">{{ contest_workspace.contest_title }}</a>
+  </h3>
+  <p class="contest-workspace-count">{{ contest_workspace.problem_count }} problem{% if contest_workspace.problem_count != 1 %}s{% endif %}</p>
+  <nav class="contest-problem-nav" aria-label="Contest problems">
+    {% for item in contest_workspace.problems %}
+    {% set item_label = item.idx %}
+    {% if item.can_open %}
+    <a
+      class="contest-problem-link{{ ' active' if item.active else '' }}"
+      href="{{ item.href }}"
+      title="{{ item.idx }} — {{ item.problem_slug }}"
+      {% if item.active %}aria-current="page"{% endif %}
+    >{{ item_label }}</a>
+    {% else %}
+    <span
+      class="contest-problem-link disabled"
+      aria-disabled="true"
+      title="{{ 'This section is unavailable.' if item.block_reason == 'section_access_denied' else 'You cannot access this problem.' }}"
+    >{{ item_label }}</span>
+    {% endif %}
+    {% endfor %}
+  </nav>
+</section>

@@ -29,7 +29,7 @@
           {% if row.role == "owner" %}
           <span class="muted">fixed owner</span>
           {% else %}
-          <form class="inline-form" method="post" action="/problems/{{ ctx.problem.slug }}/access/grant">
+          <form class="inline-form" method="post" action="{{ problem_href('workspace_access_grant') }}">
             <input type="hidden" name="target_user" value="{{ row.username }}" />
             <select name="role">
               {% for opt in repo_role_options %}
@@ -41,7 +41,7 @@
           <form
             class="inline-form"
             method="post"
-            action="/problems/{{ ctx.problem.slug }}/access/revoke"
+            action="{{ problem_href('workspace_access_revoke') }}"
             data-confirm-message="Revoke direct problem access for {{ row.username }}? Existing files will remain stored."
           >
             <input type="hidden" name="target_user" value="{{ row.username }}" />
@@ -59,7 +59,7 @@
     <p class="muted">No members.</p>
     {% endif %}
     {% if ctx.access.can_manage %}
-    <form class="form-row" method="post" action="/problems/{{ ctx.problem.slug }}/access/grant">
+    <form class="form-row" method="post" action="{{ problem_href('workspace_access_grant') }}">
       <label for="target-user">User</label>
       <input id="target-user" name="target_user" />
       <label for="target-role">Role</label>

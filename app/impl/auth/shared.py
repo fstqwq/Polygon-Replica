@@ -11,6 +11,9 @@ from fastapi import HTTPException, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 
 from app.impl.auth.internal import runtime
+from app.impl.contest.workspace_scope import (
+    problem_template_navigation,
+)
 from app.impl.runtime.config import config
 from app.service.platform.hashing import hmac_sha256_hex, sha256_hex_bytes
 
@@ -324,6 +327,9 @@ def template_response(request: Request, template_name: str, context: dict | None
     ctx = payload.get("ctx")
     auto_update_message = ""
     if isinstance(ctx, dict):
+        problem = ctx.get("problem")
+        if isinstance(problem, dict) and isinstance(problem.get("slug"), str):
+            payload.update(problem_template_navigation(request, problem["slug"]))
         auto_update_message = _normalize_flash_message(
             ctx.get("workspace_auto_update_message", "")
         )

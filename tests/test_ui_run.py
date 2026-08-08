@@ -1635,7 +1635,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             self,
             html,
             contains=(
-                "<th>Source</th>",
+                '<th class="verification-list-source-head">Source</th>',
                 "Workspace (on v",
                 str(revision_row.get("source_display") or ""),
             ),
@@ -3878,8 +3878,8 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             "detail_rows": [
                 {
                     "test_name": "001.in",
-                    "input_preview": {"available": False, "text": "", "truncated": False, "limit": 1024, "download_href": "", "message": "missing"},
-                    "answer_preview": {"available": False, "text": "", "truncated": False, "limit": 1024, "download_href": "", "message": "missing"},
+                    "input_preview": {"available": False, "text": "", "truncated": False, "limit": 1024, "download_verification_id": "", "download_rel_path": "", "message": "missing"},
+                    "answer_preview": {"available": False, "text": "", "truncated": False, "limit": 1024, "download_verification_id": "", "download_rel_path": "", "message": "missing"},
                     "cells": [
                         {
                             "detail": {
@@ -3895,7 +3895,8 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
                                         "text": "> ping\n< pong\n",
                                         "truncated": False,
                                         "limit": 1024,
-                                        "download_href": download_href,
+                                        "download_verification_id": "ver-r-transcript",
+                                        "download_rel_path": f"blob/{encoded}/program.out",
                                         "message": "",
                                     },
                                     "interactive_transcript": {
@@ -5653,7 +5654,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         self.assertIn(f"/problems/alice/sample/run/details?verification_id=ver-{run_id}", run_html)
         self.assertEqual(run_html.count('action="/problems/alice/sample/verification/start"'), 2)
         self.assertIn(
-            'class="section-tab problem-section-tab problem-section-action-tab problem-section-action-tab-verification"',
+            'class="section-tab problem-section-tab problem-section-action-tab problem-section-action-tab-verification active"',
             run_html,
         )
         self.assertIn('class="problem-section-tab-action-control" type="submit"', run_html)
@@ -5679,18 +5680,26 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             )
         self.assertTrue(head_commit)
         current_export = {
-            "id": "exp current",
+            "id": "job-current",
+            "problem_id": 1,
+            "workspace_id": 1,
+            "actor_user_id": 1,
             "verification_id": "ver-current",
             "export_type": "icpc",
+            "status": "succeeded",
+            "export_id": "exp current",
+            "error": "",
             "filename": "sample current.zip",
             "sha256": "abc",
             "size_bytes": 123,
             "source_commit": head_commit,
             "created_at": "2026-08-08T00:00:00Z",
+            "started_at": "2026-08-08T00:00:00Z",
+            "finished_at": "2026-08-08T00:00:01Z",
         }
         with (
             patch.object(config.export_service, "latest_workspace_source_commit", return_value=head_commit),
-            patch.object(config.export_service, "latest_workspace_export_for_source", return_value=current_export),
+            patch.object(config.export_service, "latest_succeeded_workspace_export_job", return_value=current_export),
             patch.object(config.export_service, "export_archive_path", return_value=Path("/tmp/sample-current.zip")),
         ):
             response = run_page(_request("/problems/alice/sample/run"), "alice/sample", "alice")

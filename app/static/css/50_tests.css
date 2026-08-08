@@ -401,6 +401,12 @@ select.tag-select.tag-select-rejected {
   background-color: var(--tag-fail-bg);
 }
 
+select.tag-select.tag-select-mixed {
+  color: var(--warn-text);
+  border-color: var(--warn-line);
+  background-color: var(--warn-bg);
+}
+
 select.tag-select.tag-select-expected {
   color: var(--tag-info-fg);
   border-color: var(--tag-info-border);
@@ -429,6 +435,12 @@ select.tag-select.tag-select-neutral {
 .tag-select option[value="rejected"] {
   color: var(--tag-fail-fg);
   background-color: var(--tag-fail-bg);
+}
+
+.tag-select option[value="tle_or_correct"],
+.tag-select option[value="tle_or_re"] {
+  color: var(--warn-text);
+  background-color: var(--warn-bg);
 }
 
 .tag-select option[value="unknown"] {

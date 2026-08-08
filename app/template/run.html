@@ -3,11 +3,11 @@
 <div class="page-title-inline">
   <h1 class="page-title">Verification</h1>
   <div class="page-title-actions">
-    <form class="inline-form" method="post" action="/problems/{{ ctx.problem.slug }}/verification/start">
+    <form class="inline-form" method="post" action="{{ problem_href('verification_start') }}">
       <input class="page-target" type="hidden" name="page" value="run" />
       <button class="btn primary-action" type="submit" {% if not ctx.access.can_write %}disabled title="{{ ctx.access.write_block_reason }}"{% endif %}>Start verification</button>
     </form>
-    <a class="text-nowrap" href="/problems/{{ ctx.problem.slug }}/run/new">Customize verification</a>
+    <a class="text-nowrap" href="{{ problem_href('run_new_page') }}">Customize verification</a>
   </div>
 </div>
 {% include "_flash_message.html" %}
@@ -26,7 +26,7 @@
   {% set created_parts = (r.created_at | local_time).split(' ', 1) %}
   <tr class="{{ 'verification-row-failed' if r.is_failed else '' }}">
     <td class="verification-list-created-cell">
-      <a href="/problems/{{ ctx.problem.slug }}/run/details?verification_id={{ r.id }}"><span class="verification-list-created-date">{{ created_parts[0] }}</span>{% if created_parts|length > 1 %} <span class="verification-list-created-time">{{ created_parts[1] }}</span>{% endif %}</a>
+      <a href="{{ problem_href('run_details_page', query={'verification_id': r.id}) }}"><span class="verification-list-created-date">{{ created_parts[0] }}</span>{% if created_parts|length > 1 %} <span class="verification-list-created-time">{{ created_parts[1] }}</span>{% endif %}</a>
     </td>
     <td class="verification-list-source-cell">{{ r.source_display }}</td>
     <td class="verification-list-kind-cell">{{ r.kind }}</td>
@@ -51,9 +51,9 @@
       {% endif %}
     </td>
     <td class="verification-actions">
-      <a href="/problems/{{ ctx.problem.slug }}/run/details?verification_id={{ r.id }}">View</a>
+      <a href="{{ problem_href('run_details_page', query={'verification_id': r.id}) }}">View</a>
       {% if r.has_running %}
-      <form class="inline-form verification-inline-action" method="post" action="/problems/{{ ctx.problem.slug }}/run/cancel">
+      <form class="inline-form verification-inline-action" method="post" action="{{ problem_href('run_cancel') }}">
         <input type="hidden" name="verification_id" value="{{ r.id }}" />
         <a href="#" class="linkish danger-link" data-submit-form="1">Cancel</a>
       </form>
@@ -62,7 +62,7 @@
       <form
         class="inline-form verification-inline-action"
         method="post"
-        action="/problems/{{ ctx.problem.slug }}/run/rejudge"
+        action="{{ problem_href('run_rejudge') }}"
         data-confirm-message="Rejudge without cache? This creates a new verification, deletes matching cached case results, and does not reuse cached results."
       >
         <input type="hidden" name="verification_id" value="{{ r.id }}" />
@@ -75,6 +75,6 @@
 </table>
 </div>
 {% else %}
-<p class="muted">Start a verification or <a href="/problems/{{ ctx.problem.slug }}/run/new">customize it</a>.</p>
+<p class="muted">Start a verification or <a href="{{ problem_href('run_new_page') }}">customize it</a>.</p>
 {% endif %}
 {% endblock %}

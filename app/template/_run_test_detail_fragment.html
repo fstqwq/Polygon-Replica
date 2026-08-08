@@ -5,8 +5,8 @@
   <div class="preview-card">
     <div class="preview-head">
       <strong>Input {{ row.test_name }}</strong>
-      {% if row.input_preview.available and row.input_preview.download_href %}
-      <a href="{{ row.input_preview.download_href }}">download</a>
+      {% if row.input_preview.available and row.input_preview.download_verification_id %}
+      <a href="{{ problem_href('artifact_file', verification_id=row.input_preview.download_verification_id, rel_path=row.input_preview.download_rel_path) }}">download</a>
       {% endif %}
     </div>
     {% if row.input_preview.available %}
@@ -21,8 +21,8 @@
   <div class="preview-card">
     <div class="preview-head">
       <strong>Answer</strong>
-      {% if row.answer_preview.available and row.answer_preview.download_href %}
-      <a href="{{ row.answer_preview.download_href }}">download</a>
+      {% if row.answer_preview.available and row.answer_preview.download_verification_id %}
+      <a href="{{ problem_href('artifact_file', verification_id=row.answer_preview.download_verification_id, rel_path=row.answer_preview.download_rel_path) }}">download</a>
       {% endif %}
     </div>
     {% if row.answer_preview.available %}
@@ -96,8 +96,8 @@
       <div class="transcript">
         <div class="transcript-head">
           <strong>Transcript (first {{ final_row.interactive_transcript.shown }} lines)</strong>
-          {% if final_row.output_preview and final_row.output_preview.available and final_row.output_preview.download_href %}
-          <a href="{{ final_row.output_preview.download_href }}">download</a>
+          {% if final_row.output_preview and final_row.output_preview.available and final_row.output_preview.download_verification_id %}
+          <a href="{{ problem_href('artifact_file', verification_id=final_row.output_preview.download_verification_id, rel_path=final_row.output_preview.download_rel_path) }}">download</a>
           {% endif %}
         </div>
         <div class="transcript-list">
@@ -114,8 +114,8 @@
       {% else %}
       <div class="sol-output-head">
         <strong>Output</strong>
-        {% if final_row.output_preview and final_row.output_preview.available and final_row.output_preview.download_href %}
-        <a href="{{ final_row.output_preview.download_href }}">download</a>
+        {% if final_row.output_preview and final_row.output_preview.available and final_row.output_preview.download_verification_id %}
+        <a href="{{ problem_href('artifact_file', verification_id=final_row.output_preview.download_verification_id, rel_path=final_row.output_preview.download_rel_path) }}">download</a>
         {% endif %}
       </div>
       {% if final_row.output_preview and final_row.output_preview.available and final_row.output_preview.text != '(empty)' %}
