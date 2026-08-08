@@ -8,7 +8,7 @@
 {% include "_flash_message.html" %}
 <div class="run-details-page{% if detail_table_compact %} run-details-page-compact{% endif %}">
 
-<section class="verification-header-section">
+<section class="content-section verification-header-section">
   {% if detail_status or detail_task_counts or detail_fail_flag or detail_last_updated or cancel_available or (rerun_solution_paths and not detail_running) %}
   <div class="preview-card verification-task-status-card">
     <div class="preview-head verification-task-status-head">
@@ -79,7 +79,7 @@
 </section>
 
 {% if detail_columns %}
-<section>
+<section class="content-section">
   <div class="verification-detail-wrap{% if not detail_table_compact %} verification-detail-wrap-regular{% endif %}">
     <table
       class="verification-detail-table{% if detail_table_compact %} verification-detail-table-compact{% else %} verification-detail-table-regular{% endif %}"
@@ -185,7 +185,7 @@
       <p class="muted verification-detail-loading">Select a test for details.</p>
 {% endcall %}
 
-<section>
+<section class="content-section">
   <h2>Diagnostics</h2>
   {% set ns = namespace(has_diag=false) %}
   {% include "_verification_sanity_diagnostics.html" %}
@@ -242,7 +242,7 @@
   {% endif %}
 </section>
 {% else %}
-<section>
+<section class="content-section">
   {% if detail_running or detail_status == "running" %}
   <p class="muted">Test details appear as runs finish.</p>
   {% elif verification_id or detail_task_counts %}
@@ -251,7 +251,7 @@
   <p class="muted">Choose a <a href="{{ problem_href('problem_run') }}">verification</a>.</p>
   {% endif %}
 </section>
-<section>
+<section class="content-section">
   <h2>Diagnostics</h2>
   {% set ns = namespace(has_diag=false) %}
   {% include "_verification_sanity_diagnostics.html" %}

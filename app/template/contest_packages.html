@@ -4,7 +4,7 @@
 
 {% include "_flash_message.html" %}
 
-<section>
+<section class="content-section">
   <h2>Build Statements and Packages</h2>
   <p><strong>Problems in contest:</strong> {{ problem_count }}</p>
   {% if not ctx.access.can_write %}
@@ -54,7 +54,7 @@
   {% endif %}
 </section>
 
-<section>
+<section class="content-section">
   <h2>Statement Sources</h2>
   <p class="muted">Edit TeX sources and upload referenced resources for the contest PDF.</p>
   {% if contest_statement_source_error %}
@@ -139,7 +139,7 @@
   {% endif %}
 </section>
 
-<section>
+<section class="content-section">
   <h2>Build History</h2>
   {% if job_rows %}
   <table class="table-base">
@@ -182,7 +182,7 @@
 </section>
 
 {% if selected_job %}
-<section id="job-report">
+<section class="content-section" id="job-report">
   <h2>Selected Job Report</h2>
   <p><strong>Job:</strong> <code>{{ selected_job.id }}</code> / {{ selected_job.job_type }} / {{ selected_job.status | status_label }}</p>
   {% if selected_job.summary %}
@@ -237,7 +237,7 @@
 </section>
 {% endif %}
 
-<section>
+<section class="content-section">
   <h2>Artifacts</h2>
   {% if artifact_rows %}
   <table class="table-base">

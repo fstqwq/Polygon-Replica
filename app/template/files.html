@@ -3,8 +3,8 @@
 <h1 class="page-title">Files</h1>
 {% include "_flash_message.html" %}
 
-<div class="grid files-grid">
-  <section class="files-panel files-panel-browser">
+<div class="files-grid">
+  <section class="content-section files-panel files-panel-browser">
     <h2>Repository Browser</h2>
     <div class="inline-meta-row">
       <p><strong>Current folder:</strong> <code>{{ browse_dir if browse_dir else "/" }}</code></p>
@@ -15,27 +15,29 @@
     {% if files_truncated %}
     <p><em>Repository listing is capped at {{ file_limit }} entries; narrow by folder for complete browsing.</em></p>
     {% endif %}
-    <table class="table-base">
+    <div class="table-scroll">
+    <table class="table-base files-browser-table">
       <tr><th>Type</th><th>Path</th></tr>
       {% for d in browse_dirs %}
       <tr>
-        <td>dir</td>
-        <td><a href="?dir={{ d.path }}"><code>{{ d.path }}/</code></a></td>
+        <td class="table-cell-nowrap">dir</td>
+        <td class="table-cell-break"><a href="?dir={{ d.path }}"><code>{{ d.path }}/</code></a></td>
       </tr>
       {% endfor %}
       {% for f in browse_files %}
       <tr>
-        <td>file</td>
-        <td><a href="?path={{ f.path }}&dir={{ browse_dir }}"><code>{{ f.path }}</code></a></td>
+        <td class="table-cell-nowrap">file</td>
+        <td class="table-cell-break"><a href="?path={{ f.path }}&dir={{ browse_dir }}"><code>{{ f.path }}</code></a></td>
       </tr>
       {% endfor %}
     </table>
+    </div>
     {% if not browse_dirs and not browse_files %}
     <p class="muted">No entries.</p>
     {% endif %}
   </section>
 
-  <section class="files-panel files-panel-editor">
+  <section class="content-section files-panel files-panel-editor">
     <h2>Editor</h2>
     <div class="inline-meta-row">
       <p><strong>File:</strong> <code>{{ selected }}</code></p>
@@ -97,7 +99,7 @@
     {% endif %}
   </section>
 
-  <section class="files-panel files-panel-ops">
+  <section class="content-section files-panel files-panel-ops">
     <h2>File Operations</h2>
     <div class="form-stack selected-path-actions-list">
       <div class="form-block">

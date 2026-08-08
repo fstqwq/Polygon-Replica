@@ -16,6 +16,7 @@
     {% if entries_truncated %}
     <p class="muted">Showing first {{ entries_limit }} {% if entries_limit == 1 %}solution{% else %}solutions{% endif %}.</p>
     {% endif %}
+    <div class="table-scroll">
     <table class="table-base solutions-table">
       <colgroup>
         <col class="solutions-col-source" />
@@ -57,6 +58,7 @@
       </tr>
       {% endfor %}
     </table>
+    </div>
  </section>
 {% else %}
 {% call component_empty_state('No solutions', 'Add a source to define expected behavior.') %}

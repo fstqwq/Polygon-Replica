@@ -584,7 +584,6 @@ body.problem-layout:not(.verification-compact) {
 
 .page-grid.page-grid-wide .content-shell {
   min-width: 0;
-  overflow-x: auto;
 }
 
 .page-grid.page-grid-wide .side-panel {
@@ -664,7 +663,7 @@ body.verification-compact .page-grid.page-grid-wide .verification-lifecycle-step
 .content-shell,
 .info-card,
 .action-card,
-section,
+.content-section,
 .login-card {
   border: 1px solid var(--line);
   background: var(--surface);
@@ -672,7 +671,12 @@ section,
 
 .content-shell {
   min-width: 0;
-  overflow-x: auto;
+  overflow-x: visible;
+}
+
+body.problem-layout:not(.verification-compact) .content-shell {
+  container-name: problem-content;
+  container-type: inline-size;
 }
 
 .container {
@@ -690,7 +694,7 @@ section,
 
 .info-card,
 .action-card,
-section {
+.content-section {
   padding: var(--space-4);
   min-width: 0;
 }

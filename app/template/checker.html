@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% from "_component_forms.html" import component_empty_state, rename_source_form, source_editor_form %}
 {% macro custom_checker_editor(inline_error='') -%}
-<section class="component-workbench checker-custom-editor">
+<section class="content-section component-workbench checker-custom-editor">
   <div class="component-workbench-head">
     <div>
       <h2>{{ "Custom checker" if editor.source_exists else "New custom checker" }}</h2>
@@ -34,7 +34,7 @@
 {%- endmacro %}
 
 {% macro standard_checker_section() -%}
-<section class="checker-standard-panel">
+<section class="content-section checker-standard-panel">
   {% if standard_checker_options %}
   <form class="form-stack checker-standard-form" method="post" action="{{ problem_href('checker_set_standard') }}">
     {% if ctx.contest_workspace %}<input type="hidden" name="contest" value="{{ ctx.contest_workspace.contest_slug }}" />{% endif %}
@@ -93,7 +93,7 @@
   {% if show_custom_editor or editor_error %}
   {{ custom_checker_editor(editor_error) }}
   {% else %}
-  <section class="checker-custom-entry">
+  <section class="content-section checker-custom-entry">
     <div>
       <h2>Custom checker</h2>
     </div>

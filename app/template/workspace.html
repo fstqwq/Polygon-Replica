@@ -24,8 +24,8 @@
 </section>
 {% endif %}
 
-<div class="grid">
-  <section>
+<div class="workspace-page-layout">
+  <section class="content-section workspace-controls-panel">
     {% set ws_revision = ctx.workspace_revision if ctx.workspace_revision is defined else {} %}
     {% set local_rev_raw = ws_revision.get('local') if ws_revision else none %}
     {% set published_rev_raw = ws_revision.get('upstream') if ws_revision else none %}
@@ -77,7 +77,7 @@
     {% endif %}
   </section>
 
-  <section id="file-changes">
+  <section class="content-section workspace-diff-panel" id="file-changes">
     <div class="workspace-section-head">
       <h2>File Changes</h2>
       {% if ctx.access.can_write %}

@@ -3,8 +3,8 @@
 <h1 class="page-title">Manage Access</h1>
 {% include "_flash_message.html" %}
 
-<div class="grid">
-  <section>
+<div class="access-page">
+  <section class="content-section access-summary" aria-label="Current problem access">
     <h2>Access</h2>
     <p><strong>Role:</strong> {{ ctx.access.role }}</p>
     <p><strong>Capabilities:</strong> {{ "read/write" if ctx.access.can_write else "read-only" }}{% if ctx.access.can_manage %}, manage access{% endif %}</p>
@@ -13,18 +13,20 @@
     {% endif %}
   </section>
 
-  <section>
+  <section class="content-section access-members">
     <h2>Problem Access</h2>
     <p class="muted">Owners and system admins manage roles. Owners are fixed; users must register first.</p>
     {% if acl_entries %}
-    <table class="table-base">
+    <div class="table-scroll">
+    <table class="table-base access-members-table">
       <tr><th>User</th><th>Role</th><th>Granted</th><th>Actions</th></tr>
       {% for row in acl_entries %}
       <tr>
-        <td><code>{{ row.username }}</code></td>
-        <td>{{ row.role }}</td>
-        <td>{{ row.created_at | local_time }}</td>
-        <td>
+        <td class="access-user table-cell-nowrap"><code>{{ row.username }}</code></td>
+        <td class="access-role table-cell-nowrap">{{ row.role }}</td>
+        <td class="access-granted table-cell-nowrap">{{ row.created_at | local_time }}</td>
+        <td class="access-actions table-cell-actions">
+          <div class="access-actions-inner">
           {% if ctx.access.can_manage %}
           {% if row.role == "owner" %}
           <span class="muted">fixed owner</span>
@@ -51,23 +53,29 @@
           {% else %}
           <span class="muted">owner or admin</span>
           {% endif %}
+          </div>
         </td>
       </tr>
       {% endfor %}
     </table>
+    </div>
     {% else %}
     <p class="muted">No members.</p>
     {% endif %}
     {% if ctx.access.can_manage %}
-    <form class="form-row" method="post" action="{{ problem_href('workspace_access_grant') }}">
-      <label for="target-user">User</label>
-      <input id="target-user" name="target_user" />
-      <label for="target-role">Role</label>
-      <select id="target-role" name="role">
-        {% for opt in repo_role_options %}
-        <option value="{{ opt }}">{{ opt }}</option>
-        {% endfor %}
-      </select>
+    <form class="access-grant-form" method="post" action="{{ problem_href('workspace_access_grant') }}">
+      <div class="form-field-stack">
+        <label for="target-user">User</label>
+        <input id="target-user" name="target_user" />
+      </div>
+      <div class="form-field-stack">
+        <label for="target-role">Role</label>
+        <select id="target-role" name="role">
+          {% for opt in repo_role_options %}
+          <option value="{{ opt }}">{{ opt }}</option>
+          {% endfor %}
+        </select>
+      </div>
       <button class="btn" type="submit">Grant / Update</button>
     </form>
     {% else %}

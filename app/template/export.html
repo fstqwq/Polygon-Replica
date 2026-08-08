@@ -3,7 +3,7 @@
 <h1 class="page-title">Packages</h1>
 {% include "_flash_message.html" %}
 
-<div class="grid">
+<div class="package-action-grid">
   <section class="info-card">
     <h2>Export Into Package</h2>
     <form class="form-row" method="post" action="{{ problem_href('export_create') }}">
@@ -33,19 +33,20 @@
   </section>
 </div>
 
-<section>
+<section class="content-section">
   <h2>Activity</h2>
   {% if activity_rows %}
+  <div class="table-scroll">
   <table class="table-base">
     <tr><th>Time</th><th>Status</th><th>Type</th><th>Source</th><th>Detail</th><th>Open</th></tr>
     {% for row in activity_rows %}
     <tr>
-      <td>{{ row.created_at|local_time }}</td>
-      <td>{{ row.status|status_label }}</td>
-      <td>{{ row.type_display }}</td>
-      <td>{{ row.source_display }}</td>
-      <td>{{ row.detail }}</td>
-      <td>
+      <td class="table-cell-nowrap">{{ row.created_at|local_time }}</td>
+      <td class="table-cell-nowrap">{{ row.status|status_label }}</td>
+      <td class="table-cell-nowrap">{{ row.type_display }}</td>
+      <td class="table-cell-break">{{ row.source_display }}</td>
+      <td class="table-cell-break">{{ row.detail }}</td>
+      <td class="table-cell-actions">
         {% if row.open_kind == 'export' %}
         <a href="{{ problem_href('export_file', export_id=row.open_export_id, filename=row.open_filename) }}">{{ row.open_label }}</a>
         {% elif row.open_kind == 'verification' %}
@@ -57,6 +58,7 @@
     </tr>
     {% endfor %}
   </table>
+  </div>
   {% else %}
   <p class="muted">No exports.</p>
   {% endif %}

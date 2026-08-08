@@ -12,7 +12,7 @@
 
 {% if source_rows %}
 <div class="generator-workbench{% if not show_editor %} generator-workbench-list-only{% endif %}">
-  <section class="generator-list-panel">
+  <section class="content-section generator-list-panel">
     <div class="generator-list-head">
       <h2>Sources</h2>
       <span class="muted">{{ source_rows|length }} file{{ "s" if source_rows|length != 1 else "" }}</span>
@@ -32,7 +32,7 @@
   </section>
 
   {% if show_editor or editor_error %}
-  <section class="component-workbench generator-editor-panel">
+  <section class="content-section component-workbench generator-editor-panel">
     <div class="component-workbench-head">
       <div>
         <h2>{{ "Generator source" if selected_exists else "New generator" }}</h2>
@@ -62,7 +62,7 @@
   {% endif %}
 </div>
 {% elif show_editor or editor_error %}
-<section class="component-workbench generator-editor-panel generator-first-editor">
+<section class="content-section component-workbench generator-editor-panel generator-first-editor">
   <div class="component-workbench-head">
     <div>
       <h2>New generator</h2>

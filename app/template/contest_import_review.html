@@ -3,7 +3,7 @@
 <h1 class="page-title">Review Contest Import</h1>
 {% include "_flash_message.html" %}
 
-<section>
+<section class="content-section">
   <p class="muted">Package: <code>{{ package_name }}</code></p>
   <p class="muted">Adjust contest and problem slugs before importing.</p>
   {% if top_error %}
@@ -11,7 +11,7 @@
   {% endif %}
 </section>
 
-<section>
+<section class="content-section">
   <form class="form-stack" method="post" action="/contests/import/confirm">
     <input type="hidden" name="draft_id" value="{{ draft_id }}" />
     <div class="form-row">

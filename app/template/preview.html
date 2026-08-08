@@ -106,7 +106,7 @@
 {% if preview_id and (not pdf_exists) and (not preview_is_missing) and (not preview_compile_failed) %}
 <p class="muted statement-preview-message">No PDF output.</p>
 {% endif %}
-<section class="statement-editor-main">
+<section class="content-section statement-editor-main">
   <form
     method="post"
     action="{{ problem_href('preview_save') }}"
@@ -175,7 +175,7 @@
   </form>
 </section>
 {% if log_refs or log %}
-<section class="statement-preview-diagnostics">
+<section class="content-section statement-preview-diagnostics">
   {% if log_refs %}
   <details {% if not pdf_exists or (ns.latest and ns.latest.status != "ok") %}open{% endif %}>
     <summary>Log References ({{ log_refs_total }})</summary>
@@ -254,8 +254,8 @@
         {% if statement_compile_assets %}
         {% for row in statement_compile_assets %}
         <tr>
-          <td><code>{{ row.display_path }}</code></td>
-          <td>
+          <td class="table-cell-break"><code>{{ row.display_path }}</code></td>
+          <td class="table-cell-actions">
             <a href="{{ problem_href('problem_files', query={'dir': statement_assets_dir, 'path': row.path}) }}">Open</a>
             <span class="workspace-link-sep" aria-hidden="true">/</span>
             <a href="{{ problem_href('files_download', query={'path': row.path}) }}">Download</a>
@@ -310,8 +310,8 @@
         {% if contestant_attachments %}
         {% for row in contestant_attachments %}
         <tr>
-          <td><code>{{ row.display_path }}</code></td>
-          <td>
+          <td class="table-cell-break"><code>{{ row.display_path }}</code></td>
+          <td class="table-cell-actions">
             <a href="{{ problem_href('problem_files', query={'dir': 'attachments', 'path': row.path}) }}">Open</a>
             <span class="workspace-link-sep" aria-hidden="true">/</span>
             <a href="{{ problem_href('files_download', query={'path': row.path}) }}">Download</a>

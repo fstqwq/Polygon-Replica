@@ -115,6 +115,52 @@ class TestPublicContracts(unittest.TestCase):
             forms_source,
         )
 
+    def test_problem_layouts_are_container_aware_and_own_overflow(self) -> None:
+        layout_source = (ROOT / "app" / "static" / "css" / "10_layout.css").read_text(
+            encoding="utf-8-sig"
+        )
+        workspace_source = WORKSPACE_CSS_PATH.read_text(encoding="utf-8-sig")
+        forms_source = (ROOT / "app" / "static" / "css" / "30_forms.css").read_text(
+            encoding="utf-8-sig"
+        )
+        verification_source = (ROOT / "app" / "static" / "css" / "40_verification.css").read_text(
+            encoding="utf-8-sig"
+        )
+        tests_source = (ROOT / "app" / "static" / "css" / "50_tests.css").read_text(
+            encoding="utf-8-sig"
+        )
+        templates = "\n".join(
+            path.read_text(encoding="utf-8-sig")
+            for path in sorted((ROOT / "app" / "template").glob("*.html"))
+        )
+
+        self.assertIn("container-name: problem-content;", layout_source)
+        self.assertIn("container-type: inline-size;", layout_source)
+        self.assertIn("overflow-x: visible;", layout_source)
+        self.assertNotIn(".grid {", workspace_source)
+        self.assertNotIn('class="grid"', templates)
+        self.assertNotRegex(layout_source, r"(?m)^section\s*[,{]")
+
+        self.assertIn("@container problem-content (max-width: 900px)", workspace_source)
+        self.assertIn("@container problem-content (max-width: 900px)", tests_source)
+        self.assertIn("@container problem-content (max-width: 820px)", forms_source)
+        self.assertIn("@container problem-content (max-width: 820px)", tests_source)
+        self.assertIn("@container problem-content (max-width: 760px)", verification_source)
+        self.assertIn("@container problem-content (max-width: 640px)", forms_source)
+        self.assertIn("min-width: 38rem;", verification_source)
+
+        table_cells = re.search(
+            r"\.table-base th,\s*\.table-base td\s*\{(?P<body>.*?)\}",
+            forms_source,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(table_cells)
+        table_cell_body = table_cells.group("body") if table_cells else ""
+        self.assertIn("overflow-wrap: normal;", table_cell_body)
+        self.assertNotIn("overflow-wrap: anywhere;", table_cell_body)
+        self.assertIn(".table-cell-break {", forms_source)
+        self.assertIn(".table-cell-nowrap,", forms_source)
+
     def test_contest_problem_slugs_wrap_in_all_problem_tables(self) -> None:
         workspace_source = WORKSPACE_CSS_PATH.read_text(encoding="utf-8-sig")
 

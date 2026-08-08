@@ -1691,9 +1691,9 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         resp = files_page(_request("/problems/alice/sample/files"), "alice/sample", "alice")
         self.assertEqual(resp.status_code, 200)
         html = resp.body.decode("utf-8", errors="replace")
-        self.assertIn('class="files-panel files-panel-browser"', html)
-        self.assertIn('class="files-panel files-panel-editor"', html)
-        self.assertIn('class="files-panel files-panel-ops"', html)
+        self.assertIn('class="content-section files-panel files-panel-browser"', html)
+        self.assertIn('class="content-section files-panel files-panel-editor"', html)
+        self.assertIn('class="content-section files-panel files-panel-ops"', html)
 
     def test_contests_root_page_is_top_level_without_selected_contest(self) -> None:
         slug = f"ui-root-contest-{uuid.uuid4().hex[:8]}"

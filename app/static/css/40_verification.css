@@ -4,7 +4,7 @@
 }
 
 .verification-list-table {
-  min-width: 46rem;
+  min-width: 38rem;
   table-layout: auto;
 }
 
@@ -69,7 +69,7 @@
   margin-left: var(--space-3);
 }
 
-@media (max-width: 960px) {
+@container problem-content (max-width: 760px) {
   .verification-list-created-date,
   .verification-list-created-time {
     display: block;

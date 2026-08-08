@@ -2,18 +2,20 @@
 {% block content %}
 <h1 class="page-title">Revision History</h1>
 {% include "_flash_message.html" %}
-<section>
+<section class="content-section">
   {% if commits %}
+  <div class="table-scroll">
   <table class="table-base revision-history-table">
     <tr><th>Revision</th><th>Message</th><th>Author</th><th>Date</th><th>Action</th></tr>
     {% for c in commits %}
     <tr>
-      <td><code>{{ ("v" ~ c.version) if c.version else "-" }}</code></td>
-      <td>{{ c.subject }}</td><td>{{ c.author }}</td><td>{{ c.date|local_time }}</td>
-      <td><a href="{{ problem_href('problem_history', query={'revision': 'v' ~ c.version}) }}">View changes</a></td>
+      <td class="table-cell-nowrap"><code>{{ ("v" ~ c.version) if c.version else "-" }}</code></td>
+      <td class="table-cell-break">{{ c.subject }}</td><td class="table-cell-nowrap">{{ c.author }}</td><td class="table-cell-nowrap">{{ c.date|local_time }}</td>
+      <td class="table-cell-actions"><a href="{{ problem_href('problem_history', query={'revision': 'v' ~ c.version}) }}">View changes</a></td>
     </tr>
     {% endfor %}
   </table>
+  </div>
   {% if selected_commit %}
   <h2>Revision Changes</h2>
   <p>{{ selected_subject }}</p>

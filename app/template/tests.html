@@ -4,7 +4,7 @@
 <h1 class="page-title">Tests ({{ tests_editor.summary.total }})</h1>
 {% include "_flash_message.html" %}
 
-<section>
+<section class="content-section">
   <div class="tests-heading-row">
     <h2>Tests Editor</h2>
     <div class="tests-heading-actions" aria-label="Tests actions">
@@ -16,6 +16,7 @@
   <p class="muted">Showing first {{ tests_editor.shown }} of {{ tests_editor.total }} {% if tests_editor.total == 1 %}test{% else %}tests{% endif %}.</p>
   {% endif %}
   {% if tests_editor.rows %}
+  <div class="table-scroll">
   <table class="table-base table-rows tests-editor-table">
     <colgroup>
       <col class="tests-col-test" />
@@ -69,6 +70,7 @@
     </tr>
     {% endfor %}
   </table>
+  </div>
   {% else %}
   <p class="muted">Add a test to start.</p>
   {% endif %}
