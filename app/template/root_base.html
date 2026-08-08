@@ -3,8 +3,8 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>{{ ui_browser_title }}</title>
-  <link rel="stylesheet" href="/static/style.css?v=20260808-66" />
+  <title>{% block root_title %}{{ ui_browser_title }}{% endblock %}</title>
+  <link rel="stylesheet" href="/static/style.css?v=20260808-67" />
 </head>
 <body class="root-layout">
   {% set flash_presenter = 'topbar' %}

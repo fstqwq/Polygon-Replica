@@ -1,44 +1,10 @@
-<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>{% block admin_title %}Administration{% endblock %} - {{ ui_browser_title }}</title>
-  <link rel="stylesheet" href="/static/style.css?v=20260808-66" />
-</head>
-<body class="root-layout admin-layout">
-  {% set flash_presenter = 'topbar' %}
-  <header class="topbar">
-    {% set top_user = user %}
-    {% set top_settings_href = '/settings' %}
-    {% set top_active_main = active_main %}
-    {% include "_topbar_common.html" %}
-  </header>
-
-  <div class="workbench-frame workbench-frame-readable admin-workbench">
-    <div class="workbench-context-bar admin-context-bar">
-      <strong>Administration</strong>
-      <span class="muted">System operations and runtime health</span>
-    </div>
-    <nav class="section-tabs admin-section-tabs" aria-label="Administration sections">
-      {% for item in admin_nav %}
-      <a
-        class="section-tab{% if item.active %} active{% endif %}"
-        href="{{ item.href }}"
-        {% if item.active %}aria-current="page"{% endif %}
-      >{{ item.label }}</a>
-      {% endfor %}
-    </nav>
-    <div class="page-grid single-column admin-page-grid">
-      <main class="content-shell">
-        <div class="container admin-container">
-          {% include "_flash_message.html" %}
-          {% block admin_content %}{% endblock %}
-        </div>
-      </main>
-    </div>
-  </div>
-  {% include "_page_profile.html" %}
-  <script src="/static/ui.js?v=20260808-37" defer></script>
-</body>
-</html>
+{% extends "root_base.html" %}
+{% block root_title %}{% block admin_title %}Administration{% endblock %} - {{ ui_browser_title }}{% endblock %}
+{% block content %}
+{% set section_navigation_title = 'Administration' %}
+{% set section_navigation_aria_label = 'Administration sections' %}
+{% set section_navigation_items = admin_nav %}
+{% include "_root_section_navigation.html" %}
+{% include "_flash_message.html" %}
+{% block admin_content %}{% endblock %}
+{% endblock %}

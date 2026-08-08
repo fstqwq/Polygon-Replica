@@ -1,0 +1,14 @@
+<div class="root-section-navigation">
+  <div class="page-title-inline">
+    <h1 class="page-title">{{ section_navigation_title }}</h1>
+  </div>
+  <nav class="section-tabs" aria-label="{{ section_navigation_aria_label }}">
+    {% for item in section_navigation_items %}
+    <a
+      class="section-tab{% if item.active %} active{% endif %}"
+      href="{{ item.href }}"
+      {% if item.active %}aria-current="page"{% endif %}
+    >{{ item.label }}</a>
+    {% endfor %}
+  </nav>
+</div>

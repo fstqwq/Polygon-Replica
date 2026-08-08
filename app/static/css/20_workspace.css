@@ -568,33 +568,6 @@
   align-items: center;
 }
 
-.admin-workbench {
-  gap: var(--space-3);
-}
-
-.admin-context-bar {
-  gap: var(--space-3);
-}
-
-.admin-context-bar > strong {
-  font-size: var(--font-size-ui-lg);
-}
-
-.admin-section-tabs {
-  margin-top: calc(-1 * var(--space-1));
-}
-
-.root-layout .page-grid.admin-page-grid {
-  width: 100%;
-  max-width: none;
-  margin: var(--space-1) 0 0;
-  padding: 0;
-}
-
-.admin-container {
-  gap: var(--space-6);
-}
-
 .admin-page-title {
   align-items: flex-start;
 }
