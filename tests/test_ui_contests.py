@@ -331,8 +331,10 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
         self.assertIn('class="danger">0 solutions</span>', overview_html)
         self.assertIn('class="danger">missing</span>', overview_html)
         self.assertIn("Packages:", overview_html)
-        self.assertIn("current", overview_html)
-        self.assertIn("available", overview_html)
+        self.assertIn("0 ready", overview_html)
+        self.assertIn("1 none", overview_html)
+        self.assertNotIn(" stale</span>", overview_html)
+        self.assertNotIn(" available</span>", overview_html)
         self.assertIn("Package none", overview_html)
         self.assertIn("Workspace on v", overview_html)
 

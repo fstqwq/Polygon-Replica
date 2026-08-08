@@ -29,9 +29,11 @@ def contest_overview_page(request: Request, contest: str, user: Annotated[str, D
         default=0,
     )
     package_available_count = sum(1 for row in rows if row["materialization_id"])
-    package_current_count = sum(
+    package_ready_count = sum(
         1 for row in rows if row["current_is_materialized"]
     )
+    package_stale_count = package_available_count - package_ready_count
+    package_none_count = len(rows) - package_available_count
     return template_response(
         request,
         "contest_overview.html",
@@ -39,8 +41,8 @@ def contest_overview_page(request: Request, contest: str, user: Annotated[str, D
             "ctx": ctx,
             "problem_rows": rows,
             "owner_prefix_chars": owner_prefix_chars,
-            "package_total_count": len(rows),
-            "package_available_count": package_available_count,
-            "package_current_count": package_current_count,
+            "package_ready_count": package_ready_count,
+            "package_stale_count": package_stale_count,
+            "package_none_count": package_none_count,
         },
     )

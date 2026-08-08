@@ -5,9 +5,9 @@
   <h1 class="page-title">Problems</h1>
   <p class="contest-package-summary">
     Packages:
-    <span class="{{ 'warn' if package_current_count < package_total_count else '' }}">{{ package_current_count }}/{{ package_total_count }} current</span>
-    &middot;
-    <span class="{{ 'danger' if package_available_count < package_total_count else '' }}">{{ package_available_count }}/{{ package_total_count }} available</span>
+    <span>{{ package_ready_count }} ready</span>{% if package_stale_count %},
+    <span class="warn">{{ package_stale_count }} stale</span>{% endif %}{% if package_none_count %},
+    <span class="danger">{{ package_none_count }} none</span>{% endif %}
   </p>
 </div>
 
