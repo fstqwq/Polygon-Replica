@@ -3,13 +3,6 @@
   gap: var(--space-4);
 }
 
-.agent-page-head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: var(--space-3);
-}
-
 .agent-card-title {
   margin: 0;
   font-size: var(--font-size-ui-lg);
@@ -104,7 +97,6 @@
 }
 
 @media (max-width: 900px) {
-  .agent-page-head,
   .agent-connect-head,
   .agent-session-head,
   .agent-session-section-head {

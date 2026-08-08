@@ -11,6 +11,15 @@ def _request_base_url(request: Request) -> str:
     return str(request.base_url).rstrip("/")
 
 
+def _template_user(user: dict[str, object]) -> dict[str, object]:
+    user_id = int(user["user_id"])
+    return {
+        "id": user_id,
+        "username": str(user["username"]),
+        "is_system_admin": int(config.workspace_service.user_is_system_admin(user_id)),
+    }
+
+
 def agent_sessions_page(request: Request):
     user = current_web_user(request)
     sessions = config.agent_service.list_user_sessions(user_id=int(user["user_id"]))
@@ -18,7 +27,7 @@ def agent_sessions_page(request: Request):
         request,
         "agent_sessions.html",
         {
-            "user": {"id": int(user["user_id"]), "username": str(user["username"] or "")},
+            "user": _template_user(user),
             "active_main": "settings",
             "sessions": sessions,
         },
@@ -48,7 +57,7 @@ def agent_approve_page(request: Request, request_id: str):
         request,
         "agent_approve.html",
         {
-            "user": {"id": int(user["user_id"]), "username": str(user["username"] or "")},
+            "user": _template_user(user),
             "active_main": "settings",
             "access_request": access_request,
             "default_scope": "readonly",

@@ -1,9 +1,7 @@
 {% extends "root_base.html" %}
 {% block content %}
-<div class="page-title-inline root-page-title-inline">
-  <h1 class="page-title">Settings</h1>
-  {% if user.is_system_admin %}<a href="/admin">Open admin panel</a>{% endif %}
-</div>
+{% set settings_tab = 'user' %}
+{% include "_settings_navigation.html" %}
 {% include "_flash_message.html" %}
 <section class="content-section-plain settings-account-panel">
   <div class="settings-account-summary">
@@ -11,7 +9,6 @@
       <span class="muted">Signed in as</span>
       <strong>{{ user.username }}</strong>
     </div>
-    <a href="/agent/sessions">Connected agents</a>
   </div>
   <h2>Change password</h2>
   <form id="settings-password-form" class="form-stack settings-password-form" method="post" action="/settings/password">

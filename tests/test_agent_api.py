@@ -288,7 +288,11 @@ class TestAgentAPI(E2ETestBase):
 
             ok = client.get("/agent/sessions", headers={"cookie": auth_cookie}, follow_redirects=False)
             self.assertEqual(ok.status_code, 200)
-            self.assertIn("Connected Agents", ok.text)
+            self.assertIn('aria-label="Settings sections"', ok.text)
+            self.assertIn('href="/settings"', ok.text)
+            self.assertIn('href="/agent/sessions"', ok.text)
+            self.assertIn(">Agents</a>", ok.text)
+            self.assertNotIn("Back to Settings", ok.text)
             self.assertNotIn("Disconnected at", ok.text)
 
     def test_agent_register_code_is_one_time_and_reuses_session_identity(self) -> None:

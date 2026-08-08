@@ -1,15 +1,9 @@
 {% extends "root_base.html" %}
 {% block content %}
+{% set settings_tab = 'agents' %}
+{% include "_settings_navigation.html" %}
+{% include "_flash_message.html" %}
 <div class="agent-page">
-  <div class="agent-page-head">
-    <div>
-      <h1 class="page-title">Connected Agents</h1>
-    </div>
-    <p><a href="/settings">Back to Settings</a></p>
-  </div>
-
-  {% include "_flash_message.html" %}
-
   <section class="info-card agent-connect-card">
     <div class="agent-connect-head">
       <div>

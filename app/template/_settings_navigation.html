@@ -1,0 +1,17 @@
+<div class="settings-navigation">
+  <div class="page-title-inline">
+    <h1 class="page-title">Settings</h1>
+  </div>
+  <nav class="section-tabs settings-section-tabs" aria-label="Settings sections">
+    <a
+      class="section-tab{% if settings_tab == 'user' %} active{% endif %}"
+      href="/settings"
+      {% if settings_tab == 'user' %}aria-current="page"{% endif %}
+    >User</a>
+    <a
+      class="section-tab{% if settings_tab == 'agents' %} active{% endif %}"
+      href="/agent/sessions"
+      {% if settings_tab == 'agents' %}aria-current="page"{% endif %}
+    >Agents</a>
+  </nav>
+</div>

@@ -1,9 +1,10 @@
 {% extends "root_base.html" %}
 {% block content %}
-<h1 class="page-title">Agent Authorization Request</h1>
+{% set settings_tab = 'agents' %}
+{% include "_settings_navigation.html" %}
 {% include "_flash_message.html" %}
-<p><a href="/agent/sessions">Back to Agent Sessions</a></p>
 <section class="info-card">
+  <h2>Agent authorization request</h2>
   <p><strong>{{ access_request.agent_name }}</strong></p>
   <p class="muted">Desktop: <code>{{ access_request.desktop_id }}</code> | Connected: {{ access_request.init_ts }}</p>
   <p>Requesting access to: <code>{{ access_request.problem_slug }}</code></p>
