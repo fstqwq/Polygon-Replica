@@ -1,7 +1,7 @@
-"""Build and read Native materializations of published Git revisions.
+"""Build and read immutable problem packages from published Git revisions.
 
 This module owns the only bridge from a bare repository revision to a package.
-Consumers receive a validated Native reader and never a workspace, Git handle, or
+Consumers receive a validated package reader and never a workspace, Git handle, or
 verification artifact reference.
 """
 
@@ -271,7 +271,7 @@ class ProblemPackageService:
                 "statement_languages": self._statement_languages(
                     published.bare_repo, published.source_commit
                 ),
-                "missing_reason": "published revision will be materialized by Contest Build",
+                "missing_reason": "Package required",
             }
         if materialization["status"] != "available":
             return {
@@ -297,9 +297,9 @@ class ProblemPackageService:
                 int(problem_id), published.source_commit
             )
             reason = (
-                "Native materialization is unavailable; explicit rebuild required"
+                    "Package is unavailable; explicit rebuild required"
                 if current is not None and current["status"] == "unavailable"
-                else "Native materialization is currently busy"
+                else "Package is currently busy"
             )
             return {
                 "problem_id": int(problem_id),

@@ -1001,7 +1001,7 @@ class ExportService:
             raise ValueError(f"unknown problem: {problem}")
         materialization = self.problem_package_service.store.materialization(materialization_id)
         if materialization is None or materialization["problem_id"] != int(problem_row["id"]):
-            raise ValueError("Native materialization does not belong to the problem")
+            raise ValueError("Package does not belong to the problem")
         materialization, _native_path = self.problem_package_service.native_archive(
             materialization_id,
             expected_archive_sha256=expected_archive_sha256,

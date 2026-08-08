@@ -1,4 +1,4 @@
-"""SQLite persistence for Native materializations and builds."""
+"""SQLite persistence for immutable problem packages and builds."""
 
 from __future__ import annotations
 

@@ -42,8 +42,8 @@
     <article class="contest-build-card">
       <h3>ICPC Package Bundle</h3>
       <p class="muted">
-        Freeze every published problem revision, materialize missing Native packages,
-        then build one ICPC ZIP per problem and an outer bundle archive.
+        Freeze every published problem revision, build required packages, then create
+        one ICPC ZIP per problem and an outer bundle archive.
       </p>
       <form method="post" action="/contests/{{ ctx.contest.slug }}/packages/build/start">
         <input type="hidden" name="outputs" value="icpc_bundle" />
