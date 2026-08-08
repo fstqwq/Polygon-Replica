@@ -36,6 +36,7 @@ from app.service.judgehost.core import JudgehostCore
 from app.service.judgehost.batch_scheduler_models import CaseReportTelemetry, CaseResult, HostLeaseRelease
 from app.service.judgehost.state import JudgehostState
 from app.service.judgehost.task_queue import TaskQueue
+from app.service.judgehost.toolchain_versions import ToolchainVersionCollector
 from app.service.judgehost.toolkit import DomjudgeToolkit
 
 logger = logging.getLogger(__name__)
@@ -63,6 +64,7 @@ class ResultProcessor:
         self._core = core
         self._queue = queue
         self._toolkit = toolkit
+        self._toolchain_versions = ToolchainVersionCollector(state)
 
     def _touch_task_verification(self, task_id: str) -> None:
         task = self._s.task_registry.get(task_id)
@@ -266,8 +268,14 @@ class ResultProcessor:
         return self._domjudge_executable_rows(kind=token, executable_hash=executable_hash)
 
     def domjudge_get_version_commands(self, judgetask_id: int) -> dict[str, object]:
-        _ = int(judgetask_id)
-        return {}
+        try:
+            return self._toolchain_versions.version_commands(int(judgetask_id))
+        except Exception:
+            logger.exception(
+                "failed to prepare judgehost toolchain version commands judgetask_id=%s",
+                judgetask_id,
+            )
+            return {}
 
     def domjudge_check_versions(
         self,
@@ -277,10 +285,19 @@ class ResultProcessor:
         compiler: str = "",
         runner: str = "",
     ) -> dict[str, object]:
-        _ = int(judgetask_id)
-        _ = domjudge_text(hostname)
-        _ = domjudge_text(compiler)
-        _ = domjudge_text(runner)
+        try:
+            self._toolchain_versions.record_report(
+                int(judgetask_id),
+                hostname=hostname,
+                compiler=compiler,
+                runner=runner,
+            )
+        except Exception:
+            logger.exception(
+                "failed to record judgehost toolchain versions judgetask_id=%s hostname=%s",
+                judgetask_id,
+                hostname,
+            )
         return {}
 
     def _domjudge_publish_reported_case(self, *, task_id: str, test_name: str) -> bool:

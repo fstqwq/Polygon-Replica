@@ -16,6 +16,7 @@ from app.service.verification.task_store import VerificationTaskStore
 
 from app.service.judgehost.task_registry import JudgehostTaskRegistry
 from app.service.judgehost.batch_scheduler import BatchScheduler
+from app.service.judgehost.toolchain_versions import HostToolchainTelemetry
 
 
 @dataclass
@@ -51,6 +52,7 @@ class JudgehostState:
         default=lambda _verification_id: None,
     )
     hosts_state: dict[str, dict[str, object]] = field(default_factory=dict)
+    host_toolchains: dict[str, dict[str, HostToolchainTelemetry]] = field(default_factory=dict)
     batch_scheduler: BatchScheduler = field(default_factory=BatchScheduler)
 
     def __post_init__(self) -> None:

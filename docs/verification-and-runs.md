@@ -166,6 +166,18 @@ require a prior peer registration: testcase files resolve by the existing
 `testcase_id` index, executable files by the existing `(kind, script_id)` index,
 and source files by their existing 9.0.0 or main route ID.
 
+Toolchain versions use DOMjudge's existing optional compile handshake. For an
+actively leased Case, `get_version_commands` returns compiler and, when relevant,
+runner probe scripts for the task's actual language. The judgedaemon executes
+those scripts under its normal version-check runguard and Base64-encodes their
+output in a `check_versions` callback. The service accepts the callback only from
+the Case's current hostname lease owner and keeps the latest report per hostname
+and language in process-local telemetry. `/settings/judgehost` exposes those
+reports in each host's `toolchains` array. They are observation only: they are not
+a complete host capability inventory and do not affect scheduling, caches,
+verification results, or compiler compatibility decisions. Runtime reset or
+service restart clears them, and later real compilations collect them again.
+
 ## Judgehost Lifecycle
 
 The runtime keeps four distinct lifecycle layers:

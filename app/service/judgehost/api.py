@@ -466,4 +466,5 @@ class Judgehost:
         self._state.task_registry.reset()
         with self._state.state_lock:
             self._state.hosts_state.clear()
+            self._state.host_toolchains.clear()
         self._state.batch_scheduler.reset()

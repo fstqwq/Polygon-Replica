@@ -448,6 +448,13 @@ class TaskQueue:
                 ),
                 reverse=True,
             )
+            toolchains_by_host = {
+                hostname: [
+                    telemetry.status_payload()
+                    for _language_id, telemetry in sorted(toolchains.items())
+                ]
+                for hostname, toolchains in self._s.host_toolchains.items()
+            }
         rows_out: list[dict[str, object]] = []
         online_count = 0
         for row in host_rows:
@@ -478,6 +485,7 @@ class TaskQueue:
                     "last_action": str(row.get("last_action") or ""),
                     "last_task_id": str(row.get("last_task_id") or ""),
                     "last_run_id": str(row.get("last_run_id") or ""),
+                    "toolchains": toolchains_by_host.get(hostname, []),
                     "active_leases": int(active_by_host.get(hostname, 0)),
                     "update_count": int(row.get("update_count") or 0),
                     "judged_case_count": 0 if telemetry is None else telemetry["judged_case_count"],

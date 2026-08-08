@@ -30,6 +30,7 @@ from app.service.judgehost.batch_scheduler_models import CompileSubmission, Exec
 from app.service.judgehost.identity import domjudge_job_id, domjudge_submit_id
 from app.service.judgehost.api import Judgehost
 from app.service.judgehost.runtime import domjudge_rewrite_untrusted_runresult
+from app.service.judgehost.toolchain_versions import HostToolchainTelemetry
 from app.service.platform.hashing import domjudge_executable_hash
 from app.service.platform.runtime_blob_store import PayloadFile
 from app.service.verification.task_scheduler import (
@@ -630,6 +631,44 @@ class TestJudgehostService(E2ETestBase):
             item for item in rows_after if str(item.get("hostname") or "") == host
         )
         self.assertEqual(str(row_after.get("peer_addr") or ""), "203.0.113.10")
+
+    def test_host_status_exposes_runtime_toolchains_and_reset_clears_them(self) -> None:
+        service = config.judgehost_task_service
+        self._reset_task_queue_state(service)
+        host = "judgehost-toolchains"
+        service.domjudge_register_host(host)
+        with service.state.state_lock:
+            service.state.host_toolchains[host] = {
+                "py": HostToolchainTelemetry(
+                    language_id="py",
+                    compiler="command=/usr/bin/pypy3\nPython 3.10.16",
+                    runner="command=/usr/bin/pypy3\nPython 3.10.16",
+                    observed_at="2026-08-08T00:00:00+00:00",
+                    judgetask_id=102,
+                ),
+                "cpp": HostToolchainTelemetry(
+                    language_id="cpp",
+                    compiler="command=/usr/bin/g++\ng++ 14.2.0",
+                    runner="",
+                    observed_at="2026-08-08T00:00:01+00:00",
+                    judgetask_id=101,
+                ),
+            }
+
+        rows = service.status()["hosts"]
+        row = next(item for item in rows if item["hostname"] == host)
+        self.assertEqual(
+            [item["language_id"] for item in row["toolchains"]],
+            ["cpp", "py"],
+        )
+
+        service.set_host_enabled(host, False)
+        rows_after_disable = service.status()["hosts"]
+        disabled_row = next(item for item in rows_after_disable if item["hostname"] == host)
+        self.assertEqual(disabled_row["toolchains"], row["toolchains"])
+
+        service.reset_runtime_state()
+        self.assertEqual(service.state.host_toolchains, {})
 
     def test_wait_for_task_result_keeps_transient_runs_out_of_durable_artifact_paths(self) -> None:
         service = config.judgehost_task_service
