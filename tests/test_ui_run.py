@@ -1204,7 +1204,6 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             problem_id,
             user_id,
             workspace_id,
-            True,
             workspace_path=ws,
         )
         self.assertEqual(status["mode"], "pass")
@@ -1218,38 +1217,21 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         problem_id = int(ctx["problem"]["id"])
         workspace_id = int(ctx["workspace"]["id"])
         user_id = int(ctx["user"]["id"])
-        content_manifest = workspace_verification_module.verification_manifest(ws)
-        git_identities = {
-            relative_path: payload.identity
-            for relative_path, payload in content_manifest.files.items()
-        }
         verification_id = f"ver-clean-manifest-{uuid.uuid4().hex[:8]}"
-
-        with patch.object(
-            workspace_verification_module,
-            "git_blob_identities",
-            return_value=git_identities,
-        ) as identity_lookup:
-            signature = workspace_verification_module._verification_sources_signature(
-                ws,
-                workspace_dirty=False,
-            )
-            self._insert_stage_verification(
-                verification_id=verification_id,
-                problem_id=problem_id,
-                workspace_id=workspace_id,
-                signature=signature,
-                status="ok",
-            )
-            status = workspace_verification_module._verification_status_context(
-                problem_id,
-                user_id,
-                workspace_id,
-                False,
-                workspace_path=ws,
-            )
-
-        identity_lookup.assert_called_with(ws, "HEAD")
+        signature = workspace_verification_module._verification_sources_signature(ws)
+        self._insert_stage_verification(
+            verification_id=verification_id,
+            problem_id=problem_id,
+            workspace_id=workspace_id,
+            signature=signature,
+            status="ok",
+        )
+        status = workspace_verification_module._verification_status_context(
+            problem_id,
+            user_id,
+            workspace_id,
+            workspace_path=ws,
+        )
         self.assertEqual(status["verification_id"], verification_id)
         self.assertFalse(status["stale"])
 
@@ -1287,7 +1269,6 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
                 problem_id,
                 user_id,
                 workspace_id,
-                True,
                 workspace_path=ws,
             )
 
@@ -1317,7 +1298,6 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             problem_id,
             user_id,
             workspace_id,
-            True,
             workspace_path=ws,
         )
         self.assertEqual(first["verification_id"], verification_id)
@@ -1332,7 +1312,6 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
                 problem_id,
                 user_id,
                 workspace_id,
-                True,
                 workspace_path=ws,
             )
 
@@ -1361,7 +1340,6 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             problem_id,
             user_id,
             workspace_id,
-            True,
             workspace_path=ws,
         )
         self.assertEqual(first["verification_id"], verification_id)
@@ -1376,7 +1354,6 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
                 problem_id,
                 user_id,
                 workspace_id,
-                True,
                 workspace_path=ws,
             )
 

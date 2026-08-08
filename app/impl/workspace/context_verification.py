@@ -8,7 +8,6 @@ from app.impl.runtime.config import config
 from app.service.problem.solution_metadata import normalize_expected_behavior
 from app.service.verification.task_store import VerificationTaskRow, VerificationTaskStore
 from app.service.verification.signature import (
-    git_blob_identities,
     verification_fingerprint,
     verification_manifest,
 )
@@ -114,20 +113,8 @@ def latest_workspace_source_commit_verification(
         ok_only=bool(ok_only),
     )
 
-def _verification_sources_signature(
-    workspace: Path,
-    *,
-    workspace_dirty: bool = True,
-    source_commit: str = "",
-) -> str:
-    git_identities = None
-    if not workspace_dirty:
-        try:
-            git_identities = git_blob_identities(workspace, source_commit or "HEAD")
-        except RuntimeError:
-            # A newly initialized workspace may not have HEAD yet.
-            git_identities = None
-    return verification_manifest(workspace, git_identities=git_identities).signature
+def _verification_sources_signature(workspace: Path) -> str:
+    return verification_manifest(workspace).signature
 
 
 def _verification_sources_fingerprint(workspace: Path) -> str:
@@ -365,7 +352,6 @@ def _verification_status_context(
     problem_id: int,
     actor_user_id: int,
     workspace_id: int,
-    workspace_dirty: bool,
     workspace_path: Path | str | None=None,
 ) -> dict[str, object]:
     _ = actor_user_id
@@ -395,10 +381,7 @@ def _verification_status_context(
     )
     if row is None and workspace_obj is not None:
         try:
-            current_signature = _verification_sources_signature(
-                workspace_obj,
-                workspace_dirty=workspace_dirty,
-            )
+            current_signature = _verification_sources_signature(workspace_obj)
         except Exception:
             current_signature = ''
     if row is None and current_signature:

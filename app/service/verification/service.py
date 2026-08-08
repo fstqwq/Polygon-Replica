@@ -26,10 +26,7 @@ from app.service.verification.read_model import (
     task_counts,
 )
 from app.service.verification.runtime import load_problem_runtime_config
-from app.service.verification.signature import (
-    git_blob_identities,
-    verification_manifest,
-)
+from app.service.verification.signature import verification_manifest
 from app.service.verification.source import select_source
 from app.service.verification.task_metadata import normalize_diagnostics_json_text
 from app.service.verification.task_store import VerificationTaskStore
@@ -1023,10 +1020,7 @@ class VerificationService:
                 workspace_dirty=workspace_dirty,
             )
         assert snapshot_root is not None
-        git_identities = None
-        if not workspace_dirty and (source_commit or workspace_head):
-            git_identities = git_blob_identities(workspace_path, source_commit or workspace_head)
-        manifest = verification_manifest(snapshot_root, git_identities=git_identities)
+        manifest = verification_manifest(snapshot_root)
         signature = manifest.signature
         target_verification_id = verification_id or self._verification_store.allocate_id()
         run_workspace_verification_dag(

@@ -26,7 +26,6 @@ from app.service.verification.test_rows import build_verification_test_row
 from app.service.verification.types import Kind, Status
 from app.service.verification.signature import (
     VerificationManifest,
-    git_blob_identities,
     verification_manifest,
 )
 from app.service.verification.types import is_cancel_reason
@@ -1088,16 +1087,7 @@ def run_workspace_verification_dag(
             workspace_dirty=workspace_dirty,
         )
     if manifest is None:
-        git_identities = None
-        if not workspace_dirty and (source_commit or workspace_head):
-            git_identities = git_blob_identities(
-                workspace_path,
-                source_commit or workspace_head,
-            )
-        execution_manifest = verification_manifest(
-            snapshot_root,
-            git_identities=git_identities,
-        )
+        execution_manifest = verification_manifest(snapshot_root)
     else:
         execution_manifest = manifest
     signature = execution_manifest.signature

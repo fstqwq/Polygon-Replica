@@ -207,7 +207,6 @@ def page_ctx(
             int(ctx['problem']['id']),
             int(ctx['user']['id']),
             int(ctx['workspace']['id']),
-            workspace_dirty,
             workspace_path=workspace_path,
         )
     except Exception:

@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
 
 from app.service.judgehost.file_stream import DomjudgeDownloadFile, stream_domjudge_file_array
 from app.service.platform.runtime_blob_store import RuntimeBlobStore
@@ -47,21 +47,36 @@ class TestRuntimeBlobStore(unittest.TestCase):
             payloads,
         )
 
-    def test_manifest_with_git_identities_does_not_hash_file_content(self) -> None:
+    def test_manifest_identity_is_always_the_file_content_sha256(self) -> None:
         config_dir = self.root / "config"
         config_dir.mkdir()
         source = config_dir / "problem.json"
-        source.write_bytes(b'{"time_limit_ms":2000}\n')
-        identity = "a" * 64
-        with patch(
-            "app.service.verification.signature.sha256_file",
-            side_effect=AssertionError("clean manifest read file content"),
-        ):
-            manifest = verification_manifest(
-                self.root,
-                git_identities={"config/problem.json": identity},
-            )
-        self.assertEqual(manifest.require("config/problem.json").identity, identity)
+        content = b'{"time_limit_ms":2000}\n'
+        source.write_bytes(content)
+
+        manifest = verification_manifest(self.root)
+        descriptor = manifest.require("config/problem.json")
+
+        self.assertEqual(descriptor.identity, hashlib.sha256(content).hexdigest())
+        self.assertEqual(
+            self.blobs.put_file(descriptor).blob_ref,
+            self.blobs.put_bytes(content).blob_ref,
+        )
+
+    def test_unrelated_file_does_not_change_manifest_file_identity(self) -> None:
+        solutions_dir = self.root / "solutions"
+        solutions_dir.mkdir()
+        source = solutions_dir / "std.cpp"
+        content = b"int main() { return 0; }\n"
+        source.write_bytes(content)
+
+        first = verification_manifest(self.root)
+        (solutions_dir / "extra.py").write_text("print('extra')\n", encoding="utf-8")
+        second = verification_manifest(self.root)
+
+        expected = hashlib.sha256(content).hexdigest()
+        self.assertEqual(first.require("solutions/std.cpp").identity, expected)
+        self.assertEqual(second.require("solutions/std.cpp").identity, expected)
 
     def test_dirty_manifest_detects_same_size_change(self) -> None:
         manual_dir = self.root / "tests" / "manual"
