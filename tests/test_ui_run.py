@@ -1232,7 +1232,6 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             workspace_id,
             workspace_path=ws,
         )
-
         self.assertEqual(status["verification_id"], verification_id)
         self.assertFalse(status["stale"])
 
