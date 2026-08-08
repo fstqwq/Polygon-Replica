@@ -12,9 +12,6 @@ from pathlib import Path
 from typing import Iterable
 
 ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_BOUNDARY_PATH = ROOT / "import-policy" / "import-boundaries.json"
-DEFAULT_FIRST_WAVE_PATH = ROOT / "import-policy" / "import-policy-first-wave.txt"
-DEFAULT_BASELINE_PATH = ROOT / "import-policy" / "import-policy-baseline.json"
 DEFAULT_NAMING_RULE_SCOPE_PREFIXES = (
     "app.impl.auth.",
     "app.impl.build_preview.",
@@ -41,18 +38,6 @@ class Violation:
     message: str
     first_wave: bool
 
-    @property
-    def key(self) -> str:
-        return "|".join(
-            [
-                self.rule,
-                self.file,
-                str(self.line),
-                self.importer,
-                self.target,
-            ]
-        )
-
 
 def _read_text(path: Path) -> str:
     return path.read_text(encoding="utf-8-sig")
@@ -77,8 +62,8 @@ def _module_name_for_path(path: Path) -> str:
     return rel.replace("/", ".")
 
 
-def _load_first_wave(path: Path) -> list[str]:
-    if not path.exists():
+def _load_first_wave(path: Path | None) -> list[str]:
+    if path is None:
         return []
     items: list[str] = []
     for raw in path.read_text(encoding="utf-8").splitlines():
@@ -89,8 +74,8 @@ def _load_first_wave(path: Path) -> list[str]:
     return items
 
 
-def _load_boundaries(path: Path) -> dict:
-    if not path.exists():
+def _load_boundaries(path: Path | None) -> dict:
+    if path is None:
         return {"version": 1, "firstWave": [], "layers": []}
     data = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(data, dict):
@@ -467,28 +452,6 @@ def collect_audit(
     return sorted(violations, key=lambda v: (v.file, v.line, v.rule, v.target)), cycles, meta
 
 
-def _load_baseline(path: Path) -> tuple[set[str], set[str]]:
-    if not path.exists():
-        return set(), set()
-    data = json.loads(path.read_text(encoding="utf-8"))
-    violations = data.get("violations", [])
-    cycles = data.get("cycles", [])
-    violation_keys = {
-        "|".join(
-            [
-                str(v.get("rule", "")),
-                str(v.get("file", "")),
-                str(v.get("line", "")),
-                str(v.get("importer", "")),
-                str(v.get("target", "")),
-            ]
-        )
-        for v in violations
-    }
-    cycle_keys = {"|".join(sorted(map(str, c.get("nodes", [])))) for c in cycles}
-    return violation_keys, cycle_keys
-
-
 def _changed_python_files(base_ref: str) -> set[str]:
     try:
         proc = subprocess.run(
@@ -524,8 +487,6 @@ def _audit_payload(
 ) -> dict:
     return {
         "generatedAt": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-        "boundariesPath": str(DEFAULT_BOUNDARY_PATH.relative_to(ROOT).as_posix()),
-        "firstWavePath": str(DEFAULT_FIRST_WAVE_PATH.relative_to(ROOT).as_posix()),
         "firstWave": first_wave,
         "boundaries": boundaries,
         "summary": meta["summary"],
@@ -568,8 +529,10 @@ def _print_text_report(payload: dict, *, show_details: bool) -> None:
 
 
 def cmd_audit(args: argparse.Namespace) -> int:
-    boundaries = _load_boundaries(Path(args.boundaries))
-    first_wave = list(boundaries.get("firstWave", [])) or _load_first_wave(Path(args.first_wave))
+    boundary_path = Path(args.boundaries) if args.boundaries else None
+    first_wave_path = Path(args.first_wave) if args.first_wave else None
+    boundaries = _load_boundaries(boundary_path)
+    first_wave = list(boundaries.get("firstWave", [])) or _load_first_wave(first_wave_path)
     violations, cycles, meta = collect_audit(boundaries=boundaries, first_wave=first_wave)
     payload = _audit_payload(
         boundaries=boundaries,
@@ -590,8 +553,10 @@ def cmd_audit(args: argparse.Namespace) -> int:
 
 
 def cmd_check(args: argparse.Namespace) -> int:
-    boundaries = _load_boundaries(Path(args.boundaries))
-    first_wave = list(boundaries.get("firstWave", [])) or _load_first_wave(Path(args.first_wave))
+    boundary_path = Path(args.boundaries) if args.boundaries else None
+    first_wave_path = Path(args.first_wave) if args.first_wave else None
+    boundaries = _load_boundaries(boundary_path)
+    first_wave = list(boundaries.get("firstWave", [])) or _load_first_wave(first_wave_path)
     violations, cycles, meta = collect_audit(boundaries=boundaries, first_wave=first_wave)
     payload = _audit_payload(
         boundaries=boundaries,
@@ -600,22 +565,21 @@ def cmd_check(args: argparse.Namespace) -> int:
         cycles=cycles,
         meta=meta,
     )
-    baseline_keys, baseline_cycle_keys = _load_baseline(Path(args.baseline))
     changed_files = _changed_python_files(args.base_ref) if args.changed_only else set()
 
-    new_violations = [v for v in violations if v.key not in baseline_keys]
-    new_cycles = [nodes for nodes in cycles if "|".join(nodes) not in baseline_cycle_keys]
+    checked_violations = violations
+    checked_cycles = cycles
 
     if changed_files:
         changed_files_norm = {p.replace("\\", "/") for p in changed_files}
-        new_violations = [v for v in new_violations if v.file in changed_files_norm]
+        checked_violations = [v for v in checked_violations if v.file in changed_files_norm]
         module_by_file = {
             _module_name_for_path(ROOT / f): f for f in changed_files_norm if (ROOT / f).exists()
         }
         changed_modules = set(module_by_file.keys())
-        new_cycles = [
+        checked_cycles = [
             nodes
-            for nodes in new_cycles
+            for nodes in checked_cycles
             if any(node in changed_modules for node in nodes)
         ]
 
@@ -624,25 +588,21 @@ def cmd_check(args: argparse.Namespace) -> int:
     else:
         _print_text_report(payload, show_details=bool(args.verbose))
 
-    if not Path(args.baseline).exists():
-        print(f"\nImport policy check failed: missing baseline: {args.baseline}", file=sys.stderr)
-        return 1
-
-    if new_violations or new_cycles:
-        print("\nImport policy check failed: new violations detected.", file=sys.stderr)
-        for v in new_violations:
+    if checked_violations or checked_cycles:
+        print("\nImport policy check failed: violations detected.", file=sys.stderr)
+        for v in checked_violations:
             print(
-                f"  NEW {v.file}:{v.line} [{v.rule}] {v.importer} -> {v.target}",
+                f"  {v.file}:{v.line} [{v.rule}] {v.importer} -> {v.target}",
                 file=sys.stderr,
             )
-        for nodes in new_cycles:
-            print(f"  NEW CYCLE {' -> '.join(nodes)}", file=sys.stderr)
+        for nodes in checked_cycles:
+            print(f"  CYCLE {' -> '.join(nodes)}", file=sys.stderr)
         return 1
 
     if args.changed_only and not changed_files:
-        print("\nNo changed python files detected; skipped no-new gate.")
+        print("\nNo changed python files detected; skipped import policy gate.")
     else:
-        print("\nImport policy check passed: no new violations/cycles.")
+        print("\nImport policy check passed: no violations/cycles.")
     return 0
 
 
@@ -650,24 +610,21 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Import architecture policy audit/check tool")
     parser.add_argument(
         "--boundaries",
-        default=str(DEFAULT_BOUNDARY_PATH),
-        help="Path to import boundary config JSON",
+        help="Optional path to import boundary config JSON",
     )
     parser.add_argument(
         "--first-wave",
-        default=str(DEFAULT_FIRST_WAVE_PATH),
-        help="Path to first-wave module prefixes list",
+        help="Optional path to first-wave module prefixes list",
     )
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     audit = sub.add_parser("audit", help="emit current policy violations and cycle inventory")
-    audit.add_argument("--output", default=str(DEFAULT_BASELINE_PATH))
+    audit.add_argument("--output")
     audit.add_argument("--format", choices=("text", "json"), default="json")
     audit.add_argument("--verbose", action="store_true")
     audit.set_defaults(func=cmd_audit)
 
-    check = sub.add_parser("check", help="enforce no-new violations/cycles against baseline")
-    check.add_argument("--baseline", default=str(DEFAULT_BASELINE_PATH))
+    check = sub.add_parser("check", help="enforce zero import-policy violations and cycles")
     check.add_argument("--changed-only", action="store_true")
     check.add_argument("--base-ref", default="HEAD~1")
     check.add_argument("--format", choices=("text", "json"), default="text")
