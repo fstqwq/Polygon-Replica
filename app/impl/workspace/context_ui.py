@@ -437,6 +437,7 @@ def _build_problem_nav_status(ctx: dict) -> dict[str, dict[str, object]]:
     head_revision = workspace_revision if workspace_revision is not None and workspace_revision > 0 else None
     if head_revision is None and workspace_path_text and workspace_head:
         head_revision = git_commit_count(Path(workspace_path_text), workspace_head)
+    export_source_commit = ''
     export_revision: int | None = None
     if workspace_id > 0 and problem_id > 0 and workspace_path_text:
         export_source_commit = config.export_service.latest_source_commit(problem_id)
@@ -447,13 +448,11 @@ def _build_problem_nav_status(ctx: dict) -> dict[str, dict[str, object]]:
         export_nav: dict[str, object] = {'text': f'built for v{export_revision}', 'danger': bool(export_outdated)}
     else:
         export_nav = {'text': 'missing', 'danger': True}
-    if workspace_head and workspace_id > 0 and problem_id > 0:
-        actor_user_id = _to_int(_row_value(cast(dict[str, object], ctx['user']), 'id', 0))
-        current_export = config.export_service.latest_succeeded_workspace_export_job(
+    if export_source_commit and problem_id > 0:
+        current_export = config.export_service.latest_succeeded_export_job(
             problem_id,
-            workspace_id,
-            actor_user_id,
-            workspace_head,
+            export_source_commit,
+            'icpc',
         )
         if (
             current_export is not None
@@ -462,12 +461,9 @@ def _build_problem_nav_status(ctx: dict) -> dict[str, dict[str, object]]:
         ):
             export_id = current_export['export_id']
             export_filename = Path(current_export['filename']).name
-            problem_slug = cast(str | None, _row_value(problem_row, 'slug', '')) or ''
             if config.export_service.export_archive_path(
                 problem_id,
-                workspace_id,
                 export_id,
-                problem_slug,
                 export_filename,
             ) is not None:
                 export_nav['download'] = {

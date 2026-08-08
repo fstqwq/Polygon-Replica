@@ -12,24 +12,16 @@ from app.main_util import problem_slug_leaf
 from app.impl.auth.shared import redirect_response
 from app.impl.runtime.config import config
 from app.impl.contest.common import _contest_problem_slug_file_token
+from app.impl.workspace.access import workspace_access_context
 from app.impl.workspace.context_operation import audit, normalize_contest_slug_required
 from app.impl.workspace.context import global_user_ctx
-from app.impl.workspace.context_component_status import (
-    checker_status_context,
-    interactor_status_context,
-    validator_status_context,
-)
-from app.impl.workspace.solution import list_solution_sources
-from app.impl.workspace.test_spec import read_tests_spec
-from app.service.problem.resource_limits import resource_limit_display
-from app.service.repository.revision import workspace_revision_info
 from app.service.sandbox.base import ExecResult
 from app.service.statement.constant import DEFAULT_OLYMP_STY
-from app.service.statement.context import normalize_statement_language, statement_languages
+from app.service.statement.context import normalize_statement_language
 from app.service.statement.render import render_statement_problem_assets_for_language
 from app.service.statement.title import statement_title_from_snapshot
 from app.service.platform.git_process import run_git
-from app.service.verification.runtime import coerce_int, normalize_pass_limit, normalize_problem_mode
+from app.service.verification.runtime import coerce_int, normalize_problem_mode
 from app.impl.workspace.problem_config import read_problem_config
 
 _C = config.constants
@@ -137,139 +129,6 @@ def _contest_ctx(contest_slug: str, user: str, active_page: str) -> dict:
         ),
     }
 
-
-def _contest_problem_rows(contest_id: int, username: str, user_id: int) -> list[dict[str, object]]:
-    rows = config.contest_service.contest_problems(int(contest_id))
-    access_by_problem = config.workspace_service.access_contexts(
-        [int(row["problem_id"]) for row in rows],
-        int(user_id),
-    )
-    result: list[dict] = []
-    for row in rows:
-        problem_id = int(row["problem_id"])
-        problem_slug = str(row["problem_slug"])
-        slug_owner, _separator, slug_leaf = problem_slug.partition("/")
-        problem_access = access_by_problem[problem_id]
-        can_problem_read = bool(problem_access.get("can_read"))
-        can_problem_write = bool(problem_access.get("can_write"))
-        readiness = config.problem_package_service.readiness(problem_id)
-        published_revision = readiness["published_revision_number"]
-        revision_display = "unavailable"
-        revision_warn = False
-        dirty = False
-        tl_ms = int(_C.GENERAL_CONFIG_DEFAULTS["time_limit_ms"])
-        ml_mb = int(_C.GENERAL_CONFIG_DEFAULTS["memory_limit_mb"])
-        mode = str(_C.GENERAL_CONFIG_DEFAULTS["mode"])
-        pass_limit = int(_C.GENERAL_CONFIG_DEFAULTS["pass_limit"])
-        test_count = 0
-        solution_count = 0
-        solutions_truncated = False
-        statement_language_names: list[str] = []
-        statement_language_count = 0
-        output_component_label = "Checker"
-        output_component_display = "missing"
-        validator_display = "missing"
-        details_available = False
-        if can_problem_read:
-            try:
-                workspace = Path(
-                    config.workspace_service.ensure_workspace(
-                        problem_slug,
-                        username,
-                        refresh_status=True,
-                    )
-                )
-                ws_ctx = config.workspace_service.workspace_context(
-                    problem_slug,
-                    username,
-                    include_recent=False,
-                )
-                branch = str(ws_ctx["workspace"].get("branch") or "main")
-                revision = workspace_revision_info(workspace, branch)
-                revision_display = str(revision.get("display") or "unknown")
-                revision_warn = bool(revision.get("highlight"))
-                dirty = bool(ws_ctx["workspace"].get("dirty"))
-                _payload, general_cfg, _cfg_path = read_problem_config(workspace)
-                tl_ms = coerce_int(
-                    general_cfg.get("time_limit_ms"),
-                    int(_C.GENERAL_CONFIG_DEFAULTS["time_limit_ms"]),
-                    _C.GENERAL_TIME_LIMIT_MIN_MS,
-                    _C.GENERAL_TIME_LIMIT_MAX_MS,
-                )
-                ml_mb = coerce_int(
-                    general_cfg.get("memory_limit_mb"),
-                    int(_C.GENERAL_CONFIG_DEFAULTS["memory_limit_mb"]),
-                    _C.GENERAL_MEMORY_LIMIT_MIN_MB,
-                    _C.GENERAL_MEMORY_LIMIT_MAX_MB,
-                )
-                mode = normalize_problem_mode(general_cfg.get("mode"), str(_C.GENERAL_CONFIG_DEFAULTS["mode"]))
-                pass_limit = normalize_pass_limit(
-                    general_cfg.get("pass_limit"),
-                    int(_C.GENERAL_CONFIG_DEFAULTS["pass_limit"]),
-                )
-                test_count = len(read_tests_spec(workspace)[0])
-                solution_sources, solutions_truncated = list_solution_sources(
-                    workspace,
-                    limit=int(_C.SOLUTION_LIST_LIMIT),
-                )
-                solution_count = len(solution_sources)
-                statement_language_names = statement_languages(workspace)
-                statement_language_count = len(statement_language_names)
-                validator_display = str(validator_status_context(workspace)["display"])
-                if mode == "interactive":
-                    output_component_label = "Interactor"
-                    output_component_display = str(interactor_status_context(workspace)["display"])
-                else:
-                    checker_status = checker_status_context(workspace)
-                    standard_checker = str(checker_status["standard_checker"])
-                    output_component_display = standard_checker or str(checker_status["display"])
-                details_available = True
-            except Exception:
-                revision_display = "unavailable"
-                revision_warn = True
-        else:
-            revision_display = "no problem access"
-            revision_warn = True
-        result.append(
-            {
-                "contest_problem_id": int(row["contest_problem_id"]),
-                "idx": str(row["idx"]),
-                "problem_id": problem_id,
-                "statement_folder": str(row["statement_folder"]),
-                "problem_slug": problem_slug,
-                "slug_owner": slug_owner,
-                "slug_leaf": slug_leaf,
-                "time_limit_ms": tl_ms,
-                "memory_limit_mb": ml_mb,
-                **resource_limit_display(tl_ms, ml_mb),
-                "mode": mode,
-                "pass_limit": pass_limit,
-                "test_count": test_count,
-                "solution_count": solution_count,
-                "solutions_truncated": solutions_truncated,
-                "statement_language_names": statement_language_names,
-                "statement_language_count": statement_language_count,
-                "output_component_label": output_component_label,
-                "output_component_display": output_component_display,
-                "validator_display": validator_display,
-                "details_available": details_available,
-                "revision_display": revision_display,
-                "revision_warn": revision_warn,
-                "dirty": dirty,
-                "published_commit": str(readiness["published_commit"]),
-                "published_revision_number": published_revision,
-                "materialized_commit": str(readiness["materialized_commit"]),
-                "materialized_revision_number": readiness["materialized_revision_number"],
-                "materialization_id": str(readiness["materialization_id"]),
-                "current_is_materialized": bool(readiness["current_is_materialized"]),
-                "statement_languages": list(readiness["statement_languages"]),
-                "readiness_reason": str(readiness["missing_reason"]),
-                "can_problem_read": can_problem_read,
-                "can_problem_write": can_problem_write,
-                "created_at": row["created_at"],
-            }
-        )
-    return result
 
 
 def _ensure_zip_bundle(job_root: Path, bundle_name: str, source_dir: Path) -> Path:

@@ -1626,7 +1626,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         rows = workspace_impl.run_list_rows(problem_id, workspace_id, ws, limit=10, actor_user_id=int(ctx["user"]["id"]))
         working_row = next(item for item in rows if str(item.get("id") or "") == working_id)
         revision_row = next(item for item in rows if str(item.get("id") or "") == revision_id)
-        self.assertRegex(str(working_row.get("source_display") or ""), r"^Workspace \(on v[1-9][0-9]*\)$")
+        self.assertRegex(str(working_row.get("source_display") or ""), r"^Workspace on v[1-9][0-9]*$")
         self.assertRegex(str(revision_row.get("source_display") or ""), r"^Published v[1-9][0-9]*$")
 
         resp = run_page(_request("/problems/alice/sample/run"), "alice/sample", "alice")
@@ -5666,7 +5666,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         self.assertIn('class="verification-list-created-time"', run_html)
         self.assertIn('class="verification-list-source-cell"', run_html)
 
-    def test_problem_nav_downloads_package_built_for_current_workspace(self) -> None:
+    def test_problem_nav_downloads_package_built_for_current_revision(self) -> None:
         workspace = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
         marker = workspace / "notes" / f"package-nav-{uuid.uuid4().hex[:8]}.txt"
         marker.parent.mkdir(parents=True, exist_ok=True)
@@ -5682,11 +5682,10 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         current_export = {
             "id": "job-current",
             "problem_id": 1,
-            "workspace_id": 1,
             "actor_user_id": 1,
-            "verification_id": "ver-current",
             "export_type": "icpc",
             "status": "succeeded",
+            "materialization_id": "mat-current",
             "export_id": "exp current",
             "error": "",
             "filename": "sample current.zip",
@@ -5698,8 +5697,8 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             "finished_at": "2026-08-08T00:00:01Z",
         }
         with (
-            patch.object(config.export_service, "latest_workspace_source_commit", return_value=head_commit),
-            patch.object(config.export_service, "latest_succeeded_workspace_export_job", return_value=current_export),
+            patch.object(config.export_service, "latest_source_commit", return_value=head_commit),
+            patch.object(config.export_service, "latest_succeeded_export_job", return_value=current_export),
             patch.object(config.export_service, "export_archive_path", return_value=Path("/tmp/sample-current.zip")),
         ):
             response = run_page(_request("/problems/alice/sample/run"), "alice/sample", "alice")

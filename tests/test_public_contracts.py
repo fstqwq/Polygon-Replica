@@ -102,6 +102,19 @@ class TestPublicContracts(unittest.TestCase):
         self.assertIn("button,\ninput,\nselect,\ntextarea {\n  font: inherit;\n}", forms_source)
         self.assertNotIn('class="link-button', contest_packages_source)
 
+    def test_contest_problem_slugs_wrap_in_all_problem_tables(self) -> None:
+        workspace_source = WORKSPACE_CSS_PATH.read_text(encoding="utf-8-sig")
+
+        for table_class in [
+            "contest-problem-list-table",
+            "contest-management-table",
+            "contest-add-problems-table",
+        ]:
+            self.assertIn(
+                f".problem-list-table.{table_class} .problem-list-slug-leaf",
+                workspace_source,
+            )
+
     def test_ui_font_sizes_use_the_global_type_scale(self) -> None:
         offenders: list[str] = []
         for path in sorted((ROOT / "app" / "static" / "css").glob("*.css")):

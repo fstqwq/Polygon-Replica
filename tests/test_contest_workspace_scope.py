@@ -436,8 +436,11 @@ class TestContestWorkspaceScope(ContestActionBase):
             f"/problems/alice/sample/statement?contest={contest_slug}",
         )
         self.assertEqual(rows[1]["problem_slug"], locked_slug)
-        self.assertFalse(rows[1]["can_problem_read"])
-        self.assertIsNone(rows[1]["href"])
+        self.assertTrue(rows[1]["can_problem_read"])
+        self.assertEqual(
+            rows[1]["href"],
+            f"/problems/{locked_slug}/statement?contest={contest_slug}",
+        )
 
     def test_scoped_problem_html_renders_contest_navigation_and_scoped_urls(self) -> None:
         contest_slug, contest_id, actor_user_id = self.create_contest("ui")
@@ -530,13 +533,18 @@ class TestContestWorkspaceScope(ContestActionBase):
             peer["href"],
             f"/problems/{peer_slug}/statement?contest={contest_slug}",
         )
-        disabled_tag, disabled = next(
-            (tag, attrs)
+        locked = next(
+            attrs
             for tag, attrs in controls
-            if attrs.get("aria-disabled") == "true"
+            if tag == "a" and locked_slug in attrs.get("title", "")
         )
-        self.assertEqual(disabled_tag, "span")
-        self.assertNotIn("href", disabled)
+        self.assertEqual(
+            locked["href"],
+            f"/problems/{locked_slug}/statement?contest={contest_slug}",
+        )
+        self.assertFalse(
+            any(attrs.get("aria-disabled") == "true" for _tag, attrs in controls)
+        )
 
         url_attributes = {
             "href",
@@ -623,6 +631,10 @@ class TestContestWorkspaceScope(ContestActionBase):
                 and route.path.endswith("/open")
                 for route in app.routes
             )
+        )
+        self.assertNotIn(
+            "/contests/{contest}/readiness",
+            {route.path for route in app.routes},
         )
         for route in problem_routes:
             with self.subTest(path=route.path):

@@ -598,8 +598,13 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         assert_html_contract(
             self,
             html,
-            contains=("Workspace", "Upstream", "Publish new revision"),
-            excludes=("/problems/alice/sample/git/pull", "My Files", "Commit and share revision"),
+            contains=("Workspace on <strong>", "Upstream", "Publish new revision"),
+            excludes=(
+                "/problems/alice/sample/git/pull",
+                "My Files",
+                "Commit and share revision",
+                "Base <strong>",
+            ),
             label="workspace controls",
         )
         self.assertNotIn("rebase", html.lower())

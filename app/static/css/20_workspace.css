@@ -337,9 +337,22 @@
   }
 }
 
-.problem-list-table.contest-problem-list-table .problem-list-slug-leaf {
+.problem-list-table.contest-problem-list-table .problem-list-slug-leaf,
+.problem-list-table.contest-management-table .problem-list-slug-leaf,
+.problem-list-table.contest-add-problems-table .problem-list-slug-leaf {
   white-space: normal;
   overflow-wrap: anywhere;
+}
+
+.contest-problems-title {
+  align-items: baseline;
+}
+
+.contest-package-summary {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--font-size-ui-sm);
+  white-space: nowrap;
 }
 
 .table-base .contest-problem-details-cell {
@@ -365,6 +378,23 @@
 .contest-problem-detail-components,
 .contest-problem-detail-languages {
   white-space: normal;
+}
+
+.table-base .contest-problem-revision-cell {
+  min-width: 190px;
+  font-size: var(--font-size-ui-xs);
+}
+
+.contest-problem-revision-line {
+  display: block;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 640px) {
+  .contest-package-summary {
+    white-space: normal;
+  }
 }
 
 .contest-workspace-card {

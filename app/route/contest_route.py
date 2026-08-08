@@ -9,7 +9,6 @@ from app.impl.contest.access import (
     contest_access_revoke,
 )
 from app.impl.contest.overview import contest_overview_page
-from app.impl.contest.readiness import contest_readiness_page
 from app.impl.contest.package import (
     contest_packages_artifact_download,
     contest_packages_build_start,
@@ -33,14 +32,6 @@ from app.impl.contest.problem import (
 from app.impl.contest.property import contest_properties_page, contest_properties_save
 
 router = APIRouter()
-
-router.add_api_route(
-    "/contests/{contest}/readiness",
-    contest_readiness_page,
-    methods=["GET"],
-    response_class=HTMLResponse,
-    name="contest_readiness",
-)
 
 router.add_api_route(
     "/contests/{contest}/overview",

@@ -77,6 +77,22 @@ class ExportStore:
         )
         return "" if row is None else str(row["source_commit"])
 
+    def latest_succeeded_export_job(
+        self,
+        problem_id: int,
+        source_commit: str,
+        export_type: str,
+    ) -> ExportJobRow | None:
+        row = self.db.fetch_one(
+            """SELECT j.*,e.filename,e.sha256,e.size_bytes
+               FROM export_jobs j JOIN exports e ON e.id=j.export_id
+               WHERE j.problem_id=? AND j.source_commit=? AND j.export_type=?
+                 AND j.status='succeeded'
+               ORDER BY j.finished_at DESC,j.created_at DESC,j.id DESC LIMIT 1""",
+            [int(problem_id), source_commit, export_type],
+        )
+        return None if row is None else _job_row(row)
+
     def problem_export_jobs(
         self,
         problem_id: int,

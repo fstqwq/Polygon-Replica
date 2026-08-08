@@ -102,6 +102,58 @@ class TestPublishedRevisionExport(E2ETestBase):
         )
         return problem_id, commit, materialization
 
+    def test_latest_succeeded_export_job_matches_commit_and_type(self) -> None:
+        problem_id, commit, materialization = self._materialize()
+        actor = db_fetch_one("SELECT id FROM users WHERE username=?", [self.user])
+        self.assertIsNotNone(actor)
+        job_id = "export-latest-current-native"
+        config.export_service.create_export_job(
+            job_id=job_id,
+            problem_id=problem_id,
+            actor_user_id=int(actor["id"]),
+            export_type="native",
+            source_commit=commit,
+        )
+        config.export_service.mark_export_job_running(
+            job_id,
+            source_commit=commit,
+        )
+        export_id, archive = config.export_service.create_export(
+            self.problem,
+            "native",
+            materialization_id=materialization["id"],
+        )
+        config.export_service.mark_export_job_succeeded(
+            job_id,
+            materialization_id=materialization["id"],
+            export_id=export_id,
+        )
+
+        current = config.export_service.latest_succeeded_export_job(
+            problem_id,
+            commit,
+            "native",
+        )
+        self.assertIsNotNone(current)
+        self.assertEqual(current["id"], job_id)
+        self.assertEqual(current["export_id"], export_id)
+        self.assertTrue(current["filename"].endswith("-native-v1.zip"))
+        self.assertTrue(archive.is_file())
+        self.assertIsNone(
+            config.export_service.latest_succeeded_export_job(
+                problem_id,
+                commit,
+                "icpc",
+            )
+        )
+        self.assertIsNone(
+            config.export_service.latest_succeeded_export_job(
+                problem_id,
+                "f" * 40,
+                "native",
+            )
+        )
+
     def test_native_is_the_published_git_revision_plus_materialized_test_data(self) -> None:
         workspace, problem_id, commit = self._publish_problem()
         revision = config.problem_package_service.published_revision(problem_id)

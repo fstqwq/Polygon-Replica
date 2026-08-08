@@ -1,7 +1,15 @@
 {% extends "contest_base.html" %}
 {% from "_problem_slug_link.html" import problem_slug_link %}
 {% block content %}
-<h1 class="page-title">Problems</h1>
+<div class="page-title-inline contest-problems-title">
+  <h1 class="page-title">Problems</h1>
+  <p class="contest-package-summary">
+    Packages:
+    <span class="{{ 'warn' if package_current_count < package_total_count else '' }}">{{ package_current_count }}/{{ package_total_count }} current</span>
+    &middot;
+    <span class="{{ 'danger' if package_available_count < package_total_count else '' }}">{{ package_available_count }}/{{ package_total_count }} available</span>
+  </p>
+</div>
 
 {% include "_flash_message.html" %}
 
@@ -48,7 +56,10 @@
         <span class="contest-problem-detail contest-problem-detail-summary danger">unavailable</span>
         {% endif %}
       </td>
-      <td><span class="{{ 'revision-alert' if row.revision_warn else '' }}">{{ row.revision_display }}</span></td>
+      <td class="contest-problem-revision-cell">
+        <span class="contest-problem-revision-line{{ ' revision-alert' if row.workspace_revision_warn else '' }}">{{ row.workspace_revision_display }}</span>
+        <span class="contest-problem-revision-line{% if row.package_revision_status == 'stale' %} warn{% elif row.package_revision_status == 'missing' %} danger{% endif %}">{{ row.package_revision_display }}</span>
+      </td>
     </tr>
     {% endfor %}
   </table>

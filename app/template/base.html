@@ -33,7 +33,7 @@
   <title>{% if page_title %}{{ page_title }} - {% endif %}{{ ui_browser_title }}</title>
   <link rel="icon" href="/static/favicon.ico?v=20260427-01" sizes="any" />
   <link rel="icon" href="/static/favicon.png?v=20260427-01" type="image/png" />
-  <link rel="stylesheet" href="/static/style.css?v=20260808-59" />
+  <link rel="stylesheet" href="/static/style.css?v=20260808-62" />
   <script src="/static/ui.js?v=20260808-36" defer></script>
 </head>
 <body class="problem-layout{% if ctx.topbar_max_1400 %} topbar-max-1400{% endif %}{% block body_class %}{% endblock %}">
@@ -184,7 +184,7 @@
           {% set local_rev = ('v' ~ local_rev_raw) if local_rev_raw is not none else 'none' %}
           {% set published_rev = ('v' ~ published_rev_raw) if published_rev_raw is not none else 'none' %}
           <div class="workspace-revision">
-            <p class="workspace-revision-inline{{ ' revision-alert' if ctx.workspace_revision_alert else '' }}">Base <strong>{{ local_rev }}</strong> / Upstream <strong>{{ published_rev }}</strong></p>
+            <p class="workspace-revision-inline{{ ' revision-alert' if ctx.workspace_revision_alert else '' }}">Workspace on <strong>{{ local_rev }}</strong> / Upstream <strong>{{ published_rev }}</strong></p>
           </div>
           <div class="workspace-actions">
             {% if ctx.workspace_needs_update %}

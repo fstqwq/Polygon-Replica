@@ -34,7 +34,7 @@
         </td>
         <td><input class="contest-limit-input" name="time_limit_ms_values" value="{{ row.time_limit_ms }}" inputmode="numeric"{% if not row.can_problem_write %} readonly{% endif %} aria-label="Time limit for {{ row.problem_slug }}" /></td>
         <td><input class="contest-limit-input" name="memory_limit_mb_values" value="{{ row.memory_limit_mb }}" inputmode="numeric"{% if not row.can_problem_write %} readonly{% endif %} aria-label="Memory limit for {{ row.problem_slug }}" /></td>
-        <td><span class="{{ 'revision-alert' if row.revision_warn else '' }}">{{ row.revision_display }}</span></td>
+        <td><span class="{{ 'revision-alert' if row.workspace_revision_warn else '' }}">{{ row.workspace_revision_display }}</span></td>
       </tr>
       {% endfor %}
     </table>

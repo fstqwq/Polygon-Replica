@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from unittest.mock import patch
+
 from tests.db_helpers import (
     db_execute,
     db_fetch_all,
@@ -9,6 +11,10 @@ from tests.db_helpers import (
 )
 
 from app.service.platform.git_process import run_git
+from app.impl.contest.problem_rows import (
+    contest_problem_rows,
+    package_revision_display,
+)
 from app.service.problem.resource_limits import resource_limit_display
 from starlette.requests import Request
 
@@ -50,6 +56,108 @@ def _app_request(path: str) -> Request:
 class TestUIContests(UIHelpersMixin, E2ETestBase):
     seed_primary_workspace = False
     seed_default_workspace = True
+
+    def test_package_revision_display_separates_current_stale_and_missing(self) -> None:
+        base = {
+            "problem_id": 7,
+            "published_commit": "a" * 40,
+            "published_revision_number": 3,
+            "materialized_commit": "a" * 40,
+            "materialized_revision_number": 3,
+            "materialization_id": "mat-current",
+            "archive_sha256": "b" * 64,
+            "current_is_materialized": True,
+            "statement_languages": ["english"],
+            "missing_reason": "",
+        }
+        self.assertEqual(
+            package_revision_display(base),
+            ("Package on v3", "current"),
+        )
+        stale = {
+            **base,
+            "materialized_commit": "c" * 40,
+            "materialized_revision_number": 2,
+            "current_is_materialized": False,
+        }
+        self.assertEqual(
+            package_revision_display(stale),
+            ("Package on v2", "stale"),
+        )
+        missing = {
+            **base,
+            "materialized_commit": "",
+            "materialized_revision_number": None,
+            "materialization_id": "",
+            "archive_sha256": "",
+            "current_is_materialized": False,
+            "missing_reason": "no complete Native materialization",
+        }
+        self.assertEqual(
+            package_revision_display(missing),
+            ("Package none", "missing"),
+        )
+
+    def test_contest_problem_rows_batch_acl_skips_inaccessible_workspaces(self) -> None:
+        problem = {
+            "contest_problem_id": 11,
+            "position": 0,
+            "idx": "A",
+            "problem_id": 7,
+            "statement_folder": "",
+            "problem_slug": "alice/private",
+            "slug_leaf": "private",
+            "created_at": "2026-08-08T00:00:00+00:00",
+        }
+        access = {
+            "role": "none",
+            "can_read": False,
+            "can_write": False,
+            "can_manage": False,
+            "read_block_reason": "problem access required",
+            "write_block_reason": "problem write access required",
+            "manage_block_reason": "problem manage access required",
+        }
+        readiness = {
+            "problem_id": 7,
+            "published_commit": "",
+            "published_revision_number": None,
+            "materialized_commit": "",
+            "materialized_revision_number": None,
+            "materialization_id": "",
+            "archive_sha256": "",
+            "current_is_materialized": False,
+            "statement_languages": [],
+            "missing_reason": "no published Git revision",
+        }
+        with (
+            patch.object(
+                config.contest_service,
+                "contest_problems",
+                return_value=[problem],
+            ),
+            patch.object(
+                config.workspace_service,
+                "access_contexts",
+                return_value={7: access},
+            ) as access_contexts,
+            patch.object(config.workspace_service, "ensure_workspace") as ensure_workspace,
+            patch.object(
+                config.problem_package_service,
+                "readiness",
+                return_value=readiness,
+            ) as package_readiness,
+        ):
+            rows = contest_problem_rows(5, "alice", 3)
+
+        access_contexts.assert_called_once_with([7], 3)
+        ensure_workspace.assert_not_called()
+        package_readiness.assert_not_called()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["workspace_revision_display"], "no problem access")
+        self.assertEqual(rows[0]["package_revision_status"], "missing")
+        self.assertEqual(rows[0]["package_revision_display"], "Package unavailable")
+        self.assertNotIn("revision_display", rows[0])
 
     def test_resource_limit_display_uses_shared_units_and_warning_boundaries(self) -> None:
         self.assertEqual(
@@ -222,6 +330,11 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
         self.assertIn('class="danger">0 tests</span>', overview_html)
         self.assertIn('class="danger">0 solutions</span>', overview_html)
         self.assertIn('class="danger">missing</span>', overview_html)
+        self.assertIn("Packages:", overview_html)
+        self.assertIn("current", overview_html)
+        self.assertIn("available", overview_html)
+        self.assertIn("Package none", overview_html)
+        self.assertIn("Workspace on v", overview_html)
 
         problems_page = contest_problems_page(
             _app_request(f"/contests/{contest_slug}/problems"),

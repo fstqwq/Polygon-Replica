@@ -7,6 +7,7 @@ from urllib.parse import quote_plus
 from fastapi import Form, HTTPException, Request, Depends
 
 from app.impl.auth.shared import template_response
+from app.impl.contest.problem_rows import contest_problem_rows
 from app.impl.contest.workspace_scope import add_contest_problem_hrefs
 from app.impl.runtime.config import config
 from app.impl.workspace.access import workspace_access_context
@@ -19,7 +20,6 @@ from app.impl.contest.common import (
 )
 from app.impl.contest.shared import (
     _contest_ctx,
-    _contest_problem_rows,
     _contest_redirect,
     _problem_general_payload_map,
     _run_problem_general_update,
@@ -35,7 +35,7 @@ def contest_problems_page(request: Request, contest: str, user: Annotated[str, D
     rows = add_contest_problem_hrefs(
         request,
         contest_slug=str(ctx["contest"]["slug"]),
-        rows=_contest_problem_rows(
+        rows=contest_problem_rows(
             contest_id,
             str(ctx["user"]["username"]),
             user_id,
