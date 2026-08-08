@@ -13,6 +13,8 @@ import zipfile
 from pathlib import Path
 from unittest.mock import patch
 
+import yaml
+
 from tests.common import E2ETestBase
 from tests.ui_support import _flash_messages_from_response, _request
 import app.impl.run_export.export as export_page_module
@@ -892,7 +894,10 @@ class TestExport(E2ETestBase):
             self.assertIn("problem.yaml", names)
             self.assertIn("domjudge-problem.ini", names)
             self.assertFalse(any(name.startswith(f"{public_slug}/") for name in names))
-            self.assertFalse(any(name.startswith("input_validators/") for name in names))
+            self.assertIn(f"input_validators/validator/{Path(files['validator']).name}", names)
+            self.assertIn("input_validators/validator/testlib.h", names)
+            self.assertIn("input_validators/validator/build", names)
+            self.assertIn("input_validators/validator/run", names)
             self.assertFalse(any(name.endswith(".tex") for name in names))
             self.assertFalse(any(name.startswith("statement-sections/") for name in names))
             self.assertFalse(any(name.startswith("statement-assets/") for name in names))
@@ -905,8 +910,14 @@ class TestExport(E2ETestBase):
             self.assertEqual(zf.read("data/sample/001.in").decode("utf-8"), "sample input\n")
             self.assertEqual(zf.read("data/sample/001.ans").decode("utf-8"), "sample answer\n")
             self.assertEqual(zf.read("data/secret/002.ans").decode("utf-8"), "secret answer\n")
-            self.assertIn(f"output_validators/checker/{Path(files['checker']).name}", names)
-            self.assertIn("output_validators/checker/testlib.h", names)
+            self.assertIn(f"output_validator/{Path(files['checker']).name}", names)
+            self.assertIn("output_validator/testlib.h", names)
+            self.assertIn("output_validator/build", names)
+            self.assertIn("output_validator/run", names)
+            self.assertFalse(any(name.startswith("output_validators/") for name in names))
+            self.assertIn("statement/problem.en.pdf", names)
+            self.assertIn("problem_statement/problem.en.pdf", names)
+            self.assertIn("problem_statement/problem.pdf", names)
             domjudge_ini = zf.read("domjudge-problem.ini").decode("utf-8", errors="replace")
             self.assertIn(
                 'name = "Two Sum\'s #1 = \\"\u7cbe\u9009\\""',
@@ -916,13 +927,14 @@ class TestExport(E2ETestBase):
             self.assertRegex(domjudge_ini, r"(?m)^color = #[0-9a-f]{6}$")
             self.assertIn(f"externalid = {public_slug}", domjudge_ini)
             problem_yaml = zf.read("problem.yaml").decode("utf-8", errors="replace")
-            self.assertIn(
-                "name: 'Two Sum''s #1 = \"\u7cbe\u9009\"'",
-                problem_yaml,
-            )
+            problem_meta = yaml.safe_load(problem_yaml)
+            self.assertEqual(problem_meta["problem_format_version"], "2025-09")
+            self.assertEqual(problem_meta["type"], "pass-fail")
+            self.assertEqual(problem_meta["name"], committed_title)
+            self.assertEqual(problem_meta["version"], head)
+            self.assertEqual(problem_meta["limits"]["time_limit"], 2.0)
             self.assertNotIn("Dirty workspace title", problem_yaml)
             self.assertNotIn("Dirty workspace title", domjudge_ini)
-            self.assertNotIn("problem_format_version", problem_yaml)
         export_row = db_fetch_one("SELECT id FROM exports WHERE filename=?", [archive.name])
         self.assertIsNotNone(export_row)
         summary = export_page_module._export_archive_summary(
@@ -1334,25 +1346,152 @@ class TestExport(E2ETestBase):
         archive, _token, interactor_name = self._create_interactive_domjudge_export()
         with zipfile.ZipFile(archive, "r") as zf:
             problem_yaml = zf.read("problem.yaml").decode("utf-8", errors="replace")
+            problem_meta = yaml.safe_load(problem_yaml)
             domjudge_ini = zf.read("domjudge-problem.ini").decode("utf-8", errors="replace")
-            self.assertNotIn("problem_format_version", problem_yaml)
-            self.assertIn("validation: custom interactive multi-pass", problem_yaml)
-            self.assertIn("memory: 1024", problem_yaml)
-            self.assertIn("validation_passes: 2", problem_yaml)
-            self.assertNotIn("time_limit:", problem_yaml)
-            self.assertNotIn("memory_limit:", problem_yaml)
+            self.assertEqual(problem_meta["problem_format_version"], "legacy")
+            self.assertEqual(problem_meta["type"], "interactive multi-pass")
+            self.assertEqual(problem_meta["limits"]["memory"], 1024)
+            self.assertEqual(problem_meta["limits"]["validation_passes"], 2)
+            self.assertEqual(problem_meta["limits"]["time_limit"], 2.0)
             self.assertIn("timelimit = 2", domjudge_ini)
             self.assertRegex(domjudge_ini, r"(?m)^color = #[0-9a-f]{6}$")
             self.assertIn(f"externalid = {Path(self.problem).name}", domjudge_ini)
-            self.assertIn(f"output_validators/interactor/{interactor_name}", zf.namelist())
-            self.assertIn("output_validators/interactor/testlib.h", zf.namelist())
-            self.assertIn("output_validators/interactor/build", zf.namelist())
+            self.assertIn(f"output_validator/{interactor_name}", zf.namelist())
+            self.assertIn("output_validator/testlib.h", zf.namelist())
+            self.assertIn("output_validator/build", zf.namelist())
+            self.assertIn("output_validator/run", zf.namelist())
+            self.assertFalse(any(name.startswith("output_validators/") for name in zf.namelist()))
             self.assertIn("data/secret/001.in", zf.namelist())
             self.assertIn("data/secret/001.ans", zf.namelist())
             self.assertEqual(zf.read("data/secret/001.ans"), b"")
             self.assertNotIn("data/sample/001.in", zf.namelist())
             self.assertNotIn("data/sample/001.ans", zf.namelist())
         self.assertTrue(archive.name.startswith(f"{Path(self.problem).name}-v"))
+
+    def test_icpc_export_preserves_all_submission_expectations(self) -> None:
+        ws = Path(self._workspace_path())
+        token = uuid.uuid4().hex[:8]
+        expected_behaviors = (
+            "accepted",
+            "wrong_answer",
+            "time_limit_exceeded",
+            "run_time_error",
+            "tle_or_correct",
+            "tle_or_re",
+            "rejected",
+        )
+        tracked = self._seed_export_tests(ws, "001")
+        source_by_expected: dict[str, str] = {}
+        for expected in expected_behaviors:
+            rel = f"solutions/{expected}_{token}.cpp"
+            source_by_expected[expected] = rel
+            (ws / rel).write_text("int main(){return 0;}\n", encoding="utf-8")
+            (ws / f"{rel}.desc").write_text(f"expected: {expected}\n", encoding="utf-8")
+            tracked.extend([rel, f"{rel}.desc"])
+        head = self._commit_workspace_paths(
+            ws,
+            tracked,
+            f"test ICPC submission expectations {token}",
+        )
+        ctx = workspace_service.workspace_context(self.problem, self.user, include_recent=False)
+
+        def _compile_ok(
+            _statement_root: Path,
+            dst_statement: Path,
+            *,
+            problem_name: str,
+            include_sample_tests: bool = True,
+        ) -> bool:
+            self.assertTrue(problem_name)
+            self.assertTrue(include_sample_tests)
+            dst_statement.mkdir(parents=True, exist_ok=True)
+            (dst_statement / "problem.en.pdf").write_bytes(b"%PDF-1.4\n%%EOF\n")
+            return True
+
+        with patch.object(export_service, "_try_compile_statement_pdf", side_effect=_compile_ok):
+            archive = export_service.create_export(
+                self.problem,
+                "",
+                "icpc",
+                workspace_id=int(ctx["workspace"]["id"]),
+                source_commit=head,
+            )
+
+        expected_metadata = {
+            "accepted": (["AC"], ["AC"]),
+            "wrong_answer": (["AC", "WA"], ["WA"]),
+            "time_limit_exceeded": (["AC", "TLE"], ["TLE"]),
+            "run_time_error": (["AC", "RTE"], ["RTE"]),
+            "tle_or_correct": (["AC", "TLE"], ["AC", "TLE"]),
+            "tle_or_re": (["TLE", "RTE"], ["TLE", "RTE"]),
+            "rejected": (["AC", "WA", "TLE", "RTE"], ["WA", "TLE", "RTE"]),
+        }
+        directory_by_expected = {
+            "accepted": "accepted",
+            "wrong_answer": "wrong_answer",
+            "time_limit_exceeded": "time_limit_exceeded",
+            "run_time_error": "run_time_error",
+            "tle_or_correct": "mixed_tle_or_correct",
+            "tle_or_re": "mixed_tle_or_re",
+            "rejected": "rejected",
+        }
+        with zipfile.ZipFile(archive, "r") as zf:
+            metadata = yaml.safe_load(zf.read("submissions/submissions.yaml"))
+            for expected, source_rel in source_by_expected.items():
+                package_rel = f"{directory_by_expected[expected]}/{Path(source_rel).name}"
+                self.assertEqual(metadata[package_rel]["language"], "cpp")
+                self.assertEqual(metadata[package_rel]["permitted"], expected_metadata[expected][0])
+                self.assertEqual(metadata[package_rel]["required"], expected_metadata[expected][1])
+                exported = zf.read(f"submissions/{package_rel}").decode("utf-8")
+                if expected == "tle_or_correct":
+                    self.assertTrue(exported.startswith("// @EXPECTED_RESULTS@: CORRECT,TIMELIMIT\n"))
+                elif expected == "tle_or_re":
+                    self.assertTrue(exported.startswith("// @EXPECTED_RESULTS@: TIMELIMIT,RUN-ERROR\n"))
+                else:
+                    self.assertFalse(exported.startswith("// @EXPECTED_RESULTS@"))
+
+    def test_icpc_export_rejects_rejected_submission_with_compile_error(self) -> None:
+        ws = Path(self._workspace_path())
+        token = uuid.uuid4().hex[:8]
+        accepted = f"solutions/accepted_{token}.cpp"
+        rejected = f"solutions/rejected_{token}.cpp"
+        for rel, expected in ((accepted, "accepted"), (rejected, "rejected")):
+            (ws / rel).write_text("int main(){return 0;}\n", encoding="utf-8")
+            (ws / f"{rel}.desc").write_text(f"expected: {expected}\n", encoding="utf-8")
+        head = self._commit_workspace_paths(
+            ws,
+            [
+                accepted,
+                f"{accepted}.desc",
+                rejected,
+                f"{rejected}.desc",
+                *self._seed_export_tests(ws, "001"),
+            ],
+            f"test ICPC rejected CE {token}",
+        )
+        ctx = workspace_service.workspace_context(self.problem, self.user, include_recent=False)
+
+        def _compile_ok(
+            _statement_root: Path,
+            dst_statement: Path,
+            **_kwargs: object,
+        ) -> bool:
+            dst_statement.mkdir(parents=True, exist_ok=True)
+            (dst_statement / "problem.en.pdf").write_bytes(b"%PDF-1.4\n%%EOF\n")
+            return True
+
+        with (
+            patch.object(export_service, "_try_compile_statement_pdf", side_effect=_compile_ok),
+            patch.object(export_service, "_rejected_solution_has_compile_error", return_value=True),
+        ):
+            with self.assertRaisesRegex(ValueError, "cannot express compiler error"):
+                export_service.create_export(
+                    self.problem,
+                    "verification-with-ce",
+                    "icpc",
+                    workspace_id=int(ctx["workspace"]["id"]),
+                    source_commit=head,
+                )
 
     def test_icpc_export_build_script_shell_quotes_interactor_filename(self) -> None:
         token = uuid.uuid4().hex[:8]
@@ -1362,13 +1501,13 @@ class TestExport(E2ETestBase):
             interactor_name=interactor_name,
         )
         with zipfile.ZipFile(archive, "r") as zf:
-            build_script = zf.read("output_validators/interactor/build").decode("utf-8", errors="replace")
+            build_script = zf.read("output_validator/build").decode("utf-8", errors="replace")
             self.assertIn(
-                f"g++ -Wall -DDOMJUDGE -O2 {shlex.quote(interactor_name)} -std=gnu++20 -o run\n",
+                f"c++ -Wall -DDOMJUDGE -O2 -std=gnu++20 -o program.bin -- {shlex.quote(interactor_name)}\n",
                 build_script,
             )
             self.assertNotIn(
-                f"g++ -Wall -DDOMJUDGE -O2 {interactor_name} -std=gnu++20 -o run\n",
+                f" -- {interactor_name}\n",
                 build_script,
             )
 
@@ -2132,12 +2271,14 @@ class TestExport(E2ETestBase):
         with zipfile.ZipFile(archive, "r") as zf:
             names = set(zf.namelist())
             self.assertIn("problem.yaml", names)
-            self.assertFalse(any(name.startswith("input_validators/") for name in names))
-            self.assertIn(f"output_validators/checker/{Path(files['checker_selected']).name}", names)
-            self.assertNotIn(f"output_validators/checker/{Path(files['checker_other']).name}", names)
+            self.assertIn(f"input_validators/validator/{Path(files['validator_selected']).name}", names)
+            self.assertNotIn(f"input_validators/validator/{Path(files['validator_other']).name}", names)
+            self.assertIn(f"output_validator/{Path(files['checker_selected']).name}", names)
+            self.assertNotIn(f"output_validator/{Path(files['checker_other']).name}", names)
+            self.assertFalse(any(name.startswith("output_validators/") for name in names))
 
             content = zf.read("problem.yaml").decode("utf-8", errors="replace")
-            self.assertNotIn("problem_format_version:", content)
+            self.assertEqual(yaml.safe_load(content)["problem_format_version"], "2025-09")
 
     def test_export_products_remain_available_until_artifact_cleanup(self) -> None:
         ws = Path(self._workspace_path())
@@ -2227,7 +2368,9 @@ class TestExport(E2ETestBase):
         with zipfile.ZipFile(archive, "r") as zf:
             names = set(zf.namelist())
         self.assertIn("problem.yaml", names)
+        self.assertIn("statement/problem.en.pdf", names)
         self.assertIn("problem_statement/problem.en.pdf", names)
+        self.assertIn("problem_statement/problem.pdf", names)
 
     def test_export_archive_summary_detects_icpc_statement_pdf(self) -> None:
         ctx = workspace_service.workspace_context(self.problem, self.user, include_recent=False)
@@ -2439,7 +2582,7 @@ class TestExport(E2ETestBase):
             self.assertTrue(str(problem_name or "").strip())
             self.assertTrue(include_sample_tests)
             dst_statement.mkdir(parents=True, exist_ok=True)
-            for name in ("problem.en.pdf", "problem.zh.pdf", "problem.japanese.pdf"):
+            for name in ("problem.en.pdf", "problem.zh.pdf", "problem.ja.pdf"):
                 (dst_statement / name).write_bytes(b"%PDF-1.4\n%%EOF\n")
             return True
 
@@ -2454,15 +2597,24 @@ class TestExport(E2ETestBase):
 
         with zipfile.ZipFile(archive, "r") as zf:
             names = set(zf.namelist())
+            problem_meta = yaml.safe_load(zf.read("problem.yaml"))
         self.assertIn("problem.yaml", names)
         self.assertNotIn("problem_statement/problem.en.tex", names)
         self.assertNotIn("problem_statement/problem.zh.tex", names)
-        self.assertNotIn("problem_statement/problem.japanese.tex", names)
+        self.assertNotIn("problem_statement/problem.ja.tex", names)
+        self.assertIn("statement/problem.en.pdf", names)
+        self.assertIn("statement/problem.zh.pdf", names)
+        self.assertIn("statement/problem.ja.pdf", names)
         self.assertIn("problem_statement/problem.en.pdf", names)
         self.assertIn("problem_statement/problem.zh.pdf", names)
-        self.assertIn("problem_statement/problem.japanese.pdf", names)
+        self.assertIn("problem_statement/problem.ja.pdf", names)
+        self.assertIn("problem_statement/problem.pdf", names)
+        self.assertEqual(set(problem_meta["name"]), {"en", "zh", "ja"})
+        self.assertTrue(problem_meta["name"]["en"])
+        self.assertEqual(problem_meta["name"]["zh"], "Chinese Title")
+        self.assertEqual(problem_meta["name"]["ja"], "Japanese Title")
 
-    def test_export_skips_statement_pdf_when_export_compile_fails(self) -> None:
+    def test_export_fails_when_statement_pdf_compile_fails(self) -> None:
         ws = Path(self._workspace_path())
         token = uuid.uuid4().hex[:8]
         rel = f"solutions/ac_pdf_fail_{token}.cpp"
@@ -2476,17 +2628,13 @@ class TestExport(E2ETestBase):
         ctx = workspace_service.workspace_context(self.problem, self.user, include_recent=False)
 
         with patch.object(export_service, "_try_compile_statement_pdf", return_value=False) as compile_mock:
-            archive = export_service.create_export(
-                self.problem,
-                "",
-                "icpc",
-                workspace_id=int(ctx["workspace"]["id"]),
-                source_commit=head,
-            )
+            with self.assertRaisesRegex(ValueError, "PDF was not produced"):
+                export_service.create_export(
+                    self.problem,
+                    "",
+                    "icpc",
+                    workspace_id=int(ctx["workspace"]["id"]),
+                    source_commit=head,
+                )
 
         compile_mock.assert_called_once()
-        with zipfile.ZipFile(archive, "r") as zf:
-            names = set(zf.namelist())
-        self.assertIn("problem.yaml", names)
-        self.assertNotIn("problem_statement/problem.en.pdf", names)
-        self.assertNotIn("problem_statement/problem.en.tex", names)

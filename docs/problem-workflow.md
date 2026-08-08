@@ -129,9 +129,14 @@ Current preview inputs can also reuse verification artifact refs for sample sync
 Statement export walks every discovered language directory in the snapshot.
 
 Current naming rules:
-- `english` -> `problem.en.tex` and `problem.en.pdf`
-- `chinese` -> `problem.zh.tex` and `problem.zh.pdf`
-- every other language -> `problem.<language>.tex` and `problem.<language>.pdf`
+- statement language names are normalized to language codes (`english` -> `en`,
+  `chinese` -> `zh`, `japanese` -> `ja`)
+- ICPC archives contain the authoritative 2025-09 PDF at
+  `statement/problem.<language>.pdf`
+- the same PDF is copied to `problem_statement/problem.<language>.pdf` for
+  DOMjudge, with `problem_statement/problem.pdf` selecting English when present
+  and otherwise the first language in deterministic statement order
+- authored TeX and statement-section sources are not copied into ICPC archives
 
 The shared statement template is common across languages. The language-specific part is the content under `statement-sections/<language>/`.
 
@@ -153,6 +158,19 @@ The default statement language order is `english`, then `chinese`, then the
 remaining languages alphabetically. Dirty workspace content is never used to
 derive export metadata. SQLite stores the problem slug and repository metadata,
 not a global problem name.
+
+### ICPC Package Compatibility
+
+The existing `icpc` export produces one archive with the 2025-09 layout and the
+DOMjudge compatibility files. Pass-fail, interactive, and multi-pass packages
+declare `problem_format_version: 2025-09`. The combined interactive +
+multi-pass case declares the legacy format and uses DOMjudge's
+`interactive multi-pass` type because DOMjudge compatibility takes priority for
+that combination.
+
+The supported DOMjudge import targets are 9.0.1 and main commit
+`0a00f66b0d13ae8451aa32a49bc673ec118b069d`. This is a tested compatibility
+boundary, not a promise for all historical or future DOMjudge versions.
 
 ## Revision Operations Exposed in the UI
 

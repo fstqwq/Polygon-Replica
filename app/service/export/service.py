@@ -1,10 +1,10 @@
 from __future__ import annotations
+# pylint: disable=too-many-lines
 
 import hashlib
 import json
 import os
 import re
-import shlex
 import shutil
 import uuid
 import zipfile
@@ -13,6 +13,16 @@ from typing import Callable
 
 from app.db import DB
 from app.service.disk.export_store import ExportJobRow, ExportStore
+from app.service.export.icpc_package import (
+    SUBMISSION_RULES,
+    annotated_submission,
+    render_problem_yaml,
+    render_submissions_yaml,
+    source_language,
+    statement_language_code,
+    write_input_validator,
+    write_output_validator,
+)
 from app.service.platform.hashing import sha256_file
 from app.service.platform.runtime_blob_store import PayloadFile
 from app.service.platform.fs.op import extract_git_archive, remove_symlinks
@@ -36,13 +46,6 @@ class ExportService:
         "native": "native.zip",
     }
     SOURCE_SUFFIX_ORDER = (".cpp", ".cc", ".cxx", ".c", ".py", ".java")
-    KATTIS_SUBMISSION_DIRS = (
-        "accepted",
-        "wrong_answer",
-        "time_limit_exceeded",
-        "run_time_error",
-        "rejected",
-    )
     DOMJUDGE_COLOR_PALETTE = (
         "#e6194b",
         "#3cb44b",
@@ -179,9 +182,6 @@ class ExportService:
 
     def fail_interrupted_export_jobs(self) -> int:
         return self._store.fail_interrupted_export_jobs()
-
-    def _yaml_quote(self, value: str) -> str:
-        return "'" + value.replace("'", "''") + "'"
 
     def _package_root_name(self, slug: str) -> str:
         return "".join(ch.lower() for ch in slug if ch.isalnum()) or "problem"
@@ -333,14 +333,6 @@ class ExportService:
                 pass
         return expected
 
-    def _submission_dir_for_expected(self, expected_behavior: str) -> str | None:
-        normalized = normalize_expected_behavior(expected_behavior)
-        if normalized in self.KATTIS_SUBMISSION_DIRS:
-            return normalized
-        if normalized in {"tle_or_correct", "tle_or_re"}:
-            return "time_limit_exceeded"
-        return None
-
     def _ensure_unique_file_path(self, parent: Path, filename: str) -> Path:
         safe_name = Path(str(filename or "")).name
         if not safe_name:
@@ -390,6 +382,18 @@ class ExportService:
                     raise ValueError("checker_source is configured but invalid")
                 return None
         return self._find_first_source(snapshot / "checkers")
+
+    def _effective_validator_source(self, snapshot: Path, strict: bool) -> Path | None:
+        build_cfg = self._load_build_config(snapshot)
+        configured = validator_source.strip() if isinstance(validator_source := build_cfg.get("validator_source"), str) else ""
+        if configured:
+            try:
+                return self._resolve_snapshot_source(snapshot, configured)
+            except ValueError:
+                if strict:
+                    raise ValueError("validator_source is configured but invalid")
+                return None
+        return self._find_first_source(snapshot / "validators")
 
     def _effective_interactor_source(self, snapshot: Path, strict: bool) -> Path | None:
         configured = interactor_source.strip() if isinstance(interactor_source := self._load_build_config(snapshot).get("interactor_source"), str) else ""
@@ -536,30 +540,32 @@ class ExportService:
             return {}
         return payload if isinstance(payload, dict) else {}
 
-    def _build_problem_yaml(self, *, problem_name: str, mode: str, pass_limit: int, snapshot: Path, has_checker: bool) -> str:
+    def _build_problem_yaml(
+        self,
+        *,
+        problem_slug: str,
+        source_commit: str,
+        statement_names: dict[str, str],
+        mode: str,
+        pass_limit: int,
+        snapshot: Path,
+    ) -> str:
         cfg = self._load_problem_config(snapshot)
-        validation = "default"
-        if str(mode or "").strip() == "interactive":
-            validation = "custom interactive multi-pass" if int(pass_limit) > 1 else "custom interactive"
-        elif has_checker:
-            validation = "custom"
-        lines: list[str] = []
-        limit_lines: list[str] = []
+        time_limit_ms = cfg.get("time_limit_ms")
+        if not isinstance(time_limit_ms, int) or time_limit_ms <= 0:
+            time_limit_ms = 2000
         memory_limit_mb = cfg.get("memory_limit_mb")
-        if isinstance(memory_limit_mb, int) and memory_limit_mb > 0:
-            limit_lines.append(f"  memory: {memory_limit_mb}")
-        if int(pass_limit) > 1:
-            limit_lines.append(f"  validation_passes: {max(2, int(pass_limit))}")
-        if limit_lines:
-            lines.append("limits:")
-            lines.extend(limit_lines)
-        lines.extend(
-            [
-                f"name: {self._yaml_quote(problem_name)}",
-                f"validation: {validation}",
-            ]
+        if not isinstance(memory_limit_mb, int) or memory_limit_mb <= 0:
+            memory_limit_mb = None
+        return render_problem_yaml(
+            problem_slug=problem_slug,
+            source_commit=source_commit,
+            names=statement_names,
+            mode=mode,
+            pass_limit=max(1, int(pass_limit)),
+            time_limit_ms=time_limit_ms,
+            memory_limit_mb=memory_limit_mb,
         )
-        return "\n".join(lines) + "\n"
 
     @staticmethod
     def _ini_value(value: str) -> str:
@@ -606,11 +612,7 @@ class ExportService:
 
     @staticmethod
     def _statement_export_suffix(language: str) -> str:
-        if language == "english":
-            return "en"
-        if language == "chinese":
-            return "zh"
-        return language
+        return statement_language_code(language)
 
     def _try_compile_statement_pdf(
         self,
@@ -629,15 +631,16 @@ class ExportService:
                     language=language,
                     include_sample_tests=include_sample_tests,
                 )
-            except Exception:
-                continue
+            except Exception as exc:
+                raise ValueError(f"failed to render {language} statement: {exc}") from exc
             compile_result = self.tex_compile_service.compile_pdf(rendered)
             proc = compile_result.proc
             if proc.returncode != 0:
-                continue
+                error = str(proc.stderr or proc.stdout or "statement compiler failed").strip()
+                raise ValueError(f"failed to compile {language} statement: {error}")
             pdf_path = compile_result.pdf_path
             if not pdf_path.exists() or not pdf_path.is_file():
-                continue
+                raise ValueError(f"failed to compile {language} statement: PDF was not produced")
             suffix = self._statement_export_suffix(language)
             dst_statement.mkdir(parents=True, exist_ok=True)
             shutil.copy2(pdf_path, dst_statement / f"problem.{suffix}.pdf")
@@ -846,49 +849,72 @@ class ExportService:
                 verification_id=verification_id,
             )
 
-    def _copy_output_validator_component(
+    def _rejected_solution_has_compile_error(
         self,
-        source: Path | None,
-        dst_dir: Path,
-        subdir: str,
         *,
-        snapshot: Path,
-        create_build_script: bool = False,
-    ) -> None:
-        if source is None:
-            return
-        target_dir = dst_dir / subdir
-        target_dir.mkdir(parents=True, exist_ok=True)
-        if source.suffix == ".cpp":
-            testlib = snapshot / "third_party" / "testlib" / "testlib.h"
-            if not self._is_safe_regular_file(snapshot, testlib):
-                raise ValueError("export missing testlib header: third_party/testlib/testlib.h")
-            shutil.copy2(testlib, target_dir / "testlib.h")
-            if create_build_script:
-                self._write_output_validator_build_script(target_dir, source.name)
-        shutil.copy2(source, target_dir / source.name)
-
-    def _write_output_validator_build_script(self, target_dir: Path, source_name: str) -> None:
-        build = target_dir / "build"
-        build.write_text(
-            "#!/bin/sh\n"
-            "# Auto-generated for DOMjudge multi-pass validation.\n"
-            f"g++ -Wall -DDOMJUDGE -O2 {shlex.quote(source_name)} -std=gnu++20 -o run\n",
-            encoding="utf-8",
+        verification_id: str,
+        source_path: str,
+    ) -> bool:
+        if not verification_id:
+            return False
+        rows = self.db.fetch_all(
+            """
+            SELECT verdict,error_text
+            FROM verification_tasks
+            WHERE verification_id=? AND source_path=? AND expected_behavior='rejected'
+            """,
+            [verification_id, source_path],
         )
-        build.chmod(0o755)
+        return any(
+            str(row["verdict"] or "").upper() in {"CE", "COMPILE_ERROR", "COMPILE ERROR"}
+            or str(row["error_text"] or "").strip().lower() in {"ce", "compile_error", "compile error"}
+            for row in rows
+        )
 
-    def _copy_solutions(self, snapshot: Path, package_root: Path) -> None:
+    def _copy_solutions(
+        self,
+        snapshot: Path,
+        package_root: Path,
+        *,
+        verification_id: str,
+    ) -> None:
         dst_submissions = package_root / "submissions"
         dst_submissions.mkdir(parents=True, exist_ok=True)
+        metadata: dict[str, dict[str, object]] = {}
+        accepted_count = 0
         for source_file in self._iter_solution_sources(snapshot / "solutions"):
             expected = self._solution_expected_behavior(source_file)
-            target_group = self._submission_dir_for_expected(expected)
-            if not target_group:
+            rule = SUBMISSION_RULES.get(expected)
+            if rule is None:
                 continue
-            target_dir = dst_submissions / target_group
+            source_rel = source_file.relative_to(snapshot).as_posix()
+            if expected == "rejected" and self._rejected_solution_has_compile_error(
+                verification_id=verification_id,
+                source_path=source_rel,
+            ):
+                raise ValueError(f"2025-09 submissions cannot express compiler error: {source_rel}")
+            target_dir = dst_submissions / rule["directory"]
             target_dir.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(source_file, self._ensure_unique_file_path(target_dir, source_file.name))
+            target = self._ensure_unique_file_path(target_dir, source_file.name)
+            if expected in {"tle_or_correct", "tle_or_re"}:
+                target.write_bytes(annotated_submission(source_file, rule["domjudge_results"]))
+            else:
+                shutil.copy2(source_file, target)
+            rel = target.relative_to(dst_submissions).as_posix()
+            metadata[rel] = {
+                "language": source_language(source_file),
+                "permitted": list(rule["permitted"]),
+                "required": list(rule["required"]),
+            }
+            if expected == "accepted":
+                accepted_count += 1
+        if accepted_count == 0:
+            raise ValueError("2025-09 export requires at least one accepted submission")
+        (dst_submissions / "submissions.yaml").write_text(
+            render_submissions_yaml(metadata),
+            encoding="utf-8",
+            newline="\n",
+        )
 
     def _build_icpc_package(
         self,
@@ -897,6 +923,7 @@ class ExportService:
         snapshot: Path,
         problem_name: str,
         problem_slug: str,
+        source_commit: str,
         domjudge_short_name: str,
         verification_id: str,
         mode: str,
@@ -915,15 +942,56 @@ class ExportService:
         )
         if mode == "interactive" and interactor_source is None:
             raise ValueError("interactive export requires interactor source")
+        validator_source = self._effective_validator_source(snapshot, strict=True)
+
+        samples_as_secret = self._keep_samples_out_of_domjudge_sample_data(mode, pass_limit)
+        if not samples_as_secret:
+            self._materialize_export_sample_display_payloads(
+                snapshot,
+                verification_id=verification_id,
+            )
+
+        statement_languages_to_export = self._statement_export_languages(snapshot)
+        statement_dir = package_root / "statement"
+        self._try_compile_statement_pdf(
+            snapshot,
+            statement_dir,
+            problem_name=problem_name,
+            include_sample_tests=not samples_as_secret,
+        )
+        statement_names: dict[str, str] = {}
+        statement_files: dict[str, Path] = {}
+        for language in statement_languages_to_export:
+            language_code = self._statement_export_suffix(language)
+            if language_code in statement_files:
+                raise ValueError(f"duplicate statement language code: {language_code}")
+            statement_file = statement_dir / f"problem.{language_code}.pdf"
+            if not statement_file.is_file():
+                raise ValueError(f"failed to compile {language} statement: PDF was not produced")
+            statement_names[language_code] = statement_title_from_snapshot(
+                snapshot,
+                fallback_title=problem_name,
+                language=language,
+            )
+            statement_files[language_code] = statement_file
+        legacy_statement_dir = package_root / "problem_statement"
+        legacy_statement_dir.mkdir(parents=True, exist_ok=True)
+        for language_code, statement_file in statement_files.items():
+            shutil.copy2(statement_file, legacy_statement_dir / statement_file.name)
+        preferred_code = "en" if "en" in statement_files else next(iter(statement_files))
+        shutil.copy2(statement_files[preferred_code], legacy_statement_dir / "problem.pdf")
+
         (package_root / "problem.yaml").write_text(
             self._build_problem_yaml(
-                problem_name=problem_name,
+                problem_slug=problem_slug,
+                source_commit=source_commit,
+                statement_names=statement_names,
                 mode=mode,
                 pass_limit=pass_limit,
                 snapshot=snapshot,
-                has_checker=checker_source is not None,
             ),
             encoding="utf-8",
+            newline="\n",
         )
         (package_root / "domjudge-problem.ini").write_text(
             self._build_domjudge_problem_ini(
@@ -934,12 +1002,6 @@ class ExportService:
             ),
             encoding="utf-8",
         )
-        samples_as_secret = self._keep_samples_out_of_domjudge_sample_data(mode, pass_limit)
-        if not samples_as_secret:
-            self._materialize_export_sample_display_payloads(
-                snapshot,
-                verification_id=verification_id,
-            )
         self._copy_secret_and_sample_data(
             snapshot,
             package_root,
@@ -947,20 +1009,21 @@ class ExportService:
             samples_as_secret=samples_as_secret,
             blank_secret_answers=mode == "interactive",
         )
-        self._try_compile_statement_pdf(
-            snapshot,
-            package_root / "problem_statement",
-            problem_name=problem_name,
-            include_sample_tests=not samples_as_secret,
-        )
-        self._copy_output_validator_component(
-            interactor_source if mode == "interactive" else checker_source,
-            package_root / "output_validators",
-            "interactor" if mode == "interactive" else "checker",
+        write_input_validator(
             snapshot=snapshot,
-            create_build_script=mode == "interactive" and int(pass_limit) > 1,
+            package_root=package_root,
+            source=validator_source,
         )
-        self._copy_solutions(snapshot, package_root)
+        write_output_validator(
+            snapshot=snapshot,
+            package_root=package_root,
+            source=interactor_source if mode == "interactive" else checker_source,
+        )
+        self._copy_solutions(
+            snapshot,
+            package_root,
+            verification_id=verification_id,
+        )
         self._copy_attachments(snapshot, package_root)
 
     def _make_archive_from_dir_contents(self, archive_target: Path, root: Path) -> Path:
@@ -1138,6 +1201,7 @@ class ExportService:
                     snapshot=snapshot,
                     problem_name=problem_name,
                     problem_slug=str(problem_row["slug"]),
+                    source_commit=stored_source_commit,
                     domjudge_short_name=resolved_short_name,
                     verification_id=resolved_verification_id,
                     mode=mode,

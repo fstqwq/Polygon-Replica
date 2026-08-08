@@ -8,6 +8,8 @@ import zipfile
 from pathlib import Path, PurePosixPath
 from typing import TypedDict
 
+import yaml
+
 from app.main_util import UPLOAD_MAX_BYTES
 from app.service.importing.statement_assets import ImportedLegacyStatementAsset, merge_imported_statement_assets
 from app.service.problem.build_config import dumps_build_config
@@ -54,6 +56,7 @@ ProblemMeta = TypedDict(
     "ProblemMeta",
     {
         "title": str,
+        "format_version": str,
         "mode": str,
         "pass_limit": int,
         "time_limit_ms": int | None,
@@ -193,47 +196,6 @@ def _entry_map_from_zip(zf: zipfile.ZipFile, marker: str) -> dict[str, zipfile.Z
     return mapped
 
 
-def _yaml_strip_comment(raw: str) -> str:
-    line = raw
-    out: list[str] = []
-    in_single = False
-    in_double = False
-    i = 0
-    while i < len(line):
-        ch = line[i]
-        if ch == "'" and not in_double:
-            if in_single and i + 1 < len(line) and line[i + 1] == "'":
-                out.append("''")
-                i += 2
-                continue
-            in_single = not in_single
-            out.append(ch)
-            i += 1
-            continue
-        if ch == '"' and not in_single:
-            in_double = not in_double
-            out.append(ch)
-            i += 1
-            continue
-        if ch == "#" and (not in_single) and (not in_double):
-            break
-        out.append(ch)
-        i += 1
-    return "".join(out).rstrip()
-
-
-def _yaml_unquote(raw: str) -> str:
-    text = raw.strip()
-    if len(text) >= 2 and text[0] == "'" and text[-1] == "'":
-        return text[1:-1].replace("''", "'")
-    if len(text) >= 2 and text[0] == '"' and text[-1] == '"':
-        inner = text[1:-1]
-        inner = inner.replace(r"\"", '"').replace(r"\\", "\\")
-        inner = inner.replace(r"\n", "\n").replace(r"\t", "\t").replace(r"\r", "\r")
-        return inner
-    return text
-
-
 def _ini_unquote(raw: str) -> str:
     text = raw.strip()
     if len(text) >= 2 and text[0] == '"' and text[-1] == '"':
@@ -371,58 +333,72 @@ def _unique_rel_path(workspace: Path, parent_rel: Path, filename: str) -> str:
 
 class ICPCPackageImportService:
     def _parse_problem_yaml(self, text: str) -> ProblemMeta:
-        top: dict[str, str] = {}
-        limits: dict[str, str] = {}
-        in_limits = False
-        for raw_line in text.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
-            line = _yaml_strip_comment(raw_line)
-            if not line.strip():
-                continue
-            if line[:1].isspace():
-                if not in_limits:
-                    continue
-                nested = line.strip()
-                if ":" not in nested:
-                    continue
-                key, value = nested.split(":", 1)
-                key_norm = key.strip().lower().replace("-", "_")
-                if key_norm in {"time_limit", "memory_limit", "validation_passes"}:
-                    limits[key_norm] = value.strip()
-                continue
-            in_limits = False
-            if ":" not in line:
-                continue
-            key, value = line.split(":", 1)
-            key_norm = key.strip().lower().replace("-", "_")
-            value_text = value.strip()
-            top[key_norm] = value_text
-            if key_norm == "limits" and not value_text:
-                in_limits = True
+        try:
+            loaded = yaml.safe_load(text)
+        except yaml.YAMLError as exc:
+            raise ValueError(f"invalid problem.yaml: {exc}") from exc
+        if loaded is None:
+            loaded = {}
+        if not isinstance(loaded, dict):
+            raise ValueError("problem.yaml must contain a mapping")
 
-        title = _yaml_unquote(top.get("name", ""))
-        validation_tokens = [item for item in _yaml_unquote(top.get("validation", "")).strip().lower().split() if item]
-        mode = "interactive" if "interactive" in validation_tokens else "pass-fail"
-        if any(token in {"multi-pass", "multipass"} for token in validation_tokens):
-            validation_passes_raw = limits.get("validation_passes")
-            if validation_passes_raw is None:
-                validation_passes_raw = top.get("validation_passes")
-            pass_limit = _coerce_int(_yaml_unquote(validation_passes_raw or "0"), 0, min_value=1)
+        format_version = str(loaded.get("problem_format_version") or "").strip()
+        if format_version not in {"", "legacy", "legacy-icpc", "2025-09"}:
+            raise ValueError(f"unsupported problem_format_version: {format_version}")
+
+        raw_name = loaded.get("name")
+        if isinstance(raw_name, dict):
+            language_names = {
+                str(key): value.strip()
+                for key, value in raw_name.items()
+                if str(key) and isinstance(value, str) and value.strip()
+            }
+            title = language_names.get("en") or next(iter(language_names.values()), "")
+        else:
+            title = str(raw_name or "")
+
+        raw_type = loaded.get("type")
+        if isinstance(raw_type, list):
+            type_tokens = [str(item).strip().lower() for item in raw_type if str(item).strip()]
+        elif isinstance(raw_type, str):
+            if format_version == "2025-09":
+                type_tokens = [raw_type.strip().lower()] if raw_type.strip() else []
+            else:
+                type_tokens = [item for item in raw_type.strip().lower().split() if item]
+        elif raw_type is None:
+            type_tokens = []
+        else:
+            raise ValueError("problem.yaml type must be a string or sequence")
+        unsupported_types = set(type_tokens) - {"pass-fail", "interactive", "multi-pass"}
+        if unsupported_types:
+            raise ValueError(f"unsupported ICPC problem type: {', '.join(sorted(unsupported_types))}")
+
+        validation_tokens = [
+            item
+            for item in str(loaded.get("validation") or "").strip().lower().split()
+            if item
+        ]
+        effective_tokens = set(type_tokens) | set(validation_tokens)
+        mode = "interactive" if "interactive" in effective_tokens else "pass-fail"
+        limits_raw = loaded.get("limits")
+        limits = limits_raw if isinstance(limits_raw, dict) else {}
+        is_multi_pass = bool({"multi-pass", "multipass"} & effective_tokens)
+        if is_multi_pass:
+            validation_passes_raw = limits.get("validation_passes", loaded.get("validation_passes"))
+            pass_limit = _coerce_int(validation_passes_raw, 0, min_value=1)
             if pass_limit < 2:
-                raise ValueError("interactive multi-pass ICPC package requires limits.validation_passes >= 2")
+                raise ValueError("multi-pass ICPC package requires limits.validation_passes >= 2")
         else:
             pass_limit = 1
 
-        time_raw = limits.get("time_limit")
-        if time_raw is None:
-            time_raw = top.get("time_limit")
-        memory_raw = limits.get("memory_limit")
-        if memory_raw is None:
-            memory_raw = top.get("memory_limit")
-        time_limit_ms = _time_limit_ms_from_text(_yaml_unquote(time_raw)) if time_raw else None
-        memory_limit_mb = _memory_limit_mb_from_text(_yaml_unquote(memory_raw)) if memory_raw else None
+        time_raw = limits.get("time_limit", loaded.get("time_limit"))
+        memory_raw = limits.get("memory", limits.get("memory_limit", loaded.get("memory_limit")))
+        time_limit_ms = _time_limit_ms_from_text(str(time_raw)) if time_raw is not None else None
+        memory_limit_mb = _memory_limit_mb_from_text(str(memory_raw)) if memory_raw is not None else None
 
         return {
             "title": title,
+            "format_version": format_version,
             "mode": mode,
             "pass_limit": pass_limit,
             "time_limit_ms": int(time_limit_ms) if time_limit_ms is not None else None,

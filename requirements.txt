@@ -7,3 +7,4 @@ pyflakes==3.4.0
 vulture==2.14
 cryptography==44.0.0
 sortedcontainers==2.4.0
+PyYAML==6.0.2

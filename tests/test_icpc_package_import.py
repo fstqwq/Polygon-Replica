@@ -113,6 +113,58 @@ class TestICPCPackageImport(unittest.TestCase):
                 fallback_title="two-sum",
             )
 
+    def test_problem_yaml_2025_metadata_supports_names_types_and_limits(self) -> None:
+        metadata = ICPCPackageImportService()._parse_problem_yaml(  # pylint: disable=protected-access
+            """
+problem_format_version: 2025-09
+name:
+  zh: 中文题目
+  en: "Quoted: # title"
+type: [interactive, multi-pass]
+limits:
+  time_limit: 2.25
+  memory: 768
+  validation_passes: 3
+"""
+        )
+        self.assertEqual(metadata["format_version"], "2025-09")
+        self.assertEqual(metadata["title"], "Quoted: # title")
+        self.assertEqual(metadata["mode"], "interactive")
+        self.assertEqual(metadata["pass_limit"], 3)
+        self.assertEqual(metadata["time_limit_ms"], 2250)
+        self.assertEqual(metadata["memory_limit_mb"], 768)
+
+    def test_problem_yaml_legacy_type_and_validation_remain_supported(self) -> None:
+        service = ICPCPackageImportService()
+        legacy_type = service._parse_problem_yaml(  # pylint: disable=protected-access
+            """
+problem_format_version: legacy
+name: Legacy combined
+type: interactive multi-pass
+limits:
+  validation_passes: 2
+"""
+        )
+        self.assertEqual(legacy_type["mode"], "interactive")
+        self.assertEqual(legacy_type["pass_limit"], 2)
+
+        legacy_validation = service._parse_problem_yaml(  # pylint: disable=protected-access
+            "name: Legacy validation\nvalidation: custom interactive\n"
+        )
+        self.assertEqual(legacy_validation["mode"], "interactive")
+        self.assertEqual(legacy_validation["pass_limit"], 1)
+
+    def test_problem_yaml_rejects_unknown_version_and_type(self) -> None:
+        service = ICPCPackageImportService()
+        with self.assertRaisesRegex(ValueError, "unsupported problem_format_version"):
+            service._parse_problem_yaml(  # pylint: disable=protected-access
+                "problem_format_version: 2099-01\nname: Future\n"
+            )
+        with self.assertRaisesRegex(ValueError, "unsupported ICPC problem type"):
+            service._parse_problem_yaml(  # pylint: disable=protected-access
+                "problem_format_version: 2025-09\nname: Scored\ntype: scoring\n"
+            )
+
     def test_import_icpc_package_basic_layout(self) -> None:
         ws = self._workspace_path()
         payload = io.BytesIO()
