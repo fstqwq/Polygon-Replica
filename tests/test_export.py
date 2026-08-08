@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 import json
+import shutil
 import tempfile
+import threading
 import zipfile
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest.mock import patch
 
 from app.impl.runtime.config import config
 from app.service.importing.native import NativePackageImportService
+from app.service.platform.git_process import run_git
 from app.service.problem_package.manifest import load_manifest, validate_manifest_files
 from tests.common import E2ETestBase
 from tests.db_helpers import db_execute, db_fetch_one
@@ -145,6 +149,58 @@ class TestPublishedRevisionExport(E2ETestBase):
         self.assertEqual(restored["id"], first["id"])
         self.assertTrue(config.problem_package_service.native_archive(restored["id"])[1].is_file())
 
+    def test_concurrent_requests_build_one_native_for_the_revision(self) -> None:
+        _workspace, problem_id, _commit = self._publish_problem()
+        revision = config.problem_package_service.published_revision(problem_id)
+        build_count = 0
+        count_lock = threading.Lock()
+        delegate = self._verification_builder(problem_id)
+
+        def build(snapshot: Path, commit: str, revision_number: int, verification_id: str) -> str:
+            nonlocal build_count
+            with count_lock:
+                build_count += 1
+            return delegate(snapshot, commit, revision_number, verification_id)
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            rows = list(
+                executor.map(
+                    lambda _index: config.problem_package_service.ensure_materialization(
+                        revision,
+                        build,
+                    ),
+                    range(2),
+                )
+            )
+
+        self.assertEqual(build_count, 1)
+        self.assertEqual(rows[0]["id"], rows[1]["id"])
+
+    def test_distinct_git_commits_with_the_same_tree_are_distinct_revisions(self) -> None:
+        workspace, problem_id, first_commit = self._publish_problem()
+        first_revision = config.problem_package_service.published_revision(problem_id)
+        first = config.problem_package_service.ensure_materialization(
+            first_revision,
+            self._verification_builder(problem_id),
+        )
+
+        commit = run_git(
+            ["git", "-C", str(workspace), "commit", "--allow-empty", "-m", "publish same tree again"]
+        )
+        self.assertEqual(commit.returncode, 0, commit.stderr or commit.stdout)
+        push = run_git(["git", "-C", str(workspace), "push", "origin", "HEAD:main"])
+        self.assertEqual(push.returncode, 0, push.stderr or push.stdout)
+
+        second_revision = config.problem_package_service.published_revision(problem_id)
+        self.assertNotEqual(second_revision.source_commit, first_commit)
+        second = config.problem_package_service.ensure_materialization(
+            second_revision,
+            self._verification_builder(problem_id),
+        )
+        self.assertNotEqual(second["id"], first["id"])
+        self.assertEqual(second["source_digest"], first["source_digest"])
+        self.assertEqual(second["revision_number"], first["revision_number"] + 1)
+
     def test_icpc_conversion_only_needs_native_after_verification_is_deleted(self) -> None:
         problem_id, commit, materialization = self._materialize()
         db_execute(
@@ -199,6 +255,69 @@ class TestPublishedRevisionExport(E2ETestBase):
             self.assertTrue((workspace / "config" / "problem.json").is_file())
             self.assertFalse((workspace / "test_data").exists())
             self.assertFalse((workspace / "tests" / "answers").exists())
+
+    def test_native_import_rejects_source_only_archives(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="native-source-only-") as temp:
+            archive = Path(temp) / "source-only.zip"
+            with zipfile.ZipFile(archive, "w") as package:
+                package.writestr("config/problem.json", "{}\n")
+            workspace = Path(temp) / "workspace"
+            workspace.mkdir()
+            with self.assertRaisesRegex(ValueError, "source-only Native packages"):
+                NativePackageImportService().import_package(
+                    workspace,
+                    archive.name,
+                    archive.read_bytes(),
+                )
+
+    def test_icpc_conversion_rejects_missing_statements(self) -> None:
+        workspace, problem_id, _commit = self._publish_problem()
+        shutil.rmtree(workspace / "statement-sections")
+        config.git_service.commit(
+            workspace,
+            "remove all statements",
+            self.user,
+            f"{self.user}@polygonlike.local",
+        )
+        config.git_service.push(workspace, "main")
+        revision = config.problem_package_service.published_revision(problem_id)
+        materialization = config.problem_package_service.ensure_materialization(
+            revision,
+            self._verification_builder(problem_id),
+        )
+        with self.assertRaisesRegex(ValueError, "at least one problem statement"):
+            config.export_service.create_export(
+                self.problem,
+                "icpc",
+                materialization_id=materialization["id"],
+            )
+
+    def test_icpc_conversion_rejects_invalid_configured_checker(self) -> None:
+        workspace, problem_id, _commit = self._publish_problem()
+        build_path = workspace / "config" / "build.json"
+        build: dict[str, object] = {}
+        if build_path.is_file():
+            build = json.loads(build_path.read_text(encoding="utf-8"))
+        build["checker_source"] = "checkers/missing.cpp"
+        build_path.write_text(json.dumps(build, indent=2) + "\n", encoding="utf-8")
+        config.git_service.commit(
+            workspace,
+            "configure missing checker",
+            self.user,
+            f"{self.user}@polygonlike.local",
+        )
+        config.git_service.push(workspace, "main")
+        revision = config.problem_package_service.published_revision(problem_id)
+        materialization = config.problem_package_service.ensure_materialization(
+            revision,
+            self._verification_builder(problem_id),
+        )
+        with self.assertRaisesRegex(ValueError, "checker_source is configured but invalid"):
+            config.export_service.create_export(
+                self.problem,
+                "icpc",
+                materialization_id=materialization["id"],
+            )
 
     def test_native_reader_rejects_manifest_tampering(self) -> None:
         _problem_id, _commit, materialization = self._materialize()

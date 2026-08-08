@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import secrets
 import shutil
 from pathlib import Path, PurePosixPath
@@ -890,8 +891,12 @@ class ContestService:
             raise ValueError("contest job id is required")
         artifact_id = f"ca-{secrets.token_hex(6)}"
         target_path = self.artifact_path(str(contest_row["slug"]), safe_job_id, artifact_id, safe_filename)
-        if resolved != target_path:
-            shutil.copy2(resolved, target_path)
+        partial_path = target_path.with_name(f".{target_path.name}.{secrets.token_hex(6)}.partial")
+        try:
+            shutil.copy2(resolved, partial_path)
+            os.replace(partial_path, target_path)
+        finally:
+            partial_path.unlink(missing_ok=True)
         stored_file = target_path.resolve()
         self._store.insert_artifact(
             artifact_id=artifact_id,

@@ -172,10 +172,10 @@ class TestContestWorkspaceScope(ContestActionBase):
         batch_access.assert_called_once()
         self.assertEqual(
             batch_access.call_args.args[0],
-            [peer_problem_id, int(locked_problem_id), active_problem_id],
+            [active_problem_id, peer_problem_id, int(locked_problem_id)],
         )
         self.assertEqual(context["problem_count"], 3)
-        self.assertEqual([row["idx"] for row in context["problems"]], ["A", "BB", "C"])
+        self.assertEqual([row["idx"] for row in context["problems"]], ["C", "A", "BB"])
         self.assertEqual(context["active_idx"], "C")
         self.assertEqual(context["section"], "checker")
         self.assertEqual(context["exit_href"], "/problems/alice/sample/checker")
@@ -183,16 +183,19 @@ class TestContestWorkspaceScope(ContestActionBase):
             context["contest_href"],
             f"/contests/{contest_slug}/overview",
         )
-        peer = context["problems"][0]
+        peer = context["problems"][1]
         self.assertEqual(peer["problem_slug"], peer_slug)
         self.assertEqual(
             peer["href"],
             f"/problems/{peer_slug}/checker?contest={contest_slug}",
         )
-        locked = context["problems"][1]
-        self.assertFalse(locked["can_open"])
-        self.assertEqual(locked["block_reason"], "problem_access_denied")
-        self.assertIsNone(locked["href"])
+        contest_derived = context["problems"][2]
+        self.assertTrue(contest_derived["can_open"])
+        self.assertIsNone(contest_derived["block_reason"])
+        self.assertEqual(
+            contest_derived["href"],
+            f"/problems/{locked_slug}/checker?contest={contest_slug}",
+        )
 
     def test_url_builder_encodes_path_and_query_exactly_once(self) -> None:
         request = _app_request("/")
@@ -251,7 +254,7 @@ class TestContestWorkspaceScope(ContestActionBase):
             ("?contest=missing-contest", alice_cookie, 404),
             (f"?contest={empty_contest_slug}", alice_cookie, 404),
             (f"?contest={contest_slug}", bob_cookie, 403),
-            (f"?contest={contest_slug}", carol_cookie, 403),
+            (f"?contest={contest_slug}", carol_cookie, 200),
         ]
         with TestClient(app) as client:
             for query, cookie, expected in cases:

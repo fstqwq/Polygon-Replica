@@ -25,8 +25,8 @@ class TestContestProblemActions(ContestActionBase):
             contest_problem_indices=["B", "A"],
         )
         self.assertEqual(response.status_code, 303)
-        rows = db_fetch_all("SELECT id,idx FROM contest_problems WHERE contest_id=?", [contest_id])
-        self.assertEqual({int(row["id"]): str(row["idx"]) for row in rows}, {first_id: "B", second_id: "A"})
+        rows = db_fetch_all("SELECT id,label FROM contest_problems WHERE contest_id=?", [contest_id])
+        self.assertEqual({int(row["id"]): str(row["label"]) for row in rows}, {first_id: "B", second_id: "A"})
 
         incomplete = contest_problems_renumber(
             contest=contest_slug,
@@ -35,9 +35,9 @@ class TestContestProblemActions(ContestActionBase):
             contest_problem_indices=["A"],
         )
         self.assertIn("every contest problem", _flash_messages_from_response(incomplete)[0])
-        unchanged = db_fetch_all("SELECT id,idx FROM contest_problems WHERE contest_id=?", [contest_id])
+        unchanged = db_fetch_all("SELECT id,label FROM contest_problems WHERE contest_id=?", [contest_id])
         self.assertEqual(
-            {int(row["id"]): str(row["idx"]) for row in unchanged},
+            {int(row["id"]): str(row["label"]) for row in unchanged},
             {first_id: "B", second_id: "A"},
         )
 

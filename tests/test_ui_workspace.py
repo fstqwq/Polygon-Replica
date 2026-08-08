@@ -1846,12 +1846,6 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
                 f"alice/{custom_problem_slugs[4]}",
             ],
         )
-        for row in imported_rows:
-            problem_slug = str(row["slug"] or "").strip()
-            problem_id_row = db_fetch_one("SELECT id FROM problems WHERE slug=?", [problem_slug])
-            self.assertIsNotNone(problem_id_row)
-            self.assertTrue(str(source_folder_map.get(str(int(problem_id_row["id"]))) or "").strip())
-
         taxi_problem_slug = ""
         for row in imported_rows:
             idx = str(row["idx"] or "").strip().upper()

@@ -869,16 +869,14 @@ class TestAgentAPI(E2ETestBase):
                 headers=self._bearer(readonly_token),
                 json={"export_type": "native"},
             )
-            self.assertEqual(native_export.status_code, 400, native_export.text)
-            self.assertIn("no committed revision", native_export.text)
+            self.assertEqual(native_export.status_code, 403, native_export.text)
 
             icpc_export = client.post(
                 "/agent/v1/export/start",
                 headers=self._bearer(readonly_token),
                 json={"export_type": "icpc"},
             )
-            self.assertEqual(icpc_export.status_code, 400, icpc_export.text)
-            self.assertIn("no committed revision", icpc_export.text)
+            self.assertEqual(icpc_export.status_code, 403, icpc_export.text)
 
             _workspace_request, workspace_token = self._approve_token(
                 client,
@@ -887,6 +885,22 @@ class TestAgentAPI(E2ETestBase):
                 identity_hash=identity_hash,
                 scope="workspace",
             )
+            native_export = client.post(
+                "/agent/v1/export/start",
+                headers=self._bearer(workspace_token),
+                json={"export_type": "native"},
+            )
+            self.assertEqual(native_export.status_code, 400, native_export.text)
+            self.assertIn("no published main revision", native_export.text)
+
+            icpc_export = client.post(
+                "/agent/v1/export/start",
+                headers=self._bearer(workspace_token),
+                json={"export_type": "icpc"},
+            )
+            self.assertEqual(icpc_export.status_code, 400, icpc_export.text)
+            self.assertIn("no published main revision", icpc_export.text)
+
             workspace_commit = client.post(
                 "/agent/v1/commit",
                 headers=self._bearer(workspace_token),
@@ -940,7 +954,7 @@ class TestAgentAPI(E2ETestBase):
 
             fresh_icpc_export = client.post(
                 "/agent/v1/export/start",
-                headers=self._bearer(readonly_token),
+                headers=self._bearer(workspace_token),
                 json={"export_type": "icpc"},
             )
             self.assertEqual(fresh_icpc_export.status_code, 200, fresh_icpc_export.text)
@@ -952,7 +966,7 @@ class TestAgentAPI(E2ETestBase):
 
             fresh_native_export = client.post(
                 "/agent/v1/export/start",
-                headers=self._bearer(readonly_token),
+                headers=self._bearer(workspace_token),
                 json={"export_type": "native"},
             )
             self.assertEqual(fresh_native_export.status_code, 200, fresh_native_export.text)

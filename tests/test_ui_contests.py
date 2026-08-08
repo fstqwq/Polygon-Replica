@@ -154,12 +154,12 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
         self.assertIn("added 2 problem", add_msgs[0].lower())
 
         rows = db_fetch_all(
-            "SELECT id,problem_id,idx FROM contest_problems WHERE contest_id=? ORDER BY idx COLLATE NOCASE ASC, id ASC",
+            "SELECT id,problem_id,label FROM contest_problems WHERE contest_id=? ORDER BY position ASC, id ASC",
             [contest_id],
         )
         self.assertEqual(len(rows), 2)
-        self.assertEqual(str(rows[0]["idx"]), "A")
-        self.assertEqual(str(rows[1]["idx"]), "B")
+        self.assertEqual(str(rows[0]["label"]), "A")
+        self.assertEqual(str(rows[1]["label"]), "B")
 
         remove_resp = contest_problems_remove_selected(
             contest=contest_slug,

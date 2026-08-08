@@ -29,7 +29,7 @@ from app.service.problem.test_spec import dumps_tests_spec, load_tests_spec
 from app.service.problem.solution_metadata import infer_expected_behavior_from_name, normalize_expected_behavior, parse_solution_desc
 from app.service.statement.render import render_statement_main
 from app.service.statement.tex_compile import TexCompileService
-from app.service.statement.context import pick_statement_language, statement_languages
+from app.service.statement.context import statement_languages
 from app.service.statement.title import statement_title_from_snapshot
 from app.service.platform.workspace_path import (
     is_allowed_workspace_root_path,
@@ -374,13 +374,17 @@ class ExportService:
 
     def _load_build_config(self, snapshot: Path) -> dict:
         cfg_path = snapshot / "config" / "build.json"
-        if not cfg_path.exists() or not cfg_path.is_file():
+        if not cfg_path.exists():
             return {}
+        if cfg_path.is_symlink() or not cfg_path.is_file():
+            raise ValueError("published build config is not a regular file")
         try:
             payload = json.loads(cfg_path.read_text(encoding="utf-8"))
-        except Exception:
-            return {}
-        return payload if isinstance(payload, dict) else {}
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            raise ValueError("published build config is invalid") from exc
+        if not isinstance(payload, dict):
+            raise ValueError("published build config must be an object")
+        return payload
 
     def _resolve_snapshot_source(self, snapshot: Path, rel_path: str) -> Path:
         source_rel = str(rel_path or "").strip()
@@ -482,13 +486,15 @@ class ExportService:
 
     def _load_problem_config(self, snapshot: Path) -> dict:
         cfg_path = snapshot / "config" / "problem.json"
-        if not cfg_path.exists() or not cfg_path.is_file():
-            return {}
+        if cfg_path.is_symlink() or not cfg_path.is_file():
+            raise ValueError("published problem config is unavailable")
         try:
             payload = json.loads(cfg_path.read_text(encoding="utf-8"))
-        except Exception:
-            return {}
-        return payload if isinstance(payload, dict) else {}
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            raise ValueError("published problem config is invalid") from exc
+        if not isinstance(payload, dict):
+            raise ValueError("published problem config must be an object")
+        return payload
 
     def _build_problem_yaml(
         self,
@@ -556,9 +562,9 @@ class ExportService:
 
     def _statement_export_languages(self, snapshot: Path) -> list[str]:
         languages = statement_languages(snapshot)
-        if languages:
-            return languages
-        return [pick_statement_language(snapshot)]
+        if not languages:
+            raise ValueError("ICPC export requires at least one problem statement")
+        return languages
 
     @staticmethod
     def _statement_export_suffix(language: str) -> str:
@@ -715,7 +721,7 @@ class ExportService:
         checker_source = (
             None
             if mode == "interactive"
-            else self._effective_checker_source(snapshot, strict=False)
+            else self._effective_checker_source(snapshot, strict=True)
         )
         interactor_source = (
             self._effective_interactor_source(snapshot, strict=True)
