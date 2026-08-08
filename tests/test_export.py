@@ -39,6 +39,29 @@ workspace_service = config.workspace_service
 
 
 class TestExport(E2ETestBase):
+    def setUp(self) -> None:
+        super().setUp()
+        self._real_statement_compiler = export_service._try_compile_statement_pdf  # pylint: disable=protected-access
+
+        def _compile_fixture_statement(
+            snapshot: Path,
+            dst_statement: Path,
+            **_kwargs: object,
+        ) -> bool:
+            dst_statement.mkdir(parents=True, exist_ok=True)
+            for language in export_service._statement_export_languages(snapshot):  # pylint: disable=protected-access
+                suffix = export_service._statement_export_suffix(language)  # pylint: disable=protected-access
+                (dst_statement / f"problem.{suffix}.pdf").write_bytes(b"%PDF-1.4\n%%EOF\n")
+            return True
+
+        self._statement_compile_patcher = patch.object(
+            export_service,
+            "_try_compile_statement_pdf",
+            side_effect=_compile_fixture_statement,
+        )
+        self._statement_compile_patcher.start()
+        self.addCleanup(self._statement_compile_patcher.stop)
+
     def _create_export_job(
         self,
         *,
@@ -2446,7 +2469,14 @@ class TestExport(E2ETestBase):
                 pdf_path=pdf_path,
             )
 
-        with patch.object(export_service.tex_compile_service, "compile_pdf", side_effect=_fake_compile) as compile_mock:
+        with (
+            patch.object(
+                export_service,
+                "_try_compile_statement_pdf",
+                side_effect=self._real_statement_compiler,
+            ),
+            patch.object(export_service.tex_compile_service, "compile_pdf", side_effect=_fake_compile) as compile_mock,
+        ):
             archive = export_service.create_export(
                 self.problem,
                 "",
@@ -2530,7 +2560,14 @@ class TestExport(E2ETestBase):
                 pdf_path=pdf_path,
             )
 
-        with patch.object(export_service.tex_compile_service, "compile_pdf", side_effect=_fake_compile):
+        with (
+            patch.object(
+                export_service,
+                "_try_compile_statement_pdf",
+                side_effect=self._real_statement_compiler,
+            ),
+            patch.object(export_service.tex_compile_service, "compile_pdf", side_effect=_fake_compile),
+        ):
             archive = export_service.create_export(
                 self.problem,
                 verification_id,
