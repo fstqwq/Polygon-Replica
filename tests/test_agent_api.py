@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-import io
 import hashlib
+import io
+import json
 import zipfile
 from pathlib import Path
 from urllib.parse import urlparse
@@ -141,7 +142,30 @@ class TestAgentAPI(E2ETestBase):
     def test_export_status_and_download_resolve_export_job_directly(self) -> None:
         username = self.random_id("agent-export-job")
         _password, auth_cookie = self._issue_auth_cookie(username)
-        self._grant_problem_owner(username)
+        workspace = self._grant_problem_owner(username)
+        (workspace / "config").mkdir(parents=True, exist_ok=True)
+        (workspace / "config" / "problem.json").write_text(
+            '{"mode":"pass-fail","pass_limit":1}\n',
+            encoding="utf-8",
+        )
+        (workspace / "tests" / "manual").mkdir(parents=True, exist_ok=True)
+        (workspace / "tests" / "manual" / "001.in").write_text("1\n", encoding="utf-8")
+        (workspace / "tests" / "spec.json").write_text(
+            json.dumps(
+                {"tests": [{"id": "001", "kind": "manual", "sample": False}]},
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        source_commit = config.git_service.commit(
+            workspace,
+            "publish agent export fixture",
+            username,
+            f"{username}@polygonlike.local",
+        )
+        config.git_service.push(workspace, "main")
         ctx = workspace_service.workspace_context(
             self.problem,
             username,
@@ -159,26 +183,42 @@ class TestAgentAPI(E2ETestBase):
         )
         archive.parent.mkdir(parents=True, exist_ok=True)
         archive.write_bytes(b"agent export payload")
-        db_execute(
-            """
-            INSERT INTO problem_package_materializations(
-                id,problem_id,source_commit,revision_number,source_digest,
-                archive_rel_path,archive_sha256,archive_size_bytes,verification_id,
-                status,created_at,checked_at,unavailable_reason
-            ) VALUES(?,?,?,1,?,?,?,?,?,'available',?,?,'')
-            """,
-            [
-                "pm-agent-export-direct",
-                problem_id,
-                "c" * 40,
-                "0" * 64,
-                archive.relative_to(config.settings.artifacts_root).as_posix(),
-                hashlib.sha256(archive.read_bytes()).hexdigest(),
-                archive.stat().st_size,
-                "pv-agent-export-direct",
-                "2026-08-08T00:00:00Z",
-                "2026-08-08T00:00:00Z",
-            ],
+
+        def materialize(_snapshot: Path, commit: str, _revision: int, verification_id: str) -> str:
+            config.verification_service.begin_verification_record(
+                verification_id=verification_id,
+                problem_id=problem_id,
+                workspace_id=None,
+                signature="agent-export-fixture",
+                source_commit=commit,
+                kind="all",
+                status="ok",
+            )
+            input_ref = config.verification_service.store_verification_blob(
+                verification_id=verification_id,
+                test_name="001.in",
+                role="input",
+                file_name="001.in",
+                payload=b"1\n",
+            )
+            answer_ref = config.verification_service.store_verification_blob(
+                verification_id=verification_id,
+                test_name="001.in",
+                role="answer",
+                file_name="001.ans",
+                payload=b"2\n",
+            )
+            config.verification_service.update_verification_artifact_refs(
+                verification_id,
+                "001.in",
+                {"input_ref": input_ref, "answer_ref": answer_ref},
+            )
+            return verification_id
+
+        revision = config.problem_package_service.published_revision(problem_id)
+        materialization = config.problem_package_service.ensure_materialization(
+            revision,
+            materialize,
         )
         db_execute(
             """
@@ -190,14 +230,14 @@ class TestAgentAPI(E2ETestBase):
             [
                 export_id,
                 problem_id,
-                "pm-agent-export-direct",
+                materialization["id"],
                 "icpc",
                 "0" * 64,
                 filename,
                 archive.relative_to(config.settings.artifacts_root).as_posix(),
                 hashlib.sha256(archive.read_bytes()).hexdigest(),
                 archive.stat().st_size,
-                "c" * 40,
+                source_commit,
                 "2026-08-08T00:00:00Z",
             ],
         )
@@ -206,15 +246,15 @@ class TestAgentAPI(E2ETestBase):
             problem_id=problem_id,
             actor_user_id=actor_user_id,
             export_type="icpc",
-            source_commit="c" * 40,
+            source_commit=source_commit,
         )
         config.export_service.mark_export_job_running(
             job_id,
-            source_commit="c" * 40,
+            source_commit=source_commit,
         )
         config.export_service.mark_export_job_succeeded(
             job_id,
-            materialization_id="pm-agent-export-direct",
+            materialization_id=materialization["id"],
             export_id=export_id,
         )
         db_execute(

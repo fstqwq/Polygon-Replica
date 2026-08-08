@@ -578,6 +578,7 @@ def _prepare_contest_pdf_problem(
     source_folder: str,
     language: str,
     materialization_id: str,
+    archive_sha256: str,
 ) -> dict[str, object]:
     item: dict[str, object] = {
         "idx": idx,
@@ -592,7 +593,10 @@ def _prepare_contest_pdf_problem(
         item["error"] = f"contest source folder missing for {problem_slug}"
         return item
     try:
-        with config.problem_package_service.open_reader(materialization_id) as native:
+        with config.problem_package_service.open_reader(
+            materialization_id,
+            expected_archive_sha256=archive_sha256,
+        ) as native:
             target_dir = _contest_compile_target(
                 compile_root,
                 "problems",
@@ -812,6 +816,7 @@ def _run_contest_pdf_job_worker(
             source_folder=source_folder,
             language=language,
             materialization_id=str(entry["materialization_id"]),
+            archive_sha256=str(entry["archive_sha256"]),
         )
         results.append(item)
     success_count = sum((1 for row in results if str(row.get("status")) == "success"))
@@ -1014,6 +1019,7 @@ def _run_contest_package_job_worker(
                 "icpc",
                 materialization_id=str(entry["materialization_id"]),
                 domjudge_short_name=idx,
+                expected_archive_sha256=str(entry["archive_sha256"]),
             )
             item["export_id"] = export_id
             export_path = Path(export_path).resolve()
@@ -1102,33 +1108,6 @@ def _run_contest_package_job_worker(
     return summary
 
 
-def _freeze_contest_build_items(contest_id: int, job_id: str) -> list[str]:
-    items: list[dict[str, object]] = []
-    missing: list[str] = []
-    for entry in config.contest_service.contest_problems(contest_id):
-        problem_id = int(entry["problem_id"])
-        materialization = config.problem_package_service.latest_available_materialization(problem_id)
-        if materialization is None:
-            missing.append(str(entry["problem_slug"]))
-            continue
-        items.append(
-            {
-                "contest_problem_id": int(entry["contest_problem_id"]),
-                "position": int(entry["position"]),
-                "label": str(entry["idx"]),
-                "problem_id": problem_id,
-                "statement_folder": str(entry["statement_folder"]),
-                "source_commit": materialization["source_commit"],
-                "revision_number": materialization["revision_number"],
-                "materialization_id": materialization["id"],
-                "archive_sha256": materialization["archive_sha256"],
-            }
-        )
-    if not missing:
-        config.contest_service.freeze_build_items(job_id, items)
-    return missing
-
-
 def _snapshot_contest_sources(
     *,
     contest_id: int,
@@ -1194,9 +1173,6 @@ def _queue_contest_job(
     )
     if not requested_outputs:
         raise ValueError("select at least one contest build output")
-    active_id = config.contest_service.running_job_id(contest_id, _CONTEST_JOB_TYPE_BUILD)
-    if active_id:
-        return (active_id, False, "already_running")
     job_language = ""
     if "statement_pdf" in requested_outputs:
         job_language = (
@@ -1212,28 +1188,16 @@ def _queue_contest_job(
     }
     if job_language:
         initial_summary["language"] = job_language
-    job_id = config.contest_service.create_job(
-        contest_id,
-        actor_user_id,
-        _CONTEST_JOB_TYPE_BUILD,
-        "running",
-        initial_summary,
-        finished_at=None,
+    frozen = config.contest_service.freeze_build_job(
+        contest_id=contest_id,
+        actor_user_id=actor_user_id,
+        job_type=_CONTEST_JOB_TYPE_BUILD,
+        summary=initial_summary,
     )
-    missing_materializations = _freeze_contest_build_items(contest_id, job_id)
-    if missing_materializations:
-        detail = ", ".join(missing_materializations[:10])
-        config.contest_service.update_job(
-            contest_id,
-            job_id,
-            "failed",
-            {
-                **initial_summary,
-                "error": f"Native materialization required; Export these problems first: {detail}",
-                "missing_materializations": missing_materializations,
-            },
-            finished=True,
-        )
+    job_id = str(frozen["job_id"])
+    if frozen["outcome"] == "already_running":
+        return (job_id, False, "already_running")
+    if frozen["outcome"] == "not_ready":
         return (job_id, False, "not_ready")
     try:
         _snapshot_contest_sources(

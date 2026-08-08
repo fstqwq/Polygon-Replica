@@ -5,6 +5,7 @@ from pathlib import Path
 from unittest.mock import patch
 from urllib.parse import parse_qs, urlparse
 
+from app.impl.contest.shared import _run_contest_package_job_worker  # pylint: disable=protected-access
 from tests.contest_support import ContestActionBase
 from tests.db_helpers import db_execute, db_fetch_all, db_fetch_one, read_contest_job_summary
 from tests.ui_support import config, contest_packages_build_start, uuid
@@ -139,6 +140,81 @@ class TestContestBuilds(ContestActionBase):
         self.assertEqual(build_icpc.call_args.kwargs["job_id"], job_id)
         summary = read_contest_job_summary(contest_id, job_id)
         self.assertEqual(summary["successful_outputs"], ["statement_pdf", "icpc_bundle"])
+
+    def test_build_freeze_atomically_reuses_active_job(self) -> None:
+        contest_slug, contest_id, problem_id, _problem_slug = self._contest_with_problem()
+        self._seed_materialization(
+            problem_id=problem_id,
+            source_commit="c" * 40,
+            revision_number=3,
+        )
+        actor = db_fetch_one("SELECT id FROM users WHERE username='alice'")
+        self.assertIsNotNone(actor)
+        summary = {
+            "job_type": "build",
+            "contest_slug": contest_slug,
+            "status": "running",
+        }
+
+        first = config.contest_service.freeze_build_job(
+            contest_id=contest_id,
+            actor_user_id=int(actor["id"]),
+            job_type="build",
+            summary=summary,
+        )
+        second = config.contest_service.freeze_build_job(
+            contest_id=contest_id,
+            actor_user_id=int(actor["id"]),
+            job_type="build",
+            summary=summary,
+        )
+
+        self.assertEqual(first["outcome"], "created")
+        self.assertEqual(second["outcome"], "already_running")
+        self.assertEqual(second["job_id"], first["job_id"])
+        rows = db_fetch_all(
+            "SELECT id FROM contest_jobs WHERE contest_id=? AND job_type='build'",
+            [contest_id],
+        )
+        self.assertEqual(len(rows), 1)
+
+    def test_package_worker_rejects_changed_frozen_native_sha(self) -> None:
+        contest_slug, contest_id, problem_id, _problem_slug = self._contest_with_problem()
+        self._seed_materialization(
+            problem_id=problem_id,
+            source_commit="d" * 40,
+            revision_number=4,
+        )
+        actor = db_fetch_one("SELECT id FROM users WHERE username='alice'")
+        self.assertIsNotNone(actor)
+        frozen = config.contest_service.freeze_build_job(
+            contest_id=contest_id,
+            actor_user_id=int(actor["id"]),
+            job_type="build",
+            summary={"job_type": "build", "contest_slug": contest_slug},
+        )
+        db_execute(
+            "UPDATE contest_build_items SET archive_sha256=? WHERE job_id=?",
+            ["f" * 64, frozen["job_id"]],
+        )
+
+        result = _run_contest_package_job_worker(
+            contest_id=contest_id,
+            contest_slug=contest_slug,
+            actor_user_id=int(actor["id"]),
+            job_id=frozen["job_id"],
+            finalize=False,
+        )
+
+        self.assertEqual(result["totals"]["failed"], 1)
+        error = str(result["results"][0]["error"])
+        self.assertIn("frozen Native archive checksum", error)
+        row = db_fetch_one(
+            "SELECT status FROM problem_package_materializations WHERE problem_id=?",
+            [problem_id],
+        )
+        self.assertIsNotNone(row)
+        self.assertEqual(str(row["status"]), "available")
 
     def test_partial_output_does_not_change_the_frozen_revision(self) -> None:
         contest_slug, contest_id, problem_id, _problem_slug = self._contest_with_problem()

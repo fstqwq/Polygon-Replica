@@ -671,7 +671,7 @@ class ExportService:
             target_dir = dst_submissions / rule["directory"]
             target_dir.mkdir(parents=True, exist_ok=True)
             target = self._ensure_unique_file_path(target_dir, source_file.name)
-            if len(rule["domjudge_results"]) > 1:
+            if expected in {"tle_or_correct", "tle_or_re", "rejected"}:
                 target.write_bytes(annotated_submission(source_file, rule["domjudge_results"]))
             else:
                 shutil.copy2(source_file, target)
@@ -967,17 +967,20 @@ class ExportService:
         *,
         materialization_id: str,
         domjudge_short_name: str | None = None,
+        expected_archive_sha256: str | None = None,
     ) -> tuple[str, Path]:
         safe_export_type = str(export_type).strip().lower()
         safe_short_name = None if domjudge_short_name is None else self._domjudge_short_name(domjudge_short_name)
         lock = self._conversion_lock(materialization_id, safe_export_type, safe_short_name)
-        with lock:
-            return self._create_export(
-                problem,
-                safe_export_type,
-                materialization_id=materialization_id,
-                domjudge_short_name=safe_short_name,
-            )
+        with self.problem_package_service.materialization_operation(materialization_id):
+            with lock:
+                return self._create_export(
+                    problem,
+                    safe_export_type,
+                    materialization_id=materialization_id,
+                    domjudge_short_name=safe_short_name,
+                    expected_archive_sha256=expected_archive_sha256,
+                )
 
     def _create_export(
         self,
@@ -986,6 +989,7 @@ class ExportService:
         *,
         materialization_id: str,
         domjudge_short_name: str | None = None,
+        expected_archive_sha256: str | None = None,
     ) -> tuple[str, Path]:
         """Return a cached or newly converted artifact from one validated Native."""
 
@@ -998,6 +1002,10 @@ class ExportService:
         materialization = self.problem_package_service.store.materialization(materialization_id)
         if materialization is None or materialization["problem_id"] != int(problem_row["id"]):
             raise ValueError("Native materialization does not belong to the problem")
+        materialization, _native_path = self.problem_package_service.native_archive(
+            materialization_id,
+            expected_archive_sha256=expected_archive_sha256,
+        )
         public_slug = self._public_problem_slug(str(problem_row["slug"]))
         short_name = self._domjudge_short_name(domjudge_short_name or public_slug)
         options: dict[str, object] = {} if resolved_export_type == "native" else {"domjudge_short_name": short_name}
@@ -1013,7 +1021,10 @@ class ExportService:
         export_id = f"e-{uuid.uuid4().hex[:10]}"
         revision_token = f"v{materialization['revision_number']}"
         if resolved_export_type == "native":
-            materialization, out = self.problem_package_service.native_archive(materialization_id)
+            materialization, out = self.problem_package_service.native_archive(
+                materialization_id,
+                expected_archive_sha256=expected_archive_sha256,
+            )
             filename = f"{self._archive_filename_slug(str(problem_row['slug']))}-native-{revision_token}.zip"
         else:
             filename = f"{public_slug}-{revision_token}.zip"
@@ -1021,7 +1032,10 @@ class ExportService:
             package_root = staging / "package"
             archive_partial = staging / f"{filename}.partial"
             try:
-                with self.problem_package_service.open_reader(materialization_id) as native:
+                with self.problem_package_service.open_reader(
+                    materialization_id,
+                    expected_archive_sha256=expected_archive_sha256,
+                ) as native:
                     mode = native.manifest["mode"]
                     pass_limit = native.manifest["pass_limit"]
                     problem_name = statement_title_from_snapshot(

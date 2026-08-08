@@ -40,6 +40,11 @@ class BuildRow(TypedDict):
     error: str
 
 
+class MaterializationExportRow(TypedDict):
+    export_type: str
+    archive_rel_path: str
+
+
 def _materialization(row) -> MaterializationRow:
     return {
         "id": str(row["id"]),
@@ -175,8 +180,42 @@ class ProblemPackageStore:
             [error, now_iso(), build_id],
         )
 
-    def insert_materialization(self, row: MaterializationRow, *, build_id: str) -> None:
-        def transaction(connection) -> None:
+    @staticmethod
+    def _delete_materialization_exports(
+        connection,
+        materialization_id: str,
+    ) -> list[MaterializationExportRow]:
+        rows = connection.execute(
+            """SELECT export_type,archive_rel_path FROM exports
+               WHERE materialization_id=?""",
+            [materialization_id],
+        ).fetchall()
+        connection.execute(
+            "DELETE FROM exports WHERE materialization_id=?",
+            [materialization_id],
+        )
+        return [
+            {
+                "export_type": str(item["export_type"]),
+                "archive_rel_path": str(item["archive_rel_path"]),
+            }
+            for item in rows
+        ]
+
+    def insert_materialization(
+        self,
+        row: MaterializationRow,
+        *,
+        build_id: str,
+        invalidate_exports: bool = False,
+    ) -> list[MaterializationExportRow]:
+        def transaction(connection) -> list[MaterializationExportRow]:
+            invalidated_exports: list[MaterializationExportRow] = []
+            if invalidate_exports:
+                invalidated_exports = self._delete_materialization_exports(
+                    connection,
+                    row["id"],
+                )
             connection.execute(
                 """INSERT INTO problem_package_materializations(
                    id,problem_id,source_commit,revision_number,source_digest,
@@ -203,14 +242,27 @@ class ProblemPackageStore:
                    WHERE id=?""",
                 [row["id"], now_iso(), build_id],
             )
-        self.db.write_transaction(transaction)
+            return invalidated_exports
+        return self.db.write_transaction(transaction)
 
-    def mark_unavailable(self, materialization_id: str, reason: str) -> None:
-        self.db.execute(
-            """UPDATE problem_package_materializations
-               SET status='unavailable',unavailable_reason=?,checked_at=? WHERE id=?""",
-            [reason, now_iso(), materialization_id],
-        )
+    def invalidate_materialization(
+        self,
+        materialization_id: str,
+        reason: str,
+    ) -> list[MaterializationExportRow]:
+        def transaction(connection) -> list[MaterializationExportRow]:
+            invalidated_exports = self._delete_materialization_exports(
+                connection,
+                materialization_id,
+            )
+            connection.execute(
+                """UPDATE problem_package_materializations
+                   SET status='unavailable',unavailable_reason=?,checked_at=? WHERE id=?""",
+                [reason, now_iso(), materialization_id],
+            )
+            return invalidated_exports
+
+        return self.db.write_transaction(transaction)
 
     def artifact_ref(self, verification_id: str, test_id: str, key: str) -> str:
         if key not in {"input_ref", "answer_ref"}:

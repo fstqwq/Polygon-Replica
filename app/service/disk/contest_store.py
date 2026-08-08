@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
-from typing import TypedDict
+from typing import Literal, TypedDict
 
 from app.main_util import problem_slug_leaf
 from app.db import DB
@@ -79,6 +79,13 @@ class ContestAttachmentRecord(TypedDict):
     key: str
     rel_path: str
     created_at: str
+
+
+class ContestBuildFreezeResult(TypedDict):
+    outcome: Literal["created", "already_running", "not_ready"]
+    job_id: str
+    contest_slug: str
+    missing_materializations: list[str]
 
 
 class ContestDiskStore:
@@ -666,6 +673,107 @@ class ContestDiskStore:
             ],
         )
 
+    def freeze_build_job(
+        self,
+        *,
+        job_id: str,
+        contest_id: int,
+        actor_user_id: int,
+        job_type: str,
+        created_at: str,
+    ) -> ContestBuildFreezeResult:
+        def transaction(connection) -> ContestBuildFreezeResult:
+            contest = connection.execute(
+                "SELECT slug,source_generation FROM contests WHERE id=?",
+                [int(contest_id)],
+            ).fetchone()
+            if contest is None:
+                raise ValueError("contest not found")
+            active = connection.execute(
+                """SELECT id FROM contest_jobs
+                   WHERE contest_id=? AND job_type=? AND status IN ('running','queued')
+                   ORDER BY created_at DESC,id DESC LIMIT 1""",
+                [int(contest_id), job_type],
+            ).fetchone()
+            if active is not None:
+                return {
+                    "outcome": "already_running",
+                    "job_id": str(active["id"]),
+                    "contest_slug": str(contest["slug"]),
+                    "missing_materializations": [],
+                }
+            rows = connection.execute(
+                """SELECT
+                       cp.id AS contest_problem_id,cp.position,cp.label,
+                       cp.problem_id,cp.statement_folder,p.slug AS problem_slug,
+                       m.id AS materialization_id,m.source_commit,m.revision_number,
+                       m.archive_sha256
+                   FROM contest_problems cp
+                   JOIN problems p ON p.id=cp.problem_id
+                   LEFT JOIN problem_package_materializations m ON m.id=(
+                       SELECT candidate.id
+                       FROM problem_package_materializations candidate
+                       WHERE candidate.problem_id=cp.problem_id
+                         AND candidate.status='available'
+                       ORDER BY candidate.revision_number DESC,candidate.created_at DESC
+                       LIMIT 1
+                   )
+                   WHERE cp.contest_id=?
+                   ORDER BY cp.position,cp.id""",
+                [int(contest_id)],
+            ).fetchall()
+            missing = [
+                str(row["problem_slug"])
+                for row in rows
+                if row["materialization_id"] is None
+            ]
+            status = "failed" if missing else "running"
+            connection.execute(
+                """INSERT INTO contest_jobs(
+                       id,contest_id,actor_user_id,job_type,status,
+                       source_generation,created_at,finished_at
+                   ) VALUES(?,?,?,?,?,?,?,?)""",
+                [
+                    job_id,
+                    int(contest_id),
+                    int(actor_user_id),
+                    job_type,
+                    status,
+                    int(contest["source_generation"]),
+                    created_at,
+                    created_at if missing else None,
+                ],
+            )
+            if not missing:
+                for row in rows:
+                    connection.execute(
+                        """INSERT INTO contest_build_items(
+                               job_id,contest_problem_id,position,label,problem_id,
+                               statement_folder,source_commit,revision_number,
+                               materialization_id,archive_sha256
+                           ) VALUES(?,?,?,?,?,?,?,?,?,?)""",
+                        [
+                            job_id,
+                            int(row["contest_problem_id"]),
+                            int(row["position"]),
+                            str(row["label"]),
+                            int(row["problem_id"]),
+                            str(row["statement_folder"]),
+                            str(row["source_commit"]),
+                            int(row["revision_number"]),
+                            str(row["materialization_id"]),
+                            str(row["archive_sha256"]),
+                        ],
+                    )
+            return {
+                "outcome": "not_ready" if missing else "created",
+                "job_id": job_id,
+                "contest_slug": str(contest["slug"]),
+                "missing_materializations": missing,
+            }
+
+        return self.db.write_transaction(transaction)
+
     def bump_source_generation(self, contest_id: int) -> int:
         def transaction(connection) -> int:
             connection.execute(
@@ -742,19 +850,6 @@ class ContestDiskStore:
         row = self.db.fetch_one("SELECT status FROM contest_jobs WHERE contest_id=? AND id=?", [int(contest_id), job_id])
         return "" if row is None else str(row["status"] or "")
 
-    def running_job_id(self, contest_id: int, job_type: str) -> str:
-        row = self.db.fetch_one(
-            """
-            SELECT id
-            FROM contest_jobs
-            WHERE contest_id=? AND job_type=? AND status IN ('running','queued')
-            ORDER BY created_at DESC, id DESC
-            LIMIT 1
-            """,
-            [int(contest_id), job_type],
-        )
-        return "" if row is None else str(row["id"])
-
     def insert_artifact(
         self,
         *,
@@ -774,25 +869,6 @@ class ContestDiskStore:
             """,
             [artifact_id, int(contest_id), job_id, artifact_type, filename, sha256, int(size_bytes), created_at],
         )
-
-    def replace_build_items(self, job_id: str, items: list[dict[str, object]]) -> None:
-        def transaction(connection) -> None:
-            connection.execute("DELETE FROM contest_build_items WHERE job_id=?", [job_id])
-            for item in items:
-                connection.execute(
-                    """INSERT INTO contest_build_items(
-                       job_id,contest_problem_id,position,label,problem_id,statement_folder,source_commit,
-                       revision_number,materialization_id,archive_sha256
-                       ) VALUES(?,?,?,?,?,?,?,?,?,?)""",
-                    [
-                        job_id, int(item["contest_problem_id"]), int(item["position"]),
-                        str(item["label"]), int(item["problem_id"]), str(item["statement_folder"]),
-                        str(item["source_commit"]),
-                        int(item["revision_number"]), str(item["materialization_id"]),
-                        str(item["archive_sha256"]),
-                    ],
-                )
-        self.db.write_transaction(transaction)
 
     def build_items(self, job_id: str) -> list[dict[str, object]]:
         rows = self.db.fetch_all(

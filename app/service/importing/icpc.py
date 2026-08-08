@@ -13,7 +13,12 @@ import yaml
 from app.main_util import UPLOAD_MAX_BYTES
 from app.service.importing.statement_assets import ImportedLegacyStatementAsset, merge_imported_statement_assets
 from app.service.problem.build_config import dumps_build_config
-from app.service.problem.solution_metadata import normalize_expected_behavior, render_solution_desc
+from app.service.importing.icpc_submissions import (
+    generated_expected_results,
+    parse_submissions_yaml,
+    submission_expected_from_group,
+)
+from app.service.problem.solution_metadata import render_solution_desc
 from app.service.statement.constant import (
     DEFAULT_STATEMENT_PROBLEM_TEMPLATE,
     DEFAULT_STATEMENT_TEMPLATE,
@@ -102,6 +107,7 @@ SolutionsSummary = TypedDict(
     {
         "count": int,
         "accepted_source": str,
+        "warnings": list[str],
     },
 )
 
@@ -294,24 +300,6 @@ def _memory_limit_mb_from_text(raw: str) -> int | None:
     if "kb" in text or "kib" in text or text.endswith("k"):
         return max(1, int(round(value / 1024.0)))
     return max(1, int(round(value)))
-
-
-def _submission_expected_from_group(raw_group: str) -> str:
-    token = raw_group.strip().lower().replace("-", "_")
-    direct = normalize_expected_behavior(token)
-    if direct != "unknown":
-        return direct
-    if token == "wrong_answer":
-        return "wrong_answer"
-    if token in {"time_limit_exceeded", "tle"}:
-        return "time_limit_exceeded"
-    if token in {"run_time_error", "runtime_error", "rte"}:
-        return "run_time_error"
-    if token in {"accepted", "ac"}:
-        return "accepted"
-    if token in {"rejected", "reject"}:
-        return "rejected"
-    return "unknown"
 
 
 def _unique_rel_path(workspace: Path, parent_rel: Path, filename: str) -> str:
@@ -626,12 +614,29 @@ class ICPCPackageImportService:
             "sample": sum(1 for row in spec_entries if bool(row.get("sample"))),
         }
 
-    def _import_solutions(self, zf: zipfile.ZipFile, entries: dict[str, zipfile.ZipInfo], workspace: Path) -> SolutionsSummary:
+    def _submission_yaml_behaviors(
+        self,
+        zf: zipfile.ZipFile,
+        entries: dict[str, zipfile.ZipInfo],
+    ) -> tuple[dict[str, str], list[str]]:
+        info = entries.get("submissions/submissions.yaml")
+        if info is None:
+            return ({}, [])
+        return parse_submissions_yaml(_read_text_from_zip(zf, info))
+
+    def _import_solutions(
+        self,
+        zf: zipfile.ZipFile,
+        entries: dict[str, zipfile.ZipInfo],
+        workspace: Path,
+    ) -> SolutionsSummary:
         solutions_dir_rel = Path("solutions")
         solutions_dir = workspace / solutions_dir_rel
         shutil.rmtree(solutions_dir, ignore_errors=True)
         solutions_dir.mkdir(parents=True, exist_ok=True)
 
+        yaml_behaviors, warnings = self._submission_yaml_behaviors(zf, entries)
+        consumed_yaml_paths: set[str] = set()
         imported_count = 0
         accepted_source = ""
         for rel in sorted(entries):
@@ -649,13 +654,45 @@ class ICPCPackageImportService:
             if info is None:
                 continue
             target_rel = _unique_rel_path(workspace, solutions_dir_rel, filename)
-            self._write_bytes(workspace, Path(target_rel), _read_bytes_from_zip(zf, info))
-            expected = _submission_expected_from_group(group)
+            payload = _read_bytes_from_zip(zf, info)
+            annotation_expected, payload, annotation_warning = generated_expected_results(payload)
+            if annotation_warning:
+                warnings.append(f"{rel}: {annotation_warning}")
+            directory_expected = submission_expected_from_group(group)
+            yaml_expected = yaml_behaviors.get(rel)
+            if yaml_expected is not None:
+                consumed_yaml_paths.add(rel)
+                expected = yaml_expected
+                chosen_source = "submissions.yaml"
+                lower_candidates = [
+                    ("annotation", annotation_expected),
+                    ("directory", directory_expected),
+                ]
+            elif annotation_expected is not None:
+                expected = annotation_expected
+                chosen_source = "annotation"
+                lower_candidates = [("directory", directory_expected)]
+            else:
+                expected = directory_expected
+                chosen_source = "directory"
+                lower_candidates = []
+            for source_name, candidate in lower_candidates:
+                if candidate not in {None, "unknown"} and candidate != expected:
+                    warnings.append(
+                        f"{rel}: {chosen_source} expected behavior overrides conflicting {source_name}"
+                    )
+            self._write_bytes(workspace, Path(target_rel), payload)
             self._write_text(workspace, Path(f"{target_rel}.desc"), render_solution_desc(expected, ""))
             if not accepted_source and expected == "accepted":
                 accepted_source = target_rel
             imported_count += 1
-        return {"count": imported_count, "accepted_source": accepted_source}
+        for unused_path in sorted(set(yaml_behaviors).difference(consumed_yaml_paths)):
+            warnings.append(f"{unused_path}: submissions.yaml entry has no matching source file")
+        return {
+            "count": imported_count,
+            "accepted_source": accepted_source,
+            "warnings": warnings,
+        }
 
     def _copy_component_tree(
         self,
@@ -895,7 +932,7 @@ class ICPCPackageImportService:
                 "problem_cfg": problem_cfg,
                 "build_cfg": build_cfg,
                 "domjudge": domjudge_meta,
-                "warnings": list(statement_warnings),
+                "warnings": list(statement_warnings) + list(solutions_summary["warnings"]),
             }
             if file_io_warning:
                 result["file_io_warning"] = file_io_warning

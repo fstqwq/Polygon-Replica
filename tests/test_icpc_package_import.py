@@ -7,6 +7,9 @@ import unittest
 import zipfile
 from pathlib import Path
 
+import yaml
+
+from app.service.export.icpc_package import SUBMISSION_RULES
 from app.service.importing.icpc import ICPCPackageImportService
 from app.service.statement.title import (
     PROBLEM_TITLE_MAX_LEN,
@@ -227,6 +230,120 @@ limits:
         self.assertTrue(str(build_cfg.get("accepted_solution_source") or "").startswith("solutions/"))
         self.assertEqual(str(build_cfg.get("validator_source") or ""), "validators/validator.cpp")
         self.assertEqual(str(build_cfg.get("checker_source") or ""), "checkers/checker.cpp")
+
+    def test_submission_yaml_round_trips_all_expected_behaviors_and_strips_annotations(self) -> None:
+        ws = self._workspace_path()
+        payload = io.BytesIO()
+        metadata: dict[str, dict[str, object]] = {}
+        with zipfile.ZipFile(payload, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr(
+                "roundtrip/problem.yaml",
+                "problem_format_version: 2025-09\nname: Submission Roundtrip\ntype: pass-fail\n",
+            )
+            zf.writestr("roundtrip/data/secret/001.in", "1\n")
+            for expected, rule in SUBMISSION_RULES.items():
+                rel = f"{rule['directory']}/{expected}.cpp"
+                source = f"int {expected.replace('-', '_')}() {{ return 0; }}\n"
+                if expected in {"tle_or_correct", "tle_or_re", "rejected"}:
+                    results = ",".join(rule["domjudge_results"])
+                    source = f"// @EXPECTED_RESULTS@: {results}\n{source}"
+                zf.writestr(f"roundtrip/submissions/{rel}", source)
+                metadata[rel] = {
+                    "language": "cpp",
+                    "permitted": list(rule["permitted"]),
+                    "required": list(rule["required"]),
+                }
+            zf.writestr(
+                "roundtrip/submissions/submissions.yaml",
+                yaml.safe_dump(metadata, sort_keys=False),
+            )
+
+        result = ICPCPackageImportService().import_package(
+            ws,
+            "roundtrip.zip",
+            payload.getvalue(),
+        )
+
+        self.assertFalse(result["warnings"])
+        for expected in SUBMISSION_RULES:
+            source = ws / "solutions" / f"{expected}.cpp"
+            desc = ws / "solutions" / f"{expected}.cpp.desc"
+            self.assertTrue(source.is_file())
+            self.assertIn(f"expected: {expected}", desc.read_text(encoding="utf-8"))
+            self.assertNotIn("@EXPECTED_RESULTS@", source.read_text(encoding="utf-8"))
+
+    def test_submission_yaml_overrides_annotation_and_directory_with_warning(self) -> None:
+        ws = self._workspace_path()
+        payload = io.BytesIO()
+        metadata = {
+            "wrong_answer/conflict.cpp": {
+                "language": "cpp",
+                "permitted": ["AC"],
+                "required": ["AC"],
+            }
+        }
+        with zipfile.ZipFile(payload, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr("problem.yaml", "name: Conflict\nvalidation: default\n")
+            zf.writestr("data/secret/001.in", "1\n")
+            zf.writestr(
+                "submissions/wrong_answer/conflict.cpp",
+                "// @EXPECTED_RESULTS@: CORRECT,TIMELIMIT\nint main() { return 0; }\n",
+            )
+            zf.writestr("submissions/submissions.yaml", yaml.safe_dump(metadata))
+
+        result = ICPCPackageImportService().import_package(
+            ws,
+            "conflict.zip",
+            payload.getvalue(),
+        )
+
+        desc = (ws / "solutions" / "conflict.cpp.desc").read_text(encoding="utf-8")
+        self.assertIn("expected: accepted", desc)
+        source = (ws / "solutions" / "conflict.cpp").read_text(encoding="utf-8")
+        self.assertNotIn("@EXPECTED_RESULTS@", source)
+        warnings = [str(item) for item in result["warnings"]]
+        self.assertTrue(any("overrides conflicting annotation" in item for item in warnings))
+        self.assertTrue(any("overrides conflicting directory" in item for item in warnings))
+
+    def test_submission_yaml_rejects_invalid_verdict(self) -> None:
+        payload = io.BytesIO()
+        with zipfile.ZipFile(payload, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr("problem.yaml", "name: Invalid\nvalidation: default\n")
+            zf.writestr("data/secret/001.in", "1\n")
+            zf.writestr("submissions/accepted/ac.cpp", "int main() { return 0; }\n")
+            zf.writestr(
+                "submissions/submissions.yaml",
+                "accepted/ac.cpp:\n  permitted: [AC, CE]\n  required: [AC]\n",
+            )
+
+        with self.assertRaisesRegex(ValueError, "invalid permitted verdict"):
+            ICPCPackageImportService().import_package(
+                self.workspace,
+                "invalid.zip",
+                payload.getvalue(),
+            )
+
+    def test_non_first_line_expected_results_comment_is_preserved(self) -> None:
+        payload = io.BytesIO()
+        source = (
+            "int main() { return 0; }\n"
+            "// @EXPECTED_RESULTS@: CORRECT,TIMELIMIT\n"
+        )
+        with zipfile.ZipFile(payload, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr("problem.yaml", "name: User Comment\nvalidation: default\n")
+            zf.writestr("data/secret/001.in", "1\n")
+            zf.writestr("submissions/accepted/ac.cpp", source)
+
+        ICPCPackageImportService().import_package(
+            self.workspace,
+            "user-comment.zip",
+            payload.getvalue(),
+        )
+
+        self.assertEqual(
+            (self.workspace / "solutions" / "ac.cpp").read_text(encoding="utf-8"),
+            source,
+        )
 
     def test_import_icpc_package_interactive_type_sets_interactor_mode(self) -> None:
         ws = self._workspace_path()
