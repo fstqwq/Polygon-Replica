@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import hashlib
 import zipfile
 from pathlib import Path
 from urllib.parse import urlparse
@@ -147,7 +148,6 @@ class TestAgentAPI(E2ETestBase):
             include_recent=False,
         )
         problem_id = int(ctx["problem"]["id"])
-        workspace_id = int(ctx["workspace"]["id"])
         actor_user_id = int(ctx["user"]["id"])
         job_id = "agent-export-job-direct"
         export_id = "e-agent-export-direct"
@@ -161,19 +161,41 @@ class TestAgentAPI(E2ETestBase):
         archive.write_bytes(b"agent export payload")
         db_execute(
             """
+            INSERT INTO problem_package_materializations(
+                id,problem_id,source_commit,revision_number,source_digest,
+                archive_rel_path,archive_sha256,archive_size_bytes,verification_id,
+                status,created_at,checked_at,unavailable_reason
+            ) VALUES(?,?,?,1,?,?,?,?,?,'available',?,?,'')
+            """,
+            [
+                "pm-agent-export-direct",
+                problem_id,
+                "c" * 40,
+                "0" * 64,
+                archive.relative_to(config.settings.artifacts_root).as_posix(),
+                hashlib.sha256(archive.read_bytes()).hexdigest(),
+                archive.stat().st_size,
+                "pv-agent-export-direct",
+                "2026-08-08T00:00:00Z",
+                "2026-08-08T00:00:00Z",
+            ],
+        )
+        db_execute(
+            """
             INSERT INTO exports(
-                id,problem_id,verification_id,workspace_id,export_type,
-                filename,sha256,size_bytes,source_commit,created_at
-            ) VALUES(?,?,?,?,?,?,?,?,?,?)
+                id,problem_id,materialization_id,export_type,options_hash,
+                filename,archive_rel_path,sha256,size_bytes,source_commit,created_at
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?)
             """,
             [
                 export_id,
                 problem_id,
-                "",
-                workspace_id,
-                "native",
+                "pm-agent-export-direct",
+                "icpc",
+                "0" * 64,
                 filename,
-                "d" * 64,
+                archive.relative_to(config.settings.artifacts_root).as_posix(),
+                hashlib.sha256(archive.read_bytes()).hexdigest(),
                 archive.stat().st_size,
                 "c" * 40,
                 "2026-08-08T00:00:00Z",
@@ -182,20 +204,17 @@ class TestAgentAPI(E2ETestBase):
         config.export_service.create_export_job(
             job_id=job_id,
             problem_id=problem_id,
-            workspace_id=workspace_id,
             actor_user_id=actor_user_id,
-            verification_id="",
-            export_type="native",
+            export_type="icpc",
             source_commit="c" * 40,
         )
         config.export_service.mark_export_job_running(
             job_id,
-            verification_id="",
             source_commit="c" * 40,
         )
         config.export_service.mark_export_job_succeeded(
             job_id,
-            verification_id="",
+            materialization_id="pm-agent-export-direct",
             export_id=export_id,
         )
         db_execute(

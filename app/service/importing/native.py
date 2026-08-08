@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import json
 import shutil
+import stat
 import uuid
 import zipfile
 from pathlib import Path, PurePosixPath
@@ -15,6 +16,7 @@ from app.service.platform.workspace_path import (
     is_repository_answer_path,
 )
 from app.service.problem.test_spec import load_tests_spec
+from app.service.problem_package.manifest import load_manifest, validate_manifest_files
 from app.service.statement.constant import STATEMENT_SECTIONS_DIR
 
 
@@ -25,7 +27,7 @@ ZIP_MAX_EXTRACTED_BYTES = UPLOAD_MAX_BYTES
 
 
 def _normalize_zip_path(raw: str) -> str:
-    text = raw.replace("\\", "/").strip()
+    text = raw.replace("\\", "/")
     if not text:
         return ""
     pure = PurePosixPath(text)
@@ -33,12 +35,9 @@ def _normalize_zip_path(raw: str) -> str:
         return ""
     parts: list[str] = []
     for part in pure.parts:
-        token = part.strip()
-        if not token or token == ".":
-            continue
-        if token == "..":
+        if part in {"", ".", ".."}:
             return ""
-        parts.append(token)
+        parts.append(part)
     return "/".join(parts)
 
 
@@ -50,23 +49,12 @@ def _entry_map_from_zip(zf: zipfile.ZipFile, anchor: str) -> dict[str, zipfile.Z
         normalized = _normalize_zip_path(info.filename)
         if not normalized:
             continue
+        if normalized in raw:
+            raise ValueError(f"duplicate Native package path: {normalized}")
         raw[normalized] = info
     if anchor in raw:
         return raw
-    candidates = sorted([p for p in raw if p.endswith(f"/{anchor}")], key=len)
-    if not candidates:
-        raise ValueError(f"{anchor} not found in package")
-    prefix = candidates[0][: -len(anchor)]
-    mapped: dict[str, zipfile.ZipInfo] = {}
-    for path, info in raw.items():
-        if not path.startswith(prefix):
-            continue
-        rel = path[len(prefix) :]
-        if rel:
-            mapped[rel] = info
-    if anchor not in mapped:
-        raise ValueError(f"{anchor} not found in package")
-    return mapped
+    raise ValueError(f"{anchor} not found at Native package root")
 
 
 def _validated_native_entries(
@@ -180,13 +168,15 @@ class NativePackageImportService:
 
         with zipfile.ZipFile(io.BytesIO(raw), "r") as zf:
             entry_map = _entry_map_from_zip(zf, NATIVE_PACKAGE_ANCHOR)
-
-            files_to_write = _validated_native_entries(entry_map)
+            if "test_data/manifest.json" not in entry_map:
+                raise ValueError("source-only Native packages are no longer supported")
             staging_root = workspace.parent / f".native-import-{uuid.uuid4().hex}"
             written_total = 0
             try:
                 staging_root.mkdir(parents=True, exist_ok=False)
-                for target_rel, info, rel in files_to_write:
+                for rel in sorted(entry_map):
+                    target_rel = Path(rel)
+                    info = entry_map[rel]
                     written_total += _extract_zip_entry_to_path(
                         zf,
                         info,
@@ -194,6 +184,21 @@ class NativePackageImportService:
                         extracted_before=written_total,
                         display_name=rel,
                     )
+                    mode = info.external_attr >> 16
+                    if mode and stat.S_ISLNK(mode):
+                        raise ValueError(f"native package contains a symbolic link: {rel}")
+                    if mode and not stat.S_ISREG(mode):
+                        raise ValueError(f"native package contains a special file: {rel}")
+                    if mode:
+                        (staging_root / target_rel).chmod(stat.S_IMODE(mode))
+
+                manifest = load_manifest(staging_root / "test_data" / "manifest.json")
+                validate_manifest_files(staging_root, manifest)
+                shutil.rmtree(staging_root / "test_data", ignore_errors=False)
+                source_entries = {
+                    rel: info for rel, info in entry_map.items() if not rel.startswith("test_data/")
+                }
+                _validated_native_entries(source_entries)
 
                 _clear_workspace_tree(workspace)
                 for child in staging_root.iterdir():

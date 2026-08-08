@@ -90,9 +90,10 @@ not an authentication principal and it is not required to authorize file access.
 
 ### Contest
 - `/contests/{contest}/...`
-- overview, problems, properties, access, and Statements & Builds
-- contest package jobs verify and export each problem from that workspace's Git `HEAD`; dirty working-tree files are excluded
-- contest membership and direct problem ACLs are separate; the combined revoke action only removes non-owner ACLs on problems the actor can manage
+- overview, problems, readiness, properties, access, and Statements & Builds
+- readiness compares published Git revisions with complete Native materializations
+- contest builds freeze roster labels, source generation, and exact Native materialization IDs; they never provision workspaces or run Export implicitly
+- contest membership derives read/write problem access dynamically; direct problem ACLs remain independent
 
 ### Agent
 - `/agent/sessions`, `/agent/connect`, approval, revoke, and disconnect pages

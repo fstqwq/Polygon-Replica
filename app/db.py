@@ -189,6 +189,11 @@ CREATE TABLE IF NOT EXISTS contests (
     slug TEXT UNIQUE NOT NULL,
     title TEXT NOT NULL,
     owner_user_id INTEGER NOT NULL,
+    status TEXT NOT NULL DEFAULT 'draft',
+    source_generation INTEGER NOT NULL DEFAULT 1,
+    location TEXT NOT NULL DEFAULT '',
+    date_text TEXT NOT NULL DEFAULT '',
+    statement_default_language TEXT NOT NULL DEFAULT 'english',
     created_at TEXT NOT NULL,
     FOREIGN KEY(owner_user_id) REFERENCES users(id)
 );
@@ -207,12 +212,15 @@ CREATE TABLE IF NOT EXISTS contest_members (
 CREATE TABLE IF NOT EXISTS contest_problems (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     contest_id INTEGER NOT NULL,
-    idx TEXT NOT NULL,
+    position INTEGER NOT NULL,
+    label TEXT NOT NULL,
     problem_id INTEGER NOT NULL,
+    statement_folder TEXT NOT NULL DEFAULT '',
     added_by_user_id INTEGER NOT NULL,
     created_at TEXT NOT NULL,
     UNIQUE(contest_id, problem_id),
-    UNIQUE(contest_id, idx),
+    UNIQUE(contest_id, position),
+    UNIQUE(contest_id, label),
     FOREIGN KEY(contest_id) REFERENCES contests(id),
     FOREIGN KEY(problem_id) REFERENCES problems(id),
     FOREIGN KEY(added_by_user_id) REFERENCES users(id)
@@ -224,10 +232,29 @@ CREATE TABLE IF NOT EXISTS contest_jobs (
     actor_user_id INTEGER NOT NULL,
     job_type TEXT NOT NULL,
     status TEXT NOT NULL,
+    source_generation INTEGER NOT NULL,
     created_at TEXT NOT NULL,
     finished_at TEXT,
     FOREIGN KEY(contest_id) REFERENCES contests(id),
     FOREIGN KEY(actor_user_id) REFERENCES users(id)
+);
+
+CREATE TABLE IF NOT EXISTS contest_build_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_id TEXT NOT NULL,
+    contest_problem_id INTEGER NOT NULL,
+    position INTEGER NOT NULL,
+    label TEXT NOT NULL,
+    problem_id INTEGER NOT NULL,
+    statement_folder TEXT NOT NULL DEFAULT '',
+    source_commit TEXT NOT NULL,
+    revision_number INTEGER NOT NULL,
+    materialization_id TEXT NOT NULL,
+    archive_sha256 TEXT NOT NULL,
+    UNIQUE(job_id,contest_problem_id),
+    FOREIGN KEY(job_id) REFERENCES contest_jobs(id),
+    FOREIGN KEY(problem_id) REFERENCES problems(id),
+    FOREIGN KEY(materialization_id) REFERENCES problem_package_materializations(id)
 );
 
 CREATE TABLE IF NOT EXISTS contest_artifacts (
@@ -241,18 +268,6 @@ CREATE TABLE IF NOT EXISTS contest_artifacts (
     created_at TEXT NOT NULL,
     FOREIGN KEY(contest_id) REFERENCES contests(id),
     FOREIGN KEY(job_id) REFERENCES contest_jobs(id)
-);
-
-CREATE TABLE IF NOT EXISTS contest_properties (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    contest_id INTEGER NOT NULL,
-    key TEXT NOT NULL,
-    value_json TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    updated_by_user_id INTEGER NOT NULL,
-    UNIQUE(contest_id, key),
-    FOREIGN KEY(contest_id) REFERENCES contests(id),
-    FOREIGN KEY(updated_by_user_id) REFERENCES users(id)
 );
 
 CREATE TABLE IF NOT EXISTS contest_attachments (
@@ -403,37 +418,74 @@ CREATE TABLE IF NOT EXISTS verification_artifact_refs (
     FOREIGN KEY(verification_id) REFERENCES verifications(id)
 );
 
+CREATE TABLE IF NOT EXISTS problem_package_materializations (
+    id TEXT PRIMARY KEY,
+    problem_id INTEGER NOT NULL,
+    source_commit TEXT NOT NULL,
+    revision_number INTEGER NOT NULL,
+    source_digest TEXT NOT NULL,
+    archive_rel_path TEXT NOT NULL,
+    archive_sha256 TEXT NOT NULL,
+    archive_size_bytes INTEGER NOT NULL,
+    verification_id TEXT NOT NULL,
+    status TEXT NOT NULL CHECK(status IN ('available','unavailable')),
+    created_at TEXT NOT NULL,
+    checked_at TEXT NOT NULL,
+    unavailable_reason TEXT NOT NULL DEFAULT '',
+    UNIQUE(problem_id,source_commit),
+    FOREIGN KEY(problem_id) REFERENCES problems(id)
+);
+
+CREATE TABLE IF NOT EXISTS problem_package_builds (
+    id TEXT PRIMARY KEY,
+    problem_id INTEGER NOT NULL,
+    source_commit TEXT NOT NULL,
+    verification_id TEXT NOT NULL DEFAULT '',
+    phase TEXT NOT NULL,
+    status TEXT NOT NULL CHECK(status IN ('queued','running','succeeded','failed')),
+    materialization_id TEXT,
+    error TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    started_at TEXT,
+    finished_at TEXT,
+    UNIQUE(problem_id,source_commit),
+    FOREIGN KEY(problem_id) REFERENCES problems(id),
+    FOREIGN KEY(materialization_id) REFERENCES problem_package_materializations(id) ON DELETE SET NULL
+);
+
 CREATE TABLE IF NOT EXISTS exports (
     id TEXT PRIMARY KEY,
     problem_id INTEGER NOT NULL,
-    verification_id TEXT NOT NULL,
-    workspace_id INTEGER,
+    materialization_id TEXT NOT NULL,
     export_type TEXT NOT NULL,
+    options_hash TEXT NOT NULL,
     filename TEXT NOT NULL,
+    archive_rel_path TEXT NOT NULL,
     sha256 TEXT NOT NULL,
     size_bytes INTEGER NOT NULL,
-    source_commit TEXT,
+    source_commit TEXT NOT NULL,
     created_at TEXT NOT NULL,
-    FOREIGN KEY(problem_id) REFERENCES problems(id)
+    UNIQUE(materialization_id,export_type,options_hash),
+    FOREIGN KEY(problem_id) REFERENCES problems(id),
+    FOREIGN KEY(materialization_id) REFERENCES problem_package_materializations(id)
 );
 
 CREATE TABLE IF NOT EXISTS export_jobs (
     id TEXT PRIMARY KEY,
     problem_id INTEGER NOT NULL,
-    workspace_id INTEGER NOT NULL,
     actor_user_id INTEGER NOT NULL,
-    verification_id TEXT NOT NULL DEFAULT '',
     export_type TEXT NOT NULL,
     source_commit TEXT NOT NULL,
     status TEXT NOT NULL CHECK(status IN ('queued','running','succeeded','failed')),
+    materialization_id TEXT,
     export_id TEXT,
     error TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL,
     started_at TEXT,
     finished_at TEXT,
     FOREIGN KEY(problem_id) REFERENCES problems(id),
-    FOREIGN KEY(workspace_id) REFERENCES workspaces(id),
     FOREIGN KEY(actor_user_id) REFERENCES users(id),
+    FOREIGN KEY(materialization_id) REFERENCES problem_package_materializations(id) ON DELETE SET NULL,
     FOREIGN KEY(export_id) REFERENCES exports(id) ON DELETE SET NULL
 );
 
@@ -475,13 +527,15 @@ CREATE INDEX IF NOT EXISTS idx_contests_slug ON contests(slug);
 CREATE INDEX IF NOT EXISTS idx_contests_owner ON contests(owner_user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_contest_members_user ON contest_members(user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_contest_members_contest ON contest_members(contest_id, user_id);
-CREATE INDEX IF NOT EXISTS idx_contest_problems_contest ON contest_problems(contest_id, problem_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_contest_members_single_owner ON contest_members(contest_id) WHERE role='owner';
+CREATE INDEX IF NOT EXISTS idx_contest_problems_contest ON contest_problems(contest_id, position);
 CREATE INDEX IF NOT EXISTS idx_contest_problems_problem ON contest_problems(problem_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_contest_jobs_contest_created ON contest_jobs(contest_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_contest_jobs_actor_created ON contest_jobs(actor_user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_contest_build_items_job_position ON contest_build_items(job_id,position);
+CREATE INDEX IF NOT EXISTS idx_contest_build_items_materialization ON contest_build_items(materialization_id);
 CREATE INDEX IF NOT EXISTS idx_contest_artifacts_contest_created ON contest_artifacts(contest_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_contest_artifacts_job_created ON contest_artifacts(job_id, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_contest_properties_contest_updated ON contest_properties(contest_id, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_contest_attachments_contest_created ON contest_attachments(contest_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_previews_problem_created ON previews(problem_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_previews_problem_workspace_created ON previews(problem_id, workspace_id, created_at DESC);
@@ -504,9 +558,12 @@ CREATE INDEX IF NOT EXISTS idx_verification_tasks_verification_predecessor ON ve
 CREATE INDEX IF NOT EXISTS idx_verification_tasks_predecessor ON verification_tasks(predecessor_task_id);
 CREATE INDEX IF NOT EXISTS idx_verification_tasks_verification_final ON verification_tasks(verification_id, final_status, task_kind);
 CREATE INDEX IF NOT EXISTS idx_verification_artifact_refs_verification_updated ON verification_artifact_refs(verification_id, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_problem_package_materializations_problem_revision ON problem_package_materializations(problem_id,revision_number DESC);
+CREATE INDEX IF NOT EXISTS idx_problem_package_materializations_status ON problem_package_materializations(status,checked_at DESC);
+CREATE INDEX IF NOT EXISTS idx_problem_package_builds_status_created ON problem_package_builds(status,created_at);
 CREATE INDEX IF NOT EXISTS idx_exports_problem_created ON exports(problem_id, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_exports_verification_created ON exports(verification_id, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_export_jobs_workspace_actor_created ON export_jobs(workspace_id, actor_user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_exports_materialization_created ON exports(materialization_id,created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_export_jobs_actor_created ON export_jobs(actor_user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_export_jobs_problem_created ON export_jobs(problem_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_export_jobs_export ON export_jobs(export_id);
 CREATE INDEX IF NOT EXISTS idx_audit_problem_created ON audit_log(problem_id, created_at DESC);
@@ -711,17 +768,37 @@ CURRENT_SCHEMA_COLUMNS: dict[str, tuple[str, ...]] = {
         "recent_verification_status",
         "updated_at",
     ),
-    "contests": ("id", "slug", "title", "owner_user_id", "created_at"),
+    "contests": (
+        "id", "slug", "title", "owner_user_id", "status", "source_generation",
+        "location", "date_text", "statement_default_language", "created_at",
+    ),
     "contest_members": ("id", "contest_id", "user_id", "role", "created_at"),
-    "contest_problems": ("id", "contest_id", "idx", "problem_id", "added_by_user_id", "created_at"),
+    "contest_problems": (
+        "id", "contest_id", "position", "label", "problem_id", "statement_folder",
+        "added_by_user_id", "created_at",
+    ),
     "contest_jobs": (
         "id",
         "contest_id",
         "actor_user_id",
         "job_type",
         "status",
+        "source_generation",
         "created_at",
         "finished_at",
+    ),
+    "contest_build_items": (
+        "id",
+        "job_id",
+        "contest_problem_id",
+        "position",
+        "label",
+        "problem_id",
+        "statement_folder",
+        "source_commit",
+        "revision_number",
+        "materialization_id",
+        "archive_sha256",
     ),
     "contest_artifacts": (
         "id",
@@ -732,14 +809,6 @@ CURRENT_SCHEMA_COLUMNS: dict[str, tuple[str, ...]] = {
         "sha256",
         "size_bytes",
         "created_at",
-    ),
-    "contest_properties": (
-        "id",
-        "contest_id",
-        "key",
-        "value_json",
-        "updated_at",
-        "updated_by_user_id",
     ),
     "contest_attachments": (
         "id",
@@ -855,13 +924,42 @@ CURRENT_SCHEMA_COLUMNS: dict[str, tuple[str, ...]] = {
         "finished_at",
         "created_at",
     ),
+    "problem_package_materializations": (
+        "id",
+        "problem_id",
+        "source_commit",
+        "revision_number",
+        "source_digest",
+        "archive_rel_path",
+        "archive_sha256",
+        "archive_size_bytes",
+        "verification_id",
+        "status",
+        "created_at",
+        "checked_at",
+        "unavailable_reason",
+    ),
+    "problem_package_builds": (
+        "id",
+        "problem_id",
+        "source_commit",
+        "verification_id",
+        "phase",
+        "status",
+        "materialization_id",
+        "error",
+        "created_at",
+        "started_at",
+        "finished_at",
+    ),
     "exports": (
         "id",
         "problem_id",
-        "verification_id",
-        "workspace_id",
+        "materialization_id",
         "export_type",
+        "options_hash",
         "filename",
+        "archive_rel_path",
         "sha256",
         "size_bytes",
         "source_commit",
@@ -870,12 +968,11 @@ CURRENT_SCHEMA_COLUMNS: dict[str, tuple[str, ...]] = {
     "export_jobs": (
         "id",
         "problem_id",
-        "workspace_id",
         "actor_user_id",
-        "verification_id",
         "export_type",
         "source_commit",
         "status",
+        "materialization_id",
         "export_id",
         "error",
         "created_at",

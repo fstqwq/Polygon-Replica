@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import sqlite3
 from typing import TypedDict
 
@@ -13,6 +12,11 @@ class ContestContextRecord(TypedDict):
     slug: str
     title: str
     owner_user_id: int
+    status: str
+    source_generation: int
+    location: str
+    date_text: str
+    statement_default_language: str
     created_at: str
 
 
@@ -23,15 +27,12 @@ class ContestMemberRecord(TypedDict):
     is_system_admin: int
 
 
-class ContestPropertyRecord(TypedDict):
-    key: str
-    value_json: str
-
-
 class ContestProblemRecord(TypedDict):
     contest_problem_id: int
+    position: int
     idx: str
     problem_id: int
+    statement_folder: str
     created_at: str
     problem_slug: str
     slug_leaf: str
@@ -91,7 +92,6 @@ class ContestDiskStore:
                    MAX(
                        c.created_at,
                        COALESCE((SELECT MAX(cp0.created_at) FROM contest_problems cp0 WHERE cp0.contest_id=c.id), ''),
-                       COALESCE((SELECT MAX(pr.updated_at) FROM contest_properties pr WHERE pr.contest_id=c.id), ''),
                        COALESCE((SELECT MAX(cj.created_at) FROM contest_jobs cj WHERE cj.contest_id=c.id), ''),
                        COALESCE((
                            SELECT MAX(w2.updated_at)
@@ -140,7 +140,6 @@ class ContestDiskStore:
                    MAX(
                        c.created_at,
                        COALESCE((SELECT MAX(cp0.created_at) FROM contest_problems cp0 WHERE cp0.contest_id=c.id), ''),
-                       COALESCE((SELECT MAX(pr.updated_at) FROM contest_properties pr WHERE pr.contest_id=c.id), ''),
                        COALESCE((SELECT MAX(cj.created_at) FROM contest_jobs cj WHERE cj.contest_id=c.id), ''),
                        COALESCE((
                            SELECT MAX(w2.updated_at)
@@ -209,24 +208,40 @@ class ContestDiskStore:
             raise
 
     def add_problem(self, contest_id: int, idx: str, problem_id: int, added_by_user_id: int, created_at: str) -> None:
-        self.db.execute(
-            """
-            INSERT INTO contest_problems(contest_id,idx,problem_id,added_by_user_id,created_at)
-            VALUES(?,?,?,?,?)
-            """,
-            [int(contest_id), idx, int(problem_id), int(added_by_user_id), created_at],
-        )
+        def tx(conn: sqlite3.Connection) -> None:
+            row = conn.execute(
+                "SELECT COALESCE(MAX(position),0)+1 AS next_position FROM contest_problems WHERE contest_id=?",
+                [int(contest_id)],
+            ).fetchone()
+            position = int(row["next_position"])
+            conn.execute(
+                """
+                INSERT INTO contest_problems(
+                    contest_id,position,label,problem_id,statement_folder,added_by_user_id,created_at
+                ) VALUES(?,?,?,?,?,?,?)
+                """,
+                [int(contest_id), position, idx, int(problem_id), "", int(added_by_user_id), created_at],
+            )
+        self.db.write_transaction(tx)
 
     def contest_context_row(self, contest_slug: str) -> ContestContextRecord | None:
         row = self.db.fetch_one(
-            "SELECT id,slug,title,owner_user_id,created_at FROM contests WHERE slug=?",
+            """
+            SELECT id,slug,title,owner_user_id,status,source_generation,location,date_text,
+                   statement_default_language,created_at
+            FROM contests WHERE slug=?
+            """,
             [contest_slug],
         )
         return None if row is None else dict(row)
 
     def contest_context_by_id(self, contest_id: int) -> ContestContextRecord | None:
         row = self.db.fetch_one(
-            "SELECT id,slug,title,owner_user_id,created_at FROM contests WHERE id=?",
+            """
+            SELECT id,slug,title,owner_user_id,status,source_generation,location,date_text,
+                   statement_default_language,created_at
+            FROM contests WHERE id=?
+            """,
             [int(contest_id)],
         )
         return None if row is None else dict(row)
@@ -316,106 +331,30 @@ class ContestDiskStore:
             [int(contest_id), int(user_id)],
         )
 
-    def revoke_member_and_problem_access(
-        self,
-        contest_id: int,
-        actor_user_id: int,
-        user_id: int,
-    ) -> dict[str, int]:
-        def tx(conn: sqlite3.Connection) -> dict[str, int]:
-            membership = conn.execute(
-                "SELECT role FROM contest_members WHERE contest_id=? AND user_id=?",
-                [int(contest_id), int(user_id)],
-            ).fetchone()
-            if membership is None:
-                raise ValueError("contest membership not found")
-            if str(membership["role"]) == "owner":
-                raise ValueError("owner access is fixed and cannot be transferred")
-            actor = conn.execute(
-                "SELECT is_system_admin FROM users WHERE id=?",
-                [int(actor_user_id)],
-            ).fetchone()
-            if actor is None:
-                raise ValueError("actor user not found")
-            actor_is_admin = int(actor["is_system_admin"] or 0) == 1
-            problem_rows = conn.execute(
-                """
-                SELECT cp.problem_id,a.role AS actor_role
-                FROM contest_problems cp
-                LEFT JOIN repo_acl a
-                  ON a.problem_id=cp.problem_id AND a.user_id=?
-                WHERE cp.contest_id=?
-                """,
-                [int(actor_user_id), int(contest_id)],
-            ).fetchall()
-            manageable_problem_ids = [
-                int(row["problem_id"])
-                for row in problem_rows
-                if actor_is_admin or str(row["actor_role"] or "") in {"admin", "owner"}
-            ]
-            skipped_problem_count = len(problem_rows) - len(manageable_problem_ids)
-            removed_acl_count = 0
-            preserved_owner_count = 0
-            if manageable_problem_ids:
-                placeholders = ",".join(("?" for _ in manageable_problem_ids))
-                acl_rows = conn.execute(
-                    f"""
-                    SELECT role
-                    FROM repo_acl
-                    WHERE user_id=? AND problem_id IN ({placeholders})
-                    """,
-                    [int(user_id), *manageable_problem_ids],
-                ).fetchall()
-                removed_acl_count = sum(1 for row in acl_rows if str(row["role"]) != "owner")
-                preserved_owner_count = sum(1 for row in acl_rows if str(row["role"]) == "owner")
-                conn.execute(
-                    f"""
-                    DELETE FROM repo_acl
-                    WHERE user_id=? AND role<>'owner' AND problem_id IN ({placeholders})
-                    """,
-                    [int(user_id), *manageable_problem_ids],
-                )
-            conn.execute(
-                "DELETE FROM contest_members WHERE contest_id=? AND user_id=?",
-                [int(contest_id), int(user_id)],
-            )
-            return {
-                "removed_acl_count": removed_acl_count,
-                "preserved_owner_count": preserved_owner_count,
-                "skipped_problem_count": skipped_problem_count,
-            }
-
-        return self.db.write_transaction(tx)
-
-    def property_rows(self, contest_id: int) -> list[ContestPropertyRecord]:
-        rows = self.db.fetch_all(
-            "SELECT key,value_json FROM contest_properties WHERE contest_id=?",
-            [int(contest_id)],
-        )
-        return [dict(row) for row in rows]
-
-    def property_row(self, contest_id: int, key: str) -> ContestPropertyRecord | None:
-        row = self.db.fetch_one(
-            "SELECT key,value_json FROM contest_properties WHERE contest_id=? AND key=?",
-            [int(contest_id), str(key).strip()],
-        )
-        return None if row is None else dict(row)
-
     def update_title(self, contest_id: int, title: str) -> None:
         self.db.execute("UPDATE contests SET title=? WHERE id=?", [title, int(contest_id)])
 
-    def upsert_property(self, contest_id: int, actor_user_id: int, key: str, value: object, updated_at: str) -> None:
+    def update_metadata_field(self, contest_id: int, column: str, value: str) -> None:
+        columns = {
+            "location": "location",
+            "date": "date_text",
+            "statement_default_language": "statement_default_language",
+        }
+        target = columns[column]
         self.db.execute(
-            """
-            INSERT INTO contest_properties(contest_id,key,value_json,updated_at,updated_by_user_id)
-            VALUES(?,?,?,?,?)
-            ON CONFLICT(contest_id,key) DO UPDATE SET
-                value_json=excluded.value_json,
-                updated_at=excluded.updated_at,
-                updated_by_user_id=excluded.updated_by_user_id
-            """,
-            [int(contest_id), key, json.dumps(value), updated_at, int(actor_user_id)],
+            f"UPDATE contests SET {target}=? WHERE id=?",
+            [value, int(contest_id)],
         )
+
+    def set_problem_statement_folders(self, contest_id: int, source_folders: dict[int, str]) -> None:
+        def tx(conn: sqlite3.Connection) -> None:
+            conn.execute("UPDATE contest_problems SET statement_folder='' WHERE contest_id=?", [int(contest_id)])
+            for problem_id, folder in source_folders.items():
+                conn.execute(
+                    "UPDATE contest_problems SET statement_folder=? WHERE contest_id=? AND problem_id=?",
+                    [folder, int(contest_id), int(problem_id)],
+                )
+        self.db.write_transaction(tx)
 
     def attachment_rows(self, contest_id: int) -> list[ContestAttachmentRecord]:
         rows = self.db.fetch_all(
@@ -483,11 +422,12 @@ class ContestDiskStore:
     def contest_problem_rows(self, contest_id: int) -> list[ContestProblemRecord]:
         rows = self.db.fetch_all(
             """
-            SELECT cp.id AS contest_problem_id,cp.idx,cp.problem_id,cp.created_at,p.slug AS problem_slug
+            SELECT cp.id AS contest_problem_id,cp.position,cp.label AS idx,cp.problem_id,
+                   cp.statement_folder,cp.created_at,p.slug AS problem_slug
             FROM contest_problems cp
             JOIN problems p ON p.id=cp.problem_id
             WHERE cp.contest_id=?
-            ORDER BY cp.idx COLLATE NOCASE ASC, cp.id ASC
+            ORDER BY cp.position ASC, cp.id ASC
             """,
             [int(contest_id)],
         )
@@ -497,8 +437,10 @@ class ContestDiskStore:
             items.append(
                 {
                     "contest_problem_id": int(row["contest_problem_id"]),
+                    "position": int(row["position"]),
                     "idx": str(row["idx"] or ""),
                     "problem_id": int(row["problem_id"]),
+                    "statement_folder": str(row["statement_folder"] or ""),
                     "created_at": str(row["created_at"] or ""),
                     "problem_slug": safe_slug,
                     "slug_leaf": problem_slug_leaf(safe_slug),
@@ -532,6 +474,7 @@ class ContestDiskStore:
                 FROM repo_acl a
                 JOIN problems p ON p.id=a.problem_id
                 WHERE a.user_id=?
+                  AND a.role IN ('owner','admin')
                   AND p.id NOT IN (
                       SELECT cp.problem_id
                       FROM contest_problems cp
@@ -578,8 +521,8 @@ class ContestDiskStore:
         return row is not None
 
     def used_problem_indices(self, contest_id: int) -> list[str]:
-        rows = self.db.fetch_all("SELECT idx FROM contest_problems WHERE contest_id=?", [int(contest_id)])
-        return [str(row["idx"]) for row in rows if str(row["idx"]).strip()]
+        rows = self.db.fetch_all("SELECT label FROM contest_problems WHERE contest_id=?", [int(contest_id)])
+        return [str(row["label"]) for row in rows if str(row["label"]).strip()]
 
     def remove_problem(self, contest_id: int, problem_id: int) -> bool:
         return self.remove_problems(int(contest_id), [int(problem_id)]) > 0
@@ -613,7 +556,6 @@ class ContestDiskStore:
                 return 0
             if len({idx for _, idx in safe_pairs}) != len(safe_pairs):
                 return 0
-            placeholders = ",".join(("?" for _ in contest_problem_ids))
             rows = conn.execute(
                 "SELECT id FROM contest_problems WHERE contest_id=?",
                 [int(contest_id)],
@@ -622,33 +564,15 @@ class ContestDiskStore:
             if found_ids != set(contest_problem_ids):
                 return 0
 
-            target_indices = [idx for _, idx in safe_pairs]
-            idx_placeholders = ",".join(("?" for _ in target_indices))
-            conflicting = conn.execute(
-                f"""
-                SELECT id
-                FROM contest_problems
-                WHERE contest_id=?
-                  AND idx IN ({idx_placeholders})
-                  AND id NOT IN ({placeholders})
-                LIMIT 1
-                """,
-                [int(contest_id), *target_indices, *contest_problem_ids],
-            ).fetchone()
-            if conflicting is not None:
-                return 0
-
             for pos, (contest_problem_id, _) in enumerate(safe_pairs, start=1):
-                # Move all affected rows out of the user-visible index namespace before
-                # writing final values, so A<->B swaps do not trip the unique index.
                 conn.execute(
-                    "UPDATE contest_problems SET idx=? WHERE contest_id=? AND id=?",
-                    [f"~tmp-reorder-{int(contest_id)}-{contest_problem_id}-{pos}~", int(contest_id), contest_problem_id],
+                    "UPDATE contest_problems SET position=?,label=? WHERE contest_id=? AND id=?",
+                    [-pos, f"~tmp-reorder-{contest_problem_id}~", int(contest_id), contest_problem_id],
                 )
-            for contest_problem_id, idx in safe_pairs:
+            for pos, (contest_problem_id, idx) in enumerate(safe_pairs, start=1):
                 conn.execute(
-                    "UPDATE contest_problems SET idx=? WHERE contest_id=? AND id=?",
-                    [idx, int(contest_id), contest_problem_id],
+                    "UPDATE contest_problems SET position=?,label=? WHERE contest_id=? AND id=?",
+                    [pos, idx, int(contest_id), contest_problem_id],
                 )
             return len(safe_pairs)
         return int(self.db.write_transaction(tx)) > 0
@@ -680,8 +604,9 @@ class ContestDiskStore:
                 return 0
             for pos, contest_problem_id in enumerate(safe_ids, start=1):
                 conn.execute(
-                    "UPDATE contest_problems SET idx=? WHERE contest_id=? AND id=?",
+                    "UPDATE contest_problems SET position=?,label=? WHERE contest_id=? AND id=?",
                     [
+                        -pos,
                         f"~tmp-renumber-{int(contest_id)}-{contest_problem_id}-{pos}~",
                         int(contest_id),
                         contest_problem_id,
@@ -689,8 +614,8 @@ class ContestDiskStore:
                 )
             for pos, contest_problem_id in enumerate(safe_ids, start=1):
                 conn.execute(
-                    "UPDATE contest_problems SET idx=? WHERE contest_id=? AND id=?",
-                    [idx_label(pos), int(contest_id), contest_problem_id],
+                    "UPDATE contest_problems SET position=?,label=? WHERE contest_id=? AND id=?",
+                    [pos, idx_label(pos), int(contest_id), contest_problem_id],
                 )
             return len(safe_ids)
         return int(self.db.write_transaction(tx)) == len(safe_ids)
@@ -698,10 +623,13 @@ class ContestDiskStore:
     def delete_contest(self, contest_id: int) -> None:
         def tx(conn: sqlite3.Connection) -> None:
             safe_contest_id = int(contest_id)
+            conn.execute(
+                "DELETE FROM contest_build_items WHERE job_id IN (SELECT id FROM contest_jobs WHERE contest_id=?)",
+                [safe_contest_id],
+            )
             conn.execute("DELETE FROM contest_artifacts WHERE contest_id=?", [safe_contest_id])
             conn.execute("DELETE FROM contest_jobs WHERE contest_id=?", [safe_contest_id])
             conn.execute("DELETE FROM contest_attachments WHERE contest_id=?", [safe_contest_id])
-            conn.execute("DELETE FROM contest_properties WHERE contest_id=?", [safe_contest_id])
             conn.execute("DELETE FROM contest_problems WHERE contest_id=?", [safe_contest_id])
             conn.execute("DELETE FROM contest_members WHERE contest_id=?", [safe_contest_id])
             conn.execute("DELETE FROM contests WHERE id=?", [safe_contest_id])
@@ -715,11 +643,11 @@ class ContestDiskStore:
         placeholders = ",".join(("?" for _ in safe_problem_ids))
         rows = self.db.fetch_all(
             f"""
-            SELECT cp.problem_id,cp.idx,p.slug AS problem_slug
+            SELECT cp.problem_id,cp.label AS idx,p.slug AS problem_slug
             FROM contest_problems cp
             JOIN problems p ON p.id=cp.problem_id
             WHERE cp.contest_id=? AND cp.problem_id IN ({placeholders})
-            ORDER BY cp.idx COLLATE NOCASE ASC, cp.id ASC
+            ORDER BY cp.position ASC, cp.id ASC
             """,
             [int(contest_id), *safe_problem_ids],
         )
@@ -749,11 +677,31 @@ class ContestDiskStore:
     ) -> None:
         self.db.execute(
             """
-            INSERT INTO contest_jobs(id,contest_id,actor_user_id,job_type,status,created_at,finished_at)
-            VALUES(?,?,?,?,?,?,?)
+            INSERT INTO contest_jobs(
+                id,contest_id,actor_user_id,job_type,status,source_generation,created_at,finished_at
+            )
+            VALUES(?,?,?,?,?,(SELECT source_generation FROM contests WHERE id=?),?,?)
             """,
-            [job_id, int(contest_id), int(actor_user_id), job_type, status, created_at, finished_at],
+            [
+                job_id, int(contest_id), int(actor_user_id), job_type, status,
+                int(contest_id), created_at, finished_at,
+            ],
         )
+
+    def bump_source_generation(self, contest_id: int) -> int:
+        def transaction(connection) -> int:
+            connection.execute(
+                "UPDATE contests SET source_generation=source_generation+1 WHERE id=?",
+                [int(contest_id)],
+            )
+            row = connection.execute(
+                "SELECT source_generation FROM contests WHERE id=?",
+                [int(contest_id)],
+            ).fetchone()
+            if row is None:
+                raise ValueError("contest not found")
+            return int(row["source_generation"])
+        return self.db.write_transaction(transaction)
 
     def update_job(
         self,
@@ -848,6 +796,49 @@ class ContestDiskStore:
             """,
             [artifact_id, int(contest_id), job_id, artifact_type, filename, sha256, int(size_bytes), created_at],
         )
+
+    def replace_build_items(self, job_id: str, items: list[dict[str, object]]) -> None:
+        def transaction(connection) -> None:
+            connection.execute("DELETE FROM contest_build_items WHERE job_id=?", [job_id])
+            for item in items:
+                connection.execute(
+                    """INSERT INTO contest_build_items(
+                       job_id,contest_problem_id,position,label,problem_id,statement_folder,source_commit,
+                       revision_number,materialization_id,archive_sha256
+                       ) VALUES(?,?,?,?,?,?,?,?,?,?)""",
+                    [
+                        job_id, int(item["contest_problem_id"]), int(item["position"]),
+                        str(item["label"]), int(item["problem_id"]), str(item["statement_folder"]),
+                        str(item["source_commit"]),
+                        int(item["revision_number"]), str(item["materialization_id"]),
+                        str(item["archive_sha256"]),
+                    ],
+                )
+        self.db.write_transaction(transaction)
+
+    def build_items(self, job_id: str) -> list[dict[str, object]]:
+        rows = self.db.fetch_all(
+            """SELECT i.*,p.slug AS problem_slug
+               FROM contest_build_items i JOIN problems p ON p.id=i.problem_id
+               WHERE i.job_id=? ORDER BY i.position,i.id""",
+            [job_id],
+        )
+        return [
+            {
+                "contest_problem_id": int(row["contest_problem_id"]),
+                "position": int(row["position"]),
+                "label": str(row["label"]),
+                "idx": str(row["label"]),
+                "problem_id": int(row["problem_id"]),
+                "problem_slug": str(row["problem_slug"]),
+                "statement_folder": str(row["statement_folder"]),
+                "source_commit": str(row["source_commit"]),
+                "revision_number": int(row["revision_number"]),
+                "materialization_id": str(row["materialization_id"]),
+                "archive_sha256": str(row["archive_sha256"]),
+            }
+            for row in rows
+        ]
 
     def artifact_rows(self, contest_id: int, *, limit: int) -> list[ContestArtifactRecord]:
         rows = self.db.fetch_all(

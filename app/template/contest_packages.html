@@ -21,8 +21,9 @@
       <form
         class="form-stack"
         method="post"
-        action="/contests/{{ ctx.contest.slug }}/packages/preview/start"
+        action="/contests/{{ ctx.contest.slug }}/packages/build/start"
       >
+        <input type="hidden" name="outputs" value="statement_pdf" />
         <label for="contest-pdf-language">Language</label>
         <select id="contest-pdf-language" name="language">
           {% for language in contest_statement_language_options %}
@@ -42,9 +43,10 @@
       <h3>ICPC Package Bundle</h3>
       <p class="muted">
         Build one ICPC ZIP per problem, a <code>manifest.json</code>, and an outer bundle
-        archive from each workspace HEAD.
+        archive from the frozen Native revisions selected when the job starts.
       </p>
       <form method="post" action="/contests/{{ ctx.contest.slug }}/packages/build/start">
+        <input type="hidden" name="outputs" value="icpc_bundle" />
         <button class="btn" type="submit">Build ICPC Package Bundle</button>
       </form>
     </article>
@@ -151,14 +153,15 @@
       <th>Action</th>
     </tr>
     {% for row in job_rows %}
-    {% set totals = row.summary.get("totals", {}) if row.summary else {} %}
+    {% set requested_outputs = row.summary.get("requested_outputs", []) if row.summary else [] %}
+    {% set successful_outputs = row.summary.get("successful_outputs", []) if row.summary else [] %}
     <tr class="{% if selected_job and selected_job.id == row.id %}table-row-selected{% endif %}">
       <td><code>{{ row.id }}</code></td>
-      <td>{{ "pdf" if row.job_type == "pdf" else row.job_type }}</td>
+      <td>build</td>
       <td>{{ row.status | status_label }}</td>
       <td>
-        {% if totals %}
-          {{ totals.get("success", 0) }} success / {{ totals.get("failed", 0) }} failed
+        {% if requested_outputs %}
+          {{ successful_outputs | length }} / {{ requested_outputs | length }} outputs
         {% else %}
           -
         {% endif %}
@@ -183,24 +186,23 @@
   <h2>Selected Job Report</h2>
   <p><strong>Job:</strong> <code>{{ selected_job.id }}</code> / {{ selected_job.job_type }} / {{ selected_job.status | status_label }}</p>
   {% if selected_job.summary %}
-  {% if selected_job.summary.get("language") %}
-  <p><strong>Language:</strong> {{ selected_job.summary.get("language") }}</p>
-  {% endif %}
-  {% if selected_job.summary.get("artifact_id") %}
-  <p><strong>Artifact:</strong> <code>{{ selected_job.summary.get("artifact_id") }}</code></p>
-  {% endif %}
-  {% if selected_job.summary.get("pdf_file") %}
-  <p><strong>PDF:</strong> <code>{{ selected_job.summary.get("pdf_file") }}</code></p>
-  {% endif %}
   {% if selected_job.summary.get("error") %}
   <p class="danger"><strong>Error:</strong> {{ selected_job.summary.get("error") }}</p>
   {% endif %}
-  {% if selected_job.summary.get("common_error") %}
-  <p class="danger">
-    <strong>All problems failed:</strong> {{ selected_job.summary.get("common_error") }}
-  </p>
+  {% set selected_outputs = selected_job.summary.get("outputs") or {} %}
+  {% if selected_outputs %}
+  {% for output_name, output_summary in selected_outputs.items() %}
+  <h3>{{ "Contest PDF" if output_name == "statement_pdf" else "ICPC Package Bundle" }}</h3>
+  {% if output_summary.get("language") %}
+  <p><strong>Language:</strong> {{ output_summary.get("language") }}</p>
   {% endif %}
-  {% set selected_results = selected_job.summary.get("results") or [] %}
+  {% if output_summary.get("artifact_id") %}
+  <p><strong>Artifact:</strong> <code>{{ output_summary.get("artifact_id") }}</code></p>
+  {% endif %}
+  {% if output_summary.get("error") %}
+  <p class="danger"><strong>Error:</strong> {{ output_summary.get("error") }}</p>
+  {% endif %}
+  {% set selected_results = output_summary.get("results") or [] %}
   {% if selected_results %}
   <table class="table-base">
     <tr>
@@ -217,16 +219,17 @@
       <td>{{ row.get("status", "") | status_label }}</td>
       <td><code>{{ row.get("source_commit", "") }}</code></td>
       <td>
-        {% if not selected_job.summary.get("common_error")
-          or row.get("error", "") != selected_job.summary.get("common_error", "") %}
-          {{ row.get("error", "") or row.get("warning", "") }}
-        {% endif %}
+        {{ row.get("error", "") or row.get("warning", "") }}
       </td>
     </tr>
     {% endfor %}
   </table>
   {% else %}
-  <p class="muted">No per-problem report was produced for this job.</p>
+  <p class="muted">No per-problem report was produced for this output.</p>
+  {% endif %}
+  {% endfor %}
+  {% else %}
+  <p class="muted">This job has not produced output reports yet.</p>
   {% endif %}
   {% else %}
   <p class="muted">This job has not produced a report yet.</p>

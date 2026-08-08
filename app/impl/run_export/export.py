@@ -16,16 +16,13 @@ from app.impl.auth.shared import redirect_response, template_response
 from app.impl.contest.workspace_scope import contest_workspace_context_from_request
 from app.impl.runtime.config import config
 from app.impl.workspace.access import require_write_access
-from app.service.repository.revision import git_commit_count, verification_source_display
+from app.impl.workspace.access import workspace_access_context
+from app.impl.workspace.context import global_user_ctx
 from app.impl.workspace.context_job import start_export_job
-from app.impl.workspace.context_job_helper import allocate_verification_id
 from app.impl.workspace.context_ui import page_ctx
 from app.impl.run_export.query import (
-    _verification_runtime_progress,
     _count_label,
-    _verification_href,
 )
-from app.service.verification.validation_status import build_validation_status
 
 
 def _export_type_display(export_type: str) -> str:
@@ -36,14 +33,8 @@ def _export_type_display(export_type: str) -> str:
     return export_type or "-"
 
 
-def _source_revision_display(workspace: Path, source_commit: str, revision_cache: dict[str, int | None]) -> str:
-    return verification_source_display(workspace, source_commit, revision_cache)
-
-
 def _export_archive_summary(
-    problem: str,
     problem_id: int,
-    workspace_id: int,
     export_id: str,
     filename: str,
 ) -> dict[str, object]:
@@ -58,9 +49,7 @@ def _export_archive_summary(
     if not export_id or not archive_name:
         return result
     archive_path = _resolve_export_archive_path(
-        problem,
         problem_id,
-        workspace_id,
         export_id,
         archive_name,
     )
@@ -71,7 +60,14 @@ def _export_archive_summary(
     try:
         with zipfile.ZipFile(archive_path, "r") as zf:
             names = [name for name in zf.namelist() if name and not name.endswith("/")]
-            native_anchor = next((name for name in names if name.endswith("/config/problem.json")), "")
+            native_anchor = next(
+                (
+                    name
+                    for name in names
+                    if name == "config/problem.json" or name.endswith("/config/problem.json")
+                ),
+                "",
+            )
             if native_anchor:
                 package_root = native_anchor[: -len("config/problem.json")]
                 solutions_total = sum(
@@ -80,10 +76,10 @@ def _export_archive_summary(
                     if name.startswith(f"{package_root}solutions/") and Path(name).suffix.lower() in {".cpp", ".cc", ".cxx", ".c", ".py", ".java", ".kt", ".go", ".rs", ".pas"}
                 )
                 tests_total = 0
-                tests_spec_name = f"{package_root}tests/spec.json"
-                if tests_spec_name in names:
+                manifest_name = f"{package_root}test_data/manifest.json"
+                if manifest_name in names:
                     try:
-                        tests_payload = json.loads(zf.read(tests_spec_name).decode("utf-8", errors="replace"))
+                        tests_payload = json.loads(zf.read(manifest_name).decode("utf-8", errors="replace"))
                         tests_total = len(cast(list[object], tests_payload.get("tests") or [])) if isinstance(tests_payload, dict) else 0
                     except Exception:
                         tests_total = 0
@@ -142,9 +138,7 @@ def _export_archive_summary(
     return result
 
 def _resolve_export_archive_path(
-    problem: str,
     problem_id: int,
-    workspace_id: int,
     export_id: str,
     filename: str,
 ) -> Path | None:
@@ -153,9 +147,7 @@ def _resolve_export_archive_path(
         return None
     return config.export_service.export_archive_path(
         problem_id,
-        workspace_id,
         export_id,
-        problem,
         archive_name,
     )
 
@@ -165,44 +157,46 @@ def export_page(request: Request, problem: str, user: Annotated[str, Depends(req
         user,
         contest_workspace=contest_workspace_context_from_request(request),
     )
-    workspace_id = ctx['workspace']['id']
     problem_id = int(ctx['problem']['id'])
     actor_user_id = int(ctx["user"]["id"])
-    head_commit = ctx["workspace"].get("head_commit")
-    if head_commit is None:
+    try:
+        published_revision = config.problem_package_service.published_revision(problem_id)
+        head_commit = published_revision.source_commit
+        generate_revision: int | None = published_revision.revision_number
+    except (OSError, RuntimeError, ValueError):
         head_commit = ""
-    workspace = Path(ctx['workspace']['path'])
-    generate_revision: int | None = git_commit_count(workspace, head_commit) if head_commit else None
+        generate_revision = None
     icpc_revision_display = f'v{generate_revision}' if generate_revision is not None and generate_revision >= 0 else 'missing'
     icpc_option_label = (
-        f'ICPC (committed revision {icpc_revision_display})'
+        f'ICPC (published revision {icpc_revision_display})'
         if head_commit
-        else 'ICPC (requires committed revision)'
+        else 'ICPC (requires published revision)'
     )
     native_option_label = (
-        f'Native (committed revision {icpc_revision_display})'
+        f'Native (published revision {icpc_revision_display})'
         if head_commit
-        else 'Native (requires committed revision)'
+        else 'Native (requires published revision)'
     )
-    job_rows = config.export_service.workspace_export_jobs(
+    job_rows = config.export_service.problem_export_jobs(
         problem_id,
-        int(workspace_id),
         actor_user_id,
         limit=40,
+        include_all=bool(ctx["access"]["can_manage"]),
     )
     revision_cache: dict[str, int | None] = {}
-    verification_meta_cache: dict[str, dict[str, object] | None] = {}
     archive_summary_cache: dict[tuple[str, str], dict[str, object]] = {}
     activity_rows: list[dict[str, object]] = []
     for row in job_rows:
         item = dict(row)
         source_commit = cast(str, item["source_commit"])
-        source_display = _source_revision_display(workspace, source_commit, revision_cache)
+        if source_commit not in revision_cache:
+            revision_cache[source_commit] = config.problem_package_service.revision_number(problem_id, source_commit)
+        revision_number = revision_cache[source_commit]
+        source_display = f"v{revision_number}" if revision_number is not None else "unavailable"
         stored_filename = Path(cast(str, item["filename"])).name if item["filename"] else ""
         export_id = cast(str, item["export_id"])
         status = cast(str, item["status"])
         error_text = cast(str, item["error"])
-        verification_id = cast(str, item["verification_id"])
         problem_slug = cast(str, ctx["problem"]["slug"])
         fallback_stem = Path(problem_slug).name
         if not fallback_stem:
@@ -214,40 +208,16 @@ def export_page(request: Request, problem: str, user: Annotated[str, Depends(req
             display_filename = stored_filename or f"{fallback_stem}-native-{source_display}.zip"
         else:
             display_filename = stored_filename or f"{fallback_stem}-{source_display}.zip"
-        verification_meta = verification_meta_cache.get(verification_id)
-        if verification_id and (verification_meta is None) and (verification_id not in verification_meta_cache):
-            verification_meta = config.verification_service.workspace_verification_detail(
-                int(problem_id),
-                int(workspace_id),
-                verification_id,
-            )
-            verification_meta_cache[verification_id] = verification_meta
-        runtime_progress = _verification_runtime_progress(
-            problem_id=problem_id,
-            problem_slug=problem_slug,
-            username=cast(str, ctx["user"]["username"]),
-            verification_id=verification_id,
-            event_status=status,
-        )
-        verification_href = _verification_href(
-            problem_id=problem_id,
-            problem_slug=problem_slug,
-            username=cast(str, ctx["user"]["username"]),
-            verification_id=verification_id,
-        )
         detail = error_text or status
-        open_href = verification_href
-        open_label = "open"
+        open_href = ""
+        open_label = ""
         if status == "succeeded" and export_id and stored_filename:
-            validation_status = build_validation_status(verification_meta)
-            summary_bits: list[str] = [validation_status]
+            summary_bits: list[str] = []
             summary_key = (export_id, stored_filename)
             archive_summary = archive_summary_cache.get(summary_key)
             if archive_summary is None:
                 archive_summary = _export_archive_summary(
-                    problem,
                     problem_id,
-                    int(workspace_id),
                     export_id,
                     stored_filename,
                 )
@@ -266,12 +236,6 @@ def export_page(request: Request, problem: str, user: Annotated[str, Depends(req
             open_label = "zip"
         elif status == "succeeded":
             detail = "artifact unavailable"
-        elif runtime_progress["detail"] and (
-            status == "running"
-            or not error_text
-            or error_text.startswith("verification failed:")
-        ):
-            detail = runtime_progress["detail"]
         activity_rows.append(
             {
                 "created_at": item["created_at"],
@@ -294,34 +258,32 @@ def export_page(request: Request, problem: str, user: Annotated[str, Depends(req
         },
     )
 
-def export_create(problem: str, user: Annotated[str, Depends(require_session_user)], verification_id: str=Form(''), export_type: str=Form('icpc')):
-    ctx = page_ctx(problem, user, include_branches=False, refresh_status=True, include_recent=False)
-    require_write_access(ctx)
-    _ = verification_id
+def export_create(problem: str, user: Annotated[str, Depends(require_session_user)], export_type: str=Form('icpc')):
+    user_ctx = global_user_ctx(user)
+    problem_row = config.contest_service.problem_by_slug(problem)
+    if problem_row is None:
+        return redirect_response(f'/problems/{problem}/export', status_code=303, message="problem not found")
+    problem_id = int(problem_row["id"])
+    actor_user_id = int(user_ctx["user"]["id"])
+    access = workspace_access_context(problem_id, actor_user_id)
+    if not bool(access["can_write"]):
+        return redirect_response(
+            f'/problems/{problem}/export',
+            status_code=303,
+            message=str(access["write_block_reason"]),
+        )
     requested_export_type = export_type.lower()
-    problem_id = int(ctx['problem']['id'])
-    workspace_id = int(ctx['workspace']['id'])
-    head_commit = cast(str | None, ctx["workspace"].get("head_commit"))
-    if head_commit is None:
-        head_commit = ""
     if not requested_export_type:
         requested_export_type = 'icpc'
-    source_commit = head_commit
-    export_verification_id = allocate_verification_id() if requested_export_type == "icpc" else ""
     export_job_id = f"exp-{uuid.uuid4().hex[:12]}"
     try:
         if requested_export_type not in {'icpc', 'native'}:
             raise ValueError('unsupported package type')
-        if not head_commit:
-            raise ValueError('no committed revision; commit changes first')
         started = start_export_job(
             problem,
             user,
-            actor_user_id=int(ctx['user']['id']),
+            actor_user_id=actor_user_id,
             problem_id=problem_id,
-            workspace_id=workspace_id,
-            source_commit=source_commit,
-            requested_verification_id=export_verification_id,
             requested_export_type=requested_export_type,
             export_job_id=export_job_id,
         )

@@ -7,12 +7,13 @@ graph LR
     Create[Create or import] --> Edit[Edit files]
     Edit --> Merge[Update from published revision]
     Merge --> Commit[Publish revision]
-    Commit --> Verify[Verification or run]
-    Verify --> Export[Export package]
+    Commit --> Materialize[Verify and materialize Native]
+    Materialize --> Export[Native or ICPC product]
+    Materialize --> Contest[Contest build]
     Edit --> Preview[Compile statement preview]
 ```
 
-A problem is created from scratch or imported from an external package. Users edit sources in separate workspaces, update from the published revision, publish the result, then run verification or export.
+A problem is created from scratch or imported from an external package. Users edit sources in separate workspaces and publish them. Export fixes the bare repository's current `main` commit, verifies it, and creates or reuses its Native materialization. ICPC and Contest outputs consume that immutable Native artifact.
 
 ## Git-Backed Source of Truth
 
@@ -35,7 +36,7 @@ graph LR
 - provisioning workspaces
 - workspace status (`head_commit`, `dirty`)
 - locking a workspace for mutation
-- creating execution snapshots for verification, preview, and export
+- creating execution snapshots for workspace verification and preview
 
 ## Problem Repository Layout
 
@@ -126,7 +127,8 @@ Current preview inputs can also reuse verification artifact refs for sample sync
 
 ## Statement Export
 
-Statement export walks every discovered language directory in the snapshot.
+Statement export walks every discovered language directory in the validated
+Native package for the published revision.
 
 Current naming rules:
 - statement language names are normalized to language codes (`english` -> `en`,

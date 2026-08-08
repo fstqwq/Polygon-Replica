@@ -64,11 +64,8 @@ def contest_problems_page(request: Request, contest: str, user: Annotated[str, D
 
 def contest_problems_add(contest: str, user: Annotated[str, Depends(require_session_user)], problem_slugs: list[str] = Form([]), q: str = Form("")):
     ctx = _contest_ctx(contest, user, "problems")
-    if not bool(ctx["access"].get("can_write")):
-        write_block_reason = ctx["access"].get("write_block_reason")
-        if not isinstance(write_block_reason, str) or not write_block_reason.strip():
-            raise RuntimeError("missing write_block_reason")
-        raise HTTPException(status_code=403, detail=write_block_reason)
+    if not bool(ctx["access"].get("can_manage")):
+        raise HTTPException(status_code=403, detail=ctx["access"]["manage_block_reason"])
     safe_slugs = _dedupe_preserve([form_text(item) for item in problem_slugs])
     if not safe_slugs:
         safe_query = q.strip()
@@ -89,8 +86,8 @@ def contest_problems_add(contest: str, user: Annotated[str, Depends(require_sess
             continue
         problem_id = int(problem_row["id"])
         problem_access = workspace_access_context(problem_id, user_id)
-        if not bool(problem_access.get("can_read")):
-            failed.append(f"{slug}: no access to problem")
+        if not bool(problem_access.get("can_manage")):
+            failed.append(f"{slug}: direct problem manage access required")
             continue
         if config.contest_service.contest_has_problem(contest_id, problem_id):
             failed.append(f"{slug}: already in contest")

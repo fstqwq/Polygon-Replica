@@ -2,7 +2,7 @@
 
 ## Overview
 
-Polygon-Replica uses SQLite with WAL journaling and incremental auto-vacuum. There is no ORM. Schema and in-place migrations live in `app/db.py`.
+Polygon-Replica uses SQLite with WAL journaling and incremental auto-vacuum. There is no ORM. The canonical schema lives in `app/db.py`.
 
 `DB` is a thin helper around raw SQL with:
 - `fetch_one`
@@ -34,9 +34,9 @@ erDiagram
     problems ||--o{ workspaces : has
     problems ||--o{ verifications : has
     problems ||--o{ previews : has
-    problems ||--o{ exports : has
+    problems ||--o{ problem_package_materializations : materializes
+    problem_package_materializations ||--o{ exports : derives
     problems ||--o{ export_jobs : requests
-    workspaces ||--o{ export_jobs : runs
     users ||--o{ export_jobs : starts
     exports ||--o{ export_jobs : completes
     verifications ||--o{ verification_tasks : contains
@@ -48,7 +48,7 @@ erDiagram
     contests ||--o{ contest_problems : includes
     contests ||--o{ contest_jobs : tracks
     contests ||--o{ contest_artifacts : stores
-    contests ||--o{ contest_properties : configures
+    contest_jobs ||--o{ contest_build_items : freezes
     contests ||--o{ contest_attachments : stores
 ```
 
@@ -96,6 +96,7 @@ Current columns:
 - `problem_id`
 - `workspace_id`
 - `signature`
+- `source_commit`
 - `kind`
 - `status`
 - `fail_reason`
@@ -116,7 +117,8 @@ Current columns:
 Important notes:
 - `kind` is durable and meaningful: `all`, `sample`, or `custom`
 - `signature` is the current durable identity for a verification row
-- there is no `source_commit` or `source_ref` on `verifications`
+- `source_commit` identifies the committed source used by published-revision
+  verification; ordinary workspace verification may leave it empty
 
 #### `verification_tasks`
 
@@ -193,30 +195,39 @@ Current columns:
 Current columns:
 - `id`
 - `problem_id`
-- `verification_id`
-- `workspace_id`
+- `materialization_id`
 - `export_type`
+- `options_hash`
 - `filename`
+- `archive_rel_path`
 - `sha256`
 - `size_bytes`
 - `source_commit`
 - `created_at`
 
-The database records export metadata. The archive bytes stay on the filesystem.
+The database records derived export metadata. Each export is derived from one
+Native materialization and never reads a workspace or verification artifact.
+
+#### `problem_package_materializations`
+
+One row records the complete Native artifact for a unique
+`(problem_id, source_commit)`. It stores the Git revision number, source digest,
+archive path/hash/size, verification provenance, and availability state.
+`problem_package_builds` records the single materialization attempt for that
+same published revision.
 
 #### `export_jobs`
 
-`export_jobs` is the sole lifecycle model for package generation. Its status is
-one of `queued`, `running`, `succeeded`, or `failed`. A succeeded job points
-directly to its `exports` row through nullable `export_id`; deleting an export
-sets that link to `NULL`. Agent status/download and the Export Activity UI query
-this table and never reconstruct lifecycle state from audit records.
+`export_jobs` is the sole user-visible lifecycle model for package generation.
+Its status is one of `queued`, `running`, `succeeded`, or `failed`. A succeeded
+job points to its Native materialization and directly to its `exports` row
+through nullable `export_id`; deleting an export sets that link to `NULL`.
+Agent status/download and the Export Activity UI query this table and never
+reconstruct lifecycle state from audit records.
 
-Successful products are not deduplicated by filename or source commit. Jobs and
-their products remain available until the administrator runs artifact cleanup.
-
-Old `exports` rows are intentionally not backfilled. They remain stored until
-the first administrator cleanup but do not appear in the new Activity list.
+Successful products are shared by problem readers and deduplicated by Native
+materialization, export type, and canonical options. Jobs and their products
+remain available until the administrator runs artifact cleanup.
 
 ### Contests
 
@@ -227,7 +238,8 @@ the first administrator cleanup but do not appear in the new Activity list.
 | `contest_problems` | contest roster |
 | `contest_jobs` | async contest jobs |
 | `contest_artifacts` | contest file metadata |
-| `contest_properties` | contest config |
+| typed columns on `contests` | status, source generation, location, date, and statement language |
+| `contest_build_items` | frozen roster labels and Native revision inputs |
 | `contest_attachments` | uploaded contest assets |
 
 ### System
@@ -259,14 +271,8 @@ A finished verification writes structured result data to two places:
 - JSON payloads are stored as `TEXT` and parsed in application code.
 - SQL access is explicit. Domain stores in `app/service/disk/` are thin wrappers around raw queries.
 
-## Migrations
+## Schema compatibility
 
-Schema migration is in-place inside `app/db.py`.
-
-Current examples:
-- `previews`: remove old path-based fields and preserve `summary_json`
-- `contest_artifacts`: remove old `artifact_path`
-- `verification_tasks`: remove old bundle refs and keep direct structured fields
-- `verification_artifact_refs`: keep input/answer refs in SQLite instead of verification metadata files
-
-There is no external migration framework.
+`app/db.py` defines one canonical schema. Startup validates existing tables and
+fails when their shape differs; this codebase does not carry compatibility or
+backfill paths for removed data models.

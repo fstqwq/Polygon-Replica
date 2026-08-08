@@ -21,8 +21,6 @@ from tests.ui_support import (
     contest_access_grant,
     contest_access_page,
     contest_access_revoke,
-    contest_access_sync_all,
-    contest_access_sync_user,
     contest_overview_page,
     contest_packages_page,
     contest_problems_add,
@@ -325,120 +323,42 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
         self.assertIsNotNone(problem_row)
         self.assertEqual(int(rows[0]["problem_id"]), int(problem_row["id"]))
 
-    def test_contest_access_grant_reminds_to_sync_problem_access(self) -> None:
-        contest_slug = f"ui-contest-access-remind-{uuid.uuid4().hex[:8]}"
-        contest_id = self._create_contest(contest_slug, "Access Reminder Contest")
-        problem_slug = f"alice/ui-access-remind-{uuid.uuid4().hex[:8]}"
+    def test_contest_membership_grants_dynamic_problem_access_without_sync(self) -> None:
+        contest_slug = f"ui-contest-dynamic-access-{uuid.uuid4().hex[:8]}"
+        contest_id = self._create_contest(contest_slug, "Dynamic Access Contest")
+        problem_slug = f"alice/ui-dynamic-access-{uuid.uuid4().hex[:8]}"
         workspace_service.ensure_problem(problem_slug)
         workspace_service.grant_repo_access(problem_slug, "alice", "owner")
         alice_row = db_fetch_one("SELECT id FROM users WHERE username='alice'")
         problem_row = db_fetch_one("SELECT id FROM problems WHERE slug=?", [problem_slug])
         self.assertIsNotNone(alice_row)
         self.assertIsNotNone(problem_row)
-        config.contest_service.add_problem(contest_id, "A", int(problem_row["id"]), int(alice_row["id"]))
-        self.assertEqual(_register_with_password_envelope("bob", "StrongPass123", next_path="/").status_code, 303)
-        db_execute("UPDATE users SET is_system_admin=0 WHERE username=?", ["bob"])
-        workspace_service.clear_identity_caches()
-
-        grant = contest_access_grant(contest=contest_slug, user="alice", target_user="bob", role="write")
-        self.assertEqual(grant.status_code, 303)
-        grant_messages = _flash_messages_from_response(grant)
-        self.assertTrue(grant_messages)
-        self.assertIn("reminder:", grant_messages[0].lower())
-        self.assertIn("sync 1 writable contest problem", grant_messages[0].lower())
-
-    def test_contest_access_sync_user_applies_contest_role_to_writable_problems(self) -> None:
-        contest_slug = f"ui-contest-access-sync-user-{uuid.uuid4().hex[:8]}"
-        contest_id = self._create_contest(contest_slug, "Access Sync User Contest")
-        problem_a = f"alice/ui-access-sync-a-{uuid.uuid4().hex[:8]}"
-        problem_b = f"alice/ui-access-sync-b-{uuid.uuid4().hex[:8]}"
-        workspace_service.ensure_problem(problem_a)
-        workspace_service.ensure_problem(problem_b)
-        workspace_service.grant_repo_access(problem_a, "alice", "owner")
-        workspace_service.grant_repo_access(problem_b, "alice", "owner")
-        alice_row = db_fetch_one("SELECT id FROM users WHERE username='alice'")
-        row_a = db_fetch_one("SELECT id FROM problems WHERE slug=?", [problem_a])
-        row_b = db_fetch_one("SELECT id FROM problems WHERE slug=?", [problem_b])
-        self.assertIsNotNone(alice_row)
-        self.assertIsNotNone(row_a)
-        self.assertIsNotNone(row_b)
-        config.contest_service.add_problem(contest_id, "A", int(row_a["id"]), int(alice_row["id"]))
-        config.contest_service.add_problem(contest_id, "B", int(row_b["id"]), int(alice_row["id"]))
-        self.assertEqual(_register_with_password_envelope("bob", "StrongPass123", next_path="/").status_code, 303)
-        db_execute("UPDATE users SET is_system_admin=0 WHERE username=?", ["bob"])
-        workspace_service.clear_identity_caches()
-        self.assertEqual(contest_access_grant(contest=contest_slug, user="alice", target_user="bob", role="read").status_code, 303)
-
-        sync_resp = contest_access_sync_user(contest=contest_slug, user="alice", target_user="bob")
-        self.assertEqual(sync_resp.status_code, 303)
-        sync_messages = _flash_messages_from_response(sync_resp)
-        self.assertTrue(sync_messages)
-        self.assertIn("synced 2 problem access entry", sync_messages[0].lower())
-
-        acl_rows = db_fetch_all(
-            """
-            SELECT p.slug,a.role
-            FROM repo_acl a
-            JOIN problems p ON p.id=a.problem_id
-            WHERE a.user_id=(SELECT id FROM users WHERE username='bob')
-              AND p.slug IN (?, ?)
-            ORDER BY p.slug ASC
-            """,
-            [problem_a, problem_b],
-        )
-        self.assertEqual([(str(row["slug"]), str(row["role"])) for row in acl_rows], [(problem_a, "read"), (problem_b, "read")])
-
-    def test_contest_access_sync_all_applies_roles_for_all_members(self) -> None:
-        contest_slug = f"ui-contest-access-sync-all-{uuid.uuid4().hex[:8]}"
-        contest_id = self._create_contest(contest_slug, "Access Sync All Contest")
-        problem_a = f"alice/ui-access-sync-all-a-{uuid.uuid4().hex[:8]}"
-        problem_b = f"alice/ui-access-sync-all-b-{uuid.uuid4().hex[:8]}"
-        workspace_service.ensure_problem(problem_a)
-        workspace_service.ensure_problem(problem_b)
-        workspace_service.grant_repo_access(problem_a, "alice", "owner")
-        workspace_service.grant_repo_access(problem_b, "alice", "owner")
-        alice_row = db_fetch_one("SELECT id FROM users WHERE username='alice'")
-        row_a = db_fetch_one("SELECT id FROM problems WHERE slug=?", [problem_a])
-        row_b = db_fetch_one("SELECT id FROM problems WHERE slug=?", [problem_b])
-        self.assertIsNotNone(alice_row)
-        self.assertIsNotNone(row_a)
-        self.assertIsNotNone(row_b)
-        config.contest_service.add_problem(contest_id, "A", int(row_a["id"]), int(alice_row["id"]))
-        config.contest_service.add_problem(contest_id, "B", int(row_b["id"]), int(alice_row["id"]))
-        self.assertEqual(_register_with_password_envelope("bob", "StrongPass123", next_path="/").status_code, 303)
-        self.assertEqual(_register_with_password_envelope("carol", "StrongPass123", next_path="/").status_code, 303)
-        db_execute("UPDATE users SET is_system_admin=0 WHERE username IN (?, ?)", ["bob", "carol"])
-        workspace_service.clear_identity_caches()
-        self.assertEqual(contest_access_grant(contest=contest_slug, user="alice", target_user="bob", role="read").status_code, 303)
-        self.assertEqual(contest_access_grant(contest=contest_slug, user="alice", target_user="carol", role="write").status_code, 303)
-
-        sync_resp = contest_access_sync_all(contest=contest_slug, user="alice")
-        self.assertEqual(sync_resp.status_code, 303)
-        sync_messages = _flash_messages_from_response(sync_resp)
-        self.assertTrue(sync_messages)
-        self.assertIn("synced contest problem access for 2 member", sync_messages[0].lower())
-        self.assertIn("4 entry change", sync_messages[0].lower())
-
-        acl_rows = db_fetch_all(
-            """
-            SELECT u.username,p.slug,a.role
-            FROM repo_acl a
-            JOIN users u ON u.id=a.user_id
-            JOIN problems p ON p.id=a.problem_id
-            WHERE u.username IN ('bob', 'carol')
-              AND p.slug IN (?, ?)
-            ORDER BY u.username ASC, p.slug ASC
-            """,
-            [problem_a, problem_b],
-        )
+        problem_id = int(problem_row["id"])
+        config.contest_service.add_problem(contest_id, "A", problem_id, int(alice_row["id"]))
         self.assertEqual(
-            [(str(row["username"]), str(row["slug"]), str(row["role"])) for row in acl_rows],
-            [
-                ("bob", problem_a, "read"),
-                ("bob", problem_b, "read"),
-                ("carol", problem_a, "write"),
-                ("carol", problem_b, "write"),
-            ],
+            _register_with_password_envelope("bob", "StrongPass123", next_path="/").status_code,
+            303,
+        )
+        db_execute("UPDATE users SET is_system_admin=0 WHERE username=?", ["bob"])
+        workspace_service.clear_identity_caches()
+
+        grant = contest_access_grant(
+            contest=contest_slug,
+            user="alice",
+            target_user="bob",
+            role="write",
+        )
+        self.assertEqual(grant.status_code, 303)
+        self.assertIn("effective immediately", _flash_messages_from_response(grant)[0].lower())
+        bob = db_fetch_one("SELECT id FROM users WHERE username='bob'")
+        self.assertIsNotNone(bob)
+        self.assertTrue(workspace_service.access_context(problem_id, int(bob["id"]))["can_write"])
+        self.assertEqual(
+            db_fetch_all(
+                "SELECT role FROM repo_acl WHERE problem_id=? AND user_id=?",
+                [problem_id, int(bob["id"])],
+            ),
+            [],
         )
 
     def test_contest_properties_access_and_packages_pages(self) -> None:
@@ -576,8 +496,9 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
         running_job_id = f"cj-{uuid.uuid4().hex[:10]}"
         db_execute(
             """
-            INSERT INTO contest_jobs(id,contest_id,actor_user_id,job_type,status,created_at,finished_at)
-            VALUES(?,?,?,?,?,?,?)
+            INSERT INTO contest_jobs(
+                id,contest_id,actor_user_id,job_type,status,source_generation,created_at,finished_at
+            ) VALUES(?,?,?,?,?,1,?,?)
             """,
             [
                 running_job_id,
@@ -614,8 +535,9 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
         change_job_id = f"cj-{uuid.uuid4().hex[:10]}"
         db_execute(
             """
-            INSERT INTO contest_jobs(id,contest_id,actor_user_id,job_type,status,created_at,finished_at)
-            VALUES(?,?,?,?,?,?,?)
+            INSERT INTO contest_jobs(
+                id,contest_id,actor_user_id,job_type,status,source_generation,created_at,finished_at
+            ) VALUES(?,?,?,?,?,1,?,?)
             """,
             [
                 change_job_id,

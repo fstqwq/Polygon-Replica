@@ -189,9 +189,12 @@ class ArtifactCleanupService:
 
     _ARTIFACT_TABLES = (
         "previews",
+        "contest_build_items",
+        "contest_artifacts",
         "export_jobs",
         "exports",
-        "contest_artifacts",
+        "problem_package_builds",
+        "problem_package_materializations",
         "contest_jobs",
         "verification_artifact_refs",
         "verification_selected_tests",

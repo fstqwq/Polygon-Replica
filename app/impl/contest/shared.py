@@ -13,10 +13,8 @@ from app.impl.auth.shared import redirect_response
 from app.impl.runtime.config import config
 from app.impl.contest.common import _contest_problem_slug_file_token
 from app.impl.workspace.context_operation import audit, normalize_contest_slug_required
-from app.impl.workspace.context_job import prepare_icpc_export_verification
 from app.impl.workspace.context import global_user_ctx
 from app.impl.workspace.access import workspace_access_context
-from app.service.repository.revision import workspace_revision_info
 from app.service.sandbox.base import ExecResult
 from app.service.statement.constant import DEFAULT_OLYMP_STY
 from app.service.statement.context import normalize_statement_language
@@ -32,6 +30,7 @@ _CONTEST_PROPERTY_LOCATION = "location"
 _CONTEST_PROPERTY_DATE = "date"
 _CONTEST_JOB_TYPE_PDF = "pdf"
 _CONTEST_JOB_TYPE_PACKAGE = "package"
+_CONTEST_JOB_TYPE_BUILD = "build"
 _CONTEST_EXTRACTBB_SUFFIXES = {".bmp", ".jpeg", ".jpg", ".pdf", ".png"}
 _CONTEST_LATEX_JOB_NAME = "statements"
 _CONTEST_LATEX_WRAPPER_NAME = "__contest_wrapper__.tex"
@@ -62,6 +61,7 @@ def _contest_nav(contest_slug: str, active: str) -> list[dict[str, str]]:
     return [
         {"key": "overview", "label": "Overview", "href": f"{base}/overview", "active": "1" if active == "overview" else "0"},
         {"key": "problems", "label": "Problems", "href": f"{base}/problems", "active": "1" if active == "problems" else "0"},
+        {"key": "readiness", "label": "Readiness", "href": f"{base}/readiness", "active": "1" if active == "readiness" else "0"},
         {"key": "properties", "label": "Properties", "href": f"{base}/properties", "active": "1" if active == "properties" else "0"},
         {"key": "access", "label": "Access", "href": f"{base}/access", "active": "1" if active == "access" else "0"},
         {
@@ -93,6 +93,11 @@ def _contest_ctx(contest_slug: str, user: str, active_page: str) -> dict:
             "slug": str(contest_row["slug"]),
             "title": str(contest_row["title"]),
             "owner_user_id": int(contest_row["owner_user_id"]),
+            "status": str(contest_row["status"]),
+            "source_generation": int(contest_row["source_generation"]),
+            "location": str(contest_row["location"]),
+            "date": str(contest_row["date"]),
+            "statement_default_language": str(contest_row["statement_default_language"]),
             "created_at": contest_row["created_at"],
         },
         "access": access,
@@ -102,34 +107,30 @@ def _contest_ctx(contest_slug: str, user: str, active_page: str) -> dict:
 
 
 def _contest_problem_rows(contest_id: int, username: str, user_id: int) -> list[dict[str, object]]:
+    del username
     rows = config.contest_service.contest_problems(int(contest_id))
+    access_by_problem = config.workspace_service.access_contexts(
+        [int(row["problem_id"]) for row in rows],
+        int(user_id),
+    )
     result: list[dict] = []
     for row in rows:
         problem_id = int(row["problem_id"])
         problem_slug = str(row["problem_slug"])
         slug_leaf = str(row["slug_leaf"])
-        problem_access = workspace_access_context(problem_id, int(user_id))
+        problem_access = access_by_problem[problem_id]
         can_problem_write = bool(problem_access.get("can_write"))
-        revision_display = "unavailable"
-        revision_warn = False
-        dirty = False
+        readiness = config.problem_package_service.readiness(problem_id)
+        published_revision = readiness["published_revision_number"]
+        revision_display = "unpublished" if published_revision is None else f"v{published_revision}"
+        revision_warn = not bool(readiness["current_is_materialized"])
         tl_ms = int(_C.GENERAL_CONFIG_DEFAULTS["time_limit_ms"])
         ml_mb = int(_C.GENERAL_CONFIG_DEFAULTS["memory_limit_mb"])
         mode = str(_C.GENERAL_CONFIG_DEFAULTS["mode"])
         if bool(problem_access.get("can_read")):
             try:
-                workspace = Path(config.workspace_service.ensure_workspace(problem_slug, username, refresh_status=True))
-                ws_ctx = config.workspace_service.workspace_context(problem_slug, username, include_recent=False)
-                branch_obj = ws_ctx["workspace"].get("branch")
-                branch = str(branch_obj).strip() if branch_obj is not None else ""
-                if not branch:
-                    branch = "main"
-                revision = workspace_revision_info(workspace, branch)
-                revision_display_obj = revision.get("display")
-                revision_display = str(revision_display_obj) if revision_display_obj is not None else "unknown"
-                revision_warn = bool(revision.get("highlight"))
-                dirty = bool(ws_ctx["workspace"].get("dirty"))
-                _payload, general_cfg, _cfg_path = read_problem_config(workspace)
+                revision = config.problem_package_service.published_revision(problem_id)
+                general_cfg = config.problem_package_service.published_config(revision)
                 tl_ms = coerce_int(
                     general_cfg.get("time_limit_ms"),
                     int(_C.GENERAL_CONFIG_DEFAULTS["time_limit_ms"]),
@@ -145,6 +146,7 @@ def _contest_problem_rows(contest_id: int, username: str, user_id: int) -> list[
                 mode = normalize_problem_mode(general_cfg.get("mode"), str(_C.GENERAL_CONFIG_DEFAULTS["mode"]))
             except Exception:
                 revision_display = "unavailable"
+                revision_warn = True
         else:
             revision_display = "no problem access"
             revision_warn = True
@@ -153,6 +155,7 @@ def _contest_problem_rows(contest_id: int, username: str, user_id: int) -> list[
                 "contest_problem_id": int(row["contest_problem_id"]),
                 "idx": str(row["idx"]),
                 "problem_id": problem_id,
+                "statement_folder": str(row["statement_folder"]),
                 "problem_slug": problem_slug,
                 "slug_leaf": slug_leaf,
                 "time_limit_ms": tl_ms,
@@ -160,7 +163,15 @@ def _contest_problem_rows(contest_id: int, username: str, user_id: int) -> list[
                 "mode": mode,
                 "revision_display": revision_display,
                 "revision_warn": revision_warn,
-                "dirty": dirty,
+                "dirty": False,
+                "published_commit": str(readiness["published_commit"]),
+                "published_revision_number": published_revision,
+                "materialized_commit": str(readiness["materialized_commit"]),
+                "materialized_revision_number": readiness["materialized_revision_number"],
+                "materialization_id": str(readiness["materialization_id"]),
+                "current_is_materialized": bool(readiness["current_is_materialized"]),
+                "statement_languages": list(readiness["statement_languages"]),
+                "readiness_reason": str(readiness["missing_reason"]),
                 "can_problem_write": can_problem_write,
                 "created_at": row["created_at"],
             }
@@ -577,43 +588,29 @@ def _contest_tex_env(compile_root: Path) -> dict[str, str]:
 
 def _copy_contest_statement_language_tree(
     *,
-    contest_id: int,
-    contest_slug: str,
+    source_snapshot: Path,
     language: str,
     compile_root: Path,
-    problem_entries: list[dict[str, object]],
-    source_folder_map: dict[int, str],
 ) -> Path:
-    prefix = f"statements/{language}/"
-    copied = 0
-    for row in config.contest_service.statement_attachment_rows(contest_id):
-        rel_path = str(row["rel_path"] or "").strip()
-        if not rel_path.startswith(prefix):
-            continue
-        source_path = config.contest_service.statement_file_path(contest_slug, rel_path)
-        if source_path.is_symlink() or (not source_path.exists()) or (not source_path.is_file()):
-            raise RuntimeError(f"contest statement source missing: {rel_path}")
-        target_path = _contest_compile_target(compile_root, *Path(rel_path).parts)
-        target_path.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(source_path, target_path)
-        copied += 1
+    language_root = source_snapshot / "statements" / language
+    if language_root.exists():
+        for source_path in language_root.rglob("*"):
+            if source_path.is_symlink():
+                raise RuntimeError(f"contest statement source is a symlink: {source_path}")
+            if source_path.is_dir():
+                continue
+            if not source_path.is_file():
+                raise RuntimeError(f"contest statement source is not regular: {source_path}")
+            rel_path = source_path.relative_to(source_snapshot)
+            target_path = _contest_compile_target(compile_root, *rel_path.parts)
+            target_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source_path, target_path)
     statements_root = _contest_compile_target(compile_root, "statements", language)
     statements_root.mkdir(parents=True, exist_ok=True)
     olymp_sty = statements_root / "olymp.sty"
     if olymp_sty.is_symlink() or (not olymp_sty.exists()):
         (statements_root / "olymp.sty").write_text(DEFAULT_OLYMP_STY, encoding="utf-8")
     statements_tex = statements_root / "statements.tex"
-    if statements_tex.is_symlink() or (not statements_tex.exists()):
-        (statements_root / "statements.tex").write_text(
-            contest_default_statements_tex(
-                contest_id=contest_id,
-                contest_slug=contest_slug,
-                language=language,
-                problem_entries=problem_entries,
-                source_folder_map=source_folder_map,
-            ),
-            encoding="utf-8",
-        )
     if statements_tex.is_symlink() or (not statements_tex.exists()) or (not statements_tex.is_file()):
         raise RuntimeError(f"contest statements.tex missing for language: {language}")
     _ensure_contest_statements_tex_cjk_support(statements_tex)
@@ -623,13 +620,12 @@ def _copy_contest_statement_language_tree(
 def _prepare_contest_pdf_problem(
     *,
     compile_root: Path,
-    actor_user_id: int,
-    actor_username: str,
     problem_id: int,
     problem_slug: str,
     idx: str,
     source_folder: str,
     language: str,
+    materialization_id: str,
 ) -> dict[str, object]:
     item: dict[str, object] = {
         "idx": idx,
@@ -643,59 +639,31 @@ def _prepare_contest_pdf_problem(
     if not source_folder:
         item["error"] = f"contest source folder missing for {problem_slug}"
         return item
-    access = workspace_access_context(problem_id, actor_user_id)
-    if not bool(access.get("can_read")):
-        item["error"] = "read access to problem is required"
-        return item
-    snapshot_root: Path | None = None
     try:
-        workspace = Path(config.workspace_service.ensure_workspace(problem_slug, actor_username, refresh_status=True))
-        ws_ctx = config.workspace_service.workspace_context(problem_slug, actor_username, include_recent=False)
-        head_obj = ws_ctx["workspace"].get("head_commit")
-        head_commit = str(head_obj).strip() if head_obj is not None else ""
-        if not head_commit:
-            raise RuntimeError("no committed revision")
-        snapshot_root = config.workspace_service.create_snapshot(
-            workspace,
-            head_commit,
-            workspace_head=head_commit,
-            workspace_dirty=False,
-        )
-        try:
-            sample_sync = config.preview_service.sync_sample_payloads_for_snapshot(
-                problem_slug,
-                actor_username,
-                snapshot_root,
+        with config.problem_package_service.open_reader(materialization_id) as native:
+            target_dir = _contest_compile_target(
+                compile_root,
+                "problems",
+                source_folder,
+                "statements",
+                language,
             )
-            if int(sample_sync.get("sample_count", 0)) > 0:
-                item["sample_sync"] = sample_sync
-        except Exception as exc:
-            item["warning"] = f"sample sync skipped: {exc}"
-        target_dir = _contest_compile_target(
-            compile_root,
-            "problems",
-            source_folder,
-            "statements",
-            language,
-        )
-        render_statement_problem_assets_for_language(
-            snapshot_root,
-            language,
-            target_dir,
-            problem_title=statement_title_from_snapshot(
-                snapshot_root,
-                fallback_title=problem_slug_leaf(problem_slug),
-                language=language,
-            ),
-        )
-        item["preamble_lines"] = _extract_latex_color_definition_lines(snapshot_root / "statement" / "olymp.sty")
-        item["source_commit"] = head_commit
-        item["status"] = "success"
+            render_statement_problem_assets_for_language(
+                native.root,
+                language,
+                target_dir,
+                problem_title=statement_title_from_snapshot(
+                    native.root,
+                    fallback_title=problem_slug_leaf(problem_slug),
+                    language=language,
+                ),
+            )
+            item["preamble_lines"] = _extract_latex_color_definition_lines(native.root / "statement" / "olymp.sty")
+            item["source_commit"] = native.manifest["source_commit"]
+            item["materialization_id"] = materialization_id
+            item["status"] = "success"
     except Exception as exc:
         item["error"] = str(exc)
-    finally:
-        if snapshot_root is not None:
-            shutil.rmtree(snapshot_root.parent, ignore_errors=True)
     return item
 
 
@@ -848,11 +816,11 @@ def _run_contest_pdf_job_worker(
     contest_id: int,
     contest_slug: str,
     actor_user_id: int,
-    actor_username: str,
     job_id: str,
     language: str,
     insert_blank_pages: bool,
-) -> None:
+    finalize: bool = True,
+) -> dict[str, object]:
     job_root = config.contest_service.job_root(contest_slug, job_id)
     compile_root = (job_root / "contest-pdf-src").resolve()
     if compile_root.exists():
@@ -861,15 +829,16 @@ def _run_contest_pdf_job_worker(
     contest_mounts = (compile_root,)
     contest_tex_env = _contest_tex_env(compile_root)
     log_path = job_root / "logs" / "contest-pdf.log"
-    source_folder_map = config.contest_service.statement_problem_source_folders(contest_id)
-    entries = config.contest_service.contest_problems(contest_id)
+    entries = config.contest_service.build_items(job_id)
+    source_folder_map = {
+        int(entry["problem_id"]): str(entry["statement_folder"])
+        for entry in entries
+        if str(entry["statement_folder"])
+    }
     statements_root = _copy_contest_statement_language_tree(
-        contest_id=contest_id,
-        contest_slug=contest_slug,
+        source_snapshot=config.contest_service.job_root(contest_slug, job_id) / "contest-sources",
         language=language,
         compile_root=compile_root,
-        problem_entries=[dict(entry) for entry in entries],
-        source_folder_map=source_folder_map,
     )
     if insert_blank_pages:
         statements_tex = statements_root / "statements.tex"
@@ -885,13 +854,12 @@ def _run_contest_pdf_job_worker(
         source_folder = _contest_problem_source_folder(dict(entry), source_folder_map)
         item = _prepare_contest_pdf_problem(
             compile_root=compile_root,
-            actor_user_id=actor_user_id,
-            actor_username=actor_username,
             problem_id=int(entry["problem_id"]),
             problem_slug=str(entry["problem_slug"]),
-            idx=str(entry["idx"]),
+            idx=str(entry["label"]),
             source_folder=source_folder,
             language=language,
+            materialization_id=str(entry["materialization_id"]),
         )
         results.append(item)
     success_count = sum((1 for row in results if str(row.get("status")) == "success"))
@@ -910,7 +878,8 @@ def _run_contest_pdf_job_worker(
     if failed_count > 0:
         first_error = str(next((row.get("error") for row in results if str(row.get("status")) != "success"), "") or "").strip()
         summary["error"] = first_error or "problem preparation failed"
-        config.contest_service.update_job(contest_id, job_id, "failed", summary, finished=True)
+        if finalize:
+            config.contest_service.update_job(contest_id, job_id, "failed", summary, finished=True)
         audit(
             actor_user_id,
             None,
@@ -925,7 +894,7 @@ def _run_contest_pdf_job_worker(
                 "failed": failed_count,
             },
         )
-        return
+        return summary
     _hoist_contest_problem_preamble_commands(
         compile_root=compile_root,
         statements_root=statements_root,
@@ -951,12 +920,14 @@ def _run_contest_pdf_job_worker(
             )
             if proc.timed_out:
                 summary["error"] = f"mpost timeout for {row['problem_slug']}: {mp_file.name}"
-                config.contest_service.update_job(contest_id, job_id, "failed", summary, finished=True)
-                return
+                if finalize:
+                    config.contest_service.update_job(contest_id, job_id, "failed", summary, finished=True)
+                return summary
             if int(proc.returncode or 0) != 0:
                 summary["error"] = f"mpost failed for {row['problem_slug']}: {mp_file.name}"
-                config.contest_service.update_job(contest_id, job_id, "failed", summary, finished=True)
-                return
+                if finalize:
+                    config.contest_service.update_job(contest_id, job_id, "failed", summary, finished=True)
+                return summary
     extractbb_error = _prepare_contest_graphics_bounding_boxes(
         compile_root,
         log_path,
@@ -965,8 +936,9 @@ def _run_contest_pdf_job_worker(
     )
     if extractbb_error:
         summary["error"] = extractbb_error
-        config.contest_service.update_job(contest_id, job_id, "failed", summary, finished=True)
-        return
+        if finalize:
+            config.contest_service.update_job(contest_id, job_id, "failed", summary, finished=True)
+        return summary
     latex_wrapper = _write_contest_latex_wrapper(statements_root)
     final_output = ""
     for command, title in (
@@ -1007,18 +979,21 @@ def _run_contest_pdf_job_worker(
         ).strip()
         if proc.timed_out:
             summary["error"] = f"{title} timeout"
-            config.contest_service.update_job(contest_id, job_id, "failed", summary, finished=True)
-            return
+            if finalize:
+                config.contest_service.update_job(contest_id, job_id, "failed", summary, finished=True)
+            return summary
         if int(proc.returncode or 0) != 0:
             error_text = _contest_latex_compile_error_detail(final_output, proc.returncode)
             summary["error"] = error_text or f"{title} failed"
-            config.contest_service.update_job(contest_id, job_id, "failed", summary, finished=True)
-            return
+            if finalize:
+                config.contest_service.update_job(contest_id, job_id, "failed", summary, finished=True)
+            return summary
     generated_pdf = statements_root / "statements.pdf"
     if generated_pdf.is_symlink() or (not generated_pdf.exists()) or (not generated_pdf.is_file()):
         summary["error"] = "contest pdf missing after compile"
-        config.contest_service.update_job(contest_id, job_id, "failed", summary, finished=True)
-        return
+        if finalize:
+            config.contest_service.update_job(contest_id, job_id, "failed", summary, finished=True)
+        return summary
     pdf_dir = job_root / "contest-pdf"
     pdf_dir.mkdir(parents=True, exist_ok=True)
     target_pdf = (pdf_dir / "statements.pdf").resolve()
@@ -1033,7 +1008,8 @@ def _run_contest_pdf_job_worker(
     summary["artifact_id"] = artifact_id
     summary["filename"] = target_pdf.name
     summary["pdf_file"] = "contest-pdf/statements.pdf"
-    config.contest_service.update_job(contest_id, job_id, "ok", summary, finished=True)
+    if finalize:
+        config.contest_service.update_job(contest_id, job_id, "ok", summary, finished=True)
     audit(
         actor_user_id,
         None,
@@ -1049,23 +1025,24 @@ def _run_contest_pdf_job_worker(
             "artifact_id": artifact_id,
         },
     )
+    return summary
 
 def _run_contest_package_job_worker(
     *,
     contest_id: int,
     contest_slug: str,
     actor_user_id: int,
-    actor_username: str,
     job_id: str,
-) -> None:
+    finalize: bool = True,
+) -> dict[str, object]:
     job_root = config.contest_service.job_root(contest_slug, job_id)
     packages_dir = job_root / "packages"
     packages_dir.mkdir(parents=True, exist_ok=True)
-    entries = config.contest_service.contest_problem_entries(contest_id)
+    entries = config.contest_service.build_items(job_id)
     results: list[dict[str, object]] = []
     for entry in entries:
         problem_id = int(entry["problem_id"])
-        idx = str(entry["idx"] or "")
+        idx = str(entry["label"] or "")
         problem_slug = str(entry["problem_slug"] or "")
         item: dict[str, object] = {
             "idx": idx,
@@ -1073,47 +1050,21 @@ def _run_contest_package_job_worker(
             "problem_slug": problem_slug,
             "status": "failed",
             "source_commit": "",
-            "verification_id": "",
+            "materialization_id": str(entry["materialization_id"]),
             "package_file": "",
             "error": "",
         }
-        access = workspace_access_context(problem_id, actor_user_id)
-        if not bool(access.get("can_read")):
-            item["error"] = "read access to problem is required"
-            results.append(item)
-            continue
         try:
-            config.workspace_service.ensure_workspace(problem_slug, actor_username, refresh_status=True)
-            ws_ctx = config.workspace_service.workspace_context(problem_slug, actor_username, include_recent=False)
-            workspace_id = int(ws_ctx["workspace"]["id"])
-            head_commit_obj = ws_ctx["workspace"].get("head_commit")
-            head_commit = str(head_commit_obj).strip() if head_commit_obj is not None else ""
+            head_commit = str(entry["source_commit"])
             item["source_commit"] = head_commit
-            if not head_commit:
-                raise RuntimeError("no committed revision; commit changes first")
-            verification_id = prepare_icpc_export_verification(
+            export_id, export_path = config.export_service.create_export(
                 problem_slug,
-                actor_username,
-                actor_user_id=actor_user_id,
-                problem_id=problem_id,
-                workspace_id=workspace_id,
-                source_commit=head_commit,
-                requested_verification_id="",
-                ok_only=True,
+                "icpc",
+                materialization_id=str(entry["materialization_id"]),
+                domjudge_short_name=idx,
             )
-            if not verification_id:
-                raise RuntimeError("failed to resolve verification")
-            item["verification_id"] = verification_id
-            export_path = Path(
-                config.export_service.create_export(
-                    problem_slug,
-                    verification_id,
-                    "icpc",
-                    workspace_id=workspace_id,
-                    source_commit=head_commit,
-                    domjudge_short_name=idx,
-                )
-            ).resolve()
+            item["export_id"] = export_id
+            export_path = Path(export_path).resolve()
             if not export_path.exists() or not export_path.is_file() or export_path.is_symlink():
                 raise RuntimeError("package file missing")
             file_token = _contest_problem_slug_file_token(problem_slug)
@@ -1162,7 +1113,7 @@ def _run_contest_package_job_worker(
     )
     artifact_id = ""
     artifact_filename = ""
-    if success_count > 0:
+    if success_count > 0 and failed_count == 0:
         archive_path = _ensure_zip_bundle(job_root, f"{contest_slug}-packages-{job_id}", bundle_root)
         artifact_filename = archive_path.name
         artifact_id = config.contest_service.record_artifact(
@@ -1174,13 +1125,14 @@ def _run_contest_package_job_worker(
         )
     summary["artifact_id"] = artifact_id
     summary["filename"] = artifact_filename
-    config.contest_service.update_job(
-        contest_id,
-        job_id,
-        "ok" if failed_count == 0 and success_count > 0 else "failed",
-        summary,
-        finished=True,
-    )
+    if finalize:
+        config.contest_service.update_job(
+            contest_id,
+            job_id,
+            "ok" if failed_count == 0 and success_count > 0 else "failed",
+            summary,
+            finished=True,
+        )
     audit(
         actor_user_id,
         None,
@@ -1195,81 +1147,229 @@ def _run_contest_package_job_worker(
             "artifact_id": artifact_id,
         },
     )
+    return summary
+
+
+def _freeze_contest_build_items(contest_id: int, job_id: str) -> list[str]:
+    items: list[dict[str, object]] = []
+    missing: list[str] = []
+    for entry in config.contest_service.contest_problems(contest_id):
+        problem_id = int(entry["problem_id"])
+        materialization = config.problem_package_service.latest_available_materialization(problem_id)
+        if materialization is None:
+            missing.append(str(entry["problem_slug"]))
+            continue
+        items.append(
+            {
+                "contest_problem_id": int(entry["contest_problem_id"]),
+                "position": int(entry["position"]),
+                "label": str(entry["idx"]),
+                "problem_id": problem_id,
+                "statement_folder": str(entry["statement_folder"]),
+                "source_commit": materialization["source_commit"],
+                "revision_number": materialization["revision_number"],
+                "materialization_id": materialization["id"],
+                "archive_sha256": materialization["archive_sha256"],
+            }
+        )
+    if not missing:
+        config.contest_service.freeze_build_items(job_id, items)
+    return missing
+
+
+def _snapshot_contest_sources(
+    *,
+    contest_id: int,
+    contest_slug: str,
+    job_id: str,
+    language: str,
+) -> None:
+    source = config.contest_service.contest_source_root(contest_slug)
+    target = config.contest_service.job_root(contest_slug, job_id) / "contest-sources"
+    shutil.rmtree(target, ignore_errors=True)
+    target.mkdir(parents=True, exist_ok=True)
+    for dirpath, dirnames, filenames in os.walk(source, topdown=True, followlinks=False):
+        parent = Path(dirpath)
+        rel_parent = parent.relative_to(source)
+        destination = target / rel_parent
+        destination.mkdir(parents=True, exist_ok=True)
+        dirnames[:] = sorted(dirnames)
+        for dirname in dirnames:
+            path = parent / dirname
+            if path.is_symlink() or not path.is_dir():
+                raise RuntimeError(f"contest source is not a regular directory: {path.relative_to(source)}")
+        for filename in sorted(filenames):
+            path = parent / filename
+            if path.is_symlink() or not path.is_file():
+                raise RuntimeError(f"contest source is not a regular file: {path.relative_to(source)}")
+            shutil.copy2(path, destination / filename)
+    if language:
+        statements_root = target / "statements" / language
+        statements_root.mkdir(parents=True, exist_ok=True)
+        statements_tex = statements_root / "statements.tex"
+        if not statements_tex.exists():
+            entries = config.contest_service.build_items(job_id)
+            source_folder_map = {
+                int(entry["problem_id"]): str(entry["statement_folder"])
+                for entry in entries
+                if str(entry["statement_folder"])
+            }
+            statements_tex.write_text(
+                contest_default_statements_tex(
+                    contest_id=contest_id,
+                    contest_slug=contest_slug,
+                    language=language,
+                    problem_entries=entries,
+                    source_folder_map=source_folder_map,
+                ),
+                encoding="utf-8",
+            )
 
 def _queue_contest_job(
     *,
     contest_id: int,
     contest_slug: str,
     actor_user_id: int,
-    actor_username: str,
-    job_type: str,
+    outputs: tuple[str, ...],
     language: str = "",
     insert_blank_pages: bool = False,
 ) -> tuple[str, bool, str]:
-    active_id = config.contest_service.running_job_id(contest_id, job_type)
+    unknown_outputs = set(outputs).difference({"statement_pdf", "icpc_bundle"})
+    if unknown_outputs:
+        raise ValueError(f"unsupported contest build output: {sorted(unknown_outputs)[0]}")
+    requested_outputs = tuple(
+        output for output in ("statement_pdf", "icpc_bundle") if output in set(outputs)
+    )
+    if not requested_outputs:
+        raise ValueError("select at least one contest build output")
+    active_id = config.contest_service.running_job_id(contest_id, _CONTEST_JOB_TYPE_BUILD)
     if active_id:
         return (active_id, False, "already_running")
     job_language = ""
-    if job_type == _CONTEST_JOB_TYPE_PDF:
+    if "statement_pdf" in requested_outputs:
         job_language = (
             normalize_statement_language(language)
             or _resolve_contest_statement_language(contest_id)
         )
     initial_summary = {
-        "job_type": str(job_type or "").strip(),
+        "job_type": _CONTEST_JOB_TYPE_BUILD,
         "contest_slug": str(contest_slug or "").strip(),
         "status": "running",
-        "results": [],
+        "requested_outputs": list(requested_outputs),
+        "outputs": {},
     }
     if job_language:
         initial_summary["language"] = job_language
     job_id = config.contest_service.create_job(
         contest_id,
         actor_user_id,
-        str(job_type or "").strip(),
+        _CONTEST_JOB_TYPE_BUILD,
         "running",
         initial_summary,
         finished_at=None,
     )
+    missing_materializations = _freeze_contest_build_items(contest_id, job_id)
+    if missing_materializations:
+        detail = ", ".join(missing_materializations[:10])
+        config.contest_service.update_job(
+            contest_id,
+            job_id,
+            "failed",
+            {
+                **initial_summary,
+                "error": f"Native materialization required; Export these problems first: {detail}",
+                "missing_materializations": missing_materializations,
+            },
+            finished=True,
+        )
+        return (job_id, False, "not_ready")
+    try:
+        _snapshot_contest_sources(
+            contest_id=contest_id,
+            contest_slug=contest_slug,
+            job_id=job_id,
+            language=job_language,
+        )
+    except Exception as exc:
+        config.contest_service.update_job(
+            contest_id,
+            job_id,
+            "failed",
+            {**initial_summary, "error": f"contest source snapshot failed: {exc}"},
+            finished=True,
+        )
+        return (job_id, False, "source_snapshot_failed")
 
     def _runner() -> None:
         try:
-            if job_type == _CONTEST_JOB_TYPE_PDF:
-                _run_contest_pdf_job_worker(
-                    contest_id=contest_id,
-                    contest_slug=contest_slug,
-                    actor_user_id=actor_user_id,
-                    actor_username=actor_username,
-                    job_id=job_id,
-                    language=job_language,
-                    insert_blank_pages=insert_blank_pages,
+            output_results: dict[str, dict[str, object]] = {}
+            for output in requested_outputs:
+                try:
+                    if output == "statement_pdf":
+                        output_results[output] = _run_contest_pdf_job_worker(
+                            contest_id=contest_id,
+                            contest_slug=contest_slug,
+                            actor_user_id=actor_user_id,
+                            job_id=job_id,
+                            language=job_language,
+                            insert_blank_pages=insert_blank_pages,
+                            finalize=False,
+                        )
+                    else:
+                        output_results[output] = _run_contest_package_job_worker(
+                            contest_id=contest_id,
+                            contest_slug=contest_slug,
+                            actor_user_id=actor_user_id,
+                            job_id=job_id,
+                            finalize=False,
+                        )
+                except Exception as exc:
+                    output_results[output] = {"error": str(exc), "artifact_id": ""}
+            successful = [
+                output
+                for output, summary in output_results.items()
+                if str(summary.get("artifact_id") or "") and not str(summary.get("error") or "")
+            ]
+            if len(successful) == len(requested_outputs):
+                status = "ok"
+            elif successful:
+                status = "partial"
+            else:
+                status = "failed"
+            final_summary: dict[str, object] = {
+                **initial_summary,
+                "status": status,
+                "outputs": output_results,
+                "successful_outputs": successful,
+            }
+            if status != "ok":
+                final_summary["error"] = "; ".join(
+                    f"{output}: {summary.get('error') or 'build failed'}"
+                    for output, summary in output_results.items()
+                    if output not in successful
                 )
-                return
-            if job_type == _CONTEST_JOB_TYPE_PACKAGE:
-                _run_contest_package_job_worker(
-                    contest_id=contest_id,
-                    contest_slug=contest_slug,
-                    actor_user_id=actor_user_id,
-                    actor_username=actor_username,
-                    job_id=job_id,
-                )
-                return
-            raise RuntimeError(f"unsupported contest job type: {job_type}")
+            config.contest_service.update_job(
+                contest_id,
+                job_id,
+                status,
+                final_summary,
+                finished=True,
+            )
         except Exception as exc:
             _finalize_contest_job_failure_if_running(
                 contest_id=contest_id,
                 job_id=job_id,
-                job_type=job_type,
+                job_type=_CONTEST_JOB_TYPE_BUILD,
                 error_text=str(exc),
             )
             raise
 
     _future, queued, submit_reason = config.worker_queue_service.submit(
-        name=f"contest-{job_type}-{contest_id}",
+        name=f"contest-build-{contest_id}",
         fn=_runner,
-        queue_name=f"contest-{job_type}",
-        dedupe_key=f"contest:{contest_id}:{job_type}",
-        job_type=f"contest-{job_type}",
+        queue_name="contest-build",
+        dedupe_key=f"contest:{contest_id}:build",
+        job_type="contest-build",
     )
     if not queued:
         config.contest_service.update_job(
@@ -1277,7 +1377,7 @@ def _queue_contest_job(
             job_id,
             "failed",
             {
-                "job_type": str(job_type or "").strip(),
+                "job_type": _CONTEST_JOB_TYPE_BUILD,
                 "contest_slug": str(contest_slug or "").strip(),
                 "error": f"queue rejected ({submit_reason})",
             },

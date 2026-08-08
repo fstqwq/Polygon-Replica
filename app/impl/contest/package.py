@@ -16,8 +16,6 @@ from app.service.statement.constant import DEFAULT_OLYMP_STY
 from app.service.statement.context import normalize_statement_language
 
 from app.impl.contest.shared import (
-    _CONTEST_JOB_TYPE_PACKAGE,
-    _CONTEST_JOB_TYPE_PDF,
     _contest_ctx,
     _contest_redirect,
     _queue_contest_job,
@@ -139,9 +137,10 @@ def _contest_statement_source_rows(contest_id: int, contest_slug: str, language:
     return sorted(rows, key=lambda item: str(item["display_path"]))
 
 
-def contest_packages_preview_start(
+def contest_packages_build_start(
     contest: str,
     user: Annotated[str, Depends(require_session_user)],
+    outputs: list[str] = Form([]),
     language: Annotated[str, Form()] = "",
     insert_blank_pages: Annotated[bool, Form()] = False,
 ):
@@ -149,6 +148,7 @@ def contest_packages_preview_start(
     if not bool(ctx["access"].get("can_write")):
         raise HTTPException(status_code=403, detail=ctx["access"]["write_block_reason"])
     contest_id = int(ctx["contest"]["id"])
+    requested_outputs = tuple(outputs or ["statement_pdf", "icpc_bundle"])
     current_language = _contest_statement_language(contest_id, language)
     if config.contest_service.problem_count(contest_id) <= 0:
         return _contest_redirect(str(ctx["contest"]["slug"]), "packages", message="add at least one problem first")
@@ -156,62 +156,16 @@ def contest_packages_preview_start(
         contest_id=contest_id,
         contest_slug=str(ctx["contest"]["slug"]),
         actor_user_id=int(ctx["user"]["id"]),
-        actor_username=str(ctx["user"]["username"]),
-        job_type=_CONTEST_JOB_TYPE_PDF,
+        outputs=requested_outputs,
         language=current_language,
         insert_blank_pages=insert_blank_pages,
     )
     if queued:
-        message = "contest pdf build queued"
+        message = "contest build queued"
     elif reason == "already_running":
-        message = f"contest pdf build already running ({job_id})"
+        message = f"contest build already running ({job_id})"
     else:
-        message = f"contest pdf build queue rejected ({reason})"
-    audit(
-        int(ctx["user"]["id"]),
-        None,
-        "contest.packages.pdf.start",
-        {
-            "contest_id": contest_id,
-            "contest_slug": str(ctx["contest"]["slug"]),
-            "job_id": job_id,
-            "language": current_language,
-            "queued": bool(queued),
-            "reason": reason,
-        },
-    )
-    return _contest_redirect(
-        str(ctx["contest"]["slug"]),
-        "packages",
-        query=_contest_packages_statement_query(
-            language=current_language,
-            job_id=job_id,
-        ),
-        fragment="job-report",
-        message=message,
-    )
-
-
-def contest_packages_build_start(contest: str, user: Annotated[str, Depends(require_session_user)]):
-    ctx = _contest_ctx(contest, user, "packages")
-    if not bool(ctx["access"].get("can_write")):
-        raise HTTPException(status_code=403, detail=ctx["access"]["write_block_reason"])
-    contest_id = int(ctx["contest"]["id"])
-    if config.contest_service.problem_count(contest_id) <= 0:
-        return _contest_redirect(str(ctx["contest"]["slug"]), "packages", message="add at least one problem first")
-    job_id, queued, reason = _queue_contest_job(
-        contest_id=contest_id,
-        contest_slug=str(ctx["contest"]["slug"]),
-        actor_user_id=int(ctx["user"]["id"]),
-        actor_username=str(ctx["user"]["username"]),
-        job_type=_CONTEST_JOB_TYPE_PACKAGE,
-    )
-    if queued:
-        message = "contest package build queued"
-    elif reason == "already_running":
-        message = f"contest package build already running ({job_id})"
-    else:
-        message = f"contest package build queue rejected ({reason})"
+        message = f"contest build queue rejected ({reason})"
     audit(
         int(ctx["user"]["id"]),
         None,
@@ -220,6 +174,8 @@ def contest_packages_build_start(contest: str, user: Annotated[str, Depends(requ
             "contest_id": contest_id,
             "contest_slug": str(ctx["contest"]["slug"]),
             "job_id": job_id,
+            "outputs": list(requested_outputs),
+            "language": current_language,
             "queued": bool(queued),
             "reason": reason,
         },
@@ -227,7 +183,7 @@ def contest_packages_build_start(contest: str, user: Annotated[str, Depends(requ
     return _contest_redirect(
         str(ctx["contest"]["slug"]),
         "packages",
-        query=f"job_id={quote_plus(job_id)}" if job_id else "",
+        query=_contest_packages_statement_query(language=current_language, job_id=job_id),
         fragment="job-report",
         message=message,
     )

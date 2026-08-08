@@ -227,25 +227,48 @@ class TestArtifactCleanup(unittest.TestCase):
         )
         self._execute(
             """
-            INSERT INTO exports(
-                id,problem_id,verification_id,workspace_id,export_type,
-                filename,sha256,size_bytes,source_commit,created_at
-            ) VALUES('export-cleanup',?,?,?,'native','package.zip','hash',10,'commit',?)
+            INSERT INTO problem_package_materializations(
+                id,problem_id,source_commit,revision_number,source_digest,
+                archive_rel_path,archive_sha256,archive_size_bytes,verification_id,
+                status,created_at,checked_at,unavailable_reason
+            ) VALUES('pm-cleanup',? ,?,1,?,'materializations/native.zip',?,10,
+                     'ver-cleanup','available',?,?,'')
             """,
-            (self.problem_id, "ver-cleanup", self.workspace_id, now),
+            (self.problem_id, "c" * 40, "d" * 64, "e" * 64, now, now),
+        )
+        self._execute(
+            """
+            INSERT INTO problem_package_builds(
+                id,problem_id,source_commit,verification_id,phase,status,
+                materialization_id,error,created_at,started_at,finished_at
+            ) VALUES('pb-cleanup',?,?,?,'complete','succeeded','pm-cleanup','',?,?,?)
+            """,
+            (self.problem_id, "c" * 40, "ver-cleanup", now, now, now),
+        )
+        self._execute(
+            """
+            INSERT INTO exports(
+                id,problem_id,materialization_id,export_type,options_hash,
+                filename,archive_rel_path,sha256,size_bytes,source_commit,created_at
+            ) VALUES('export-cleanup',?,'pm-cleanup','native',?,'package.zip',
+                     'materializations/native.zip',?,10,?,?)
+            """,
+            (self.problem_id, "0" * 64, "e" * 64, "c" * 40, now),
         )
         self._execute(
             """
             INSERT INTO export_jobs(
-                id,problem_id,workspace_id,actor_user_id,verification_id,
-                export_type,source_commit,status,export_id,error,created_at
-            ) VALUES('export-job-cleanup',?,?,?,'ver-cleanup','native','commit',
-                     'succeeded','export-cleanup','',?)
+                id,problem_id,actor_user_id,export_type,source_commit,status,
+                materialization_id,export_id,error,created_at,started_at,finished_at
+            ) VALUES('export-job-cleanup',?,?,'native',?,'succeeded',
+                     'pm-cleanup','export-cleanup','',?,?,?)
             """,
             (
                 self.problem_id,
-                self.workspace_id,
                 self.actor_user_id,
+                "c" * 40,
+                now,
+                now,
                 now,
             ),
         )
@@ -272,8 +295,8 @@ class TestArtifactCleanup(unittest.TestCase):
         self._execute(
             """
             INSERT INTO contest_problems(
-                contest_id,idx,problem_id,added_by_user_id,created_at
-            ) VALUES(?,'A',?,?,?)
+                contest_id,position,label,problem_id,statement_folder,added_by_user_id,created_at
+            ) VALUES(?,1,'A',?,'a',?,?)
             """,
             (
                 self.contest_id,
@@ -282,14 +305,12 @@ class TestArtifactCleanup(unittest.TestCase):
                 now,
             ),
         )
-        self._execute(
-            """
-            INSERT INTO contest_properties(
-                contest_id,key,value_json,updated_at,updated_by_user_id
-            ) VALUES(?,'duration','120',?,?)
-            """,
-            (self.contest_id, now, self.actor_user_id),
+        contest_problem = isolated_db_fetch_one(
+            self.db,
+            "SELECT id FROM contest_problems WHERE contest_id=? AND problem_id=?",
+            (self.contest_id, self.problem_id),
         )
+        self.assertIsNotNone(contest_problem)
         self._execute(
             """
             INSERT INTO contest_attachments(
@@ -301,10 +322,19 @@ class TestArtifactCleanup(unittest.TestCase):
         self._execute(
             """
             INSERT INTO contest_jobs(
-                id,contest_id,actor_user_id,job_type,status,created_at
-            ) VALUES('contest-job-cleanup',? ,?,'package','succeeded',?)
+                id,contest_id,actor_user_id,job_type,status,source_generation,created_at,finished_at
+            ) VALUES('contest-job-cleanup',? ,?,'build','ok',1,?,?)
             """,
-            (self.contest_id, self.actor_user_id, now),
+            (self.contest_id, self.actor_user_id, now, now),
+        )
+        self._execute(
+            """
+            INSERT INTO contest_build_items(
+                job_id,contest_problem_id,position,label,problem_id,statement_folder,
+                source_commit,revision_number,materialization_id,archive_sha256
+            ) VALUES('contest-job-cleanup',?,1,'A',?,'a',?,1,'pm-cleanup',?)
+            """,
+            (int(contest_problem["id"]), self.problem_id, "c" * 40, "e" * 64),
         )
         self._execute(
             """
@@ -403,6 +433,9 @@ class TestArtifactCleanup(unittest.TestCase):
             "previews",
             "export_jobs",
             "exports",
+            "problem_package_builds",
+            "problem_package_materializations",
+            "contest_build_items",
             "contest_artifacts",
             "contest_jobs",
             "verification_artifact_refs",
@@ -430,7 +463,6 @@ class TestArtifactCleanup(unittest.TestCase):
         self.assertEqual(self._count("contests"), 1)
         self.assertEqual(self._count("contest_members"), 1)
         self.assertEqual(self._count("contest_problems"), 1)
-        self.assertEqual(self._count("contest_properties"), 1)
         self.assertEqual(self._count("contest_attachments"), 1)
         system_config = isolated_db_fetch_one(
             self.db,

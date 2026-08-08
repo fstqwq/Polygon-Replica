@@ -98,10 +98,10 @@ cache. SQLite spans durable metadata and cleanup-safe job/result rows.
 
 | Backend | Purpose | Current role |
 |---------|---------|--------------|
-| SQLite | metadata | durable users/problems/workspaces/contests/config plus cleanup-safe verification, preview, export job/export, contest job/artifact, and audit rows |
+| SQLite | metadata | durable users/problems/workspaces/contests/config plus cleanup-safe verification, Native materialization/build, export job/export, contest build, and audit rows |
 | Git bare repos | source of truth | problem sources only |
 | Durable filesystem | non-Git source and backup | contest source attachments and operator-managed migration backups |
-| Generated filesystem | derived payloads | export archives, contest build products, and temporary workspace snapshot downloads |
+| Generated filesystem | derived payloads | Native materializations, ICPC archives, contest build products, and temporary workspace snapshot downloads |
 | Cache filesystem | startup-scoped derived/runtime payloads | preview PDFs, verification logs/artifacts, snapshots, JudgeFS/runtime blobs, judgehost workdirs, and worker cache |
 
 ## Current Filesystem Layout
@@ -144,6 +144,7 @@ workspace snapshot downloads. Every child is eligible for administrator cleanup.
 
 ```text
 <artifacts_root>/
+  materializations/<problem-id>/<source-commit>/native.zip
   exports/
   contests/
   snapshots/
@@ -196,3 +197,5 @@ This means cache-root data is operationally derived, not durable truth.
 
 Export jobs left queued/running by a process restart are marked failed rather
 than resumed.
+Native build rows are also marked failed and artifact staging is removed; a
+later Export can safely materialize the same Git revision again.

@@ -525,27 +525,18 @@ async def agent_verification_detail(request: Request, verification_id: str):
 
 
 async def agent_export_start(request: Request):
-    identity = require_agent_token(request, min_scope="readonly")
-    ctx = _agent_problem_ctx(identity)
+    identity = require_agent_token(request, min_scope="workspace")
     payload = await _read_json(request)
     export_type = str(payload.get("export_type") or "icpc").strip().lower() or "icpc"
-    verification_id = allocate_verification_id() if export_type == "icpc" else ""
-    workspace_head = str(ctx["workspace"].get("head_commit") or "")
     if export_type not in {"icpc", "native"}:
         return json_error_response("unsupported package type", status_code=400)
-    if not workspace_head:
-        return json_error_response("no committed revision; commit changes first", status_code=400)
-    source_commit = workspace_head
-    export_job_id = f"exp-api-{Path(verification_id).name}" if verification_id else f"exp-api-{allocate_run_id()}"
     try:
+        export_job_id = f"exp-api-{allocate_run_id()}"
         started = start_export_job(
             identity.problem_slug,
             identity.username,
             actor_user_id=int(identity.user_id),
             problem_id=int(identity.problem_id),
-            workspace_id=int(ctx["workspace"]["id"]),
-            source_commit=source_commit,
-            requested_verification_id=verification_id,
             requested_export_type=export_type,
             export_job_id=export_job_id,
         )
@@ -560,12 +551,14 @@ async def agent_export_start(request: Request):
 
 async def agent_export_status(request: Request, job_id: str):
     identity = require_agent_token(request, min_scope="readonly")
-    ctx = _agent_problem_ctx(identity)
+    access = config.workspace_service.access_context(
+        int(identity.problem_id), int(identity.user_id)
+    )
     job = config.export_service.export_job(
         int(identity.problem_id),
-        int(ctx["workspace"]["id"]),
         int(identity.user_id),
         job_id,
+        include_all=bool(access["can_manage"]),
     )
     if job is None:
         return json_error_response("export not found", status_code=404)
@@ -588,12 +581,14 @@ async def agent_export_status(request: Request, job_id: str):
 
 async def agent_export_download(request: Request, job_id: str):
     identity = require_agent_token(request, min_scope="readonly")
-    ctx = _agent_problem_ctx(identity)
+    access = config.workspace_service.access_context(
+        int(identity.problem_id), int(identity.user_id)
+    )
     job = config.export_service.export_job(
         int(identity.problem_id),
-        int(ctx["workspace"]["id"]),
         int(identity.user_id),
         job_id,
+        include_all=bool(access["can_manage"]),
     )
     if job is None or str(job.get("status") or "") != "succeeded":
         return json_error_response("export not ready", status_code=404)
@@ -603,9 +598,7 @@ async def agent_export_download(request: Request, job_id: str):
         return json_error_response("export not ready", status_code=404)
     archive_path = config.export_service.export_archive_path(
         int(identity.problem_id),
-        int(ctx["workspace"]["id"]),
         artifact_id,
-        identity.problem_slug,
         filename,
     )
     if archive_path is None:

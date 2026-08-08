@@ -211,10 +211,20 @@ class WorkspaceDiskStore:
         return row
 
     def repo_role(self, problem_id: int, user_id: int) -> str | None:
-        row = self.db.fetch_one("SELECT role FROM repo_acl WHERE problem_id=? AND user_id=?", [problem_id, user_id])
-        if row is None:
-            return None
-        return str(row["role"])
+        rows = self.db.fetch_all(
+            """
+            SELECT role FROM repo_acl WHERE problem_id=? AND user_id=?
+            UNION ALL
+            SELECT CASE WHEN cm.role IN ('owner','write') THEN 'write' ELSE 'read' END
+            FROM contest_problems cp
+            JOIN contest_members cm ON cm.contest_id=cp.contest_id
+            WHERE cp.problem_id=? AND cm.user_id=? AND cm.role IN ('owner','write','read')
+            """,
+            [problem_id, user_id, problem_id, user_id],
+        )
+        rank = {"read": 1, "write": 2, "owner": 3, "admin": 4}
+        roles = [str(row["role"]) for row in rows]
+        return max(roles, key=lambda role: rank.get(role, 0)) if roles else None
 
     def repo_roles(self, problem_ids: list[int], user_id: int) -> dict[int, str]:
         safe_problem_ids = sorted(
@@ -225,13 +235,27 @@ class WorkspaceDiskStore:
         placeholders = ",".join("?" for _problem_id in safe_problem_ids)
         rows = self.db.fetch_all(
             f"""
-            SELECT problem_id,role
-            FROM repo_acl
+            SELECT problem_id,role FROM repo_acl
             WHERE user_id=? AND problem_id IN ({placeholders})
+            UNION ALL
+            SELECT cp.problem_id,
+                   CASE WHEN cm.role IN ('owner','write') THEN 'write' ELSE 'read' END AS role
+            FROM contest_problems cp
+            JOIN contest_members cm ON cm.contest_id=cp.contest_id
+            WHERE cm.user_id=? AND cm.role IN ('owner','write','read')
+              AND cp.problem_id IN ({placeholders})
             """,
-            [int(user_id), *safe_problem_ids],
+            [int(user_id), *safe_problem_ids, int(user_id), *safe_problem_ids],
         )
-        return {int(row["problem_id"]): str(row["role"]) for row in rows}
+        rank = {"read": 1, "write": 2, "owner": 3, "admin": 4}
+        result: dict[int, str] = {}
+        for row in rows:
+            problem_id = int(row["problem_id"])
+            role = str(row["role"])
+            current = result.get(problem_id)
+            if current is None or rank.get(role, 0) > rank.get(current, 0):
+                result[problem_id] = role
+        return result
 
     def problem_owner_count(self, problem_id: int) -> int:
         row = self.db.fetch_one(
@@ -301,15 +325,22 @@ class WorkspaceDiskStore:
     def user_problem_slugs(self, user_id: int, *, limit: int) -> list[str]:
         rows = self.db.fetch_all(
             """
+            WITH accessible(problem_id) AS (
+                SELECT problem_id FROM repo_acl WHERE user_id=?
+                UNION
+                SELECT cp.problem_id
+                FROM contest_problems cp
+                JOIN contest_members cm ON cm.contest_id=cp.contest_id
+                WHERE cm.user_id=? AND cm.role IN ('owner','write','read')
+            )
             SELECT p.slug
-            FROM repo_acl a
+            FROM accessible a
             JOIN problems p ON p.id=a.problem_id
             LEFT JOIN workspaces w ON w.problem_id=p.id AND w.user_id=?
-            WHERE a.user_id=?
             ORDER BY COALESCE(NULLIF(w.updated_at, ''), p.created_at) DESC, p.slug ASC
             LIMIT ?
             """,
-            [user_id, user_id, max(1, int(limit))],
+            [user_id, user_id, user_id, max(1, int(limit))],
         )
         result: list[str] = []
         for row in rows:
@@ -356,15 +387,27 @@ class WorkspaceDiskStore:
     def user_problem_slugs_by_leaf(self, user_id: int, leaf: str, *, limit: int) -> list[str]:
         rows = self.db.fetch_all(
             """
+            WITH accessible(problem_id) AS (
+                SELECT problem_id FROM repo_acl WHERE user_id=?
+                UNION
+                SELECT cp.problem_id
+                FROM contest_problems cp
+                JOIN contest_members cm ON cm.contest_id=cp.contest_id
+                WHERE cm.user_id=? AND cm.role IN ('owner','write','read')
+            )
             SELECT p.slug
-            FROM repo_acl a
+            FROM accessible a
             JOIN problems p ON p.id=a.problem_id
-            WHERE a.user_id=?
-              AND p.slug LIKE ?
+            WHERE p.slug LIKE ?
             ORDER BY p.slug ASC
             LIMIT ?
             """,
-            [int(user_id), f"%/{str(leaf or '').strip()}", max(1, int(limit))],
+            [
+                int(user_id),
+                int(user_id),
+                f"%/{str(leaf or '').strip()}",
+                max(1, int(limit)),
+            ],
         )
         result: list[str] = []
         for row in rows:
@@ -376,19 +419,32 @@ class WorkspaceDiskStore:
     def user_problem_rows(self, user_id: int, *, limit: int) -> list[UserProblemRow]:
         rows = self.db.fetch_all(
             """
-            SELECT p.slug,a.role AS role,
+            WITH grants(problem_id,role_rank) AS (
+                SELECT problem_id,
+                       CASE role WHEN 'admin' THEN 4 WHEN 'owner' THEN 3 WHEN 'write' THEN 2 ELSE 1 END
+                FROM repo_acl WHERE user_id=?
+                UNION ALL
+                SELECT cp.problem_id,CASE WHEN cm.role IN ('owner','write') THEN 2 ELSE 1 END
+                FROM contest_problems cp
+                JOIN contest_members cm ON cm.contest_id=cp.contest_id
+                WHERE cm.user_id=? AND cm.role IN ('owner','write','read')
+            ), effective AS (
+                SELECT problem_id,MAX(role_rank) AS role_rank
+                FROM grants GROUP BY problem_id
+            )
+            SELECT p.slug,
+                   CASE e.role_rank WHEN 4 THEN 'admin' WHEN 3 THEN 'owner' WHEN 2 THEN 'write' ELSE 'read' END AS role,
                    w.id AS workspace_id,w.path,w.branch,w.head_commit,w.dirty,w.updated_at,
                    w.revision_local,w.revision_upstream,w.revision_missing,w.revision_highlight,
                    w.revision_upstream_higher,w.revision_ahead_count,w.revision_behind_count,
                    COALESCE(NULLIF(w.updated_at, ''), p.created_at) AS last_updated_at
-            FROM repo_acl a
-            JOIN problems p ON p.id=a.problem_id
+            FROM effective e
+            JOIN problems p ON p.id=e.problem_id
             LEFT JOIN workspaces w ON w.problem_id=p.id AND w.user_id=?
-            WHERE a.user_id=?
             ORDER BY last_updated_at DESC, p.slug ASC
             LIMIT ?
             """,
-            [int(user_id), int(user_id), max(1, int(limit))],
+            [int(user_id), int(user_id), int(user_id), max(1, int(limit))],
         )
         items: list[UserProblemRow] = []
         for row in rows:
@@ -464,7 +520,6 @@ class WorkspaceDiskStore:
                    MAX(
                        c.created_at,
                        COALESCE((SELECT MAX(cp0.created_at) FROM contest_problems cp0 WHERE cp0.contest_id=c.id), ''),
-                       COALESCE((SELECT MAX(pr.updated_at) FROM contest_properties pr WHERE pr.contest_id=c.id), ''),
                        COALESCE((SELECT MAX(cj.created_at) FROM contest_jobs cj WHERE cj.contest_id=c.id), ''),
                        COALESCE((
                            SELECT MAX(w2.updated_at)
@@ -742,11 +797,15 @@ class WorkspaceDiskStore:
                 SELECT 'verification' AS kind,id,status,created_at FROM verifications WHERE problem_id=?
                 UNION ALL
                 SELECT 'preview' AS kind,id,status,created_at FROM previews WHERE problem_id=?
+                UNION ALL
+                SELECT 'export' AS kind,id,status,created_at FROM export_jobs WHERE problem_id=?
+                UNION ALL
+                SELECT 'package-build' AS kind,id,status,created_at FROM problem_package_builds WHERE problem_id=?
             )
             ORDER BY created_at DESC
             LIMIT ?
             """,
-            [int(problem_id), int(problem_id), max(1, int(limit))],
+            [int(problem_id), int(problem_id), int(problem_id), int(problem_id), max(1, int(limit))],
         )
         items: list[dict[str, str]] = []
         for row in rows:
@@ -827,9 +886,12 @@ class WorkspaceDiskStore:
                     ):
                         if token and token not in collected_run_ids:
                             collected_run_ids.append(token)
+            conn.execute("DELETE FROM contest_build_items WHERE problem_id=?", [int(problem_id)])
             conn.execute("DELETE FROM contest_problems WHERE problem_id=?", [int(problem_id)])
             conn.execute("DELETE FROM export_jobs WHERE problem_id=?", [int(problem_id)])
             conn.execute("DELETE FROM exports WHERE problem_id=?", [int(problem_id)])
+            conn.execute("DELETE FROM problem_package_builds WHERE problem_id=?", [int(problem_id)])
+            conn.execute("DELETE FROM problem_package_materializations WHERE problem_id=?", [int(problem_id)])
             conn.execute("DELETE FROM previews WHERE problem_id=?", [int(problem_id)])
             conn.execute(
                 "DELETE FROM verification_artifact_refs WHERE verification_id IN (SELECT id FROM verifications WHERE problem_id=?)",

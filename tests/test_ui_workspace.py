@@ -1712,17 +1712,19 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         db_execute("UPDATE contests SET created_at=? WHERE id=?", ["2026-01-01T00:00:00+00:00", newer_contest_id])
         db_execute(
             """
-            INSERT OR REPLACE INTO contest_properties(contest_id,key,value_json,updated_at,updated_by_user_id)
-            VALUES(?,?,?,?,?)
+            INSERT INTO contest_jobs(
+                id,contest_id,actor_user_id,job_type,status,source_generation,created_at,finished_at
+            ) VALUES(?,?,?,?,?,1,?,?)
             """,
-            [newer_contest_id, "sort_probe", json.dumps({"v": 1}), "2026-01-01T00:00:05+00:00", alice_id],
+            ["cj-sort-new", newer_contest_id, alice_id, "build", "ok", "2026-01-01T00:00:05+00:00", "2026-01-01T00:00:05+00:00"],
         )
         db_execute(
             """
-            INSERT OR REPLACE INTO contest_properties(contest_id,key,value_json,updated_at,updated_by_user_id)
-            VALUES(?,?,?,?,?)
+            INSERT INTO contest_jobs(
+                id,contest_id,actor_user_id,job_type,status,source_generation,created_at,finished_at
+            ) VALUES(?,?,?,?,?,1,?,?)
             """,
-            [older_contest_id, "sort_probe", json.dumps({"v": 1}), "2026-01-01T00:00:01+00:00", alice_id],
+            ["cj-sort-old", older_contest_id, alice_id, "build", "ok", "2026-01-01T00:00:01+00:00", "2026-01-01T00:00:01+00:00"],
         )
 
         resp = contests_root_page(_request("/contests"), "alice")
@@ -1805,18 +1807,11 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         self.assertEqual(str(contest_row["title"] or ""), "Synthetic Contest")
         contest_id = int(contest_row["id"])
         default_language_row = db_fetch_one(
-            "SELECT value_json FROM contest_properties WHERE contest_id=? AND key='statement_default_language'",
+            "SELECT statement_default_language FROM contests WHERE id=?",
             [contest_id],
         )
         self.assertIsNotNone(default_language_row)
-        self.assertEqual(json.loads(str(default_language_row["value_json"])), "english")
-        source_folder_row = db_fetch_one(
-            "SELECT value_json FROM contest_properties WHERE contest_id=? AND key='statement_source_folders'",
-            [contest_id],
-        )
-        self.assertIsNotNone(source_folder_row)
-        source_folder_map = json.loads(str(source_folder_row["value_json"]))
-        self.assertIsInstance(source_folder_map, dict)
+        self.assertEqual(str(default_language_row["statement_default_language"]), "english")
         attachment_rows = db_fetch_all(
             "SELECT key,rel_path FROM contest_attachments WHERE contest_id=? ORDER BY key ASC",
             [contest_id],
@@ -1829,16 +1824,19 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         self.assertTrue((contest_source_root / "statements" / "english" / "olymp.sty").is_file())
         imported_rows = db_fetch_all(
             """
-            SELECT cp.idx,p.slug
+            SELECT cp.label AS idx,cp.statement_folder,p.slug
             FROM contest_problems cp
             JOIN problems p ON p.id=cp.problem_id
             WHERE cp.contest_id=?
-            ORDER BY cp.idx COLLATE NOCASE ASC
+            ORDER BY cp.position ASC
             """,
             [contest_id],
         )
         self.assertEqual(len(imported_rows), 4)
         self.assertEqual([str(row["idx"] or "") for row in imported_rows], ["A", "B", "C", "D"])
+        statement_folders = [str(row["statement_folder"] or "") for row in imported_rows]
+        self.assertTrue(all(statement_folders))
+        self.assertEqual(len(set(statement_folders)), 4)
         self.assertEqual(
             [str(row["slug"] or "").strip() for row in imported_rows],
             [

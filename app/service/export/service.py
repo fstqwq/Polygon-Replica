@@ -6,10 +6,10 @@ import json
 import os
 import re
 import shutil
+import threading
 import uuid
 import zipfile
-from pathlib import Path
-from typing import Callable
+from pathlib import Path, PurePosixPath
 
 from app.db import DB
 from app.service.disk.export_store import ExportJobRow, ExportStore
@@ -24,20 +24,19 @@ from app.service.export.icpc_package import (
     write_output_validator,
 )
 from app.service.platform.hashing import sha256_file
-from app.service.platform.runtime_blob_store import PayloadFile
-from app.service.platform.fs.op import extract_git_archive, remove_symlinks
-from app.service.problem.test_spec import dumps_tests_spec, load_tests_spec, payload_rel_path_for_test
+from app.service.platform.fs.op import remove_symlinks
+from app.service.problem.test_spec import dumps_tests_spec, load_tests_spec
 from app.service.problem.solution_metadata import infer_expected_behavior_from_name, normalize_expected_behavior, parse_solution_desc
 from app.service.statement.render import render_statement_main
 from app.service.statement.tex_compile import TexCompileService
 from app.service.statement.context import pick_statement_language, statement_languages
 from app.service.statement.title import statement_title_from_snapshot
-from app.service.platform.git_process import run_git
 from app.service.platform.workspace_path import (
     is_allowed_workspace_root_path,
     is_hidden_workspace_path,
     is_repository_answer_path,
 )
+from app.service.problem_package.service import NativePackageReader, ProblemPackageService
 
 
 class ExportService:
@@ -73,61 +72,91 @@ class ExportService:
         artifacts_root: Path,
         workspace_root: Path,
         tex_compile_service: TexCompileService,
-        artifact_file_resolver: Callable[[str], PayloadFile | None],
+        problem_package_service: ProblemPackageService,
     ):
         self.db = db
         self._store = ExportStore(db)
         self.artifacts_root = artifacts_root
         self.workspace_root = workspace_root
         self.tex_compile_service = tex_compile_service
-        self.artifact_file_resolver = artifact_file_resolver
+        self.problem_package_service = problem_package_service
+        self._conversion_locks_guard = threading.Lock()
+        self._conversion_locks: dict[tuple[str, str, str], threading.Lock] = {}
 
-    def latest_workspace_source_commit(self, problem_id: int, workspace_id: int) -> str:
-        return self._store.latest_workspace_source_commit(problem_id, workspace_id)
+    def _conversion_lock(
+        self,
+        materialization_id: str,
+        export_type: str,
+        domjudge_short_name: str | None,
+    ) -> threading.Lock:
+        key = (materialization_id, export_type, domjudge_short_name or "")
+        with self._conversion_locks_guard:
+            return self._conversion_locks.setdefault(key, threading.Lock())
 
-    def export_archive_path(self, problem_id: int, workspace_id: int, export_id: str, problem_slug: str, filename: str) -> Path | None:
-        row = self._store.export_archive_row(int(problem_id), int(workspace_id), export_id)
+    def latest_source_commit(self, problem_id: int) -> str:
+        return self._store.latest_source_commit(problem_id)
+
+    def export_archive_path(self, problem_id: int, export_id: str, filename: str) -> Path | None:
+        row = self._store.export_archive_row(int(problem_id), export_id)
         if row is None:
             return None
         stored_filename = Path(str(row["filename"] or "").strip()).name
         archive_name = Path(str(filename or "").strip()).name
         if not stored_filename or stored_filename != archive_name:
             return None
+        if str(row["export_type"]) == "native":
+            try:
+                _materialization, candidate = self.problem_package_service.native_archive(
+                    str(row["materialization_id"])
+                )
+            except ValueError:
+                return None
+            return candidate
         try:
-            candidate = self._export_path(problem_slug, export_id, archive_name).resolve()
-        except ValueError:
+            root = self.artifacts_root.resolve()
+            candidate = (root / Path(*PurePosixPath(str(row["archive_rel_path"])).parts)).resolve()
+            if root not in candidate.parents:
+                return None
+        except (ValueError, OSError):
             return None
-        if not candidate.exists() or not candidate.is_file() or candidate.is_symlink():
+        if (
+            not candidate.exists()
+            or not candidate.is_file()
+            or candidate.is_symlink()
+            or candidate.stat().st_size != row["size_bytes"]
+            or sha256_file(candidate) != row["sha256"]
+        ):
             return None
         return candidate
 
-    def workspace_export_jobs(
+    def problem_export_jobs(
         self,
         problem_id: int,
-        workspace_id: int,
         actor_user_id: int,
         *,
         limit: int,
+        include_all: bool = False,
     ) -> list[ExportJobRow]:
-        return self._store.workspace_export_jobs(
+        return self._store.problem_export_jobs(
             int(problem_id),
-            int(workspace_id),
             int(actor_user_id),
             limit=limit,
+            include_all=include_all,
         )
 
     def export_job(
         self,
         problem_id: int,
-        workspace_id: int,
         actor_user_id: int,
         job_id: str,
+        *,
+        include_all: bool = False,
     ) -> ExportJobRow | None:
         return self._store.export_job(
             int(problem_id),
-            int(workspace_id),
             int(actor_user_id),
             job_id,
+            include_all=include_all,
         )
 
     def create_export_job(
@@ -135,18 +164,14 @@ class ExportService:
         *,
         job_id: str,
         problem_id: int,
-        workspace_id: int,
         actor_user_id: int,
-        verification_id: str,
         export_type: str,
         source_commit: str,
     ) -> None:
         self._store.create_export_job(
             job_id=job_id,
             problem_id=int(problem_id),
-            workspace_id=int(workspace_id),
             actor_user_id=int(actor_user_id),
-            verification_id=verification_id,
             export_type=export_type,
             source_commit=source_commit,
         )
@@ -155,12 +180,10 @@ class ExportService:
         self,
         job_id: str,
         *,
-        verification_id: str,
         source_commit: str,
     ) -> None:
         self._store.mark_export_job_running(
             job_id,
-            verification_id=verification_id,
             source_commit=source_commit,
         )
 
@@ -168,12 +191,12 @@ class ExportService:
         self,
         job_id: str,
         *,
-        verification_id: str,
+        materialization_id: str,
         export_id: str,
     ) -> None:
         self._store.mark_export_job_succeeded(
             job_id,
-            verification_id=verification_id,
+            materialization_id=materialization_id,
             export_id=export_id,
         )
 
@@ -406,63 +429,6 @@ class ExportService:
                 return None
         return self._find_first_source(snapshot / "interactors")
 
-    def _problem_mode_and_pass_limit(self, snapshot: Path | None) -> tuple[str, int]:
-        if snapshot is None:
-            return ("pass-fail", 1)
-        cfg_path = snapshot / "config" / "problem.json"
-        if not cfg_path.exists():
-            return ("pass-fail", 1)
-        cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
-        mode = str(cfg.get("mode") or "").strip()
-        if mode not in {"pass-fail", "interactive"}:
-            raise ValueError("export requires canonical problem.json mode")
-        pass_limit_raw = cfg.get("pass_limit")
-        try:
-            pass_limit = int(pass_limit_raw)
-        except Exception as exc:
-            raise ValueError("export requires canonical problem.json pass_limit") from exc
-        if pass_limit < 1:
-            raise ValueError("export requires canonical positive pass_limit")
-        return (mode, pass_limit)
-
-    def _snapshot_source(
-        self,
-        workspace_id: int | None,
-        problem_slug: str,
-        source_commit: str | None,
-        tmp_root: Path,
-    ) -> Path:
-        workspace = self._workspace_path_for_export(workspace_id, problem_slug)
-        snapshot = tmp_root / "_source"
-        source_commit = str(source_commit or "").strip()
-        if source_commit:
-            resolved = run_git(
-                [
-                    "git",
-                    "-C",
-                    str(workspace),
-                    "rev-parse",
-                    "--verify",
-                    f"{source_commit}^{{commit}}",
-                ],
-                timeout=120,
-            )
-            commit_sha = resolved.stdout.strip()
-            if resolved.returncode != 0 or not commit_sha:
-                detail = (resolved.stderr or resolved.stdout).strip()
-                raise ValueError(
-                    detail or f"unable to snapshot export source commit {source_commit}"
-                )
-            try:
-                extract_git_archive(workspace, commit_sha, snapshot, timeout=120)
-                remove_symlinks(snapshot)
-                return snapshot
-            except Exception as exc:
-                shutil.rmtree(snapshot, ignore_errors=True)
-                raise ValueError(str(exc))
-
-        raise ValueError("export source snapshot requires non-empty source commit")
-
     def _copy_native_working_tree(self, src_dir: Path, dst_dir: Path, *, root_dir: Path) -> None:
         for child in src_dir.iterdir():
             rel = child.relative_to(root_dir)
@@ -490,14 +456,14 @@ class ExportService:
         tmp_root: Path,
     ) -> Path:
         """Copy the workspace tree to a temp snapshot using native-import path rules."""
-        workspace = self._workspace_path_for_export(workspace_id, problem_slug)
+        workspace = self._workspace_path_for_snapshot(workspace_id, problem_slug)
         snapshot = tmp_root / "_source"
         snapshot.mkdir(parents=True, exist_ok=True)
         self._copy_native_working_tree(workspace, snapshot, root_dir=workspace)
         remove_symlinks(snapshot)
         return snapshot
 
-    def _workspace_path_for_export(self, workspace_id: int | None, problem_slug: str) -> Path:
+    def _workspace_path_for_snapshot(self, workspace_id: int | None, problem_slug: str) -> Path:
         if workspace_id is None:
             raise ValueError("build workspace metadata missing")
         ws_row = self._store.workspace_export_context(int(workspace_id))
@@ -513,22 +479,6 @@ class ExportService:
         if not git_dir.exists() or not git_dir.is_dir():
             raise ValueError(f"workspace git metadata missing for export workspace {workspace_id}")
         return workspace
-
-    def _revision_number_for_commit(self, workspace: Path, source_commit: str) -> int | None:
-        commit = str(source_commit or "").strip()
-        if not commit:
-            return None
-        try:
-            proc = run_git(
-                ["git", "-C", str(workspace), "rev-list", "--count", commit],
-                timeout=120,
-            )
-            if proc.returncode != 0:
-                return None
-            value = int(str(proc.stdout or "").strip())
-            return value if value >= 0 else None
-        except Exception:
-            return None
 
     def _load_problem_config(self, snapshot: Path) -> dict:
         cfg_path = snapshot / "config" / "problem.json"
@@ -647,148 +597,6 @@ class ExportService:
             compiled_any = True
         return compiled_any
 
-    def _verification_artifact_ref_candidates(
-        self,
-        verification_id: str,
-        test_id: str,
-        ref_key: str,
-    ) -> list[str]:
-        safe_verification_id = str(verification_id or "").strip()
-        safe_test_id = str(test_id or "").strip()
-        safe_ref_key = str(ref_key or "").strip()
-        if safe_ref_key not in {"input_ref", "answer_ref"}:
-            raise ValueError(f"invalid verification artifact ref: {safe_ref_key}")
-        if not safe_verification_id or not safe_test_id:
-            return []
-        refs: list[str] = []
-        mapped_rows = self.db.fetch_all(
-            f"""
-            SELECT r.{safe_ref_key} AS artifact_ref
-            FROM verification_tests_meta m
-            JOIN verification_artifact_refs r
-              ON r.verification_id=m.verification_id
-             AND r.test_name=m.test_name
-            WHERE m.verification_id=? AND m.source_id=?
-            ORDER BY m.ordinal ASC
-            """,
-            [safe_verification_id, safe_test_id],
-        )
-        for row in mapped_rows:
-            artifact_ref = str(row["artifact_ref"] or "")
-            if artifact_ref and artifact_ref not in refs:
-                refs.append(artifact_ref)
-        direct_row = self.db.fetch_one(
-            f"""
-            SELECT {safe_ref_key}
-            FROM verification_artifact_refs
-            WHERE verification_id=? AND test_name=?
-            """,
-            [safe_verification_id, f"{safe_test_id}.in"],
-        )
-        if direct_row is not None:
-            artifact_ref = str(direct_row[safe_ref_key] or "")
-            if artifact_ref and artifact_ref not in refs:
-                refs.append(artifact_ref)
-        return refs
-
-    def _verification_file(self, verification_id: str, test_id: str, ref_key: str) -> PayloadFile | None:
-        for artifact_ref in self._verification_artifact_ref_candidates(verification_id, test_id, ref_key):
-            payload_file = self.artifact_file_resolver(artifact_ref)
-            if payload_file is not None:
-                return payload_file
-        return None
-
-    def _verification_input_file(self, verification_id: str, test_id: str) -> PayloadFile | None:
-        return self._verification_file(verification_id, test_id, "input_ref")
-
-    def _verification_answer_file(self, verification_id: str, test_id: str) -> PayloadFile | None:
-        return self._verification_file(verification_id, test_id, "answer_ref")
-
-    def _copy_workspace_payload_input(
-        self,
-        snapshot: Path,
-        test_id: str,
-        kind: str,
-        target: Path,
-    ) -> None:
-        source_rel = payload_rel_path_for_test(test_id, kind)
-        input_file = snapshot / source_rel
-        if not self._is_safe_regular_file(snapshot, input_file):
-            raise ValueError(f"export missing test input: {source_rel}")
-        shutil.copy2(input_file, target)
-
-    def _copy_required_test_input(
-        self,
-        snapshot: Path,
-        row: dict,
-        target: Path,
-        *,
-        verification_id: str,
-    ) -> None:
-        test_id = row["id"]
-        if row["kind"] == "manual":
-            self._copy_workspace_payload_input(snapshot, test_id, row["kind"], target)
-            return
-        input_file = self._verification_input_file(verification_id, test_id)
-        if input_file is None:
-            raise ValueError(f"export missing verification input artifact: {test_id}.in")
-        shutil.copy2(input_file.path, target)
-
-    def _copy_sample_input(
-        self,
-        snapshot: Path,
-        row: dict,
-        target: Path,
-        *,
-        verification_id: str,
-    ) -> None:
-        sample_input = row["sample_input"]
-        if sample_input:
-            target.write_text(sample_input, encoding="utf-8")
-            return
-        self._copy_required_test_input(snapshot, row, target, verification_id=verification_id)
-
-    def _copy_required_answer(
-        self,
-        snapshot: Path,
-        test_id: str,
-        target: Path,
-        *,
-        verification_id: str,
-    ) -> None:
-        answer_file = self._verification_answer_file(verification_id, test_id)
-        if answer_file is not None:
-            shutil.copy2(answer_file.path, target)
-            return
-        raise ValueError(f"export missing verification answer artifact: {test_id}.ans")
-
-    def _materialize_export_sample_display_payloads(
-        self,
-        snapshot: Path,
-        *,
-        verification_id: str,
-    ) -> None:
-        spec_path = snapshot / "tests" / "spec.json"
-        entries = load_tests_spec(spec_path)
-        changed = False
-        for row in entries:
-            if not bool(row["sample"]):
-                continue
-            if row["kind"] == "gen" and not row["sample_input"]:
-                input_file = self._verification_input_file(verification_id, row["id"])
-                if input_file is not None:
-                    row["sample_input"] = input_file.path.read_text(encoding="utf-8", errors="replace")
-                    changed = True
-            if row["sample_output"]:
-                continue
-            answer_file = self._verification_answer_file(verification_id, row["id"])
-            if answer_file is None:
-                continue
-            row["sample_output"] = answer_file.path.read_text(encoding="utf-8", errors="replace")
-            changed = True
-        if changed:
-            spec_path.write_text(dumps_tests_spec(entries), encoding="utf-8")
-
     @staticmethod
     def _keep_samples_out_of_domjudge_sample_data(mode: str, pass_limit: int) -> bool:
         try:
@@ -799,84 +607,39 @@ class ExportService:
 
     def _copy_secret_and_sample_data(
         self,
-        snapshot: Path,
+        native: NativePackageReader,
         package_root: Path,
         *,
-        verification_id: str,
         samples_as_secret: bool = False,
-        blank_secret_answers: bool = False,
     ) -> None:
         secret_dir = package_root / "data" / "secret"
         sample_dir = package_root / "data" / "sample"
         secret_dir.mkdir(parents=True, exist_ok=True)
         sample_dir.mkdir(parents=True, exist_ok=True)
-        entries = load_tests_spec(snapshot / "tests" / "spec.json")
-        if not entries:
-            raise ValueError("export requires tests/spec.json entries")
-        for row in entries:
+        for row in native.manifest["tests"]:
             test_id = row["id"]
-            if samples_as_secret or (not bool(row["sample"])):
-                self._copy_required_test_input(
-                    snapshot,
-                    row,
-                    secret_dir / f"{test_id}.in",
-                    verification_id=verification_id,
-                )
-                if blank_secret_answers:
-                    (secret_dir / f"{test_id}.ans").write_bytes(b"")
-                else:
-                    self._copy_required_answer(
-                        snapshot,
-                        test_id,
-                        secret_dir / f"{test_id}.ans",
-                        verification_id=verification_id,
-                    )
-                continue
-            self._copy_sample_input(
-                snapshot,
-                row,
-                sample_dir / f"{test_id}.in",
-                verification_id=verification_id,
-            )
-            sample_output = row["sample_output"]
-            if sample_output:
-                (sample_dir / f"{test_id}.ans").write_text(sample_output, encoding="utf-8")
-                continue
-            self._copy_required_answer(
-                snapshot,
-                test_id,
-                sample_dir / f"{test_id}.ans",
-                verification_id=verification_id,
-            )
-
-    def _rejected_solution_has_compile_error(
-        self,
-        *,
-        verification_id: str,
-        source_path: str,
-    ) -> bool:
-        if not verification_id:
-            return False
-        rows = self.db.fetch_all(
-            """
-            SELECT verdict,error_text
-            FROM verification_tasks
-            WHERE verification_id=? AND source_path=? AND expected_behavior='rejected'
-            """,
-            [verification_id, source_path],
-        )
-        return any(
-            str(row["verdict"] or "").upper() in {"CE", "COMPILE_ERROR", "COMPILE ERROR"}
-            or str(row["error_text"] or "").strip().lower() in {"ce", "compile_error", "compile error"}
-            for row in rows
-        )
+            destination = secret_dir if samples_as_secret or not row["sample"] else sample_dir
+            input_source = native.payload(row, "input")
+            if destination == sample_dir:
+                input_source = native.payload(row, "sample_input") or input_source
+            if input_source is None:
+                raise ValueError(f"Native test input is missing: {test_id}")
+            shutil.copy2(input_source, destination / f"{test_id}.in")
+            answer_source = native.payload(row, "answer")
+            if destination == sample_dir:
+                answer_source = native.payload(row, "sample_output") or answer_source
+            answer_target = destination / f"{test_id}.ans"
+            if answer_source is None:
+                if native.manifest["mode"] != "interactive":
+                    raise ValueError(f"Native test answer is missing: {test_id}")
+                answer_target.write_bytes(b"")
+            else:
+                shutil.copy2(answer_source, answer_target)
 
     def _copy_solutions(
         self,
         snapshot: Path,
         package_root: Path,
-        *,
-        verification_id: str,
     ) -> None:
         dst_submissions = package_root / "submissions"
         dst_submissions.mkdir(parents=True, exist_ok=True)
@@ -887,16 +650,10 @@ class ExportService:
             rule = SUBMISSION_RULES.get(expected)
             if rule is None:
                 continue
-            source_rel = source_file.relative_to(snapshot).as_posix()
-            if expected == "rejected" and self._rejected_solution_has_compile_error(
-                verification_id=verification_id,
-                source_path=source_rel,
-            ):
-                raise ValueError(f"2025-09 submissions cannot express compiler error: {source_rel}")
             target_dir = dst_submissions / rule["directory"]
             target_dir.mkdir(parents=True, exist_ok=True)
             target = self._ensure_unique_file_path(target_dir, source_file.name)
-            if expected in {"tle_or_correct", "tle_or_re"}:
+            if len(rule["domjudge_results"]) > 1:
                 target.write_bytes(annotated_submission(source_file, rule["domjudge_results"]))
             else:
                 shutil.copy2(source_file, target)
@@ -916,19 +673,44 @@ class ExportService:
             newline="\n",
         )
 
+    @staticmethod
+    def _hydrate_statement_samples(native: NativePackageReader) -> None:
+        """Populate the converter's private source copy from Native judge data."""
+
+        spec_path = native.root / "tests" / "spec.json"
+        rows = load_tests_spec(spec_path)
+        manifest_by_id = {row["id"]: row for row in native.manifest["tests"]}
+        changed = False
+        for row in rows:
+            if not bool(row["sample"]):
+                continue
+            materialized = manifest_by_id.get(str(row["id"]))
+            if materialized is None:
+                raise ValueError(f"Native manifest is missing test: {row['id']}")
+            input_path = native.payload(materialized, "sample_input") or native.payload(materialized, "input")
+            output_path = native.payload(materialized, "sample_output") or native.payload(materialized, "answer")
+            if not row["sample_input"] and input_path is not None:
+                row["sample_input"] = input_path.read_text(encoding="utf-8", errors="replace")
+                changed = True
+            if not row["sample_output"] and output_path is not None:
+                row["sample_output"] = output_path.read_text(encoding="utf-8", errors="replace")
+                changed = True
+        if changed:
+            spec_path.write_text(dumps_tests_spec(rows), encoding="utf-8", newline="\n")
+
     def _build_icpc_package(
         self,
         *,
         package_root: Path,
-        snapshot: Path,
+        native: NativePackageReader,
         problem_name: str,
         problem_slug: str,
         source_commit: str,
         domjudge_short_name: str,
-        verification_id: str,
         mode: str,
         pass_limit: int,
     ) -> None:
+        snapshot = native.root
         package_root.mkdir(parents=True, exist_ok=True)
         checker_source = (
             None
@@ -945,11 +727,7 @@ class ExportService:
         validator_source = self._effective_validator_source(snapshot, strict=True)
 
         samples_as_secret = self._keep_samples_out_of_domjudge_sample_data(mode, pass_limit)
-        if not samples_as_secret:
-            self._materialize_export_sample_display_payloads(
-                snapshot,
-                verification_id=verification_id,
-            )
+        self._hydrate_statement_samples(native)
 
         statement_languages_to_export = self._statement_export_languages(snapshot)
         statement_dir = package_root / "statement"
@@ -1003,11 +781,9 @@ class ExportService:
             encoding="utf-8",
         )
         self._copy_secret_and_sample_data(
-            snapshot,
+            native,
             package_root,
-            verification_id=verification_id,
             samples_as_secret=samples_as_secret,
-            blank_secret_answers=mode == "interactive",
         )
         write_input_validator(
             snapshot=snapshot,
@@ -1019,11 +795,7 @@ class ExportService:
             package_root=package_root,
             source=interactor_source if mode == "interactive" else checker_source,
         )
-        self._copy_solutions(
-            snapshot,
-            package_root,
-            verification_id=verification_id,
-        )
+        self._copy_solutions(snapshot, package_root)
         self._copy_attachments(snapshot, package_root)
 
     def _make_archive_from_dir_contents(self, archive_target: Path, root: Path) -> Path:
@@ -1130,124 +902,140 @@ class ExportService:
             raise ValueError("invalid export archive path")
         return candidate
 
+    @staticmethod
+    def _options_hash(options: dict[str, object]) -> str:
+        payload = json.dumps(options, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+    def _cached_export_path(
+        self,
+        *,
+        problem_id: int,
+        materialization_id: str,
+        export_type: str,
+        options_hash: str,
+    ) -> tuple[str, Path] | None:
+        export_id = self._store.cached_export(
+            materialization_id=materialization_id,
+            export_type=export_type,
+            options_hash=options_hash,
+        )
+        if not export_id:
+            return None
+        row = self._store.export_archive_row(problem_id, export_id)
+        if row is not None:
+            if export_type == "native":
+                try:
+                    _materialization, path = self.problem_package_service.native_archive(materialization_id)
+                    return export_id, path
+                except ValueError:
+                    pass
+            else:
+                path = self.artifacts_root / Path(*PurePosixPath(row["archive_rel_path"]).parts)
+                if (
+                    path.is_file()
+                    and not path.is_symlink()
+                    and path.stat().st_size == row["size_bytes"]
+                    and sha256_file(path) == row["sha256"]
+                ):
+                    return export_id, path
+        self._store.delete_export(export_id)
+        return None
+
     def create_export(
         self,
         problem: str,
-        verification_id: str,
         export_type: str,
         *,
-        workspace_id: int | None = None,
-        source_commit: str = "",
+        materialization_id: str,
         domjudge_short_name: str | None = None,
-    ) -> Path:
+    ) -> tuple[str, Path]:
+        safe_export_type = str(export_type).strip().lower()
+        safe_short_name = None if domjudge_short_name is None else self._domjudge_short_name(domjudge_short_name)
+        lock = self._conversion_lock(materialization_id, safe_export_type, safe_short_name)
+        with lock:
+            return self._create_export(
+                problem,
+                safe_export_type,
+                materialization_id=materialization_id,
+                domjudge_short_name=safe_short_name,
+            )
+
+    def _create_export(
+        self,
+        problem: str,
+        export_type: str,
+        *,
+        materialization_id: str,
+        domjudge_short_name: str | None = None,
+    ) -> tuple[str, Path]:
+        """Return a cached or newly converted artifact from one validated Native."""
+
         resolved_export_type = str(export_type or "").strip().lower() or "icpc"
-        resolved_verification_id = str(verification_id or "").strip()
         if resolved_export_type not in self.TYPES:
             raise ValueError("unsupported export type")
-
         problem_row = self._store.problem_export_row(problem)
         if problem_row is None:
             raise ValueError(f"unknown problem: {problem}")
-        requested_source_commit = str(source_commit or "").strip()
-        resolved_workspace_id = workspace_id
-        if resolved_workspace_id is None:
-            raise ValueError("export requires workspace_id")
-        workspace = self._workspace_path_for_export(resolved_workspace_id, problem)
-        if not requested_source_commit:
-            head = run_git(["git", "-C", str(workspace), "rev-parse", "--verify", "HEAD"], timeout=120)
-            if head.returncode == 0 and head.stdout.strip():
-                requested_source_commit = head.stdout.strip()
-            else:
-                raise ValueError("no committed revision; commit changes first")
-        stored_source_commit = requested_source_commit
+        materialization = self.problem_package_service.store.materialization(materialization_id)
+        if materialization is None or materialization["problem_id"] != int(problem_row["id"]):
+            raise ValueError("Native materialization does not belong to the problem")
+        public_slug = self._public_problem_slug(str(problem_row["slug"]))
+        short_name = self._domjudge_short_name(domjudge_short_name or public_slug)
+        options: dict[str, object] = {} if resolved_export_type == "native" else {"domjudge_short_name": short_name}
+        options_hash = self._options_hash(options)
+        cached = self._cached_export_path(
+            problem_id=int(problem_row["id"]),
+            materialization_id=materialization_id,
+            export_type=resolved_export_type,
+            options_hash=options_hash,
+        )
+        if cached is not None:
+            return cached
         export_id = f"e-{uuid.uuid4().hex[:10]}"
-        export_dir = self._export_dir(str(problem_row["slug"]), export_id)
-        export_dir.mkdir(parents=True, exist_ok=True)
-        tmp_root = export_dir / f"tmp-{uuid.uuid4().hex[:8]}"
-        package_root = tmp_root / self._package_root_name(problem_row["slug"])
-        package_root.mkdir(parents=True, exist_ok=True)
-        revision_number: int | None = None
-        workspace_path: Path | None = None
-        try:
-            workspace_path = self._workspace_path_for_export(resolved_workspace_id, str(problem_row["slug"]))
-        except Exception:
-            workspace_path = None
-        if workspace_path is not None:
-            revision_number = self._revision_number_for_commit(workspace_path, stored_source_commit)
-        revision_token = f"v{revision_number}" if isinstance(revision_number, int) and revision_number >= 0 else "v0"
-
-        snapshot: Path | None = None
-        try:
-            mode = "pass-fail"
-            pass_limit = 1
-            if resolved_export_type == "icpc":
-                snapshot = self._snapshot_source(
-                    resolved_workspace_id,
-                    str(problem_row["slug"]),
-                    requested_source_commit,
-                    tmp_root,
-                )
-                mode, pass_limit = self._problem_mode_and_pass_limit(snapshot)
-                public_slug = self._public_problem_slug(str(problem_row["slug"]))
-                problem_name = statement_title_from_snapshot(
-                    snapshot,
-                    fallback_title=public_slug,
-                )
-                resolved_short_name = self._domjudge_short_name(
-                    domjudge_short_name or public_slug
-                )
-                self._build_icpc_package(
-                    package_root=package_root,
-                    snapshot=snapshot,
-                    problem_name=problem_name,
-                    problem_slug=str(problem_row["slug"]),
-                    source_commit=stored_source_commit,
-                    domjudge_short_name=resolved_short_name,
-                    verification_id=resolved_verification_id,
-                    mode=mode,
-                    pass_limit=pass_limit,
-                )
-            else:
-                snapshot = self._snapshot_source(
-                    resolved_workspace_id,
-                    str(problem_row["slug"]),
-                    requested_source_commit,
-                    tmp_root,
-                )
-                self._build_native_package(
-                    package_root=package_root,
-                    snapshot=snapshot,
-                )
-
-            if resolved_export_type == "native":
-                preferred_filename = f"{self._archive_filename_slug(str(problem_row['slug']))}-native-{revision_token}.zip"
-            else:
-                preferred_filename = f"{self._public_problem_slug(str(problem_row['slug']))}-{revision_token}.zip"
-            archive_target = self._export_path(str(problem_row["slug"]), export_id, preferred_filename)
-            if resolved_export_type == "icpc":
-                out = self._make_archive_from_dir_contents(archive_target, package_root)
-            else:
-                archive_prefix = archive_target.with_suffix("")
-                archive = shutil.make_archive(
-                    str(archive_prefix),
-                    "zip",
-                    root_dir=tmp_root,
-                    base_dir=package_root.name,
-                )
-                out = Path(archive)
-            digest = sha256_file(out)
-
-            self._store.insert_export_record(
-                export_id=export_id,
-                problem_id=int(problem_row["id"]),
-                verification_id=resolved_verification_id,
-                workspace_id=resolved_workspace_id,
-                export_type=resolved_export_type,
-                filename=out.name,
-                sha256=digest,
-                size_bytes=int(out.stat().st_size),
-                source_commit=stored_source_commit,
-            )
-            return out
-        finally:
-            shutil.rmtree(tmp_root, ignore_errors=True)
+        revision_token = f"v{materialization['revision_number']}"
+        if resolved_export_type == "native":
+            materialization, out = self.problem_package_service.native_archive(materialization_id)
+            filename = f"{self._archive_filename_slug(str(problem_row['slug']))}-native-{revision_token}.zip"
+        else:
+            filename = f"{public_slug}-{revision_token}.zip"
+            staging = self.artifacts_root / ".staging" / f"export-{export_id}-{uuid.uuid4().hex}"
+            package_root = staging / "package"
+            archive_partial = staging / f"{filename}.partial"
+            try:
+                with self.problem_package_service.open_reader(materialization_id) as native:
+                    mode = native.manifest["mode"]
+                    pass_limit = native.manifest["pass_limit"]
+                    problem_name = statement_title_from_snapshot(
+                        native.root,
+                        fallback_title=public_slug,
+                    )
+                    self._build_icpc_package(
+                        package_root=package_root,
+                        native=native,
+                        problem_name=problem_name,
+                        problem_slug=str(problem_row["slug"]),
+                        source_commit=materialization["source_commit"],
+                        domjudge_short_name=short_name,
+                        mode=mode,
+                        pass_limit=pass_limit,
+                    )
+                    self._make_archive_from_dir_contents(archive_partial, package_root)
+                out = self._export_path(str(problem_row["slug"]), export_id, filename)
+                out.parent.mkdir(parents=True, exist_ok=True)
+                os.replace(archive_partial, out)
+            finally:
+                shutil.rmtree(staging, ignore_errors=True)
+        self._store.insert_export_record(
+            export_id=export_id,
+            problem_id=int(problem_row["id"]),
+            materialization_id=materialization_id,
+            export_type=resolved_export_type,
+            options_hash=options_hash,
+            filename=filename,
+            archive_rel_path=out.relative_to(self.artifacts_root).as_posix(),
+            sha256=sha256_file(out),
+            size_bytes=int(out.stat().st_size),
+            source_commit=materialization["source_commit"],
+        )
+        return export_id, out

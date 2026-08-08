@@ -7,8 +7,8 @@
 <section>
   <h2>Members</h2>
   <p class="muted">
-    Contest access does not automatically grant problem access. Use sync to apply each member's contest role to all contest
-    problems you can write. Owners and system admins are preserved.
+    Contest membership grants problem access dynamically: read members can read roster problems, while write members and the
+    contest owner can edit them. Direct problem ACLs remain independent.
   </p>
   {% if entries %}
   <table class="table-base">
@@ -26,27 +26,14 @@
       {% if ctx.access.can_manage %}
       <td>
         {% if row.role != "owner" %}
-        <form method="post" action="/contests/{{ ctx.contest.slug }}/access/sync-user" class="inline-form">
-          <input type="hidden" name="target_user" value="{{ row.username }}" />
-          <button class="btn" type="submit">Sync Problem Access</button>
-        </form>
         <form
           method="post"
           action="/contests/{{ ctx.contest.slug }}/access/revoke"
           class="inline-form"
-          data-confirm-message="Revoke contest membership for {{ row.username }}? Problem access and working copies will not be changed."
+          data-confirm-message="Revoke contest membership for {{ row.username }}? Contest-derived problem access ends immediately; direct problem ACLs remain unchanged."
         >
           <input type="hidden" name="target_user" value="{{ row.username }}" />
           <button class="btn danger-link" type="submit">Revoke Contest Membership</button>
-        </form>
-        <form
-          method="post"
-          action="/contests/{{ ctx.contest.slug }}/access/revoke-with-problems"
-          class="inline-form"
-          data-confirm-message="Revoke contest membership and manageable non-owner problem access for {{ row.username }}? Owner access, system administrator access, unmanaged problems, and working copies are preserved."
-        >
-          <input type="hidden" name="target_user" value="{{ row.username }}" />
-          <button class="btn danger-link" type="submit">Revoke Membership + Problem Access</button>
         </form>
         {% else %}
         <span class="muted">fixed owner</span>
@@ -74,13 +61,7 @@
     </select>
     <button class="btn" type="submit">Grant / Update Membership</button>
   </form>
-  <p class="muted">
-    After granting a member, remember to sync their problem access if they should actually open or edit contest problems.
-    Current writable contest problems: {{ sync_problem_candidate_count }}.
-  </p>
-  <form class="form-row" method="post" action="/contests/{{ ctx.contest.slug }}/access/sync-all">
-    <button class="btn" type="submit">Sync All Members' Problem Access</button>
-  </form>
+  <p class="muted">Derived problem access takes effect immediately and is removed with membership or roster removal.</p>
 </section>
 {% else %}
 <p class="muted">Owner or system admin role is required for access management.</p>

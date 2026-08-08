@@ -207,7 +207,6 @@ def page_ctx(
             int(ctx['problem']['id']),
             int(ctx['user']['id']),
             int(ctx['workspace']['id']),
-            workspace_dirty,
             workspace_path=workspace_path,
         )
     except Exception:
@@ -427,7 +426,7 @@ def _build_problem_nav_status(ctx: dict) -> dict[str, dict[str, object]]:
         head_revision = git_commit_count(Path(workspace_path_text), workspace_head)
     export_revision: int | None = None
     if workspace_id > 0 and problem_id > 0 and workspace_path_text:
-        export_source_commit = config.export_service.latest_workspace_source_commit(problem_id, workspace_id)
+        export_source_commit = config.export_service.latest_source_commit(problem_id)
         if export_source_commit:
             export_revision = git_commit_count(Path(workspace_path_text), export_source_commit)
     if export_revision is not None and export_revision > 0:

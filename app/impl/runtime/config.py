@@ -14,6 +14,7 @@ from app.service.platform.fs.layout import FsManager
 from app.service.verification.service import VerificationService
 from app.service.verification.task_store import VerificationTaskStore
 from app.service.export.service import ExportService
+from app.service.problem_package.service import ProblemPackageService
 from app.service.repository.git import GitService
 from app.service.repository.merge import WorkspaceMergeService
 from app.service.platform.runtime_blob_store import RuntimeBlobStore
@@ -65,6 +66,7 @@ class RuntimeConfig:
     preview_service: PreviewService = field(init=False)
     judgehost_task_service: Judgehost = field(init=False)
     export_service: ExportService = field(init=False)
+    problem_package_service: ProblemPackageService = field(init=False)
     worker_queue_service: WorkerQueueService = field(init=False)
     artifact_cleanup_service: ArtifactCleanupService = field(init=False)
     maintenance_service: MaintenanceCoordinator = field(init=False)
@@ -189,12 +191,17 @@ class RuntimeConfig:
             self.tex_compile_service,
             verification_service=self.verification_service,
         )
+        self.problem_package_service = ProblemPackageService(
+            self.db,
+            self.settings,
+            artifact_file_resolver=self.runtime_blob_store.descriptor,
+        )
         self.export_service = ExportService(
             self.db,
             self.settings.artifacts_root,
             self.settings.workspace_root,
             self.tex_compile_service,
-            artifact_file_resolver=self.runtime_blob_store.descriptor,
+            problem_package_service=self.problem_package_service,
         )
         durable_log_path = self.settings.cache_root / "runtime" / "worker-queue-events.jsonl"
         self.worker_queue_service = WorkerQueueService(

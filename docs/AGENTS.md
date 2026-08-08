@@ -55,6 +55,18 @@ maintaining old code.
 - If code is needed and cannot be improved, keep it as is.
 - Never use a local patch to paper over a structural problem. Prefer a simple,
   unified solution.
+- Do not pre-design compatibility machinery for hypothetical future forks. Model
+  only the current canonical shape.
+- Do not invent project-owned schema, format, materializer, converter, or
+  implementation version numbers unless a concrete compatibility boundary already
+  exists.
+- Do not hide compatibility identity in local variables, constants, cache-key
+  salts, or other hard-coded markers. Externally mandated protocol and file-format
+  version fields are not project-owned markers and remain valid where the external
+  contract requires them.
+- If a real hard fork becomes necessary, introduce an explicit field in the
+  persisted or exchanged data shape at that time (for example, a new JSON field),
+  together with the actual fork behavior. Do not reserve such fields in advance.
 - For files larger than 1000 lines, consider refactoring into smaller files.
 - Use subdirectories or nested subdirectories as needed to maintain a clean structure.
 - Any refactor must define responsibility boundaries and invariants first.

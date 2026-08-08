@@ -77,7 +77,7 @@ SUBMISSION_RULES: dict[str, SubmissionRule] = {
         "domjudge_results": ("TIMELIMIT", "RUN-ERROR"),
     },
     "rejected": {
-        "directory": "rejected",
+        "directory": "mixed_rejected",
         "permitted": ("AC", "WA", "TLE", "RTE"),
         "required": ("WA", "TLE", "RTE"),
         "domjudge_results": ("CORRECT", "WRONG-ANSWER", "TIMELIMIT", "RUN-ERROR"),

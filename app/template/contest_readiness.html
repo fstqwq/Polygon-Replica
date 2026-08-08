@@ -1,0 +1,38 @@
+{% extends "contest_base.html" %}
+{% block content %}
+<h1 class="page-title">Contest Readiness</h1>
+
+<section>
+  <p><strong>Available Native revisions:</strong> {{ ready_count }} / {{ problem_rows | length }}</p>
+  <p><strong>Current published revisions materialized:</strong> {{ current_count }} / {{ problem_rows | length }}</p>
+</section>
+
+<section>
+{% if problem_rows %}
+  <table class="table-base">
+    <tr>
+      <th>Label</th>
+      <th>Problem</th>
+      <th>Published</th>
+      <th>Latest Native</th>
+      <th>Current</th>
+      <th>Statement languages</th>
+      <th>Reason</th>
+    </tr>
+    {% for row in problem_rows %}
+    <tr>
+      <td><code>{{ row.idx }}</code></td>
+      <td><code>{{ row.problem_slug }}</code></td>
+      <td>{{ "v" ~ row.published_revision_number if row.published_revision_number is not none else "-" }}</td>
+      <td>{{ "v" ~ row.materialized_revision_number if row.materialized_revision_number is not none else "-" }}</td>
+      <td>{{ "yes" if row.current_is_materialized else "no" }}</td>
+      <td>{{ row.statement_languages | join(", ") if row.statement_languages else "-" }}</td>
+      <td>{{ row.readiness_reason or ("Export the current revision" if not row.current_is_materialized else "-") }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+{% else %}
+  <p class="muted">No problems in contest.</p>
+{% endif %}
+</section>
+{% endblock %}

@@ -9,7 +9,6 @@ from typing import TypedDict
 from app.db import DB, now_iso
 from app.service.contest.statement_meta import infer_contest_header_fields
 from app.service.disk.contest_store import ContestDiskStore
-from app.service.disk.verification_store import VerificationStore
 from app.service.platform.hashing import sha256_file
 from app.service.platform.process import is_canonical_artifact_id
 from app.service.statement.context import normalize_statement_language
@@ -40,8 +39,10 @@ class ContestMembership(TypedDict):
 
 class ContestProblem(TypedDict):
     contest_problem_id: int
+    position: int
     idx: str
     problem_id: int
+    statement_folder: str
     problem_slug: str
     slug_leaf: str
     created_at: str
@@ -66,6 +67,11 @@ class ContestContext(TypedDict):
     slug: str
     title: str
     owner_user_id: int
+    status: str
+    source_generation: int
+    location: str
+    date: str
+    statement_default_language: str
     created_at: str
 
 
@@ -105,19 +111,9 @@ class ContestStatementAttachment(TypedDict):
     created_at: str
 
 
-class ContestVerificationStage(TypedDict):
-    id: str
-    status: str
-    signature: str
-    source_commit: str
-    created_at: str
-    finished_at: str
-
-
 class ContestService:
     _ACCESS_ROLES = {"admin", "owner", "write", "read"}
     _STATEMENT_DEFAULT_LANGUAGE_KEY = "statement_default_language"
-    _STATEMENT_SOURCE_FOLDERS_KEY = "statement_source_folders"
     _LOCATION_KEY = "location"
     _DATE_KEY = "date"
     _TEXT_SOURCE_SUFFIXES = {
@@ -140,19 +136,22 @@ class ContestService:
         self.db = db
         self.settings = settings
         self._store = ContestDiskStore(db)
-        self._verification_store = VerificationStore(db)
 
     def _normalize_role(self, raw_role: str | None) -> str:
         if raw_role in self._ACCESS_ROLES:
             return raw_role
         return "read"
 
-    def _job_summary_path(self, contest_slug: str, job_id: str) -> Path:
-        return (self.job_root(contest_slug, job_id) / "summary.json").resolve()
+    def _job_summary_path(self, contest_slug: str, job_id: str, *, create: bool) -> Path:
+        return (
+            self.job_root(contest_slug, job_id, create=create) / "summary.json"
+        ).resolve()
 
     def _read_job_summary(self, contest_slug: str, job_id: str) -> dict[str, object]:
         try:
-            text = self._job_summary_path(contest_slug, job_id).read_text(encoding="utf-8")
+            text = self._job_summary_path(
+                contest_slug, job_id, create=False
+            ).read_text(encoding="utf-8")
         except OSError:
             return {}
         if not text:
@@ -164,32 +163,9 @@ class ContestService:
         return payload if isinstance(payload, dict) else {}
 
     def _write_job_summary(self, contest_slug: str, job_id: str, summary: dict[str, object]) -> None:
-        path = self._job_summary_path(contest_slug, job_id)
+        path = self._job_summary_path(contest_slug, job_id, create=True)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(summary, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
-
-    def _property_text(self, raw_json: str) -> str:
-        text = str(raw_json).strip()
-        if not text:
-            return ""
-        try:
-            payload = json.loads(text)
-        except Exception:
-            return text
-        if payload is None:
-            return ""
-        if isinstance(payload, str):
-            return payload
-        return str(payload)
-
-    def _property_value(self, raw_json: str) -> object:
-        text = str(raw_json).strip()
-        if not text:
-            return ""
-        try:
-            return json.loads(text)
-        except Exception:
-            return text
 
     def _contest_idx_label(self, seq: int) -> str:
         value = max(1, int(seq))
@@ -288,6 +264,7 @@ class ContestService:
             created_by_user_id=int(actor_user_id),
             created_at=now_iso(),
         )
+        self._store.bump_source_generation(int(contest_id))
         return safe_key
 
     def delete_statement_source_file(self, *, contest_id: int, contest_slug: str, key: str) -> str:
@@ -310,6 +287,7 @@ class ContestService:
             except OSError:
                 pass
         self._store.delete_attachment_row(int(contest_id), safe_key)
+        self._store.bump_source_generation(int(contest_id))
         return safe_key
 
     def _job_payload(self, row: dict[str, object]) -> ContestJob:
@@ -322,9 +300,10 @@ class ContestService:
             "finished_at": str(row["finished_at"]),
         }
 
-    def artifacts_base(self) -> Path:
+    def artifacts_base(self, *, create: bool = True) -> Path:
         base = (self.settings.artifacts_root / "contests").resolve()
-        base.mkdir(parents=True, exist_ok=True)
+        if create:
+            base.mkdir(parents=True, exist_ok=True)
         return base
 
     def contest_sources_base(self) -> Path:
@@ -337,33 +316,52 @@ class ContestService:
             raise ValueError("invalid contest source path")
         return root
 
-    def job_root(self, contest_slug: str, job_id: str) -> Path:
+    def job_root(self, contest_slug: str, job_id: str, *, create: bool = True) -> Path:
         safe_job_id = str(job_id).strip()
         if not is_canonical_artifact_id(safe_job_id):
             raise ValueError("invalid contest job id")
-        base = self.artifacts_base()
+        base = self.artifacts_base(create=create)
         root = (base / str(contest_slug).strip() / safe_job_id).resolve()
         if not self._path_within(base, root):
             raise ValueError("invalid contest artifact path")
-        root.mkdir(parents=True, exist_ok=True)
+        if create:
+            root.mkdir(parents=True, exist_ok=True)
         return root
 
-    def artifact_root(self, contest_slug: str, job_id: str, artifact_id: str) -> Path:
+    def artifact_root(
+        self,
+        contest_slug: str,
+        job_id: str,
+        artifact_id: str,
+        *,
+        create: bool = True,
+    ) -> Path:
         safe_artifact_id = str(artifact_id).strip()
         if not is_canonical_artifact_id(safe_artifact_id):
             raise ValueError("invalid contest artifact id")
-        job_root = self.job_root(contest_slug, job_id)
+        job_root = self.job_root(contest_slug, job_id, create=create)
         root = (job_root / "artifacts" / safe_artifact_id).resolve()
         if not self._path_within(job_root, root):
             raise ValueError("invalid contest artifact path")
-        root.mkdir(parents=True, exist_ok=True)
+        if create:
+            root.mkdir(parents=True, exist_ok=True)
         return root
 
-    def artifact_path(self, contest_slug: str, job_id: str, artifact_id: str, filename: str) -> Path:
+    def artifact_path(
+        self,
+        contest_slug: str,
+        job_id: str,
+        artifact_id: str,
+        filename: str,
+        *,
+        create: bool = True,
+    ) -> Path:
         safe_filename = Path(str(filename).strip()).name
         if not safe_filename:
             raise ValueError("invalid contest artifact filename")
-        root = self.artifact_root(contest_slug, job_id, artifact_id)
+        root = self.artifact_root(
+            contest_slug, job_id, artifact_id, create=create
+        )
         target = (root / safe_filename).resolve()
         if not self._path_within(root, target):
             raise ValueError("invalid contest artifact file path")
@@ -411,7 +409,7 @@ class ContestService:
         source_root = (self.contest_sources_base() / safe_slug).resolve()
         if source_root.exists():
             shutil.rmtree(source_root, ignore_errors=True)
-        artifact_root = (self.artifacts_base() / safe_slug).resolve()
+        artifact_root = (self.artifacts_base(create=False) / safe_slug).resolve()
         if artifact_root.exists():
             shutil.rmtree(artifact_root, ignore_errors=True)
 
@@ -431,6 +429,7 @@ class ContestService:
             int(added_by_user_id),
             now_iso(),
         )
+        self._store.bump_source_generation(int(contest_id))
 
     def contest_context(self, contest_slug: str) -> ContestContext | None:
         row = self._store.contest_context_row(contest_slug)
@@ -441,6 +440,11 @@ class ContestService:
             "slug": str(row["slug"]),
             "title": str(row["title"]),
             "owner_user_id": int(row["owner_user_id"]),
+            "status": str(row["status"]),
+            "source_generation": int(row["source_generation"]),
+            "location": str(row["location"]),
+            "date": str(row["date_text"]),
+            "statement_default_language": str(row["statement_default_language"]),
             "created_at": str(row["created_at"]),
         }
 
@@ -518,25 +522,15 @@ class ContestService:
     def revoke_member(self, contest_id: int, user_id: int) -> None:
         self._store.revoke_member(int(contest_id), int(user_id))
 
-    def revoke_member_and_problem_access(
-        self,
-        contest_id: int,
-        actor_user_id: int,
-        user_id: int,
-    ) -> dict[str, int]:
-        return self._store.revoke_member_and_problem_access(
-            int(contest_id),
-            int(actor_user_id),
-            int(user_id),
-        )
-
     def properties_map(self, contest_id: int) -> dict[str, str]:
-        result: dict[str, str] = {}
-        for row in self._store.property_rows(int(contest_id)):
-            key = str(row["key"]).strip()
-            if key:
-                result[key] = self._property_text(str(row["value_json"]))
-        return result
+        row = self._store.contest_context_by_id(int(contest_id))
+        if row is None:
+            return {}
+        return {
+            self._LOCATION_KEY: str(row["location"]),
+            self._DATE_KEY: str(row["date_text"]),
+            self._STATEMENT_DEFAULT_LANGUAGE_KEY: str(row["statement_default_language"]),
+        }
 
     def overview_properties_map(self, contest_id: int, contest_slug: str) -> dict[str, str]:
         result = self.properties_map(int(contest_id))
@@ -551,15 +545,29 @@ class ContestService:
 
     def update_title(self, contest_id: int, title: str) -> None:
         self._store.update_title(int(contest_id), title)
+        self._store.bump_source_generation(int(contest_id))
 
     def upsert_property(self, contest_id: int, actor_user_id: int, key: str, value: object) -> None:
-        self._store.upsert_property(int(contest_id), int(actor_user_id), key, value, now_iso())
+        del actor_user_id
+        safe_key = str(key).strip()
+        if safe_key not in {self._LOCATION_KEY, self._DATE_KEY, self._STATEMENT_DEFAULT_LANGUAGE_KEY}:
+            raise ValueError(f"unsupported contest metadata field: {safe_key}")
+        self._store.update_metadata_field(int(contest_id), safe_key, str(value))
+        self._store.bump_source_generation(int(contest_id))
 
     def property_value(self, contest_id: int, key: str) -> object:
-        row = self._store.property_row(int(contest_id), str(key).strip())
+        row = self._store.contest_context_by_id(int(contest_id))
         if row is None:
             return ""
-        return self._property_value(str(row["value_json"]))
+        fields = {
+            self._LOCATION_KEY: "location",
+            self._DATE_KEY: "date_text",
+            self._STATEMENT_DEFAULT_LANGUAGE_KEY: "statement_default_language",
+        }
+        column = fields.get(str(key).strip())
+        if column is None:
+            raise ValueError(f"unsupported contest metadata field: {key}")
+        return str(row[column])
 
     def replace_statement_sources(
         self,
@@ -590,6 +598,7 @@ class ContestService:
             created_at=now_iso(),
             rows=attachment_rows,
         )
+        self._store.bump_source_generation(int(contest_id))
 
     def statement_attachment_rows(self, contest_id: int) -> list[ContestStatementAttachment]:
         result: list[ContestStatementAttachment] = []
@@ -611,9 +620,7 @@ class ContestService:
         return target
 
     def statement_default_language(self, contest_id: int) -> str:
-        raw = self.property_value(int(contest_id), self._STATEMENT_DEFAULT_LANGUAGE_KEY)
-        value = str(raw).strip().lower() if raw is not None else ""
-        return value
+        return str(self.property_value(int(contest_id), self._STATEMENT_DEFAULT_LANGUAGE_KEY)).strip().lower()
 
     def set_statement_default_language(self, contest_id: int, actor_user_id: int, language: str) -> None:
         self.upsert_property(
@@ -646,19 +653,11 @@ class ContestService:
         return {"title": "", "location": "", "date": ""}
 
     def statement_problem_source_folders(self, contest_id: int) -> dict[int, str]:
-        raw = self.property_value(int(contest_id), self._STATEMENT_SOURCE_FOLDERS_KEY)
-        if not isinstance(raw, dict):
-            return {}
-        result: dict[int, str] = {}
-        for key, value in raw.items():
-            try:
-                problem_id = int(str(key).strip())
-            except Exception:
-                continue
-            folder = str(value).strip()
-            if problem_id > 0 and folder:
-                result[problem_id] = folder
-        return result
+        return {
+            int(row["problem_id"]): str(row["statement_folder"])
+            for row in self._store.contest_problem_rows(int(contest_id))
+            if str(row["statement_folder"])
+        }
 
     def set_statement_problem_source_folders(
         self,
@@ -666,13 +665,14 @@ class ContestService:
         actor_user_id: int,
         source_folders: dict[int, str],
     ) -> None:
-        payload = {str(problem_id): str(folder).strip() for problem_id, folder in source_folders.items() if int(problem_id) > 0 and str(folder).strip()}
-        self.upsert_property(
-            int(contest_id),
-            int(actor_user_id),
-            self._STATEMENT_SOURCE_FOLDERS_KEY,
-            payload,
-        )
+        del actor_user_id
+        payload = {
+            int(problem_id): str(folder).strip()
+            for problem_id, folder in source_folders.items()
+            if int(problem_id) > 0 and str(folder).strip()
+        }
+        self._store.set_problem_statement_folders(int(contest_id), payload)
+        self._store.bump_source_generation(int(contest_id))
 
     def contest_problems(self, contest_id: int) -> list[ContestProblem]:
         result: list[ContestProblem] = []
@@ -680,8 +680,10 @@ class ContestService:
             result.append(
                 {
                     "contest_problem_id": int(row["contest_problem_id"]),
+                    "position": int(row["position"]),
                     "idx": str(row["idx"]),
                     "problem_id": int(row["problem_id"]),
+                    "statement_folder": str(row["statement_folder"]),
                     "problem_slug": str(row["problem_slug"]),
                     "slug_leaf": str(row["slug_leaf"]),
                     "created_at": str(row["created_at"]),
@@ -743,20 +745,32 @@ class ContestService:
         raise RuntimeError("unable to allocate contest problem index")
 
     def remove_problem(self, contest_id: int, problem_id: int) -> bool:
-        return self._store.remove_problem(int(contest_id), int(problem_id))
+        removed = self._store.remove_problem(int(contest_id), int(problem_id))
+        if removed:
+            self._store.bump_source_generation(int(contest_id))
+        return removed
 
     def remove_problems(self, contest_id: int, problem_ids: list[int]) -> int:
-        return self._store.remove_problems(int(contest_id), problem_ids)
+        removed = self._store.remove_problems(int(contest_id), problem_ids)
+        if removed:
+            self._store.bump_source_generation(int(contest_id))
+        return removed
 
     def reorder_problem_indices(self, contest_id: int, pairs: list[tuple[int, str]]) -> bool:
-        return self._store.reorder_problem_indices(int(contest_id), pairs)
+        changed = self._store.reorder_problem_indices(int(contest_id), pairs)
+        if changed:
+            self._store.bump_source_generation(int(contest_id))
+        return changed
 
     def renumber_problem_indices(
         self,
         contest_id: int,
         ordered_contest_problem_ids: list[int],
     ) -> bool:
-        return self._store.renumber_problem_indices(int(contest_id), ordered_contest_problem_ids)
+        changed = self._store.renumber_problem_indices(int(contest_id), ordered_contest_problem_ids)
+        if changed:
+            self._store.bump_source_generation(int(contest_id))
+        return changed
 
     def selected_problems(self, contest_id: int, problem_ids: list[int]) -> list[ContestProblemEntry]:
         result: list[ContestProblemEntry] = []
@@ -801,6 +815,12 @@ class ContestService:
         )
         self._write_job_summary(str(contest_row["slug"]), job_id, summary)
         return job_id
+
+    def freeze_build_items(self, job_id: str, items: list[dict[str, object]]) -> None:
+        self._store.replace_build_items(job_id, items)
+
+    def build_items(self, job_id: str) -> list[dict[str, object]]:
+        return self._store.build_items(job_id)
 
     def update_job(
         self,
@@ -896,7 +916,13 @@ class ContestService:
             artifact_id = str(row["id"] or "")
             filename = str(row["filename"] or "")
             try:
-                artifact_path = self.artifact_path(contest_slug, job_id, artifact_id, filename).resolve()
+                artifact_path = self.artifact_path(
+                    contest_slug,
+                    job_id,
+                    artifact_id,
+                    filename,
+                    create=False,
+                ).resolve()
             except Exception:
                 artifact_path = Path()
             downloadable = (
@@ -936,6 +962,7 @@ class ContestService:
                 str(row["job_id"] or ""),
                 safe_artifact_id,
                 str(row["filename"] or ""),
+                create=False,
             ).resolve()
         except Exception:
             return None
@@ -943,16 +970,3 @@ class ContestService:
             return None
         filename = Path(str(row["filename"])).name or file_path.name
         return (file_path, filename)
-
-    def verification_stage(self, problem_id: int, workspace_id: int, verification_id: str) -> ContestVerificationStage | None:
-        row = self._verification_store.workspace_verification_row(int(problem_id), int(workspace_id), verification_id)
-        if row is None:
-            return None
-        return {
-            "id": str(row["id"]),
-            "status": str(row["status"]).strip().lower(),
-            "signature": str(row["signature"] or ""),
-            "source_commit": str(row["source_commit"] or ""),
-            "created_at": str(row["created_at"]),
-            "finished_at": str(row["finished_at"]),
-        }

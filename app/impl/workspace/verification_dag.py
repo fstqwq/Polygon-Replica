@@ -26,7 +26,6 @@ from app.service.verification.test_rows import build_verification_test_row
 from app.service.verification.types import Kind, Status
 from app.service.verification.signature import (
     VerificationManifest,
-    git_blob_identities,
     verification_manifest,
 )
 from app.service.verification.types import is_cancel_reason
@@ -108,6 +107,16 @@ def _workspace_mode_and_pass_limit(problem_id: int, workspace_id: int) -> tuple[
         return (default_mode, default_pass_limit)
     workspace_path = Path(workspace_path_text).resolve()
     _payload, general_cfg, _cfg_path = read_problem_config(workspace_path)
+    return (
+        normalize_problem_mode(general_cfg.get("mode"), default_mode),
+        normalize_pass_limit(general_cfg.get("pass_limit"), default_pass_limit),
+    )
+
+
+def _snapshot_mode_and_pass_limit(snapshot: Path) -> tuple[str, int]:
+    default_mode = str(_C.GENERAL_CONFIG_DEFAULTS.get("mode") or "pass-fail")
+    default_pass_limit = int(_C.GENERAL_CONFIG_DEFAULTS.get("pass_limit") or 1)
+    _payload, general_cfg, _cfg_path = read_problem_config(snapshot)
     return (
         normalize_problem_mode(general_cfg.get("mode"), default_mode),
         normalize_pass_limit(general_cfg.get("pass_limit"), default_pass_limit),
@@ -1055,7 +1064,7 @@ def run_workspace_verification_dag(
     *,
     actor_user_id: int,
     problem_id: int,
-    workspace_id: int,
+    workspace_id: int | None,
     workspace_head: str,
     workspace_dirty: bool,
     targets: list[dict[str, object]],
@@ -1065,22 +1074,28 @@ def run_workspace_verification_dag(
     kind: str = Kind.ALL.value,
     sample_only: bool = False,
     snapshot_root_override: Path | None = None,
+    retain_snapshot_override: bool = False,
     manifest: VerificationManifest | None = None,
     selected_test_names: list[str] | None = None,
     bypass_case_result_cache: bool = False,
     skip_sanity: bool = False,
 ) -> None:
-    workspace_path_text = config.workspace_service.workspace_path(int(problem_id), int(workspace_id))
-    if not workspace_path_text:
-        raise RuntimeError("workspace metadata missing")
-    workspace_path = Path(workspace_path_text).resolve()
-    if (not workspace_path.exists()) or (not workspace_path.is_dir()) or workspace_path.is_symlink():
-        raise RuntimeError("workspace path is unavailable")
+    workspace_path: Path | None = None
+    if workspace_id is not None:
+        workspace_path_text = config.workspace_service.workspace_path(int(problem_id), int(workspace_id))
+        if workspace_path_text:
+            workspace_path = Path(workspace_path_text).resolve()
+    if snapshot_root_override is None:
+        if workspace_path is None:
+            raise RuntimeError("workspace metadata missing")
+        if (not workspace_path.exists()) or (not workspace_path.is_dir()) or workspace_path.is_symlink():
+            raise RuntimeError("workspace path is unavailable")
     record_source = str(source_commit or "").strip() or workspace_verification_source(workspace_head)
     task_store = config.verification_task_store
     layout = config.fs_manager.prepare_verification_layout(verification_id)
     snapshot_root = snapshot_root_override
     if snapshot_root is None:
+        assert workspace_path is not None
         snapshot_root = config.workspace_service.create_snapshot(
             workspace_path,
             None,
@@ -1088,16 +1103,7 @@ def run_workspace_verification_dag(
             workspace_dirty=workspace_dirty,
         )
     if manifest is None:
-        git_identities = None
-        if not workspace_dirty and (source_commit or workspace_head):
-            git_identities = git_blob_identities(
-                workspace_path,
-                source_commit or workspace_head,
-            )
-        execution_manifest = verification_manifest(
-            snapshot_root,
-            git_identities=git_identities,
-        )
+        execution_manifest = verification_manifest(snapshot_root)
     else:
         execution_manifest = manifest
     signature = execution_manifest.signature
@@ -1110,7 +1116,7 @@ def run_workspace_verification_dag(
         )
         _require_online_judgehost()
     except Exception as exc:
-        verification_mode, verification_pass_limit = _workspace_mode_and_pass_limit(problem_id, workspace_id)
+        verification_mode, verification_pass_limit = _snapshot_mode_and_pass_limit(snapshot_root)
         config.verification_service.begin_verification_record(
             verification_id=verification_id,
             problem_id=problem_id,
@@ -1151,7 +1157,7 @@ def run_workspace_verification_dag(
         # All task rows, final detail, status, and audit data are durable before
         # the quiet-window cleanup can retire process-local judgehost records.
         config.judgehost_task_service.schedule_verification_cleanup(verification_id)
-        if snapshot_root.exists():
+        if snapshot_root.exists() and not retain_snapshot_override:
             import shutil
 
             shutil.rmtree(snapshot_root.parent, ignore_errors=True)
@@ -1451,7 +1457,7 @@ def run_workspace_verification_dag(
         # Schedule only after final detail, status, and audit writes are durable.
         config.judgehost_task_service.schedule_verification_cleanup(verification_id)
     finally:
-        if snapshot_root.exists():
+        if snapshot_root.exists() and not retain_snapshot_override:
             import shutil
 
             shutil.rmtree(snapshot_root.parent, ignore_errors=True)

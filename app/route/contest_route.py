@@ -7,17 +7,14 @@ from app.impl.contest.access import (
     contest_access_grant,
     contest_access_page,
     contest_access_revoke,
-    contest_access_revoke_with_problems,
-    contest_access_sync_all,
-    contest_access_sync_user,
 )
 from app.impl.contest.overview import contest_overview_page
+from app.impl.contest.readiness import contest_readiness_page
 from app.impl.contest.package import (
     contest_packages_artifact_download,
     contest_packages_build_start,
     contest_packages_job_status,
     contest_packages_page,
-    contest_packages_preview_start,
     contest_statement_source_delete,
     contest_statement_source_file,
     contest_statement_source_save,
@@ -36,6 +33,14 @@ from app.impl.contest.problem import (
 from app.impl.contest.property import contest_properties_page, contest_properties_save
 
 router = APIRouter()
+
+router.add_api_route(
+    "/contests/{contest}/readiness",
+    contest_readiness_page,
+    methods=["GET"],
+    response_class=HTMLResponse,
+    name="contest_readiness",
+)
 
 router.add_api_route(
     "/contests/{contest}/overview",
@@ -127,34 +132,10 @@ router.add_api_route(
 )
 
 router.add_api_route(
-    "/contests/{contest}/access/revoke-with-problems",
-    contest_access_revoke_with_problems,
-    methods=["POST"],
-)
-
-router.add_api_route(
-    "/contests/{contest}/access/sync-user",
-    contest_access_sync_user,
-    methods=["POST"],
-)
-
-router.add_api_route(
-    "/contests/{contest}/access/sync-all",
-    contest_access_sync_all,
-    methods=["POST"],
-)
-
-router.add_api_route(
     "/contests/{contest}/packages",
     contest_packages_page,
     methods=["GET"],
     response_class=HTMLResponse,
-)
-
-router.add_api_route(
-    "/contests/{contest}/packages/preview/start",
-    contest_packages_preview_start,
-    methods=["POST"],
 )
 
 router.add_api_route(

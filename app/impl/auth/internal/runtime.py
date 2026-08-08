@@ -198,6 +198,7 @@ def _startup_reset_runtime_state() -> None:
 
 def startup() -> None:
     config.runtime_state_service.initialize_metadata()
+    config.problem_package_service.fail_interrupted_builds()
     config.export_service.fail_interrupted_export_jobs()
     config.verification_service.apply_runtime_values(config.constants)
     _startup_reset_runtime_state()

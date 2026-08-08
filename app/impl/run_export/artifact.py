@@ -15,6 +15,8 @@ from app.impl.workspace.artifact import (
     verification_artifact_file,
 )
 from app.impl.workspace.context_ui import page_ctx
+from app.impl.workspace.context import global_user_ctx
+from app.impl.workspace.access import workspace_access_context
 
 
 def _browser_blob_response(file_path: Path, filename: str) -> FileResponse:
@@ -51,14 +53,17 @@ def artifact_file(problem: str, user: Annotated[str, Depends(require_session_use
 
 
 def export_file(problem: str, user: Annotated[str, Depends(require_session_user)], export_id: str, filename: str):
-    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
-    problem_id = int(ctx["problem"]["id"])
-    workspace_id = int(ctx["workspace"]["id"])
+    user_ctx = global_user_ctx(user)
+    problem_row = config.contest_service.problem_by_slug(problem)
+    if problem_row is None:
+        raise HTTPException(status_code=404, detail="problem not found")
+    problem_id = int(problem_row["id"])
+    access = workspace_access_context(problem_id, int(user_ctx["user"]["id"]))
+    if not bool(access["can_read"]):
+        raise HTTPException(status_code=403, detail=access["read_block_reason"])
     file_path = config.export_service.export_archive_path(
         problem_id,
-        workspace_id,
         export_id,
-        problem,
         filename,
     )
     if file_path is None:
