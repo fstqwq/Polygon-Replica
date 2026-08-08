@@ -200,17 +200,17 @@ def _copy_testlib(snapshot: Path, target_dir: Path) -> None:
 def _program_command(source: Path, *, snapshot: Path, target_dir: Path) -> tuple[str, str]:
     suffix = source.suffix.lower()
     shutil.copy2(source, target_dir / source.name)
-    quoted_name = shlex.quote(source.name)
+    quoted_name = shlex.quote(f"./{source.name}")
     if suffix in {".cc", ".cpp", ".cxx"}:
         _copy_testlib(snapshot, target_dir)
         return (
-            f"c++ -Wall -DDOMJUDGE -O2 -std=gnu++20 -o program.bin -- {quoted_name}\n",
-            "./program.bin",
+            f"c++ -Wall -DDOMJUDGE -O2 -std=gnu++20 -o program.bin {quoted_name}\n",
+            '"$program_dir/program.bin"',
         )
     if suffix == ".c":
-        return (f"cc -Wall -O2 -o program.bin -- {quoted_name}\n", "./program.bin")
+        return (f"cc -Wall -O2 -o program.bin {quoted_name}\n", '"$program_dir/program.bin"')
     if suffix == ".py":
-        return ("", f"python3 {quoted_name}")
+        return ("", f'python3 "$program_dir"/{shlex.quote(source.name)}')
     raise ValueError(f"unsupported ICPC validator language: {suffix or source.name}")
 
 
@@ -222,10 +222,14 @@ def write_input_validator(*, snapshot: Path, package_root: Path, source: Path | 
         return
     build_command, command = _program_command(source, snapshot=snapshot, target_dir=target_dir)
     if build_command:
-        _write_executable(target_dir / "build", f"#!/bin/sh\nset -eu\n{build_command}")
+        _write_executable(
+            target_dir / "build",
+            "#!/bin/sh\nset -eu\ncd -- \"$(dirname -- \"$0\")\"\n" + build_command,
+        )
     _write_executable(
         target_dir / "run",
         "#!/bin/sh\n"
+        "program_dir=$(CDPATH= cd -- \"$(dirname -- \"$0\")\" && pwd)\n"
         f"{command} \"$@\"\n"
         "status=$?\n"
         "case \"$status\" in\n"
@@ -242,10 +246,14 @@ def write_output_validator(*, snapshot: Path, package_root: Path, source: Path |
     target_dir.mkdir(parents=True, exist_ok=True)
     build_command, command = _program_command(source, snapshot=snapshot, target_dir=target_dir)
     if build_command:
-        _write_executable(target_dir / "build", f"#!/bin/sh\nset -eu\n{build_command}")
+        _write_executable(
+            target_dir / "build",
+            "#!/bin/sh\nset -eu\ncd -- \"$(dirname -- \"$0\")\"\n" + build_command,
+        )
     _write_executable(
         target_dir / "run",
         "#!/bin/sh\n"
+        "program_dir=$(CDPATH= cd -- \"$(dirname -- \"$0\")\" && pwd)\n"
         f"{command} \"$@\"\n"
         "status=$?\n"
         "case \"$status\" in\n"

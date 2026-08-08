@@ -1503,11 +1503,11 @@ class TestExport(E2ETestBase):
         with zipfile.ZipFile(archive, "r") as zf:
             build_script = zf.read("output_validator/build").decode("utf-8", errors="replace")
             self.assertIn(
-                f"c++ -Wall -DDOMJUDGE -O2 -std=gnu++20 -o program.bin -- {shlex.quote(interactor_name)}\n",
+                f"c++ -Wall -DDOMJUDGE -O2 -std=gnu++20 -o program.bin {shlex.quote(f'./{interactor_name}')}\n",
                 build_script,
             )
             self.assertNotIn(
-                f" -- {interactor_name}\n",
+                f" {interactor_name}\n",
                 build_script,
             )
 
