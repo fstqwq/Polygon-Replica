@@ -824,6 +824,15 @@
   align-items: start;
 }
 
+.admin-config-sidebar {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.admin-config-reset {
+  justify-self: start;
+}
+
 .admin-config-categories {
   display: grid;
   border: 1px solid var(--line);

@@ -172,6 +172,8 @@ class TestSmtpConfig(UIHelpersMixin, E2ETestBase):
             missing_key_page = admin_mail_page(_request("/admin/mail"), user=self.user)
             missing_key_html = missing_key_page.body.decode("utf-8", errors="replace")
             self.assertIn("POLYGON_REPLICA_ENCRYPTION_KEY is not configured", missing_key_html)
+            self.assertIn("Polygon Replica server or container environment", missing_key_html)
+            self.assertIn("restart the web service", missing_key_html)
             self.assertIn("encrypts the SMTP password before it is stored", missing_key_html)
 
         self.assertEqual(response.status_code, 303)

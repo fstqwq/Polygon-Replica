@@ -1,28 +1,24 @@
 {% extends "admin_base.html" %}
 {% block admin_title %}System configuration{% endblock %}
 {% block admin_content %}
-<div class="admin-page-actions">
-  <form method="post" action="/admin/config/reset" data-confirm-message="Reset all system configuration to defaults?">
-    <button class="btn danger-link" type="submit">Reset all overrides</button>
-  </form>
-</div>
-
 <div class="admin-config-layout">
-  <nav class="admin-config-categories" aria-label="Configuration categories">
-    {% for section in config_sections %}
-    <a class="{% if section.slug == selected_slug %}active{% endif %}" href="{{ section.href }}">
-      <span>{{ section.category }}</span>
-      {% if section.changed_count %}<strong class="warn">{{ section.changed_count }}</strong>{% endif %}
-    </a>
-    {% endfor %}
-  </nav>
+  <div class="admin-config-sidebar">
+    <nav class="admin-config-categories" aria-label="Configuration categories">
+      {% for section in config_sections %}
+      <a class="{% if section.slug == selected_slug %}active{% endif %}" href="{{ section.href }}">
+        <span>{{ section.category }}</span>
+        {% if section.changed_count %}<strong class="warn">{{ section.changed_count }}</strong>{% endif %}
+      </a>
+      {% endfor %}
+    </nav>
+    <form class="admin-config-reset" method="post" action="/admin/config/reset" data-confirm-message="Reset all system configuration to defaults?">
+      <button class="btn danger-link" type="submit">Reset all overrides</button>
+    </form>
+  </div>
 
   <section class="content-section-plain admin-config-section">
     <div class="admin-card-head">
-      <div>
-        <h2>{{ selected_section.category }}</h2>
-        <p class="muted">{{ selected_changed_count }} overrides · {{ selected_count }} keys</p>
-      </div>
+      <h2>{{ selected_section.category }}</h2>
     </div>
     <form class="form-stack" method="post" action="/admin/config/{{ selected_slug }}">
       <div class="admin-config-list">

@@ -10,7 +10,12 @@
       </span>
     </div>
     {% if not smtp.get('encryption_key_ready') %}
-    <p class="danger">{{ smtp.get('encryption_key_message', '') }}. This deployment key encrypts the SMTP password before it is stored.</p>
+    <p class="danger">
+      {{ smtp.get('encryption_key_message', '') }}.
+      Set it in the Polygon Replica server or container environment
+      (Docker <code>--env</code> or Compose <code>environment:</code>), then restart the web service.
+      It encrypts the SMTP password before it is stored.
+    </p>
     {% endif %}
     <form class="form-stack" method="post" action="/admin/mail">
       <div class="admin-inline-fields">
