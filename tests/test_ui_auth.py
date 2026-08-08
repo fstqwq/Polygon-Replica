@@ -8,10 +8,10 @@ from unittest.mock import patch
 
 from fastapi import HTTPException
 from starlette.responses import PlainTextResponse
+import app.impl.admin.panel as admin_panel_module
 from app.service.auth.password_hash import password_verifier_storage_hash
 from app import main_constant
 from app.impl.auth.password_envelope import PasswordEnvelopeStore
-from app.impl.admin.panel import admin_artifacts_cleanup as settings_artifacts_cleanup
 from app.impl.root.auth_pages import logout
 from app.service.platform.maintenance import CleanupStart
 from tests.common import E2ETestBase
@@ -1183,7 +1183,7 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
             "start_cleanup",
             return_value=CleanupStart(True, "started", {}),
         ):
-            accepted = settings_artifacts_cleanup(user="alice")
+            accepted = admin_panel_module.admin_artifacts_cleanup(user="alice")
         self.assertEqual(accepted.status_code, 303)
         self.assertEqual(accepted.headers.get("location"), "/maintenance")
 
@@ -1200,7 +1200,7 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
             "start_cleanup",
             return_value=CleanupStart(False, "busy", busy_counts),
         ):
-            busy = settings_artifacts_cleanup(user="alice")
+            busy = admin_panel_module.admin_artifacts_cleanup(user="alice")
         self.assertEqual(busy.status_code, 409)
         self.assertIn(b'"worker_queued":1', busy.body)
 

@@ -883,7 +883,10 @@ ADMIN_CONFIG_SPECS: dict[str, dict[str, object]] = {
         "type": "int",
         "min": 1024,
         "max": 134217728,
-        "description": "Maximum size of each checker, validator, interactor, or testlib source file.",
+        "description": (
+            "Maximum size of each checker, validator, interactor, or testlib "
+            "source file."
+        ),
     },
 }
 
