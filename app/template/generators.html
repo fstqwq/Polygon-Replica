@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_component_forms.html" import rename_source_form, source_editor_form %}
+{% from "_component_forms.html" import component_empty_state, rename_source_form, source_editor_form %}
 {% block content %}
 <div class="page-title-inline component-page-title">
   <h1 class="page-title">Generators</h1>
@@ -82,12 +82,12 @@
   ) }}
 </section>
 {% else %}
-<section class="component-empty-state">
-  <div>
-    <h2>No generators</h2>
-    <p class="muted">Add a source when tests need generated input.</p>
-  </div>
+{% call component_empty_state('No generators', 'Add a source when tests need generated input.') %}
+  {% if ctx.access.can_write %}
   <a class="button-link primary-action" href="{{ problem_href('problem_generators', query={'new': 'generator.cpp'}) }}">Add generator</a>
-</section>
+  {% else %}
+  <span class="button-link primary-action" aria-disabled="true" title="{{ ctx.access.write_block_reason }}">Add generator</span>
+  {% endif %}
+{% endcall %}
 {% endif %}
 {% endblock %}

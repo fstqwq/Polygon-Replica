@@ -1,34 +1,34 @@
 {% extends "base.html" %}
-{% from "_component_forms.html" import rename_source_form, source_editor_form %}
+{% from "_component_forms.html" import component_empty_state, rename_source_form, source_editor_form %}
 {% macro custom_checker_editor(inline_error='') -%}
 <section class="component-workbench checker-custom-editor">
   <div class="component-workbench-head">
     <div>
-      <h2>{{ "Custom checker" if checker_status.repo_source_exists else "New custom checker" }}</h2>
+      <h2>{{ "Custom checker" if editor.source_exists else "New custom checker" }}</h2>
     </div>
-    {% if checker_status.repo_source_exists %}<code class="component-workbench-path">{{ repo_source }}</code>{% endif %}
+    {% if editor.source_exists %}<code class="component-workbench-path">{{ editor.source_path }}</code>{% endif %}
   </div>
   {% if checker_status.standard_warning %}
   <p class="flash flash-inline tone-warn">{{ checker_status.standard_warning }}</p>
   {% endif %}
-  {% if checker_status.repo_source_exists %}
+  {% if editor.source_exists %}
   {{ rename_source_form(
     problem_href('checker_rename_source'),
-    repo_source,
+    editor.source_path,
     "checker-rename-path"
   ) }}
   {% endif %}
   {{ source_editor_form(
     problem_href('checker_save_source'),
-    repo_source,
-    repo_content,
-    repo_content_truncated,
+    editor.source_path,
+    editor.content,
+    editor.content_truncated,
     content_char_limit,
     "Save checker",
     inline_error,
-    not checker_status.repo_source_exists,
+    not editor.source_exists,
     "checker-source-path",
-    starter_content
+    editor.starter_content
   ) }}
 </section>
 {%- endmacro %}
@@ -68,6 +68,27 @@
 {% set editor_error = message if message_level == 'error' else '' %}
 
 <div class="checker-layout">
+  {% if editor.state == 'empty' and not editor_error %}
+  {% call component_empty_state('No checker', 'Choose a standard checker or write one.') %}
+    {% if standard_checker_options %}
+    <form class="checker-empty-standard-form" method="post" action="{{ problem_href('checker_set_standard') }}">
+      <select id="standard-checker-name" name="checker_name" aria-label="Standard checker" data-auto-submit-select="1" {% if not ctx.access.can_write %}disabled title="{{ ctx.access.write_block_reason }}"{% endif %}>
+        <option value="" selected disabled>Choose a standard checker</option>
+        {% for checker in standard_checker_options %}
+        <option value="{{ checker.value }}">{{ checker.value }} — {{ checker.description }}</option>
+        {% endfor %}
+      </select>
+    </form>
+    {% else %}
+    <span class="danger">Standard checker catalog unavailable.</span>
+    {% endif %}
+    {% if ctx.access.can_write %}
+    <a class="button-link primary-action" href="{{ problem_href('problem_checker', query={'new': 'checker.cpp'}) }}">Write custom checker</a>
+    {% else %}
+    <span class="button-link primary-action" aria-disabled="true" title="{{ ctx.access.write_block_reason }}">Write custom checker</span>
+    {% endif %}
+  {% endcall %}
+  {% else %}
   {{ standard_checker_section() }}
   {% if show_custom_editor or editor_error %}
   {{ custom_checker_editor(editor_error) }}
@@ -76,8 +97,9 @@
     <div>
       <h2>Custom checker</h2>
     </div>
-    <a class="button-link primary-action" href="{{ problem_href('problem_checker', query={'mode': 'custom'}) }}">{{ "Customize source" if checker_status.repo_source_exists else "Write custom checker" }}</a>
+    <a class="button-link primary-action" href="{{ problem_href('problem_checker', query={'edit': 'source'}) }}">Customize source</a>
   </section>
+  {% endif %}
   {% endif %}
 </div>
 {% endblock %}

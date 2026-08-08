@@ -1,34 +1,44 @@
 {% extends "base.html" %}
-{% from "_component_forms.html" import rename_source_form, source_editor_form %}
+{% from "_component_forms.html" import component_empty_state, rename_source_form, source_editor_form %}
 {% block content %}
 <h1 class="page-title">Interactor</h1>
 {% include "_flash_message.html" %}
 {% set editor_error = message if message_level == 'error' else '' %}
+{% if editor.state == 'empty' and not editor_error %}
+{% call component_empty_state('No interactor', 'Add a source for interactive communication.') %}
+  {% if ctx.access.can_write %}
+  <a class="button-link primary-action" href="{{ problem_href('problem_interactor', query={'new': 'interactor.cpp'}) }}">Add interactor</a>
+  {% else %}
+  <span class="button-link primary-action" aria-disabled="true" title="{{ ctx.access.write_block_reason }}">Add interactor</span>
+  {% endif %}
+{% endcall %}
+{% else %}
 <section class="component-workbench">
     <div class="component-workbench-head">
       <div>
-        <h2>{{ "Interactor source" if interactor_status.repo_source_exists else "New interactor" }}</h2>
+        <h2>{{ "Interactor source" if editor.source_exists else "New interactor" }}</h2>
       </div>
-      {% if interactor_status.repo_source_exists %}<code class="component-workbench-path">{{ repo_source }}</code>{% endif %}
+      {% if editor.source_exists %}<code class="component-workbench-path">{{ editor.source_path }}</code>{% endif %}
     </div>
-    {% if interactor_status.repo_source_exists %}
+    {% if editor.source_exists %}
     {{ rename_source_form(
       problem_href('interactor_rename_source'),
-      repo_source,
+      editor.source_path,
       "interactor-rename-path"
     ) }}
     {% endif %}
     {{ source_editor_form(
       problem_href('interactor_save_source'),
-      repo_source,
-      repo_content,
-      repo_content_truncated,
+      editor.source_path,
+      editor.content,
+      editor.content_truncated,
       content_char_limit,
       "Save interactor",
       editor_error,
-      not interactor_status.repo_source_exists,
+      not editor.source_exists,
       "interactor-source-path",
-      starter_content
+      editor.starter_content
     ) }}
 </section>
+{% endif %}
 {% endblock %}

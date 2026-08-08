@@ -33,3 +33,15 @@
   <button class="btn" type="submit">Rename</button>
 </form>
 {%- endmacro %}
+
+{% macro component_empty_state(title, description='') -%}
+<section class="component-empty-state">
+  <div>
+    <h2>{{ title }}</h2>
+    {% if description %}<p class="muted">{{ description }}</p>{% endif %}
+  </div>
+  <div class="component-empty-state-actions">
+    {{ caller() }}
+  </div>
+</section>
+{%- endmacro %}

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Literal, TypedDict
 from urllib.parse import quote_plus
 
 from fastapi import HTTPException, Request
@@ -27,12 +27,75 @@ MAIN_CORRECT_EXPECTED_VALUE = "main_correct"
 MAIN_CORRECT_EXPECTED_LABEL = "main correct solution (AC)"
 
 
+class SingleSourceEditorContext(TypedDict):
+    state: Literal["empty", "create", "existing"]
+    source_path: str
+    source_exists: bool
+    content: str
+    content_truncated: bool
+    starter_content: str
+
+
 def _normalize_component_create_path(raw: str | None, folder: str, default_filename: str) -> str:
     normalized = normalize_workspace_rel_path(raw)
     expected_prefix = f"{folder}/"
     if normalized and (not normalized.startswith(expected_prefix)):
         normalized = f"{folder}/{normalized}"
     return normalize_component_source_path(normalized, folder, default_filename)
+
+
+def single_source_editor_context(
+    *,
+    request: Request,
+    workspace: Path,
+    configured_source: str,
+    configured_source_exists: bool,
+    folder: str,
+    default_filename: str,
+    starter_content: str,
+) -> SingleSourceEditorContext:
+    default_source = f"{folder}/{default_filename}"
+    requested_new = request.query_params.get("new")
+    source_path = configured_source or default_source
+    state: Literal["empty", "create", "existing"]
+    if configured_source_exists:
+        state = "existing"
+    elif requested_new is None:
+        state = "empty"
+    else:
+        state = "create"
+        try:
+            source_path = _normalize_component_create_path(
+                requested_new or default_filename,
+                folder,
+                default_filename,
+            )
+        except ValueError:
+            source_path = default_source
+
+    content = ""
+    content_truncated = False
+    if state == "existing":
+        try:
+            source_abs = safe_workspace_path(workspace, source_path)
+            if source_abs.exists() and source_abs.is_file() and not source_abs.is_symlink():
+                content, content_truncated = config.git_service.read_file_limited(
+                    workspace,
+                    source_path,
+                    _C.WORKSPACE_FILE_VIEW_CHAR_LIMIT,
+                )
+        except HTTPException:
+            content = ""
+            content_truncated = False
+
+    return {
+        "state": state,
+        "source_path": source_path,
+        "source_exists": configured_source_exists,
+        "content": content,
+        "content_truncated": content_truncated,
+        "starter_content": "" if configured_source_exists else starter_content,
+    }
 
 
 def _normalize_component_rename_target(raw: str | None, folder: str, default_filename: str, component_label: str) -> str:
@@ -156,4 +219,3 @@ def _has_destructive_sudo_for_ctx(request: Request, ctx: dict) -> bool:
     if user_id <= 0:
         return False
     return has_sudo_session(request, user_id=user_id, scope=str(_C.SUDO_SCOPE_DESTRUCTIVE))
-

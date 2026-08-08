@@ -219,6 +219,8 @@ class TestUIComponents(UIHelpersMixin, E2ETestBase):
         self.assertIn("std::wcmp.cpp", html)
 
     def test_checker_page_describes_standard_checkers_in_select_options(self) -> None:
+        ws = Path(workspace_service.ensure_workspace(self.problem, self.user))
+        (ws / "checkers/checker.cpp").unlink(missing_ok=True)
         resp = checker_page(
             _request(f"/problems/{self.problem}/checker"), self.problem, self.user
         )
@@ -233,12 +235,32 @@ class TestUIComponents(UIHelpersMixin, E2ETestBase):
             html,
         )
         self.assertEqual(html.count("ordered sequence of tokens"), 1)
-        self.assertIn('class="checker-standard-control-row"', html)
+        self.assertIn("Choose a standard checker", html)
+        self.assertIn('class="checker-empty-standard-form"', html)
         self.assertIn('data-auto-submit-select="1"', html)
         self.assertNotIn("Use checker", html)
+        self.assertNotIn("View source", html)
         self.assertNotIn("standard-checker-description", html)
         self.assertNotIn("Use custom testlib logic", html)
-        self.assertIn('class="button-link primary-action"', html)
+        self.assertIn(">Write custom checker</a>", html)
+        self.assertIn("new=checker.cpp", html)
+        self.assertNotIn("mode=custom", html)
+        self.assertNotIn('data-code-editor="1"', html)
+
+        create_resp = checker_page(
+            _request(
+                f"/problems/{self.problem}/checker",
+                "new=checker.cpp",
+            ),
+            self.problem,
+            self.user,
+        )
+        self.assertEqual(create_resp.status_code, 200)
+        create_html = create_resp.body.decode("utf-8", errors="replace")
+        self.assertIn("New custom checker", create_html)
+        self.assertIn('data-code-editor="1"', create_html)
+        self.assertIn("Insert testlib template", create_html)
+        self.assertFalse((ws / "checkers/checker.cpp").exists())
 
     def test_checker_page_supports_source_save_without_files_page(self) -> None:
         ws = Path(workspace_service.ensure_workspace(self.problem, self.user))
@@ -1206,8 +1228,27 @@ class TestUIComponents(UIHelpersMixin, E2ETestBase):
         )
         self.assertEqual(validator_resp.status_code, 200)
         validator_html = validator_resp.body.decode("utf-8", errors="replace")
-        self.assertIn("New validator", validator_html)
-        self.assertIn("registerValidation", validator_html)
+        self.assertIn("No validator", validator_html)
+        self.assertIn(">Add validator</a>", validator_html)
+        self.assertNotIn('data-code-editor="1"', validator_html)
+        self.assertNotIn("registerValidation", validator_html)
+        self.assertFalse((ws / validator_rel).exists())
+
+        validator_create_resp = validator_page(
+            _request(
+                f"/problems/{self.problem}/validator",
+                "new=validator.cpp",
+            ),
+            self.problem,
+            self.user,
+        )
+        self.assertEqual(validator_create_resp.status_code, 200)
+        validator_create_html = validator_create_resp.body.decode(
+            "utf-8", errors="replace"
+        )
+        self.assertIn("New validator", validator_create_html)
+        self.assertIn("registerValidation", validator_create_html)
+        self.assertIn('data-code-editor="1"', validator_create_html)
         self.assertFalse((ws / validator_rel).exists())
 
         interactor_resp = interactor_page(
@@ -1215,8 +1256,27 @@ class TestUIComponents(UIHelpersMixin, E2ETestBase):
         )
         self.assertEqual(interactor_resp.status_code, 200)
         interactor_html = interactor_resp.body.decode("utf-8", errors="replace")
-        self.assertIn("New interactor", interactor_html)
-        self.assertIn("registerInteraction", interactor_html)
+        self.assertIn("No interactor", interactor_html)
+        self.assertIn(">Add interactor</a>", interactor_html)
+        self.assertNotIn('data-code-editor="1"', interactor_html)
+        self.assertNotIn("registerInteraction", interactor_html)
+        self.assertFalse((ws / interactor_rel).exists())
+
+        interactor_create_resp = interactor_page(
+            _request(
+                f"/problems/{self.problem}/interactor",
+                "new=interactor.cpp",
+            ),
+            self.problem,
+            self.user,
+        )
+        self.assertEqual(interactor_create_resp.status_code, 200)
+        interactor_create_html = interactor_create_resp.body.decode(
+            "utf-8", errors="replace"
+        )
+        self.assertIn("New interactor", interactor_create_html)
+        self.assertIn("registerInteraction", interactor_create_html)
+        self.assertIn('data-code-editor="1"', interactor_create_html)
         self.assertFalse((ws / interactor_rel).exists())
 
         with patch(

@@ -9,7 +9,7 @@ from fastapi import Form, HTTPException, Request, Depends
 from app.impl.auth.shared import json_error_response, json_redirect_response, redirect_response, template_response
 from app.impl.contest.workspace_scope import contest_workspace_context_from_request
 from app.impl.problem.compile_check import judgehost_compile_check_error
-from app.impl.problem.shared import rename_component_source
+from app.impl.problem.shared import rename_component_source, single_source_editor_context
 from app.impl.runtime.config import config
 from app.impl.workspace.context_operation import audit, read_build_config, template_for_kind, write_build_config
 from app.impl.workspace.access import require_write_access
@@ -31,17 +31,16 @@ def validator_page(request: Request, problem: str, user: Annotated[str, Depends(
     validator_status = validator_status_context(workspace)
     repo_source = validator_status['repo_source'] if isinstance(validator_status.get('repo_source'), str) and validator_status['repo_source'] else 'validators/validator.cpp'
     repo_exists = bool(validator_status.get('repo_source_exists'))
-    repo_content = ''
-    repo_content_truncated = False
-    try:
-        repo_abs = safe_workspace_path(workspace, repo_source)
-        if repo_abs.exists() and repo_abs.is_file() and (not repo_abs.is_symlink()):
-            repo_content, repo_content_truncated = config.git_service.read_file_limited(workspace, repo_source, _C.WORKSPACE_FILE_VIEW_CHAR_LIMIT)
-    except HTTPException:
-        repo_content = ''
-        repo_content_truncated = False
-    starter_content = template_for_kind('validator') if not repo_exists else ''
-    return template_response(request, 'validator.html', {'ctx': ctx, 'validator_status': validator_status, 'repo_source': repo_source, 'repo_content': repo_content, 'starter_content': starter_content, 'repo_content_truncated': repo_content_truncated, 'content_char_limit': _C.WORKSPACE_FILE_VIEW_CHAR_LIMIT})
+    editor = single_source_editor_context(
+        request=request,
+        workspace=workspace,
+        configured_source=repo_source,
+        configured_source_exists=repo_exists,
+        folder='validators',
+        default_filename='validator.cpp',
+        starter_content=template_for_kind('validator'),
+    )
+    return template_response(request, 'validator.html', {'ctx': ctx, 'validator_status': validator_status, 'editor': editor, 'content_char_limit': _C.WORKSPACE_FILE_VIEW_CHAR_LIMIT})
 
 def validator_rename_source(
     problem: str,

@@ -10,7 +10,7 @@ from app.impl.auth.shared import json_error_response, json_redirect_response, re
 from app.impl.contest.workspace_scope import contest_workspace_context_from_request
 from app.impl.problem.compile_check import judgehost_compile_check_error
 from app.impl.runtime.config import config
-from app.impl.problem.shared import rename_component_source
+from app.impl.problem.shared import rename_component_source, single_source_editor_context
 from app.impl.workspace.context_operation import audit, read_build_config, resolve_standard_checker_path, standard_checker_catalog, template_for_kind, write_build_config
 from app.impl.workspace.context_component_status import checker_status_context
 from app.impl.workspace.access import require_write_access
@@ -34,27 +34,23 @@ def checker_page(request: Request, problem: str, user: Annotated[str, Depends(re
     checker_status = checker_status_context(workspace)
     standard_checker_options = standard_checker_catalog()
     selected_standard = standard_checker if isinstance(standard_checker := checker_status.get('standard_checker'), str) else ''
-    if not selected_standard and standard_checker_options:
-        recommended = next(
-            (row for row in standard_checker_options if row['value'] == 'std::wcmp.cpp'),
-            standard_checker_options[0],
-        )
-        selected_standard = recommended['value']
     repo_source = repo_source if isinstance(repo_source := checker_status.get('repo_source'), str) and repo_source else 'checkers/checker.cpp'
-    repo_content = ''
-    repo_content_truncated = False
-    try:
-        repo_abs = safe_workspace_path(workspace, repo_source)
-        if repo_abs.exists() and repo_abs.is_file() and (not repo_abs.is_symlink()):
-            repo_content, repo_content_truncated = config.git_service.read_file_limited(workspace, repo_source, _C.WORKSPACE_FILE_VIEW_CHAR_LIMIT)
-    except HTTPException:
-        repo_content = ''
-        repo_content_truncated = False
-    starter_content = template_for_kind('checker') if not checker_status.get('repo_source_exists') else ''
-    show_custom_editor = request.query_params.get('mode') == 'custom' or bool(
-        checker_status.get('repo_source_exists') and not checker_status.get('standard_checker')
+    editor = single_source_editor_context(
+        request=request,
+        workspace=workspace,
+        configured_source=repo_source,
+        configured_source_exists=bool(checker_status.get('repo_source_exists')),
+        folder='checkers',
+        default_filename='checker.cpp',
+        starter_content=template_for_kind('checker'),
     )
-    return template_response(request, 'checker.html', {'ctx': ctx, 'checker_status': checker_status, 'standard_checker_options': standard_checker_options, 'selected_standard_checker': selected_standard, 'show_custom_editor': show_custom_editor, 'repo_source': repo_source, 'repo_content': repo_content, 'starter_content': starter_content, 'repo_content_truncated': repo_content_truncated, 'content_char_limit': _C.WORKSPACE_FILE_VIEW_CHAR_LIMIT})
+    show_custom_editor = editor['state'] == 'create' or bool(
+        editor['state'] == 'existing' and (
+            not checker_status.get('standard_checker')
+            or request.query_params.get('edit') == 'source'
+        )
+    )
+    return template_response(request, 'checker.html', {'ctx': ctx, 'checker_status': checker_status, 'standard_checker_options': standard_checker_options, 'selected_standard_checker': selected_standard, 'show_custom_editor': show_custom_editor, 'editor': editor, 'content_char_limit': _C.WORKSPACE_FILE_VIEW_CHAR_LIMIT})
 
 def checker_view_standard(request: Request, problem: str, user: Annotated[str, Depends(require_session_user)], checker_name: str=''):
     ctx = page_ctx(

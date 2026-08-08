@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_component_forms.html" import component_empty_state %}
 {% block content %}
 <div class="page-title-inline component-page-title">
   <h1 class="page-title">Solutions</h1>
@@ -58,12 +59,12 @@
     </table>
  </section>
 {% else %}
-<section class="component-empty-state">
-  <div>
-    <h2>No solutions</h2>
-    <p class="muted">Add a source to define expected behavior.</p>
-  </div>
+{% call component_empty_state('No solutions', 'Add a source to define expected behavior.') %}
+  {% if ctx.access.can_write %}
   <a class="button-link primary-action" href="{{ problem_href('solutions_editor_page', query={'path': solution_create_default_path}) }}">Add solution</a>
-</section>
+  {% else %}
+  <span class="button-link primary-action" aria-disabled="true" title="{{ ctx.access.write_block_reason }}">Add solution</span>
+  {% endif %}
+{% endcall %}
 {% endif %}
 {% endblock %}

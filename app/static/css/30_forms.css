@@ -276,6 +276,22 @@ form {
   gap: var(--space-4);
 }
 
+.component-empty-state-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.checker-empty-standard-form {
+  min-width: min(360px, 100%);
+}
+
+.checker-empty-standard-form select {
+  width: 100%;
+}
+
 .checker-standard-head h2,
 .checker-standard-head p,
 .checker-custom-entry h2,
@@ -381,6 +397,11 @@ form {
   .checker-standard-head,
   .checker-custom-entry,
   .component-empty-state {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .component-empty-state-actions {
     align-items: stretch;
     flex-direction: column;
   }

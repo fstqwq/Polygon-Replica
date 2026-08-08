@@ -9,7 +9,7 @@ from fastapi import Form, HTTPException, Request, Depends
 from app.impl.auth.shared import json_error_response, json_redirect_response, redirect_response, template_response
 from app.impl.contest.workspace_scope import contest_workspace_context_from_request
 from app.impl.problem.compile_check import judgehost_compile_check_error
-from app.impl.problem.shared import rename_component_source
+from app.impl.problem.shared import rename_component_source, single_source_editor_context
 from app.impl.runtime.config import config
 from app.impl.workspace.context_operation import audit, read_build_config, template_for_kind, write_build_config
 from app.impl.workspace.context_component_status import interactor_status_context
@@ -30,17 +30,16 @@ def interactor_page(request: Request, problem: str, user: Annotated[str, Depends
     workspace = Path(ctx['workspace']['path'])
     interactor_status = interactor_status_context(workspace)
     repo_source = repo_source if isinstance(repo_source := interactor_status.get('repo_source'), str) and repo_source else 'interactors/interactor.cpp'
-    repo_content = ''
-    repo_content_truncated = False
-    try:
-        repo_abs = safe_workspace_path(workspace, repo_source)
-        if repo_abs.exists() and repo_abs.is_file() and (not repo_abs.is_symlink()):
-            repo_content, repo_content_truncated = config.git_service.read_file_limited(workspace, repo_source, _C.WORKSPACE_FILE_VIEW_CHAR_LIMIT)
-    except HTTPException:
-        repo_content = ''
-        repo_content_truncated = False
-    starter_content = template_for_kind('interactor') if not interactor_status.get('repo_source_exists') else ''
-    return template_response(request, 'interactor.html', {'ctx': ctx, 'interactor_status': interactor_status, 'repo_source': repo_source, 'repo_content': repo_content, 'starter_content': starter_content, 'repo_content_truncated': repo_content_truncated, 'content_char_limit': _C.WORKSPACE_FILE_VIEW_CHAR_LIMIT})
+    editor = single_source_editor_context(
+        request=request,
+        workspace=workspace,
+        configured_source=repo_source,
+        configured_source_exists=bool(interactor_status.get('repo_source_exists')),
+        folder='interactors',
+        default_filename='interactor.cpp',
+        starter_content=template_for_kind('interactor'),
+    )
+    return template_response(request, 'interactor.html', {'ctx': ctx, 'interactor_status': interactor_status, 'editor': editor, 'content_char_limit': _C.WORKSPACE_FILE_VIEW_CHAR_LIMIT})
 
 def interactor_rename_source(
     problem: str,
