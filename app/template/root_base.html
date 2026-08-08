@@ -4,7 +4,10 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>{% block root_title %}{{ ui_browser_title }}{% endblock %}</title>
-  <link rel="stylesheet" href="/static/style.css?v=20260808-70" />
+  <link rel="stylesheet" href="/static/css/00_tokens.css?v=20260809-01" />
+  <link rel="stylesheet" href="/static/css/core.css?v=20260809-01" />
+  <link rel="stylesheet" href="/static/css/dialog_auth.css?v=20260809-01" />
+  {% block page_styles %}{% endblock %}
 </head>
 <body class="root-layout">
   {% set flash_presenter = 'topbar' %}
@@ -21,6 +24,7 @@
     </main>
   </div>
   {% include "_page_profile.html" %}
-  <script src="/static/ui.js?v=20260808-37" defer></script>
+  <script type="module" src="/static/ui.js?v=20260809-01"></script>
+  {% block page_scripts %}{% endblock %}
 </body>
 </html>

@@ -1,4 +1,6 @@
 {% extends "base.html" %}
+{% block page_styles %}<link rel="stylesheet" href="/static/css/25_code_editor.css?v=20260809-01" />{% endblock %}
+{% block page_scripts %}<script src="/static/editor_init.js?v=20260807-03" defer></script>{% endblock %}
 {% from "_component_forms.html" import component_empty_state, rename_source_form, source_editor_form %}
 {% macro custom_checker_editor(inline_error='') -%}
 <section class="content-section component-workbench checker-custom-editor">

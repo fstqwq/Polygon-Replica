@@ -1,0 +1,238 @@
+/* Solutions lists and source editor. */
+.solutions-editor-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.7fr) minmax(320px, 1fr);
+  gap: var(--space-4);
+  align-items: start;
+}
+
+.solutions-editor-layout > section {
+  min-width: 0;
+}
+
+.solutions-editor-layout table {
+  table-layout: fixed;
+}
+
+.solution-editor-panel {
+  min-width: 0;
+}
+
+
+.solutions-delete-form {
+  display: inline-flex;
+  margin: 0;
+}
+
+
+.solution-pick-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-4);
+  font-size: var(--font-size-ui-sm);
+}
+
+.solution-pick-list {
+  max-height: 360px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  padding: var(--space-1);
+}
+
+.solution-pick-item {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  padding: var(--space-2);
+}
+
+.solution-pick-main {
+  font-family: Consolas, "Courier New", monospace;
+  font-size: var(--font-size-ui-sm);
+}
+
+.solution-pick-help {
+  margin-top: var(--space-2);
+}
+
+.solutions-table {
+  table-layout: fixed;
+  width: 100%;
+}
+
+.solutions-table col.solutions-col-source {
+  width: 36%;
+}
+
+.solutions-table col.solutions-col-expected {
+  width: 38%;
+}
+
+.solutions-table col.solutions-col-actions {
+  width: 26%;
+}
+
+.solutions-source-link {
+  display: inline-block;
+  max-width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.solutions-source-link > code {
+  display: inline-block;
+  max-width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.solutions-expected-cell .tag-form {
+  width: 100%;
+}
+
+.solutions-expected-cell .tag-select {
+  width: 100%;
+  max-width: 100%;
+}
+
+.solutions-actions-cell {
+  min-width: 0;
+}
+
+.solutions-actions {
+  display: flex;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.solutions-rename-disclosure {
+  min-width: 0;
+}
+
+.solutions-rename-disclosure > summary {
+  color: var(--link);
+  cursor: pointer;
+  list-style: none;
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+  white-space: nowrap;
+}
+
+.solutions-rename-disclosure > summary::-webkit-details-marker {
+  display: none;
+}
+
+.solutions-rename-form {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+  min-width: 0;
+}
+
+.solutions-rename-form > input[name="new_path"] {
+  width: min(220px, 24vw);
+  min-width: 120px;
+}
+
+.solutions-delete-form {
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+
+.tag-select {
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  appearance: none;
+  font-size: var(--font-size-ui-sm);
+  padding: 3px 6px;
+  padding-right: var(--space-8);
+  background-position: right 8px center;
+  background-repeat: no-repeat;
+  background-size: 10px 6px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%236b7280' stroke-width='1.5'/%3E%3C/svg%3E");
+}
+
+/* Expected-behavior palette: ok / fail / info / neutral. */
+select.tag-select.tag-select-main-correct,
+select.tag-select.tag-select-accepted {
+  color: var(--tag-ok-fg);
+  border-color: var(--tag-ok-border);
+  background-color: var(--tag-ok-bg);
+}
+
+select.tag-select.tag-select-main-correct {
+  font-weight: 700;
+}
+
+select.tag-select.tag-select-main-correct option {
+  font-weight: 400;
+}
+
+select.tag-select.tag-select-main-correct option[value="main_correct"] {
+  font-weight: 700;
+}
+
+select.tag-select.tag-select-wrong-answer,
+select.tag-select.tag-select-time-limit-exceeded,
+select.tag-select.tag-select-run-time-error,
+select.tag-select.tag-select-rejected {
+  color: var(--tag-fail-fg);
+  border-color: var(--tag-fail-border);
+  background-color: var(--tag-fail-bg);
+}
+
+select.tag-select.tag-select-mixed {
+  color: var(--warn-text);
+  border-color: var(--warn-line);
+  background-color: var(--warn-bg);
+}
+
+select.tag-select.tag-select-expected {
+  color: var(--tag-info-fg);
+  border-color: var(--tag-info-border);
+  background-color: var(--tag-info-bg);
+}
+
+select.tag-select.tag-select-neutral {
+  color: var(--tag-neutral-fg);
+  border-color: var(--tag-neutral-border);
+  background-color: var(--tag-neutral-bg);
+}
+
+.tag-select option[value="main_correct"],
+.tag-select option[value="accepted"] {
+  color: var(--tag-ok-fg);
+  background-color: var(--tag-ok-bg);
+}
+
+.tag-select option[value="main_correct"] {
+  font-weight: 700;
+}
+
+.tag-select option[value="wrong_answer"],
+.tag-select option[value="time_limit_exceeded"],
+.tag-select option[value="run_time_error"],
+.tag-select option[value="rejected"] {
+  color: var(--tag-fail-fg);
+  background-color: var(--tag-fail-bg);
+}
+
+.tag-select option[value="tle_or_correct"],
+.tag-select option[value="tle_or_re"] {
+  color: var(--warn-text);
+  background-color: var(--warn-bg);
+}
+
+.tag-select option[value="unknown"] {
+  color: var(--tag-neutral-fg);
+  background-color: var(--tag-neutral-bg);
+}
+
+

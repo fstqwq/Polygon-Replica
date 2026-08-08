@@ -1,4 +1,6 @@
 {% extends "root_base.html" %}
+{% block page_styles %}<link rel="stylesheet" href="/static/css/admin_settings.css?v=20260809-01" />{% endblock %}
+{% block page_scripts %}<script type="module" src="/static/js/auth.js?v=20260809-01"></script>{% endblock %}
 {% block content %}
 {% set settings_tab = 'user' %}
 {% include "_settings_navigation.html" %}

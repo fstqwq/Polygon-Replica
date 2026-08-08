@@ -1,0 +1,328 @@
+/* Statement editor, preview, attachments, and local drafts. */
+.statement-summary {
+  margin: 0 0 var(--space-4);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.statement-summary-title {
+  margin: 0;
+  display: inline-flex;
+  align-items: center;
+}
+
+.statement-summary-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.statement-summary-edit {
+  display: inline-flex;
+  align-items: center;
+  margin-left: auto;
+  white-space: nowrap;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  padding: 2px var(--space-3);
+}
+
+.statement-summary-edit:hover {
+  border-color: var(--line);
+  background: var(--surface-alt);
+  text-decoration: none;
+}
+
+.statement-page-title-inline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+}
+
+.statement-page-title-tools {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-3);
+  min-width: 0;
+  margin-left: auto;
+  flex-wrap: wrap;
+}
+
+.statement-language-switch-form {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.statement-language-switch-form > label {
+  margin: 0;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.statement-language-switch-form > select {
+  min-width: 120px;
+}
+
+.statement-preview-toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  margin-bottom: var(--space-4);
+}
+
+.statement-preview-status {
+  margin-left: var(--space-1);
+}
+
+.statement-preview-message {
+  margin-bottom: var(--space-4);
+}
+
+.statement-editor-main {
+  width: 100%;
+}
+
+.statement-preview-diagnostics {
+  margin-top: var(--space-5);
+}
+
+.statement-assets-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 380px), 1fr));
+  gap: var(--space-6);
+}
+
+.statement-assets-card {
+  display: grid;
+  gap: var(--space-3);
+  min-width: 0;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  padding: var(--space-5);
+}
+
+.statement-assets-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.statement-assets-card-head h2 {
+  margin: 0;
+}
+
+.statement-assets-card-copy {
+  margin: 0;
+}
+
+.statement-assets-card-body {
+  display: grid;
+  gap: var(--space-4);
+  min-width: 0;
+}
+
+@container problem-content (max-width: 900px) {
+  .statement-assets-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.statement-assets-upload-block {
+  margin: 0;
+}
+
+.statement-assets-upload-block .form-input-with-action {
+  flex-wrap: wrap;
+}
+
+.statement-assets-upload-block .form-input-with-action > input[type="file"] {
+  flex: 1 1 240px;
+  width: 0;
+  max-width: 100%;
+}
+
+@media (max-width: 720px) {
+  .statement-summary-meta {
+    gap: var(--space-2);
+  }
+
+  .statement-summary-edit {
+    margin-left: 0;
+  }
+
+  .statement-page-title-tools {
+    justify-content: flex-start;
+  }
+
+  .statement-assets-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+
+.statement-editor-field {
+  margin-bottom: var(--space-3);
+}
+
+.statement-editor-field-inline {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.statement-editor-field-inline > label {
+  margin: 0;
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.statement-editor-inline-input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.statement-editor-inline-input input {
+  width: 100%;
+}
+
+.statement-editor-field-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+
+.statement-editor-field-head label {
+  margin: 0;
+}
+
+.statement-editor-field-body {
+  position: relative;
+}
+
+.statement-draft-inline-trigger {
+  position: absolute;
+  right: var(--space-2);
+  bottom: var(--space-2);
+  z-index: 3;
+  white-space: nowrap;
+  font-size: var(--font-size-ui-xs);
+  line-height: 1;
+  padding: 5px 8px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--line) 85%, transparent);
+  background: color-mix(in srgb, var(--surface) 44%, transparent);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  opacity: 0.42;
+  transition: opacity 120ms ease, background-color 120ms ease, border-color 120ms ease;
+}
+
+.statement-draft-inline-trigger:hover,
+.statement-draft-inline-trigger:focus-visible {
+  opacity: 0.88;
+  background: color-mix(in srgb, var(--surface) 72%, transparent);
+  border-color: var(--line);
+}
+
+.statement-draft-popup .ui-popup-dialog {
+  width: min(760px, calc(100vw - 32px));
+}
+
+.statement-draft-list {
+  display: grid;
+  gap: var(--space-3);
+  max-height: min(46vh, 420px);
+  overflow: auto;
+}
+
+.statement-draft-entry {
+  border: 1px solid var(--line);
+  background: var(--surface);
+  padding: var(--space-3);
+  display: grid;
+  gap: var(--space-2);
+}
+
+.statement-draft-entry-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.statement-draft-entry-title {
+  margin: 0;
+  font-weight: 600;
+}
+
+.statement-draft-entry-meta {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--font-size-ui-sm);
+}
+
+.statement-draft-entry-preview {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--font-size-ui-sm);
+  line-height: 1.4;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.statement-draft-preview-list {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.statement-draft-preview-item {
+  border: 1px dashed var(--line);
+  padding: var(--space-2);
+  background: var(--surface-alt);
+  display: grid;
+  gap: var(--space-2);
+}
+
+.statement-draft-preview-title {
+  margin: 0;
+  font-weight: 600;
+  color: var(--text);
+  font-size: var(--font-size-ui-sm);
+}
+
+.statement-draft-preview-body {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: var(--font-size-ui-sm);
+  line-height: 1.45;
+  color: var(--text);
+}
+
+.statement-draft-entry-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.statement-draft-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+

@@ -8,10 +8,15 @@ from pathlib import Path
 from tests.assertion_helpers import assert_html_contract
 
 ROOT = Path(__file__).resolve().parents[1]
-STYLE_PATH = ROOT / "app" / "static" / "style.css"
 TOKENS_PATH = ROOT / "app" / "static" / "css" / "00_tokens.css"
-WORKSPACE_CSS_PATH = ROOT / "app" / "static" / "css" / "20_workspace.css"
+CORE_CSS_PATH = ROOT / "app" / "static" / "css" / "core.css"
+WORKSPACE_CSS_PATH = ROOT / "app" / "static" / "css" / "problem_workspace.css"
+COMPONENT_CSS_PATH = ROOT / "app" / "static" / "css" / "problem_components.css"
+STATEMENT_CSS_PATH = ROOT / "app" / "static" / "css" / "statement.css"
+FILES_CSS_PATH = ROOT / "app" / "static" / "css" / "files.css"
+CONTEST_CSS_PATH = ROOT / "app" / "static" / "css" / "contest.css"
 UI_JS_PATH = ROOT / "app" / "static" / "ui.js"
+JS_ROOT = ROOT / "app" / "static" / "js"
 ADMIN_JUDGEHOST_TEMPLATE_PATH = ROOT / "app" / "template" / "admin_judgehosts.html"
 
 
@@ -80,9 +85,14 @@ class TestPublicContracts(unittest.TestCase):
     def test_code_editor_assets_have_one_lazy_loading_owner(self) -> None:
         base_source = (ROOT / "app" / "template" / "base.html").read_text(encoding="utf-8-sig")
         editor_source = (ROOT / "app" / "static" / "editor_init.js").read_text(encoding="utf-8-sig")
-        ui_source = UI_JS_PATH.read_text(encoding="utf-8-sig")
-        forms_source = (ROOT / "app" / "static" / "css" / "30_forms.css").read_text(encoding="utf-8-sig")
-        tests_source = (ROOT / "app" / "static" / "css" / "50_tests.css").read_text(encoding="utf-8-sig")
+        ui_source = "\n".join(path.read_text(encoding="utf-8-sig") for path in sorted(JS_ROOT.glob("*.js")))
+        forms_source = "\n".join(
+            [
+                CORE_CSS_PATH.read_text(encoding="utf-8-sig"),
+                COMPONENT_CSS_PATH.read_text(encoding="utf-8-sig"),
+            ]
+        )
+        tests_source = (ROOT / "app" / "static" / "css" / "tests.css").read_text(encoding="utf-8-sig")
 
         self.assertNotIn("/static/vendor/codemirror", base_source)
         self.assertIn('var TARGET_SELECTOR = "textarea[data-code-editor=\'1\']";', editor_source)
@@ -94,7 +104,7 @@ class TestPublicContracts(unittest.TestCase):
         self.assertNotIn(".component-editor-error {", tests_source)
 
     def test_native_buttons_inherit_the_application_font(self) -> None:
-        forms_source = (ROOT / "app" / "static" / "css" / "30_forms.css").read_text(encoding="utf-8-sig")
+        forms_source = CORE_CSS_PATH.read_text(encoding="utf-8-sig")
         contest_packages_source = (ROOT / "app" / "template" / "contest_packages.html").read_text(
             encoding="utf-8-sig"
         )
@@ -103,7 +113,7 @@ class TestPublicContracts(unittest.TestCase):
         self.assertNotIn('class="link-button', contest_packages_source)
 
     def test_statement_attachment_cards_follow_content_width(self) -> None:
-        forms_source = (ROOT / "app" / "static" / "css" / "30_forms.css").read_text(encoding="utf-8-sig")
+        forms_source = STATEMENT_CSS_PATH.read_text(encoding="utf-8-sig")
 
         self.assertIn(
             "repeat(auto-fit, minmax(min(100%, 380px), 1fr))",
@@ -116,19 +126,18 @@ class TestPublicContracts(unittest.TestCase):
         )
 
     def test_problem_layouts_are_container_aware_and_own_overflow(self) -> None:
-        layout_source = (ROOT / "app" / "static" / "css" / "10_layout.css").read_text(
-            encoding="utf-8-sig"
-        )
+        layout_source = CORE_CSS_PATH.read_text(encoding="utf-8-sig")
         workspace_source = WORKSPACE_CSS_PATH.read_text(encoding="utf-8-sig")
-        forms_source = (ROOT / "app" / "static" / "css" / "30_forms.css").read_text(
-            encoding="utf-8-sig"
+        forms_source = "\n".join(
+            [
+                CORE_CSS_PATH.read_text(encoding="utf-8-sig"),
+                COMPONENT_CSS_PATH.read_text(encoding="utf-8-sig"),
+            ]
         )
         verification_source = (ROOT / "app" / "static" / "css" / "40_verification.css").read_text(
             encoding="utf-8-sig"
         )
-        tests_source = (ROOT / "app" / "static" / "css" / "50_tests.css").read_text(
-            encoding="utf-8-sig"
-        )
+        tests_source = FILES_CSS_PATH.read_text(encoding="utf-8-sig")
         templates = "\n".join(
             path.read_text(encoding="utf-8-sig")
             for path in sorted((ROOT / "app" / "template").glob("*.html"))
@@ -162,7 +171,7 @@ class TestPublicContracts(unittest.TestCase):
         self.assertIn(".table-cell-nowrap,", forms_source)
 
     def test_contest_problem_slugs_wrap_in_all_problem_tables(self) -> None:
-        workspace_source = WORKSPACE_CSS_PATH.read_text(encoding="utf-8-sig")
+        workspace_source = CONTEST_CSS_PATH.read_text(encoding="utf-8-sig")
 
         for table_class in [
             "contest-problem-list-table",
@@ -189,28 +198,59 @@ class TestPublicContracts(unittest.TestCase):
         self.assertNotIn("13.2px", token_source)
         self.assertNotIn("--font-size-ui-md", token_source)
 
-    def test_run_detail_popup_title_uses_safe_canonical_test_metadata(self) -> None:
-        ui_source = UI_JS_PATH.read_text(encoding="utf-8-sig")
+    def test_ui_assets_are_split_by_surface_without_legacy_entrypoints(self) -> None:
+        static_root = ROOT / "app" / "static"
+        self.assertFalse((static_root / "style.css").exists())
+        entry_source = UI_JS_PATH.read_text(encoding="utf-8-sig")
+        self.assertIn('from "./js/core.js"', entry_source)
+        self.assertIn("onReady(initCore);", entry_source)
 
-        self.assertIn('document.createTextNode("Test Details: " + testName)', ui_source)
+        module_source = "\n".join(
+            path.read_text(encoding="utf-8-sig") for path in sorted(JS_ROOT.glob("*.js"))
+        )
+        for removed in [
+            "sha256Hex",
+            "initLifecycleTabs",
+            "window.alert",
+            "window.confirm",
+            "item.fields",
+            'indexOf("test added")',
+        ]:
+            self.assertNotIn(removed, module_source)
+
+        template_source = "\n".join(
+            path.read_text(encoding="utf-8-sig")
+            for path in sorted((ROOT / "app" / "template").glob("*.html"))
+        )
+        self.assertNotIn("/static/style.css", template_source)
+        self.assertIn('type="module" src="/static/ui.js', template_source)
+        self.assertIn('/static/js/problem_components.js', template_source)
+        self.assertIn('/static/js/statement.js', template_source)
+        self.assertIn('/static/js/tests.js', template_source)
+        self.assertIn('/static/js/run.js', template_source)
+
+    def test_run_detail_popup_title_uses_safe_canonical_test_metadata(self) -> None:
+        ui_source = (JS_ROOT / "run.js").read_text(encoding="utf-8-sig")
+
+        self.assertIn('document.createTextNode(`Test Details: ${testName}`)', ui_source)
         self.assertIn('commandText.className = "verification-test-title-command";', ui_source)
         self.assertIn('commandText.textContent = command || "gen";', ui_source)
         self.assertNotIn("solutionTitle", ui_source)
         self.assertNotIn("popupTitle.innerHTML", ui_source)
 
     def test_generated_judgehost_commands_isolate_submission_uids(self) -> None:
-        ui_source = UI_JS_PATH.read_text(encoding="utf-8-sig")
+        ui_source = (JS_ROOT / "admin.js").read_text(encoding="utf-8-sig")
         judgehost_source = ADMIN_JUDGEHOST_TEMPLATE_PATH.read_text(encoding="utf-8-sig")
 
-        self.assertIn("return safe >= 1 && safe <= 65533 ? safe : 60706;", ui_source)
-        self.assertIn("var runUserUidGid = runUidBase + daemonId;", ui_source)
+        self.assertIn("const uidBase = parsedBase >= 1 && parsedBase <= 65533 ? parsedBase : 60706;", ui_source)
+        self.assertIn("const runUserUidGid = uidBase + daemonId;", ui_source)
         self.assertIn("if (largestRunUidGid > 65533)", ui_source)
         self.assertIn("largestRunUidGid > 61183", ui_source)
         self.assertIn('" -e RUN_USER_UID_GID=" +', ui_source)
         self.assertIn('data-gen-script-run-uid-base="1"', judgehost_source)
 
     def test_generated_judgehost_command_uses_unconfigured_latest_image(self) -> None:
-        command_source = UI_JS_PATH.read_text(encoding="utf-8-sig")
+        command_source = (JS_ROOT / "admin.js").read_text(encoding="utf-8-sig")
         documentation = "\n".join(
             [
                 (ROOT / "README.md").read_text(encoding="utf-8-sig"),
@@ -282,7 +322,7 @@ class TestPublicContracts(unittest.TestCase):
 
     def test_danger_link_styles_use_shared_tokens(self) -> None:
         token_source = TOKENS_PATH.read_text(encoding="utf-8-sig")
-        workspace_source = WORKSPACE_CSS_PATH.read_text(encoding="utf-8-sig")
+        workspace_source = CORE_CSS_PATH.read_text(encoding="utf-8-sig")
         for token in [
             "--danger-link-color:",
             "--danger-link-hover-color:",
@@ -348,7 +388,9 @@ class TestPublicContracts(unittest.TestCase):
             "tests-editor-action-link",
             "tests-editor-action-danger",
         ]
-        for path in list((ROOT / "app" / "template").rglob("*.html")) + [STYLE_PATH]:
+        for path in list((ROOT / "app" / "template").rglob("*.html")) + list(
+            (ROOT / "app" / "static" / "css").glob("*.css")
+        ):
             source = path.read_text(encoding="utf-8-sig")
             for snippet in banned_snippets:
                 if snippet in source:

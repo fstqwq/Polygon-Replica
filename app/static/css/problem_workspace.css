@@ -1,0 +1,756 @@
+/* Problem shell, access, workspace review, and merge. */
+.workspace-revision {
+  border: 0;
+  background: transparent;
+  padding: 0;
+  margin: 0 0 var(--space-3);
+  display: grid;
+  gap: 2px;
+}
+
+.danger-zone {
+  border: 1px solid var(--tag-fail-border);
+  background: var(--surface-danger);
+  margin: var(--space-4) 0 0;
+}
+
+.danger-zone > summary {
+  cursor: pointer;
+  font-size: var(--font-size-body);
+  font-weight: 700;
+  color: var(--danger);
+  padding: var(--space-3) var(--space-4);
+  user-select: none;
+}
+
+.danger-zone-body {
+  border-top: 1px solid var(--tag-fail-border);
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-4);
+}
+
+.danger-zone-delete {
+  border: 1px solid var(--tag-fail-border);
+  background: var(--surface);
+  padding: var(--space-3);
+}
+
+.workspace-revision-inline {
+  margin: 0;
+  padding: 2px 0 0;
+  font-size: var(--font-size-ui-sm);
+  line-height: 1.35;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow-wrap: normal;
+  word-break: keep-all;
+}
+
+.workspace-revision-inline.revision-alert {
+  color: var(--danger);
+}
+
+.workspace-actions {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0 0 var(--space-3);
+}
+
+.workspace-actions .action-link-form {
+  display: flex;
+  width: 100%;
+}
+
+.workspace-side-button {
+  width: 100%;
+  justify-content: flex-start;
+}
+
+.workspace-actions .button-link:not(.primary-action) {
+  background: var(--surface-alt);
+  border-color: var(--line-strong);
+  color: var(--text);
+}
+
+.workspace-actions .button-link:not(.primary-action):hover:not([aria-disabled="true"]) {
+  background: var(--surface-hover);
+}
+
+.workspace-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+}
+
+.workspace-section-head > h2 {
+  margin: 0;
+}
+
+.workspace-section-head-action {
+  margin-left: auto;
+}
+
+.workspace-links {
+  display: flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: 0;
+  margin: 0 0 var(--space-2);
+}
+
+.workspace-card-nav {
+  margin: var(--space-4) 0 0;
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--line);
+}
+
+.workspace-side-link {
+  font-size: var(--font-size-ui-sm);
+  line-height: 1.35;
+  white-space: nowrap;
+}
+
+.workspace-card-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin: 0 0 var(--space-3);
+}
+
+.workspace-card-head > h3 {
+  margin: 0;
+}
+
+.workspace-card-head .workspace-side-link {
+  font-size: var(--font-size-ui-sm);
+  font-weight: 600;
+}
+
+
+.contest-workspace-card {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.contest-workspace-card > h3 {
+  margin: 0;
+  min-width: 0;
+  font-size: var(--font-size-ui-sm);
+  line-height: 1.3;
+}
+
+.contest-workspace-card > h3 a {
+  display: block;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.contest-workspace-count {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--font-size-ui-xs);
+}
+
+.contest-problem-nav {
+  display: flex;
+  align-content: flex-start;
+  flex-wrap: wrap;
+  gap: 4px 5px;
+  max-height: 108px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.contest-problem-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 32px;
+  max-width: 100%;
+  min-height: 24px;
+  overflow: hidden;
+  padding: 1px 5px;
+  border: 1px solid var(--line);
+  background: var(--surface-alt);
+  color: var(--text-secondary);
+  font-size: var(--font-size-ui-xs);
+  font-weight: 600;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.contest-problem-link:hover {
+  border-color: var(--line-strong);
+  background: var(--surface-hover);
+  text-decoration: none;
+}
+
+.contest-problem-link.active {
+  border-color: var(--accent-ring);
+  background: var(--surface-selected);
+  color: var(--accent);
+}
+
+.contest-problem-link.disabled {
+  border-color: var(--line);
+  background: var(--surface-subtle);
+  color: var(--muted);
+  cursor: not-allowed;
+  opacity: 0.62;
+}
+
+.revision-history-table .revision-history-col-tight {
+  width: 1%;
+  white-space: nowrap;
+  overflow-wrap: normal;
+  word-break: keep-all;
+}
+
+.workspace-link-sep {
+  color: var(--muted);
+  margin: 0 var(--space-3);
+  user-select: none;
+  pointer-events: none;
+}
+
+.workspace-page-layout {
+  display: grid;
+  grid-template-columns: minmax(280px, 0.72fr) minmax(0, 1.28fr);
+  gap: var(--space-4);
+  align-items: start;
+}
+
+.access-page {
+  display: grid;
+  gap: var(--space-4);
+}
+
+.access-summary {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--space-3) var(--space-6);
+}
+
+.access-summary h2,
+.access-summary p {
+  margin: 0;
+}
+
+.access-members {
+  display: grid;
+  gap: var(--space-4);
+}
+
+.access-members > h2,
+.access-members > p {
+  margin: 0;
+}
+
+.access-members-table .access-user,
+.access-members-table .access-role,
+.access-members-table .access-granted,
+.access-members-table .access-actions {
+  white-space: nowrap;
+  overflow-wrap: normal;
+  word-break: keep-all;
+}
+
+.access-actions-inner {
+  display: flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: var(--space-3);
+}
+
+.access-actions-inner .inline-form {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: var(--space-2);
+}
+
+.access-grant-form {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) 140px auto;
+  align-items: end;
+  gap: var(--space-3);
+}
+
+.access-grant-form .form-field-stack {
+  min-width: 0;
+}
+
+.package-action-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr));
+  gap: var(--space-4);
+}
+
+@container problem-content (max-width: 900px) {
+  .workspace-page-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@container problem-content (max-width: 640px) {
+  .access-summary {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .access-grant-form {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+
+.change-badges {
+  display: block;
+  white-space: nowrap;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-gutter: stable;
+  margin: var(--space-3) 0;
+}
+
+.change-chip {
+  display: inline;
+  color: var(--text);
+  font-size: var(--font-size-ui-2xs);
+  font-weight: 500;
+  line-height: 1.2;
+  padding: 0;
+  margin-right: var(--space-4);
+  border: 0;
+  background: transparent;
+}
+
+.change-added {
+  color: var(--change-added);
+}
+
+.change-modified {
+  color: var(--change-modified);
+}
+
+.change-deleted,
+.change-conflicted {
+  color: var(--change-deleted);
+}
+
+.change-renamed,
+.change-typechange {
+  color: var(--change-renamed);
+}
+
+.change-untracked,
+.change-other {
+  color: var(--change-other);
+}
+
+.change-list {
+  margin: 0;
+  padding-left: 0;
+  list-style: none;
+  font-size: var(--font-size-ui-sm);
+  max-height: 320px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+}
+
+.files {
+  margin: 0;
+  padding-left: var(--space-7);
+}
+
+.change-item {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  margin: 2px 0;
+}
+
+.change-item > a {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.change-code {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  padding: 1px 5px;
+  border: 1px solid var(--line);
+  background: var(--surface-alt);
+  line-height: 1.1;
+}
+
+.change-item.change-added .change-code {
+  color: var(--change-added);
+}
+
+.change-item.change-modified .change-code {
+  color: var(--change-modified);
+}
+
+.change-item.change-deleted .change-code {
+  color: var(--change-deleted);
+}
+
+.change-item.change-renamed .change-code,
+.change-item.change-typechange .change-code {
+  color: var(--change-renamed);
+}
+
+.change-item.change-conflicted .change-code {
+  color: var(--change-deleted);
+}
+
+.change-item.change-untracked .change-code,
+.change-item.change-other .change-code {
+  color: var(--change-other);
+}
+
+.workspace-diff-files {
+  display: grid;
+  gap: var(--space-1);
+  margin: var(--space-3) 0;
+  max-height: 220px;
+  overflow: auto;
+}
+
+.workspace-diff-file {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--text);
+}
+
+.workspace-diff-file:hover {
+  text-decoration: none;
+  background: var(--surface-alt);
+}
+
+.workspace-diff-file.active {
+  border-color: var(--text);
+  background: var(--surface-alt);
+}
+
+.workspace-diff-file.workspace-diff-file-added {
+  border-left: 3px solid var(--change-added);
+}
+
+.workspace-diff-file.workspace-diff-file-modified {
+  border-left: 3px solid var(--change-modified);
+}
+
+.workspace-diff-file.workspace-diff-file-deleted,
+.workspace-diff-file.workspace-diff-file-conflicted {
+  border-left: 3px solid var(--change-deleted);
+}
+
+.workspace-diff-file.workspace-diff-file-renamed,
+.workspace-diff-file.workspace-diff-file-typechange {
+  border-left: 3px solid var(--change-renamed);
+}
+
+.workspace-diff-file.workspace-diff-file-untracked,
+.workspace-diff-file.workspace-diff-file-other {
+  border-left: 3px solid var(--change-other);
+}
+
+.workspace-diff-view {
+  margin: 0;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  padding: 0;
+  max-height: 520px;
+  overflow: auto;
+  white-space: pre;
+}
+
+.workspace-diff-line {
+  display: block;
+  padding: 0 var(--space-3);
+}
+
+.workspace-diff-line-add {
+  background: var(--surface-success);
+  color: var(--ok);
+}
+
+.workspace-diff-line-del {
+  background: var(--surface-danger);
+  color: var(--danger-link-hover-color);
+}
+
+.workspace-diff-line-hunk {
+  background: var(--surface-info);
+  color: var(--tag-info-fg);
+}
+
+.workspace-diff-line-head {
+  background: var(--surface-alt);
+  color: var(--text-secondary);
+}
+
+.workspace-merge-result {
+  align-items: center;
+  background: var(--surface-success);
+  border: 1px solid var(--tag-ok-border);
+  display: flex;
+  gap: 1rem;
+  justify-content: space-between;
+  margin-bottom: 1rem;
+  padding: 1rem;
+}
+
+.workspace-merge-result h2,
+.workspace-merge-result p {
+  margin: 0 0 0.35rem;
+}
+
+.workspace-merge-result-actions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+}
+
+body.merge-page .content-shell,
+body.merge-page .container {
+  min-width: 0;
+  overflow: hidden;
+}
+
+.merge-review-card {
+  border: 1px solid var(--line);
+  padding: 1rem;
+}
+
+.merge-review-head,
+.merge-comparison-title-row {
+  align-items: center;
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.merge-review-head {
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 1rem;
+  padding-bottom: 0.75rem;
+}
+
+.merge-review-head h2,
+.merge-review-head p {
+  margin: 0 0 0.35rem;
+}
+
+.merge-file-count {
+  white-space: nowrap;
+}
+
+.merge-comparison {
+  border: 1px solid var(--line);
+  min-width: 0;
+}
+
+.merge-file-group {
+  border: 0;
+  margin: 0;
+  min-width: 0;
+  padding: 0;
+}
+
+.merge-expanded-diffs {
+  display: grid;
+  gap: 1rem;
+}
+
+.merge-file-group legend {
+  font-weight: 700;
+  max-width: 100%;
+}
+
+.merge-group-note {
+  color: var(--text-secondary);
+  margin: 0 0 0.5rem;
+}
+
+.merge-diff-choice {
+  align-items: center;
+  display: flex;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.merge-diff-choice input {
+  flex: 0 0 auto;
+  margin: 0;
+}
+
+.merge-change-kind {
+  color: var(--text-secondary);
+  font-size: var(--font-size-ui-xs);
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.merge-comparison {
+  align-self: start;
+  overflow: hidden;
+}
+
+.merge-file-group .merge-comparison + .merge-comparison {
+  margin-top: 0.75rem;
+}
+
+.merge-comparison-empty,
+.merge-comparison-error,
+.merge-diff-unavailable {
+  color: var(--text-secondary);
+  margin: 0;
+  padding: 1rem;
+}
+
+.merge-comparison-error {
+  color: var(--danger-link-color);
+}
+
+.merge-comparison-title-row {
+  border-bottom: 1px solid var(--line);
+  padding: 0.75rem;
+}
+
+.merge-comparison-message {
+  color: var(--text-secondary);
+}
+
+.merge-diff-head,
+.merge-diff-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.merge-diff-head {
+  background: var(--surface-alt);
+  border-bottom: 1px solid var(--line);
+}
+
+.merge-diff-head > div {
+  display: flex;
+  gap: 0.75rem;
+  justify-content: space-between;
+  min-width: 0;
+  padding: 0.55rem 0.75rem;
+}
+
+.merge-diff-head > div + div,
+.merge-diff-cell + .merge-diff-cell {
+  border-left: 1px solid var(--line);
+}
+
+.merge-diff {
+  max-height: 65vh;
+  min-width: 0;
+  overflow: auto;
+}
+
+.merge-diff-row {
+  min-width: 760px;
+}
+
+.merge-diff-cell {
+  display: grid;
+  grid-template-columns: 3.25rem minmax(0, 1fr);
+  min-height: 1.45rem;
+  min-width: 0;
+}
+
+.merge-diff-line-number {
+  background: var(--surface-alt);
+  border-right: 1px solid var(--line);
+  color: var(--text-secondary);
+  padding: 0 0.45rem;
+  text-align: right;
+  user-select: none;
+}
+
+.merge-diff-code {
+  min-width: max-content;
+  padding: 0 0.45rem;
+  white-space: pre;
+}
+
+.merge-diff-cell-delete,
+.merge-diff-cell-replace.merge-diff-cell-left {
+  background: var(--surface-danger);
+}
+
+.merge-diff-cell-insert,
+.merge-diff-cell-replace.merge-diff-cell-right {
+  background: var(--surface-success);
+}
+
+.merge-diff-inline-change {
+  background: color-mix(in srgb, currentColor 16%, transparent);
+  font-weight: 700;
+}
+
+.merge-diff-no-newline {
+  color: var(--text-secondary);
+  font-style: italic;
+}
+
+.merge-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+  margin-top: 1rem;
+}
+
+@media (max-width: 760px) {
+  .workspace-merge-result {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .merge-review-head,
+  .merge-comparison-title-row {
+    grid-template-columns: 1fr;
+  }
+
+  .merge-diff-head,
+  .merge-diff-row {
+    grid-template-columns: 1fr;
+  }
+
+  .merge-diff-row {
+    min-width: 0;
+  }
+
+  .merge-diff-head > div + div,
+  .merge-diff-cell + .merge-diff-cell {
+    border-left: 0;
+    border-top: 1px solid var(--line);
+  }
+}
+

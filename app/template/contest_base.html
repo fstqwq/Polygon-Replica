@@ -6,7 +6,11 @@
   <title>{{ ctx.contest.title }} - {{ ui_browser_title }}</title>
   <link rel="icon" href="/static/favicon.ico?v=20260427-01" sizes="any" />
   <link rel="icon" href="/static/favicon.png?v=20260427-01" type="image/png" />
-  <link rel="stylesheet" href="/static/style.css?v=20260808-70" />
+  <link rel="stylesheet" href="/static/css/00_tokens.css?v=20260809-01" />
+  <link rel="stylesheet" href="/static/css/core.css?v=20260809-01" />
+  <link rel="stylesheet" href="/static/css/dialog_auth.css?v=20260809-01" />
+  <link rel="stylesheet" href="/static/css/contest.css?v=20260809-01" />
+  {% block page_styles %}{% endblock %}
 </head>
 <body class="contest-layout">
   {% set flash_presenter = 'topbar' %}
@@ -44,6 +48,7 @@
     </div>
   </div>
   {% include "_page_profile.html" %}
-  <script src="/static/ui.js?v=20260808-37" defer></script>
+  <script type="module" src="/static/ui.js?v=20260809-01"></script>
+  {% block page_scripts %}{% endblock %}
 </body>
 </html>

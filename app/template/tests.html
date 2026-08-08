@@ -1,4 +1,6 @@
 {% extends "base.html" %}
+{% block page_styles %}<link rel="stylesheet" href="/static/css/25_code_editor.css?v=20260809-01" /><link rel="stylesheet" href="/static/css/tests.css?v=20260809-01" />{% endblock %}
+{% block page_scripts %}<script src="/static/editor_init.js?v=20260807-03" defer></script><script type="module" src="/static/js/tests.js?v=20260809-01"></script>{% endblock %}
 {% from "_component_dialogs.html" import ui_popup %}
 {% block content %}
 <h1 class="page-title">Tests ({{ tests_editor.summary.total }})</h1>

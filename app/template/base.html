@@ -33,8 +33,13 @@
   <title>{% if page_title %}{{ page_title }} - {% endif %}{{ ui_browser_title }}</title>
   <link rel="icon" href="/static/favicon.ico?v=20260427-01" sizes="any" />
   <link rel="icon" href="/static/favicon.png?v=20260427-01" type="image/png" />
-  <link rel="stylesheet" href="/static/style.css?v=20260808-70" />
-  <script src="/static/ui.js?v=20260808-37" defer></script>
+  <link rel="stylesheet" href="/static/css/00_tokens.css?v=20260809-01" />
+  <link rel="stylesheet" href="/static/css/core.css?v=20260809-01" />
+  <link rel="stylesheet" href="/static/css/dialog_auth.css?v=20260809-01" />
+  <link rel="stylesheet" href="/static/css/problem_workspace.css?v=20260809-01" />
+  <link rel="stylesheet" href="/static/css/problem_components.css?v=20260809-01" />
+  {% block page_styles %}{% endblock %}
+  <script type="module" src="/static/ui.js?v=20260809-01"></script>
 </head>
 <body class="problem-layout{% if ctx.topbar_max_1400 %} topbar-max-1400{% endif %}{% block body_class %}{% endblock %}">
   {% set flash_presenter = 'topbar' %}
@@ -261,6 +266,7 @@
   {% endcall %}
   {% include "_page_profile.html" %}
 
-  <script src="/static/editor_init.js?v=20260807-03" defer></script>
+  <script type="module" src="/static/js/problem_components.js?v=20260809-01"></script>
+  {% block page_scripts %}{% endblock %}
 </body>
 </html>
