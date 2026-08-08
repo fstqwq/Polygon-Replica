@@ -14,7 +14,7 @@ import re
 
 from app.db import DB
 from app.runtime_value import RuntimeValues, build_runtime_values
-from app.service.disk.workspace_store import WorkspaceDiskStore
+from app.service.disk.workspace_store import WorkspaceDiskStore, WorkspaceRow
 from app.service.platform.fs.op import copytree, ensure_dir, extract_git_archive, remove_symlinks
 from app.service.platform.testlib_source import maintained_testlib_header
 from app.service.platform.workspace_path import is_hidden_workspace_path
@@ -803,6 +803,13 @@ class WorkspaceService:
             "workspace": dict(ws),
             "latest_artifact_verification": latest_artifact_verification,
         }
+
+    def workspace_rows(
+        self,
+        problem_ids: list[int],
+        user_id: int,
+    ) -> dict[int, WorkspaceRow]:
+        return self._store.workspace_rows(problem_ids, int(user_id))
 
     def _workspace_expected_path(self, username: str, problem: str) -> Path:
         return (self.settings.workspace_root / str(username) / str(problem)).resolve()

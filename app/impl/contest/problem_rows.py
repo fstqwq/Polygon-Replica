@@ -14,7 +14,8 @@ from app.impl.workspace.solution import list_solution_sources
 from app.impl.workspace.test_spec import read_tests_spec
 from app.service.problem.resource_limits import resource_limit_display
 from app.service.problem_package.service import ProblemReadiness
-from app.service.repository.revision import workspace_revision_info
+from app.service.disk.workspace_store import WorkspaceRow
+from app.service.repository.revision import workspace_upstream_revision_display
 from app.service.statement.context import statement_languages
 from app.service.verification.runtime import (
     coerce_int,
@@ -101,6 +102,46 @@ def _inaccessible_package_readiness(problem_id: int) -> ProblemReadiness:
     }
 
 
+def _workspace_revision_display(
+    workspace_state: WorkspaceRow,
+    readiness: ProblemReadiness,
+) -> tuple[str, bool]:
+    local_revision = workspace_state["revision_local"]
+    published_revision = readiness["published_revision_number"]
+    upstream_revision = (
+        published_revision
+        if published_revision is not None
+        else workspace_state["revision_upstream"]
+    )
+    warn = (
+        local_revision is None
+        or upstream_revision is None
+        or upstream_revision > local_revision
+    )
+    return (
+        workspace_upstream_revision_display(local_revision, upstream_revision),
+        warn,
+    )
+
+
+def _resolved_workspace_path(
+    workspace_state: WorkspaceRow,
+    *,
+    problem_slug: str,
+    username: str,
+) -> Path | None:
+    try:
+        expected = (config.settings.workspace_root / username / problem_slug).resolve()
+        workspace = Path(workspace_state["path"]).resolve()
+    except OSError:
+        return None
+    if workspace != expected:
+        return None
+    if not workspace.is_dir() or not (workspace / ".git").is_dir():
+        return None
+    return workspace
+
+
 def contest_problem_rows(
     contest_id: int,
     username: str,
@@ -111,6 +152,88 @@ def contest_problem_rows(
         [row["problem_id"] for row in rows],
         user_id,
     )
+    readable_rows = [
+        row
+        for row in rows
+        if bool(access_by_problem[row["problem_id"]]["can_read"])
+    ]
+    # The ACL batch is the boundary for all package and workspace I/O below.
+    # Mutation paths persist local status; published readiness supplies the live
+    # upstream revision, so a list render does not need to rescan every Git tree.
+    readable_problem_ids = [row["problem_id"] for row in readable_rows]
+    readiness_by_problem = {
+        row["problem_id"]: config.problem_package_service.readiness(
+            row["problem_id"]
+        )
+        for row in readable_rows
+    }
+    workspace_by_problem = (
+        config.workspace_service.workspace_rows(readable_problem_ids, user_id)
+        if readable_problem_ids
+        else {}
+    )
+    workspace_errors: set[int] = set()
+    provisioned = False
+    for row in readable_rows:
+        problem_id = row["problem_id"]
+        workspace_state = workspace_by_problem.get(problem_id)
+        workspace = (
+            _resolved_workspace_path(
+                workspace_state,
+                problem_slug=row["problem_slug"],
+                username=username,
+            )
+            if workspace_state is not None
+            else None
+        )
+        if workspace is not None:
+            continue
+        try:
+            config.workspace_service.ensure_workspace(
+                row["problem_slug"],
+                username,
+                refresh_status=True,
+            )
+            provisioned = True
+        except (OSError, RuntimeError, ValueError):
+            workspace_errors.add(problem_id)
+    if provisioned:
+        workspace_by_problem = config.workspace_service.workspace_rows(
+            readable_problem_ids,
+            user_id,
+        )
+
+    refreshed = False
+    for row in readable_rows:
+        problem_id = row["problem_id"]
+        if problem_id in workspace_errors:
+            continue
+        workspace_state = workspace_by_problem.get(problem_id)
+        if workspace_state is None or workspace_state["revision_local"] is not None:
+            continue
+        workspace = _resolved_workspace_path(
+            workspace_state,
+            problem_slug=row["problem_slug"],
+            username=username,
+        )
+        if workspace is None:
+            workspace_errors.add(problem_id)
+            continue
+        try:
+            config.workspace_service.refresh_workspace_status_with_ids(
+                workspace,
+                problem_id,
+                user_id,
+            )
+            refreshed = True
+        except (OSError, RuntimeError, ValueError):
+            workspace_errors.add(problem_id)
+    if refreshed:
+        workspace_by_problem = config.workspace_service.workspace_rows(
+            readable_problem_ids,
+            user_id,
+        )
+
     result: list[ContestProblemDisplayRow] = []
     for row in rows:
         problem_id = row["problem_id"]
@@ -121,7 +244,7 @@ def contest_problem_rows(
         can_problem_write = bool(problem_access["can_write"])
 
         if can_problem_read:
-            readiness = config.problem_package_service.readiness(problem_id)
+            readiness = readiness_by_problem[problem_id]
             package_display, package_status = package_revision_display(readiness)
         else:
             readiness = _inaccessible_package_readiness(problem_id)
@@ -146,23 +269,20 @@ def contest_problem_rows(
 
         if can_problem_read:
             try:
-                workspace = Path(
-                    config.workspace_service.ensure_workspace(
-                        problem_slug,
-                        username,
-                        refresh_status=True,
-                    )
+                if problem_id in workspace_errors:
+                    raise RuntimeError("workspace unavailable")
+                workspace_state = workspace_by_problem[problem_id]
+                workspace = _resolved_workspace_path(
+                    workspace_state,
+                    problem_slug=problem_slug,
+                    username=username,
                 )
-                workspace_context = config.workspace_service.workspace_context(
-                    problem_slug,
-                    username,
-                    include_recent=False,
-                )
-                workspace_state = workspace_context["workspace"]
-                branch = str(workspace_state.get("branch") or "main")
-                revision = workspace_revision_info(workspace, branch)
-                workspace_revision_display = revision["display"]
-                workspace_revision_warn = revision["highlight"]
+                if workspace is None:
+                    raise RuntimeError("workspace unavailable")
+                (
+                    workspace_revision_display,
+                    workspace_revision_warn,
+                ) = _workspace_revision_display(workspace_state, readiness)
                 dirty = bool(workspace_state["dirty"])
 
                 _payload, general_config, _config_path = read_problem_config(workspace)

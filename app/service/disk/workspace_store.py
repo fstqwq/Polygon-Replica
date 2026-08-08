@@ -595,6 +595,39 @@ class WorkspaceDiskStore:
             return None
         return int(row["id"])
 
+    def _workspace_record(self, row: sqlite3.Row) -> WorkspaceRow:
+        return {
+            "id": int(row["id"]),
+            "problem_id": int(row["problem_id"]),
+            "user_id": int(row["user_id"]),
+            "path": str(row["path"] or ""),
+            "branch": str(row["branch"] or ""),
+            "head_commit": str(row["head_commit"] or ""),
+            "dirty": int(row["dirty"] or 0),
+            "revision_local": self._optional_int(row["revision_local"]),
+            "revision_upstream": self._optional_int(row["revision_upstream"]),
+            "revision_missing": int(
+                row["revision_missing"]
+                if row["revision_missing"] is not None
+                else 1
+            ),
+            "revision_highlight": int(
+                row["revision_highlight"]
+                if row["revision_highlight"] is not None
+                else 1
+            ),
+            "revision_upstream_higher": int(
+                row["revision_upstream_higher"] or 0
+            ),
+            "revision_ahead_count": self._optional_int(
+                row["revision_ahead_count"]
+            ),
+            "revision_behind_count": self._optional_int(
+                row["revision_behind_count"]
+            ),
+            "updated_at": str(row["updated_at"] or ""),
+        }
+
     def workspace_row(self, problem_id: int, user_id: int) -> WorkspaceRow | None:
         row = self.db.fetch_one(
             """
@@ -609,22 +642,31 @@ class WorkspaceDiskStore:
         )
         if row is None:
             return None
+        return self._workspace_record(row)
+
+    def workspace_rows(
+        self,
+        problem_ids: list[int],
+        user_id: int,
+    ) -> dict[int, WorkspaceRow]:
+        unique_problem_ids = list(dict.fromkeys(int(value) for value in problem_ids))
+        if not unique_problem_ids:
+            return {}
+        placeholders = ",".join("?" for _ in unique_problem_ids)
+        rows = self.db.fetch_all(
+            f"""
+            SELECT id,problem_id,user_id,path,branch,head_commit,dirty,
+                   revision_local,revision_upstream,revision_missing,revision_highlight,
+                   revision_upstream_higher,revision_ahead_count,revision_behind_count,
+                   updated_at
+            FROM workspaces
+            WHERE user_id=? AND problem_id IN ({placeholders})
+            """,
+            [int(user_id), *unique_problem_ids],
+        )
         return {
-            "id": int(row["id"]),
-            "problem_id": int(row["problem_id"]),
-            "user_id": int(row["user_id"]),
-            "path": str(row["path"] or ""),
-            "branch": str(row["branch"] or ""),
-            "head_commit": str(row["head_commit"] or ""),
-            "dirty": int(row["dirty"] or 0),
-            "revision_local": self._optional_int(row["revision_local"]),
-            "revision_upstream": self._optional_int(row["revision_upstream"]),
-            "revision_missing": int(row["revision_missing"] if row["revision_missing"] is not None else 1),
-            "revision_highlight": int(row["revision_highlight"] if row["revision_highlight"] is not None else 1),
-            "revision_upstream_higher": int(row["revision_upstream_higher"] or 0),
-            "revision_ahead_count": self._optional_int(row["revision_ahead_count"]),
-            "revision_behind_count": self._optional_int(row["revision_behind_count"]),
-            "updated_at": str(row["updated_at"] or ""),
+            int(row["problem_id"]): self._workspace_record(row)
+            for row in rows
         }
 
     def workspace_identity_by_path(self, path: str) -> WorkspaceIdentityRow | None:

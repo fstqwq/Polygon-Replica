@@ -147,6 +147,7 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
                 "access_contexts",
                 return_value={7: access},
             ) as access_contexts,
+            patch.object(config.workspace_service, "workspace_rows") as workspace_rows,
             patch.object(config.workspace_service, "ensure_workspace") as ensure_workspace,
             patch.object(
                 config.problem_package_service,
@@ -157,6 +158,7 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
             rows = contest_problem_rows(5, "alice", 3)
 
         access_contexts.assert_called_once_with([7], 3)
+        workspace_rows.assert_not_called()
         ensure_workspace.assert_not_called()
         package_readiness.assert_not_called()
         self.assertEqual(len(rows), 1)
@@ -164,6 +166,91 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
         self.assertEqual(rows[0]["package_revision_status"], "blocked")
         self.assertEqual(rows[0]["package_revision_display"], "Package unavailable")
         self.assertNotIn("revision_display", rows[0])
+
+    def test_contest_problem_rows_reuses_stored_workspace_status(self) -> None:
+        problem_id, user_id = workspace_service.page_identity(
+            self.default_problem,
+            self.default_user,
+        )
+        workspace_state = workspace_service.workspace_rows(
+            [problem_id],
+            user_id,
+        )[problem_id]
+        workspace_state = {
+            **workspace_state,
+            "revision_local": 2,
+            "revision_upstream": 2,
+            "revision_missing": 0,
+            "revision_highlight": 0,
+        }
+        problem = {
+            "contest_problem_id": 11,
+            "position": 0,
+            "idx": "A",
+            "problem_id": problem_id,
+            "statement_folder": "",
+            "problem_slug": self.default_problem,
+            "slug_leaf": "sample",
+            "created_at": "2026-08-08T00:00:00+00:00",
+        }
+        access = {
+            "role": "owner",
+            "can_read": True,
+            "can_write": True,
+            "can_manage": True,
+            "read_block_reason": "",
+            "write_block_reason": "",
+            "manage_block_reason": "",
+        }
+        readiness = {
+            "problem_id": problem_id,
+            "published_commit": "a" * 40,
+            "published_revision_number": 3,
+            "materialized_commit": "",
+            "materialized_revision_number": None,
+            "materialization_id": "",
+            "archive_sha256": "",
+            "current_is_materialized": False,
+            "statement_languages": [],
+            "missing_reason": "no complete Native materialization",
+        }
+        with (
+            patch.object(
+                config.contest_service,
+                "contest_problems",
+                return_value=[problem],
+            ),
+            patch.object(
+                config.workspace_service,
+                "access_contexts",
+                return_value={problem_id: access},
+            ),
+            patch.object(
+                config.workspace_service,
+                "workspace_rows",
+                return_value={problem_id: workspace_state},
+            ) as workspace_rows,
+            patch.object(config.workspace_service, "ensure_workspace") as ensure_workspace,
+            patch.object(
+                config.workspace_service,
+                "refresh_workspace_status_with_ids",
+            ) as refresh_workspace_status,
+            patch.object(
+                config.problem_package_service,
+                "readiness",
+                return_value=readiness,
+            ),
+        ):
+            rows = contest_problem_rows(5, self.default_user, user_id)
+
+        workspace_rows.assert_called_once_with([problem_id], user_id)
+        ensure_workspace.assert_not_called()
+        refresh_workspace_status.assert_not_called()
+        self.assertEqual(
+            rows[0]["workspace_revision_display"],
+            "Workspace on v2 / Upstream v3",
+        )
+        self.assertTrue(rows[0]["workspace_revision_warn"])
 
     def test_resource_limit_display_uses_shared_units_and_warning_boundaries(self) -> None:
         self.assertEqual(
