@@ -406,3 +406,21 @@ export function initCore() {
   initAutoSubmit();
   initCopyButtons();
 }
+
+Object.defineProperty(window, "PolygonUI", {
+  value: Object.freeze({
+    findCodeMirrorEditorForTextarea,
+    initCore,
+    localStorageAvailable,
+    onReady,
+    setSubmitting,
+    showConfirmDialog,
+    showInlineError,
+    storageScopeToken,
+    submitForm,
+    syncCodeEditorsInForm,
+    writeTextToClipboard,
+  }),
+  writable: false,
+  configurable: false,
+});

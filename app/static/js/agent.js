@@ -1,4 +1,4 @@
-import { onReady, setSubmitting, showInlineError, writeTextToClipboard } from "./core.js";
+const { onReady, setSubmitting, showInlineError, writeTextToClipboard } = window.PolygonUI;
 
 function initAgentConnect() {
   const button = document.querySelector("[data-agent-connect-button='1']");

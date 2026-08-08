@@ -1,4 +1,4 @@
-import { onReady, showInlineError } from "./core.js";
+const { onReady, showInlineError } = window.PolygonUI;
 
 function generateToken() {
   if (!window.crypto || typeof window.crypto.getRandomValues !== "function") throw new Error("Secure random is unavailable.");

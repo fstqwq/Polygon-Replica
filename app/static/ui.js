@@ -1,3 +1,3 @@
-import { initCore, onReady } from "./js/core.js";
+const { initCore, onReady } = window.PolygonUI;
 
 onReady(initCore);

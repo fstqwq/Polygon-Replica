@@ -1,5 +1,5 @@
 {% extends "root_base.html" %}
-{% block page_styles %}<link rel="stylesheet" href="/static/css/admin_settings.css?v=20260809-01" />{% endblock %}
+{% block page_styles %}<link rel="stylesheet" href="{{ static_asset_url('css/admin_settings.css') }}" />{% endblock %}
 {% block root_title %}{% block admin_title %}Administration{% endblock %} - {{ ui_browser_title }}{% endblock %}
 {% block content %}
 {% set section_navigation_title = 'Administration' %}
@@ -10,6 +10,6 @@
 {% block admin_content %}{% endblock %}
 {% endblock %}
 {% block page_scripts %}
-<script type="module" src="/static/js/admin.js?v=20260809-01"></script>
-<script type="module" src="/static/js/auth.js?v=20260809-01"></script>
+<script type="module" src="{{ static_asset_url('js/admin.js') }}"></script>
+<script type="module" src="{{ static_asset_url('js/auth.js') }}"></script>
 {% endblock %}

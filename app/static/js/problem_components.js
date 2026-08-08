@@ -1,11 +1,11 @@
-import {
+const {
   findCodeMirrorEditorForTextarea,
   onReady,
   setSubmitting,
   showConfirmDialog,
   showInlineError,
   syncCodeEditorsInForm,
-} from "./core.js";
+} = window.PolygonUI;
 
 const EDITOR_READY_EVENT = "polygonlike:code-editor-ready";
 let suppressBeforeUnload = false;

@@ -4,9 +4,9 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>{% block root_title %}{{ ui_browser_title }}{% endblock %}</title>
-  <link rel="stylesheet" href="/static/css/00_tokens.css?v=20260809-01" />
-  <link rel="stylesheet" href="/static/css/core.css?v=20260809-01" />
-  <link rel="stylesheet" href="/static/css/dialog_auth.css?v=20260809-01" />
+  <link rel="stylesheet" href="{{ static_asset_url('css/00_tokens.css') }}" />
+  <link rel="stylesheet" href="{{ static_asset_url('css/core.css') }}" />
+  <link rel="stylesheet" href="{{ static_asset_url('css/dialog_auth.css') }}" />
   {% block page_styles %}{% endblock %}
 </head>
 <body class="root-layout">
@@ -24,7 +24,8 @@
     </main>
   </div>
   {% include "_page_profile.html" %}
-  <script type="module" src="/static/ui.js?v=20260809-01"></script>
+  <script type="module" src="{{ static_asset_url('js/core.js') }}"></script>
+  <script type="module" src="{{ static_asset_url('ui.js') }}"></script>
   {% block page_scripts %}{% endblock %}
 </body>
 </html>

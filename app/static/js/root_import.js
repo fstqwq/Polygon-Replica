@@ -1,4 +1,4 @@
-import { onReady } from "./core.js";
+const { onReady } = window.PolygonUI;
 
 function packageFilename(input) {
   if (input.files && input.files[0] && input.files[0].name) return input.files[0].name;

@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% from "_component_dialogs.html" import ui_popup %}
-{% block page_styles %}<link rel="stylesheet" href="/static/css/25_code_editor.css?v=20260809-01" /><link rel="stylesheet" href="/static/css/statement.css?v=20260809-01" />{% endblock %}
-{% block page_scripts %}<script src="/static/editor_init.js?v=20260807-03" defer></script><script type="module" src="/static/js/statement.js?v=20260809-01"></script>{% endblock %}
+{% block page_styles %}<link rel="stylesheet" href="{{ static_asset_url('css/25_code_editor.css') }}" /><link rel="stylesheet" href="{{ static_asset_url('css/statement.css') }}" />{% endblock %}
+{% block page_scripts %}{% include "_editor_assets.html" %}<script type="module" src="{{ static_asset_url('js/statement.js') }}"></script>{% endblock %}
 {% block content %}
 {% set statement_return_href = problem_href('preview_page') if return_page == 'preview' else problem_href('problem_statement') %}
 {% set ns = namespace(latest=None) %}

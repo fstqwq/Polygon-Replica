@@ -4,11 +4,11 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>{{ ui_browser_title }}</title>
-  <link rel="icon" href="/static/favicon.ico?v=20260427-01" sizes="any" />
-  <link rel="icon" href="/static/favicon.png?v=20260427-01" type="image/png" />
-  <link rel="stylesheet" href="/static/css/00_tokens.css?v=20260809-01" />
-  <link rel="stylesheet" href="/static/css/core.css?v=20260809-01" />
-  <link rel="stylesheet" href="/static/css/dialog_auth.css?v=20260809-01" />
+  <link rel="icon" href="{{ static_asset_url('favicon.ico') }}" sizes="any" />
+  <link rel="icon" href="{{ static_asset_url('favicon.png') }}" type="image/png" />
+  <link rel="stylesheet" href="{{ static_asset_url('css/00_tokens.css') }}" />
+  <link rel="stylesheet" href="{{ static_asset_url('css/core.css') }}" />
+  <link rel="stylesheet" href="{{ static_asset_url('css/dialog_auth.css') }}" />
   {% block page_styles %}{% endblock %}
 </head>
 <body>
@@ -24,8 +24,9 @@
     </section>
   </main>
   {% include "_page_profile.html" %}
-  <script type="module" src="/static/ui.js?v=20260809-01"></script>
-  <script type="module" src="/static/js/auth.js?v=20260809-01"></script>
+  <script type="module" src="{{ static_asset_url('js/core.js') }}"></script>
+  <script type="module" src="{{ static_asset_url('ui.js') }}"></script>
+  <script type="module" src="{{ static_asset_url('js/auth.js') }}"></script>
   {% block auth_scripts %}{% endblock %}
 </body>
 </html>

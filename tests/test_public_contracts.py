@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import ast
+import hashlib
 import logging
 import re
+import tempfile
 import unittest
 from pathlib import Path
 from tests.assertion_helpers import assert_html_contract
@@ -202,12 +204,15 @@ class TestPublicContracts(unittest.TestCase):
         static_root = ROOT / "app" / "static"
         self.assertFalse((static_root / "style.css").exists())
         entry_source = UI_JS_PATH.read_text(encoding="utf-8-sig")
-        self.assertIn('from "./js/core.js"', entry_source)
+        core_source = (JS_ROOT / "core.js").read_text(encoding="utf-8-sig")
+        self.assertIn("const { initCore, onReady } = window.PolygonUI;", entry_source)
         self.assertIn("onReady(initCore);", entry_source)
+        self.assertIn('Object.defineProperty(window, "PolygonUI"', core_source)
 
         module_source = "\n".join(
             path.read_text(encoding="utf-8-sig") for path in sorted(JS_ROOT.glob("*.js"))
         )
+        self.assertNotIn('from "polygon-core"', module_source)
         for removed in [
             "sha256Hex",
             "initLifecycleTabs",
@@ -223,11 +228,60 @@ class TestPublicContracts(unittest.TestCase):
             for path in sorted((ROOT / "app" / "template").glob("*.html"))
         )
         self.assertNotIn("/static/style.css", template_source)
-        self.assertIn('type="module" src="/static/ui.js', template_source)
-        self.assertIn('/static/js/problem_components.js', template_source)
-        self.assertIn('/static/js/statement.js', template_source)
-        self.assertIn('/static/js/tests.js', template_source)
-        self.assertIn('/static/js/run.js', template_source)
+        self.assertIn("static_asset_url('ui.js')", template_source)
+        self.assertIn("static_asset_url('js/core.js')", template_source)
+        self.assertIn("static_asset_url('js/problem_components.js')", template_source)
+        self.assertIn("static_asset_url('js/statement.js')", template_source)
+        self.assertIn("static_asset_url('js/tests.js')", template_source)
+        self.assertIn("static_asset_url('js/run.js')", template_source)
+
+    def test_static_assets_use_startup_content_fingerprints(self) -> None:
+        from app.service.platform.static_assets import StaticAssetManifest
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            static_root = Path(temporary_directory)
+            asset_path = static_root / "nested" / "space +&?#%.js"
+            asset_path.parent.mkdir()
+            asset_path.write_bytes(b"first version")
+            expected_digest = hashlib.sha256(b"first version").hexdigest()[:12]
+
+            manifest = StaticAssetManifest(static_root)
+            self.assertEqual(
+                manifest.url("nested/space +&?#%.js"),
+                f"/static/nested/space%20%2B%26%3F%23%25.js?v={expected_digest}",
+            )
+
+            asset_path.write_bytes(b"second version")
+            refreshed = StaticAssetManifest(static_root)
+            self.assertNotEqual(
+                manifest.url("nested/space +&?#%.js"),
+                refreshed.url("nested/space +&?#%.js"),
+            )
+
+            for invalid_path in ["", "/nested/file.js", "nested//file.js", "nested/./file.js", "../file.js", "nested\\file.js", "missing.js"]:
+                with self.subTest(invalid_path=invalid_path):
+                    with self.assertRaises(ValueError):
+                        manifest.url(invalid_path)
+
+    def test_templates_delegate_static_resource_urls_to_the_manifest(self) -> None:
+        template_source = "\n".join(
+            path.read_text(encoding="utf-8-sig")
+            for path in sorted((ROOT / "app" / "template").glob("*.html"))
+        )
+        runtime_config_source = (ROOT / "app" / "impl" / "runtime" / "config.py").read_text(
+            encoding="utf-8-sig"
+        )
+        editor_assets_source = (ROOT / "app" / "template" / "_editor_assets.html").read_text(
+            encoding="utf-8-sig"
+        )
+
+        self.assertNotIn("/static/", template_source)
+        self.assertNotIn("?v=", template_source)
+        self.assertIn('self.templates.env.globals["static_asset_url"] = self.static_assets.url', runtime_config_source)
+        self.assertIn("static_asset_url('favicon.ico')", template_source)
+        self.assertIn("static_asset_url('favicon.png')", template_source)
+        self.assertIn("data-core-css=", editor_assets_source)
+        self.assertNotIn('type="application/json"', editor_assets_source)
 
     def test_run_detail_popup_title_uses_safe_canonical_test_metadata(self) -> None:
         ui_source = (JS_ROOT / "run.js").read_text(encoding="utf-8-sig")

@@ -6,57 +6,58 @@
   if (!targets.length) return;
 
   var EDITOR_READY_EVENT = "polygonlike:code-editor-ready";
-  var LOCAL_BASE = "/static/vendor/codemirror";
-  var ASSET_VERSION = "20260410-23";
-
-  function assetUrl(path) {
-    return path + "?v=" + ASSET_VERSION;
-  }
-
-  var CORE_CSS = assetUrl(LOCAL_BASE + "/lib/codemirror.min.css");
-  var THEME_CSS = "/static/css/25_code_editor.css?v=20260807-03";
-  var CORE_JS = assetUrl(LOCAL_BASE + "/lib/codemirror.min.js");
+  var manifestElement = document.currentScript;
+  if (!manifestElement) return;
+  var CORE_CSS = String(manifestElement.dataset.coreCss || "");
+  var CORE_JS = String(manifestElement.dataset.coreJs || "");
   var ADDON_JS = [
-    assetUrl(LOCAL_BASE + "/addon/edit/matchbrackets.min.js"),
-    assetUrl(LOCAL_BASE + "/addon/edit/closebrackets.min.js"),
-  ];
+    String(manifestElement.dataset.addonMatchbrackets || ""),
+    String(manifestElement.dataset.addonClosebrackets || ""),
+  ].filter(Boolean);
+  var MODE_JS = {
+    clike: String(manifestElement.dataset.modeClike || ""),
+    python: String(manifestElement.dataset.modePython || ""),
+    stex: String(manifestElement.dataset.modeStex || ""),
+    javascript: String(manifestElement.dataset.modeJavascript || ""),
+  };
+  if (!CORE_CSS || !CORE_JS) return;
 
   function editorConfig(path) {
     var normalizedPath = String(path || "").trim().toLowerCase();
     if (/\.(cpp|cc|cxx|hpp|hh|h)$/.test(normalizedPath)) {
       return {
         mode: "text/x-c++src",
-        modeScript: assetUrl(LOCAL_BASE + "/mode/clike/clike.min.js"),
+        modeScript: String(MODE_JS.clike || ""),
       };
     }
     if (normalizedPath.endsWith(".c")) {
       return {
         mode: "text/x-csrc",
-        modeScript: assetUrl(LOCAL_BASE + "/mode/clike/clike.min.js"),
+        modeScript: String(MODE_JS.clike || ""),
       };
     }
     if (normalizedPath.endsWith(".java")) {
       return {
         mode: "text/x-java",
-        modeScript: assetUrl(LOCAL_BASE + "/mode/clike/clike.min.js"),
+        modeScript: String(MODE_JS.clike || ""),
       };
     }
     if (normalizedPath.endsWith(".py")) {
       return {
         mode: "python",
-        modeScript: assetUrl(LOCAL_BASE + "/mode/python/python.min.js"),
+        modeScript: String(MODE_JS.python || ""),
       };
     }
     if (/\.(tex|sty|cls)$/.test(normalizedPath)) {
       return {
         mode: "stex",
-        modeScript: assetUrl(LOCAL_BASE + "/mode/stex/stex.min.js"),
+        modeScript: String(MODE_JS.stex || ""),
       };
     }
     if (normalizedPath.endsWith(".json")) {
       return {
         mode: { name: "javascript", json: true },
-        modeScript: assetUrl(LOCAL_BASE + "/mode/javascript/javascript.min.js"),
+        modeScript: String(MODE_JS.javascript || ""),
       };
     }
     return { mode: null, modeScript: "" };
@@ -146,9 +147,7 @@
   }
 
   Promise.all([
-    loadStylesheet(CORE_CSS).then(function () {
-      return loadStylesheet(THEME_CSS);
-    }),
+    loadStylesheet(CORE_CSS),
     loadScript(CORE_JS),
   ])
     .then(function () {

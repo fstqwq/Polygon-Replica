@@ -19,6 +19,7 @@ from app.service.repository.git import GitService
 from app.service.repository.merge import WorkspaceMergeService
 from app.service.platform.runtime_blob_store import RuntimeBlobStore
 from app.service.platform.runtime_cache_index import RuntimeCacheIndex
+from app.service.platform.static_assets import StaticAssetManifest
 from app.service.judgehost.api import Judgehost
 from app.service.sandbox.base import SandboxBackend
 from app.service.sandbox.tex_backend import TexSandboxBackend
@@ -47,6 +48,7 @@ from app.service.platform import workspace_path
 @dataclass
 class RuntimeConfig:
     TEMPLATE_ROOT: Path = Path(__file__).resolve().parents[2] / "template"
+    STATIC_ROOT: Path = Path(__file__).resolve().parents[2] / "static"
     settings: Settings = field(default_factory=load_settings)
     constants: RuntimeValues = field(init=False)
     db: DB = field(init=False)
@@ -76,6 +78,7 @@ class RuntimeConfig:
     workspace_archive_service: WorkspaceArchiveService = field(init=False)
     workspace_file_service: WorkspaceFileService = field(init=False)
     workspace_mutation_service: WorkspaceMutationService = field(init=False)
+    static_assets: StaticAssetManifest = field(init=False)
     templates: Jinja2Templates = field(
         default_factory=lambda: Jinja2Templates(directory=str(RuntimeConfig.TEMPLATE_ROOT))
     )
@@ -132,6 +135,8 @@ class RuntimeConfig:
 
     def __post_init__(self) -> None:
         validate_runtime_startup_preconditions(self.settings)
+        self.static_assets = StaticAssetManifest(self.STATIC_ROOT)
+        self.templates.env.globals["static_asset_url"] = self.static_assets.url
         self.db = DB(self.settings.db_path)
         self.verification_task_store = VerificationTaskStore(self.db)
         self.system_config_service = SystemConfigService(self.db)

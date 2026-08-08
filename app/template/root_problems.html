@@ -1,5 +1,5 @@
 {% extends "root_base.html" %}
-{% block page_scripts %}<script type="module" src="/static/js/root_import.js?v=20260809-01"></script>{% endblock %}
+{% block page_scripts %}<script type="module" src="{{ static_asset_url('js/root_import.js') }}"></script>{% endblock %}
 {% from "_component_dialogs.html" import ui_popup %}
 {% from "_problem_slug_link.html" import problem_slug_link %}
 {% block content %}

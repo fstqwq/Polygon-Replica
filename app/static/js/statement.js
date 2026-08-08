@@ -1,4 +1,4 @@
-import {
+const {
   findCodeMirrorEditorForTextarea,
   localStorageAvailable,
   onReady,
@@ -6,7 +6,7 @@ import {
   showConfirmDialog,
   storageScopeToken,
   submitForm,
-} from "./core.js";
+} = window.PolygonUI;
 
 const EDITOR_READY_EVENT = "polygonlike:code-editor-ready";
 const HISTORY_LIMIT = 10;

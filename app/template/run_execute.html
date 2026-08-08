@@ -1,6 +1,6 @@
 {% extends "base.html" %}
-{% block page_styles %}<link rel="stylesheet" href="/static/css/40_verification.css?v=20260809-01" /><link rel="stylesheet" href="/static/css/run.css?v=20260809-01" />{% endblock %}
-{% block page_scripts %}<script type="module" src="/static/js/run.js?v=20260809-01"></script>{% endblock %}
+{% block page_styles %}<link rel="stylesheet" href="{{ static_asset_url('css/40_verification.css') }}" /><link rel="stylesheet" href="{{ static_asset_url('css/run.css') }}" />{% endblock %}
+{% block page_scripts %}<script type="module" src="{{ static_asset_url('js/run.js') }}"></script>{% endblock %}
 {% block content %}
 <h1 class="page-title">Run Solutions</h1>
 <p><a href="{{ problem_href('problem_run') }}">&laquo; Back to verifications</a></p>

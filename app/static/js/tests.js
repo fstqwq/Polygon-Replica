@@ -1,4 +1,4 @@
-import { onReady } from "./core.js";
+const { onReady } = window.PolygonUI;
 
 function initSampleForms() {
   const sync = (form) => {
