@@ -14,7 +14,6 @@ from app.impl.workspace.solution import list_solution_sources
 from app.impl.workspace.test_spec import read_tests_spec
 from app.service.problem.resource_limits import resource_limit_display
 from app.service.problem_package.service import ProblemReadiness
-from app.service.disk.workspace_store import WorkspaceRow
 from app.service.repository.revision import workspace_upstream_revision_display
 from app.service.statement.context import statement_languages
 from app.service.verification.runtime import (
@@ -22,6 +21,7 @@ from app.service.verification.runtime import (
     normalize_pass_limit,
     normalize_problem_mode,
 )
+from app.service.workspace.state import WorkspaceState
 
 _C = config.constants
 
@@ -103,7 +103,7 @@ def _inaccessible_package_readiness(problem_id: int) -> ProblemReadiness:
 
 
 def _workspace_revision_display(
-    workspace_state: WorkspaceRow,
+    workspace_state: WorkspaceState,
     readiness: ProblemReadiness,
 ) -> tuple[str, bool]:
     local_revision = workspace_state["revision_local"]
@@ -125,7 +125,7 @@ def _workspace_revision_display(
 
 
 def _resolved_workspace_path(
-    workspace_state: WorkspaceRow,
+    workspace_state: WorkspaceState,
     *,
     problem_slug: str,
     username: str,

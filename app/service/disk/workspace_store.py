@@ -6,6 +6,7 @@ from typing import TypedDict
 
 from app.db import DB, now_iso
 from app.service.verification.task_store import VerificationTaskStore
+from app.service.workspace.state import WorkspaceState
 
 
 class ProblemAclEntry(TypedDict):
@@ -28,24 +29,6 @@ class UserRow(TypedDict):
     created_at: str
     is_system_admin: int
     is_banned: int
-
-
-class WorkspaceRow(TypedDict):
-    id: int
-    problem_id: int
-    user_id: int
-    path: str
-    branch: str
-    head_commit: str
-    dirty: int
-    revision_local: int | None
-    revision_upstream: int | None
-    revision_missing: int
-    revision_highlight: int
-    revision_upstream_higher: int
-    revision_ahead_count: int | None
-    revision_behind_count: int | None
-    updated_at: str
 
 
 class WorkspaceIdentityRow(TypedDict):
@@ -595,7 +578,7 @@ class WorkspaceDiskStore:
             return None
         return int(row["id"])
 
-    def _workspace_record(self, row: sqlite3.Row) -> WorkspaceRow:
+    def _workspace_record(self, row) -> WorkspaceState:
         return {
             "id": int(row["id"]),
             "problem_id": int(row["problem_id"]),
@@ -628,7 +611,7 @@ class WorkspaceDiskStore:
             "updated_at": str(row["updated_at"] or ""),
         }
 
-    def workspace_row(self, problem_id: int, user_id: int) -> WorkspaceRow | None:
+    def workspace_row(self, problem_id: int, user_id: int) -> WorkspaceState | None:
         row = self.db.fetch_one(
             """
             SELECT id,problem_id,user_id,path,branch,head_commit,dirty,
@@ -648,7 +631,7 @@ class WorkspaceDiskStore:
         self,
         problem_ids: list[int],
         user_id: int,
-    ) -> dict[int, WorkspaceRow]:
+    ) -> dict[int, WorkspaceState]:
         unique_problem_ids = list(dict.fromkeys(int(value) for value in problem_ids))
         if not unique_problem_ids:
             return {}
