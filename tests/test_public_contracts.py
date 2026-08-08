@@ -102,6 +102,19 @@ class TestPublicContracts(unittest.TestCase):
         self.assertIn("button,\ninput,\nselect,\ntextarea {\n  font: inherit;\n}", forms_source)
         self.assertNotIn('class="link-button', contest_packages_source)
 
+    def test_statement_attachment_cards_follow_content_width(self) -> None:
+        forms_source = (ROOT / "app" / "static" / "css" / "30_forms.css").read_text(encoding="utf-8-sig")
+
+        self.assertIn(
+            "repeat(auto-fit, minmax(min(100%, 380px), 1fr))",
+            forms_source,
+        )
+        self.assertIn(
+            ".statement-assets-upload-block .form-input-with-action {\n"
+            "  flex-wrap: wrap;\n}",
+            forms_source,
+        )
+
     def test_contest_problem_slugs_wrap_in_all_problem_tables(self) -> None:
         workspace_source = WORKSPACE_CSS_PATH.read_text(encoding="utf-8-sig")
 

@@ -562,13 +562,14 @@ form {
 
 .statement-assets-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 380px), 1fr));
   gap: var(--space-6);
 }
 
 .statement-assets-card {
   display: grid;
   gap: var(--space-3);
+  min-width: 0;
   border: 1px solid var(--line);
   background: var(--surface);
   padding: var(--space-5);
@@ -592,10 +593,21 @@ form {
 .statement-assets-card-body {
   display: grid;
   gap: var(--space-4);
+  min-width: 0;
 }
 
 .statement-assets-upload-block {
   margin: 0;
+}
+
+.statement-assets-upload-block .form-input-with-action {
+  flex-wrap: wrap;
+}
+
+.statement-assets-upload-block .form-input-with-action > input[type="file"] {
+  flex: 1 1 240px;
+  width: 0;
+  max-width: 100%;
 }
 
 @media (max-width: 720px) {
