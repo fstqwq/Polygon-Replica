@@ -79,9 +79,12 @@
   --space-8: 24px;
   --font-size-ui-2xs: 10px;
   --font-size-ui-xs: 11px;
-  --font-size-ui-sm: 13.2px;
-  --font-size-ui-md: 13px;
+  --font-size-ui-sm: 13px;
   --font-size-body: 14px;
+  --font-size-ui-lg: 16px;
+  --font-size-ui-xl: 18px;
+  --font-size-ui-2xl: 20px;
+  --font-size-brand: 44px;
 }
 
 * {
@@ -122,15 +125,15 @@ h3 {
 }
 
 h1 {
-  font-size: 20px;
+  font-size: var(--font-size-ui-2xl);
 }
 
 h2 {
-  font-size: 16px;
+  font-size: var(--font-size-ui-lg);
 }
 
 h3 {
-  font-size: var(--font-size-ui-md);
+  font-size: var(--font-size-ui-sm);
 }
 
 code,

@@ -127,7 +127,7 @@
         <form class="inline-action" method="post" action="/contests/{{ ctx.contest.slug }}/packages/statement/delete" data-confirm-message="Delete contest statement source {{ row.display_path }}?">
           <input type="hidden" name="language" value="{{ contest_statement_language }}" />
           <input type="hidden" name="path" value="{{ row.display_path }}" />
-          <button class="link-button danger-link" type="submit">delete</button>
+          <button class="linkish-button danger-link" type="submit">delete</button>
         </form>
         {% endif %}
       </div></td>

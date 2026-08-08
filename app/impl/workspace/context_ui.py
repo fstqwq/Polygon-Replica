@@ -45,6 +45,7 @@ from app.impl.workspace.context_component_status import (
 from app.impl.workspace.context_verification import _verification_status_context
 from app.impl.workspace.problem_config import read_problem_config
 from app.service.repository.revision import git_commit_count, workspace_revision_info
+from app.service.problem.resource_limits import resource_limit_display
 
 _C = config.constants
 logger = logging.getLogger(__name__)
@@ -149,7 +150,15 @@ def page_ctx(
     _payload, general_cfg, _cfg_path = read_problem_config(workspace_path)
     safe_mode = normalize_problem_mode(general_cfg.get('mode'), str(_C.GENERAL_CONFIG_DEFAULTS['mode']))
     ctx['problem_mode'] = safe_mode
-    ctx['general_cfg'] = {'time_limit_ms': coerce_int(general_cfg.get('time_limit_ms'), int(_C.GENERAL_CONFIG_DEFAULTS['time_limit_ms']), _C.GENERAL_TIME_LIMIT_MIN_MS, _C.GENERAL_TIME_LIMIT_MAX_MS), 'memory_limit_mb': coerce_int(general_cfg.get('memory_limit_mb'), int(_C.GENERAL_CONFIG_DEFAULTS['memory_limit_mb']), _C.GENERAL_MEMORY_LIMIT_MIN_MB, _C.GENERAL_MEMORY_LIMIT_MAX_MB), 'mode': safe_mode, 'pass_limit': normalize_pass_limit(general_cfg.get('pass_limit'), int(_C.GENERAL_CONFIG_DEFAULTS['pass_limit']))}
+    time_limit_ms = coerce_int(general_cfg.get('time_limit_ms'), int(_C.GENERAL_CONFIG_DEFAULTS['time_limit_ms']), _C.GENERAL_TIME_LIMIT_MIN_MS, _C.GENERAL_TIME_LIMIT_MAX_MS)
+    memory_limit_mb = coerce_int(general_cfg.get('memory_limit_mb'), int(_C.GENERAL_CONFIG_DEFAULTS['memory_limit_mb']), _C.GENERAL_MEMORY_LIMIT_MIN_MB, _C.GENERAL_MEMORY_LIMIT_MAX_MB)
+    ctx['general_cfg'] = {
+        'time_limit_ms': time_limit_ms,
+        'memory_limit_mb': memory_limit_mb,
+        'mode': safe_mode,
+        'pass_limit': normalize_pass_limit(general_cfg.get('pass_limit'), int(_C.GENERAL_CONFIG_DEFAULTS['pass_limit'])),
+        **resource_limit_display(time_limit_ms, memory_limit_mb),
+    }
     ctx['system_limit_info'] = _system_limit_info()
     ctx['workspace_revision'] = workspace_revision_info(
         workspace_path,

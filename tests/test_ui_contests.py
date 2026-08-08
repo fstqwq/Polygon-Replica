@@ -9,6 +9,7 @@ from tests.db_helpers import (
 )
 
 from app.service.platform.git_process import run_git
+from app.service.problem.resource_limits import resource_limit_display
 from starlette.requests import Request
 
 from tests.common import E2ETestBase
@@ -49,6 +50,23 @@ def _app_request(path: str) -> Request:
 class TestUIContests(UIHelpersMixin, E2ETestBase):
     seed_primary_workspace = False
     seed_default_workspace = True
+
+    def test_resource_limit_display_uses_shared_units_and_warning_boundaries(self) -> None:
+        self.assertEqual(
+            resource_limit_display(2_000, 1_024),
+            {
+                "time_limit_display": "2s",
+                "time_limit_warn": False,
+                "memory_limit_display": "1G",
+                "memory_limit_warn": False,
+            },
+        )
+        self.assertTrue(resource_limit_display(499, 256)["time_limit_warn"])
+        self.assertFalse(resource_limit_display(500, 256)["time_limit_warn"])
+        self.assertFalse(resource_limit_display(10_000, 256)["time_limit_warn"])
+        self.assertTrue(resource_limit_display(10_001, 256)["time_limit_warn"])
+        self.assertTrue(resource_limit_display(2_000, 255)["memory_limit_warn"])
+        self.assertFalse(resource_limit_display(2_000, 256)["memory_limit_warn"])
 
     def _create_contest(self, slug: str, title: str = "UI Contest") -> int:
         resp = contests_root_create(
@@ -184,11 +202,26 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
         self.assertNotIn("<h2>Properties</h2>", overview_html)
         self.assertIn('<h3>Contest</h3>', overview_html)
         self.assertIn("Manage problems", overview_html)
-        self.assertIn('class="table-base problem-list-table"', overview_html)
+        self.assertIn('class="table-base problem-list-table contest-problem-list-table"', overview_html)
         self.assertIn('class="problem-slug-link problem-list-slug-link"', overview_html)
         self.assertIn('<span class="problem-list-slug-owner">alice/</span>', overview_html)
         self.assertIn('<span class="problem-list-slug-leaf">sample</span>', overview_html)
         self.assertNotIn("alice/sample</code> - sample", overview_html)
+        self.assertIn("<th>Details</th>", overview_html)
+        self.assertIn('<th class="problem-list-head">Title</th>', overview_html)
+        self.assertNotIn("<th>TL/ML</th>", overview_html)
+        self.assertNotIn("<th>Mode</th>", overview_html)
+        self.assertIn("pass-fail", overview_html)
+        self.assertIn(">2s</span>", overview_html)
+        self.assertIn(">1G</span>", overview_html)
+        self.assertNotIn("1024MB", overview_html)
+        self.assertIn("solution", overview_html)
+        self.assertIn("language", overview_html)
+        self.assertIn("Checker:", overview_html)
+        self.assertIn("Validator:", overview_html)
+        self.assertIn('class="danger">0 tests</span>', overview_html)
+        self.assertIn('class="danger">0 solutions</span>', overview_html)
+        self.assertIn('class="danger">missing</span>', overview_html)
 
         problems_page = contest_problems_page(
             _app_request(f"/contests/{contest_slug}/problems"),
@@ -202,6 +235,10 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
         self.assertIn("Update limits", problems_html)
         self.assertIn("Contest problems", problems_html)
         self.assertIn("Add problems", problems_html)
+        self.assertIn("<th>#</th>", problems_html)
+        self.assertEqual(problems_html.count('<th class="problem-list-head">Title</th>'), 2)
+        self.assertNotIn("<th>Idx</th>", problems_html)
+        self.assertNotIn("<th class=\"problem-list-head\">Problem ID</th>", problems_html)
         self.assertIn("/problems/change-general", problems_html)
 
     def test_change_names_tl_ml_creates_per_problem_commit(self) -> None:

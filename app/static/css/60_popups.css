@@ -39,7 +39,7 @@ body.confirm-open {
 .ui-popup-title,
 .ui-popup-header > h3 {
   margin: 0;
-  font-size: 1.22rem;
+  font-size: var(--font-size-ui-xl);
   line-height: 1.2;
 }
 
@@ -159,7 +159,7 @@ body.confirm-open {
 .statement-draft-entry-preview {
   margin: 0;
   color: var(--text-secondary);
-  font-size: var(--font-size-ui-md);
+  font-size: var(--font-size-ui-sm);
   line-height: 1.4;
   white-space: pre-wrap;
   word-break: break-word;

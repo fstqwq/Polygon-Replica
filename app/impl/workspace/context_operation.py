@@ -38,6 +38,7 @@ from app.service.problem.test_spec import (
     TESTS_SPEC_REL,
     summarize_tests_spec,
 )
+from app.service.repository.revision import workspace_upstream_revision_display
 from app.service.verification.runtime import coerce_int
 
 _C = config.constants
@@ -50,9 +51,7 @@ _STANDARD_CHECKER_CACHE_SET: frozenset[str] = frozenset()
 
 
 def _db_revision_display(local: int | None, upstream: int | None) -> str:
-    local_text = f"v{local}" if local is not None else "none"
-    published_text = f"v{upstream}" if upstream is not None else "missing"
-    return f"Base {local_text} / Upstream {published_text}"
+    return workspace_upstream_revision_display(local, upstream)
 
 def user_participating_problems(user_id: int, limit: int=_C.API_PROBLEMS_LIST_LIMIT) -> list[dict]:
     uid = int(user_id)

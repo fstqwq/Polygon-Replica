@@ -35,27 +35,28 @@
 
 {% macro standard_checker_section() -%}
 <section class="checker-standard-panel">
-  <div class="checker-standard-head">
-    <div>
-      <h2 class="checker-section-title">Standard checker</h2>
-    </div>
-    {% if checker_status.standard_checker %}<span class="status-chip">Current: {{ checker_status.standard_checker }}</span>{% endif %}
-  </div>
   {% if standard_checker_options %}
   <form class="form-stack checker-standard-form" method="post" action="{{ problem_href('checker_set_standard') }}">
     {% if ctx.contest_workspace %}<input type="hidden" name="contest" value="{{ ctx.contest_workspace.contest_slug }}" />{% endif %}
-    <select id="standard-checker-name" name="checker_name" aria-label="Standard checker">
-      {% for checker in standard_checker_options %}
-      <option value="{{ checker.value }}" data-description="{{ checker.description }}" {% if checker.value == selected_standard_checker %}selected{% endif %}>{{ checker.value }} — {{ checker.description }}</option>
-      {% endfor %}
-    </select>
-    {% if selected_standard_description %}<p id="standard-checker-description" class="muted checker-standard-description" data-standard-checker-description="1">{{ selected_standard_description }}.</p>{% endif %}
-    <div class="form-row-actions">
-      <button class="btn primary-action" type="submit">Use checker</button>
+    <div class="checker-standard-head">
+      <div class="checker-standard-title-row">
+        <h2 class="checker-section-title">Standard checker</h2>
+        {% if checker_status.standard_checker %}<span class="status-chip">Current: {{ checker_status.standard_checker }}</span>{% endif %}
+      </div>
+    </div>
+    <div class="checker-standard-control-row">
+      <select id="standard-checker-name" name="checker_name" aria-label="Standard checker" data-auto-submit-select="1">
+        {% for checker in standard_checker_options %}
+        <option value="{{ checker.value }}" {% if checker.value == selected_standard_checker %}selected{% endif %}>{{ checker.value }} — {{ checker.description }}</option>
+        {% endfor %}
+      </select>
       <button class="linkish-button" type="submit" formaction="{{ problem_href('checker_view_standard') }}" formmethod="get">View source</button>
     </div>
   </form>
   {% else %}
+  <div class="checker-standard-head">
+    <h2 class="checker-section-title">Standard checker</h2>
+  </div>
   <p class="flash">Standard checker catalog is unavailable: <code>third_party/upstream/testlib/checkers</code>.</p>
   {% endif %}
 </section>
@@ -74,9 +75,8 @@
   <section class="checker-custom-entry">
     <div>
       <h2>Custom checker</h2>
-      <p class="muted">Use custom testlib logic when a standard checker is not enough.</p>
     </div>
-    <a class="button-link" href="{{ problem_href('problem_checker', query={'mode': 'custom'}) }}">{{ "Customize source" if checker_status.repo_source_exists else "Write custom checker" }}</a>
+    <a class="button-link primary-action" href="{{ problem_href('problem_checker', query={'mode': 'custom'}) }}">{{ "Customize source" if checker_status.repo_source_exists else "Write custom checker" }}</a>
   </section>
   {% endif %}
 </div>

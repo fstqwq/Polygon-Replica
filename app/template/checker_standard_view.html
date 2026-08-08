@@ -1,14 +1,13 @@
 {% extends "base.html" %}
 {% block content %}
-<h1 class="page-title">View Standard Checker</h1>
-<p><strong>Checker:</strong> <code>{{ checker_name }}</code></p>
-<p class="muted">Source: upstream <code>third_party/upstream/testlib/checkers/</code>, {{ checker_lines }} lines.</p>
-<p><a href="{{ problem_href('problem_checker') }}">Back to Checker</a></p>
-
-<form class="form-row" method="post" action="{{ problem_href('checker_set_standard') }}">
-  <input type="hidden" name="checker_name" value="{{ checker_name }}" />
-  <button class="btn" type="submit">Use This Standard Checker</button>
-</form>
-
-<pre class="line-context">{{ checker_source }}</pre>
+<h1 class="page-title"><code>{{ checker_name }}</code></h1>
+<textarea
+  class="checker-standard-source-viewer"
+  data-code-editor="1"
+  data-code-path="{{ checker_name }}"
+  data-code-height="620"
+  aria-label="{{ checker_name }} source"
+  readonly
+  spellcheck="false"
+>{{ checker_source }}</textarea>
 {% endblock %}

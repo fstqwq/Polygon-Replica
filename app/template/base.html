@@ -33,8 +33,8 @@
   <title>{% if page_title %}{{ page_title }} - {% endif %}{{ ui_browser_title }}</title>
   <link rel="icon" href="/static/favicon.ico?v=20260427-01" sizes="any" />
   <link rel="icon" href="/static/favicon.png?v=20260427-01" type="image/png" />
-  <link rel="stylesheet" href="/static/style.css?v=20260808-43" />
-  <script src="/static/ui.js?v=20260808-35" defer></script>
+  <link rel="stylesheet" href="/static/style.css?v=20260808-59" />
+  <script src="/static/ui.js?v=20260808-36" defer></script>
 </head>
 <body class="problem-layout{% if ctx.topbar_max_1400 %} topbar-max-1400{% endif %}{% block body_class %}{% endblock %}">
   {% set flash_presenter = 'topbar' %}
@@ -84,14 +84,13 @@
             class="problem-context-meta-pill problem-context-meta-pill-action"
             href="#statement-settings-popup"
             data-popup-open="statement-settings-popup"
-            aria-label="Edit time and memory limits"
-            title="Edit time and memory limits"
+            aria-label="Edit problem metadata"
           >
             <svg class="problem-context-meta-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
               <path fill="currentColor" d="M19.14 12.94c.04-.31.06-.63.06-.94s-.02-.63-.07-.94l2.03-1.58-1.92-3.32-2.39.96a7.18 7.18 0 0 0-1.62-.94L14.87 3h-3.84l-.36 3.18c-.58.24-1.12.55-1.62.94l-2.39-.96-1.92 3.32 2.03 1.58c-.05.31-.08.64-.08.94s.03.63.08.94l-2.03 1.58 1.92 3.32 2.39-.96c.5.39 1.04.7 1.62.94l.36 3.18h3.84l.36-3.18c.58-.24 1.12-.55 1.62-.94l2.39.96 1.92-3.32-2.02-1.58ZM12.95 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7Z"></path>
             </svg>
-            <span class="problem-context-meta-pill-item">{{ ctx.general_cfg.time_limit_ms }}ms</span>
-            <span class="problem-context-meta-pill-item">{{ ctx.general_cfg.memory_limit_mb }}MB</span>
+            <span class="problem-context-meta-pill-item{{ ' warn' if ctx.general_cfg.time_limit_warn else '' }}">{{ ctx.general_cfg.time_limit_display }}</span>
+            <span class="problem-context-meta-pill-item{{ ' warn' if ctx.general_cfg.memory_limit_warn else '' }}">{{ ctx.general_cfg.memory_limit_display }}</span>
             {% if ctx.general_cfg.pass_limit > 1 %}
             <span class="problem-context-meta-pill-item accent-gradient-text">{{ ctx.general_cfg.pass_limit }} passes</span>
             {% endif %}

@@ -2915,22 +2915,6 @@
     });
   }
 
-  function initStandardCheckerDescription() {
-    var select = document.getElementById("standard-checker-name");
-    var description = document.querySelector("[data-standard-checker-description='1']");
-    if (!select || !description) return;
-
-    function refreshDescription() {
-      var option = select.options[select.selectedIndex];
-      var text = String((option && option.getAttribute("data-description")) || "").trim();
-      description.textContent = text ? text + "." : "";
-      description.hidden = !text;
-    }
-
-    select.addEventListener("change", refreshDescription);
-    refreshDescription();
-  }
-
   function initStatementLanguageSwitch() {
     var forms = document.querySelectorAll("form[data-statement-language-form='1']");
     if (!forms.length) return;
@@ -3027,7 +3011,6 @@
     initSudoEnvelopeForm();
     initStatementDraftBackup();
     initStatementLanguageSwitch();
-    initStandardCheckerDescription();
     initAutoSubmitSelects();
     initPolygonImportSlugSuggest();
     initCopyTextButtons();

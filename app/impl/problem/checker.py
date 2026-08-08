@@ -51,18 +51,10 @@ def checker_page(request: Request, problem: str, user: Annotated[str, Depends(re
         repo_content = ''
         repo_content_truncated = False
     starter_content = template_for_kind('checker') if not checker_status.get('repo_source_exists') else ''
-    selected_standard_description = next(
-        (
-            str(row['description'])
-            for row in standard_checker_options
-            if row['value'] == selected_standard
-        ),
-        '',
-    )
     show_custom_editor = request.query_params.get('mode') == 'custom' or bool(
         checker_status.get('repo_source_exists') and not checker_status.get('standard_checker')
     )
-    return template_response(request, 'checker.html', {'ctx': ctx, 'checker_status': checker_status, 'standard_checker_options': standard_checker_options, 'selected_standard_checker': selected_standard, 'selected_standard_description': selected_standard_description, 'show_custom_editor': show_custom_editor, 'repo_source': repo_source, 'repo_content': repo_content, 'starter_content': starter_content, 'repo_content_truncated': repo_content_truncated, 'content_char_limit': _C.WORKSPACE_FILE_VIEW_CHAR_LIMIT})
+    return template_response(request, 'checker.html', {'ctx': ctx, 'checker_status': checker_status, 'standard_checker_options': standard_checker_options, 'selected_standard_checker': selected_standard, 'show_custom_editor': show_custom_editor, 'repo_source': repo_source, 'repo_content': repo_content, 'starter_content': starter_content, 'repo_content_truncated': repo_content_truncated, 'content_char_limit': _C.WORKSPACE_FILE_VIEW_CHAR_LIMIT})
 
 def checker_view_standard(request: Request, problem: str, user: Annotated[str, Depends(require_session_user)], checker_name: str=''):
     ctx = page_ctx(
@@ -87,12 +79,11 @@ def checker_view_standard(request: Request, problem: str, user: Annotated[str, D
         normalized_name, source_path = resolve_standard_checker_path(selected)
         canonical = f'std::{normalized_name}'
         source_text = source_path.read_text(encoding='utf-8', errors='replace')
-        description = str(_C.STANDARD_CHECKER_DESCRIPTIONS.get(normalized_name, 'general-purpose standard checker from testlib'))
     except ValueError as exc:
         return redirect_response(f'/problems/{problem}/checker', status_code=303, message=str(exc))
     except OSError as exc:
         return redirect_response(f'/problems/{problem}/checker', status_code=303, message=str(exc))
-    return template_response(request, 'checker_standard_view.html', {'ctx': ctx, 'checker_name': canonical, 'checker_description': description, 'checker_source': source_text, 'checker_lines': len(source_text.splitlines())})
+    return template_response(request, 'checker_standard_view.html', {'ctx': ctx, 'checker_name': canonical, 'checker_source': source_text})
 
 def checker_set_standard(problem: str, user: Annotated[str, Depends(require_session_user)], checker_name: str=Form(...)):
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)

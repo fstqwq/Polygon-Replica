@@ -61,13 +61,30 @@ def verification_source_display(
         if source.base_commit not in revision_cache:
             revision_cache[source.base_commit] = git_commit_count(workspace, source.base_commit)
         revision = revision_cache[source.base_commit]
-        return f"Workspace (on v{revision})" if revision is not None else "Workspace (on v?)"
+        return f"Workspace on v{revision}" if revision is not None else "Workspace on v?"
     if not source.base_commit:
         return "Workspace"
     if source.base_commit not in revision_cache:
         revision_cache[source.base_commit] = git_commit_count(workspace, source.base_commit)
     revision = revision_cache[source.base_commit]
     return f"Published v{revision}" if revision is not None else "Published v?"
+
+
+def workspace_upstream_revision_display(
+    workspace_revision: int | None,
+    upstream_revision: int | None,
+) -> str:
+    workspace_text = (
+        f"Workspace on v{workspace_revision}"
+        if workspace_revision is not None
+        else "none"
+    )
+    upstream_text = (
+        f"v{upstream_revision}"
+        if upstream_revision is not None
+        else "missing"
+    )
+    return f"{workspace_text} / Upstream {upstream_text}"
 
 
 def git_commit_count(workspace: Path, rev: str) -> int | None:
@@ -202,9 +219,7 @@ def workspace_revision_info(
     elif behind_count is not None:
         upstream_higher = behind_count > 0
     missing = local_version is None or upstream_version is None
-    local_text = f"v{local_version}" if local_version is not None else "none"
-    published_text = f"v{upstream_version}" if upstream_version is not None else "missing"
-    display = f"Base {local_text} / Upstream {published_text}"
+    display = workspace_upstream_revision_display(local_version, upstream_version)
     highlight = bool(upstream_higher or missing)
     return {
         "local": local_version,

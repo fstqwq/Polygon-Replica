@@ -89,7 +89,7 @@ body.problem-layout:not(.verification-compact) {
 
 .logo {
   display: inline-block;
-  font-size: 44px;
+  font-size: var(--font-size-brand);
   line-height: 1.04;
   color: var(--text);
 }
@@ -117,7 +117,7 @@ body.problem-layout:not(.verification-compact) {
   display: flex;
   align-items: center;
   gap: var(--space-3);
-  font-size: var(--font-size-ui-md);
+  font-size: var(--font-size-ui-sm);
   margin-left: auto;
   color: var(--text-secondary);
 }
@@ -201,7 +201,7 @@ body.problem-layout:not(.verification-compact) {
 }
 
 .contest-context-name {
-  font-size: 18px;
+  font-size: var(--font-size-ui-xl);
   line-height: 1.2;
 }
 
@@ -410,7 +410,7 @@ body.problem-layout:not(.verification-compact) {
 
 .problem-context-title {
   margin: 0;
-  font-size: 15px;
+  font-size: var(--font-size-ui-lg);
   font-weight: 700;
   color: var(--text);
   text-decoration: none;
@@ -514,6 +514,11 @@ body.problem-layout:not(.verification-compact) {
   font-weight: 600;
   line-height: 1.25;
   white-space: nowrap;
+}
+
+.problem-context-meta-pill-item.warn {
+  color: var(--warn);
+  font-weight: 700;
 }
 
 .problem-context-meta-icon {

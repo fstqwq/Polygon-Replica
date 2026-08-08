@@ -232,6 +232,13 @@ class TestUIComponents(UIHelpersMixin, E2ETestBase):
             "std::rcmp9.cpp — double sequence, abs/rel error &lt;= 1e-9",
             html,
         )
+        self.assertEqual(html.count("ordered sequence of tokens"), 1)
+        self.assertIn('class="checker-standard-control-row"', html)
+        self.assertIn('data-auto-submit-select="1"', html)
+        self.assertNotIn("Use checker", html)
+        self.assertNotIn("standard-checker-description", html)
+        self.assertNotIn("Use custom testlib logic", html)
+        self.assertIn('class="button-link primary-action"', html)
 
     def test_checker_page_supports_source_save_without_files_page(self) -> None:
         ws = Path(workspace_service.ensure_workspace(self.problem, self.user))
@@ -1180,6 +1187,12 @@ class TestUIComponents(UIHelpersMixin, E2ETestBase):
         html = resp.body.decode("utf-8", errors="replace")
         self.assertIn("std::fcmp.cpp", html)
         self.assertIn("registerTestlibCmd", html)
+        self.assertIn('data-code-editor="1"', html)
+        self.assertIn('data-code-path="std::fcmp.cpp"', html)
+        self.assertIn("readonly", html)
+        self.assertNotIn("Use This Standard Checker", html)
+        self.assertNotIn("Back to Checker", html)
+        self.assertNotIn("third_party/upstream/testlib/checkers", html)
 
     def test_validator_and_interactor_pages_render_unsaved_starters(self) -> None:
         ws = Path(workspace_service.ensure_workspace(self.problem, self.user))

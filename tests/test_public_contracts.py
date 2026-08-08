@@ -93,6 +93,30 @@ class TestPublicContracts(unittest.TestCase):
         self.assertIn(".component-editor-error {", forms_source)
         self.assertNotIn(".component-editor-error {", tests_source)
 
+    def test_native_buttons_inherit_the_application_font(self) -> None:
+        forms_source = (ROOT / "app" / "static" / "css" / "30_forms.css").read_text(encoding="utf-8-sig")
+        contest_packages_source = (ROOT / "app" / "template" / "contest_packages.html").read_text(
+            encoding="utf-8-sig"
+        )
+
+        self.assertIn("button,\ninput,\nselect,\ntextarea {\n  font: inherit;\n}", forms_source)
+        self.assertNotIn('class="link-button', contest_packages_source)
+
+    def test_ui_font_sizes_use_the_global_type_scale(self) -> None:
+        offenders: list[str] = []
+        for path in sorted((ROOT / "app" / "static" / "css").glob("*.css")):
+            for line_number, line in enumerate(path.read_text(encoding="utf-8-sig").splitlines(), start=1):
+                stripped = line.strip()
+                if "font-size:" not in stripped or stripped.startswith("--font-size-"):
+                    continue
+                if "var(--font-size-" not in stripped and "font-size: inherit" not in stripped:
+                    offenders.append(f"{path.name}:{line_number}")
+
+        self.assertEqual(offenders, [])
+        token_source = TOKENS_PATH.read_text(encoding="utf-8-sig")
+        self.assertNotIn("13.2px", token_source)
+        self.assertNotIn("--font-size-ui-md", token_source)
+
     def test_run_detail_popup_title_uses_safe_canonical_test_metadata(self) -> None:
         ui_source = UI_JS_PATH.read_text(encoding="utf-8-sig")
 

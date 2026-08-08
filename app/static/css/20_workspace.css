@@ -106,7 +106,7 @@
 }
 
 .workspace-side-link {
-  font-size: var(--font-size-ui-md);
+  font-size: var(--font-size-ui-sm);
   line-height: 1.35;
   white-space: nowrap;
 }
@@ -337,9 +337,34 @@
   }
 }
 
-.contest-problem-list-table .problem-list-slug-leaf {
+.problem-list-table.contest-problem-list-table .problem-list-slug-leaf {
   white-space: normal;
   overflow-wrap: anywhere;
+}
+
+.table-base .contest-problem-details-cell {
+  min-width: 190px;
+  font-size: var(--font-size-ui-xs);
+}
+
+.contest-problem-detail {
+  display: block;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
+.contest-problem-detail-summary {
+  color: inherit;
+  white-space: normal;
+}
+
+.contest-problem-detail-summary.danger {
+  color: var(--danger);
+}
+
+.contest-problem-detail-components,
+.contest-problem-detail-languages {
+  white-space: normal;
 }
 
 .contest-workspace-card {
@@ -350,7 +375,7 @@
 .contest-workspace-card > h3 {
   margin: 0;
   min-width: 0;
-  font-size: var(--font-size-ui-md);
+  font-size: var(--font-size-ui-sm);
   line-height: 1.3;
 }
 
@@ -512,7 +537,7 @@
 }
 
 .settings-last-judging-time {
-  font-size: 0.82rem;
+  font-size: var(--font-size-ui-xs);
   line-height: 1.2;
   margin-top: 0.2rem;
 }
@@ -1019,7 +1044,7 @@ body.merge-page .container {
 
 .merge-change-kind {
   color: var(--text-secondary);
-  font-size: 0.78rem;
+  font-size: var(--font-size-ui-xs);
   font-weight: 700;
   text-transform: uppercase;
 }

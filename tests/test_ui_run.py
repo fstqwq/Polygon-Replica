@@ -1636,7 +1636,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             html,
             contains=(
                 '<th class="verification-list-source-head">Source</th>',
-                "Workspace (on v",
+                "Workspace on v",
                 str(revision_row.get("source_display") or ""),
             ),
             excludes=("<th>Finished</th>", "current files"),
