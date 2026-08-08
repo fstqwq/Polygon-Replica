@@ -118,11 +118,13 @@ class TestToolchainVersionCollector(unittest.TestCase):
         self.assertEqual(self.collector.version_commands(101), {})
 
     def test_report_decodes_and_canonicalizes_version_output(self) -> None:
-        self.collector.record_report(
-            101,
-            hostname="judgehost-a",
-            compiler=self._encoded(b" command=/usr/bin/g++\r\ng++ 14\xff\x00 \r\n"),
-            runner="",
+        self.assertTrue(
+            self.collector.record_report(
+                101,
+                hostname="judgehost-a",
+                compiler=self._encoded(b" command=/usr/bin/g++\r\ng++ 14\xff\x00 \r\n"),
+                runner="",
+            )
         )
 
         telemetry = self.state.host_toolchains["judgehost-a"]["cpp"]
@@ -133,19 +135,23 @@ class TestToolchainVersionCollector(unittest.TestCase):
         self.assertTrue(telemetry.observed_at)
 
     def test_report_requires_current_owner_and_valid_bounded_content(self) -> None:
-        self.collector.record_report(
-            101,
-            hostname="judgehost-b",
-            compiler=self._encoded(b"g++ 14"),
-            runner="",
+        self.assertFalse(
+            self.collector.record_report(
+                101,
+                hostname="judgehost-b",
+                compiler=self._encoded(b"g++ 14"),
+                runner="",
+            )
         )
         self.assertEqual(self.state.host_toolchains, {})
 
-        self.collector.record_report(
-            101,
-            hostname="judgehost-a",
-            compiler="not base64",
-            runner=self._encoded(b"x" * (ToolchainVersionCollector.MAX_VERSION_OUTPUT_BYTES + 1)),
+        self.assertFalse(
+            self.collector.record_report(
+                101,
+                hostname="judgehost-a",
+                compiler="not base64",
+                runner=self._encoded(b"x" * (ToolchainVersionCollector.MAX_VERSION_OUTPUT_BYTES + 1)),
+            )
         )
         self.assertEqual(self.state.host_toolchains, {})
 

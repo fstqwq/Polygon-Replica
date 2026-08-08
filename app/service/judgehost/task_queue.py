@@ -51,12 +51,13 @@ class TaskQueue:
     ) -> None:
         if not action:
             raise RuntimeError("judgehost host event action is required")
+        safe_host = self._core.normalize_hostname(hostname)
         now_text = now_iso()
         with self._s.state_lock:
-            row = self._s.hosts_state.get(hostname)
+            row = self._s.hosts_state.get(safe_host)
             if row is None:
                 row = {
-                    "hostname": hostname,
+                    "hostname": safe_host,
                     "enabled": True,
                     "first_seen_at": now_text,
                     "last_seen_at": now_text,
@@ -65,7 +66,7 @@ class TaskQueue:
                     "last_run_id": "",
                     "update_count": 0,
                 }
-                self._s.hosts_state[hostname] = row
+                self._s.hosts_state[safe_host] = row
             row["last_seen_at"] = now_text
             row["last_action"] = action
             row["last_task_id"] = task_id
@@ -500,11 +501,12 @@ class TaskQueue:
 
 
     def set_host_enabled(self, hostname: str, enabled: bool) -> HostLeaseRelease:
+        safe_host = self._core.normalize_hostname(hostname)
         now_text = now_iso()
         with self._s.state_lock:
-            current_row = dict(self._s.hosts_state.get(hostname, {}))
-            self._s.hosts_state[hostname] = {
-                "hostname": hostname,
+            current_row = dict(self._s.hosts_state.get(safe_host, {}))
+            self._s.hosts_state[safe_host] = {
+                "hostname": safe_host,
                 "peer_addr": str(current_row.get("peer_addr") or ""),
                 "enabled": bool(enabled),
                 "first_seen_at": str(current_row.get("first_seen_at") or now_text),
@@ -517,7 +519,7 @@ class TaskQueue:
         release = HostLeaseRelease(0, 0, (), (), ())
         if not enabled:
             release = self._s.batch_scheduler.release_host_leases(
-                hostname,
+                safe_host,
                 now_text=now_text,
             )
         return release

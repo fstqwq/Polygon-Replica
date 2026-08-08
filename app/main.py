@@ -15,6 +15,7 @@ import app.impl.auth.middleware as auth_http
 from app.impl.runtime.config import config
 from app.impl.auth.shared import _apply_security_headers
 from app.route import (
+    admin_route,
     tests_route,
     preview_route,
     contest_route,
@@ -115,6 +116,7 @@ app.add_middleware(MaintenanceAdmissionMiddleware)
 
 
 app.include_router(root_auth_route.router)
+app.include_router(admin_route.router)
 app.include_router(contest_route.router)
 app.include_router(agent_route.router)
 app.include_router(problem_route.router)

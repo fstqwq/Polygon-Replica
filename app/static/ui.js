@@ -2137,11 +2137,11 @@
       currentEnvelopeTokenName: "current_password_envelope_token",
       currentEncryptedVerifierName: "current_password_encrypted_verifier",
     });
-    initPreparedPasswordEnvelopeForm(document.getElementById("settings-admin-password-form"), {
+    initPreparedPasswordEnvelopeForm(document.getElementById("admin-password-form"), {
       requireCurrentPassword: false,
-      scope: "settings-admin-password",
+      scope: "admin-password",
       currentPurpose: "",
-      newPurpose: "settings-admin-new",
+      newPurpose: "admin-new",
       username: function (activeForm) {
         var usernameEl = activeForm.querySelector("input[name='target_username']");
         return usernameEl ? String(usernameEl.value || "").trim() : "";

@@ -1,0 +1,93 @@
+{% extends "admin_base.html" %}
+{% block admin_title %}User administration{% endblock %}
+{% block admin_content %}
+<div class="page-title-inline admin-page-title">
+  <div>
+    <h1 class="page-title">Users</h1>
+    <p class="muted">{{ active_system_admin_count }} active system admins.</p>
+  </div>
+  <form class="admin-search-form" method="get" action="/admin/users">
+    <input id="admin_users_query" name="query" type="search" value="{{ admin_users_query }}" autocomplete="off" spellcheck="false" placeholder="Username or email" />
+    <button class="btn" type="submit">Search</button>
+  </form>
+</div>
+
+<section class="content-section-plain">
+  <h2>Directory</h2>
+  {% if admin_user_rows %}
+  <div class="table-scroll">
+    <table class="table-base">
+      <thead><tr><th>User</th><th>Email</th><th>Role</th><th>Status</th><th>Created</th></tr></thead>
+      <tbody>
+        {% for row in admin_user_rows %}
+        <tr>
+          <td><strong>{{ row.username }}</strong></td>
+          <td>{% if row.email %}{{ row.email }}{% else %}<span class="muted">none</span>{% endif %}</td>
+          <td>{% if row.is_system_admin %}<span class="ok">system admin</span>{% else %}user{% endif %}</td>
+          <td>
+            {% if row.is_banned %}<span class="danger">banned</span>
+            {% elif row.is_registered %}active
+            {% else %}<span class="muted">placeholder</span>{% endif %}
+          </td>
+          <td>{% if row.created_at %}{{ row.created_at | local_time }}{% else %}<span class="muted">none</span>{% endif %}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <p class="muted">Showing {{ admin_user_rows|length }} {% if admin_users_query %}matching{% else %}recent{% endif %} users.</p>
+  {% else %}
+  <p class="muted">No matching users.</p>
+  {% endif %}
+</section>
+
+<div class="admin-action-grid">
+  <section class="info-card admin-action-card">
+    <h2>Admin role</h2>
+    <form class="form-stack" method="post" action="/admin/users/system-admin">
+      <label for="admin_target_username">Username</label>
+      <input id="admin_target_username" name="target_username" type="text" autocomplete="username" spellcheck="false" />
+      <label for="admin_action">Action</label>
+      <select id="admin_action" name="action"><option value="grant">Grant</option><option value="revoke">Revoke</option></select>
+      <button class="btn primary-action" type="submit">Update admin role</button>
+    </form>
+  </section>
+  <section class="info-card admin-action-card">
+    <h2>Account status</h2>
+    <form class="form-stack" method="post" action="/admin/users/ban">
+      <label for="ban_target_username">Username</label>
+      <input id="ban_target_username" name="target_username" type="text" autocomplete="username" spellcheck="false" />
+      <label for="ban_action">Action</label>
+      <select id="ban_action" name="action"><option value="ban">Ban</option><option value="unban">Unban</option></select>
+      <button class="btn" type="submit">Update account status</button>
+    </form>
+  </section>
+</div>
+
+<section class="info-card admin-password-card">
+  <h2>Reset password</h2>
+  <form id="admin-password-form" class="form-stack" method="post" action="/admin/users/password">
+    <div class="admin-inline-fields">
+      <div class="form-field-stack">
+        <label for="admin_password_target_username">Username</label>
+        <input id="admin_password_target_username" name="target_username" type="text" autocomplete="username" spellcheck="false" />
+      </div>
+      <div class="form-field-stack">
+        <label for="admin_new_password">New password</label>
+        <input id="admin_new_password" name="new_password" type="password" autocomplete="new-password" />
+      </div>
+      <div class="form-field-stack">
+        <label for="admin_new_password_confirm">Confirm new password</label>
+        <input id="admin_new_password_confirm" name="new_password_confirm" type="password" autocomplete="new-password" />
+      </div>
+    </div>
+    <input type="hidden" name="csrf_token" value="{{ admin_password_csrf_token }}" />
+    <input type="hidden" name="new_password_salt" value="{{ admin_password_salt }}" />
+    <input type="hidden" name="new_password_iters" value="{{ admin_password_iters }}" />
+    <input type="hidden" name="new_password_key_id" value="" />
+    <input type="hidden" name="new_password_envelope_token" value="" />
+    <input type="hidden" name="new_password_encrypted_verifier" value="" />
+    <div class="form-row form-row-actions"><button class="btn" type="submit">Reset user password</button></div>
+  </form>
+</section>
+{% endblock %}

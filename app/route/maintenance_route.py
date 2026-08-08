@@ -15,7 +15,7 @@ def maintenance_page():
     status = str(snapshot.get("status") or "idle")
     if status == "succeeded":
         return RedirectResponse(
-            "/settings?cleanup=success",
+            "/admin?cleanup=success",
             status_code=303,
             headers={"Cache-Control": "no-store"},
         )
@@ -37,7 +37,7 @@ def maintenance_page():
             f"stage: {snapshot.get('stage') or 'unknown'}\n"
             f"completed_stage: {completed_stage}\n"
             f"error: {snapshot.get('error') or 'unknown error'}\n"
-            "An administrator may retry the cleanup from Settings.\n"
+            "An administrator may retry the cleanup from Admin.\n"
         )
         return PlainTextResponse(body, headers={"Cache-Control": "no-store"})
     body = (

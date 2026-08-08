@@ -285,10 +285,11 @@ class ResultProcessor:
         compiler: str = "",
         runner: str = "",
     ) -> dict[str, object]:
+        safe_host = self._core.normalize_hostname(hostname)
         try:
-            self._toolchain_versions.record_report(
+            recorded = self._toolchain_versions.record_report(
                 int(judgetask_id),
-                hostname=hostname,
+                hostname=safe_host,
                 compiler=compiler,
                 runner=runner,
             )
@@ -298,6 +299,16 @@ class ResultProcessor:
                 judgetask_id,
                 hostname,
             )
+            recorded = False
+        if recorded:
+            case_row = self._s.batch_scheduler.fetch_case(int(judgetask_id))
+            if case_row is not None:
+                self._queue._record_host_event_conn(
+                    hostname=safe_host,
+                    action="versions",
+                    task_id=domjudge_text(case_row["task_id"]),
+                    run_id=domjudge_text(case_row["run_id"]),
+                )
         return {}
 
     def _domjudge_publish_reported_case(self, *, task_id: str, test_name: str) -> bool:
@@ -1420,13 +1431,22 @@ class ResultProcessor:
         row = self._s.batch_scheduler.case_debug_context(case_id)
         if row is None:
             return 0
+        case_identity = self._s.batch_scheduler.fetch_case(case_id)
+        if case_identity is not None:
+            lease_owner = domjudge_text(case_identity["lease_owner"])
+            if lease_owner:
+                self._queue._record_host_event_conn(
+                    hostname=lease_owner,
+                    action="internal-error",
+                    task_id=domjudge_text(case_identity["task_id"]),
+                    run_id=domjudge_text(case_identity["run_id"]),
+                )
         batch_id = int(row["batch_id"])
         case_debug = domjudge_text(row["case_debug_text"])
         batch_debug = domjudge_text(row["batch_debug_text"])
         debug_text = case_debug
         if batch_debug and batch_debug not in debug_text:
             debug_text = batch_debug if not debug_text else f"{debug_text}\n{batch_debug}"
-        case_identity = self._s.batch_scheduler.fetch_case(case_id)
         if case_identity is not None:
             self._touch_task_verification(domjudge_text(case_identity["task_id"]))
         payload_text = self._domjudge_debug_payload_text({} if payload is None else payload)

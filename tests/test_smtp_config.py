@@ -11,8 +11,8 @@ from tests.db_helpers import db_execute, db_fetch_one
 from tests.ui_support import (
     UIHelpersMixin,
     _request,
+    admin_mail_page,
     config,
-    settings_page,
     settings_smtp_update,
 )
 from app.service.platform.secret_box import ENCRYPTION_KEY_ENV, SecretBox, SecretBoxDecryptError
@@ -155,9 +155,9 @@ class TestSmtpConfig(UIHelpersMixin, E2ETestBase):
         db_execute("UPDATE users SET is_system_admin=1 WHERE username=?", [self.user])
         config.workspace_service.clear_identity_caches()
         with patch.dict(os.environ, {ENCRYPTION_KEY_ENV: _KEY}):
-            page = settings_page(_request("/settings"), user=self.user)
+            page = admin_mail_page(_request("/admin/mail"), user=self.user)
             html = page.body.decode("utf-8", errors="replace")
-            self.assertIn("SMTP Mailbox", html)
+            self.assertIn("SMTP server", html)
             response = settings_smtp_update(
                 user=self.user,
                 smtp_host="smtp.example.com",

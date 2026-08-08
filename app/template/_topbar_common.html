@@ -6,6 +6,9 @@
   <div id="top-event-slot" class="top-event-slot" aria-live="polite" aria-atomic="true"></div>
   <div class="top-actions">
     <span class="session-user">{{ top_user.username }}</span>
+    {% if top_user.is_system_admin %}
+    <a href="/admin">Admin</a>
+    {% endif %}
     {% if top_settings_href %}
     <a href="{{ top_settings_href }}">Settings</a>
     {% endif %}

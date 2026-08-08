@@ -279,7 +279,7 @@ def auth_password_envelope(
             if not current_user:
                 raise HTTPException(status_code=401, detail='login required')
             safe_username = current_user
-        elif safe_scope == 'settings-admin-password':
+        elif safe_scope == 'admin-password':
             current_user = session_user(request)
             if not current_user:
                 raise HTTPException(status_code=401, detail='login required')

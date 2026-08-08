@@ -1,0 +1,70 @@
+{% extends "admin_base.html" %}
+{% block admin_title %}System configuration{% endblock %}
+{% block admin_content %}
+<div class="page-title-inline admin-page-title">
+  <div>
+    <h1 class="page-title">Configuration</h1>
+    <p class="muted">{{ admin_config_changed_total }} overrides across all categories.</p>
+  </div>
+  <form method="post" action="/admin/config/reset" data-confirm-message="Reset all system configuration to defaults?">
+    <button class="btn danger-link" type="submit">Reset all overrides</button>
+  </form>
+</div>
+
+<div class="admin-config-layout">
+  <nav class="admin-config-categories" aria-label="Configuration categories">
+    {% for section in config_sections %}
+    <a class="{% if section.slug == selected_slug %}active{% endif %}" href="{{ section.href }}">
+      <span>{{ section.category }}</span>
+      {% if section.changed_count %}<strong class="warn">{{ section.changed_count }}</strong>{% endif %}
+    </a>
+    {% endfor %}
+  </nav>
+
+  <section class="content-section-plain admin-config-section">
+    <div class="admin-card-head">
+      <div>
+        <h2>{{ selected_section.category }}</h2>
+        <p class="muted">{{ selected_changed_count }} overrides · {{ selected_count }} keys</p>
+      </div>
+    </div>
+    <form class="form-stack" method="post" action="/admin/config/{{ selected_slug }}">
+      <div class="admin-config-list">
+        {% for row in selected_rows %}
+        <div class="admin-config-row{% if row.changed %} admin-config-row-changed{% endif %}">
+          <div class="admin-config-key">
+            <code>{{ row.key }}</code>
+            {% if row.description %}<span class="muted">{{ row.description }}</span>{% endif %}
+          </div>
+          <div class="admin-config-value">
+            {% if row.type == 'bool' %}
+            <label class="admin-inline-toggle"><input type="checkbox" name="{{ row.input_name }}" {% if row.current_value %}checked{% endif %} /> {{ 'enabled' if row.current_value else 'disabled' }}</label>
+            {% elif row.choices %}
+            <select name="{{ row.input_name }}">{% for choice in row.choices %}<option value="{{ choice }}" {% if row.current_display == choice %}selected{% endif %}>{{ choice }}</option>{% endfor %}</select>
+            {% elif row.type == 'int' %}
+            <input type="number" name="{{ row.input_name }}" value="{{ row.current_value }}" />
+            {% elif row.type == 'float' %}
+            <input type="number" step="any" name="{{ row.input_name }}" value="{{ row.current_value }}" />
+            {% elif 'token' in row.key|lower %}
+            <div class="form-input-with-action">
+              <input id="{{ row.input_name }}" type="text" name="{{ row.input_name }}" value="{{ row.current_value }}" autocomplete="off" spellcheck="false" />
+              <button class="btn" type="button" data-token-generate="1" data-token-target="{{ row.input_name }}">Generate</button>
+            </div>
+            {% else %}
+            <input type="text" name="{{ row.input_name }}" value="{{ row.current_value }}" />
+            {% endif %}
+            <div class="admin-config-meta">
+              <span>Default <code>{{ row.default_display }}</code></span>
+              <span>{{ 'restart required' if row.restart_required else 'runtime' }}</span>
+              {% if row.pending_restart %}<span class="warn">pending restart · running <code>{{ row.effective_display }}</code></span>{% endif %}
+            </div>
+            {% if row.changed %}<label class="muted"><input type="checkbox" name="config_reset_{{ row.key }}" value="1" /> Use default</label>{% endif %}
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+      <div class="form-row form-row-actions"><button class="btn primary-action" type="submit">Save {{ selected_section.category }}</button></div>
+    </form>
+  </section>
+</div>
+{% endblock %}

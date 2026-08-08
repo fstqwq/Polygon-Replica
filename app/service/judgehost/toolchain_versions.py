@@ -165,25 +165,25 @@ class ToolchainVersionCollector:
         hostname: str,
         compiler: str,
         runner: str,
-    ) -> None:
+    ) -> bool:
         context = self._version_context(int(judgetask_id))
         if context is None:
             logger.warning(
                 "ignored judgehost toolchain report for inactive judgetask_id=%s",
                 judgetask_id,
             )
-            return
+            return False
         if context.lease_owner != hostname:
             logger.warning(
                 "ignored judgehost toolchain report for non-owner judgetask_id=%s hostname=%s",
                 judgetask_id,
                 hostname,
             )
-            return
+            return False
         compiler_version = self._decode_version_output(compiler, field="compiler")
         runner_version = self._decode_version_output(runner, field="runner")
         if compiler_version is None and runner_version is None:
-            return
+            return False
         telemetry = HostToolchainTelemetry(
             language_id=context.language_id,
             compiler=compiler_version or "",
@@ -194,3 +194,4 @@ class ToolchainVersionCollector:
         with self._state.state_lock:
             host_toolchains = self._state.host_toolchains.setdefault(hostname, {})
             host_toolchains[context.language_id] = telemetry
+        return True

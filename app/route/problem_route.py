@@ -47,21 +47,8 @@ from app.impl.problem.interactor import (
     interactor_save_source,
 )
 from app.impl.problem.setting import (
-    settings_config_category_page,
-    settings_config_category_update,
-    settings_judgehost_host_action,
-    settings_judgehost_runtime_update,
-    settings_judgehost_snapshot,
     settings_page,
-    settings_artifacts_cleanup,
     settings_password_update,
-    settings_smtp_test,
-    settings_smtp_update,
-    settings_system_config_reset,
-    settings_user_ban_update,
-    settings_user_password_update,
-    settings_user_system_admin_update,
-    settings_worker_queue_snapshot,
 )
 from app.impl.problem.solution import solutions_delete, solutions_editor_page, solutions_page, solutions_rename, solutions_save_source, solutions_set_tag
 from app.impl.problem.validator import (
@@ -209,74 +196,8 @@ router.add_api_route(
     response_class=HTMLResponse,
 )
 router.add_api_route(
-    "/settings/artifacts/cleanup",
-    settings_artifacts_cleanup,
-    methods=["POST"],
-)
-router.add_api_route(
     "/settings/password",
     settings_password_update,
-    methods=["POST"],
-)
-router.add_api_route(
-    "/settings/users/system-admin",
-    settings_user_system_admin_update,
-    methods=["POST"],
-)
-router.add_api_route(
-    "/settings/users/ban",
-    settings_user_ban_update,
-    methods=["POST"],
-)
-router.add_api_route(
-    "/settings/users/password",
-    settings_user_password_update,
-    methods=["POST"],
-)
-router.add_api_route(
-    "/settings/smtp",
-    settings_smtp_update,
-    methods=["POST"],
-)
-router.add_api_route(
-    "/settings/smtp/test",
-    settings_smtp_test,
-    methods=["POST"],
-)
-router.add_api_route(
-    "/settings/judgehost/runtime",
-    settings_judgehost_runtime_update,
-    methods=["POST"],
-)
-router.add_api_route(
-    "/settings/config/{category}",
-    settings_config_category_page,
-    methods=["GET"],
-    response_class=HTMLResponse,
-)
-router.add_api_route(
-    "/settings/config/{category}",
-    settings_config_category_update,
-    methods=["POST"],
-)
-router.add_api_route(
-    "/settings/system-config/reset",
-    settings_system_config_reset,
-    methods=["POST"],
-)
-router.add_api_route(
-    "/settings/worker-queue",
-    settings_worker_queue_snapshot,
-    methods=["GET"],
-)
-router.add_api_route(
-    "/settings/judgehost",
-    settings_judgehost_snapshot,
-    methods=["GET"],
-)
-router.add_api_route(
-    "/settings/judgehost/host-action",
-    settings_judgehost_host_action,
     methods=["POST"],
 )
 router.add_api_route(

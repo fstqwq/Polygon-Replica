@@ -60,7 +60,7 @@ class TestMaintenanceAdmissionMiddleware(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(succeeded.status_code, 303)
         self.assertEqual(
             succeeded.headers.get("location"),
-            "/settings?cleanup=success",
+            "/admin?cleanup=success",
         )
 
         failed_state = {

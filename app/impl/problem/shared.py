@@ -125,6 +125,7 @@ def _settings_user_ctx(user: str) -> dict:
     user_row = {
         "id": user_id,
         "username": username,
+        "is_system_admin": int(user_row_raw["is_system_admin"]),
     }
     if user_row["id"] <= 0 or (not user_row["username"]):
         raise HTTPException(status_code=400, detail="invalid user")
@@ -155,27 +156,4 @@ def _has_destructive_sudo_for_ctx(request: Request, ctx: dict) -> bool:
     if user_id <= 0:
         return False
     return has_sudo_session(request, user_id=user_id, scope=str(_C.SUDO_SCOPE_DESTRUCTIVE))
-
-
-def _as_bool_form_value(raw: str) -> bool:
-    token = raw.strip().lower()
-    return token in {"1", "true", "yes", "on", "y"}
-
-
-def _system_config_row_by_key(sections: list[dict[str, object]]) -> dict[str, dict[str, object]]:
-    rows_by_key: dict[str, dict[str, object]] = {}
-    for section in sections:
-        rows = section.get("rows") if isinstance(section, dict) else []
-        if not isinstance(rows, list):
-            continue
-        for row in rows:
-            if not isinstance(row, dict):
-                continue
-            key = key.strip() if isinstance(key := row.get("key"), str) else ""
-            if key:
-                rows_by_key[key] = row
-    return rows_by_key
-
-
-
 

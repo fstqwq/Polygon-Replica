@@ -69,8 +69,11 @@ def global_user_ctx(
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     return {
-        "user": {"id": int(row["id"]), "username": str(row["username"])},
+        "user": {
+            "id": int(row["id"]),
+            "username": str(row["username"]),
+            "is_system_admin": int(row["is_system_admin"]),
+        },
         "default_problem": selector(safe_user),
     }
-
 

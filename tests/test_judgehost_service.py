@@ -1789,6 +1789,36 @@ class TestJudgehostService(E2ETestBase):
         self.assertTrue(_host_row().get("online"))
         self.assertEqual(_host_row().get("last_action"), "lease")
 
+        service.domjudge_check_versions(
+            case_id,
+            hostname=host,
+            compiler=base64.b64encode(b"command=/usr/bin/g++\ng++ 14.2.0").decode("ascii"),
+            runner="",
+        )
+        versions_row = _host_row()
+        self.assertEqual(versions_row.get("last_action"), "versions")
+        self.assertEqual(
+            versions_row.get("toolchains"),
+            [
+                {
+                    "language_id": "cpp",
+                    "compiler": "command=/usr/bin/g++\ng++ 14.2.0",
+                    "runner": "",
+                    "observed_at": versions_row["toolchains"][0]["observed_at"],
+                    "judgetask_id": case_id,
+                }
+            ],
+        )
+
+        service.domjudge_check_versions(
+            case_id,
+            hostname="judgehost-version-not-owner",
+            compiler=base64.b64encode(b"spoofed compiler").decode("ascii"),
+            runner="",
+        )
+        self.assertNotIn("judgehost-version-not-owner", service.state.hosts_state)
+        self.assertEqual(_host_row().get("last_action"), "versions")
+
         _mark_host_stale()
         service.domjudge_update_judging(
             "judgehost-not-owner",

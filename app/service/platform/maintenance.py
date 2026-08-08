@@ -529,7 +529,7 @@ class MaintenanceCoordinator:
 
     _EXEMPT_PREFIXES = ("/api/v4/",)
     _EXEMPT_PATHS = frozenset(
-        {"/api/v4", "/maintenance", "/settings/artifacts/cleanup"}
+        {"/api/v4", "/maintenance", "/admin/maintenance/artifacts/cleanup"}
     )
 
     def __init__(

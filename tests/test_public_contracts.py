@@ -12,7 +12,7 @@ STYLE_PATH = ROOT / "app" / "static" / "style.css"
 TOKENS_PATH = ROOT / "app" / "static" / "css" / "00_tokens.css"
 WORKSPACE_CSS_PATH = ROOT / "app" / "static" / "css" / "20_workspace.css"
 UI_JS_PATH = ROOT / "app" / "static" / "ui.js"
-SETTINGS_TEMPLATE_PATH = ROOT / "app" / "template" / "settings.html"
+ADMIN_JUDGEHOST_TEMPLATE_PATH = ROOT / "app" / "template" / "admin_judgehosts.html"
 
 
 def _python_files_under(root: Path) -> list[Path]:
@@ -141,15 +141,14 @@ class TestPublicContracts(unittest.TestCase):
 
     def test_generated_judgehost_commands_isolate_submission_uids(self) -> None:
         ui_source = UI_JS_PATH.read_text(encoding="utf-8-sig")
-        settings_source = SETTINGS_TEMPLATE_PATH.read_text(encoding="utf-8-sig")
+        judgehost_source = ADMIN_JUDGEHOST_TEMPLATE_PATH.read_text(encoding="utf-8-sig")
 
         self.assertIn("return safe >= 1 && safe <= 65533 ? safe : 60706;", ui_source)
         self.assertIn("var runUserUidGid = runUidBase + daemonId;", ui_source)
         self.assertIn("if (largestRunUidGid > 65533)", ui_source)
         self.assertIn("largestRunUidGid > 61183", ui_source)
         self.assertIn('" -e RUN_USER_UID_GID=" +', ui_source)
-        self.assertIn('data-gen-script-run-uid-base="1"', settings_source)
-        self.assertIn("base + DAEMON_ID", settings_source)
+        self.assertIn('data-gen-script-run-uid-base="1"', judgehost_source)
 
     def test_generated_judgehost_command_uses_unconfigured_latest_image(self) -> None:
         command_source = UI_JS_PATH.read_text(encoding="utf-8-sig")

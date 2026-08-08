@@ -313,7 +313,11 @@ class WorkspaceService:
 
     def global_user_context(self, username: str) -> dict[str, object]:
         ensured = self.ensure_user(self._validate_identifier(username, "user"))
-        return {"id": int(ensured["id"]), "username": str(ensured["username"])}
+        return {
+            "id": int(ensured["id"]),
+            "username": str(ensured["username"]),
+            "is_system_admin": int(ensured["is_system_admin"]),
+        }
 
     def known_user_id(self, username: str) -> int | None:
         return self._store.user_id_by_username(self._validate_identifier(username, "user"))

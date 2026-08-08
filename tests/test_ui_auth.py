@@ -11,7 +11,7 @@ from starlette.responses import PlainTextResponse
 from app.service.auth.password_hash import password_verifier_storage_hash
 from app import main_constant
 from app.impl.auth.password_envelope import PasswordEnvelopeStore
-from app.impl.problem.setting import settings_artifacts_cleanup
+from app.impl.admin.panel import admin_artifacts_cleanup as settings_artifacts_cleanup
 from app.impl.root.auth_pages import logout
 from app.service.platform.maintenance import CleanupStart
 from tests.common import E2ETestBase
@@ -19,6 +19,9 @@ from tests.common import E2ETestBase
 from tests.ui_support import (
     ADMIN_CONFIG_DEFAULTS,
     AUTH_COOKIE_NAME,
+    admin_judgehosts_page,
+    admin_overview_page,
+    admin_users_page,
     Request,
     UIHelpersMixin,
     _cookie_value_from_response,
@@ -1109,7 +1112,7 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         self.assertEqual(resp.status_code, 303)
         self.assertIn("/setup?next=", resp.headers.get("location", ""))
 
-    def test_settings_page_shows_system_admin_panel_for_system_admin(self) -> None:
+    def test_admin_panel_is_separate_from_account_settings(self) -> None:
         db_execute("UPDATE users SET is_system_admin=0")
         db_execute("UPDATE users SET is_system_admin=1 WHERE username=?", ["alice"])
         workspace_service.clear_identity_caches()
@@ -1117,17 +1120,44 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         resp = settings_page(_request("/settings"), user="alice")
         self.assertEqual(resp.status_code, 200)
         html = resp.body.decode("utf-8", errors="replace")
-        self.assertIn("System Admin Panel", html)
-        self.assertIn("Configuration Center", html)
-        self.assertIn("settings-admin-panel", html)
         self.assertIn("settings-account-panel", html)
-        self.assertNotIn('data-main="problems" class="active"', html)
-        self.assertIn("/settings/config/", html)
-        self.assertIn("Judging", html)
-        self.assertIn("User Administration", html)
-        self.assertIn("Reset User Password", html)
-        self.assertIn('/settings/artifacts/cleanup', html)
-        self.assertIn("ALL PREVIOUS AUDIT HISTORY", html)
+        self.assertIn('href="/admin">Open admin panel</a>', html)
+        self.assertNotIn("System Admin Panel", html)
+        self.assertNotIn("Judgehost Runtime Controls", html)
+
+        admin_resp = admin_overview_page(_request("/admin"), user="alice")
+        self.assertEqual(admin_resp.status_code, 200)
+        admin_html = admin_resp.body.decode("utf-8", errors="replace")
+        self.assertIn("Administration", admin_html)
+        self.assertIn("Generated artifacts", admin_html)
+        self.assertIn('/admin/maintenance/artifacts/cleanup', admin_html)
+        self.assertIn('/admin/judgehosts', admin_html)
+        self.assertIn('/admin/judgehosts/snapshot', admin_html)
+        self.assertNotIn('/admin/worker-queue/snapshot', admin_html)
+        self.assertIn('/admin/users', admin_html)
+
+    def test_admin_routes_do_not_keep_settings_compatibility_paths(self) -> None:
+        from app.main import app
+
+        route_paths = {route.path for route in app.routes}
+        self.assertTrue(
+            {
+                "/admin",
+                "/admin/judgehosts",
+                "/admin/users",
+                "/admin/mail",
+                "/admin/config/{category}",
+            }.issubset(route_paths)
+        )
+        self.assertTrue(
+            {
+                "/settings/config/{category}",
+                "/settings/judgehosts",
+                "/settings/users",
+                "/settings/smtp",
+                "/settings/maintenance/artifacts/cleanup",
+            }.isdisjoint(route_paths)
+        )
 
     def test_artifact_cleanup_admin_action_redirects_or_returns_busy_counts(self) -> None:
         db_execute("UPDATE users SET is_system_admin=0")
@@ -1160,7 +1190,7 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         self.assertEqual(busy.status_code, 409)
         self.assertIn(b'"worker_queued":1', busy.body)
 
-    def test_settings_page_system_admin_can_search_user_list(self) -> None:
+    def test_admin_users_page_can_search_user_list(self) -> None:
         match_user = self.random_id("lookupa")
         other_user = self.random_id("lookupb")
         match_email = f"{match_user}@gmail.com"
@@ -1171,16 +1201,15 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         db_execute("UPDATE users SET is_system_admin=1 WHERE username=?", ["alice"])
         workspace_service.clear_identity_caches()
 
-        resp = settings_page(_request("/settings", query=f"admin_users_query={match_user}"), user="alice")
+        resp = admin_users_page(_request("/admin/users", query=f"query={match_user}"), user="alice")
         self.assertEqual(resp.status_code, 200)
         html = resp.body.decode("utf-8", errors="replace")
-        self.assertIn("Find Users", html)
+        self.assertIn("Directory", html)
         self.assertIn(match_user, html)
         self.assertIn(match_email, html)
         self.assertNotIn(other_user, html)
         self.assertNotIn(other_email, html)
-        self.assertIn("Showing first 1 matching", html)
-        self.assertIn("user.", html)
+        self.assertIn("Showing 1 matching users", html)
 
     def test_system_admin_can_grant_and_revoke_system_admin(self) -> None:
         target = self.random_id("adminuser")
@@ -1277,7 +1306,7 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         self.assertEqual(new_login.status_code, 303)
         self.assertTrue(_cookie_value_from_response(new_login, AUTH_COOKIE_NAME))
 
-    def test_settings_page_runtime_runner_hides_auth_fields_when_judgehost_disabled(self) -> None:
+    def test_admin_judgehosts_hides_auth_fields_when_disabled(self) -> None:
         db_execute("UPDATE users SET is_system_admin=0")
         db_execute("UPDATE users SET is_system_admin=1 WHERE username=?", ["alice"])
         workspace_service.clear_identity_caches()
@@ -1294,7 +1323,7 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         )
         config.reload_runtime_values()
 
-        resp = settings_page(_request("/settings"), user="alice")
+        resp = admin_judgehosts_page(_request("/admin/judgehosts"), user="alice")
         self.assertEqual(resp.status_code, 200)
         html = resp.body.decode("utf-8", errors="replace")
         self.assertIn('data-popup-open="judgehost-gen-script-popup"', html)
@@ -1304,10 +1333,9 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         self.assertIn('data-gen-script-output="1"', html)
         self.assertIn('data-judgehost-enable-toggle="1"', html)
         self.assertIn('data-judgehost-auth-block="1" hidden', html)
-        self.assertIn('class="btn danger-link" type="submit">Reset To Defaults</button>', html)
-        self.assertIn("Runtime keys reload immediately", html)
+        self.assertIn('action="/admin/judgehosts/runtime"', html)
 
-    def test_settings_page_runtime_runner_shows_auth_fields_when_judgehost_enabled(self) -> None:
+    def test_admin_judgehosts_shows_auth_fields_when_enabled(self) -> None:
         db_execute("UPDATE users SET is_system_admin=0")
         db_execute("UPDATE users SET is_system_admin=1 WHERE username=?", ["alice"])
         workspace_service.clear_identity_caches()
@@ -1324,7 +1352,7 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         )
         config.reload_runtime_values()
 
-        resp = settings_page(_request("/settings"), user="alice")
+        resp = admin_judgehosts_page(_request("/admin/judgehosts"), user="alice")
         self.assertEqual(resp.status_code, 200)
         html = resp.body.decode("utf-8", errors="replace")
         self.assertIn('data-judgehost-enable-toggle="1"', html)
@@ -1333,7 +1361,7 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         self.assertIn('data-judgehost-api-username="1"', html)
         self.assertIn('data-judgehost-api-token="1"', html)
 
-    def test_settings_page_formats_judgehost_telemetry(self) -> None:
+    def test_admin_judgehosts_formats_reported_telemetry(self) -> None:
         db_execute("UPDATE users SET is_system_admin=0")
         db_execute("UPDATE users SET is_system_admin=1 WHERE username=?", ["alice"])
         workspace_service.clear_identity_caches()
@@ -1354,6 +1382,8 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
                     "age_sec": 3,
                     "last_seen_at": raw_last_judging,
                     "last_action": "heartbeat",
+                    "first_seen_at": raw_last_judging,
+                    "update_count": 9,
                     "active_leases": 0,
                     "last_task_id": "",
                     "last_run_id": "",
@@ -1367,21 +1397,28 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
                         "test_name": "001.in",
                     },
                     "recent_avg_per_case_sec": 0.125,
+                    "toolchains": [
+                        {
+                            "language_id": "cpp",
+                            "compiler": "command=/usr/bin/g++\ng++ 14.2.0",
+                            "runner": "",
+                            "observed_at": raw_last_judging,
+                            "judgetask_id": 123,
+                        }
+                    ],
                 }
             ],
         }
         with patch.object(config.judgehost_task_service, "status", return_value=fake_status):
-            resp = settings_page(_request("/settings"), user="alice")
+            resp = admin_judgehosts_page(_request("/admin/judgehosts"), user="alice")
         self.assertEqual(resp.status_code, 200)
         html = resp.body.decode("utf-8", errors="replace")
         self.assertIn("judgehost-lastseen-time", html)
-        self.assertIn('class="settings-judgehost-hostname"', html)
-        self.assertIn('class="muted settings-judgehost-peer-addr">203.0.113.10</div>', html)
-        self.assertNotIn('class="muted settings-judgehost-hostname"', html)
-        self.assertIn("Count", html)
-        self.assertIn("Last Judging", html)
-        self.assertIn("Recent Avg Per Case", html)
-        self.assertIn(">42<", html)
+        self.assertIn("203.0.113.10", html)
+        self.assertIn("Judged cases", html)
+        self.assertIn("Last judging", html)
+        self.assertIn("Recent average", html)
+        self.assertIn(">42</dd>", html)
         self.assertIn("0.125 s", html)
         self.assertIn(config.templates.env.filters["local_time"](raw_last_judging), html)
         self.assertNotIn(raw_last_judging, html)
@@ -1389,15 +1426,17 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
             'href="/problems/alice/sample/run/details?verification_id=ver-0123456789abcdef"',
             html,
         )
-        self.assertIn("Solution Run: <code>alice/sample</code> ac.cpp / 001.in", html)
-        self.assertIn('class="muted settings-last-judging-time"', html)
+        self.assertIn("Solution Run · <code>alice/sample</code> · ac.cpp / 001.in", html)
+        self.assertIn("Reported toolchains", html)
+        self.assertIn("g++ 14.2.0", html)
+        self.assertIn("Reported for judging task 123", html)
 
     def test_settings_config_category_update_requires_system_admin(self) -> None:
         with self.assertRaises(HTTPException) as blocked:
             asyncio.run(
                 settings_config_category_update(
                     _post_form_request(
-                        "/settings/config/judging",
+                        "/admin/config/judging",
                         {"config_RUN_TEST_SELECTOR_LIMIT": "777"},
                     ),
                     user="alice",
@@ -1415,7 +1454,7 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         update_resp = asyncio.run(
             settings_config_category_update(
                 _post_form_request(
-                    "/settings/config/judging",
+                    "/admin/config/judging",
                     {"config_RUN_TEST_SELECTOR_LIMIT": str(override_value)},
                 ),
                 user="alice",
@@ -1423,7 +1462,7 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
             )
         )
         self.assertEqual(update_resp.status_code, 303)
-        self.assertIn("/settings/config/judging", update_resp.headers.get("location", ""))
+        self.assertIn("/admin/config/judging", update_resp.headers.get("location", ""))
         self.assertEqual(
             int(config.system_config_service.get("RUN_TEST_SELECTOR_LIMIT")),
             override_value,
@@ -1456,7 +1495,7 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         set_override_resp = asyncio.run(
             settings_config_category_update(
                 _post_form_request(
-                    "/settings/config/judging",
+                    "/admin/config/judging",
                     {"config_RUN_TEST_SELECTOR_LIMIT": str(override_value)},
                 ),
                 user="alice",
@@ -1471,7 +1510,7 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         revert_resp = asyncio.run(
             settings_config_category_update(
                 _post_form_request(
-                    "/settings/config/judging",
+                    "/admin/config/judging",
                     {
                         "config_RUN_TEST_SELECTOR_LIMIT": str(override_value + 999),
                         "config_reset_RUN_TEST_SELECTOR_LIMIT": "1",
@@ -1499,7 +1538,7 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         resp = asyncio.run(
             settings_config_category_update(
                 _post_form_request(
-                    "/settings/config/judgehost",
+                    "/admin/config/judgehost",
                     {"config_JUDGEHOST_API_TOKEN": bad_token},
                 ),
                 user="alice",
@@ -1507,7 +1546,7 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
             )
         )
         self.assertEqual(resp.status_code, 303)
-        self.assertIn("/settings/config/judgehost", resp.headers.get("location", ""))
+        self.assertIn("/admin/config/judgehost", resp.headers.get("location", ""))
         messages = _flash_messages_from_response(resp)
         self.assertTrue(messages)
         self.assertIn("JUDGEHOST_API_TOKEN must contain only visible ASCII characters", messages[0])
@@ -1625,7 +1664,7 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         resp = asyncio.run(
             settings_config_category_update(
                 _post_form_request(
-                    "/settings/config/toolchain",
+                    "/admin/config/toolchain",
                     {"config_TOOLCHAIN_JUDGEHOST_CPP_COMPILE_FLAGS": flags},
                 ),
                 user="alice",
@@ -1633,7 +1672,7 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
             )
         )
         self.assertEqual(resp.status_code, 303)
-        self.assertIn("/settings/config/toolchain", resp.headers.get("location", ""))
+        self.assertIn("/admin/config/toolchain", resp.headers.get("location", ""))
         self.assertEqual(str(config.system_config_service.get("TOOLCHAIN_JUDGEHOST_CPP_COMPILE_FLAGS") or ""), flags)
 
     def test_settings_config_category_page_and_hot_reload(self) -> None:
@@ -1643,20 +1682,20 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         self.addCleanup(settings_system_config_reset, user="alice")
 
         page_resp = settings_config_category_page(
-            _request("/settings/config/judging"),
+            _request("/admin/config/judging"),
             user="alice",
             category="judging",
         )
         self.assertEqual(page_resp.status_code, 200)
         page_html = page_resp.body.decode("utf-8", errors="replace")
-        self.assertIn("System Configuration", page_html)
+        self.assertIn("Configuration", page_html)
         self.assertIn("RUN_EXEC_MEMORY_MB", page_html)
 
         update_value = 1536
         update_resp = asyncio.run(
             settings_config_category_update(
                 _post_form_request(
-                    "/settings/config/judging",
+                    "/admin/config/judging",
                     {"config_RUN_EXEC_MEMORY_MB": str(update_value)},
                 ),
                 user="alice",
@@ -1664,7 +1703,7 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
             )
         )
         self.assertEqual(update_resp.status_code, 303)
-        self.assertIn("/settings/config/judging", update_resp.headers.get("location", ""))
+        self.assertIn("/admin/config/judging", update_resp.headers.get("location", ""))
         self.assertEqual(int(config.system_config_service.get("RUN_EXEC_MEMORY_MB")), update_value)
         self.assertEqual(int(config.constants.RUN_EXEC_MEMORY_MB), update_value)
 
@@ -1674,7 +1713,7 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         workspace_service.clear_identity_caches()
 
         page_resp = settings_config_category_page(
-            _request("/settings/config/judgehost"),
+            _request("/admin/config/judgehost"),
             user="alice",
             category="judgehost",
         )

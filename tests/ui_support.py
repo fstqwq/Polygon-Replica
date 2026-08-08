@@ -15,6 +15,7 @@ from cryptography.hazmat.primitives.asymmetric import padding
 from starlette.requests import Request
 
 import app.impl.auth.middleware as auth_middleware_module
+import app.impl.admin.panel as admin_panel_module
 from app.impl.auth.password_envelope import password_envelope_store
 import app.impl.contest.access as contest_access_module
 import app.impl.contest.overview as contest_overview_module
@@ -52,6 +53,7 @@ import app.impl.workspace.run_view_detail as workspace_run_view_detail_module
 import app.impl.workspace.run_view_list as workspace_run_view_list_module
 from app.impl.runtime.config import config
 _API_MODULES = (
+    admin_panel_module,
     auth_middleware_module,
     tests_spec_module,
     tests_spec_verification_module,
@@ -213,17 +215,21 @@ solutions_rename = _api_attr("solutions_rename")
 solutions_delete = _api_attr("solutions_delete")
 solutions_set_tag = _api_attr("solutions_set_tag")
 settings_password_update = _api_attr("settings_password_update")
-settings_user_ban_update = _api_attr("settings_user_ban_update")
-settings_user_password_update = _api_attr("settings_user_password_update")
-settings_user_system_admin_update = _api_attr("settings_user_system_admin_update")
+admin_overview_page = _api_attr("admin_overview_page")
+admin_judgehosts_page = _api_attr("admin_judgehosts_page")
+admin_users_page = _api_attr("admin_users_page")
+admin_mail_page = _api_attr("admin_mail_page")
+settings_user_ban_update = _api_attr("admin_user_ban_update")
+settings_user_password_update = _api_attr("admin_user_password_update")
+settings_user_system_admin_update = _api_attr("admin_user_system_admin_update")
 settings_page = _api_attr("settings_page")
-settings_smtp_update = _api_attr("settings_smtp_update")
-settings_smtp_test = _api_attr("settings_smtp_test")
-settings_judgehost_snapshot = _api_attr("settings_judgehost_snapshot")
-settings_config_category_page = _api_attr("settings_config_category_page")
-settings_config_category_update = _api_attr("settings_config_category_update")
-settings_system_config_reset = _api_attr("settings_system_config_reset")
-settings_worker_queue_snapshot = _api_attr("settings_worker_queue_snapshot")
+settings_smtp_update = _api_attr("admin_smtp_update")
+settings_smtp_test = _api_attr("admin_smtp_test")
+settings_judgehost_snapshot = _api_attr("admin_judgehost_snapshot")
+settings_config_category_page = _api_attr("admin_config_category_page")
+settings_config_category_update = _api_attr("admin_config_category_update")
+settings_system_config_reset = _api_attr("admin_system_config_reset")
+settings_worker_queue_snapshot = _api_attr("admin_worker_queue_snapshot")
 switch_workspace = _api_attr("switch_workspace")
 workspace_delete = _api_attr("workspace_delete")
 problem_delete = _api_attr("problem_delete")
@@ -651,13 +657,13 @@ def _settings_password_update_with_envelope(user: str, current_password: str, ne
 
 
 def _settings_admin_password_update_with_envelope(actor_user: str, target_user: str, new_password: str):
-    csrf = issue_password_form_csrf_token("settings-admin-password")
+    csrf = issue_password_form_csrf_token("admin-password")
     new_salt = uuid.uuid4().hex
     new_iters = int(config.constants.PASSWORD_HASH_ITERS)
     new_verifier = _password_verifier_hex(new_password, new_salt, new_iters)
     new_envelope = _password_envelope_fields_direct(
-        scope="settings-admin-password",
-        purpose="settings-admin-new",
+        scope="admin-password",
+        purpose="admin-new",
         username=target_user,
         csrf_token=csrf,
         verifier=new_verifier,

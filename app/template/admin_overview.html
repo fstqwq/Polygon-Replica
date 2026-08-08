@@ -1,0 +1,82 @@
+{% extends "admin_base.html" %}
+{% block admin_title %}Admin overview{% endblock %}
+{% block admin_content %}
+{% set queue = judgehost.queue %}
+{% set cleanup = maintenance_status if maintenance_status else {} %}
+<div class="page-title-inline admin-page-title">
+  <div>
+    <h1 class="page-title">Overview</h1>
+    <p class="muted">Current runtime state. Open a section for controls and details.</p>
+  </div>
+</div>
+
+<div class="admin-summary-grid">
+  <a class="admin-summary-card" href="/admin/judgehosts">
+    <span class="admin-summary-label">Judgehosts</span>
+    <strong class="admin-summary-value{% if judgehost.enabled and judgehost.hosts_online > 0 %} ok{% else %} danger{% endif %}">
+      {{ judgehost.hosts_online }} / {{ judgehost.hosts_total }} online
+    </strong>
+    <span class="muted">{{ queue.leased }} leased · {{ queue.queued }} queued</span>
+  </a>
+  <a class="admin-summary-card" href="/admin/users">
+    <span class="admin-summary-label">Administrators</span>
+    <strong class="admin-summary-value">{{ active_system_admin_count }}</strong>
+    <span class="muted">active system admins</span>
+  </a>
+  <a class="admin-summary-card" href="/admin/mail">
+    <span class="admin-summary-label">Mail</span>
+    <strong class="admin-summary-value{% if not smtp.get('encryption_key_ready') %} danger{% endif %}">
+      {{ 'configured' if smtp.get('host') and smtp.get('password_configured') else 'incomplete' }}
+    </strong>
+    <span class="muted">{{ smtp.get('security_mode', 'STARTTLS') }}</span>
+  </a>
+  <a class="admin-summary-card" href="{{ admin_nav[-1].href }}">
+    <span class="admin-summary-label">Configuration</span>
+    <strong class="admin-summary-value{% if admin_config_changed_total %} warn{% endif %}">{{ admin_config_changed_total }}</strong>
+    <span class="muted">overrides</span>
+  </a>
+</div>
+
+<section class="content-section-plain admin-overview-section">
+  <div class="admin-card-head">
+    <div>
+      <h2>Queue</h2>
+      <p class="muted">Judgehost task lifecycle totals for this runtime.</p>
+    </div>
+    <a href="/admin/judgehosts/snapshot" target="_blank" rel="noopener">Runtime JSON</a>
+  </div>
+  <div class="admin-metric-strip">
+    <div><span>Queued</span><strong>{{ queue.queued }}</strong></div>
+    <div><span>Leased</span><strong>{{ queue.leased }}</strong></div>
+    <div><span>Completed</span><strong>{{ queue.completed }}</strong></div>
+    <div><span>Failed</span><strong{% if queue.failed %} class="danger"{% endif %}>{{ queue.failed }}</strong></div>
+  </div>
+</section>
+
+<section class="content-section-plain admin-overview-section">
+  <div class="admin-card-head">
+    <div>
+      <h2>Generated artifacts</h2>
+      <p class="muted">Cleanup preserves Git repositories, workspaces, contest sources, backups, and core metadata.</p>
+    </div>
+    <a href="/maintenance">Maintenance details</a>
+  </div>
+  <p>
+    Status:
+    <strong class="{% if cleanup.get('status') == 'failed' %}danger{% elif cleanup.get('status') == 'succeeded' %}ok{% endif %}">
+      {{ cleanup.get('status', 'idle') }}
+    </strong>
+    {% if cleanup.get('stage') %}<span class="muted">· {{ cleanup.get('stage') }}</span>{% endif %}
+  </p>
+  {% if cleanup.get('status') == 'failed' %}
+  <p class="danger">{{ cleanup.get('error', 'Unknown cleanup error') }}</p>
+  {% endif %}
+  <form
+    method="post"
+    action="/admin/maintenance/artifacts/cleanup"
+    data-confirm-message="Delete all generated artifacts, generated jobs, runtime caches, and all previous audit history?"
+  >
+    <button class="btn danger-link" type="submit">Clear generated artifacts</button>
+  </form>
+</section>
+{% endblock %}
