@@ -1485,6 +1485,20 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         row_after = db_fetch_one("SELECT value_json FROM system_config WHERE key=?", ["RUN_TEST_SELECTOR_LIMIT"])
         self.assertIsNone(row_after)
 
+    def test_system_config_refresh_prunes_removed_keys(self) -> None:
+        removed_key = "JUDGEHOST_INCLUDE_BUILD_PAYLOAD"
+        db_execute(
+            """
+            INSERT OR REPLACE INTO system_config(key, value_json, updated_at, updated_by_user_id)
+            VALUES(?,?,?,NULL)
+            """,
+            [removed_key, "false", "2026-08-08T00:00:00+00:00"],
+        )
+
+        config.system_config_service.refresh()
+
+        self.assertIsNone(db_fetch_one("SELECT key FROM system_config WHERE key=?", [removed_key]))
+
     def test_settings_config_category_update_can_revert_single_override_to_default(self) -> None:
         db_execute("UPDATE users SET is_system_admin=0")
         db_execute("UPDATE users SET is_system_admin=1 WHERE username=?", ["alice"])
@@ -1689,14 +1703,16 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         self.assertEqual(page_resp.status_code, 200)
         page_html = page_resp.body.decode("utf-8", errors="replace")
         self.assertIn("Configuration", page_html)
-        self.assertIn("RUN_EXEC_MEMORY_MB", page_html)
+        self.assertIn("RUN_EXEC_PROCESS_LIMIT", page_html)
+        self.assertNotIn("RUN_EXEC_MEMORY_MB", page_html)
+        self.assertNotIn("VERIFICATION_EXEC_MEMORY_MB", page_html)
 
         update_value = 1536
         update_resp = asyncio.run(
             settings_config_category_update(
                 _post_form_request(
                     "/admin/config/judging",
-                    {"config_RUN_EXEC_MEMORY_MB": str(update_value)},
+                    {"config_RUN_EXEC_PROCESS_LIMIT": str(update_value)},
                 ),
                 user="alice",
                 category="judging",
@@ -1704,8 +1720,8 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         )
         self.assertEqual(update_resp.status_code, 303)
         self.assertIn("/admin/config/judging", update_resp.headers.get("location", ""))
-        self.assertEqual(int(config.system_config_service.get("RUN_EXEC_MEMORY_MB")), update_value)
-        self.assertEqual(int(config.constants.RUN_EXEC_MEMORY_MB), update_value)
+        self.assertEqual(int(config.system_config_service.get("RUN_EXEC_PROCESS_LIMIT")), update_value)
+        self.assertEqual(int(config.constants.RUN_EXEC_PROCESS_LIMIT), update_value)
 
     def test_settings_config_category_page_renders_token_generate_button(self) -> None:
         db_execute("UPDATE users SET is_system_admin=0")
@@ -1720,6 +1736,7 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         self.assertEqual(page_resp.status_code, 200)
         page_html = page_resp.body.decode("utf-8", errors="replace")
         self.assertIn("JUDGEHOST_API_TOKEN", page_html)
+        self.assertNotIn("JUDGEHOST_INCLUDE_BUILD_PAYLOAD", page_html)
         self.assertIn("data-token-generate=\"1\"", page_html)
         self.assertIn("data-token-target=\"config_JUDGEHOST_API_TOKEN\"", page_html)
         self.assertIn(">Generate</button>", page_html)

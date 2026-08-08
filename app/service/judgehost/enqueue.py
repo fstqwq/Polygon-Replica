@@ -318,8 +318,6 @@ class TaskEnqueue:
         mode: str,
         selected_tests: list[str],
     ) -> dict[str, object]:
-        if not self._s.include_build_payload:
-            return {}
         safe_verification_id = TaskEnqueue._normalize_text(artifact_verification_id)
         if not safe_verification_id:
             return {}
@@ -483,7 +481,7 @@ class TaskEnqueue:
         sources_payload: dict[str, dict[str, object]] = {}
         for name, source_path in source_files.items():
             descriptor = RuntimeBlobStore.describe_file(source_path)
-            if descriptor.size > self._s.max_binary_payload_bytes:
+            if descriptor.size > self._s.max_component_source_bytes:
                 raise RuntimeError(f"{name} payload exceeds size limit")
             sources_payload[name] = self._s.runtime_blob_store.put_file(
                 descriptor
@@ -536,7 +534,7 @@ class TaskEnqueue:
             source_file = upload_file
             source_bytes = self._s.runtime_blob_store.read(
                 source_file,
-                max_bytes=self._s.max_source_bytes,
+                max_bytes=self._s.max_submission_source_bytes,
             )
             source_name = TaskEnqueue._normalize_text_with_default(upload_filename, default="submission.cpp")
             source_label = source_name
@@ -551,7 +549,7 @@ class TaskEnqueue:
             source_path = self._core.safe_workspace_source(workspace, TaskEnqueue._normalize_text(submission_path))
             source_bytes = self._core.safe_read_bytes(
                 source_path,
-                max_bytes=self._s.max_source_bytes,
+                max_bytes=self._s.max_submission_source_bytes,
                 label="submission payload",
             )
             source_file = self._s.runtime_blob_store.put_bytes(source_bytes)
@@ -623,7 +621,7 @@ class TaskEnqueue:
     ) -> dict[str, object]:
         upload_content = self._s.runtime_blob_store.read(
             upload_file,
-            max_bytes=self._s.max_source_bytes,
+            max_bytes=self._s.max_submission_source_bytes,
         )
         source_name, entry_point = self._normalize_submission_source(
             source_name=upload_filename,
@@ -654,7 +652,7 @@ class TaskEnqueue:
         source_file = PayloadFile.from_payload(payload["source_file"])
         source_bytes = self._s.runtime_blob_store.read(
             source_file,
-            max_bytes=self._s.max_source_bytes,
+            max_bytes=self._s.max_submission_source_bytes,
         )
         if not source_bytes:
             raise RuntimeError("submission source payload is empty")
@@ -670,7 +668,7 @@ class TaskEnqueue:
             descriptor = PayloadFile.from_payload(raw_file)
             blob = self._s.runtime_blob_store.read(
                 descriptor,
-                max_bytes=self._s.max_source_bytes,
+                max_bytes=self._s.max_submission_source_bytes,
             )
             if not blob:
                 continue
@@ -742,7 +740,7 @@ class TaskEnqueue:
                 return b""
             return self._s.runtime_blob_store.read(
                 PayloadFile.from_payload(raw_file),
-                max_bytes=self._s.max_binary_payload_bytes,
+                max_bytes=self._s.max_component_source_bytes,
             )
 
         checker_source_bytes = _source_bytes("checker.cpp")

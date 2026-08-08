@@ -41,10 +41,9 @@ class JudgehostState:
     wait_timeout_sec: int = 900
     wait_poll_sec: float = 0.5
     online_window_sec: int = 120
-    max_source_bytes: int = 262144
+    max_submission_source_bytes: int = 262144
     max_tests_per_task: int = 512
-    include_build_payload: bool = True
-    max_binary_payload_bytes: int = 8388608
+    max_component_source_bytes: int = 8388608
 
     task_registry: JudgehostTaskRegistry = field(init=False)
     touch_verification_runtime: Callable[[str], None] = field(

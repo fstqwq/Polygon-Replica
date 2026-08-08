@@ -483,7 +483,6 @@ class TestJudgehostLifecycle(DBTestBase):
         service.state.enabled = True
         service.state.api_token = "test-token"
         service.state.api_username = "judgehost"
-        service.state.include_build_payload = True
         return service
 
     @staticmethod

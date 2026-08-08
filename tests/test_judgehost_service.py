@@ -94,7 +94,6 @@ class TestJudgehostService(E2ETestBase):
         service.state.enabled = True
         service.state.api_token = "test-token"
         service.state.api_username = "judgehost"
-        service.state.include_build_payload = True
         return service
 
     def _verification_run_row(self, run_id: str, verification_id: str = "") -> dict[str, object] | None:
@@ -179,15 +178,12 @@ class TestJudgehostService(E2ETestBase):
         old_enabled = service.state.enabled
         old_token = service.state.api_token
         old_username = service.state.api_username
-        old_include_build_payload = service.state.include_build_payload
         self.addCleanup(setattr, service.state, "enabled", old_enabled)
         self.addCleanup(setattr, service.state, "api_token", old_token)
         self.addCleanup(setattr, service.state, "api_username", old_username)
-        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
         service.state.enabled = True
         service.state.api_token = "test-token"
         service.state.api_username = "judgehost"
-        service.state.include_build_payload = True
 
         ctx = config.workspace_service.workspace_context(self.problem, self.user, include_recent=False)
         verification_id = f"ver-{uuid.uuid4().hex}"
@@ -784,15 +780,12 @@ class TestJudgehostService(E2ETestBase):
         old_enabled = service.state.enabled
         old_token = service.state.api_token
         old_username = service.state.api_username
-        old_include_build_payload = service.state.include_build_payload
         self.addCleanup(setattr, service.state, "enabled", old_enabled)
         self.addCleanup(setattr, service.state, "api_token", old_token)
         self.addCleanup(setattr, service.state, "api_username", old_username)
-        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
         service.state.enabled = True
         service.state.api_token = "test-token"
         service.state.api_username = "judgehost"
-        service.state.include_build_payload = True
 
         verification_id = f"b-jh-dom-{uuid.uuid4().hex[:8]}"
         run_id = f"r-jh-dom-{uuid.uuid4().hex[:8]}"
@@ -912,15 +905,12 @@ class TestJudgehostService(E2ETestBase):
         old_enabled = service.state.enabled
         old_token = service.state.api_token
         old_username = service.state.api_username
-        old_include_build_payload = service.state.include_build_payload
         self.addCleanup(setattr, service.state, "enabled", old_enabled)
         self.addCleanup(setattr, service.state, "api_token", old_token)
         self.addCleanup(setattr, service.state, "api_username", old_username)
-        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
         service.state.enabled = True
         service.state.api_token = "test-token"
         service.state.api_username = "judgehost"
-        service.state.include_build_payload = True
 
         verification_id = f"b-jh-script-provider-{uuid.uuid4().hex[:8]}"
         run_id = f"r-jh-script-provider-{uuid.uuid4().hex[:8]}"
@@ -957,15 +947,12 @@ class TestJudgehostService(E2ETestBase):
         old_enabled = service.state.enabled
         old_token = service.state.api_token
         old_username = service.state.api_username
-        old_include_build_payload = service.state.include_build_payload
         self.addCleanup(setattr, service.state, "enabled", old_enabled)
         self.addCleanup(setattr, service.state, "api_token", old_token)
         self.addCleanup(setattr, service.state, "api_username", old_username)
-        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
         service.state.enabled = True
         service.state.api_token = "test-token"
         service.state.api_username = "judgehost"
-        service.state.include_build_payload = True
 
         verification_id = f"b-jh-script-cache-{uuid.uuid4().hex[:8]}"
         run_id_a = f"r-jh-script-cache-a-{uuid.uuid4().hex[:8]}"
@@ -1059,15 +1046,12 @@ class TestJudgehostService(E2ETestBase):
         old_enabled = service.state.enabled
         old_token = service.state.api_token
         old_username = service.state.api_username
-        old_include_build_payload = service.state.include_build_payload
         self.addCleanup(setattr, service.state, "enabled", old_enabled)
         self.addCleanup(setattr, service.state, "api_token", old_token)
         self.addCleanup(setattr, service.state, "api_username", old_username)
-        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
         service.state.enabled = True
         service.state.api_token = "test-token"
         service.state.api_username = "judgehost"
-        service.state.include_build_payload = True
 
         verification_id = f"b-jh-script-miss-{uuid.uuid4().hex[:8]}"
         run_id = f"r-jh-script-miss-{uuid.uuid4().hex[:8]}"
@@ -1137,15 +1121,12 @@ class TestJudgehostService(E2ETestBase):
         old_enabled = service.state.enabled
         old_token = service.state.api_token
         old_username = service.state.api_username
-        old_include_build_payload = service.state.include_build_payload
         self.addCleanup(setattr, service.state, "enabled", old_enabled)
         self.addCleanup(setattr, service.state, "api_token", old_token)
         self.addCleanup(setattr, service.state, "api_username", old_username)
-        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
         service.state.enabled = True
         service.state.api_token = "test-token"
         service.state.api_username = "judgehost"
-        service.state.include_build_payload = True
 
         verification_id = f"b-jh-generate-recompute-{uuid.uuid4().hex[:8]}"
         run_id = f"r-jh-generate-recompute-{uuid.uuid4().hex[:8]}"
@@ -1230,17 +1211,14 @@ class TestJudgehostService(E2ETestBase):
         old_enabled = service.state.enabled
         old_token = service.state.api_token
         old_username = service.state.api_username
-        old_include_build_payload = service.state.include_build_payload
         old_max_tests_per_task = service.state.max_tests_per_task
         self.addCleanup(setattr, service.state, "enabled", old_enabled)
         self.addCleanup(setattr, service.state, "api_token", old_token)
         self.addCleanup(setattr, service.state, "api_username", old_username)
-        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
         self.addCleanup(setattr, service.state, "max_tests_per_task", old_max_tests_per_task)
         service.state.enabled = True
         service.state.api_token = "test-token"
         service.state.api_username = "judgehost"
-        service.state.include_build_payload = True
         service.state.max_tests_per_task = 1
 
         verification_id = f"b-jh-dom-notrunc-{uuid.uuid4().hex[:8]}"
@@ -1296,15 +1274,12 @@ class TestJudgehostService(E2ETestBase):
         old_enabled = service.state.enabled
         old_token = service.state.api_token
         old_username = service.state.api_username
-        old_include_build_payload = service.state.include_build_payload
         self.addCleanup(setattr, service.state, "enabled", old_enabled)
         self.addCleanup(setattr, service.state, "api_token", old_token)
         self.addCleanup(setattr, service.state, "api_username", old_username)
-        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
         service.state.enabled = True
         service.state.api_token = "test-token"
         service.state.api_username = "judgehost"
-        service.state.include_build_payload = True
 
         verification_id = f"b-jh-dom-cache-{uuid.uuid4().hex[:8]}"
         run_id_a = f"r-jh-dom-cache-a-{uuid.uuid4().hex[:8]}"
@@ -1407,15 +1382,12 @@ class TestJudgehostService(E2ETestBase):
         old_enabled = service.state.enabled
         old_token = service.state.api_token
         old_username = service.state.api_username
-        old_include_build_payload = service.state.include_build_payload
         self.addCleanup(setattr, service.state, "enabled", old_enabled)
         self.addCleanup(setattr, service.state, "api_token", old_token)
         self.addCleanup(setattr, service.state, "api_username", old_username)
-        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
         service.state.enabled = True
         service.state.api_token = "test-token"
         service.state.api_username = "judgehost"
-        service.state.include_build_payload = True
 
         verification_id = f"b-jh-dom-mp-{uuid.uuid4().hex[:8]}"
         run_id = f"r-jh-dom-mp-{uuid.uuid4().hex[:8]}"
@@ -1554,15 +1526,12 @@ class TestJudgehostService(E2ETestBase):
         old_enabled = service.state.enabled
         old_token = service.state.api_token
         old_username = service.state.api_username
-        old_include_build_payload = service.state.include_build_payload
         self.addCleanup(setattr, service.state, "enabled", old_enabled)
         self.addCleanup(setattr, service.state, "api_token", old_token)
         self.addCleanup(setattr, service.state, "api_username", old_username)
-        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
         service.state.enabled = True
         service.state.api_token = "test-token"
         service.state.api_username = "judgehost"
-        service.state.include_build_payload = True
 
         verification_id = f"b-jh-dom-wa2tl-{uuid.uuid4().hex[:8]}"
         run_id = f"r-jh-dom-wa2tl-{uuid.uuid4().hex[:8]}"
@@ -1635,15 +1604,12 @@ class TestJudgehostService(E2ETestBase):
         old_enabled = service.state.enabled
         old_token = service.state.api_token
         old_username = service.state.api_username
-        old_include_build_payload = service.state.include_build_payload
         self.addCleanup(setattr, service.state, "enabled", old_enabled)
         self.addCleanup(setattr, service.state, "api_token", old_token)
         self.addCleanup(setattr, service.state, "api_username", old_username)
-        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
         service.state.enabled = True
         service.state.api_token = "test-token"
         service.state.api_username = "judgehost"
-        service.state.include_build_payload = True
 
         verification_id = f"b-jh-dom-reconnect-{uuid.uuid4().hex[:8]}"
         execution_verification_id = _canonical_verification_id("inv-domjudge-reconnect")
@@ -1866,11 +1832,9 @@ class TestJudgehostService(E2ETestBase):
         old_enabled = service.state.enabled
         old_token = service.state.api_token
         old_username = service.state.api_username
-        old_include_build_payload = service.state.include_build_payload
         self.addCleanup(setattr, service.state, "enabled", old_enabled)
         self.addCleanup(setattr, service.state, "api_token", old_token)
         self.addCleanup(setattr, service.state, "api_username", old_username)
-        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
         service.state.enabled = True
         service.state.api_token = "test-token"
         service.state.api_username = "judgehost"
@@ -1878,7 +1842,6 @@ class TestJudgehostService(E2ETestBase):
         build_bad = f"b-jh-dom-bad-{uuid.uuid4().hex[:8]}"
         run_bad = f"r-jh-dom-bad-{uuid.uuid4().hex[:8]}"
         self._seed_build_verification(build_bad)
-        service.state.include_build_payload = False
         with self.assertRaisesRegex(RuntimeError, "no tests in judgehost payload"):
             service.enqueue_task(
                 problem=self.problem,
@@ -1889,7 +1852,7 @@ class TestJudgehostService(E2ETestBase):
                 upload_content=None,
                 upload_filename=None,
                 run_id=run_bad,
-                selected_tests=["001.in"],
+                selected_tests=["999.in"],
                 verification_id=_canonical_verification_id("inv-domjudge-bad"),
                 verification_run_ids=[run_bad],
                 expected_behavior="accepted",
@@ -1899,7 +1862,6 @@ class TestJudgehostService(E2ETestBase):
         build_good = f"b-jh-dom-good-{uuid.uuid4().hex[:8]}"
         run_good = f"r-jh-dom-good-{uuid.uuid4().hex[:8]}"
         self._seed_build_verification(build_good)
-        service.state.include_build_payload = True
         good_task = service.enqueue_task(
             problem=self.problem,
             username=self.user,
@@ -1931,15 +1893,12 @@ class TestJudgehostService(E2ETestBase):
         old_enabled = service.state.enabled
         old_token = service.state.api_token
         old_username = service.state.api_username
-        old_include_build_payload = service.state.include_build_payload
         self.addCleanup(setattr, service.state, "enabled", old_enabled)
         self.addCleanup(setattr, service.state, "api_token", old_token)
         self.addCleanup(setattr, service.state, "api_username", old_username)
-        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
         service.state.enabled = True
         service.state.api_token = "test-token"
         service.state.api_username = "judgehost"
-        service.state.include_build_payload = True
 
         build_a = f"b-jh-cache-a-{uuid.uuid4().hex[:8]}"
         run_a = f"r-jh-cache-a-{uuid.uuid4().hex[:8]}"
@@ -2010,15 +1969,12 @@ class TestJudgehostService(E2ETestBase):
         old_enabled = service.state.enabled
         old_token = service.state.api_token
         old_username = service.state.api_username
-        old_include_build_payload = service.state.include_build_payload
         self.addCleanup(setattr, service.state, "enabled", old_enabled)
         self.addCleanup(setattr, service.state, "api_token", old_token)
         self.addCleanup(setattr, service.state, "api_username", old_username)
-        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
         service.state.enabled = True
         service.state.api_token = "test-token"
         service.state.api_username = "judgehost"
-        service.state.include_build_payload = True
 
         build_a = f"b-jh-host-a-{uuid.uuid4().hex[:8]}"
         run_a = f"r-jh-host-a-{uuid.uuid4().hex[:8]}"
@@ -2087,9 +2043,6 @@ class TestJudgehostService(E2ETestBase):
 
     def test_domjudge_interactive_uses_configured_pass_limit(self) -> None:
         service = config.judgehost_task_service
-        old_include_build_payload = service.state.include_build_payload
-        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
-        service.state.include_build_payload = True
 
         verification_id = f"b-jh-passlimit-interactive-{uuid.uuid4().hex[:8]}"
         run_id = f"r-jh-passlimit-interactive-{uuid.uuid4().hex[:8]}"
@@ -2126,9 +2079,6 @@ class TestJudgehostService(E2ETestBase):
 
     def test_domjudge_pass_fail_multi_pass_uses_configured_pass_limit(self) -> None:
         service = config.judgehost_task_service
-        old_include_build_payload = service.state.include_build_payload
-        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
-        service.state.include_build_payload = True
 
         verification_id = f"b-jh-passlimit-multipass-{uuid.uuid4().hex[:8]}"
         run_id = f"r-jh-passlimit-multipass-{uuid.uuid4().hex[:8]}"
@@ -2162,15 +2112,12 @@ class TestJudgehostService(E2ETestBase):
         old_enabled = service.state.enabled
         old_token = service.state.api_token
         old_username = service.state.api_username
-        old_include_build_payload = service.state.include_build_payload
         self.addCleanup(setattr, service.state, "enabled", old_enabled)
         self.addCleanup(setattr, service.state, "api_token", old_token)
         self.addCleanup(setattr, service.state, "api_username", old_username)
-        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
         service.state.enabled = True
         service.state.api_token = "test-token"
         service.state.api_username = "judgehost"
-        service.state.include_build_payload = True
 
         ws = Path(self._workspace_path())
         (ws / "interactors").mkdir(parents=True, exist_ok=True)
@@ -2384,15 +2331,12 @@ class TestJudgehostService(E2ETestBase):
         old_enabled = service.state.enabled
         old_token = service.state.api_token
         old_username = service.state.api_username
-        old_include_build_payload = service.state.include_build_payload
         self.addCleanup(setattr, service.state, "enabled", old_enabled)
         self.addCleanup(setattr, service.state, "api_token", old_token)
         self.addCleanup(setattr, service.state, "api_username", old_username)
-        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
         service.state.enabled = True
         service.state.api_token = "test-token"
         service.state.api_username = "judgehost"
-        service.state.include_build_payload = True
 
         verification_id = f"b-jh-generate-scripts-{uuid.uuid4().hex[:8]}"
         run_id = f"r-jh-generate-scripts-{uuid.uuid4().hex[:8]}"
@@ -2444,15 +2388,12 @@ class TestJudgehostService(E2ETestBase):
         old_enabled = service.state.enabled
         old_token = service.state.api_token
         old_username = service.state.api_username
-        old_include_build_payload = service.state.include_build_payload
         self.addCleanup(setattr, service.state, "enabled", old_enabled)
         self.addCleanup(setattr, service.state, "api_token", old_token)
         self.addCleanup(setattr, service.state, "api_username", old_username)
-        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
         service.state.enabled = True
         service.state.api_token = "test-token"
         service.state.api_username = "judgehost"
-        service.state.include_build_payload = True
 
         verification_id = f"b-jh-generate-interactive-{uuid.uuid4().hex[:8]}"
         run_id = f"r-jh-generate-interactive-{uuid.uuid4().hex[:8]}"
@@ -2508,15 +2449,12 @@ class TestJudgehostService(E2ETestBase):
         old_enabled = service.state.enabled
         old_token = service.state.api_token
         old_username = service.state.api_username
-        old_include_build_payload = service.state.include_build_payload
         self.addCleanup(setattr, service.state, "enabled", old_enabled)
         self.addCleanup(setattr, service.state, "api_token", old_token)
         self.addCleanup(setattr, service.state, "api_username", old_username)
-        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
         service.state.enabled = True
         service.state.api_token = "test-token"
         service.state.api_username = "judgehost"
-        service.state.include_build_payload = True
 
         verification_id = f"b-jh-compile-only-virtual-{uuid.uuid4().hex[:8]}"
         run_id = f"r-jh-compile-only-virtual-{uuid.uuid4().hex[:8]}"
@@ -2585,15 +2523,12 @@ class TestJudgehostService(E2ETestBase):
         old_enabled = service.state.enabled
         old_token = service.state.api_token
         old_username = service.state.api_username
-        old_include_build_payload = service.state.include_build_payload
         self.addCleanup(setattr, service.state, "enabled", old_enabled)
         self.addCleanup(setattr, service.state, "api_token", old_token)
         self.addCleanup(setattr, service.state, "api_username", old_username)
-        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
         service.state.enabled = True
         service.state.api_token = "test-token"
         service.state.api_username = "judgehost"
-        service.state.include_build_payload = True
 
         verification_id = f"b-jh-compile-only-multipass-{uuid.uuid4().hex[:8]}"
         run_id = f"r-jh-compile-only-multipass-{uuid.uuid4().hex[:8]}"
@@ -2667,15 +2602,12 @@ class TestJudgehostService(E2ETestBase):
         old_enabled = service.state.enabled
         old_token = service.state.api_token
         old_username = service.state.api_username
-        old_include_build_payload = service.state.include_build_payload
         self.addCleanup(setattr, service.state, "enabled", old_enabled)
         self.addCleanup(setattr, service.state, "api_token", old_token)
         self.addCleanup(setattr, service.state, "api_username", old_username)
-        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
         service.state.enabled = True
         service.state.api_token = "test-token"
         service.state.api_username = "judgehost"
-        service.state.include_build_payload = True
 
         host = "judgehost-compile-only-extra-cache"
         verification_id = f"b-jh-compile-only-extra-cache-{uuid.uuid4().hex[:8]}"
@@ -2785,15 +2717,12 @@ class TestJudgehostService(E2ETestBase):
         old_enabled = service.state.enabled
         old_token = service.state.api_token
         old_username = service.state.api_username
-        old_include_build_payload = service.state.include_build_payload
         self.addCleanup(setattr, service.state, "enabled", old_enabled)
         self.addCleanup(setattr, service.state, "api_token", old_token)
         self.addCleanup(setattr, service.state, "api_username", old_username)
-        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
         service.state.enabled = True
         service.state.api_token = "test-token"
         service.state.api_username = "judgehost"
-        service.state.include_build_payload = True
 
         host = "judgehost-compile-only-empty-build-payload-cache"
         # save-source compile check path uses a placeholder build id and no build payload tests
@@ -2872,15 +2801,12 @@ class TestJudgehostService(E2ETestBase):
         old_enabled = service.state.enabled
         old_token = service.state.api_token
         old_username = service.state.api_username
-        old_include_build_payload = service.state.include_build_payload
         self.addCleanup(setattr, service.state, "enabled", old_enabled)
         self.addCleanup(setattr, service.state, "api_token", old_token)
         self.addCleanup(setattr, service.state, "api_username", old_username)
-        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
         service.state.enabled = True
         service.state.api_token = "test-token"
         service.state.api_username = "judgehost"
-        service.state.include_build_payload = True
 
         verification_id = f"b-jh-prepared-merge-{uuid.uuid4().hex[:8]}"
         run_id = f"r-jh-prepared-merge-{uuid.uuid4().hex[:8]}"
@@ -2946,15 +2872,12 @@ class TestJudgehostService(E2ETestBase):
         old_enabled = service.state.enabled
         old_token = service.state.api_token
         old_username = service.state.api_username
-        old_include_build_payload = service.state.include_build_payload
         self.addCleanup(setattr, service.state, "enabled", old_enabled)
         self.addCleanup(setattr, service.state, "api_token", old_token)
         self.addCleanup(setattr, service.state, "api_username", old_username)
-        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
         service.state.enabled = True
         service.state.api_token = "test-token"
         service.state.api_username = "judgehost"
-        service.state.include_build_payload = True
         self._reset_task_queue_state(service)
 
         verification_id = f"b-jh-extra-src-{uuid.uuid4().hex[:8]}"
@@ -3037,15 +2960,12 @@ class TestJudgehostService(E2ETestBase):
         old_enabled = service.state.enabled
         old_token = service.state.api_token
         old_username = service.state.api_username
-        old_include_build_payload = service.state.include_build_payload
         self.addCleanup(setattr, service.state, "enabled", old_enabled)
         self.addCleanup(setattr, service.state, "api_token", old_token)
         self.addCleanup(setattr, service.state, "api_username", old_username)
-        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
         service.state.enabled = True
         service.state.api_token = "test-token"
         service.state.api_username = "judgehost"
-        service.state.include_build_payload = True
 
         verification_id = f"b-jh-compile-only-ok-{uuid.uuid4().hex[:8]}"
         run_id = f"r-jh-compile-only-ok-{uuid.uuid4().hex[:8]}"
@@ -3114,15 +3034,12 @@ class TestJudgehostService(E2ETestBase):
         old_enabled = service.state.enabled
         old_token = service.state.api_token
         old_username = service.state.api_username
-        old_include_build_payload = service.state.include_build_payload
         self.addCleanup(setattr, service.state, "enabled", old_enabled)
         self.addCleanup(setattr, service.state, "api_token", old_token)
         self.addCleanup(setattr, service.state, "api_username", old_username)
-        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
         service.state.enabled = True
         service.state.api_token = "test-token"
         service.state.api_username = "judgehost"
-        service.state.include_build_payload = True
 
         verification_id = f"b-jh-compile-only-no-output-{uuid.uuid4().hex[:8]}"
         run_id = f"r-jh-compile-only-no-output-{uuid.uuid4().hex[:8]}"
@@ -3191,15 +3108,12 @@ class TestJudgehostService(E2ETestBase):
         old_enabled = service.state.enabled
         old_token = service.state.api_token
         old_username = service.state.api_username
-        old_include_build_payload = service.state.include_build_payload
         self.addCleanup(setattr, service.state, "enabled", old_enabled)
         self.addCleanup(setattr, service.state, "api_token", old_token)
         self.addCleanup(setattr, service.state, "api_username", old_username)
-        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
         service.state.enabled = True
         service.state.api_token = "test-token"
         service.state.api_username = "judgehost"
-        service.state.include_build_payload = True
 
         verification_id = f"b-jh-compile-only-ce-{uuid.uuid4().hex[:8]}"
         run_id = f"r-jh-compile-only-ce-{uuid.uuid4().hex[:8]}"
@@ -3257,15 +3171,12 @@ class TestJudgehostService(E2ETestBase):
         old_enabled = service.state.enabled
         old_token = service.state.api_token
         old_username = service.state.api_username
-        old_include_build_payload = service.state.include_build_payload
         self.addCleanup(setattr, service.state, "enabled", old_enabled)
         self.addCleanup(setattr, service.state, "api_token", old_token)
         self.addCleanup(setattr, service.state, "api_username", old_username)
-        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
         service.state.enabled = True
         service.state.api_token = "test-token"
         service.state.api_username = "judgehost"
-        service.state.include_build_payload = True
 
         verification_id = f"b-jh-extra-source-{uuid.uuid4().hex[:8]}"
         run_id = f"r-jh-extra-source-{uuid.uuid4().hex[:8]}"
@@ -3384,15 +3295,12 @@ class TestJudgehostService(E2ETestBase):
         old_enabled = service.state.enabled
         old_token = service.state.api_token
         old_username = service.state.api_username
-        old_include_build_payload = service.state.include_build_payload
         self.addCleanup(setattr, service.state, "enabled", old_enabled)
         self.addCleanup(setattr, service.state, "api_token", old_token)
         self.addCleanup(setattr, service.state, "api_username", old_username)
-        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
         service.state.enabled = True
         service.state.api_token = "test-token"
         service.state.api_username = "judgehost"
-        service.state.include_build_payload = True
 
         verification_id = f"b-jh-large-{uuid.uuid4().hex[:8]}"
         run_id = f"r-jh-large-{uuid.uuid4().hex[:8]}"
@@ -3462,15 +3370,12 @@ class TestJudgehostService(E2ETestBase):
         old_enabled = service.state.enabled
         old_token = service.state.api_token
         old_username = service.state.api_username
-        old_include_build_payload = service.state.include_build_payload
         self.addCleanup(setattr, service.state, "enabled", old_enabled)
         self.addCleanup(setattr, service.state, "api_token", old_token)
         self.addCleanup(setattr, service.state, "api_username", old_username)
-        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
         service.state.enabled = True
         service.state.api_token = "test-token"
         service.state.api_username = "judgehost"
-        service.state.include_build_payload = True
 
         verification_id = f"b-jh-compile-log-{uuid.uuid4().hex[:8]}"
         run_id = f"r-jh-compile-log-{uuid.uuid4().hex[:8]}"
@@ -3701,15 +3606,12 @@ class TestJudgehostService(E2ETestBase):
         old_enabled = service.state.enabled
         old_token = service.state.api_token
         old_username = service.state.api_username
-        old_include_build_payload = service.state.include_build_payload
         self.addCleanup(setattr, service.state, "enabled", old_enabled)
         self.addCleanup(setattr, service.state, "api_token", old_token)
         self.addCleanup(setattr, service.state, "api_username", old_username)
-        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
         service.state.enabled = True
         service.state.api_token = "test-token"
         service.state.api_username = "judgehost"
-        service.state.include_build_payload = True
 
         with TestClient(app) as client:
             verification_id = f"b-jh-peer-{uuid.uuid4().hex[:8]}"
@@ -3769,15 +3671,12 @@ class TestJudgehostService(E2ETestBase):
         old_enabled = service.state.enabled
         old_token = service.state.api_token
         old_username = service.state.api_username
-        old_include_build_payload = service.state.include_build_payload
         self.addCleanup(setattr, service.state, "enabled", old_enabled)
         self.addCleanup(setattr, service.state, "api_token", old_token)
         self.addCleanup(setattr, service.state, "api_username", old_username)
-        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
         service.state.enabled = True
         service.state.api_token = "test-token"
         service.state.api_username = "judgehost"
-        service.state.include_build_payload = True
 
         with TestClient(app) as client:
             verification_id = f"b-jh-peer-script-{uuid.uuid4().hex[:8]}"
@@ -3822,19 +3721,16 @@ class TestJudgehostService(E2ETestBase):
         old_enabled = service.state.enabled
         old_token = service.state.api_token
         old_username = service.state.api_username
-        old_include_build_payload = service.state.include_build_payload
         old_max_part_size = int(getattr(MultiPartParser, "max_part_size", 0) or 0)
         old_max_file_size = int(getattr(MultiPartParser, "max_file_size", 0) or 0)
         self.addCleanup(setattr, service.state, "enabled", old_enabled)
         self.addCleanup(setattr, service.state, "api_token", old_token)
         self.addCleanup(setattr, service.state, "api_username", old_username)
-        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
         self.addCleanup(setattr, MultiPartParser, "max_part_size", old_max_part_size)
         self.addCleanup(setattr, MultiPartParser, "max_file_size", old_max_file_size)
         service.state.enabled = True
         service.state.api_token = "test-token"
         service.state.api_username = "judgehost"
-        service.state.include_build_payload = True
         MultiPartParser.max_part_size = 1024 * 1024
         MultiPartParser.max_file_size = 1024 * 1024
 
@@ -3901,15 +3797,12 @@ class TestJudgehostService(E2ETestBase):
         old_enabled = service.state.enabled
         old_token = service.state.api_token
         old_username = service.state.api_username
-        old_include_build_payload = service.state.include_build_payload
         self.addCleanup(setattr, service.state, "enabled", old_enabled)
         self.addCleanup(setattr, service.state, "api_token", old_token)
         self.addCleanup(setattr, service.state, "api_username", old_username)
-        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
         service.state.enabled = True
         service.state.api_token = "test-token"
         service.state.api_username = "judgehost"
-        service.state.include_build_payload = True
 
         ws = Path(self._workspace_path())
         (ws / "config").mkdir(parents=True, exist_ok=True)
@@ -3993,15 +3886,12 @@ class TestJudgehostService(E2ETestBase):
         old_enabled = service.state.enabled
         old_token = service.state.api_token
         old_username = service.state.api_username
-        old_include_build_payload = service.state.include_build_payload
         self.addCleanup(setattr, service.state, "enabled", old_enabled)
         self.addCleanup(setattr, service.state, "api_token", old_token)
         self.addCleanup(setattr, service.state, "api_username", old_username)
-        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
         service.state.enabled = True
         service.state.api_token = "test-token"
         service.state.api_username = "judgehost"
-        service.state.include_build_payload = True
 
         ws = Path(self._workspace_path())
         (ws / "checkers").mkdir(parents=True, exist_ok=True)
@@ -4072,15 +3962,12 @@ class TestJudgehostService(E2ETestBase):
         old_enabled = service.state.enabled
         old_token = service.state.api_token
         old_username = service.state.api_username
-        old_include_build_payload = service.state.include_build_payload
         self.addCleanup(setattr, service.state, "enabled", old_enabled)
         self.addCleanup(setattr, service.state, "api_token", old_token)
         self.addCleanup(setattr, service.state, "api_username", old_username)
-        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
         service.state.enabled = True
         service.state.api_token = "test-token"
         service.state.api_username = "judgehost"
-        service.state.include_build_payload = True
 
         ws = Path(self._workspace_path())
         (ws / "checkers").mkdir(parents=True, exist_ok=True)
@@ -4133,15 +4020,12 @@ class TestJudgehostService(E2ETestBase):
         old_enabled = service.state.enabled
         old_token = service.state.api_token
         old_username = service.state.api_username
-        old_include_build_payload = service.state.include_build_payload
         self.addCleanup(setattr, service.state, "enabled", old_enabled)
         self.addCleanup(setattr, service.state, "api_token", old_token)
         self.addCleanup(setattr, service.state, "api_username", old_username)
-        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
         service.state.enabled = True
         service.state.api_token = "test-token"
         service.state.api_username = "judgehost"
-        service.state.include_build_payload = True
 
         ws = Path(self._workspace_path())
         (ws / "config").mkdir(parents=True, exist_ok=True)
@@ -4190,15 +4074,12 @@ class TestJudgehostService(E2ETestBase):
         old_enabled = service.state.enabled
         old_token = service.state.api_token
         old_username = service.state.api_username
-        old_include_build_payload = service.state.include_build_payload
         self.addCleanup(setattr, service.state, "enabled", old_enabled)
         self.addCleanup(setattr, service.state, "api_token", old_token)
         self.addCleanup(setattr, service.state, "api_username", old_username)
-        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
         service.state.enabled = True
         service.state.api_token = "test-token"
         service.state.api_username = "judgehost"
-        service.state.include_build_payload = True
 
         verification_id = f"b-jh-partial-cache-{uuid.uuid4().hex[:8]}"
         run_id_seed = f"r-jh-partial-seed-{uuid.uuid4().hex[:8]}"
@@ -4332,15 +4213,12 @@ class TestJudgehostService(E2ETestBase):
         old_enabled = service.state.enabled
         old_token = service.state.api_token
         old_username = service.state.api_username
-        old_include_build_payload = service.state.include_build_payload
         self.addCleanup(setattr, service.state, "enabled", old_enabled)
         self.addCleanup(setattr, service.state, "api_token", old_token)
         self.addCleanup(setattr, service.state, "api_username", old_username)
-        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
         service.state.enabled = True
         service.state.api_token = "test-token"
         service.state.api_username = "judgehost"
-        service.state.include_build_payload = True
 
         verification_id = f"b-jh-accepted-cache-{uuid.uuid4().hex[:8]}"
         run_id_a = f"r-jh-accepted-cache-a-{uuid.uuid4().hex[:8]}"
@@ -4424,15 +4302,12 @@ class TestJudgehostService(E2ETestBase):
         old_enabled = service.state.enabled
         old_token = service.state.api_token
         old_username = service.state.api_username
-        old_include_build_payload = service.state.include_build_payload
         self.addCleanup(setattr, service.state, "enabled", old_enabled)
         self.addCleanup(setattr, service.state, "api_token", old_token)
         self.addCleanup(setattr, service.state, "api_username", old_username)
-        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
         service.state.enabled = True
         service.state.api_token = "test-token"
         service.state.api_username = "judgehost"
-        service.state.include_build_payload = True
 
         verification_id = f"b-jh-checker-fail-{uuid.uuid4().hex[:8]}"
         run_id = f"r-jh-checker-fail-{uuid.uuid4().hex[:8]}"
@@ -4508,15 +4383,12 @@ class TestJudgehostService(E2ETestBase):
         old_enabled = service.state.enabled
         old_token = service.state.api_token
         old_username = service.state.api_username
-        old_include_build_payload = service.state.include_build_payload
         self.addCleanup(setattr, service.state, "enabled", old_enabled)
         self.addCleanup(setattr, service.state, "api_token", old_token)
         self.addCleanup(setattr, service.state, "api_username", old_username)
-        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
         service.state.enabled = True
         service.state.api_token = "test-token"
         service.state.api_username = "judgehost"
-        service.state.include_build_payload = True
 
         verification_id = f"b-jh-run-error-{uuid.uuid4().hex[:8]}"
         run_id = f"r-jh-run-error-{uuid.uuid4().hex[:8]}"
@@ -4594,15 +4466,12 @@ class TestJudgehostService(E2ETestBase):
         old_enabled = service.state.enabled
         old_token = service.state.api_token
         old_username = service.state.api_username
-        old_include_build_payload = service.state.include_build_payload
         self.addCleanup(setattr, service.state, "enabled", old_enabled)
         self.addCleanup(setattr, service.state, "api_token", old_token)
         self.addCleanup(setattr, service.state, "api_username", old_username)
-        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
         service.state.enabled = True
         service.state.api_token = "test-token"
         service.state.api_username = "judgehost"
-        service.state.include_build_payload = True
 
         verification_id = f"b-jh-compare-neg-tl-{uuid.uuid4().hex[:8]}"
         run_id = f"r-jh-compare-neg-tl-{uuid.uuid4().hex[:8]}"
@@ -4680,15 +4549,12 @@ class TestJudgehostService(E2ETestBase):
         old_enabled = service.state.enabled
         old_token = service.state.api_token
         old_username = service.state.api_username
-        old_include_build_payload = service.state.include_build_payload
         self.addCleanup(setattr, service.state, "enabled", old_enabled)
         self.addCleanup(setattr, service.state, "api_token", old_token)
         self.addCleanup(setattr, service.state, "api_username", old_username)
-        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
         service.state.enabled = True
         service.state.api_token = "test-token"
         service.state.api_username = "judgehost"
-        service.state.include_build_payload = True
 
         verification_id = f"b-jh-compare-internal-{uuid.uuid4().hex[:8]}"
         run_id = f"r-jh-compare-internal-{uuid.uuid4().hex[:8]}"
@@ -4743,15 +4609,12 @@ class TestJudgehostService(E2ETestBase):
         old_enabled = service.state.enabled
         old_token = service.state.api_token
         old_username = service.state.api_username
-        old_include_build_payload = service.state.include_build_payload
         self.addCleanup(setattr, service.state, "enabled", old_enabled)
         self.addCleanup(setattr, service.state, "api_token", old_token)
         self.addCleanup(setattr, service.state, "api_username", old_username)
-        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
         service.state.enabled = True
         service.state.api_token = "test-token"
         service.state.api_username = "judgehost"
-        service.state.include_build_payload = True
 
         verification_id = f"b-jh-compare-debug-{uuid.uuid4().hex[:8]}"
         run_id = f"r-jh-compare-debug-{uuid.uuid4().hex[:8]}"
@@ -4810,15 +4673,12 @@ class TestJudgehostService(E2ETestBase):
         old_enabled = service.state.enabled
         old_token = service.state.api_token
         old_username = service.state.api_username
-        old_include_build_payload = service.state.include_build_payload
         self.addCleanup(setattr, service.state, "enabled", old_enabled)
         self.addCleanup(setattr, service.state, "api_token", old_token)
         self.addCleanup(setattr, service.state, "api_username", old_username)
-        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
         service.state.enabled = True
         service.state.api_token = "test-token"
         service.state.api_username = "judgehost"
-        service.state.include_build_payload = True
 
         verification_id = f"b-jh-compare-payload-{uuid.uuid4().hex[:8]}"
         run_id = f"r-jh-compare-payload-{uuid.uuid4().hex[:8]}"
@@ -4873,15 +4733,12 @@ class TestJudgehostService(E2ETestBase):
         old_enabled = service.state.enabled
         old_token = service.state.api_token
         old_username = service.state.api_username
-        old_include_build_payload = service.state.include_build_payload
         self.addCleanup(setattr, service.state, "enabled", old_enabled)
         self.addCleanup(setattr, service.state, "api_token", old_token)
         self.addCleanup(setattr, service.state, "api_username", old_username)
-        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
         service.state.enabled = True
         service.state.api_token = "test-token"
         service.state.api_username = "judgehost"
-        service.state.include_build_payload = True
 
         verification_id = f"b-jh-case-only-id-{uuid.uuid4().hex[:8]}"
         run_id = f"r-jh-case-only-id-{uuid.uuid4().hex[:8]}"
@@ -4935,15 +4792,12 @@ class TestJudgehostService(E2ETestBase):
         old_enabled = service.state.enabled
         old_token = service.state.api_token
         old_username = service.state.api_username
-        old_include_build_payload = service.state.include_build_payload
         self.addCleanup(setattr, service.state, "enabled", old_enabled)
         self.addCleanup(setattr, service.state, "api_token", old_token)
         self.addCleanup(setattr, service.state, "api_username", old_username)
-        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
         service.state.enabled = True
         service.state.api_token = "test-token"
         service.state.api_username = "judgehost"
-        service.state.include_build_payload = True
 
         verification_id = f"b-jh-compare-jhlog-{uuid.uuid4().hex[:8]}"
         run_id = f"r-jh-compare-jhlog-{uuid.uuid4().hex[:8]}"
@@ -5003,15 +4857,12 @@ class TestJudgehostService(E2ETestBase):
         old_enabled = service.state.enabled
         old_token = service.state.api_token
         old_username = service.state.api_username
-        old_include_build_payload = service.state.include_build_payload
         self.addCleanup(setattr, service.state, "enabled", old_enabled)
         self.addCleanup(setattr, service.state, "api_token", old_token)
         self.addCleanup(setattr, service.state, "api_username", old_username)
-        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
         service.state.enabled = True
         service.state.api_token = "test-token"
         service.state.api_username = "judgehost"
-        service.state.include_build_payload = True
 
         verification_id = f"b-jh-compare-strip-{uuid.uuid4().hex[:8]}"
         run_id = f"r-jh-compare-strip-{uuid.uuid4().hex[:8]}"
@@ -5082,15 +4933,12 @@ class TestJudgehostService(E2ETestBase):
         old_enabled = service.state.enabled
         old_token = service.state.api_token
         old_username = service.state.api_username
-        old_include_build_payload = service.state.include_build_payload
         self.addCleanup(setattr, service.state, "enabled", old_enabled)
         self.addCleanup(setattr, service.state, "api_token", old_token)
         self.addCleanup(setattr, service.state, "api_username", old_username)
-        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
         service.state.enabled = True
         service.state.api_token = "test-token"
         service.state.api_username = "judgehost"
-        service.state.include_build_payload = True
 
         verification_id = f"b-jh-fl-cache-{uuid.uuid4().hex[:8]}"
         run_id_a = f"r-jh-fl-cache-a-{uuid.uuid4().hex[:8]}"
@@ -5183,15 +5031,12 @@ class TestJudgehostService(E2ETestBase):
         old_enabled = service.state.enabled
         old_token = service.state.api_token
         old_username = service.state.api_username
-        old_include_build_payload = service.state.include_build_payload
         self.addCleanup(setattr, service.state, "enabled", old_enabled)
         self.addCleanup(setattr, service.state, "api_token", old_token)
         self.addCleanup(setattr, service.state, "api_username", old_username)
-        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
         service.state.enabled = True
         service.state.api_token = "test-token"
         service.state.api_username = "judgehost"
-        service.state.include_build_payload = True
 
         verification_id = f"b-jh-recompile-{uuid.uuid4().hex[:8]}"
         run_id_a = f"r-jh-recompile-a-{uuid.uuid4().hex[:8]}"
@@ -5278,15 +5123,12 @@ class TestJudgehostService(E2ETestBase):
         old_enabled = service.state.enabled
         old_token = service.state.api_token
         old_username = service.state.api_username
-        old_include_build_payload = service.state.include_build_payload
         self.addCleanup(setattr, service.state, "enabled", old_enabled)
         self.addCleanup(setattr, service.state, "api_token", old_token)
         self.addCleanup(setattr, service.state, "api_username", old_username)
-        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
         service.state.enabled = True
         service.state.api_token = "test-token"
         service.state.api_username = "judgehost"
-        service.state.include_build_payload = True
 
         verification_id = f"b-jh-share-hosts-{uuid.uuid4().hex[:8]}"
         run_id = f"r-jh-share-hosts-{uuid.uuid4().hex[:8]}"
@@ -5358,15 +5200,12 @@ class TestJudgehostService(E2ETestBase):
         old_enabled = service.state.enabled
         old_token = service.state.api_token
         old_username = service.state.api_username
-        old_include_build_payload = service.state.include_build_payload
         self.addCleanup(setattr, service.state, "enabled", old_enabled)
         self.addCleanup(setattr, service.state, "api_token", old_token)
         self.addCleanup(setattr, service.state, "api_username", old_username)
-        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
         service.state.enabled = True
         service.state.api_token = "test-token"
         service.state.api_username = "judgehost"
-        service.state.include_build_payload = True
 
         verification_id = f"b-jh-preempt-{uuid.uuid4().hex[:8]}"
         self._seed_build_verification(verification_id)
@@ -5724,15 +5563,12 @@ class TestJudgehostService(E2ETestBase):
         old_enabled = service.state.enabled
         old_token = service.state.api_token
         old_username = service.state.api_username
-        old_include_build_payload = service.state.include_build_payload
         self.addCleanup(setattr, service.state, "enabled", old_enabled)
         self.addCleanup(setattr, service.state, "api_token", old_token)
         self.addCleanup(setattr, service.state, "api_username", old_username)
-        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
         service.state.enabled = True
         service.state.api_token = "test-token"
         service.state.api_username = "judgehost"
-        service.state.include_build_payload = True
 
         verification_id = f"b-jh-shared-generate-{uuid.uuid4().hex[:8]}"
         self._seed_build_verification(verification_id)
@@ -5942,15 +5778,12 @@ class TestJudgehostService(E2ETestBase):
         old_enabled = service.state.enabled
         old_token = service.state.api_token
         old_username = service.state.api_username
-        old_include_build_payload = service.state.include_build_payload
         self.addCleanup(setattr, service.state, "enabled", old_enabled)
         self.addCleanup(setattr, service.state, "api_token", old_token)
         self.addCleanup(setattr, service.state, "api_username", old_username)
-        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
         service.state.enabled = True
         service.state.api_token = "test-token"
         service.state.api_username = "judgehost"
-        service.state.include_build_payload = True
 
         verification_id = f"b-jh-grouped-batch-one-{uuid.uuid4().hex[:8]}"
         self._seed_build_verification(verification_id)

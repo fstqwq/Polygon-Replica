@@ -65,21 +65,14 @@ class SystemConfigService:
     )
     _CATEGORY_PREFIXES: tuple[tuple[str, str], ...] = (
         ("WORKER_QUEUE_", "Queue"),
-        ("INVOCATION_", "Judging"),
         ("JUDGEHOST_", "Judgehost"),
         ("TOOLCHAIN_", "Toolchain"),
-        ("VERIFICATION_EXEC_", "Judging"),
         ("RUN_", "Judging"),
-        ("RUNTIME_CACHE_", "Limits"),
-        ("IMPLICIT_VERIFICATION_", "Judging"),
         ("GENERAL_", "Limits"),
         ("TESTS_SPEC_", "Limits"),
-        ("SANDBOX_", "Security"),
         ("WORKSPACE_FILE_", "UI"),
         ("UI_", "UI"),
         ("PREVIEW_", "UI"),
-        ("STATEMENT_", "UI"),
-        ("SUMMARY_JSON_", "UI"),
         ("SOLUTION_", "UI"),
         ("WORKSPACE_HISTORY_", "UI"),
         ("AUTH_", "Auth"),
@@ -87,7 +80,6 @@ class SystemConfigService:
         ("PASSWORD_", "Security"),
         ("LOGIN_RATE_", "Security"),
         ("CONTEST_", "Limits"),
-        ("PROBLEM_", "Limits"),
     )
 
     def __init__(self, db: DB):
@@ -328,6 +320,8 @@ class SystemConfigService:
 
     def _load_persisted_values_locked(self) -> dict[str, object]:
         rows = self._store.override_rows()
+        stale_keys = [row["key"] for row in rows if row["key"] not in self._admin_specs]
+        self._store.delete_keys(stale_keys)
         overrides: dict[str, object] = {}
         for row in rows:
             key = row["key"]

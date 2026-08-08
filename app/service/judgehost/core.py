@@ -28,11 +28,14 @@ class JudgehostCore:
             self._s.wait_timeout_sec = max(5, min(86400, int(constants.JUDGEHOST_WAIT_TIMEOUT_SEC)))
             self._s.wait_poll_sec = max(0.05, min(30.0, float(constants.JUDGEHOST_WAIT_POLL_SEC)))
             self._s.online_window_sec = max(5, min(86400, int(constants.JUDGEHOST_ONLINE_WINDOW_SEC)))
-            self._s.max_source_bytes = max(1024, min(16 * 1024 * 1024, int(constants.JUDGEHOST_MAX_INLINE_SOURCE_BYTES)))
+            self._s.max_submission_source_bytes = max(
+                1024,
+                min(16 * 1024 * 1024, int(constants.JUDGEHOST_MAX_SUBMISSION_SOURCE_BYTES)),
+            )
             self._s.max_tests_per_task = max(1, min(10000, int(constants.JUDGEHOST_MAX_TESTS_PER_TASK)))
-            self._s.include_build_payload = bool(constants.JUDGEHOST_INCLUDE_BUILD_PAYLOAD)
-            self._s.max_binary_payload_bytes = max(
-                1024, min(128 * 1024 * 1024, int(constants.JUDGEHOST_MAX_BINARY_PAYLOAD_BYTES))
+            self._s.max_component_source_bytes = max(
+                1024,
+                min(128 * 1024 * 1024, int(constants.JUDGEHOST_MAX_COMPONENT_SOURCE_BYTES)),
             )
 
     def enabled(self) -> bool:

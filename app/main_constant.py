@@ -79,12 +79,9 @@ RUN_TEST_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}\.in$")
 HEX_64_RE = re.compile(r"^[0-9a-f]{64}$")
 HEX_32_RE = re.compile(r"^[0-9a-f]{32}$")
 
-PASSWORD_MIN_LEN = 8
-PASSWORD_MAX_LEN = 256
 PASSWORD_HASH_ITERS = 240000
 CONTEST_IDENT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 CONTEST_TITLE_MAX_LEN = 128
-PROBLEM_NAME_MAX_LEN = 128
 
 GENERAL_CONFIG_REL = Path("config/problem.json")
 BUILD_CONFIG_REL = Path("config/build.json")
@@ -122,23 +119,15 @@ JUDGEHOST_FETCH_BATCH_SIZE = 2
 JUDGEHOST_WAIT_TIMEOUT_SEC = 7200
 JUDGEHOST_WAIT_POLL_SEC = 0.5
 JUDGEHOST_ONLINE_WINDOW_SEC = 120
-JUDGEHOST_MAX_INLINE_SOURCE_BYTES = 262144
+JUDGEHOST_MAX_SUBMISSION_SOURCE_BYTES = 262144
 JUDGEHOST_MAX_TESTS_PER_TASK = 512
-JUDGEHOST_INCLUDE_BUILD_PAYLOAD = True
-JUDGEHOST_MAX_BINARY_PAYLOAD_BYTES = 8388608
+JUDGEHOST_MAX_COMPONENT_SOURCE_BYTES = 8388608
 TOOLCHAIN_COMPILE_TIMEOUT_SEC = 120
 TOOLCHAIN_COMPILE_MEMORY_MB = 2048
-TOOLCHAIN_COMPILE_PROCESS_LIMIT = 0
 AUX_DISPLAY_TEXT_LIMIT_BYTES = 2048
 # Compile/compare sandbox file cap in KiB. This is not a UI or persisted log
 # display limit; it must stay large enough for normal compiler/checker output.
 TOOLCHAIN_COMPILE_OUTPUT_KB = 262144
-TOOLCHAIN_CACHE_CLEANUP_INTERVAL_SEC = 600
-TOOLCHAIN_CACHE_MAX_BYTES = 2147483648
-TOOLCHAIN_CACHE_MAX_ENTRIES = 0
-VERIFICATION_EXEC_MEMORY_MB = 1024
-VERIFICATION_EXEC_PROCESS_LIMIT = 64
-RUN_EXEC_MEMORY_MB = 1024
 RUN_EXEC_PROCESS_LIMIT = 1024
 # Judgehost run-stage stdout cap in KiB. Compile/compare script file caps use
 # TOOLCHAIN_COMPILE_OUTPUT_KB instead.
@@ -558,18 +547,6 @@ ADMIN_CONFIG_SPECS: dict[str, dict[str, object]] = {
         "max": 1024,
         "description": "Max failed login attempts before blocking.",
     },
-    "PASSWORD_MIN_LEN": {
-        "type": "int",
-        "min": 1,
-        "max": 512,
-        "description": "Minimum user password length.",
-    },
-    "PASSWORD_MAX_LEN": {
-        "type": "int",
-        "min": 1,
-        "max": 4096,
-        "description": "Maximum user password length.",
-    },
     "PASSWORD_HASH_ITERS": {
         "type": "int",
         "min": 10000,
@@ -581,12 +558,6 @@ ADMIN_CONFIG_SPECS: dict[str, dict[str, object]] = {
         "min": 1,
         "max": 2048,
         "description": "Max contest title length.",
-    },
-    "PROBLEM_NAME_MAX_LEN": {
-        "type": "int",
-        "min": 1,
-        "max": 2048,
-        "description": "Max problem name length.",
     },
     "GENERAL_TIME_LIMIT_MIN_MS": {
         "type": "int",
@@ -700,14 +671,6 @@ ADMIN_CONFIG_SPECS: dict[str, dict[str, object]] = {
         "restart_required": False,
         "impact": "runtime",
     },
-    "TOOLCHAIN_COMPILE_PROCESS_LIMIT": {
-        "type": "int",
-        "min": 0,
-        "max": 4096,
-        "description": "Compilation process count limit (0 disables RLIMIT_NPROC).",
-        "restart_required": False,
-        "impact": "runtime",
-    },
     "AUX_DISPLAY_TEXT_LIMIT_BYTES": {
         "type": "int",
         "min": 256,
@@ -727,54 +690,6 @@ ADMIN_CONFIG_SPECS: dict[str, dict[str, object]] = {
             "Judgehost compile/compare sandbox file size cap in KiB; "
             "this is not the saved or displayed log limit."
         ),
-        "restart_required": False,
-        "impact": "runtime",
-    },
-    "TOOLCHAIN_CACHE_CLEANUP_INTERVAL_SEC": {
-        "type": "int",
-        "min": 0,
-        "max": 86400,
-        "description": "Compile cache cleanup interval in seconds.",
-        "restart_required": False,
-        "impact": "runtime",
-    },
-    "TOOLCHAIN_CACHE_MAX_BYTES": {
-        "type": "int",
-        "min": 0,
-        "max": 1125899906842624,
-        "description": "Compile cache size cap in bytes.",
-        "restart_required": False,
-        "impact": "runtime",
-    },
-    "TOOLCHAIN_CACHE_MAX_ENTRIES": {
-        "type": "int",
-        "min": 0,
-        "max": 10000000,
-        "description": "Compile cache entry cap (0 disables entry-count eviction).",
-        "restart_required": False,
-        "impact": "runtime",
-    },
-    "VERIFICATION_EXEC_MEMORY_MB": {
-        "type": "int",
-        "min": 16,
-        "max": 262144,
-        "description": "Verification-stage sandbox memory limit in MB.",
-        "restart_required": False,
-        "impact": "runtime",
-    },
-    "VERIFICATION_EXEC_PROCESS_LIMIT": {
-        "type": "int",
-        "min": 1,
-        "max": 4096,
-        "description": "Verification-stage sandbox process limit.",
-        "restart_required": False,
-        "impact": "runtime",
-    },
-    "RUN_EXEC_MEMORY_MB": {
-        "type": "int",
-        "min": 16,
-        "max": 262144,
-        "description": "Run-time sandbox memory limit in MB.",
         "restart_required": False,
         "impact": "runtime",
     },
@@ -952,46 +867,31 @@ ADMIN_CONFIG_SPECS: dict[str, dict[str, object]] = {
             "heartbeat/fetch/report event."
         ),
     },
-    "JUDGEHOST_MAX_INLINE_SOURCE_BYTES": {
+    "JUDGEHOST_MAX_SUBMISSION_SOURCE_BYTES": {
         "type": "int",
         "min": 1024,
         "max": 16777216,
-        "description": "Max submission source bytes embedded in judgehost task payload.",
+        "description": "Maximum submission source size accepted for a judgehost task.",
     },
     "JUDGEHOST_MAX_TESTS_PER_TASK": {
         "type": "int",
         "min": 1,
         "max": 10000,
-        "description": "Max tests embedded per judgehost task payload.",
+        "description": "Maximum test cases attached when reconstructing a judgehost task.",
     },
-    "JUDGEHOST_INCLUDE_BUILD_PAYLOAD": {
-        "type": "bool",
-        "description": (
-            "Include selected test payload and checker binaries in judgehost "
-            "task payload."
-        ),
-    },
-    "JUDGEHOST_MAX_BINARY_PAYLOAD_BYTES": {
+    "JUDGEHOST_MAX_COMPONENT_SOURCE_BYTES": {
         "type": "int",
         "min": 1024,
         "max": 134217728,
-        "description": "Per-binary payload byte cap for embedded checker/interactor.",
+        "description": "Maximum size of each checker, validator, interactor, or testlib source file.",
     },
 }
 
 # Explicitly reference dynamically-consumed defaults so dead-code scanners
 # do not mark them as unused.
 _DYNAMIC_DEFAULT_SENTINELS = (
-    PASSWORD_MIN_LEN,
-    PASSWORD_MAX_LEN,
-    TOOLCHAIN_COMPILE_PROCESS_LIMIT,
     AUX_DISPLAY_TEXT_LIMIT_BYTES,
     TOOLCHAIN_COMPILE_OUTPUT_KB,
-    TOOLCHAIN_CACHE_CLEANUP_INTERVAL_SEC,
-    TOOLCHAIN_CACHE_MAX_BYTES,
-    TOOLCHAIN_CACHE_MAX_ENTRIES,
-    VERIFICATION_EXEC_MEMORY_MB,
-    VERIFICATION_EXEC_PROCESS_LIMIT,
     PREVIEW_TEX_TIMEOUT_SEC,
     PREVIEW_TEX_MEMORY_MB,
     PREVIEW_TEX_PROCESS_LIMIT,
