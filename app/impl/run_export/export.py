@@ -122,7 +122,10 @@ def _export_archive_summary(
     for name in names:
         if prefix and not name.startswith(prefix):
             continue
-        if name.startswith(f"{prefix}submissions/"):
+        if (
+            name.startswith(f"{prefix}submissions/")
+            and name != f"{prefix}submissions/submissions.yaml"
+        ):
             solutions_total += 1
             if name.startswith(f"{prefix}submissions/accepted/"):
                 solutions_correct += 1
