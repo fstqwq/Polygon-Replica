@@ -1,11 +1,7 @@
 {% extends "admin_base.html" %}
 {% block admin_title %}User administration{% endblock %}
 {% block admin_content %}
-<div class="page-title-inline admin-page-title">
-  <div>
-    <h2 class="page-title">Users</h2>
-    <p class="muted">{{ active_system_admin_count }} active system admins.</p>
-  </div>
+<div class="admin-page-actions">
   <form class="admin-search-form" method="get" action="/admin/users">
     <input id="admin_users_query" name="query" type="search" value="{{ admin_users_query }}" autocomplete="off" spellcheck="false" placeholder="Username or email" />
     <button class="btn" type="submit">Search</button>

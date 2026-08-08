@@ -348,7 +348,6 @@ def admin_users_page(
     query = str(request.query_params.get("query") or "").strip()
     page.update(
         {
-            "active_system_admin_count": config.auth_service.active_system_admin_count(),
             "admin_users_query": query,
             "admin_user_rows": config.auth_service.admin_user_rows(query=query, limit=50),
             "admin_password_csrf_token": issue_password_form_csrf_token("admin-password"),

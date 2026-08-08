@@ -1,22 +1,17 @@
 {% extends "admin_base.html" %}
 {% block admin_title %}Mail configuration{% endblock %}
 {% block admin_content %}
-<div class="page-title-inline admin-page-title">
-  <div>
-    <h2 class="page-title">Mail</h2>
-    <p class="muted">SMTP delivery and credential storage.</p>
-  </div>
-</div>
-
 <div class="admin-mail-layout">
   <section class="info-card">
     <div class="admin-card-head">
       <h2>SMTP server</h2>
       <span class="{% if smtp.get('encryption_key_ready') %}ok{% else %}danger{% endif %}">
-        {{ 'encrypted storage ready' if smtp.get('encryption_key_ready') else 'encryption key missing' }}
+        {{ 'password storage ready' if smtp.get('encryption_key_ready') else 'password storage unavailable' }}
       </span>
     </div>
-    {% if not smtp.get('encryption_key_ready') %}<p class="danger">{{ smtp.get('encryption_key_message', '') }}</p>{% endif %}
+    {% if not smtp.get('encryption_key_ready') %}
+    <p class="danger">{{ smtp.get('encryption_key_message', '') }}. This deployment key encrypts the SMTP password before it is stored.</p>
+    {% endif %}
     <form class="form-stack" method="post" action="/admin/mail">
       <div class="admin-inline-fields">
         <div class="form-field-stack">
@@ -43,7 +38,6 @@
 
   <section class="info-card admin-mail-test-card">
     <h2>Test delivery</h2>
-    <p class="muted">Send one message using the currently saved settings.</p>
     <form class="form-stack" method="post" action="/admin/mail/test">
       <label for="smtp_test_recipient">Recipient</label>
       <input id="smtp_test_recipient" name="smtp_test_recipient" type="email" autocomplete="email" />

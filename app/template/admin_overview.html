@@ -3,13 +3,6 @@
 {% block admin_content %}
 {% set queue = judgehost.queue %}
 {% set cleanup = maintenance_status if maintenance_status else {} %}
-<div class="page-title-inline admin-page-title">
-  <div>
-    <h2 class="page-title">Overview</h2>
-    <p class="muted">Current runtime state. Open a section for controls and details.</p>
-  </div>
-</div>
-
 <div class="admin-summary-grid">
   <a class="admin-summary-card" href="/admin/judgehosts">
     <span class="admin-summary-label">Judgehosts</span>
@@ -39,10 +32,7 @@
 
 <section class="content-section-plain admin-overview-section">
   <div class="admin-card-head">
-    <div>
-      <h2>Queue</h2>
-      <p class="muted">Judgehost task lifecycle totals for this runtime.</p>
-    </div>
+    <h2>Queue</h2>
     <a href="/admin/judgehosts/snapshot" target="_blank" rel="noopener">Runtime JSON</a>
   </div>
   <div class="admin-metric-strip">
@@ -55,10 +45,7 @@
 
 <section class="content-section-plain admin-overview-section">
   <div class="admin-card-head">
-    <div>
-      <h2>Generated artifacts</h2>
-      <p class="muted">Cleanup preserves Git repositories, workspaces, contest sources, backups, and core metadata.</p>
-    </div>
+    <h2>Generated artifacts</h2>
     <a href="/maintenance">Maintenance details</a>
   </div>
   <p>

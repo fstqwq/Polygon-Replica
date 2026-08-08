@@ -7,15 +7,9 @@
 {% set enable_row = controls.get('JUDGEHOST_ENABLE', {}) %}
 {% set token_row = controls.get('JUDGEHOST_API_TOKEN', {}) %}
 {% set username_row = controls.get('JUDGEHOST_API_USERNAME', {}) %}
-<div class="page-title-inline admin-page-title">
-  <div>
-    <h2 class="page-title">Judgehosts</h2>
-    <p class="muted">Live connections, leased work, and toolchains reported by each host.</p>
-  </div>
-  <div class="admin-page-actions">
-    <a href="/admin/judgehosts/snapshot" target="_blank" rel="noopener">Runtime JSON</a>
-    <a href="/admin/worker-queue/snapshot" target="_blank" rel="noopener">Worker jobs JSON</a>
-  </div>
+<div class="admin-page-actions">
+  <a href="/admin/judgehosts/snapshot" target="_blank" rel="noopener">Runtime JSON</a>
+  <a href="/admin/worker-queue/snapshot" target="_blank" rel="noopener">Worker jobs JSON</a>
 </div>
 
 <div class="admin-metric-strip admin-judgehost-metrics">
@@ -93,10 +87,7 @@
 
 <section class="content-section-plain admin-hosts-section">
   <div class="admin-card-head">
-    <div>
-      <h2>Hosts</h2>
-      <p class="muted">A host is online when it has contacted this runtime recently.</p>
-    </div>
+    <h2>Hosts</h2>
     <input class="admin-host-filter" type="search" placeholder="Filter hosts" data-judgehost-filter-input="1" autocomplete="off" spellcheck="false" />
   </div>
   {% if judgehost.hosts %}

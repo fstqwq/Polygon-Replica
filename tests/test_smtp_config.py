@@ -158,6 +158,7 @@ class TestSmtpConfig(UIHelpersMixin, E2ETestBase):
             page = admin_mail_page(_request("/admin/mail"), user=self.user)
             html = page.body.decode("utf-8", errors="replace")
             self.assertIn("SMTP server", html)
+            self.assertIn("password storage ready", html)
             response = settings_smtp_update(
                 user=self.user,
                 smtp_host="smtp.example.com",
@@ -166,6 +167,12 @@ class TestSmtpConfig(UIHelpersMixin, E2ETestBase):
                 smtp_password="secret-token",
                 smtp_clear_password="0",
             )
+
+        with patch.dict(os.environ, {ENCRYPTION_KEY_ENV: ""}):
+            missing_key_page = admin_mail_page(_request("/admin/mail"), user=self.user)
+            missing_key_html = missing_key_page.body.decode("utf-8", errors="replace")
+            self.assertIn("POLYGON_REPLICA_ENCRYPTION_KEY is not configured", missing_key_html)
+            self.assertIn("encrypts the SMTP password before it is stored", missing_key_html)
 
         self.assertEqual(response.status_code, 303)
         row = db_fetch_one("SELECT password_ciphertext FROM smtp_config WHERE id=1")
