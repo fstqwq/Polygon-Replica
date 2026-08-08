@@ -116,7 +116,7 @@ def _contest_problem_rows(contest_id: int, username: str, user_id: int) -> list[
     for row in rows:
         problem_id = int(row["problem_id"])
         problem_slug = str(row["problem_slug"])
-        slug_leaf = str(row["slug_leaf"])
+        slug_owner, _separator, slug_leaf = problem_slug.partition("/")
         problem_access = access_by_problem[problem_id]
         can_problem_write = bool(problem_access.get("can_write"))
         readiness = config.problem_package_service.readiness(problem_id)
@@ -156,6 +156,7 @@ def _contest_problem_rows(contest_id: int, username: str, user_id: int) -> list[
                 "problem_id": problem_id,
                 "statement_folder": str(row["statement_folder"]),
                 "problem_slug": problem_slug,
+                "slug_owner": slug_owner,
                 "slug_leaf": slug_leaf,
                 "time_limit_ms": tl_ms,
                 "memory_limit_mb": ml_mb,

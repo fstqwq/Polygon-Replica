@@ -1,35 +1,17 @@
 {% extends "contest_base.html" %}
+{% from "_problem_slug_link.html" import problem_slug_link %}
 {% block content %}
 <h1 class="page-title">Contest Overview</h1>
 
 {% include "_flash_message.html" %}
 
-<section>
-  <h2>Summary</h2>
-  <p><strong>Problems:</strong> {{ problem_count }}</p>
-  <p><strong>Members:</strong> {{ member_count }} ({{ owner_count }} owner{% if owner_count != 1 %}s{% endif %})</p>
-  <p><strong>Created:</strong> {{ ctx.contest.created_at | local_time }}</p>
-  {% if latest_job %}
-  <p><strong>Latest job:</strong> <code>{{ latest_job.id }}</code> / {{ latest_job.job_type }} / {{ latest_job.status | status_label }} / {{ latest_job.created_at | local_time }}</p>
-  {% else %}
-  <p class="muted">No jobs.</p>
-  {% endif %}
-</section>
-
-<section>
-  <h2>Properties</h2>
-  <p><strong>Location:</strong> {{ contest_properties.get("location") if contest_properties.get("location") else "-" }}</p>
-  <p><strong>Date:</strong> {{ contest_properties.get("date") if contest_properties.get("date") else "-" }}</p>
-  <p><strong>Statement language:</strong> {{ contest_statement_language if contest_statement_language else "-" }}</p>
-</section>
-
-<section>
+<section class="content-section-plain" aria-label="Contest problem list">
   <h2>Contest Problems</h2>
   {% if problem_rows %}
-  <table class="table-base">
+  <table class="table-base problem-list-table">
     <tr>
       <th>Idx</th>
-      <th>Problem</th>
+      <th class="problem-list-head">Problem ID</th>
       <th>TL/ML</th>
       <th>Mode</th>
       <th>Revision</th>
@@ -37,7 +19,9 @@
     {% for row in problem_rows %}
     <tr class="{% if row.dirty %}table-row-dirty{% endif %}">
       <td><code>{{ row.idx }}</code></td>
-      <td><a href="{{ row.href }}"><code>{{ row.problem_slug }}</code> - {{ row.slug_leaf }}</a></td>
+      <td class="problem-list-cell">
+        {{ problem_slug_link(row.href, row.slug_owner, row.slug_leaf, owner_prefix_chars) }}
+      </td>
       <td>{{ row.time_limit_ms }}ms / {{ row.memory_limit_mb }}MB</td>
       <td>{{ row.mode }}</td>
       <td><span class="{{ 'revision-alert' if row.revision_warn else '' }}">{{ row.revision_display }}</span></td>

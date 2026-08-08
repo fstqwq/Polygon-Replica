@@ -1,5 +1,6 @@
 {% extends "root_base.html" %}
 {% from "_component_dialogs.html" import ui_popup %}
+{% from "_problem_slug_link.html" import problem_slug_link %}
 {% block content %}
 <div class="page-title-inline root-page-title-inline">
   <h1 class="page-title">My Problems</h1>
@@ -23,14 +24,7 @@
     {% for row in entries %}
     <tr class="{% if row.dirty %}table-row-dirty{% endif %}">
       <td class="problem-list-cell">
-        <a
-          class="problem-slug-link problem-list-slug-link"
-          href="/problems/{{ row.slug }}/statement"
-          style="--problem-owner-prefix-ch: {{ owner_prefix_chars }}"
-        >
-          <span class="problem-list-slug-owner">{{ row.slug_owner }}/</span>
-          <span class="problem-list-slug-leaf">{{ row.slug_leaf }}</span>
-        </a>
+        {{ problem_slug_link('/problems/' ~ row.slug ~ '/statement', row.slug_owner, row.slug_leaf, owner_prefix_chars) }}
       </td>
       <td>{{ row.role }}</td>
       <td><span class="{{ 'revision-alert' if row.revision_highlight else '' }}">{{ row.revision_display }}</span></td>

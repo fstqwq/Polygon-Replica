@@ -6,7 +6,6 @@ from fastapi import Request, Depends
 
 from app.impl.auth.shared import template_response
 from app.impl.contest.workspace_scope import add_contest_problem_hrefs
-from app.impl.runtime.config import config
 
 from app.impl.contest.shared import _contest_ctx, _contest_problem_rows
 
@@ -24,17 +23,16 @@ def contest_overview_page(request: Request, contest: str, user: Annotated[str, D
             user_id,
         ),
     )
+    owner_prefix_chars = max(
+        (len(str(row["slug_owner"])) + 1 for row in rows),
+        default=0,
+    )
     return template_response(
         request,
         "contest_overview.html",
         {
             "ctx": ctx,
             "problem_rows": rows,
-            "problem_count": len(rows),
-            "member_count": config.contest_service.member_count(contest_id),
-            "owner_count": config.contest_service.owner_count(contest_id),
-            "latest_job": config.contest_service.latest_job(contest_id),
-            "contest_properties": config.contest_service.overview_properties_map(contest_id, str(ctx["contest"]["slug"])),
-            "contest_statement_language": config.contest_service.statement_default_language(contest_id),
+            "owner_prefix_chars": owner_prefix_chars,
         },
     )

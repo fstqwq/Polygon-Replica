@@ -179,6 +179,13 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
         overview_html = overview.body.decode("utf-8", errors="replace")
         self.assertIn("Contest Overview", overview_html)
         self.assertIn("Contest Problems", overview_html)
+        self.assertNotIn("<h2>Summary</h2>", overview_html)
+        self.assertNotIn("<h2>Properties</h2>", overview_html)
+        self.assertIn('class="table-base problem-list-table"', overview_html)
+        self.assertIn('class="problem-slug-link problem-list-slug-link"', overview_html)
+        self.assertIn('<span class="problem-list-slug-owner">alice/</span>', overview_html)
+        self.assertIn('<span class="problem-list-slug-leaf">sample</span>', overview_html)
+        self.assertNotIn("alice/sample</code> - sample", overview_html)
 
         problems_page = contest_problems_page(
             _app_request(f"/contests/{contest_slug}/problems"),
@@ -428,7 +435,7 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
         self.assertIn('aria-current="page"', packages_html)
         self.assertNotIn('class="problem-submenu"', packages_html)
 
-    def test_contest_overview_best_effort_infers_location_and_date_from_statements(self) -> None:
+    def test_contest_overview_properties_map_infers_location_and_date_from_statements(self) -> None:
         contest_slug = f"ui-contest-overview-{uuid.uuid4().hex[:8]}"
         contest_id = self._create_contest(contest_slug, "Overview Contest")
         alice_row = db_fetch_one("SELECT id FROM users WHERE username='alice'")
@@ -456,15 +463,12 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
         )
         config.contest_service.set_statement_default_language(contest_id, actor_user_id, "english")
 
-        overview = contest_overview_page(
-            _app_request(f"/contests/{contest_slug}/overview"),
+        properties = config.contest_service.overview_properties_map(
+            contest_id,
             contest_slug,
-            "alice",
         )
-        self.assertEqual(overview.status_code, 200)
-        overview_html = overview.body.decode("utf-8", errors="replace")
-        self.assertIn("Hangzhou, China", overview_html)
-        self.assertIn("1 February, 2026", overview_html)
+        self.assertEqual(properties["location"], "Hangzhou, China")
+        self.assertEqual(properties["date"], "1 February, 2026")
 
     def test_contest_access_cannot_transfer_owner_role(self) -> None:
         contest_slug = f"ui-contest-owner-transfer-{uuid.uuid4().hex[:8]}"
@@ -521,9 +525,7 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
         )
         self.assertEqual(overview.status_code, 200)
         overview_html = overview.body.decode("utf-8", errors="replace")
-        self.assertIn(running_job_id, overview_html)
-        self.assertIn("pdf", overview_html)
-        self.assertIn("RUNNING", overview_html)
+        self.assertNotIn(running_job_id, overview_html)
 
         packages_page = contest_packages_page(
             _request(f"/contests/{contest_slug}/packages"),

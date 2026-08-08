@@ -1,0 +1,10 @@
+{% macro problem_slug_link(href, slug_owner, slug_leaf, owner_prefix_chars) -%}
+<a
+  class="problem-slug-link problem-list-slug-link"
+  href="{{ href }}"
+  style="--problem-owner-prefix-ch: {{ owner_prefix_chars }}"
+>
+  <span class="problem-list-slug-owner">{{ slug_owner }}/</span>
+  <span class="problem-list-slug-leaf">{{ slug_leaf }}</span>
+</a>
+{%- endmacro %}
