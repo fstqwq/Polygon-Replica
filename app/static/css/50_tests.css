@@ -23,7 +23,7 @@
 
 .tests-heading-row {
   display: flex;
-  justify-content: space-between;
+  justify-content: flex-end;
   align-items: center;
   gap: var(--space-3);
   margin-bottom: var(--space-2);
@@ -133,19 +133,30 @@
   outline-offset: -2px;
 }
 
-.tests-form-grid,
 .run-execute-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: var(--space-4);
 }
 
-.tests-form-grid-single-extra {
+.tests-generation-panel {
   margin-top: var(--space-4);
 }
 
-.tests-form-grid-single-extra > .tests-subsection {
-  grid-column: 1 / -1;
+.tests-generation-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-4);
+}
+
+.tests-generation-head > div {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.tests-generation-head h2 {
+  margin: 0;
 }
 
 .tests-subsection {
@@ -242,6 +253,13 @@
   }
 }
 
+@container problem-content (max-width: 640px) {
+  .tests-generation-head {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}
+
 .files-grid .selected-path-form .form-row > label {
   flex: 0 0 122px;
   white-space: nowrap;
@@ -299,15 +317,15 @@
 }
 
 .solutions-table col.solutions-col-source {
-  width: 24%;
+  width: 36%;
 }
 
 .solutions-table col.solutions-col-expected {
-  width: 28%;
+  width: 38%;
 }
 
 .solutions-table col.solutions-col-actions {
-  width: 48%;
+  width: 26%;
 }
 
 .solutions-source-link {
@@ -341,25 +359,41 @@
 
 .solutions-actions {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
+  flex-wrap: wrap;
   gap: var(--space-3);
   min-width: 0;
+}
+
+.solutions-rename-disclosure {
+  min-width: 0;
+}
+
+.solutions-rename-disclosure > summary {
+  color: var(--link);
+  cursor: pointer;
+  list-style: none;
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
   white-space: nowrap;
 }
 
+.solutions-rename-disclosure > summary::-webkit-details-marker {
+  display: none;
+}
+
 .solutions-rename-form {
-  display: inline-flex;
+  display: flex;
   align-items: center;
   gap: var(--space-2);
-  margin: 0;
-  flex: 1 1 auto;
+  margin-top: var(--space-2);
   min-width: 0;
 }
 
 .solutions-rename-form > input[name="new_path"] {
-  flex: 1 1 100px;
-  width: auto;
-  min-width: 100px;
+  width: min(220px, 24vw);
+  min-width: 120px;
 }
 
 .solutions-delete-form {

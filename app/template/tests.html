@@ -6,7 +6,6 @@
 
 <section class="content-section">
   <div class="tests-heading-row">
-    <h2>Tests Editor</h2>
     <div class="tests-heading-actions" aria-label="Tests actions">
       <a class="linkish" href="#tests-add-manual-popup" data-popup-open="tests-add-manual-popup">Add Manual</a>
       <a class="linkish" href="#tests-upload-manual-popup" data-popup-open="tests-upload-manual-popup">Upload Manual</a>
@@ -169,9 +168,19 @@
       </form>
 {% endcall %}
 
-<div class="tests-form-grid tests-form-grid-single-extra">
-  <section class="tests-subsection">
-    <h2>Gen Script</h2>
+<section class="tests-subsection tests-generation-panel">
+  <div class="tests-generation-head">
+    <div>
+      <h2>Generation script</h2>
+      <span class="{{ 'ok' if tests_gen_script_configured else 'muted' }}">{{ 'configured' if tests_gen_script_configured else 'not configured' }}{% if tests_gen_script.count %} · {{ tests_gen_script.count }} command{% if tests_gen_script.count != 1 %}s{% endif %}{% endif %}</span>
+    </div>
+    {% if tests_gen_script_edit %}
+    <a href="{{ problem_href('problem_tests') }}">Close editor</a>
+    {% else %}
+    <a href="{{ problem_href('problem_tests', query={'edit': 'gen-script'}) }}">Edit generation script</a>
+    {% endif %}
+  </div>
+  {% if tests_gen_script_edit %}
     <form class="form-stack" method="post" action="{{ problem_href('save_gen_script') }}">
       <label for="tests-gen-script-text">Generator commands</label>
       <textarea
@@ -185,8 +194,8 @@
         data-code-wrap="1"
       >{{ tests_gen_script.text if tests_gen_script else "" }}</textarea>
       <p class="muted">One command per line. Manual tests are kept.</p>
-      <button class="btn" type="submit">Save Gen Script</button>
+      <button class="btn" type="submit" {% if not ctx.access.can_write %}disabled title="{{ ctx.access.write_block_reason }}"{% endif %}>Save generation script</button>
     </form>
-  </section>
-</div>
+  {% endif %}
+</section>
 {% endblock %}

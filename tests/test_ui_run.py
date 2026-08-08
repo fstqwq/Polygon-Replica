@@ -496,6 +496,15 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         self.assertEqual(updated.status_code, 303)
         self.assertTrue(str(updated.headers.get("location", "")).endswith("/problems/alice/sample/tests"))
 
+        configured_page = tests_page(
+            _request("/problems/alice/sample/tests"), "alice/sample", "alice"
+        )
+        configured_html = configured_page.body.decode("utf-8", errors="replace")
+        self.assertIn("Generation script", configured_html)
+        self.assertIn("configured · 2 commands", configured_html)
+        self.assertIn("Edit generation script", configured_html)
+        self.assertNotIn('id="tests-gen-script-text"', configured_html)
+
         payload = json.loads(spec_path.read_text(encoding="utf-8"))
         tests = payload.get("tests") or []
         self.assertEqual([(row.get("id"), row.get("kind")) for row in tests], [("001", "manual"), ("002", "gen"), ("003", "gen")])
@@ -511,6 +520,30 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         self.assertEqual([(row.get("id"), row.get("kind")) for row in tests_after], [("001", "manual")])
         self.assertFalse((generator_dir / "002.in").exists())
         self.assertFalse((generator_dir / "003.in").exists())
+
+    def test_tests_gen_script_save_error_returns_to_editor(self) -> None:
+        with patch(
+            "app.impl.tests_spec.routes.parse_gen_script_lines",
+            side_effect=ValueError("invalid generator command"),
+        ):
+            response = tests_spec_gen_script_save(
+                problem="alice/sample",
+                user="alice",
+                gen_script_text="bad command",
+            )
+
+        self.assertEqual(response.status_code, 303)
+        self.assertTrue(
+            str(response.headers.get("location", "")).endswith(
+                "/problems/alice/sample/tests?edit=gen-script"
+            )
+        )
+        self.assertTrue(
+            any(
+                "invalid generator command" in message
+                for message in _flash_messages_from_response(response)
+            )
+        )
 
     def test_tests_spec_large_manual_disables_inline_editor_and_shows_payload_actions(self) -> None:
         ws_ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
@@ -832,9 +865,25 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         self.assertIn('data-popup-open="tests-add-manual-popup"', html)
         self.assertIn('data-popup-open="tests-upload-manual-popup"', html)
         self.assertIn('data-popup-open="tests-reindex-popup-1"', html)
-        self.assertIn('action="/problems/alice/sample/tests/spec/gen-script"', html)
+        self.assertNotIn("Tests Editor", html)
+        self.assertIn("Generation script", html)
+        self.assertIn("not configured", html)
+        self.assertIn("Edit generation script", html)
+        self.assertNotIn('id="tests-gen-script-text"', html)
+
+        edit_page = tests_page(
+            _request(
+                "/problems/alice/sample/tests",
+                "edit=gen-script",
+            ),
+            "alice/sample",
+            "alice",
+        )
+        self.assertEqual(edit_page.status_code, 200)
+        edit_html = edit_page.body.decode("utf-8", errors="replace")
+        self.assertIn('action="/problems/alice/sample/tests/spec/gen-script"', edit_html)
         self.assertRegex(
-            html,
+            edit_html,
             r'<textarea[^>]*id="tests-gen-script-text"[^>]*data-code-editor="1"[^>]*data-code-path="tests/spec/gen-script\.txt"[^>]*data-code-height="220"[^>]*data-code-wrap="1"[^>]*>',
         )
         self.assertIn('action="/problems/alice/sample/tests/spec/reindex"', html)
@@ -846,7 +895,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         self.assertNotIn("Move Up", html)
         self.assertNotIn("Move Down", html)
         self.assertIn('placeholder="3&#10;1 2 3"', html)
-        self.assertIn('placeholder="gen 10 1&#10;gen 20 2"', html)
+        self.assertIn('placeholder="gen 10 1&#10;gen 20 2"', edit_html)
         self.assertIn("One plain-text submission input per file.", html)
         self.assertNotIn("Batch Manual", html)
         self.assertNotIn("Batch Generator", html)

@@ -858,6 +858,13 @@ class TestUIComponents(UIHelpersMixin, E2ETestBase):
         )
         self.assertEqual(page.status_code, 200)
         html = page.body.decode("utf-8", errors="replace")
+        self.assertIn('class="solutions-rename-disclosure"', html)
+        self.assertRegex(
+            html,
+            r"(?s)<details class=\"solutions-rename-disclosure\">.*?<summary>Rename</summary>.*?<form class=\"solutions-rename-form\"",
+        )
+        self.assertEqual(html.count(f'aria-label="Rename {source_rel}"'), 1)
+        html = page.body.decode("utf-8", errors="replace")
         self.assertIn("solutions/std.cpp", html)
         self.assertIn("wrong_answer (WA)", html)
 

@@ -615,6 +615,21 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         self.assertNotIn("<h2>Access</h2>", html)
         self.assertNotIn("Branch Operations", html)
 
+    def test_clean_workspace_has_one_empty_message_and_disables_publish(self) -> None:
+        self._ensure_committed_head("alice/sample", "alice")
+        resp = workspace_page(
+            _request("/problems/alice/sample/workspace"), "alice/sample", "alice"
+        )
+        self.assertEqual(resp.status_code, 200)
+        html = resp.body.decode("utf-8", errors="replace")
+        self.assertEqual(html.count("No file changes."), 1)
+        self.assertRegex(
+            html,
+            r'<input id="revision-message" name="message" required disabled\s*/>',
+        )
+        self.assertIn('title="No file changes to publish"', html)
+        self.assertIn(">Review and publish</a>", html)
+
     def test_workspace_page_get_refreshes_workspace_status_in_db(self) -> None:
         username = self.random_id("wsget")
         workspace_service.grant_repo_access("alice/sample", username, "owner")

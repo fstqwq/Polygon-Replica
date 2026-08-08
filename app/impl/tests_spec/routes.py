@@ -67,9 +67,20 @@ def render_tests_page(request: Request, problem: str, user: Annotated[str, Depen
         tests_gen_script = tests_spec_gen_script_context(workspace)
     except (ValueError, OSError):
         tests_gen_script = {'text': '', 'count': 0}
+    tests_gen_script_configured = bool(
+        int(tests_gen_script.get('count') or 0)
+        or int(tests_editor['summary'].get('gen') or 0)
+    )
+    template_context = {
+        'ctx': ctx,
+        'tests_editor': tests_editor,
+        'tests_gen_script': tests_gen_script,
+        'tests_gen_script_configured': tests_gen_script_configured,
+        'tests_gen_script_edit': request.query_params.get('edit') == 'gen-script',
+    }
     if tests_editor_error:
-        return template_response(request, 'tests.html', {'ctx': ctx, 'tests_editor': tests_editor, 'tests_gen_script': tests_gen_script, 'message': tests_editor_error})
-    return template_response(request, 'tests.html', {'ctx': ctx, 'tests_editor': tests_editor, 'tests_gen_script': tests_gen_script})
+        template_context['message'] = tests_editor_error
+    return template_response(request, 'tests.html', template_context)
 
 def add_manual_test(
     problem: str,
@@ -405,6 +416,7 @@ def save_gen_script(problem: str, user: Annotated[str, Depends(require_session_u
     require_write_access(ctx)
     workspace = Path(ctx['workspace']['path'])
     msg = 'gen script updated'
+    redirect_query = ''
     try:
         safe_script_text = enforce_textarea_max_bytes(
             tests_spec_form_text(gen_script_text),
@@ -512,7 +524,8 @@ def save_gen_script(problem: str, user: Annotated[str, Depends(require_session_u
         audit(ctx['user']['id'], ctx['problem']['id'], 'tests.spec.gen_script', {'commands': len(desired_commands)})
     except (ValueError, OSError, HTTPException) as exc:
         msg = str(exc)
-    return redirect_response(f'/problems/{problem}/tests', status_code=303, message=msg)
+        redirect_query = '?edit=gen-script'
+    return redirect_response(f'/problems/{problem}/tests{redirect_query}', status_code=303, message=msg)
 
 def download_test_payload(problem: str, user: Annotated[str, Depends(require_session_user)], index: str):
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
@@ -576,5 +589,4 @@ async def upload_test_payload(
         except Exception:
             pass
     return redirect_response(f'/problems/{problem}/tests', status_code=303, message=msg)
-
 

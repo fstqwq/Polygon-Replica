@@ -44,11 +44,14 @@
         </td>
         <td class="solutions-actions-cell">
           <div class="solutions-actions">
-            <form class="inline-form solutions-rename-form" method="post" action="{{ problem_href('solutions_rename') }}">
-              <input type="hidden" name="old_path" value="{{ row.source_path }}" />
-              <input name="new_path" value="{{ row.file_name }}" aria-label="Rename {{ row.source_path }}" />
-              <a href="#" class="linkish" data-submit-form="1">Rename</a>
-            </form>
+            <details class="solutions-rename-disclosure">
+              <summary>Rename</summary>
+              <form class="solutions-rename-form" method="post" action="{{ problem_href('solutions_rename') }}">
+                <input type="hidden" name="old_path" value="{{ row.source_path }}" />
+                <input name="new_path" value="{{ row.file_name }}" aria-label="Rename {{ row.source_path }}" />
+                <button class="linkish-button" type="submit">Save</button>
+              </form>
+            </details>
             <form class="inline-form solutions-delete-form" method="post" action="{{ problem_href('solutions_delete') }}" data-confirm-message="Delete {{ row.source_path }}? This cannot be undone; uncommitted changes will be lost.">
               <input type="hidden" name="source_path" value="{{ row.source_path }}" />
               <a href="#" class="linkish danger-link" data-submit-form="1">Delete</a>
