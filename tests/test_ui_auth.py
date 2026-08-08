@@ -1723,6 +1723,17 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         self.assertIn("RUN_EXEC_PROCESS_LIMIT", page_html)
         self.assertNotIn("RUN_EXEC_MEMORY_MB", page_html)
         self.assertNotIn("VERIFICATION_EXEC_MEMORY_MB", page_html)
+        self.assertNotIn(">runtime</span>", page_html)
+
+        restart_page = settings_config_category_page(
+            _request("/admin/config/auth"),
+            user="alice",
+            category="auth",
+        )
+        restart_html = restart_page.body.decode("utf-8", errors="replace")
+        self.assertIn('<strong class="warn">Restart required</strong>', restart_html)
+        self.assertNotIn(">runtime</span>", restart_html)
+        self.assertNotIn("pending restart", restart_html)
 
         update_value = 1536
         update_resp = asyncio.run(

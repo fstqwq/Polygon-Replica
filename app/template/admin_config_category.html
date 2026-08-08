@@ -47,8 +47,7 @@
             {% endif %}
             <div class="admin-config-meta">
               <span>Default <code>{{ row.default_display }}</code></span>
-              <span>{{ 'restart required' if row.restart_required else 'runtime' }}</span>
-              {% if row.pending_restart %}<span class="warn">pending restart · running <code>{{ row.effective_display }}</code></span>{% endif %}
+              {% if row.restart_required %}<strong class="warn">Restart required</strong>{% endif %}
             </div>
             {% if row.changed %}<label class="muted"><input type="checkbox" name="config_reset_{{ row.key }}" value="1" /> Use default</label>{% endif %}
           </div>

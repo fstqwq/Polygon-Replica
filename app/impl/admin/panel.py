@@ -489,7 +489,7 @@ def admin_judgehost_runtime_update(
     judgehost_api_username: str = Form(""),
 ):
     ctx, actor_user_id = _admin_user_context(user)
-    message = "Judgehost runtime settings updated"
+    message = "Judgehost settings updated"
     try:
         payload = {
             "JUDGEHOST_ENABLE": _as_bool_form_value(judgehost_enable),
@@ -501,9 +501,6 @@ def admin_judgehost_runtime_update(
         changed = int(result.get("changed") or 0)
         diff_rows = result.get("diff")
         diffs = diff_rows if isinstance(diff_rows, list) else []
-        runtime_changed = sum(
-            1 for row in diffs if isinstance(row, dict) and not bool(row.get("restart_required"))
-        )
         restart_changed = sum(
             1 for row in diffs if isinstance(row, dict) and bool(row.get("restart_required"))
         )
@@ -513,12 +510,9 @@ def admin_judgehost_runtime_update(
             "system_config.update_judgehost_runtime_controls",
             {"changed_count": changed, "diff": diffs},
         )
-        message = (
-            f"Judgehost runtime settings updated ({changed} changes; "
-            f"runtime={runtime_changed}, restart={restart_changed})"
-        )
+        message = "Judgehost settings updated"
         if restart_changed:
-            message += "; restart required for restart-marked keys"
+            message += ". Restart required."
     except ValueError as exc:
         message = str(exc)
     return redirect_response("/admin/judgehosts", status_code=303, message=message)
@@ -614,9 +608,6 @@ async def admin_config_category_update(
         changed = int(result.get("changed") or 0)
         raw_diff = result.get("diff")
         diff_rows = raw_diff if isinstance(raw_diff, list) else []
-        runtime_changed = sum(
-            1 for row in diff_rows if isinstance(row, dict) and not bool(row.get("restart_required"))
-        )
         restart_changed = sum(
             1 for row in diff_rows if isinstance(row, dict) and bool(row.get("restart_required"))
         )
@@ -626,12 +617,9 @@ async def admin_config_category_update(
             "system_config.update_category",
             {"category": safe_category_slug, "changed_count": changed, "diff": diff_rows},
         )
-        message = (
-            f"System config updated ({changed} changes; runtime={runtime_changed}, "
-            f"restart={restart_changed})"
-        )
+        message = "System configuration updated"
         if restart_changed:
-            message += "; restart required for restart-marked keys"
+            message += ". Restart required."
     except ValueError as exc:
         message = str(exc)
     return redirect_response(redirect_target, status_code=303, message=message)
@@ -645,7 +633,7 @@ def admin_system_config_reset(user: Annotated[str, Depends(require_session_user)
     return redirect_response(
         "/admin/config",
         status_code=303,
-        message="System config reset to defaults; runtime keys reloaded, restart-marked keys need restart",
+        message="System configuration reset to defaults",
     )
 
 
