@@ -107,8 +107,17 @@ function focusableElements(container) {
 }
 
 function setBackgroundInert(overlay, inert) {
-  Array.from(document.body.children).forEach((child) => {
-    if (child === overlay) return;
+  const backgroundElements = [];
+  let foreground = overlay;
+  while (foreground && foreground !== document.body) {
+    const parent = foreground.parentElement;
+    if (!parent) break;
+    Array.from(parent.children).forEach((sibling) => {
+      if (sibling !== foreground) backgroundElements.push(sibling);
+    });
+    foreground = parent;
+  }
+  backgroundElements.forEach((child) => {
     if (inert) {
       child.dataset.modalWasInert = child.inert ? "1" : "0";
       child.inert = true;

@@ -208,6 +208,8 @@ class TestPublicContracts(unittest.TestCase):
         self.assertIn("const { initCore, onReady } = window.PolygonUI;", entry_source)
         self.assertIn("onReady(initCore);", entry_source)
         self.assertIn('Object.defineProperty(window, "PolygonUI"', core_source)
+        self.assertIn("while (foreground && foreground !== document.body)", core_source)
+        self.assertIn("Array.from(parent.children).forEach((sibling)", core_source)
 
         module_source = "\n".join(
             path.read_text(encoding="utf-8-sig") for path in sorted(JS_ROOT.glob("*.js"))
