@@ -606,10 +606,9 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
             html,
             contains=(
                 "<h2>Review</h2>",
-                "Upstream: <strong>",
-                "Workspace: <strong",
+                'class="workspace-review-label">Upstream</span>',
+                'class="workspace-review-label">Workspace</span>',
                 "Verification",
-                "Package",
                 "Publish new revision",
             ),
             excludes=(
@@ -617,6 +616,7 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
                 "My Files",
                 "Commit and share revision",
                 "Base <strong>",
+                "Package:",
             ),
             label="workspace controls",
         )
@@ -847,11 +847,11 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         self.assertEqual(resp.status_code, 200)
         html = resp.body.decode("utf-8", errors="replace")
         self.assertIn("<h2>Review</h2>", html)
-        self.assertRegex(
-            html,
-            r'Verification:\s*<span class="(?:danger|warn)">failed(?: \(stale\))?</span>',
-        )
+        self.assertIn('class="workspace-review-label">Verification</span>', html)
+        self.assertRegex(html, r'<strong class="(?:danger|warn)">failed(?: \(stale\))?</strong>')
         self.assertIn("checker exited with code 1", html)
+        review_html = html.split("<h2>Review</h2>", maxsplit=1)[1].split("<h2>Publish</h2>", maxsplit=1)[0]
+        self.assertNotIn("Package", review_html)
         self.assertRegex(
             html,
             r'data-tooltip="[^"]*checker exited with code 1"',

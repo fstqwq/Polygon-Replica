@@ -353,7 +353,7 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
         self.assertIn('class="danger">missing</span>', overview_html)
         self.assertIn("Packages:", overview_html)
         self.assertIn("0 ready", overview_html)
-        self.assertIn("1 blocked", overview_html)
+        self.assertIn("1 none", overview_html)
         self.assertNotIn(" buildable</span>", overview_html)
         self.assertNotIn(" available</span>", overview_html)
         self.assertRegex(
@@ -362,7 +362,7 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
         )
         self.assertRegex(
             overview_html,
-            r'Package:\s*<span class="danger">blocked</span>',
+            r'Package:\s*<span class="danger">none</span>',
         )
         upstream_marker = "Upstream: <strong>"
         workspace_marker = 'Workspace: <strong class="">'

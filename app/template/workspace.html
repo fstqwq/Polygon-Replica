@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% from "_component_dialogs.html" import change_badges %}
-{% from "_problem_review.html" import problem_review %}
+{% from "_problem_review.html" import workspace_review %}
 {% block content %}
 <h1 class="page-title">Workspace</h1>
 {% include "_flash_message.html" %}
@@ -28,7 +28,7 @@
 <div class="workspace-page-layout">
   <section class="content-section workspace-controls-panel">
     <h2>Review</h2>
-    {{ problem_review(ctx.readiness, show_verification_reason=true) }}
+    {{ workspace_review(ctx.readiness) }}
 
     {% if ctx.workspace_needs_update %}
     <form method="post" action="{{ problem_href('merge_start') }}">

@@ -429,15 +429,15 @@ def _build_problem_nav_status(ctx: dict) -> dict[str, dict[str, object]]:
     package_state = cast(str, package_status['state'])
     package_revision = cast(int | None, package_status['revision_number'])
     if package_state == 'ready' and package_revision is not None:
-        package_text = f'ready on v{package_revision}'
-    elif package_state == 'required':
-        package_text = 'not built'
+        package_text = f'v{package_revision}'
+    elif package_state == 'stale' and package_revision is not None:
+        package_text = f'v{package_revision} (stale)'
     else:
-        package_text = 'blocked'
+        package_text = 'none'
     export_nav: dict[str, object] = {
         'text': package_text,
-        'danger': package_state == 'blocked',
-        'warn': package_state == 'required',
+        'danger': package_state == 'none',
+        'warn': package_state == 'stale',
     }
     export_source_commit = config.export_service.latest_source_commit(problem_id)
     if export_source_commit and problem_id > 0:

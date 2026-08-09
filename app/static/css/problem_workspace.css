@@ -226,6 +226,49 @@
   align-items: start;
 }
 
+.workspace-review-summary {
+  display: grid;
+  margin: 0 0 var(--space-5);
+  border-top: 1px solid var(--line);
+}
+
+.workspace-review-row {
+  display: grid;
+  grid-template-columns: minmax(86px, 0.4fr) minmax(0, 1fr);
+  align-items: baseline;
+  gap: var(--space-4);
+  padding: var(--space-2) 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.workspace-review-label {
+  color: var(--text-secondary);
+  font-size: var(--font-size-ui-sm);
+  font-weight: 500;
+}
+
+.workspace-review-value {
+  min-width: 0;
+  line-height: 1.35;
+}
+
+.workspace-review-meta {
+  margin-left: var(--space-3);
+  color: var(--text-secondary);
+  font-size: var(--font-size-ui-xs);
+  font-weight: 400;
+}
+
+.workspace-review-detail {
+  display: block;
+  margin-top: 2px;
+  color: var(--text-secondary);
+  font-size: var(--font-size-ui-xs);
+  font-weight: 400;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
 .access-page {
   display: grid;
   gap: var(--space-4);
@@ -348,6 +391,10 @@
 }
 
 @container problem-content (max-width: 640px) {
+  .workspace-review-row {
+    grid-template-columns: minmax(76px, auto) minmax(0, 1fr);
+  }
+
   .access-summary {
     align-items: stretch;
     flex-direction: column;

@@ -17,10 +17,44 @@
     Verification: <span class="{{ verification_tone }}">{{ verification.display }}</span>{% if show_verification_reason and verification.reason_short %}<span class="problem-review-reason"> — {{ verification.reason_short }}</span>{% endif %}
   </span>
   <span class="problem-review-line">
-    Package: <span class="{{ package_tone }}">{% if package.state == 'ready' and package.revision_number is not none %}on v{{ package.revision_number }}{% elif package.state == 'required' %}not built{% else %}blocked{% endif %}</span>
+    Package: <span class="{{ package_tone }}">{% if package.state == 'ready' and package.revision_number is not none %}v{{ package.revision_number }}{% elif package.state == 'stale' and package.revision_number is not none %}v{{ package.revision_number }} (stale){% else %}none{% endif %}</span>
   </span>
   {% else %}
   <span class="problem-review-line"><span class="danger">unavailable</span></span>
+  {% endif %}
+</div>
+{%- endmacro %}
+
+{% macro workspace_review(readiness) -%}
+<div class="workspace-review-summary">
+  {% if readiness %}
+  {% set workspace = readiness.workspace %}
+  {% set verification = readiness.verification %}
+  {% set workspace_tone = 'warn' if workspace.tone == 'warning' else 'danger' if workspace.tone == 'danger' else '' %}
+  {% set verification_tone = 'warn' if verification.tone == 'warning' else 'danger' if verification.tone == 'danger' else '' %}
+  <div class="workspace-review-row">
+    <span class="workspace-review-label">Upstream</span>
+    <strong class="workspace-review-value">{{ ('v' ~ workspace.upstream_revision) if workspace.upstream_revision is not none else 'none' }}</strong>
+  </div>
+  <div class="workspace-review-row">
+    <span class="workspace-review-label">Workspace</span>
+    <span class="workspace-review-value">
+      <strong class="{{ workspace_tone }}">{{ ('v' ~ workspace.local_revision) if workspace.local_revision is not none else 'none' }}</strong>
+      {% if workspace.needs_update %}<span class="workspace-review-meta danger">Sync required</span>{% elif workspace.dirty %}<span class="workspace-review-meta">Local changes</span>{% endif %}
+    </span>
+  </div>
+  <div class="workspace-review-row workspace-review-verification">
+    <span class="workspace-review-label">Verification</span>
+    <span class="workspace-review-value">
+      <strong class="{{ verification_tone }}">{{ verification.display }}</strong>
+      {% if verification.reason_short %}<span class="workspace-review-detail">{{ verification.reason_short }}</span>{% endif %}
+    </span>
+  </div>
+  {% else %}
+  <div class="workspace-review-row">
+    <span class="workspace-review-label">Status</span>
+    <strong class="workspace-review-value danger">Unavailable</strong>
+  </div>
   {% endif %}
 </div>
 {%- endmacro %}

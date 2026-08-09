@@ -260,6 +260,36 @@ class TestPublishedRevisionExport(E2ETestBase):
         execute.assert_not_called()
         write_transaction.assert_not_called()
 
+    def test_published_readiness_reports_an_older_available_package_as_stale(self) -> None:
+        workspace, problem_id, first_commit = self._publish_problem()
+        first_revision = config.problem_package_service.published_revision(problem_id)
+        materialization = config.problem_package_service.ensure_materialization(
+            first_revision,
+            self._verification_builder(problem_id),
+        )
+        self.assertEqual(materialization["source_commit"], first_commit)
+
+        marker = workspace / "notes" / "package-stale.txt"
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text("published after package build\n", encoding="utf-8")
+        second_commit = config.git_service.commit(
+            workspace,
+            "publish after package build",
+            self.user,
+            f"{self.user}@polygonlike.local",
+        )
+        config.git_service.push(workspace, "main")
+
+        readiness = config.problem_package_service.published_readiness(problem_id)
+        self.assertNotEqual(second_commit, first_commit)
+        self.assertEqual(readiness["status"], "stale")
+        self.assertEqual(
+            readiness["materialized_revision_number"],
+            materialization["revision_number"],
+        )
+        self.assertEqual(readiness["materialization_id"], materialization["id"])
+        self.assertIn("newer revision", readiness["missing_reason"].lower())
+
     def test_corrupt_package_is_invalidated_only_when_consumed(self) -> None:
         problem_id, _commit, materialization = self._materialize()
         _stored, archive = config.problem_package_service.native_archive(
@@ -274,7 +304,7 @@ class TestPublishedRevisionExport(E2ETestBase):
             config.problem_package_service.native_archive(materialization["id"])
 
         after = config.problem_package_service.published_readiness(problem_id)
-        self.assertEqual(after["status"], "blocked")
+        self.assertEqual(after["status"], "none")
         self.assertIn("rebuild required", after["missing_reason"])
 
     def test_concurrent_materialization_request_fails_fast(self) -> None:

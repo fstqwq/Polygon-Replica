@@ -30,14 +30,14 @@ class TestProblemReadiness(E2ETestBase):
         }
 
     @staticmethod
-    def _required_package(problem_id: int) -> dict[str, object]:
+    def _none_package(problem_id: int) -> dict[str, object]:
         return {
             "problem_id": problem_id,
             "published_commit": "a" * 40,
             "published_revision_number": 1,
             "materialized_revision_number": None,
             "materialization_id": "",
-            "status": "buildable",
+            "status": "none",
             "missing_reason": "Package not built",
         }
 
@@ -83,7 +83,7 @@ class TestProblemReadiness(E2ETestBase):
                 config.problem_package_service,
                 "published_readiness_many",
                 return_value={
-                    subject["problem_id"]: self._required_package(subject["problem_id"])
+                    subject["problem_id"]: self._none_package(subject["problem_id"])
                 },
             ),
             patch.object(
@@ -103,7 +103,7 @@ class TestProblemReadiness(E2ETestBase):
         readiness = result[subject["problem_id"]]
         self.assertEqual(readiness["verification"]["result"], "failed")
         self.assertEqual(readiness["verification"]["reason_short"], "")
-        self.assertEqual(readiness["package"]["state"], "required")
+        self.assertEqual(readiness["package"]["state"], "none")
 
     def test_workspace_readiness_explains_failure_and_ignores_package_verification(self) -> None:
         subject = self._subject()
@@ -136,7 +136,7 @@ class TestProblemReadiness(E2ETestBase):
         with patch.object(
             config.problem_package_service,
             "published_readiness",
-            return_value=self._required_package(subject["problem_id"]),
+            return_value=self._none_package(subject["problem_id"]),
         ):
             readiness = config.problem_readiness_service.readiness(subject)
 
@@ -170,10 +170,10 @@ class TestProblemReadiness(E2ETestBase):
                         "created_at": "",
                     },
                     "package": {
-                        "state": "required",
-                        "revision_number": 2,
+                        "state": "stale",
+                        "revision_number": 1,
                         "tone": "warning",
-                        "reason": "Package not built",
+                        "reason": "A newer revision has not been packaged",
                     },
                 }
             )
@@ -185,3 +185,4 @@ class TestProblemReadiness(E2ETestBase):
         self.assertIn(workspace, html)
         self.assertLess(html.index(upstream), html.index(workspace))
         self.assertNotIn('Upstream: <strong class="danger">', html)
+        self.assertIn('Package: <span class="warn">v1 (stale)</span>', html)

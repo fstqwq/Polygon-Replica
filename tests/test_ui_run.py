@@ -104,7 +104,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             "published_revision_number": workspace_row["revision_upstream"],
             "materialized_revision_number": None,
             "materialization_id": "",
-            "status": "buildable",
+            "status": "none",
             "missing_reason": "Package not built",
         }
         with patch.object(
@@ -1217,7 +1217,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             html,
             r'class="problem-section-tab-status section-tab-status-warn">\s*ok \(stale\)\s*</span>',
         )
-        self.assertIn("verification inputs changed", html)
+        self.assertIn("Inputs changed since this verification", html)
 
     def test_verification_sidebar_marks_stale_when_general_info_changes(self) -> None:
         problem = f"alice/verify-stale-general-{uuid.uuid4().hex[:8]}"
@@ -1262,7 +1262,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             html,
             r'class="problem-section-tab-status section-tab-status-warn">\s*failed \(stale\)\s*</span>',
         )
-        self.assertIn("verification inputs changed", html)
+        self.assertIn("Inputs changed since this verification", html)
 
     def test_verification_sidebar_prefers_current_workspace_signature_over_export_verification(self) -> None:
         problem = f"alice/verify-export-not-stale-{uuid.uuid4().hex[:8]}"

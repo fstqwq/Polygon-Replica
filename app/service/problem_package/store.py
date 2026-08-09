@@ -147,6 +147,46 @@ class ProblemPackageStore:
                 result[key] = materialization
         return result
 
+    def latest_available_materializations_before(
+        self,
+        revisions: list[tuple[int, int]],
+    ) -> dict[int, MaterializationRow]:
+        keys = list(
+            dict.fromkeys(
+                (int(problem_id), int(revision_number))
+                for problem_id, revision_number in revisions
+            )
+        )
+        result: dict[int, MaterializationRow] = {}
+        for offset in range(0, len(keys), 300):
+            chunk = keys[offset : offset + 300]
+            if not chunk:
+                continue
+            values = ",".join("(?,?)" for _key in chunk)
+            params = [value for key in chunk for value in key]
+            rows = self.db.fetch_all(
+                f"""
+                WITH requested(problem_id,published_revision_number) AS (VALUES {values}),
+                candidates AS (
+                    SELECT m.*,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY m.problem_id
+                               ORDER BY m.revision_number DESC, m.created_at DESC
+                           ) AS position
+                    FROM problem_package_materializations m
+                    JOIN requested r ON r.problem_id=m.problem_id
+                    WHERE m.status='available'
+                      AND m.revision_number < r.published_revision_number
+                )
+                SELECT * FROM candidates WHERE position=1
+                """,
+                params,
+            )
+            for row in rows:
+                materialization = _materialization(row)
+                result[materialization["problem_id"]] = materialization
+        return result
+
     def all_available_materializations(self) -> list[MaterializationRow]:
         rows = self.db.fetch_all(
             """SELECT * FROM problem_package_materializations

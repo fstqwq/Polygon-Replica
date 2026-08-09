@@ -22,7 +22,7 @@ from app.service.verification.workspace_fingerprint import (
 ReadinessTone = Literal["normal", "warning", "danger"]
 WorkspaceReadinessState = Literal["current", "behind"]
 VerificationResult = Literal["none", "running", "ok", "failed"]
-PackageReadinessState = Literal["ready", "required", "blocked"]
+PackageReadinessState = Literal["ready", "stale", "none"]
 
 _SANITY_STATUS_TOKENS = {
     "ok",
@@ -147,7 +147,7 @@ class ProblemReadinessService:
             "workspace": cls._workspace(subject),
             "verification": _empty_verification(),
             "package": {
-                "state": "blocked",
+                "state": "none",
                 "revision_number": None,
                 "tone": "danger",
                 "reason": "readiness unavailable",
@@ -176,16 +176,16 @@ class ProblemReadinessService:
                 "tone": "normal",
                 "reason": "",
             }
-        if status == "buildable":
+        if status == "stale":
             return {
-                "state": "required",
-                "revision_number": readiness["published_revision_number"],
+                "state": "stale",
+                "revision_number": readiness["materialized_revision_number"],
                 "tone": "warning",
                 "reason": readiness["missing_reason"],
             }
         return {
-            "state": "blocked",
-            "revision_number": readiness["published_revision_number"],
+            "state": "none",
+            "revision_number": None,
             "tone": "danger",
             "reason": readiness["missing_reason"],
         }
@@ -286,7 +286,7 @@ class ProblemReadinessService:
         if explain and (result == "failed" or stale or sanity_attention):
             parts: list[str] = []
             if stale:
-                parts.append("verification inputs changed")
+                parts.append("Inputs changed since this verification")
             error_text = row["fail_reason"] or row["error"]
             if result == "failed":
                 task_hint = ""

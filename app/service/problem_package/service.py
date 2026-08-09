@@ -71,7 +71,7 @@ class MaterializationOperationBusy(RuntimeError):
     """The revision is already being validated, read, or rebuilt."""
 
 
-PublishedPackageStatus = Literal["ready", "buildable", "blocked"]
+PublishedPackageStatus = Literal["ready", "stale", "none"]
 
 
 class PublishedPackageReadiness(TypedDict):
@@ -254,6 +254,7 @@ class ProblemPackageService:
         problem_id: int,
         published: PublishedRevision | None,
         materialization: MaterializationRow | None,
+        previous_materialization: MaterializationRow | None,
         error: str = "",
     ) -> PublishedPackageReadiness:
         if published is None:
@@ -263,37 +264,41 @@ class ProblemPackageService:
                 "published_revision_number": None,
                 "materialized_revision_number": None,
                 "materialization_id": "",
-                "status": "blocked",
+                "status": "none",
                 "missing_reason": error or "no published Git revision",
             }
-        if materialization is None:
-            return {
-                "problem_id": problem_id,
-                "published_commit": published.source_commit,
-                "published_revision_number": published.revision_number,
-                "materialized_revision_number": None,
-                "materialization_id": "",
-                "status": "buildable",
-                "missing_reason": "Package not built",
-            }
-        if materialization["status"] != "available":
+        if materialization is not None and materialization["status"] == "available":
             return {
                 "problem_id": problem_id,
                 "published_commit": published.source_commit,
                 "published_revision_number": published.revision_number,
                 "materialized_revision_number": materialization["revision_number"],
                 "materialization_id": materialization["id"],
-                "status": "blocked",
-                "missing_reason": "Package unavailable; rebuild required",
+                "status": "ready",
+                "missing_reason": "",
+            }
+        if previous_materialization is not None:
+            return {
+                "problem_id": problem_id,
+                "published_commit": published.source_commit,
+                "published_revision_number": published.revision_number,
+                "materialized_revision_number": previous_materialization["revision_number"],
+                "materialization_id": previous_materialization["id"],
+                "status": "stale",
+                "missing_reason": "A newer revision has not been packaged",
             }
         return {
             "problem_id": problem_id,
             "published_commit": published.source_commit,
             "published_revision_number": published.revision_number,
-            "materialized_revision_number": materialization["revision_number"],
-            "materialization_id": materialization["id"],
-            "status": "ready",
-            "missing_reason": "",
+            "materialized_revision_number": None,
+            "materialization_id": "",
+            "status": "none",
+            "missing_reason": (
+                "Package unavailable; rebuild required"
+                if materialization is not None
+                else "Package not built"
+            ),
         }
 
     def published_readiness(
@@ -314,6 +319,12 @@ class ProblemPackageService:
                 for problem_id, revision in revisions.items()
             ]
         )
+        previous_materializations = self.store.latest_available_materializations_before(
+            [
+                (problem_id, revision.revision_number)
+                for problem_id, revision in revisions.items()
+            ]
+        )
         return {
             problem_id: self._published_readiness(
                 problem_id,
@@ -325,6 +336,7 @@ class ProblemPackageService:
                     if problem_id in revisions
                     else None
                 ),
+                previous_materializations.get(problem_id),
                 errors.get(problem_id, ""),
             )
             for problem_id in ids

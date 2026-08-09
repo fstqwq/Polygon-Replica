@@ -34,13 +34,13 @@ def contest_overview_page(request: Request, contest: str, user: Annotated[str, D
         if row["readiness"] is not None
         and row["readiness"]["package"]["state"] == "ready"
     )
-    package_required_count = sum(
+    package_stale_count = sum(
         1
         for row in rows
         if row["readiness"] is not None
-        and row["readiness"]["package"]["state"] == "required"
+        and row["readiness"]["package"]["state"] == "stale"
     )
-    package_blocked_count = len(rows) - package_ready_count - package_required_count
+    package_none_count = len(rows) - package_ready_count - package_stale_count
     return template_response(
         request,
         "contest_overview.html",
@@ -49,7 +49,7 @@ def contest_overview_page(request: Request, contest: str, user: Annotated[str, D
             "problem_rows": rows,
             "owner_prefix_chars": owner_prefix_chars,
             "package_ready_count": package_ready_count,
-            "package_required_count": package_required_count,
-            "package_blocked_count": package_blocked_count,
+            "package_stale_count": package_stale_count,
+            "package_none_count": package_none_count,
         },
     )
