@@ -198,8 +198,11 @@
               <button class="button-link primary-action workspace-side-button" type="submit" {% if not ctx.access.can_write %}disabled title="{{ ctx.access.write_block_reason }}"{% endif %}>Review published changes</button>
             </form>
             {% else %}
-            <a class="button-link primary-action workspace-side-button" href="{{ problem_href('problem_workspace') }}">Review and publish</a>
+            <a class="button-link primary-action workspace-side-button" href="{{ problem_href('problem_workspace') }}">Review workspace</a>
             {% endif %}
+            <form class="action-link-form" method="post" action="{{ problem_href('export_snapshot') }}">
+              <button class="button-link workspace-side-button" type="submit">Download Snapshot</button>
+            </form>
           </div>
           {% if ctx.workspace_changes.total > 0 %}
           {{ change_badges(ctx.workspace_changes.counts) }}

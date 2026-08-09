@@ -628,7 +628,12 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
             r'<input id="revision-message" name="message" required disabled\s*/>',
         )
         self.assertIn('title="No file changes to publish"', html)
-        self.assertIn(">Review and publish</a>", html)
+        self.assertIn(">Review workspace</a>", html)
+        self.assertIn(
+            'method="post" action="/problems/alice/sample/export/snapshot"',
+            html,
+        )
+        self.assertIn(">Download Snapshot</button>", html)
 
     def test_workspace_page_get_refreshes_workspace_status_in_db(self) -> None:
         username = self.random_id("wsget")
