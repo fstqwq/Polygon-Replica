@@ -25,7 +25,9 @@ _CANONICAL_NUMBER_RE = re.compile(rb"^[1-9][0-9]*$")
 _FULL_FILES = frozenset(PASS_FILE_NAMES)
 _METADATA_INPUT_FILES = frozenset({"input", "program.meta", "compare.meta"})
 _METADATA_FILES = frozenset({"program.meta", "compare.meta"})
-_FINAL_SUPPLEMENT_FILES = frozenset({"input", "teammessage.txt"})
+_FINAL_SUPPLEMENT_FILES = frozenset(
+    {"input", "judgemessage.txt", "teammessage.txt"}
+)
 
 
 class InvalidPassBundle(ValueError):

@@ -16,9 +16,6 @@ from app.impl.workspace.context_operation import dedupe_preserve_order, workspac
 
 _C = config.constants
 
-_RUNPIPE_PROTOCOL_TOKEN_RE = re.compile(r"\[\s*[0-9]+(?:\.[0-9]+)?s/[0-9]+\]")
-
-
 RunDetailPreview = TypedDict(
     "RunDetailPreview",
     {
@@ -29,25 +26,6 @@ RunDetailPreview = TypedDict(
         "download_verification_id": str,
         "download_rel_path": str,
         "message": str,
-    },
-)
-
-InteractiveTranscriptRow = TypedDict(
-    "InteractiveTranscriptRow",
-    {
-        "side": str,
-        "text": str,
-    },
-)
-
-InteractiveTranscriptPreview = TypedDict(
-    "InteractiveTranscriptPreview",
-    {
-        "available": bool,
-        "rows": list[InteractiveTranscriptRow],
-        "shown": int,
-        "total": int,
-        "truncated": bool,
     },
 )
 
@@ -71,19 +49,6 @@ DiagnosticEntry = TypedDict(
 )
 
 
-def _strip_runpipe_protocol_lines(raw: str) -> str:
-    text = raw.replace("\r\n", "\n").replace("\r", "\n")
-    kept: list[str] = []
-    for line in text.split("\n"):
-        if _RUNPIPE_PROTOCOL_TOKEN_RE.search(line):
-            continue
-        kept.append(line)
-    while kept and (not kept[0].strip()):
-        kept.pop(0)
-    while kept and (not kept[-1].strip()):
-        kept.pop()
-    return "\n".join(kept)
-
 def _run_detail_preview_unavailable(message: str = 'missing') -> RunDetailPreview:
     return {
         'available': False,
@@ -106,7 +71,6 @@ def _run_detail_preview_from_bytes(
     clipped = len(data) > limit
     head = data[:limit]
     normalized = sanitize_log_text_for_ui(head.decode("utf-8", errors="replace"))
-    normalized = _strip_runpipe_protocol_lines(normalized)
     if not normalized:
         normalized = "(empty)"
     return {
@@ -117,54 +81,6 @@ def _run_detail_preview_from_bytes(
         "download_verification_id": verification_id,
         "download_rel_path": rel_path,
         "message": "",
-    }
-
-def _interactive_transcript_preview(preview: RunDetailPreview, *, line_limit: int = 24) -> InteractiveTranscriptPreview:
-    if not preview["available"]:
-        return {"available": False, "rows": [], "shown": 0, "total": 0, "truncated": False}
-    raw_text = preview["text"]
-    if (not raw_text.strip()) or raw_text.strip() == "(empty)":
-        return {"available": False, "rows": [], "shown": 0, "total": 0, "truncated": False}
-    lines = raw_text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
-    rows: list[InteractiveTranscriptRow] = []
-    last_side = "right"
-    for raw_line in lines:
-        line = raw_line.strip()
-        if not line:
-            continue
-        side = ""
-        text = line
-        if line.startswith("<"):
-            side = "left"
-            text = line[1:].lstrip()
-        elif line.startswith(">"):
-            side = "right"
-            text = line[1:].lstrip()
-        else:
-            lower = line.lower()
-            if lower.startswith("interactor:") or lower.startswith("jury:") or lower.startswith("judge:"):
-                side = "left"
-                text = line.split(":", 1)[1].lstrip() if ":" in line else line
-            elif lower.startswith("submission:") or lower.startswith("team:") or lower.startswith("solution:"):
-                side = "right"
-                text = line.split(":", 1)[1].lstrip() if ":" in line else line
-        if not side:
-            side = "left" if last_side == "right" else "right"
-        last_side = side
-        if not text:
-            text = line
-        rows.append({"side": side, "text": text})
-    if not rows:
-        return {"available": False, "rows": [], "shown": 0, "total": 0, "truncated": False}
-    cap = max(1, int(line_limit))
-    shown_rows = rows[:cap]
-    truncated = len(rows) > cap or preview["truncated"]
-    return {
-        "available": True,
-        "rows": shown_rows,
-        "shown": len(shown_rows),
-        "total": len(rows),
-        "truncated": truncated,
     }
 
 def _nonnegative_int_or_none(raw: object) -> int | None:

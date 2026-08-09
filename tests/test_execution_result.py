@@ -4,6 +4,7 @@ import io
 import tarfile
 import unittest
 
+from app.service.judgehost.case_result import decode_case_test_row
 from app.service.judgehost.pass_bundle import InvalidPassBundle, parse_pass_bundle
 from app.service.verification.execution_result import (
     CAPTURE_COMPLETE,
@@ -148,6 +149,16 @@ class TestExecutionResult(unittest.TestCase):
         self.assertTrue(all(item.artifacts.transcript_ref for item in interactive_multi.passes))
         self.assertTrue(all(not item.artifacts.output_ref for item in interactive_multi.passes))
 
+        row = decode_case_test_row(interactive_multi, test_name="001.in")
+        projected_passes = row["passes"]
+        assert isinstance(projected_passes, list)
+        self.assertEqual([item["pass"] for item in projected_passes], [1, 2])
+        self.assertTrue(all(item["capture_status"] == CAPTURE_COMPLETE for item in projected_passes))
+        self.assertTrue(all(item["input_ref"] for item in projected_passes))
+        self.assertTrue(all(item["transcript_ref"] for item in projected_passes))
+        self.assertTrue(all(not item["output_ref"] for item in projected_passes))
+        self.assertTrue(all(item["judge_message_ref"] for item in projected_passes))
+
     def test_pass_numbers_must_be_contiguous_and_artifact_modes_are_exclusive(self) -> None:
         with self.assertRaisesRegex(ValueError, "contiguous"):
             normalize_execution_result(
@@ -188,6 +199,7 @@ class TestPassBundle(unittest.TestCase):
                 ("final-pass-number", b"2\n"),
                 *_complete_pass_entries(1),
                 ("passes/2/input", b"next input"),
+                ("passes/2/judgemessage.txt", b"final judge message"),
                 ("passes/2/teammessage.txt", b"final team message"),
             ]
         )
@@ -211,6 +223,7 @@ class TestPassBundle(unittest.TestCase):
                 ("passes/1/program.meta", b"cpu-time: 1"),
                 ("passes/1/compare.meta", b"exitcode: 42"),
                 ("passes/2/input", b"next"),
+                ("passes/2/judgemessage.txt", b""),
                 ("passes/2/teammessage.txt", b""),
             ]
         )

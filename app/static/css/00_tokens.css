@@ -55,8 +55,11 @@
   --change-deleted: #dc2626;
   --change-renamed: #7c3aed;
   --change-other: #0f766e;
-  --transcript-left-bg: #ecfeff;
-  --transcript-right-bg: #eef2ff;
+  --transcript-interactor-bg: #ecfeff;
+  --transcript-interactor-rail: #0891b2;
+  --transcript-solution-bg: #eef2ff;
+  --transcript-solution-rail: #4f46e5;
+  --transcript-payload: #172033;
   --table-row-alt: var(--surface-alt);
   --btn-bg: var(--surface);
   --btn-bg-hover: var(--surface-hover);

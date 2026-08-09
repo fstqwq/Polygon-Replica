@@ -44,27 +44,20 @@ function initRunDetails() {
     text.textContent = message;
     content.appendChild(text);
   };
-  const render = (html, runId) => {
-    if (!runId) {
-      content.innerHTML = html;
+  const render = (html) => { content.innerHTML = html; };
+  const load = async (testName, runId) => {
+    if (!testName || !runId) {
+      loading("Run details are unavailable.");
       return;
     }
-    const wrapper = document.createElement("div");
-    wrapper.innerHTML = html;
-    const cards = Array.from(wrapper.querySelectorAll(".sol-card[data-run-id]"));
-    const selected = cards.find((card) => card.dataset.runId === runId) || cards[0];
-    cards.forEach((card) => { if (card !== selected) card.remove(); });
-    content.innerHTML = wrapper.innerHTML;
-  };
-  const load = async (testName, runId) => {
-    const key = testName;
+    const key = `${testName}\u0000${runId}`;
     activeKey = key;
     if (cache.has(key)) {
-      render(cache.get(key), runId);
+      render(cache.get(key));
       return;
     }
     loading("Loading details...");
-    const query = new URLSearchParams({ test: testName, verification_id: verificationId });
+    const query = new URLSearchParams({ test: testName, run_id: runId, verification_id: verificationId });
     try {
       const response = await fetch(`${base}${base.includes("?") ? "&" : "?"}${query}`, {
         credentials: "same-origin",
@@ -73,7 +66,7 @@ function initRunDetails() {
       if (!response.ok) throw new Error("detail fetch failed");
       const html = await response.text();
       cache.set(key, html);
-      if (activeKey === key) render(html, runId);
+      if (activeKey === key) render(html);
     } catch (_error) {
       if (activeKey === key) loading("Failed to load details.");
     }

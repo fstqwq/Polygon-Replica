@@ -16,6 +16,41 @@ copy_required() {
   cp "$SOURCE_FILE" "$TARGET_FILE" 2>/dev/null
 }
 
+copy_pass_input() {
+  INPUT_PASS_NUMBER="$1"
+  INPUT_SOURCE_FILE="$2"
+  INPUT_TARGET_FILE="$3"
+
+  if is_regular_file "$INPUT_SOURCE_FILE"; then
+    copy_required "$INPUT_SOURCE_FILE" "$INPUT_TARGET_FILE"
+    return $?
+  fi
+  [ -L "$INPUT_SOURCE_FILE" ] || return 1
+  RESOLVED_INPUT_SOURCE=$(readlink -f -- "$INPUT_SOURCE_FILE" 2>/dev/null) || return 1
+  is_regular_file "$RESOLVED_INPUT_SOURCE" || return 1
+
+  if [ "$INPUT_PASS_NUMBER" -eq 1 ]; then
+    JUDGING_DIR=${TESTCASE_DIR%/*}
+    SUBMISSION_DIR=${JUDGING_DIR%/*}
+    ENDPOINT_DIR=${SUBMISSION_DIR%/*}
+    TESTCASE_CACHE_DIR="$ENDPOINT_DIR/testcase"
+    RESOLVED_TESTCASE_CACHE_DIR=$(CDPATH= cd -- "$TESTCASE_CACHE_DIR" 2>/dev/null && pwd -P) || return 1
+    [ "$RESOLVED_TESTCASE_CACHE_DIR" = "$TESTCASE_CACHE_DIR" ] || return 1
+    case "$RESOLVED_INPUT_SOURCE" in
+      "$RESOLVED_TESTCASE_CACHE_DIR"/*/*.in) ;;
+      *) return 1 ;;
+    esac
+  else
+    PREVIOUS_PASS_NUMBER=$((INPUT_PASS_NUMBER - 1))
+    EXPECTED_INPUT_SOURCE="$TESTCASE_DIR/$PREVIOUS_PASS_NUMBER/feedback/nextpass.in"
+    is_regular_file "$EXPECTED_INPUT_SOURCE" || return 1
+    RESOLVED_EXPECTED_INPUT=$(readlink -f -- "$EXPECTED_INPUT_SOURCE" 2>/dev/null) || return 1
+    [ "$RESOLVED_INPUT_SOURCE" = "$RESOLVED_EXPECTED_INPUT" ] || return 1
+  fi
+
+  copy_required "$RESOLVED_INPUT_SOURCE" "$INPUT_TARGET_FILE"
+}
+
 copy_optional_empty() {
   SOURCE_FILE="$1"
   TARGET_FILE="$2"
@@ -25,6 +60,42 @@ copy_optional_empty() {
   else
     : >"$TARGET_FILE"
   fi
+}
+
+copy_pass_judge_message() {
+  MESSAGE_PASS_NUMBER="$1"
+  MESSAGE_SOURCE_FILE="$2"
+  MESSAGE_TARGET_FILE="$3"
+  is_regular_file "$MESSAGE_SOURCE_FILE" || return 1
+  mkdir -p "$(dirname "$MESSAGE_TARGET_FILE")" 2>/dev/null || return 1
+
+  if [ "$MESSAGE_PASS_NUMBER" -le 1 ]; then
+    copy_required "$MESSAGE_SOURCE_FILE" "$MESSAGE_TARGET_FILE"
+    return $?
+  fi
+
+  PREVIOUS_MESSAGE_FILE="$TESTCASE_DIR/$((MESSAGE_PASS_NUMBER - 1))/feedback/judgemessage.txt"
+  if ! is_regular_file "$PREVIOUS_MESSAGE_FILE"; then
+    copy_required "$MESSAGE_SOURCE_FILE" "$MESSAGE_TARGET_FILE"
+    return $?
+  fi
+
+  PREVIOUS_MESSAGE_BYTES=$(wc -c <"$PREVIOUS_MESSAGE_FILE" 2>/dev/null | tr -d '[:space:]') || return 1
+  CURRENT_MESSAGE_BYTES=$(wc -c <"$MESSAGE_SOURCE_FILE" 2>/dev/null | tr -d '[:space:]') || return 1
+  case "$PREVIOUS_MESSAGE_BYTES:$CURRENT_MESSAGE_BYTES" in
+    *[!0-9:]*) return 1 ;;
+  esac
+  if [ "$PREVIOUS_MESSAGE_BYTES" -gt "$CURRENT_MESSAGE_BYTES" ]; then
+    copy_required "$MESSAGE_SOURCE_FILE" "$MESSAGE_TARGET_FILE"
+    return $?
+  fi
+  if [ "$PREVIOUS_MESSAGE_BYTES" -gt 0 ] \
+    && ! cmp -s -n "$PREVIOUS_MESSAGE_BYTES" "$PREVIOUS_MESSAGE_FILE" "$MESSAGE_SOURCE_FILE"; then
+    copy_required "$MESSAGE_SOURCE_FILE" "$MESSAGE_TARGET_FILE"
+    return $?
+  fi
+
+  tail -c "+$((PREVIOUS_MESSAGE_BYTES + 1))" "$MESSAGE_SOURCE_FILE" >"$MESSAGE_TARGET_FILE" 2>/dev/null
 }
 
 validate_pass_layout() {
@@ -66,16 +137,16 @@ populate_historical_passes() {
     TARGET_DIR="$BUILD_DIR/passes/$PASS_NUMBER"
     mkdir -p "$TARGET_DIR" 2>/dev/null || return 1
     if [ "$PROFILE" = complete ]; then
-      copy_required "$PASS_DIR/testdata.in" "$TARGET_DIR/input" || return 1
+      copy_pass_input "$PASS_NUMBER" "$PASS_DIR/testdata.in" "$TARGET_DIR/input" || return 1
       copy_required "$PASS_DIR/program.out" "$TARGET_DIR/program.out" || return 1
       copy_required "$PASS_DIR/program.err" "$TARGET_DIR/program.err" || return 1
       copy_required "$PASS_DIR/system.out" "$TARGET_DIR/system.out" || return 1
       copy_required "$PASS_DIR/program.meta" "$TARGET_DIR/program.meta" || return 1
       copy_required "$PASS_DIR/compare.meta" "$TARGET_DIR/compare.meta" || return 1
-      copy_required "$PASS_DIR/feedback/judgemessage.txt" "$TARGET_DIR/judgemessage.txt" || return 1
+      copy_pass_judge_message "$PASS_NUMBER" "$PASS_DIR/feedback/judgemessage.txt" "$TARGET_DIR/judgemessage.txt" || return 1
       copy_optional_empty "$PASS_DIR/feedback/teammessage.txt" "$TARGET_DIR/teammessage.txt" || return 1
     elif [ "$PROFILE" = metadata-input-only ]; then
-      copy_required "$PASS_DIR/testdata.in" "$TARGET_DIR/input" || return 1
+      copy_pass_input "$PASS_NUMBER" "$PASS_DIR/testdata.in" "$TARGET_DIR/input" || return 1
       copy_required "$PASS_DIR/program.meta" "$TARGET_DIR/program.meta" || return 1
       copy_required "$PASS_DIR/compare.meta" "$TARGET_DIR/compare.meta" || return 1
     else
@@ -90,7 +161,8 @@ populate_final_supplement() {
   BUILD_DIR="$1"
   TARGET_DIR="$BUILD_DIR/passes/$FINAL_NUMBER"
   mkdir -p "$TARGET_DIR" 2>/dev/null || return 1
-  copy_required "$CURRENT_DIR/testdata.in" "$TARGET_DIR/input" || return 1
+  copy_pass_input "$FINAL_NUMBER" "$CURRENT_DIR/testdata.in" "$TARGET_DIR/input" || return 1
+  copy_pass_judge_message "$FINAL_NUMBER" "$FEEDBACK_DIR/judgemessage.txt" "$TARGET_DIR/judgemessage.txt" || return 1
   copy_optional_empty "$FEEDBACK_DIR/teammessage.txt" "$TARGET_DIR/teammessage.txt"
 }
 
@@ -102,7 +174,8 @@ create_bundle() {
   PASS_NUMBER=1
   while [ "$PASS_NUMBER" -le "$FINAL_NUMBER" ]; do
     if [ "$PASS_NUMBER" -eq "$FINAL_NUMBER" ]; then
-      set -- "$@" "passes/$PASS_NUMBER/input" "passes/$PASS_NUMBER/teammessage.txt"
+      set -- "$@" "passes/$PASS_NUMBER/input" \
+        "passes/$PASS_NUMBER/judgemessage.txt" "passes/$PASS_NUMBER/teammessage.txt"
     elif [ "$PROFILE" = complete ]; then
       set -- "$@" \
         "passes/$PASS_NUMBER/input" "passes/$PASS_NUMBER/program.out" \
