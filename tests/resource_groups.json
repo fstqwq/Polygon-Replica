@@ -12,6 +12,7 @@
     "test_public_contracts.py",
     "test_icpc_package_import.py",
     "test_run_display.py",
+    "test_runpipe_transcript.py",
     "test_runtime_blob_store.py",
     "test_revision.py",
     "test_statement_style.py",
