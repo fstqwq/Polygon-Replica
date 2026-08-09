@@ -2,15 +2,12 @@ from __future__ import annotations
 from app.impl.auth.session import require_session_user
 
 import json
-import shutil
 import uuid
 import zipfile
 from pathlib import Path
 from typing import Annotated, cast
 
 from fastapi import Form, Request, Depends
-from fastapi.responses import FileResponse
-from starlette.background import BackgroundTask
 
 from app.impl.auth.shared import redirect_response, template_response
 from app.impl.contest.workspace_scope import contest_workspace_context_from_request
@@ -299,19 +296,3 @@ def export_create(problem: str, user: Annotated[str, Depends(require_session_use
     except Exception as exc:
         msg = str(exc)
     return redirect_response(f'/problems/{problem}/export', status_code=303, message=msg)
-
-
-def export_snapshot(problem: str, user: Annotated[str, Depends(require_session_user)]):
-    ctx = page_ctx(problem, user, include_branches=False, refresh_status=True, include_recent=False)
-    require_write_access(ctx)
-    archive = config.export_service.create_workspace_snapshot(
-        problem,
-        workspace_id=int(ctx["workspace"]["id"]),
-    )
-    archive_root = archive.parent
-    return FileResponse(
-        archive,
-        filename=archive.name,
-        media_type="application/zip",
-        background=BackgroundTask(lambda: shutil.rmtree(archive_root, ignore_errors=True)),
-    )

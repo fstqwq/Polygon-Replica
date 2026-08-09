@@ -1,8 +1,28 @@
 {% extends "base.html" %}
 {% block content %}
-<h1 class="page-title">Revision History</h1>
+<h1 class="page-title">Backup &amp; Restore</h1>
 {% include "_flash_message.html" %}
+
+<div class="problem-action-card-grid">
+  <section class="info-card">
+    <h2>Download Snapshot</h2>
+    <form method="post" action="{{ problem_href('problem_history_snapshot') }}">
+      <button class="btn" type="submit">Download Snapshot</button>
+    </form>
+  </section>
+  <section class="info-card">
+    <h2>Import Into Workspace</h2>
+    <p>Imported files overwrite matching workspace files. Other files are kept.</p>
+    <form class="form-row" method="post" enctype="multipart/form-data" action="{{ problem_href('problem_history_import') }}">
+      <label for="workspace-import-package">Archive (.zip)</label>
+      <input id="workspace-import-package" type="file" name="package_upload" accept=".zip,application/zip" required{% if not ctx.access.can_write %} disabled title="{{ ctx.access.write_block_reason }}"{% endif %} />
+      <button class="btn" type="submit"{% if not ctx.access.can_write %} disabled title="{{ ctx.access.write_block_reason }}"{% endif %}>Import</button>
+    </form>
+  </section>
+</div>
+
 <section class="content-section">
+  <h2>Revision History</h2>
   {% if commits %}
   <div class="table-scroll">
   <table class="table-base revision-history-table">
@@ -10,8 +30,16 @@
     {% for c in commits %}
     <tr>
       <td class="table-cell-nowrap"><code>{{ ("v" ~ c.version) if c.version else "-" }}</code></td>
-      <td class="table-cell-break">{{ c.subject }}</td><td class="table-cell-nowrap">{{ c.author }}</td><td class="table-cell-nowrap">{{ c.date|local_time }}</td>
-      <td class="table-cell-actions"><a href="{{ problem_href('problem_history', query={'revision': 'v' ~ c.version}) }}">View changes</a></td>
+      <td class="table-cell-break">{{ c.subject }}</td>
+      <td class="table-cell-nowrap">{{ c.author }}</td>
+      <td class="table-cell-nowrap">{{ c.date|local_time }}</td>
+      <td class="table-cell-actions">
+        <a href="{{ problem_href('problem_history', query={'revision': 'v' ~ c.version}) }}">View changes</a>
+        <form class="inline-form" method="post" action="{{ problem_href('problem_history_snapshot') }}">
+          <input type="hidden" name="revision" value="v{{ c.version }}" />
+          <button class="linkish-button" type="submit">Download</button>
+        </form>
+      </td>
     </tr>
     {% endfor %}
   </table>

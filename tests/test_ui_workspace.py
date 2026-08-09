@@ -5,6 +5,7 @@ from tests.db_helpers import db_execute, db_fetch_all, db_fetch_one
 import asyncio
 import io
 import re
+import shutil
 import zipfile
 from unittest.mock import patch
 from urllib.parse import parse_qs, urlparse
@@ -54,7 +55,9 @@ from tests.ui_support import (
     general_save,
     git_discard_path,
     git_service,
+    history_import,
     history_page,
+    history_snapshot,
     json,
     problem_delete,
     problems_root_import,
@@ -629,11 +632,8 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         )
         self.assertIn('title="No file changes to publish"', html)
         self.assertIn(">Review workspace</a>", html)
-        self.assertIn(
-            'method="post" action="/problems/alice/sample/export/snapshot"',
-            html,
-        )
-        self.assertIn(">Download Snapshot</button>", html)
+        self.assertIn(">Backup &amp; Restore</a>", html)
+        self.assertNotIn(">Download Snapshot</button>", html)
 
     def test_workspace_page_get_refreshes_workspace_status_in_db(self) -> None:
         username = self.random_id("wsget")
@@ -1398,7 +1398,7 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
             ("/problems/alice/sample/validator", "Validator"),
             ("/problems/alice/sample/files", "Files"),
             ("/problems/alice/sample/workspace", "Workspace"),
-            ("/problems/alice/sample/history", "Revision History"),
+            ("/problems/alice/sample/history", "Backup &amp; Restore"),
         ]
         with TestClient(app) as client:
             for path, title in expected_titles:
@@ -1988,7 +1988,9 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         resp = history_page(_request("/problems/alice/sample/history"), "alice/sample", "alice")
         self.assertEqual(resp.status_code, 200)
         html = resp.body.decode("utf-8", errors="replace")
-        self.assertIn("Revision History", html)
+        self.assertIn("Backup &amp; Restore", html)
+        self.assertIn("Download Snapshot", html)
+        self.assertIn("Import Into Workspace", html)
         self.assertIn("No revisions.", html)
         self.assertNotIn("ambiguous argument 'HEAD'", html)
         self.assertNotIn("unknown revision or path not in the working tree", html)
@@ -2006,10 +2008,11 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         resp = history_page(_request("/problems/alice/sample/history"), "alice/sample", "alice")
         self.assertEqual(resp.status_code, 200)
         html = resp.body.decode("utf-8", errors="replace")
+        self.assertIn("Backup &amp; Restore", html)
         self.assertIn("Revision History", html)
         self.assertIn(marker, html)
         self.assertIn("View changes", html)
-        self.assertNotIn("Restore", html)
+        self.assertIn("Download", html)
 
     def test_git_commit_does_not_stage_hidden_paths(self) -> None:
         self._ensure_committed_head("alice/sample", "alice")
@@ -2088,3 +2091,78 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         self.assertIn(marker, html)
         self.assertIn("workspace-diff-line-add", html)
         self.assertIn("+after", html)
+
+    def test_history_snapshot_downloads_selected_revision(self) -> None:
+        self._ensure_committed_head("alice/sample", "alice")
+        ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
+        rel = f"solutions/history-download-{uuid.uuid4().hex[:8]}.cpp"
+        source = ws / rel
+        source.parent.mkdir(parents=True, exist_ok=True)
+        source.write_text("// historical\n", encoding="utf-8")
+        git_service.commit(
+            ws,
+            f"history-download-{uuid.uuid4().hex[:6]}",
+            "alice",
+            "alice@polygonlike.local",
+        )
+        selected_version = workspace_revision_info(ws, "main")["local"]
+        self.assertIsNotNone(selected_version)
+        source.write_text("// working copy\n", encoding="utf-8")
+
+        response = history_snapshot(
+            problem="alice/sample",
+            user="alice",
+            revision=f"v{selected_version}",
+        )
+        self.assertEqual(response.status_code, 200)
+        archive = Path(str(response.path))
+        try:
+            with zipfile.ZipFile(archive, "r") as package:
+                matches = [name for name in package.namelist() if name.endswith("/" + rel)]
+                self.assertEqual(len(matches), 1)
+                self.assertEqual(package.read(matches[0]), b"// historical\n")
+            self.assertIn(
+                f"-v{selected_version}-snapshot.zip",
+                str(response.headers.get("content-disposition", "")),
+            )
+        finally:
+            shutil.rmtree(archive.parent, ignore_errors=True)
+
+    def test_history_snapshot_can_restore_matching_files_without_deleting_others(self) -> None:
+        class _Upload:
+            def __init__(self, filename: str, content: bytes):
+                self.filename = filename
+                self.file = io.BytesIO(content)
+
+        ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
+        restored_rel = f"solutions/restore-{uuid.uuid4().hex[:8]}.cpp"
+        kept_rel = f"solutions/keep-{uuid.uuid4().hex[:8]}.cpp"
+        restored = ws / restored_rel
+        kept = ws / kept_rel
+        restored.parent.mkdir(parents=True, exist_ok=True)
+        restored.write_text("// backup\n", encoding="utf-8")
+        snapshot_response = history_snapshot(
+            problem="alice/sample",
+            user="alice",
+            revision="",
+        )
+        archive = Path(str(snapshot_response.path))
+        try:
+            payload = archive.read_bytes()
+        finally:
+            shutil.rmtree(archive.parent, ignore_errors=True)
+
+        restored.write_text("// changed\n", encoding="utf-8")
+        kept.write_text("// keep\n", encoding="utf-8")
+        response = history_import(
+            problem="alice/sample",
+            user="alice",
+            package_upload=_Upload("workspace-snapshot.zip", payload),
+        )
+        self.assertEqual(response.status_code, 303)
+        self.assertEqual(
+            str(response.headers.get("location", "")),
+            "/problems/alice/sample/workspace",
+        )
+        self.assertEqual(restored.read_text(encoding="utf-8"), "// backup\n")
+        self.assertEqual(kept.read_text(encoding="utf-8"), "// keep\n")

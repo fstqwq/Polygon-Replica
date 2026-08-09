@@ -3,7 +3,7 @@
 <h1 class="page-title">Packages</h1>
 {% include "_flash_message.html" %}
 
-<div class="package-action-grid">
+<div class="problem-action-card-grid">
   <section class="info-card">
     <h2>Export Into Package</h2>
     <form class="form-row" method="post" action="{{ problem_href('export_create') }}">
@@ -13,15 +13,6 @@
         <option value="native">{{ native_option_label }}</option>
       </select>
       <button class="btn primary-action" type="submit">Export</button>
-    </form>
-  </section>
-  <section class="info-card">
-    <h2>Import Into Workspace</h2>
-    <p class="muted">Package files overwrite same-path local files. Paths absent from the package are kept.</p>
-    <form class="form-row" method="post" enctype="multipart/form-data" action="{{ problem_href('export_import') }}">
-      <label for="workspace-import-package">Package (.zip)</label>
-      <input id="workspace-import-package" type="file" name="package_upload" accept=".zip,application/zip" required />
-      <button class="btn" type="submit">Import</button>
     </form>
   </section>
 </div>

@@ -24,7 +24,7 @@ from app.service.export.icpc_package import (
     write_output_validator,
 )
 from app.service.platform.hashing import sha256_file
-from app.service.platform.fs.op import remove_symlinks
+from app.service.platform.fs.op import extract_git_archive, remove_symlinks
 from app.service.problem.test_spec import dumps_tests_spec, load_tests_spec
 from app.service.problem.solution_metadata import infer_expected_behavior_from_name, normalize_expected_behavior, parse_solution_desc
 from app.service.statement.render import render_statement_main
@@ -470,12 +470,17 @@ class ExportService:
         workspace_id: int | None,
         problem_slug: str,
         tmp_root: Path,
+        *,
+        source_commit: str | None = None,
     ) -> Path:
-        """Copy the workspace tree to a temp snapshot using native-import path rules."""
+        """Copy a working tree or committed revision using native-import path rules."""
         workspace = self._workspace_path_for_snapshot(workspace_id, problem_slug)
         snapshot = tmp_root / "_source"
-        snapshot.mkdir(parents=True, exist_ok=True)
-        self._copy_native_working_tree(workspace, snapshot, root_dir=workspace)
+        if source_commit is None:
+            snapshot.mkdir(parents=True, exist_ok=True)
+            self._copy_native_working_tree(workspace, snapshot, root_dir=workspace)
+        else:
+            extract_git_archive(workspace, source_commit, snapshot, timeout=120)
         remove_symlinks(snapshot)
         return snapshot
 
@@ -867,7 +872,15 @@ class ExportService:
         problem: str,
         *,
         workspace_id: int,
+        source_commit: str | None = None,
+        revision_number: int | None = None,
     ) -> Path:
+        if (source_commit is None) != (revision_number is None):
+            raise ValueError("snapshot revision identity is incomplete")
+        if source_commit is not None and not re.fullmatch(r"[0-9a-f]{40}", source_commit):
+            raise ValueError("snapshot source commit is invalid")
+        if revision_number is not None and revision_number < 1:
+            raise ValueError("snapshot revision number is invalid")
         problem_row = self._store.problem_export_row(problem)
         if problem_row is None:
             raise ValueError(f"unknown problem: {problem}")
@@ -882,12 +895,17 @@ class ExportService:
                 int(workspace_id),
                 str(problem_row["slug"]),
                 tmp_root,
+                source_commit=source_commit,
             )
             self._build_native_package(
                 package_root=package_root,
                 snapshot=snapshot,
             )
-            archive_stem = tmp_parent / f"{self._archive_filename_slug(str(problem_row['slug']))}-snapshot"
+            revision_suffix = f"-v{revision_number}" if revision_number is not None else ""
+            archive_stem = tmp_parent / (
+                f"{self._archive_filename_slug(str(problem_row['slug']))}"
+                f"{revision_suffix}-snapshot"
+            )
             archive = shutil.make_archive(
                 str(archive_stem),
                 "zip",

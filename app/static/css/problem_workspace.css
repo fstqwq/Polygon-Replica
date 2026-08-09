@@ -287,7 +287,7 @@
   min-width: 0;
 }
 
-.package-action-grid {
+.problem-action-card-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr));
   gap: var(--space-4);

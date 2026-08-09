@@ -1,84 +1,231 @@
 from __future__ import annotations
-from app.impl.auth.session import require_session_user
 
+import re
+import shutil
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, TypedDict, cast
 
-from fastapi import Request, Depends
+from fastapi import Depends, File, Form, HTTPException, Request, UploadFile
+from fastapi.responses import FileResponse
+from starlette.background import BackgroundTask
 
-from app.impl.auth.shared import template_response
+from app.impl.auth.session import require_session_user
+from app.impl.auth.shared import redirect_response, template_response
 from app.impl.contest.workspace_scope import contest_workspace_context_from_request
+from app.impl.run_export.import_source import (
+    import_package_into_workspace,
+    import_package_warnings,
+)
 from app.impl.runtime.config import config
+from app.impl.workspace.access import require_write_access
+from app.impl.workspace.context import count_label
 from app.impl.workspace.context_ui import page_ctx
+from app.main_util import read_fileobj_bytes_limited
 
 _C = config.constants
+_REVISION_TOKEN_RE = re.compile(r"v[1-9][0-9]*")
 
 
-def history_page(request: Request, problem: str, user: Annotated[str, Depends(require_session_user)]):
+class RevisionHistoryRow(TypedDict):
+    commit: str
+    short: str
+    author: str
+    date: str
+    subject: str
+    version: int | None
+
+
+def _revision_history_rows(ctx: dict[str, object]) -> tuple[Path, list[RevisionHistoryRow]]:
+    workspace_context = cast(dict[str, object], ctx["workspace"])
+    workspace = Path(cast(str, workspace_context["path"]))
+    raw_rows = config.git_service.history(workspace, limit=_C.WORKSPACE_HISTORY_LIMIT)
+    revision_top = cast(int | None, ctx.get("workspace_version"))
+    rows: list[RevisionHistoryRow] = []
+    for index, raw in enumerate(raw_rows):
+        version = None if revision_top is None else revision_top - index
+        rows.append(
+            {
+                "commit": cast(str, raw["commit"]),
+                "short": cast(str, raw["short"]),
+                "author": cast(str, raw["author"]),
+                "date": cast(str, raw["date"]),
+                "subject": cast(str, raw["subject"]),
+                "version": version if version is not None and version > 0 else None,
+            }
+        )
+    return workspace, rows
+
+
+def _selected_revision(
+    rows: list[RevisionHistoryRow],
+    revision: str,
+) -> RevisionHistoryRow:
+    if not _REVISION_TOKEN_RE.fullmatch(revision):
+        raise ValueError("selected revision is not in visible history")
+    selected = next(
+        (row for row in rows if row["version"] is not None and f"v{row['version']}" == revision),
+        None,
+    )
+    if selected is None:
+        raise ValueError("selected revision is not in visible history")
+    return selected
+
+
+def history_page(
+    request: Request,
+    problem: str,
+    user: Annotated[str, Depends(require_session_user)],
+):
     ctx = page_ctx(
         problem,
         user,
         contest_workspace=contest_workspace_context_from_request(request),
     )
-    workspace = Path(ctx['workspace']['path'])
-    commits: list[dict] = []
-    message = ''
-    selected_revision = request.query_params.get('revision', '')
-    selected_commit = ''
-    selected_subject = ''
-    selected_diff = ''
+    commits: list[RevisionHistoryRow] = []
+    message = ""
+    selected_revision = request.query_params.get("revision", "")
+    selected_commit = ""
+    selected_subject = ""
+    selected_diff = ""
     selected_diff_truncated = False
     selected_diff_lines: list[dict[str, str]] = []
     try:
-        commits = config.git_service.history(workspace, limit=_C.WORKSPACE_HISTORY_LIMIT)
-        revision_top = int(ctx['workspace_version']) if ctx.get('workspace_version') is not None else None
-        for idx, row in enumerate(commits):
-            if revision_top is None:
-                row['version'] = None
-            else:
-                row['version'] = max(1, revision_top - idx)
+        workspace, commits = _revision_history_rows(ctx)
         if selected_revision:
-            selected_row = next(
-                (row for row in commits if f"v{row.get('version')}" == selected_revision), None
+            selected_row = _selected_revision(commits, selected_revision)
+            selected_commit = selected_row["commit"]
+            selected_subject = selected_row["subject"]
+            selected_diff, selected_diff_truncated = config.git_service.diff_for_revision(
+                workspace,
+                selected_commit,
             )
-            if selected_row is None:
-                raise ValueError('selected revision is not in visible history')
-            selected_commit = selected_row['commit']
-            selected_subject = selected_row['subject']
-            selected_diff, selected_diff_truncated = config.git_service.diff_for_revision(workspace, selected_commit)
             for line in selected_diff.splitlines():
                 if (
-                    line.startswith('diff --git ')
-                    or line.startswith('index ')
-                    or line.startswith('new file mode ')
-                    or line.startswith('deleted file mode ')
-                    or line.startswith('--- ')
-                    or line.startswith('+++ ')
+                    line.startswith("diff --git ")
+                    or line.startswith("index ")
+                    or line.startswith("new file mode ")
+                    or line.startswith("deleted file mode ")
+                    or line.startswith("--- ")
+                    or line.startswith("+++ ")
                 ):
                     continue
-                kind = 'ctx'
-                if line.startswith('@@'):
-                    kind = 'hunk'
-                elif line.startswith('+'):
-                    kind = 'add'
-                elif line.startswith('-'):
-                    kind = 'del'
-                selected_diff_lines.append({'text': line, 'kind': kind})
+                kind = "ctx"
+                if line.startswith("@@"):
+                    kind = "hunk"
+                elif line.startswith("+"):
+                    kind = "add"
+                elif line.startswith("-"):
+                    kind = "del"
+                selected_diff_lines.append({"text": line, "kind": kind})
     except Exception as exc:
-        if not message:
-            message = str(exc)
+        message = str(exc)
     return template_response(
         request,
-        'history.html',
+        "history.html",
         {
-            'ctx': ctx,
-            'commits': commits,
-            'message': message,
-            'selected_commit': selected_commit,
-            'selected_subject': selected_subject,
-            'selected_diff': selected_diff,
-            'selected_diff_truncated': bool(selected_diff_truncated),
-            'selected_diff_lines': selected_diff_lines,
-            'diff_char_limit': int(config.git_service.DIFF_MAX_CHARS),
+            "ctx": ctx,
+            "commits": commits,
+            "message": message,
+            "selected_commit": selected_commit,
+            "selected_subject": selected_subject,
+            "selected_diff": selected_diff,
+            "selected_diff_truncated": bool(selected_diff_truncated),
+            "selected_diff_lines": selected_diff_lines,
+            "diff_char_limit": int(config.git_service.DIFF_MAX_CHARS),
         },
+    )
+
+
+def history_snapshot(
+    problem: str,
+    user: Annotated[str, Depends(require_session_user)],
+    revision: str = Form(""),
+):
+    ctx = page_ctx(
+        problem,
+        user,
+        include_branches=False,
+        include_recent=False,
+        include_workspace_changes=False,
+    )
+    source_commit: str | None = None
+    revision_number: int | None = None
+    if revision:
+        try:
+            _workspace, rows = _revision_history_rows(ctx)
+            selected = _selected_revision(rows, revision)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        source_commit = selected["commit"]
+        revision_number = selected["version"]
+    workspace_context = cast(dict[str, object], ctx["workspace"])
+    archive = config.export_service.create_workspace_snapshot(
+        problem,
+        workspace_id=cast(int, workspace_context["id"]),
+        source_commit=source_commit,
+        revision_number=revision_number,
+    )
+    archive_root = archive.parent
+    return FileResponse(
+        archive,
+        filename=archive.name,
+        media_type="application/zip",
+        background=BackgroundTask(lambda: shutil.rmtree(archive_root, ignore_errors=True)),
+    )
+
+
+def history_import(
+    problem: str,
+    user: Annotated[str, Depends(require_session_user)],
+    package_upload: UploadFile | None = File(None),
+):
+    ctx = page_ctx(
+        problem,
+        user,
+        include_branches=False,
+        refresh_status=False,
+        include_recent=False,
+    )
+    require_write_access(ctx)
+    try:
+        if package_upload is None:
+            raise ValueError("archive file is required")
+        package_name = (package_upload.filename or "").strip()
+        if not package_name:
+            raise ValueError("archive filename is required")
+        package_content = read_fileobj_bytes_limited(package_upload.file, label="archive file")
+        user_context = cast(dict[str, object], ctx["user"])
+        imported = import_package_into_workspace(
+            actor_user_id=cast(int, user_context["id"]),
+            actor_user=cast(str, user_context["username"]),
+            target_problem=problem,
+            package_name=package_name,
+            package_content=package_content,
+            source_problem=problem,
+        )
+        target_problem = cast(str, imported["target_problem"])
+        total_tests = cast(int, imported["total_tests"])
+        message = (
+            f"archive imported into your workspace for {target_problem} "
+            f"({count_label(total_tests, 'test')})"
+        )
+        warnings = import_package_warnings(imported)
+        if warnings:
+            message = f"{message}; warning: {'; '.join(warnings)}"
+        return redirect_response(
+            f"/problems/{target_problem}/workspace",
+            status_code=303,
+            message=message,
+        )
+    except ValueError as exc:
+        message = str(exc)
+    except Exception as exc:
+        message = str(exc)
+    finally:
+        if package_upload is not None:
+            package_upload.file.close()
+    return redirect_response(
+        f"/problems/{problem}/history",
+        status_code=303,
+        message=message,
     )

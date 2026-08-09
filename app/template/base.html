@@ -24,7 +24,7 @@
   {% if part == 'files' %}{% set inferred_problem_title.value = 'Files' %}{% endif %}
   {% if part == 'workspace' %}{% set inferred_problem_title.value = 'Workspace' %}{% endif %}
   {% if part == 'merge' %}{% set inferred_problem_title.value = 'Review Published Changes' %}{% endif %}
-  {% if part == 'history' %}{% set inferred_problem_title.value = 'Revision History' %}{% endif %}
+  {% if part == 'history' %}{% set inferred_problem_title.value = 'Backup & Restore' %}{% endif %}
   {% endif %}
   {% endfor %}
   {% set page_title = inferred_problem_title.value %}
@@ -200,9 +200,6 @@
             {% else %}
             <a class="button-link primary-action workspace-side-button" href="{{ problem_href('problem_workspace') }}">Review workspace</a>
             {% endif %}
-            <form class="action-link-form" method="post" action="{{ problem_href('export_snapshot') }}">
-              <button class="button-link workspace-side-button" type="submit">Download Snapshot</button>
-            </form>
           </div>
           {% if ctx.workspace_changes.total > 0 %}
           {{ change_badges(ctx.workspace_changes.counts) }}
@@ -223,7 +220,7 @@
           <div class="workspace-links workspace-card-nav">
             <a class="workspace-side-link" href="{{ problem_href('problem_files') }}">Browse Files</a>
             <span class="workspace-link-sep" aria-hidden="true">/</span>
-            <a class="workspace-side-link" href="{{ problem_href('problem_history') }}">Revision History</a>
+            <a class="workspace-side-link" href="{{ problem_href('problem_history') }}">Backup &amp; Restore</a>
           </div>
         </section>
       </aside>

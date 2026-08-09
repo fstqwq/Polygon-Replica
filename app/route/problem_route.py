@@ -32,7 +32,7 @@ from app.impl.problem.generator import (
     generators_page,
 )
 from app.impl.problem.git_op import git_discard_path, revision_commit
-from app.impl.problem.history import history_page
+from app.impl.problem.history import history_import, history_page, history_snapshot
 from app.impl.problem.merge_op import (
     merge_apply,
     merge_compare,
@@ -292,6 +292,18 @@ router.add_api_route(
     methods=["GET"],
     response_class=HTMLResponse,
     name="problem_history",
+)
+router.add_api_route(
+    "/problems/{problem:path}/history/snapshot",
+    history_snapshot,
+    methods=["POST"],
+    name="problem_history_snapshot",
+)
+router.add_api_route(
+    "/problems/{problem:path}/history/import",
+    history_import,
+    methods=["POST"],
+    name="problem_history_import",
 )
 router.add_api_route(
     "/problems/{problem:path}/revision/commit",

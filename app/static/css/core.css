@@ -1586,12 +1586,6 @@ tr.verification-row-failed > td {
   min-width: 0;
 }
 
-.package-action-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr));
-  gap: var(--space-4);
-}
-
 @container problem-content (max-width: 900px) {
   .workspace-page-layout {
     grid-template-columns: minmax(0, 1fr);
@@ -2129,4 +2123,3 @@ tr.verification-row-failed > td {
   white-space: normal;
   overflow-wrap: anywhere;
 }
-

@@ -354,7 +354,7 @@ ADMIN_CONFIG_SPECS: dict[str, dict[str, object]] = {
         "type": "int",
         "min": 1,
         "max": 5000,
-        "description": "Max commit rows shown on history page.",
+        "description": "Max commit rows shown on the Backup & Restore page.",
     },
     "SOLUTION_LIST_LIMIT": {
         "type": "int",

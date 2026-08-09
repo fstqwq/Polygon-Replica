@@ -662,6 +662,11 @@ class TestContestWorkspaceScope(ContestActionBase):
             "problem_workspace",
         }
         self.assertTrue(expected_names.issubset({route.name for route in problem_routes}))
+        problem_paths = {route.path for route in problem_routes}
+        self.assertIn("/problems/{problem:path}/history/snapshot", problem_paths)
+        self.assertIn("/problems/{problem:path}/history/import", problem_paths)
+        self.assertNotIn("/problems/{problem:path}/export/snapshot", problem_paths)
+        self.assertNotIn("/problems/{problem:path}/export/import", problem_paths)
 
     def test_same_problem_can_be_scoped_by_multiple_contests(self) -> None:
         first_slug, first_id, actor_user_id = self.create_contest("first")

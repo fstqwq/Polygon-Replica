@@ -1,27 +1,17 @@
 from __future__ import annotations
-from app.impl.auth.session import require_session_user
-
 import io
 import re
 import shutil
 import uuid
 import zipfile
 from pathlib import Path
-from typing import Annotated, TypedDict, cast
+from typing import TypedDict, cast
 
-from fastapi import Depends, File, UploadFile
-from fastapi.responses import JSONResponse
-
-from app.impl.auth.shared import redirect_response
 from app.impl.runtime.config import config
-from app.impl.workspace.access import require_write_access
-from app.impl.workspace.context_ui import page_ctx
 from app.impl.workspace.context_operation import audit
 from app.impl.run_export.query import (
     _bare_repo_head_commit,
-    _count_label,
 )
-from app.main_util import read_fileobj_bytes_limited
 from app.service.importing.icpc import ICPCPackageImportService
 from app.service.importing.native import NATIVE_PACKAGE_ANCHOR, NativePackageImportService
 from app.service.importing.polygon import PolygonPackageImportService
@@ -424,47 +414,3 @@ def import_package_warnings(import_result: dict[str, object] | None) -> list[str
     if warning:
         warnings.append(warning)
     return warnings
-
-def export_import(problem: str, user: Annotated[str, Depends(require_session_user)], package_upload: UploadFile | None=File(None)):
-    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
-    require_write_access(ctx)
-    try:
-        if package_upload is None:
-            raise ValueError('package file is required')
-        package_name = package_upload.filename or ""
-        package_name = package_name.strip()
-        if not package_name:
-            raise ValueError('package filename is required')
-        package_content = read_fileobj_bytes_limited(package_upload.file, label='package file')
-        actor_user = ctx["user"]["username"]
-        imported = import_package_into_workspace(
-            actor_user_id=int(ctx['user']['id']),
-            actor_user=actor_user,
-            target_problem=problem.strip(),
-            package_name=package_name,
-            package_content=package_content,
-            source_problem=problem.strip(),
-        )
-        target_problem = cast(str, imported["target_problem"])
-        total_tests = int(imported["total_tests"])
-        package_format = cast(str, imported["package_format"])
-        msg = f"{package_format} package imported into your workspace for {target_problem} ({_count_label(total_tests, 'test')})"
-        warnings = import_package_warnings(imported)
-        if warnings:
-            msg = f"{msg}; warning: {'; '.join(warnings)}"
-        return redirect_response(f'/problems/{target_problem}/workspace', status_code=303, message=msg)
-    except ValueError as exc:
-        msg = str(exc)
-    except Exception as exc:
-        msg = str(exc)
-    finally:
-        if package_upload is not None:
-            package_upload.file.close()
-    return redirect_response(f'/problems/{problem}/export', status_code=303, message=msg)
-
-def export_import_slug_hint(problem: str, user: Annotated[str, Depends(require_session_user)], filename: str = "", requested_slug: str = ""):
-    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
-    require_write_access(ctx)
-    actor_user = ctx["user"]["username"]
-    payload = build_import_slug_hint(actor_user, filename, requested_slug)
-    return JSONResponse(payload)

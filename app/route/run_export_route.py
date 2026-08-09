@@ -3,8 +3,7 @@ from __future__ import annotations
 from fastapi.responses import HTMLResponse
 
 from app.impl.run_export.artifact import artifact_file, export_file
-from app.impl.run_export.export import export_create, export_page, export_snapshot
-from app.impl.run_export.import_source import export_import, export_import_slug_hint
+from app.impl.run_export.export import export_create, export_page
 from app.impl.run_export.run import (
     run_cancel,
     run_details_page,
@@ -69,21 +68,6 @@ router.add_api_route(
     "/problems/{problem:path}/export/create",
     export_create,
     methods=["POST"],
-)
-router.add_api_route(
-    "/problems/{problem:path}/export/snapshot",
-    export_snapshot,
-    methods=["POST"],
-)
-router.add_api_route(
-    "/problems/{problem:path}/export/import",
-    export_import,
-    methods=["POST"],
-)
-router.add_api_route(
-    "/problems/{problem:path}/export/import/slug-hint",
-    export_import_slug_hint,
-    methods=["GET"],
 )
 router.add_api_route(
     "/problems/{problem:path}/artifacts/{verification_id}/{rel_path:path}",
