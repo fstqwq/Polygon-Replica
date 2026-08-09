@@ -10,8 +10,7 @@ from app.service.platform.error_text import bounded_display_text, normalize_disp
 from app.service.problem.solution_metadata import infer_expected_behavior_from_name, normalize_expected_behavior
 from app.service.verification.runtime import coerce_int, normalize_problem_mode
 
-from app.service.verification.result_match import verification_solution_match
-from app.impl.workspace.run_display import run_verdict_short
+from app.service.verification.result_match import run_verdict_short, verification_solution_match
 
 _C = config.constants
 _TASK_KIND_MAIN_CORRECT = "main-correct"

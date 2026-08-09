@@ -51,9 +51,12 @@ from app.impl.workspace.run_test_generation import (
 )
 from app.service.verification.result_match import (
     expected_status_rule,
+    run_actual_short,
+    run_verdict_short,
     status_rule_expected_display,
     verification_solution_match,
 )
+from app.service.verification.failure_display import verification_solution_failure_hint
 from app.impl.workspace.run_view_list import (
     _latest_iso_timestamp,
     _run_cell_kind,
@@ -66,13 +69,10 @@ from app.impl.workspace.run_view_list import (
 )
 from app.impl.workspace.run_display import (
     rewrite_failure_reason_with_source,
-    verification_solution_failure_hint,
     run_actual_display,
-    run_actual_short,
     run_cpu_wall_ms_text,
     run_error_display,
     run_memory_mb_text,
-    run_verdict_short,
 )
 from app.impl.workspace.runtime_threshold import (
     SUMMARY_RUNTIME_THRESHOLD_CHECK,

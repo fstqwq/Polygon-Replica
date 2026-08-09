@@ -31,12 +31,15 @@ from app.service.verification.signature import (
 )
 from app.service.verification.types import is_cancel_reason
 from app.service.verification.runtime import normalize_pass_limit, normalize_problem_mode
-from app.impl.workspace.run_display import run_actual_failed_codes, verification_solution_failure_hint
+from app.service.verification.failure_display import verification_solution_failure_hint
+from app.service.verification.result_match import (
+    run_actual_failed_codes,
+    verification_solution_match,
+)
 
 from app.impl.workspace.context_job_helper import allocate_run_id
 from app.impl.workspace.context_operation import audit
 from app.impl.workspace.context_run_detail import normalize_run_id_token
-from app.service.verification.result_match import verification_solution_match
 from app.impl.workspace.sanity_checks import (
     SANITY_FAILED,
     SANITY_PENDING,
