@@ -454,44 +454,6 @@
   outline-offset: 2px;
 }
 
-.danger-link {
-  color: var(--danger-link-color);
-  font-weight: var(--danger-link-weight);
-}
-
-.linkish.danger-link,
-.linkish-button.danger-link {
-  color: var(--danger-link-color);
-  font-weight: var(--danger-link-weight);
-}
-
-.danger-link:hover {
-  color: var(--danger-link-hover-color);
-}
-
-.linkish.danger-link:hover,
-.linkish-button.danger-link:hover:not(:disabled) {
-  color: var(--danger-link-hover-color);
-}
-
-.btn.danger-link,
-.button-link.danger-link {
-  border-color: var(--danger-link-color);
-  color: var(--danger-link-color);
-  font-weight: var(--danger-link-weight);
-}
-
-.btn.danger-link:hover:not(:disabled),
-.button-link.danger-link:hover:not([aria-disabled="true"]) {
-  background: var(--danger-link-hover-bg);
-  color: var(--danger-link-hover-color);
-}
-
-.danger-link:focus-visible {
-  outline: 2px solid var(--danger-link-focus);
-  outline-offset: 1px;
-}
-
 #judgehost_gen_script_output {
   min-height: 240px;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
@@ -567,5 +529,3 @@
     white-space: normal;
   }
 }
-
-

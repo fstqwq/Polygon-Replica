@@ -80,10 +80,10 @@
   </section>
 
   <section class="content-section files-panel files-panel-editor">
-    <div class="files-panel-title-row">
+    <div class="content-heading-row files-panel-title-row">
       <h2>Editor</h2>
       {% if selected and not selected_missing %}
-      <a class="linkish" href="{{ problem_href('files_download', query={'path': selected}) }}">Download file</a>
+      <a class="content-heading-action" href="{{ problem_href('files_download', query={'path': selected}) }}">Download file</a>
       {% endif %}
     </div>
     {% if not selected %}

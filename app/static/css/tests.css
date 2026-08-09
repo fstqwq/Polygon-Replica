@@ -74,8 +74,7 @@
 
 .tests-editor-actions-row form,
 .verification-start-form,
-.action-link-form,
-.solutions-delete-form {
+.action-link-form {
   display: inline-flex;
   margin: 0;
 }
@@ -167,4 +166,3 @@
     flex-direction: column;
   }
 }
-

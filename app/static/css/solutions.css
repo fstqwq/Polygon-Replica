@@ -19,12 +19,6 @@
 }
 
 
-.solutions-delete-form {
-  display: inline-flex;
-  margin: 0;
-}
-
-
 .solution-pick-actions {
   display: inline-flex;
   align-items: center;
@@ -144,6 +138,7 @@
 .solutions-delete-form {
   display: inline-flex;
   flex: 0 0 auto;
+  margin: 0;
 }
 
 .tag-select {
@@ -234,5 +229,4 @@ select.tag-select.tag-select-neutral {
   color: var(--tag-neutral-fg);
   background-color: var(--tag-neutral-bg);
 }
-
 

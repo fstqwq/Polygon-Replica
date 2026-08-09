@@ -23,15 +23,7 @@
 }
 
 .files-panel-title-row {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: var(--space-3);
-}
-
-.files-panel-title-row .linkish {
-  flex: 0 0 auto;
-  white-space: nowrap;
+  min-width: 0;
 }
 
 .files-selected-path {

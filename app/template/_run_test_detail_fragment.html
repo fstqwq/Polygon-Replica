@@ -1,9 +1,9 @@
-{% macro artifact_preview_card(title, preview, extra_class='') -%}
-<div class="preview-card{{ (' ' + extra_class) if extra_class else '' }}">
-  <div class="preview-head">
+{% macro artifact_preview_card(title, preview) -%}
+<div class="preview-card">
+  <div class="content-heading-row preview-head">
     <strong>{{ title }}</strong>
     {% if preview.available and preview.download_verification_id %}
-    <a href="{{ problem_href('artifact_file', verification_id=preview.download_verification_id, rel_path=preview.download_rel_path) }}">download</a>
+    <a class="content-heading-action" href="{{ problem_href('artifact_file', verification_id=preview.download_verification_id, rel_path=preview.download_rel_path) }}">download</a>
     {% endif %}
   </div>
   {% if preview.available %}
@@ -67,7 +67,14 @@
           <thead>
             <tr>
               <th>Status</th>
-              <th>Feedback</th>
+              <th>
+                <div class="content-heading-row">
+                  <span>Feedback</span>
+                  {% if feedback.available and feedback.download_verification_id %}
+                  <a class="content-heading-action" href="{{ problem_href('artifact_file', verification_id=feedback.download_verification_id, rel_path=feedback.download_rel_path) }}">download</a>
+                  {% endif %}
+                </div>
+              </th>
             </tr>
           </thead>
           <tbody>
@@ -99,10 +106,10 @@
         </table>
 
         <div class="transcript">
-          <div class="transcript-head">
+          <div class="content-heading-row transcript-head">
             <strong>{{ pass_row.pass_label }} Transcript</strong>
             {% if transcript.download_verification_id %}
-            <a href="{{ problem_href('artifact_file', verification_id=transcript.download_verification_id, rel_path=transcript.download_rel_path) }}">download raw</a>
+            <a class="content-heading-action" href="{{ problem_href('artifact_file', verification_id=transcript.download_verification_id, rel_path=transcript.download_rel_path) }}">download raw</a>
             {% endif %}
           </div>
           {% if transcript.available %}
@@ -160,10 +167,10 @@
       </tbody>
     </table>
     <div class="sol-output">
-      <div class="sol-output-head">
+      <div class="content-heading-row">
         <strong>{{ pass_row.pass_label + ' Output' if cell.detail.is_multi_pass else 'Output' }}</strong>
         {% if pass_row.output_preview and pass_row.output_preview.available and pass_row.output_preview.download_verification_id %}
-        <a href="{{ problem_href('artifact_file', verification_id=pass_row.output_preview.download_verification_id, rel_path=pass_row.output_preview.download_rel_path) }}">download</a>
+        <a class="content-heading-action" href="{{ problem_href('artifact_file', verification_id=pass_row.output_preview.download_verification_id, rel_path=pass_row.output_preview.download_rel_path) }}">download</a>
         {% endif %}
       </div>
       {% if pass_row.output_preview and pass_row.output_preview.available and pass_row.output_preview.text != '(empty)' %}
