@@ -1,27 +1,30 @@
 {% extends "base.html" %}
 {% block content %}
-<h1 class="page-title">Backup &amp; Restore</h1>
+<div class="page-title-inline backup-restore-title">
+  <h1 class="page-title">Backup &amp; Restore</h1>
+  <div class="page-title-actions">
+    <form method="post" action="{{ problem_href('problem_history_snapshot') }}">
+      <button class="linkish-button backup-current-download" type="submit">Download current workspace</button>
+    </form>
+  </div>
+</div>
 {% include "_flash_message.html" %}
 
-<div class="problem-action-card-grid">
-  <section class="info-card">
-    <h2>Download Snapshot</h2>
-    <form method="post" action="{{ problem_href('problem_history_snapshot') }}">
-      <button class="btn" type="submit">Download Snapshot</button>
-    </form>
-  </section>
-  <section class="info-card">
-    <h2>Import Into Workspace</h2>
+<section class="backup-import-section">
+  <div class="backup-import-copy">
+    <h2>Import Snapshot</h2>
     <p>Imported files overwrite matching workspace files. Other files are kept.</p>
-    <form class="form-row" method="post" enctype="multipart/form-data" action="{{ problem_href('problem_history_import') }}">
+  </div>
+  <form class="backup-import-form" method="post" enctype="multipart/form-data" action="{{ problem_href('problem_history_import') }}">
+    <div class="backup-import-file">
       <label for="workspace-import-package">Archive (.zip)</label>
       <input id="workspace-import-package" type="file" name="package_upload" accept=".zip,application/zip" required{% if not ctx.access.can_write %} disabled title="{{ ctx.access.write_block_reason }}"{% endif %} />
-      <button class="btn" type="submit"{% if not ctx.access.can_write %} disabled title="{{ ctx.access.write_block_reason }}"{% endif %}>Import</button>
-    </form>
-  </section>
-</div>
+    </div>
+    <button class="btn" type="submit"{% if not ctx.access.can_write %} disabled title="{{ ctx.access.write_block_reason }}"{% endif %}>Import</button>
+  </form>
+</section>
 
-<section class="content-section">
+<section class="backup-history-section">
   <h2>Revision History</h2>
   {% if commits %}
   <div class="table-scroll">
