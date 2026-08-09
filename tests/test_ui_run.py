@@ -4096,12 +4096,19 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             "detail_columns": [{"id": "r-transcript", "title": "wtf.py"}],
         }
 
-        with patch("app.impl.run_export.run.build_run_detail_context", return_value=detail_ctx):
+        with patch(
+            "app.impl.run_export.run.build_run_detail_context",
+            return_value=detail_ctx,
+        ) as build_detail:
             detail = run_details_test_fragment(
-                _request("/problems/alice/sample/run/details/test-fragment", "verification_id=ver-r-transcript&test=001.in&run_id=r-transcript"),
+                _request(
+                    "/problems/alice/sample/run/details/test-fragment",
+                    "verification_id=ver-r-transcript&test=001.in",
+                ),
                 "alice/sample",
                 "alice",
             )
+        self.assertEqual(build_detail.call_args.kwargs["detail_run_id"], "")
         self.assertEqual(detail.status_code, 200)
         detail_html = detail.body.decode("utf-8", errors="replace")
         assert_html_contract(
@@ -4122,16 +4129,16 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             label="interactive transcript fragment",
         )
 
-        with self.assertRaises(HTTPException) as missing_run_id:
+        with self.assertRaises(HTTPException) as empty_run_id:
             run_details_test_fragment(
                 _request(
                     "/problems/alice/sample/run/details/test-fragment",
-                    "verification_id=ver-r-transcript&test=001.in",
+                    "verification_id=ver-r-transcript&test=001.in&run_id=",
                 ),
                 "alice/sample",
                 "alice",
             )
-        self.assertEqual(missing_run_id.exception.status_code, 400)
+        self.assertEqual(empty_run_id.exception.status_code, 400)
 
     def test_interactive_detail_uses_persisted_mode_and_renders_every_pass(self) -> None:
         workspace_service.ensure_workspace("alice/sample", "alice")
@@ -4302,6 +4309,39 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             ],
             edges=[],
         )
+
+        page = run_details_page(
+            _request(
+                "/problems/alice/sample/run/details",
+                f"verification_id={verification_id}",
+            ),
+            "alice/sample",
+            "alice",
+        )
+        page_html = page.body.decode("utf-8", errors="replace")
+        test_link = re.search(
+            r'<a [^>]*data-test-name="001\.in"[^>]*>001\.in</a>',
+            page_html,
+        )
+        self.assertIsNotNone(test_link)
+        self.assertNotIn("data-run-id", test_link.group(0))
+        self.assertIn('data-run-id="interactive.cpp"', page_html)
+        self.assertIn('data-run-id="other.cpp"', page_html)
+
+        full_detail = run_details_test_fragment(
+            _request(
+                "/problems/alice/sample/run/details/test-fragment",
+                f"verification_id={verification_id}&test=001.in",
+            ),
+            "alice/sample",
+            "alice",
+        )
+        full_html = full_detail.body.decode("utf-8", errors="replace")
+        self.assertIn('data-run-id="interactive.cpp"', full_html)
+        self.assertIn('data-run-id="other.cpp"', full_html)
+        self.assertIn("first pass accepted", full_html)
+        self.assertIn("must not be read", full_html)
+        self.assertIn("trap", full_html)
 
         with patch.object(
             run_view_detail_module,
@@ -4657,6 +4697,10 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         workspace = Path(str(ctx["workspace"]["path"]))
         (workspace / "solutions").mkdir(parents=True, exist_ok=True)
         (workspace / "solutions" / "tmp.cpp").write_text("int main(){return 0;}\n", encoding="utf-8")
+        (workspace / "solutions" / "other.cpp").write_text(
+            "int main(){return 0;}\n",
+            encoding="utf-8",
+        )
 
         verification_id = canonical_test_verification_id(f"ver-runtime-detail-{uuid.uuid4().hex[:8]}")
         config.verification_service.begin_verification_record(
@@ -4690,6 +4734,14 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             payload=b"6\n",
             extra_tags={"run_id": "tmp.cpp"},
         )
+        other_output_ref = config.verification_service.store_verification_blob(
+            verification_id=verification_id,
+            test_name="001.in",
+            role="other-output",
+            file_name="other.out",
+            payload=b"other output\n",
+            extra_tags={"run_id": "other.cpp"},
+        )
         config.verification_service.update_verification_artifact_refs(
             verification_id,
             "001.in",
@@ -4715,18 +4767,57 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
                         memory_kb=1024,
                         output_ref=output_ref,
                     ),
-                }
+                },
+                {
+                    "id": f"vt-runtime-detail-other-{uuid.uuid4().hex[:8]}",
+                    "task_kind": "solution-run",
+                    "source_path": "solutions/other.cpp",
+                    "logical_run_id": "other.cpp",
+                    "test_name": "001.in",
+                    "expected_behavior": "wrong_answer",
+                    "status": VerificationTaskStore.TASK_DONE,
+                    "result": execution_result(
+                        "WA",
+                        runtime_sec=0.004,
+                        cpu_sec=0.003,
+                        wall_sec=0.004,
+                        memory_kb=2048,
+                        feedback="expected 6",
+                        output_ref=other_output_ref,
+                    ),
+                },
             ],
             edges=[],
         )
 
+        full_detail = run_details_test_fragment(
+            _request(
+                "/problems/alice/sample/run/details/test-fragment",
+                f"verification_id={verification_id}&test=001.in",
+            ),
+            "alice/sample",
+            "alice",
+        )
+        self.assertEqual(full_detail.status_code, 200)
+        full_html = full_detail.body.decode("utf-8", errors="replace")
+        self.assertIn('data-run-id="tmp.cpp"', full_html)
+        self.assertIn('data-run-id="other.cpp"', full_html)
+        self.assertIn("other output", full_html)
+        self.assertIn("expected 6", full_html)
+
         detail = run_details_test_fragment(
-            _request("/problems/alice/sample/run/details/test-fragment", f"verification_id={verification_id}&test=001.in&run_id=tmp.cpp"),
+            _request(
+                "/problems/alice/sample/run/details/test-fragment",
+                f"verification_id={verification_id}&test=001.in&run_id=tmp.cpp",
+            ),
             "alice/sample",
             "alice",
         )
         self.assertEqual(detail.status_code, 200)
         detail_html = detail.body.decode("utf-8", errors="replace")
+        self.assertIn('data-run-id="tmp.cpp"', detail_html)
+        self.assertNotIn('data-run-id="other.cpp"', detail_html)
+        self.assertNotIn("other output", detail_html)
         self.assertRegex(detail_html, r"(?s)<strong>Input 001\.in</strong>.*?<pre[^>]*>\s*1 2 3\s*</pre>")
         self.assertRegex(detail_html, r"(?s)<strong>Answer</strong>.*?<pre[^>]*>\s*6\s*</pre>")
         self.assertNotIn("<strong>Generation</strong>", detail_html)
@@ -5059,15 +5150,6 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
                     "feedback_text": "",
                     "output_ref": "",
                 },
-                {
-                    "id": f"vt-runtime-pending-{uuid.uuid4().hex[:8]}",
-                    "task_kind": "solution-run",
-                    "source_path": "solutions/tmp.cpp",
-                    "logical_run_id": "tmp.cpp",
-                    "test_name": "001.in",
-                    "expected_behavior": "accepted",
-                    "status": VerificationTaskStore.TASK_PENDING,
-                },
             ],
             edges=[],
         )
@@ -5075,13 +5157,18 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         page = run_details_page(_request("/problems/alice/sample/run/details", f"verification_id={verification_id}"), "alice/sample", "alice")
         self.assertEqual(page.status_code, 200)
         page_html = page.body.decode("utf-8", errors="replace")
-        self.assertRegex(
+        test_link = re.search(
+            r'(?s)<td class="tcell tone-fail"[^>]*>\s*(<a href="#run-test-detail-popup" data-popup-open="run-test-detail-popup" data-test-name="001\.in" data-test-source-kind="generated" data-test-command="random_tree 10 20"[^>]*>001\.in</a>)',
             page_html,
-            r'(?s)<td class="tcell tone-fail"[^>]*>\s*<a href="#run-test-detail-popup" data-popup-open="run-test-detail-popup" data-test-name="001\.in" data-test-source-kind="generated" data-test-command="random_tree 10 20"[^>]*>001\.in</a>',
         )
+        self.assertIsNotNone(test_link)
+        self.assertNotIn("data-run-id", test_link.group(1))
 
         detail = run_details_test_fragment(
-            _request("/problems/alice/sample/run/details/test-fragment", f"verification_id={verification_id}&test=001.in&run_id=tmp.cpp"),
+            _request(
+                "/problems/alice/sample/run/details/test-fragment",
+                f"verification_id={verification_id}&test=001.in",
+            ),
             "alice/sample",
             "alice",
         )

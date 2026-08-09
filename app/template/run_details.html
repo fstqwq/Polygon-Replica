@@ -80,7 +80,7 @@
   {% endif %}
 </section>
 
-{% if detail_columns %}
+{% if detail_columns or detail_rows %}
 <section class="content-section">
   <div class="verification-detail-wrap{% if not detail_table_compact %} verification-detail-wrap-regular{% endif %}">
     <table
@@ -117,8 +117,8 @@
           {% if test_cell.short %}
           <span class="vcode">{{ test_cell.short }}</span>
           {% if test_cell.meta %}<span class="vmeta">{{ test_cell.meta }}</span>{% endif %}
-          {% elif test_cell.clickable and detail_columns %}
-          <a href="#run-test-detail-popup" data-popup-open="run-test-detail-popup" data-test-name="{{ row.test_name }}" data-test-source-kind="{{ row.test_source_kind }}" data-test-command="{{ row.test_command }}" data-run-id="{{ detail_columns[0].id }}">{{ test_cell.text or row.display_name or row.test_name }}</a>
+          {% elif test_cell.clickable %}
+          <a href="#run-test-detail-popup" data-popup-open="run-test-detail-popup" data-test-name="{{ row.test_name }}" data-test-source-kind="{{ row.test_source_kind }}" data-test-command="{{ row.test_command }}">{{ test_cell.text or row.display_name or row.test_name }}</a>
           {% else %}
           {{ test_cell.text or row.display_name or row.test_name }}
           {% if test_cell.meta %}<span class="vmeta">{{ test_cell.meta }}</span>{% endif %}

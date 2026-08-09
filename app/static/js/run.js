@@ -46,7 +46,7 @@ function initRunDetails() {
   };
   const render = (html) => { content.innerHTML = html; };
   const load = async (testName, runId) => {
-    if (!testName || !runId) {
+    if (!testName) {
       loading("Run details are unavailable.");
       return;
     }
@@ -57,7 +57,8 @@ function initRunDetails() {
       return;
     }
     loading("Loading details...");
-    const query = new URLSearchParams({ test: testName, run_id: runId, verification_id: verificationId });
+    const query = new URLSearchParams({ test: testName, verification_id: verificationId });
+    if (runId) query.set("run_id", runId);
     try {
       const response = await fetch(`${base}${base.includes("?") ? "&" : "?"}${query}`, {
         credentials: "same-origin",
