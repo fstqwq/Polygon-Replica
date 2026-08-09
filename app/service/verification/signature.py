@@ -18,6 +18,7 @@ _VERIFICATION_SIGNATURE_DIR_TARGETS: tuple[str, ...] = (
     "generators",
     "validators",
     "checkers",
+    "interactors",
     "solutions",
     "tests/manual",
     "tests/generator",

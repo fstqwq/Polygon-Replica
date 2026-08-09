@@ -78,6 +78,23 @@ class TestRuntimeBlobStore(unittest.TestCase):
         self.assertEqual(first.require("solutions/std.cpp").identity, expected)
         self.assertEqual(second.require("solutions/std.cpp").identity, expected)
 
+    def test_manifest_includes_interactor_in_content_identity(self) -> None:
+        interactors_dir = self.root / "interactors"
+        interactors_dir.mkdir()
+        source = interactors_dir / "interactor.cpp"
+        source.write_bytes(b"int main() { return 0; }\n")
+
+        first = verification_manifest(self.root)
+        first_identity = first.require("interactors/interactor.cpp").identity
+        source.write_bytes(b"int main() { return 1; }\n")
+        second = verification_manifest(self.root)
+
+        self.assertNotEqual(first.signature, second.signature)
+        self.assertNotEqual(
+            first_identity,
+            second.require("interactors/interactor.cpp").identity,
+        )
+
     def test_dirty_manifest_detects_same_size_change(self) -> None:
         manual_dir = self.root / "tests" / "manual"
         manual_dir.mkdir(parents=True)
