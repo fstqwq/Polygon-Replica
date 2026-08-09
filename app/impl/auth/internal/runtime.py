@@ -161,6 +161,10 @@ def _startup_finalize_cancelled_verifications(now_text: str) -> None:
 
 def _startup_clear_all_caches() -> None:
     try:
+        config.worker_queue_service.reset_runtime_history()
+    except Exception as exc:
+        warnings.warn(f"startup worker queue history clear failed: {exc}", RuntimeWarning)
+    try:
         config.runtime_cache_index.clear_all()
     except Exception as exc:
         warnings.warn(f"startup runtime cache index clear failed: {exc}", RuntimeWarning)
@@ -177,11 +181,6 @@ def _startup_clear_all_caches() -> None:
             root.mkdir(parents=True, exist_ok=True)
         except Exception as exc:
             warnings.warn(f"startup {label} recreate failed: {exc}", RuntimeWarning)
-    durable_log = (config.fs_manager.runtime_root / "worker-queue-events.jsonl").resolve()
-    try:
-        durable_log.unlink(missing_ok=True)
-    except Exception as exc:
-        warnings.warn(f"startup worker queue durable log clear failed: {exc}", RuntimeWarning)
 
 
 def _startup_reset_runtime_state() -> None:

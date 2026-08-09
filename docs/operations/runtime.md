@@ -1,0 +1,61 @@
+# Runtime and deployment
+
+This document describes runtime constraints. For executable host and Compose
+procedures, TLS setup, first use, upgrades, and recovery, use the
+[operator deployment runbook](deployment.md).
+
+## Supported topology
+
+Run one application process. The scheduler, host registry, runtime cache,
+authentication throttling, and worker queue contain process-local state, so
+multiple uvicorn workers or application replicas are not supported.
+
+Production places a TLS proxy in front of the loopback uvicorn listener.
+Judgehost traffic reaches the same process through authenticated `/api/v4/*`
+routes. Proxy headers are trusted only at the configured proxy boundary.
+The generated Judgehost command currently uses `domjudge/judgehost:latest`;
+operators therefore control image pinning and upgrades outside the application.
+
+## Host installation
+
+`scripts/install_host.sh` supports Linux hosts using `apt-get`. It installs
+dependencies, configures user namespaces, creates storage roots, probes
+bubblewrap and TeX as the runtime account, creates `.venv`, writes the bootstrap
+environment file, and installs the systemd unit.
+
+The invocation account is normally the service account. A root invocation MUST
+set `POLYGON_REPLICA_RUNTIME_USER` to an existing non-root account; the installer
+refuses a root runtime. It validates the account and group, runs probes and
+Python installation as that account, owns writable roots with it, renders quoted
+systemd paths, and verifies the unit before installation. Application runtime
+does not require root.
+
+## Startup and shutdown
+
+Startup initializes metadata, marks interrupted package/export work failed,
+applies durable configuration, reconciles unfinished domain work, clears
+startup-scoped caches and worker history, and then starts worker threads.
+Process-local jobs cannot resume across restart.
+
+Shutdown stops the worker queue and other runtime services. Operators should
+expect interrupted asynchronous jobs to become terminal and be requested again.
+
+## Docker
+
+The production Compose service mounts durable Git/workspace data, SQLite and
+contest source data, cleanup-safe cache/artifact data, and a separately managed
+backup root. The backup root must not be placed inside a disposable cache
+volume.
+
+Bubblewrap inside a container requires host user-namespace support. Broad
+seccomp or AppArmor relaxations change the deployment security boundary and
+require operator review. `docker-compose.e2e.yml` is test infrastructure, not a
+production retention model.
+
+## Operations
+
+Admin operations include Judgehost status and enablement, users, SMTP/system
+configuration, and exclusive artifact cleanup. Do not manually delete active
+cache subtrees while the process is running. Observe process health, worker
+capacity, Judgehost leases, domain job status, artifact availability, disk
+space, and backup age as separate signals.

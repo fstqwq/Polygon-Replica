@@ -138,6 +138,68 @@ class TestWorkerQueueService(unittest.TestCase):
             finally:
                 service.stop()
 
+    def test_reset_runtime_history_clears_loaded_records_and_durable_log(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            durable_log = Path(tmpdir) / "worker-queue-events.jsonl"
+            durable_log.write_text(
+                json.dumps(
+                    {
+                        "event": "job_created",
+                        "job_id": "wq-old",
+                        "name": "old-job",
+                        "job_type": "verification",
+                        "queue_name": "verification",
+                        "created_at": 100.0,
+                        "ts": 100.0,
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            service = WorkerQueueService(
+                worker_count=1,
+                history_limit=64,
+                durable_log_path=durable_log,
+            )
+            try:
+                self.assertTrue(service.snapshot(limit=20).get("jobs"))
+                service.reset_runtime_history()
+                self.assertEqual(service.snapshot(limit=20).get("jobs"), [])
+                self.assertFalse(durable_log.exists())
+
+                worker, queued, reason = service.submit(
+                    name="after-reset",
+                    fn=lambda: None,
+                    queue_name="test",
+                    job_type="run",
+                )
+                self.assertTrue(queued, msg=reason)
+                service.wait_for_futures([worker], timeout_sec=5.0)
+                self.assertTrue(durable_log.exists())
+            finally:
+                service.stop()
+
+    def test_reset_runtime_history_rejects_active_jobs(self) -> None:
+        service = WorkerQueueService(worker_count=1, history_limit=64)
+        started = threading.Event()
+        release = threading.Event()
+        try:
+            worker, queued, reason = service.submit(
+                name="active",
+                fn=lambda: (started.set(), release.wait(3.0)),
+                queue_name="test",
+                job_type="run",
+            )
+            self.assertTrue(queued, msg=reason)
+            self.assertTrue(started.wait(2.0))
+            with self.assertRaisesRegex(RuntimeError, "jobs are active"):
+                service.reset_runtime_history()
+            release.set()
+            service.wait_for_futures([worker], timeout_sec=5.0)
+        finally:
+            release.set()
+            service.stop()
+
     def test_snapshot_reports_failure_codes_by_job_type(self) -> None:
         service = WorkerQueueService(worker_count=1, queue_capacity=8, history_limit=64)
 

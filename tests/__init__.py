@@ -34,4 +34,3 @@ os.environ["POLYGON_REPLICA_CONTEST_SOURCE_ROOT"] = str(
 os.environ["POLYGON_REPLICA_BACKUP_ROOT"] = str(
     _TESTSUITE_ROOT / "var" / "backups" / "polygon-replica"
 )
-os.environ["POLYGON_REPLICA_AUTH_COOKIE_SECURE"] = "1"

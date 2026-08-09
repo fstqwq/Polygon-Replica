@@ -645,6 +645,33 @@ class TestJudgehostLifecycle(DBTestBase):
         telemetry = store.host_telemetry_snapshot()["host-a"]
         self.assertEqual(telemetry["judged_case_count"], 1)
         self.assertIsNotNone(telemetry["recent_avg_per_case_sec"])
+        self.assertEqual(service.domjudge_add_judging_run("host-a", case_id, {}), 1)
+
+    def test_unknown_callback_is_acknowledged(self) -> None:
+        service = self._service()
+        self.assertEqual(service.domjudge_add_judging_run("host-a", 987654, {}), 1)
+
+    def test_callback_from_non_owner_is_rejected(self) -> None:
+        service = self._service()
+        store = service.state.batch_scheduler
+        task_id, run_id = "task-owner", "run-owner"
+        self._add_task(service, task_id, run_id)
+        batch_id = _create_batch(
+            store,
+            task_id=task_id,
+            run_id=run_id,
+            case_rows=[_case_row(task_id, run_id, "001.in", 1)],
+        )
+        case = store.lease_cases(batch_id, hostname="host-a", limit=1, now_text=_NOW)[0]
+        with self.assertRaisesRegex(RuntimeError, "does not own"):
+            service.domjudge_add_judging_run("host-b", int(case["id"]), {})
+
+    def test_invalid_hostname_is_rejected(self) -> None:
+        service = self._service()
+        with self.assertRaisesRegex(RuntimeError, "invalid judgehost hostname"):
+            service.domjudge_add_judging_run("", 987654, {})
+        with self.assertRaisesRegex(RuntimeError, "invalid judgehost hostname"):
+            service.domjudge_add_judging_run("bad host", 987654, {})
 
     def test_cancelled_leased_case_registration_finalizes_without_callback(self) -> None:
         service = self._service()

@@ -15,6 +15,7 @@ from starlette.formparsers import MultiPartParser
 from app.impl.runtime.config import config
 from app.main_util import UPLOAD_MAX_BYTES, read_upload_bytes_limited
 from app.service.judgehost.batch_scheduler_models import CaseClaimBusy
+from app.service.judgehost.core import InvalidJudgehostHostname, normalize_judgehost_hostname
 from app.service.judgehost.limits import judgehost_form_part_limit_bytes
 from app.service.judgehost.file_stream import stream_domjudge_file_array, validate_domjudge_file_array
 
@@ -51,7 +52,16 @@ def _hostname_from_payload(payload: JudgehostPayload, *, required: bool = False)
     hostname = (payload.get("hostname") or "").strip()
     if required and not hostname:
         raise HTTPException(status_code=400, detail="hostname is required")
-    return hostname
+    if not hostname:
+        return ""
+    return _validated_hostname(hostname)
+
+
+def _validated_hostname(hostname: str) -> str:
+    try:
+        return normalize_judgehost_hostname(hostname)
+    except InvalidJudgehostHostname as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 def _request_peer_ip(request: Request) -> str:
@@ -255,6 +265,7 @@ async def domjudge_judgehosts_post(request: Request):
     hostname = (payload.get("hostname") or "").strip()
     if not hostname:
         raise HTTPException(status_code=400, detail="hostname is required")
+    hostname = _validated_hostname(hostname)
     rows = await _run_service_call(service.domjudge_register_host, hostname)
     _record_host_peer_ip(service, request, hostname)
     return JSONResponse(rows)
@@ -334,6 +345,7 @@ async def domjudge_check_versions(request: Request, judgetask_id: int):
 
 async def domjudge_update_judging(request: Request, hostname: str, judgetask_id: int):
     service = _require_judgehost_auth(request)
+    hostname = _validated_hostname(hostname)
     payload = await _request_payload(request)
     try:
         await _run_service_call(service.domjudge_update_judging, hostname, judgetask_id, payload)
@@ -345,6 +357,7 @@ async def domjudge_update_judging(request: Request, hostname: str, judgetask_id:
 
 async def domjudge_add_judging_run(request: Request, hostname: str, judgetask_id: int):
     service = _require_judgehost_auth(request)
+    hostname = _validated_hostname(hostname)
     payload = await _request_payload(request)
     try:
         result = await _run_service_call(service.domjudge_add_judging_run, hostname, judgetask_id, payload)
@@ -372,6 +385,7 @@ async def domjudge_internal_error(request: Request):
 
 async def domjudge_add_debug_info(request: Request, hostname: str, judgetask_id: int):
     service = _require_judgehost_auth(request)
+    hostname = _validated_hostname(hostname)
     payload = await _request_payload(request)
     await _run_service_call(
         service.domjudge_add_debug_info,

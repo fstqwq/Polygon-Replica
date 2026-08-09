@@ -1,48 +1,26 @@
 # Polygon-Replica
 
-Polygon-Replica is a self-hosted replacement for the Codeforces Polygon workflow.
-It is for users who already know [Codeforces Polygon](https://polygon.codeforces.com)
-and want to move that workflow onto infrastructure they control.
+Polygon-Replica is a self-hosted problem-authoring system with a web-first
+workflow, Git-backed problem sources, SQLite metadata, local derived artifacts,
+and DOMjudge-compatible Judgehost workers.
 
-Key features:
-
-- Existing Polygon packages can be imported, edited, verified, and exported again.
-- DOMjudge-style judgedaemon execution infrastructure. Runs can reuse judgehosts that are close to the final onsite judging environment, and interactive/multi-pass problems are supported natively.
-- Agent-friendly workflows with companion `Polygon-Skills`. AI assistants can support problem authoring, review, verification, export, and operations.
-
-## Implementation Characteristics
-
-Polygon-Replica separates authored sources from runtime state and generated artifacts.
-
-At a high level:
-
-- Problem sources are Git-backed, and each user edits through an isolated workspace.
-- Contest source attachments use a separate durable filesystem root and never enter Git.
-- SQLite stores metadata and job state; generated artifacts stay outside Git on a cleanup-safe filesystem root.
-- Runtime caches are isolated from both durable source roots and generated artifacts.
-- Verification, custom runs, exports, and contest builds run as async worker jobs.
-- All code compilations, testcase generations, and judgings run through DOMjudge-style judgedaemon infrastructure.
-
-This keeps authored problem files versioned and contest attachments durable while
-keeping generated PDFs, verification outputs, snapshots, export archives, and
-runtime caches safe to remove from the administrator cleanup workflow.
-
-## Deployment
-
-For deployment, see [docs/deployment.md](docs/deployment.md) (host install) or
-[docs/docker.md](docs/docker.md) (Docker Compose).
-
-DOMjudge judgedaemon workers can run anywhere with network access to the main app
-using the `domjudge/judgehost:latest` Docker image.
+The current runtime is one FastAPI application served by uvicorn. Statement
+preview compilation is synchronous. Verification, custom run, export, and
+contest build jobs share a process-local worker queue. Published problem source
+is the `main` commit of the problem's bare Git repository; workspaces are mutable
+per-user checkouts.
 
 ## Documentation
 
-Useful references:
+- [Documentation index](docs/README.md)
+- [System design](docs/design/system.md)
+- [Problem source protocol](docs/protocol/problem-source.md)
+- [Execution protocol](docs/protocol/execution.md)
+- [Judgehost protocol](docs/protocol/judgehost.md)
+- [Storage and cleanup](docs/protocol/storage.md)
+- [Package import and export](docs/protocol/package.md)
+- [Application package map](docs/src/README.md)
+- [Known implementation findings](docs/implementation/findings.md)
 
-- [Deployment](docs/deployment.md) and [Docker deployment](docs/docker.md)
-- [Agent and contributor requirements](docs/AGENTS.md)
-- [System architecture](docs/architecture.md)
-- [Problem editing and workspace model](docs/problem-workflow.md)
-- [Database schema and data patterns](docs/data-model.md)
-- [Request lifecycle and auth](docs/request-lifecycle.md)
-- [Verification, runs, and judgehost integration](docs/verification-and-runs.md)
+These documents describe the current implementation. Proposed behavior belongs
+in a dedicated proposal, not in current architecture or protocol documents.

@@ -33,6 +33,7 @@
   "executor": [
     "test_icpc_export_package.py",
     "test_import_policy.py",
+    "test_install_host_contract.py",
     "test_judgehost_scripts.py",
     "test_tex_sandbox.py"
   ],

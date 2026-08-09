@@ -3428,6 +3428,36 @@ class TestJudgehostService(E2ETestBase):
             self.assertTrue(str(row["output_diff_ref"] or "").startswith("blob://sha256/"))
             self.assertTrue(str(row["metadata_ref"] or "").startswith("blob://sha256/"))
 
+    def test_judgehost_endpoints_reject_invalid_hostname_with_400(self) -> None:
+        from app.main import app
+
+        service = config.judgehost_task_service
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
+
+        headers = {"Authorization": "Bearer test-token"}
+        with TestClient(app) as client:
+            register = client.post(
+                "/api/v4/judgehosts",
+                data={"hostname": "bad!host"},
+                headers=headers,
+            )
+            callback = client.post(
+                "/api/v4/judgehosts/add-judging-run/bad!host/987654",
+                data={},
+                headers=headers,
+            )
+
+        self.assertEqual(register.status_code, 400)
+        self.assertEqual(callback.status_code, 400)
+
     def test_domjudge_compile_logs_are_truncated_before_state_storage(self) -> None:
         service = config.judgehost_task_service
         old_enabled = service.state.enabled

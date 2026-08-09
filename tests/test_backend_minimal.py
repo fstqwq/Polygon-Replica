@@ -76,8 +76,14 @@ class TestBackendMinimal(E2ETestBase):
         runtime_file.write_text("ok\n", encoding="utf-8")
         durable_log.write_text("event\n", encoding="utf-8")
 
-        with patch.object(config.runtime_cache_index, "clear_all", return_value=None):
+        with patch.object(config.runtime_cache_index, "clear_all", return_value=None), patch.object(
+            config.worker_queue_service,
+            "reset_runtime_history",
+            return_value=None,
+        ) as reset_history:
             _startup_clear_all_caches()
+
+        reset_history.assert_called_once_with()
 
         self.assertTrue(config.fs_manager.cache_artifacts_root.exists())
         self.assertTrue(config.fs_manager.runtime_root.exists())

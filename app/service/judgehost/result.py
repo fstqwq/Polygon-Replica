@@ -1080,7 +1080,16 @@ class ResultProcessor:
                 "ignoring add_judging_run for unknown judging run id: %s",
                 int(judgetask_id),
             )
-            return int(judgetask_id)
+            return 1
+        case_status = domjudge_lower_text(case_row["status"])
+        if (
+            case_status in {"leased", "reporting"}
+            and domjudge_text(case_row["lease_owner"]) != safe_host
+        ):
+            raise RuntimeError("judgehost does not own judging run")
+        if case_status != "leased":
+            logger.info("ignoring stale add_judging_run result for case id: %s", int(judgetask_id))
+            return 1
         self._touch_task_verification(domjudge_text(case_row["task_id"]))
         claim = self._s.batch_scheduler.claim_case_reporting(
             int(judgetask_id),
@@ -1089,7 +1098,7 @@ class ResultProcessor:
         )
         if claim is None:
             logger.info("ignoring stale add_judging_run result for case id: %s", int(judgetask_id))
-            return int(judgetask_id)
+            return 1
         self._queue._record_host_event_conn(
             hostname=safe_host,
             action="report",
@@ -1117,13 +1126,13 @@ class ResultProcessor:
             reported_monotonic=reported_monotonic,
         )
         if claim.cancel_requested:
-            accepted = self._complete_cancelled_case_receipt(
+            self._complete_cancelled_case_receipt(
                 case_id=claim.case_id,
                 generation=claim.generation,
                 row=dict(case_row),
                 report=report_telemetry,
             )
-            return 1 if accepted else int(judgetask_id)
+            return 1
 
         def _abort_unfinished_claim() -> None:
             if self._s.batch_scheduler.abort_case_claim(
@@ -1165,23 +1174,19 @@ class ResultProcessor:
             # Same stale-callback case as domjudge_update_judging: acknowledge
             # gracefully to avoid hard-failing judgedaemon retries.
             logger.info("ignoring add_judging_run for unknown judging run id: %s", case_id)
-            return case_id
+            return 1
         batch_status = domjudge_lower_text(row["batch_status"])
         if batch_status == "finalizing":
             self._domjudge_finalize_batch_if_ready(int(row["batch_id"]))
-            return case_id
+            return 1
         if batch_status != "open":
             logger.info("ignoring add_judging_run for terminal DOMjudge batch id: %s", case_id)
-            return case_id
+            return 1
         if domjudge_lower_text(row["case_status"]) != "reporting":
             logger.info("ignoring add_judging_run for non-reporting DOMjudge case id: %s", case_id)
-            return case_id
+            return 1
         if domjudge_text(row["case_lease_owner"]) != safe_host:
-            logger.info(
-                "ignoring add_judging_run from non-owner DOMjudge host for case id: %s",
-                case_id,
-            )
-            return case_id
+            raise RuntimeError("judgehost does not own judging run")
         batch_id = int(row["batch_id"])
         safe_task_id = domjudge_text(row["task_id"])
         task_payload = self._core.task_payload(safe_task_id) if safe_task_id else {}
@@ -1396,13 +1401,13 @@ class ResultProcessor:
             shortcut_eligible = False
         current_case = self._s.batch_scheduler.fetch_case(case_id)
         if current_case is not None and bool(current_case["cancel_requested"]):
-            accepted = self._complete_cancelled_case_receipt(
+            self._complete_cancelled_case_receipt(
                 case_id=case_id,
                 generation=claim_generation,
                 row=dict(row),
                 report=report_telemetry,
             )
-            return 1 if accepted else case_id
+            return 1
         cached_payloads = {
             name: self._s.runtime_blob_store.put_bytes(content)
             for name, content in cache_files.items()
@@ -1627,7 +1632,7 @@ class ResultProcessor:
             return 1
         if outcome != "reported":
             logger.info("ignoring stale add_judging_run result for case id: %s", case_id)
-            return case_id
+            return 1
         logger.debug(
             "domjudge add_judging_run host=%s batch_id=%s case_id=%s runresult=%s",
             safe_host,

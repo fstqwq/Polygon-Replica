@@ -95,7 +95,6 @@ def ensure_local_env() -> None:
     os.environ["POLYGON_REPLICA_BACKUP_ROOT"] = str(
         root / "var" / "backups" / "polygon-replica"
     )
-    os.environ["POLYGON_REPLICA_AUTH_COOKIE_SECURE"] = "1"
 
 
 ensure_local_env()

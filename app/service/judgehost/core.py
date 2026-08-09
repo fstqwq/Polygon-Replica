@@ -9,6 +9,17 @@ from app.service.judgehost.shared import _HOSTNAME_RE, _RUN_ID_RE
 from app.service.judgehost.state import JudgehostState
 
 
+class InvalidJudgehostHostname(RuntimeError):
+    """Raised when a wire hostname cannot be used as a lease identity."""
+
+
+def normalize_judgehost_hostname(hostname: str) -> str:
+    token = str(hostname or "").strip()
+    if not _HOSTNAME_RE.fullmatch(token):
+        raise InvalidJudgehostHostname("invalid judgehost hostname")
+    return token
+
+
 class JudgehostCore:
     STATUS_QUEUED = "queued"
     STATUS_LEASED = "leased"
@@ -72,10 +83,7 @@ class JudgehostCore:
         return token
 
     def normalize_hostname(self, hostname: str) -> str:
-        token = str(hostname or "").strip()
-        if not _HOSTNAME_RE.fullmatch(token):
-            return "judgehost"
-        return token
+        return normalize_judgehost_hostname(hostname)
 
     def task_status_counts(self) -> dict[str, int]:
         return self._s.task_registry.status_counts()

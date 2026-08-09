@@ -21,10 +21,9 @@ services:
       POLYGON_REPLICA_CACHE_ROOT: /tmp/polygon-replica
       POLYGON_REPLICA_CONTEST_SOURCE_ROOT: /var/lib/polygon-replica/contest-sources
       POLYGON_REPLICA_BACKUP_ROOT: /var/backups/polygon-replica
-      POLYGON_REPLICA_AUTH_COOKIE_SECURE: "1"
     # bubblewrap inside the container needs unrestricted user-namespace
     # access. Host kernel must also have unprivileged userns enabled; see
-    # docs/docker.md.
+    # docs/operations/runtime.md.
     security_opt:
       - seccomp=unconfined
       - apparmor=unconfined

@@ -366,7 +366,7 @@ class TestPublicContracts(unittest.TestCase):
         documentation = "\n".join(
             [
                 (ROOT / "README.md").read_text(encoding="utf-8-sig"),
-                (ROOT / "docs" / "docker.md").read_text(encoding="utf-8-sig"),
+                (ROOT / "docs" / "operations" / "runtime.md").read_text(encoding="utf-8-sig"),
             ]
         )
 
