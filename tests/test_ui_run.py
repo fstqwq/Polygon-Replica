@@ -11,6 +11,8 @@ import re
 from unittest.mock import patch
 from urllib.parse import parse_qs, urlparse
 
+from fastapi import HTTPException
+
 from app.main_util import TEXTAREA_MAX_BYTES
 from app.service.statement.render import statement_title_for_language
 from app.service.statement.signature import statement_sources_signature
@@ -54,10 +56,19 @@ from tests.ui_support import (
     workspace_service,
 )
 import app.impl.workspace.context_job as workspace_context_job
+import app.impl.workspace.run_view_detail as run_view_detail_module
 import app.service.problem.readiness as problem_readiness_module
 import app.service.verification.result_match as verification_result_module
 import app.service.verification.workspace_fingerprint as workspace_fingerprint_module
 from app.service.problem.readiness import WorkspaceReadinessSubject
+from app.service.verification.execution_result import (
+    CAPTURE_COMPLETE,
+    CAPTURE_METADATA_INPUT_ONLY,
+    ExecutionPassResult,
+    ExecutionUsage,
+    PassArtifacts,
+    normalize_execution_result,
+)
 from app.service.verification.task_store import VerificationTaskStore
 from app.service.verification.types import Kind
 
@@ -3979,34 +3990,53 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             "detail_rows": [
                 {
                     "test_name": "001.in",
+                    "is_interactive": True,
                     "input_preview": {"available": False, "text": "", "truncated": False, "limit": 1024, "download_verification_id": "", "download_rel_path": "", "message": "missing"},
                     "answer_preview": {"available": False, "text": "", "truncated": False, "limit": 1024, "download_verification_id": "", "download_rel_path": "", "message": "missing"},
                     "cells": [
                         {
                             "detail": {
-                                    "final_row": {
+                                "is_interactive": True,
+                                "mode_malformed": False,
+                                "compile_error_display": "",
+                                "compile_diagnostics": [],
+                                "pass_rows": [
+                                    {
+                                        "pass_label": "Pass 1",
+                                        "input_preview": {
+                                            "available": False,
+                                            "text": "",
+                                            "truncated": False,
+                                            "limit": 1024,
+                                            "download_verification_id": "",
+                                            "download_rel_path": "",
+                                            "message": "missing",
+                                        },
                                         "kind": "ok",
                                         "verdict_short": "AC",
                                         "time_display": "1ms (2ms wall)",
-                                        "status_display": "AC · 1ms (2ms wall) · 1MB",
+                                        "time_tone": "",
                                         "memory_display": "1MB",
-                                        "feedback_display": "ok",
-                                        "output_preview": {
-                                        "available": True,
-                                        "text": "> ping\n< pong\n",
-                                        "truncated": False,
-                                        "limit": 1024,
-                                        "download_verification_id": "ver-r-transcript",
-                                        "download_rel_path": f"blob/{encoded}/program.out",
-                                        "message": "",
-                                    },
-                                    "interactive_transcript": {
-                                        "available": True,
-                                        "shown": 2,
-                                        "rows": [{"side": "right", "text": "ping"}, {"side": "left", "text": "pong"}],
-                                        "truncated": False,
-                                    },
-                                }
+                                        "jury_log_preview": {
+                                            "available": True,
+                                            "text": "jury accepted",
+                                            "download_verification_id": "ver-r-transcript",
+                                            "download_rel_path": f"blob/{encoded}/jury.log",
+                                        },
+                                        "interactive_transcript": {
+                                            "available": True,
+                                            "state": "ok",
+                                            "events": [
+                                                {"kind": "data", "source": "interactor", "timestamp_seconds": "0.019", "payload_display": "ping", "payload_bytes_omitted": 0},
+                                                {"kind": "data", "source": "solution", "timestamp_seconds": "0.024", "payload_display": "pong", "payload_bytes_omitted": 0},
+                                            ],
+                                            "events_shown": 2,
+                                            "events_total": 2,
+                                            "download_verification_id": "ver-r-transcript",
+                                            "download_rel_path": f"blob/{encoded}/program.out",
+                                        },
+                                    }
+                                ],
                             }
                         }
                     ],
@@ -4017,15 +4047,280 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
 
         with patch("app.impl.run_export.run.build_run_detail_context", return_value=detail_ctx):
             detail = run_details_test_fragment(
-                _request("/problems/alice/sample/run/details/test-fragment", "verification_id=ver-r-transcript&test=001.in"),
+                _request("/problems/alice/sample/run/details/test-fragment", "verification_id=ver-r-transcript&test=001.in&run_id=r-transcript"),
                 "alice/sample",
                 "alice",
             )
         self.assertEqual(detail.status_code, 200)
         detail_html = detail.body.decode("utf-8", errors="replace")
-        self.assertIn("Transcript (first 2 lines)", detail_html)
+        self.assertIn("Showing 2/2 events.", detail_html)
+        self.assertNotIn("Interactor ·", detail_html)
+        self.assertNotIn("Solution ·", detail_html)
+        self.assertIn("Jury log", detail_html)
+        self.assertIn("jury accepted", detail_html)
+        self.assertNotIn("4 B", detail_html)
         self.assertIn(download_href, detail_html)
-        self.assertIn(">download</a>", detail_html)
+        self.assertIn(">download raw</a>", detail_html)
+
+        with self.assertRaises(HTTPException) as missing_run_id:
+            run_details_test_fragment(
+                _request(
+                    "/problems/alice/sample/run/details/test-fragment",
+                    "verification_id=ver-r-transcript&test=001.in",
+                ),
+                "alice/sample",
+                "alice",
+            )
+        self.assertEqual(missing_run_id.exception.status_code, 400)
+
+    def test_interactive_detail_uses_persisted_mode_and_renders_every_pass(self) -> None:
+        workspace_service.ensure_workspace("alice/sample", "alice")
+        ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
+        workspace_id = int(ctx["workspace"]["id"])
+        problem_id = int(ctx["problem"]["id"])
+        workspace = Path(str(ctx["workspace"]["path"]))
+        (workspace / "solutions").mkdir(parents=True, exist_ok=True)
+        (workspace / "solutions" / "interactive.cpp").write_text(
+            "int main(){return 0;}\n",
+            encoding="utf-8",
+        )
+        (workspace / "solutions" / "other.cpp").write_text(
+            "int main(){return 0;}\n",
+            encoding="utf-8",
+        )
+
+        verification_id = canonical_test_verification_id(
+            f"ver-interactive-detail-{uuid.uuid4().hex[:8]}"
+        )
+        config.verification_service.begin_verification_record(
+            verification_id=verification_id,
+            problem_id=problem_id,
+            workspace_id=workspace_id,
+            signature="",
+            kind=Kind.ALL,
+            status="ok",
+            detail={"status": "ok", "mode": "interactive"},
+        )
+
+        def store(role: str, payload: bytes) -> str:
+            return config.verification_service.store_verification_blob(
+                verification_id=verification_id,
+                test_name="001.in",
+                role=role,
+                file_name=f"{role}.bin",
+                payload=payload,
+            )
+
+        input_ref = store("input", b"testcase seed\n")
+        answer_ref = store("answer", b"accepted\n")
+        input_one_ref = store("pass-one-input", b"first pass input\n")
+        input_two_ref = store("pass-two-input", b"second pass input\n")
+        input_three_ref = store("pass-three-input", b"third pass input\n")
+        common_ref = store("metadata", b"metadata\n")
+        jury_one_ref = store("jury-one", b"first pass accepted\n")
+        jury_two_ref = store("jury-two", b"second pass accepted\n")
+        transcript_one = (
+            b"[  0.019s/5]>: ping\n\n"
+            b"[  0.024s/4]<: pong\n"
+            b"[  0.025s/0]]"
+        )
+        transcript_two = b"[  0.031s/5]>: final\n" + b"broken"
+        transcript_one_ref = store("transcript-one", transcript_one)
+        transcript_two_ref = store("transcript-two", transcript_two)
+        other_transcript_ref = store("transcript-other", b"[  0.001s/4]>: trap\n")
+        other_jury_ref = store("jury-other", b"must not be read\n")
+        config.verification_service.update_verification_artifact_refs(
+            verification_id,
+            "001.in",
+            {"input_ref": input_ref, "answer_ref": answer_ref},
+        )
+
+        passes = (
+            ExecutionPassResult(
+                number=1,
+                capture_status=CAPTURE_COMPLETE,
+                runresult="correct",
+                verdict="OK",
+                score_text="",
+                answer_correct=True,
+                usage=ExecutionUsage(0.024, 0.020, 0.024, 1024),
+                feedback="",
+                artifacts=PassArtifacts(
+                    input_ref=input_one_ref,
+                    transcript_ref=transcript_one_ref,
+                    stderr_ref=common_ref,
+                    system_ref=common_ref,
+                    judge_message_ref=jury_one_ref,
+                    team_message_ref=common_ref,
+                    metadata_ref=common_ref,
+                    compare_metadata_ref=common_ref,
+                ),
+            ),
+            ExecutionPassResult(
+                number=2,
+                capture_status=CAPTURE_COMPLETE,
+                runresult="correct",
+                verdict="OK",
+                score_text="",
+                answer_correct=True,
+                usage=ExecutionUsage(0.031, 0.027, 0.031, 1536),
+                feedback="",
+                artifacts=PassArtifacts(
+                    input_ref=input_two_ref,
+                    transcript_ref=transcript_two_ref,
+                    stderr_ref=common_ref,
+                    system_ref=common_ref,
+                    judge_message_ref=jury_two_ref,
+                    team_message_ref=common_ref,
+                    metadata_ref=common_ref,
+                    compare_metadata_ref=common_ref,
+                ),
+            ),
+            ExecutionPassResult(
+                number=3,
+                capture_status=CAPTURE_METADATA_INPUT_ONLY,
+                runresult="correct",
+                verdict="OK",
+                score_text="",
+                answer_correct=True,
+                usage=ExecutionUsage(0.034, 0.029, 0.034, 1536),
+                feedback="",
+                artifacts=PassArtifacts(
+                    input_ref=input_three_ref,
+                    metadata_ref=common_ref,
+                    compare_metadata_ref=common_ref,
+                ),
+            ),
+        )
+        other_result = normalize_execution_result(
+            passes=(
+                ExecutionPassResult(
+                    number=1,
+                    capture_status=CAPTURE_COMPLETE,
+                    runresult="correct",
+                    verdict="OK",
+                    score_text="",
+                    answer_correct=True,
+                    usage=ExecutionUsage(0.001, 0.001, 0.001, 512),
+                    feedback="",
+                    artifacts=PassArtifacts(
+                        input_ref=input_ref,
+                        transcript_ref=other_transcript_ref,
+                        stderr_ref=common_ref,
+                        system_ref=common_ref,
+                        judge_message_ref=other_jury_ref,
+                        team_message_ref=common_ref,
+                        metadata_ref=common_ref,
+                        compare_metadata_ref=common_ref,
+                    ),
+                ),
+            )
+        )
+        config.verification_task_store.replace_graph(
+            verification_id,
+            tasks=[
+                {
+                    "id": f"vt-interactive-{uuid.uuid4().hex[:8]}",
+                    "task_kind": "solution-run",
+                    "source_path": "solutions/interactive.cpp",
+                    "logical_run_id": "interactive.cpp",
+                    "test_name": "001.in",
+                    "expected_behavior": "accepted",
+                    "status": VerificationTaskStore.TASK_DONE,
+                    "result": normalize_execution_result(passes=passes),
+                },
+                {
+                    "id": f"vt-interactive-other-{uuid.uuid4().hex[:8]}",
+                    "task_kind": "solution-run",
+                    "source_path": "solutions/other.cpp",
+                    "logical_run_id": "other.cpp",
+                    "test_name": "001.in",
+                    "expected_behavior": "accepted",
+                    "status": VerificationTaskStore.TASK_DONE,
+                    "result": other_result,
+                },
+            ],
+            edges=[],
+        )
+
+        with patch.object(
+            run_view_detail_module,
+            "verification_artifact_file",
+            wraps=run_view_detail_module.verification_artifact_file,
+        ) as artifact_file:
+            detail = run_details_test_fragment(
+                _request(
+                    "/problems/alice/sample/run/details/test-fragment",
+                    f"verification_id={verification_id}&test=001.in&run_id=interactive.cpp",
+                ),
+                "alice/sample",
+                "alice",
+            )
+
+        self.assertEqual(detail.status_code, 200)
+        html = detail.body.decode("utf-8", errors="replace")
+        self.assertIn("Pass 1", html)
+        self.assertIn("Pass 2", html)
+        self.assertIn("Pass 3", html)
+        self.assertEqual(html.count("<strong>Input</strong>"), 3)
+        self.assertIn("first pass input", html)
+        self.assertIn("second pass input", html)
+        self.assertIn("third pass input", html)
+        self.assertNotIn("Input 001.in", html)
+        self.assertNotIn("<strong>Answer</strong>", html)
+        self.assertNotIn("testcase seed", html)
+        self.assertIn("first pass accepted", html)
+        self.assertIn("second pass accepted", html)
+        self.assertIn("Showing 3/3 events.", html)
+        self.assertIn("Malformed at byte", html)
+        self.assertIn('class="transcript-message transcript-warning"', html)
+        self.assertIn("transcript-event-interactor", html)
+        self.assertIn("transcript-event-solution", html)
+        self.assertNotIn("transcript-meta", html)
+        self.assertNotIn("Interactor ·", html)
+        self.assertNotIn("Solution ·", html)
+        self.assertNotIn("transcript-rail", html)
+        self.assertNotIn("transcript-tooltip", html)
+        self.assertIn("closed output", html)
+        self.assertIn("Transcript not captured.", html)
+        self.assertIn('class="transcript-message transcript-unavailable"', html)
+        self.assertNotIn("transcript-bubble", html)
+        self.assertNotIn("interactor -&gt; solution", html)
+        artifact_paths = "\n".join(str(call.args[1]) for call in artifact_file.call_args_list)
+        self.assertNotIn(input_ref.rsplit("/", 1)[-1], artifact_paths)
+        self.assertNotIn(answer_ref.rsplit("/", 1)[-1], artifact_paths)
+        self.assertNotIn(other_transcript_ref.rsplit("/", 1)[-1], artifact_paths)
+        self.assertNotIn(other_jury_ref.rsplit("/", 1)[-1], artifact_paths)
+
+        with patch.object(
+            run_view_detail_module,
+            "verification_artifact_file",
+            wraps=run_view_detail_module.verification_artifact_file,
+        ) as invalid_run_artifact_file:
+            with self.assertRaises(HTTPException) as unknown_run:
+                run_details_test_fragment(
+                    _request(
+                        "/problems/alice/sample/run/details/test-fragment",
+                        f"verification_id={verification_id}&test=001.in&run_id=unknown.cpp",
+                    ),
+                    "alice/sample",
+                    "alice",
+                )
+        self.assertEqual(unknown_run.exception.status_code, 404)
+        invalid_run_artifact_file.assert_not_called()
+
+        db_execute("UPDATE verifications SET mode='' WHERE id=?", [verification_id])
+        malformed = run_details_test_fragment(
+            _request(
+                "/problems/alice/sample/run/details/test-fragment",
+                f"verification_id={verification_id}&test=001.in&run_id=interactive.cpp",
+            ),
+            "alice/sample",
+            "alice",
+        )
+        malformed_html = malformed.body.decode("utf-8", errors="replace")
+        self.assertIn("no valid persisted mode", malformed_html)
+        self.assertNotIn("transcript-event-interactor", malformed_html)
 
     def test_run_cell_kind_nonaccepted_expected_uses_required_allowed_policy(self) -> None:
         self.assertEqual(workspace_impl._run_cell_kind("OK", "wrong_answer"), "neutral")
@@ -4311,7 +4606,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             signature="",
             kind=Kind.ALL,
             status="ok",
-            detail={"status": "ok"},
+            detail={"status": "ok", "mode": "pass-fail"},
         )
         input_ref = config.verification_service.store_verification_blob(
             verification_id=verification_id,
@@ -4366,7 +4661,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         )
 
         detail = run_details_test_fragment(
-            _request("/problems/alice/sample/run/details/test-fragment", f"verification_id={verification_id}&test=001.in"),
+            _request("/problems/alice/sample/run/details/test-fragment", f"verification_id={verification_id}&test=001.in&run_id=tmp.cpp"),
             "alice/sample",
             "alice",
         )
@@ -4383,8 +4678,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             f"/problems/alice/sample/artifacts/{verification_id}/ans/001.ans",
             detail_html,
         )
-        self.assertIn(f"/problems/alice/sample/artifacts/{verification_id}/output/", detail_html)
-        self.assertIn("/001.out", detail_html)
+        self.assertIn(f"/problems/alice/sample/artifacts/{verification_id}/blob/", detail_html)
         self.assertNotIn("(output missing)", detail_html)
         self.assertNotIn(">missing<", detail_html)
         input_download = run_export_impl.artifact_file(
@@ -4519,7 +4813,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         self.assertIn("std.cpp", page_html)
 
         detail = run_details_test_fragment(
-            _request("/problems/alice/sample/run/details/test-fragment", f"verification_id={verification_id}&test=001.in"),
+            _request("/problems/alice/sample/run/details/test-fragment", f"verification_id={verification_id}&test=001.in&run_id=std.cpp"),
             "alice/sample",
             "bob",
         )
@@ -4549,6 +4843,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             status="ok",
             detail={
                 "status": "ok",
+                "mode": "pass-fail",
                 "tests_meta_rows": [
                     {
                         "index": 1,
@@ -4632,7 +4927,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         self.assertIn('data-test-command="random_tree 10 &lt;20&gt; &amp; &#34;quoted&#34;"', page_html)
 
         detail = run_details_test_fragment(
-            _request("/problems/alice/sample/run/details/test-fragment", f"verification_id={verification_id}&test=001.in"),
+            _request("/problems/alice/sample/run/details/test-fragment", f"verification_id={verification_id}&test=001.in&run_id=tmp.cpp"),
             "alice/sample",
             "alice",
         )
@@ -4670,6 +4965,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             status="failed",
             detail={
                 "status": "failed",
+                "mode": "pass-fail",
                 "tests_meta_rows": [
                     {
                         "index": 1,
@@ -4721,11 +5017,11 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         page_html = page.body.decode("utf-8", errors="replace")
         self.assertRegex(
             page_html,
-            r'(?s)<td class="tcell tone-fail"[^>]*>\s*<a href="#run-test-detail-popup" data-popup-open="run-test-detail-popup" data-test-name="001\.in" data-test-source-kind="generated" data-test-command="random_tree 10 20">001\.in</a>',
+            r'(?s)<td class="tcell tone-fail"[^>]*>\s*<a href="#run-test-detail-popup" data-popup-open="run-test-detail-popup" data-test-name="001\.in" data-test-source-kind="generated" data-test-command="random_tree 10 20"[^>]*>001\.in</a>',
         )
 
         detail = run_details_test_fragment(
-            _request("/problems/alice/sample/run/details/test-fragment", f"verification_id={verification_id}&test=001.in"),
+            _request("/problems/alice/sample/run/details/test-fragment", f"verification_id={verification_id}&test=001.in&run_id=tmp.cpp"),
             "alice/sample",
             "alice",
         )
@@ -4752,6 +5048,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             status="ok",
             detail={
                 "status": "ok",
+                "mode": "pass-fail",
                 "tests_meta_rows": [
                     {
                         "index": 1,
@@ -4806,11 +5103,11 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         page_html = page.body.decode("utf-8", errors="replace")
         self.assertRegex(
             page_html,
-            r'(?s)<td class="tcell tone-ok"[^>]*>\s*<a href="#run-test-detail-popup" data-popup-open="run-test-detail-popup" data-test-name="001\.in" data-test-source-kind="manual" data-test-command="">001\.in</a>',
+            r'(?s)<td class="tcell tone-ok"[^>]*>\s*<a href="#run-test-detail-popup" data-popup-open="run-test-detail-popup" data-test-name="001\.in" data-test-source-kind="manual" data-test-command=""[^>]*>001\.in</a>',
         )
 
         detail = run_details_test_fragment(
-            _request("/problems/alice/sample/run/details/test-fragment", f"verification_id={verification_id}&test=001.in"),
+            _request("/problems/alice/sample/run/details/test-fragment", f"verification_id={verification_id}&test=001.in&run_id=manual-solution"),
             "alice/sample",
             "alice",
         )
@@ -4849,7 +5146,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             signature="",
             kind=Kind.ALL,
             status="ok",
-            detail={"status": "ok", "tests_meta_rows": tests_meta_rows},
+            detail={"status": "ok", "mode": "pass-fail", "tests_meta_rows": tests_meta_rows},
         )
 
         def generate_task(
@@ -4980,7 +5277,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         duplicate_detail = run_details_test_fragment(
             _request(
                 "/problems/alice/sample/run/details/test-fragment",
-                f"verification_id={verification_id}&test=004.in",
+                f"verification_id={verification_id}&test=004.in&run_id=tmp-solution",
             ),
             "alice/sample",
             "alice",
@@ -4996,7 +5293,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         cancelled_detail = run_details_test_fragment(
             _request(
                 "/problems/alice/sample/run/details/test-fragment",
-                f"verification_id={verification_id}&test=006.in",
+                f"verification_id={verification_id}&test=006.in&run_id=tmp-solution",
             ),
             "alice/sample",
             "alice",
@@ -5035,7 +5332,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             signature="",
             kind=Kind.ALL,
             status="ok",
-            detail={"status": "ok", "tests_meta_rows": tests_meta_rows},
+            detail={"status": "ok", "mode": "pass-fail", "tests_meta_rows": tests_meta_rows},
         )
         tasks: list[dict[str, object]] = []
         for index in range(1, 214):
@@ -5120,6 +5417,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             status="failed",
             detail={
                 "status": "failed",
+                "mode": "pass-fail",
                 "tests_meta_rows": [
                     {
                         "index": 1,
@@ -5219,7 +5517,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         self.assertIn('vcode">FL</span>', html)
 
         detail = run_details_test_fragment(
-            _request("/problems/alice/sample/run/details/test-fragment", f"verification_id={verification_id}&test=001.in"),
+            _request("/problems/alice/sample/run/details/test-fragment", f"verification_id={verification_id}&test=001.in&run_id={run_id}"),
             "alice/sample",
             "alice",
         )

@@ -13,8 +13,6 @@ from app.service.judgehost.domjudge.cache import (
 )
 from app.service.judgehost.shared import (
     _DOMJUDGE_CONTEST_ID_RE,
-    _DOMJUDGE_PROTOCOL_TRACE_BYTES_RE,
-    _DOMJUDGE_PROTOCOL_TRACE_RE,
     domjudge_config_from_constants,
     domjudge_hosts_payload,
     domjudge_languages_payload,
@@ -286,29 +284,6 @@ class DomjudgeToolkit:
             tags=tags,
         )
         return dict(entry.files)
-
-    @staticmethod
-    def strip_protocol_trace(raw: bytes) -> bytes:
-        payload = raw
-        if not payload:
-            return b""
-        if _DOMJUDGE_PROTOCOL_TRACE_BYTES_RE.search(payload) is None:
-            # Most runs have no runpipe transcript markers. Avoid decoding and
-            # splitting large outputs unless there is something to remove.
-            return b"" if not payload.strip() else payload
-        text = payload.decode("utf-8", errors="replace")
-        kept: list[str] = []
-        for line in text.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
-            if _DOMJUDGE_PROTOCOL_TRACE_RE.search(line):
-                continue
-            kept.append(line)
-        while kept and (not kept[0].strip()):
-            kept.pop(0)
-        while kept and (not kept[-1].strip()):
-            kept.pop()
-        if not kept:
-            return b""
-        return ("\n".join(kept) + "\n").encode("utf-8")
 
     @staticmethod
     def force_cpp_define(source_bytes: bytes) -> bytes:

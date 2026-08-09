@@ -4,6 +4,7 @@ import io
 import tarfile
 import unittest
 
+from app.service.judgehost.case_result import decode_case_test_row
 from app.service.judgehost.pass_bundle import InvalidPassBundle, parse_pass_bundle
 from app.service.verification.execution_result import (
     CAPTURE_COMPLETE,
@@ -147,6 +148,16 @@ class TestExecutionResult(unittest.TestCase):
         self.assertEqual(len(interactive_multi.passes), 2)
         self.assertTrue(all(item.artifacts.transcript_ref for item in interactive_multi.passes))
         self.assertTrue(all(not item.artifacts.output_ref for item in interactive_multi.passes))
+
+        row = decode_case_test_row(interactive_multi, test_name="001.in")
+        projected_passes = row["passes"]
+        assert isinstance(projected_passes, list)
+        self.assertEqual([item["pass"] for item in projected_passes], [1, 2])
+        self.assertTrue(all(item["capture_status"] == CAPTURE_COMPLETE for item in projected_passes))
+        self.assertTrue(all(item["input_ref"] for item in projected_passes))
+        self.assertTrue(all(item["transcript_ref"] for item in projected_passes))
+        self.assertTrue(all(not item["output_ref"] for item in projected_passes))
+        self.assertTrue(all(item["judge_message_ref"] for item in projected_passes))
 
     def test_pass_numbers_must_be_contiguous_and_artifact_modes_are_exclusive(self) -> None:
         with self.assertRaisesRegex(ValueError, "contiguous"):

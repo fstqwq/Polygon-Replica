@@ -14,24 +14,35 @@ def build_verification_test_pass_row(
     time_wall_ms: int | None = None,
     memory_kb: int | None = None,
     feedback: str = "",
+    capture_status: str = "",
+    input_ref: str = "",
     output_ref: str = "",
+    transcript_ref: str = "",
+    judge_message_ref: str = "",
     runresult: str = "",
     pass_number: int = 1,
     answer_correct: bool = False,
 ) -> VerificationTestPassRow:
+    resolved_pass_number = int(pass_number)
+    if resolved_pass_number < 1:
+        raise ValueError("verification pass number must be positive")
     resolved_time_ms = max(0, int(0 if time_ms is None else time_ms))
     resolved_time_user_ms = max(0, int(resolved_time_ms if time_user_ms is None else time_user_ms))
     resolved_time_wall_ms = max(0, int(resolved_time_user_ms if time_wall_ms is None else time_wall_ms))
     resolved_memory_kb = max(0, int(0 if memory_kb is None else memory_kb))
     row: VerificationTestPassRow = {
-        "pass": max(1, int(pass_number)),
+        "pass": resolved_pass_number,
         "verdict": verdict or "",
         "time_ms": resolved_time_ms,
         "time_user_ms": resolved_time_user_ms,
         "time_wall_ms": resolved_time_wall_ms,
         "memory_kb": resolved_memory_kb,
         "feedback": feedback or "",
+        "capture_status": capture_status or "",
+        "input_ref": input_ref or "",
         "output_ref": output_ref or "",
+        "transcript_ref": transcript_ref or "",
+        "judge_message_ref": judge_message_ref or "",
         "answer_correct": bool(answer_correct),
     }
     if runresult:
@@ -115,7 +126,7 @@ def canonicalize_verification_test_rows(raw_tests: list[dict[str, object]]) -> l
             continue
         raw_passes = cast(list[dict[str, object]], item.get("passes") or [])
         passes: list[VerificationTestPassRow] = []
-        for index, pass_item in enumerate(raw_passes, start=1):
+        for pass_item in raw_passes:
             passes.append(
                 build_verification_test_pass_row(
                     verdict=str(pass_item.get("verdict") or ""),
@@ -124,14 +135,13 @@ def canonicalize_verification_test_rows(raw_tests: list[dict[str, object]]) -> l
                     time_wall_ms=pass_item.get("time_wall_ms"),
                     memory_kb=pass_item.get("memory_kb"),
                     feedback=str(pass_item.get("feedback") or pass_item.get("message") or ""),
-                    output_ref=str(
-                        pass_item.get("output_ref")
-                        or pass_item.get("output_artifact")
-                        or pass_item.get("output_rel")
-                        or ""
-                    ),
+                    capture_status=str(pass_item.get("capture_status") or ""),
+                    input_ref=str(pass_item.get("input_ref") or ""),
+                    output_ref=str(pass_item.get("output_ref") or ""),
+                    transcript_ref=str(pass_item.get("transcript_ref") or ""),
+                    judge_message_ref=str(pass_item.get("judge_message_ref") or ""),
                     runresult=str(pass_item.get("runresult") or ""),
-                    pass_number=index,
+                    pass_number=int(pass_item["pass"]),
                     answer_correct=bool(pass_item.get("answer_correct")),
                 )
             )
