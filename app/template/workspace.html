@@ -34,7 +34,7 @@
 
     {% if ctx.workspace_needs_update %}
     <form method="post" action="{{ problem_href('merge_start') }}">
-      <button class="btn primary-action" type="submit" {% if not ctx.access.can_write %}disabled title="{{ ctx.access.write_block_reason }}"{% endif %}>Review published changes</button>
+      <button class="btn primary-action" type="submit" {% if not ctx.access.can_write %}disabled title="{{ ctx.access.write_block_reason }}"{% endif %}>Resolve Conflicts</button>
     </form>
     {% endif %}
 

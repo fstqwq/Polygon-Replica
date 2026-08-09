@@ -134,6 +134,9 @@ class TestPublicContracts(unittest.TestCase):
         workspace_source = WORKSPACE_CSS_PATH.read_text(encoding="utf-8-sig")
         base_source = (ROOT / "app" / "template" / "base.html").read_text(encoding="utf-8-sig")
         export_source = (ROOT / "app" / "template" / "export.html").read_text(encoding="utf-8-sig")
+        workspace_template_source = (ROOT / "app" / "template" / "workspace.html").read_text(
+            encoding="utf-8-sig"
+        )
         shared_button = re.search(
             r"\.btn,\s*\.button-link\s*\{(?P<body>.*?)\}", core_source, flags=re.S
         )
@@ -150,6 +153,9 @@ class TestPublicContracts(unittest.TestCase):
         self.assertIn("problem_href('export_snapshot')", base_source)
         self.assertIn(">Download Snapshot</button>", base_source)
         self.assertNotIn("<h2>Download Snapshot</h2>", export_source)
+        self.assertIn(">Resolve Conflicts</button>", base_source)
+        self.assertIn(">Resolve Conflicts</button>", workspace_template_source)
+        self.assertNotIn("Review published changes", base_source + workspace_template_source)
 
     def test_statement_attachment_cards_follow_content_width(self) -> None:
         forms_source = STATEMENT_CSS_PATH.read_text(encoding="utf-8-sig")

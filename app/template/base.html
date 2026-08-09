@@ -195,7 +195,7 @@
           <div class="workspace-actions">
             {% if ctx.workspace_needs_update %}
             <form class="action-link-form" method="post" action="{{ problem_href('merge_start') }}">
-              <button class="button-link primary-action workspace-side-button" type="submit" {% if not ctx.access.can_write %}disabled title="{{ ctx.access.write_block_reason }}"{% endif %}>Review published changes</button>
+              <button class="button-link primary-action workspace-side-button" type="submit" {% if not ctx.access.can_write %}disabled title="{{ ctx.access.write_block_reason }}"{% endif %}>Resolve Conflicts</button>
             </form>
             {% else %}
             <a class="button-link primary-action workspace-side-button" href="{{ problem_href('problem_workspace') }}">Review workspace</a>
