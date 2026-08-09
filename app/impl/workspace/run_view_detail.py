@@ -1461,8 +1461,20 @@ def build_run_detail_context(
             input_rel = f'tests/{test_name}'
             answer_name = _run_test_answer_name(test_name)
             answer_rel = f'ans/{answer_name}' if answer_name else ''
-            input_preview = _verification_artifact_preview(source_verification_id, input_rel)
-            answer_preview = _verification_artifact_preview(source_verification_id, answer_rel) if answer_rel else _run_detail_preview_unavailable('missing')
+            row_is_interactive = any(
+                (col.get('mode') or '') == 'interactive'
+                and col['tests_map'].get(test_name) is not None
+                for col in columns
+            )
+            input_preview = _run_detail_preview_unavailable('not applicable')
+            answer_preview = _run_detail_preview_unavailable('not applicable')
+            if not row_is_interactive:
+                input_preview = _verification_artifact_preview(source_verification_id, input_rel)
+                answer_preview = (
+                    _verification_artifact_preview(source_verification_id, answer_rel)
+                    if answer_rel
+                    else _run_detail_preview_unavailable('missing')
+                )
             cells: list[dict] = []
             for col in columns:
                 cell = col['tests_map'].get(test_name)
@@ -1489,6 +1501,14 @@ def build_run_detail_context(
                         if interactive_mode:
                             capture_status = str(row_payload.get('capture_status') or '')
                             capture_complete = capture_status == 'complete'
+                            input_ref = str(row_payload.get('input_ref') or '')
+                            pass_input_preview = _run_detail_preview_unavailable('not captured')
+                            if input_ref:
+                                pass_input_preview = _verification_blob_preview(
+                                    source_verification_id,
+                                    input_ref,
+                                )
+                            row_payload['input_preview'] = pass_input_preview
                             transcript_rel = str(row_payload.get('transcript_rel') or '')
                             row_payload['interactive_transcript'] = _verification_transcript(
                                 source_verification_id,
@@ -1582,6 +1602,7 @@ def build_run_detail_context(
                     'row_id': f'test-detail-{row_index}',
                     'input_preview': input_preview,
                     'answer_preview': answer_preview,
+                    'is_interactive': row_is_interactive,
                     'generate_detail': (
                         generation_view
                         if generation_view is not None

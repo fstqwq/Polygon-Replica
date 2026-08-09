@@ -1,40 +1,30 @@
+{% macro artifact_preview_card(title, preview, extra_class='') -%}
+<div class="preview-card{{ (' ' + extra_class) if extra_class else '' }}">
+  <div class="preview-head">
+    <strong>{{ title }}</strong>
+    {% if preview.available and preview.download_verification_id %}
+    <a href="{{ problem_href('artifact_file', verification_id=preview.download_verification_id, rel_path=preview.download_rel_path) }}">download</a>
+    {% endif %}
+  </div>
+  {% if preview.available %}
+  <pre class="preview-content{{ ' empty-text' if preview.text == '(empty)' else '' }}">{{ preview.text }}</pre>
+  {% if preview.truncated %}
+  <p class="muted">Showing first {{ preview.limit }} bytes.</p>
+  {% endif %}
+  {% else %}
+  <p class="muted">{{ preview.message }}</p>
+  {% endif %}
+</div>
+{%- endmacro %}
 {% if row.generation_alert %}
 <p class="test-generation-alert {{ 'tone-fail' if row.generation_alert.alert_severity == 'error' else 'tone-warn' }}">{{ row.generation_alert.alert_message }}</p>
 {% endif %}
+{% if not row.is_interactive %}
 <div class="test-grid">
-  <div class="preview-card">
-    <div class="preview-head">
-      <strong>Input {{ row.test_name }}</strong>
-      {% if row.input_preview.available and row.input_preview.download_verification_id %}
-      <a href="{{ problem_href('artifact_file', verification_id=row.input_preview.download_verification_id, rel_path=row.input_preview.download_rel_path) }}">download</a>
-      {% endif %}
-    </div>
-    {% if row.input_preview.available %}
-    <pre class="preview-content{{ ' empty-text' if row.input_preview.text == '(empty)' else '' }}">{{ row.input_preview.text }}</pre>
-    {% if row.input_preview.truncated %}
-    <p class="muted">Showing first {{ row.input_preview.limit }} bytes.</p>
-    {% endif %}
-    {% else %}
-    <p class="muted">{{ row.input_preview.message }}</p>
-    {% endif %}
-  </div>
-  <div class="preview-card">
-    <div class="preview-head">
-      <strong>Answer</strong>
-      {% if row.answer_preview.available and row.answer_preview.download_verification_id %}
-      <a href="{{ problem_href('artifact_file', verification_id=row.answer_preview.download_verification_id, rel_path=row.answer_preview.download_rel_path) }}">download</a>
-      {% endif %}
-    </div>
-    {% if row.answer_preview.available %}
-    <pre class="preview-content{{ ' empty-text' if row.answer_preview.text == '(empty)' else '' }}">{{ row.answer_preview.text }}</pre>
-    {% if row.answer_preview.truncated %}
-    <p class="muted">Showing first {{ row.answer_preview.limit }} bytes.</p>
-    {% endif %}
-    {% else %}
-    <p class="muted">{{ row.answer_preview.message }}</p>
-    {% endif %}
-  </div>
+  {{ artifact_preview_card('Input ' + row.test_name, row.input_preview) }}
+  {{ artifact_preview_card('Answer', row.answer_preview) }}
 </div>
+{% endif %}
 {% if not row.generation_skipped %}
 <div class="sol-list">
   {% for cell in row.cells %}
@@ -70,6 +60,7 @@
       {% set transcript = pass_row.interactive_transcript %}
       <section class="interactive-pass">
         <h3>{{ pass_row.pass_label }}</h3>
+        {{ artifact_preview_card('Input', pass_row.input_preview, 'interactive-pass-input') }}
         <table class="table-base table-compact sol-metrics interactive-pass-summary">
           <colgroup>
             <col class="status-col" />

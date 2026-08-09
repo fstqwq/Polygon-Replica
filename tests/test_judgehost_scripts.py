@@ -501,6 +501,66 @@ class TestJudgehostScripts(unittest.TestCase):
             )
             self.assertFalse(any(".polygon-pass" in path.name for path in testcase.rglob("*")))
 
+    def test_pass_capture_resolves_domjudge_pass_input_symlinks(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            capture = self._write_pass_capture(root, max_bytes=1024 * 1024)
+            endpoint = root / "endpoint-default"
+            testcase = endpoint / "submission" / "judging" / "testcase123"
+            cached_input = endpoint / "testcase" / "123" / "source-hash.in"
+            cached_input.parent.mkdir(parents=True)
+            cached_input.write_bytes(b"initial interactive input\n")
+
+            first = self._write_domjudge_pass(testcase, "1")
+            first_input = first / "testdata.in"
+            first_input.unlink()
+            first_input.symlink_to(cached_input)
+            next_input = first / "feedback" / "nextpass.in"
+            next_input.write_bytes(b"second pass input\n")
+
+            second = self._write_domjudge_pass(testcase, "2")
+            second_input = second / "testdata.in"
+            second_input.unlink()
+            second_input.symlink_to(next_input)
+            result = self._run_pass_capture(capture, second, 43)
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+            bundle = parse_pass_bundle(
+                (second / "feedback/teammessage.txt").read_bytes(),
+                max_bundle_bytes=1024 * 1024,
+                max_member_bytes=1024 * 1024,
+            )
+            assert bundle is not None
+            self.assertEqual(bundle.passes[0].capture_status, "complete")
+            self.assertEqual(bundle.pass_files(1)["input"], b"initial interactive input\n")
+            self.assertEqual(bundle.pass_files(2)["input"], b"second pass input\n")
+
+    def test_pass_capture_does_not_follow_pass_input_outside_domjudge_layout(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            capture = self._write_pass_capture(root, max_bytes=1024 * 1024)
+            endpoint = root / "endpoint-default"
+            testcase = endpoint / "submission" / "judging" / "testcase123"
+            outside_input = root / "outside.in"
+            outside_input.write_bytes(b"must not be captured\n")
+
+            first = self._write_domjudge_pass(testcase, "1")
+            first_input = first / "testdata.in"
+            first_input.unlink()
+            first_input.symlink_to(outside_input)
+            second = self._write_domjudge_pass(testcase, "2")
+            result = self._run_pass_capture(capture, second, 43)
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+            bundle = parse_pass_bundle(
+                (second / "feedback/teammessage.txt").read_bytes(),
+                max_bundle_bytes=1024 * 1024,
+                max_member_bytes=1024 * 1024,
+            )
+            assert bundle is not None
+            self.assertEqual(bundle.passes[0].capture_status, "metadata-only")
+            self.assertNotIn("input", bundle.pass_files(1))
+
     def test_pass_capture_final_pass_one_has_empty_history(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

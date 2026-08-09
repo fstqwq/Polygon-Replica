@@ -3990,6 +3990,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             "detail_rows": [
                 {
                     "test_name": "001.in",
+                    "is_interactive": True,
                     "input_preview": {"available": False, "text": "", "truncated": False, "limit": 1024, "download_verification_id": "", "download_rel_path": "", "message": "missing"},
                     "answer_preview": {"available": False, "text": "", "truncated": False, "limit": 1024, "download_verification_id": "", "download_rel_path": "", "message": "missing"},
                     "cells": [
@@ -4002,6 +4003,15 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
                                 "pass_rows": [
                                     {
                                         "pass_label": "Pass 1",
+                                        "input_preview": {
+                                            "available": False,
+                                            "text": "",
+                                            "truncated": False,
+                                            "limit": 1024,
+                                            "download_verification_id": "",
+                                            "download_rel_path": "",
+                                            "message": "missing",
+                                        },
                                         "kind": "ok",
                                         "verdict_short": "AC",
                                         "time_display": "1ms (2ms wall)",
@@ -4101,8 +4111,11 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
                 payload=payload,
             )
 
-        input_ref = store("input", b"seed\n")
+        input_ref = store("input", b"testcase seed\n")
         answer_ref = store("answer", b"accepted\n")
+        input_one_ref = store("pass-one-input", b"first pass input\n")
+        input_two_ref = store("pass-two-input", b"second pass input\n")
+        input_three_ref = store("pass-three-input", b"third pass input\n")
         common_ref = store("metadata", b"metadata\n")
         jury_one_ref = store("jury-one", b"first pass accepted\n")
         jury_two_ref = store("jury-two", b"second pass accepted\n")
@@ -4133,7 +4146,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
                 usage=ExecutionUsage(0.024, 0.020, 0.024, 1024),
                 feedback="",
                 artifacts=PassArtifacts(
-                    input_ref=input_ref,
+                    input_ref=input_one_ref,
                     transcript_ref=transcript_one_ref,
                     stderr_ref=common_ref,
                     system_ref=common_ref,
@@ -4153,7 +4166,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
                 usage=ExecutionUsage(0.031, 0.027, 0.031, 1536),
                 feedback="",
                 artifacts=PassArtifacts(
-                    input_ref=input_ref,
+                    input_ref=input_two_ref,
                     transcript_ref=transcript_two_ref,
                     stderr_ref=common_ref,
                     system_ref=common_ref,
@@ -4173,7 +4186,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
                 usage=ExecutionUsage(0.034, 0.029, 0.034, 1536),
                 feedback="",
                 artifacts=PassArtifacts(
-                    input_ref=input_ref,
+                    input_ref=input_three_ref,
                     metadata_ref=common_ref,
                     compare_metadata_ref=common_ref,
                 ),
@@ -4249,6 +4262,13 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         self.assertIn("Pass 1", html)
         self.assertIn("Pass 2", html)
         self.assertIn("Pass 3", html)
+        self.assertEqual(html.count("<strong>Input</strong>"), 3)
+        self.assertIn("first pass input", html)
+        self.assertIn("second pass input", html)
+        self.assertIn("third pass input", html)
+        self.assertNotIn("Input 001.in", html)
+        self.assertNotIn("<strong>Answer</strong>", html)
+        self.assertNotIn("testcase seed", html)
         self.assertIn("first pass accepted", html)
         self.assertIn("second pass accepted", html)
         self.assertIn("Showing 3/3 events.", html)
@@ -4267,6 +4287,8 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         self.assertNotIn("transcript-bubble", html)
         self.assertNotIn("interactor -&gt; solution", html)
         artifact_paths = "\n".join(str(call.args[1]) for call in artifact_file.call_args_list)
+        self.assertNotIn(input_ref.rsplit("/", 1)[-1], artifact_paths)
+        self.assertNotIn(answer_ref.rsplit("/", 1)[-1], artifact_paths)
         self.assertNotIn(other_transcript_ref.rsplit("/", 1)[-1], artifact_paths)
         self.assertNotIn(other_jury_ref.rsplit("/", 1)[-1], artifact_paths)
 
