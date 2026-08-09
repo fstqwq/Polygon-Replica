@@ -12,7 +12,6 @@ from fastapi import Form, Request, Depends
 from app.impl.auth.shared import redirect_response, template_response
 from app.impl.contest.workspace_scope import contest_workspace_context_from_request
 from app.impl.runtime.config import config
-from app.impl.workspace.access import require_write_access
 from app.impl.workspace.access import workspace_access_context
 from app.impl.workspace.context import global_user_ctx
 from app.impl.workspace.context_job import start_export_job

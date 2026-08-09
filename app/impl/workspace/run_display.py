@@ -4,7 +4,6 @@ from app.service.verification.failure_display import verification_solution_failu
 from app.service.verification.result_match import (
     run_actual_failed_codes,
     run_actual_short,
-    run_verdict_short,
 )
 
 
