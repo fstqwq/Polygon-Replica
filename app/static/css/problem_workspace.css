@@ -64,7 +64,6 @@
 
 .workspace-side-button {
   width: 100%;
-  justify-content: flex-start;
 }
 
 .workspace-actions .button-link:not(.primary-action) {
@@ -753,4 +752,3 @@ body.merge-page .container {
     border-top: 1px solid var(--line);
   }
 }
-

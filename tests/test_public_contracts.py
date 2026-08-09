@@ -129,6 +129,22 @@ class TestPublicContracts(unittest.TestCase):
         self.assertIn("button,\ninput,\nselect,\ntextarea {\n  font: inherit;\n}", forms_source)
         self.assertNotIn('class="link-button', contest_packages_source)
 
+    def test_workspace_primary_action_keeps_shared_button_alignment(self) -> None:
+        core_source = CORE_CSS_PATH.read_text(encoding="utf-8-sig")
+        workspace_source = WORKSPACE_CSS_PATH.read_text(encoding="utf-8-sig")
+        shared_button = re.search(
+            r"\.btn,\s*\.button-link\s*\{(?P<body>.*?)\}", core_source, flags=re.S
+        )
+        side_button = re.search(
+            r"\.workspace-side-button\s*\{(?P<body>.*?)\}", workspace_source, flags=re.S
+        )
+
+        self.assertIsNotNone(shared_button)
+        self.assertIsNotNone(side_button)
+        self.assertIn("justify-content: center;", shared_button.group("body"))
+        self.assertIn("width: 100%;", side_button.group("body"))
+        self.assertNotIn("justify-content", side_button.group("body"))
+
     def test_statement_attachment_cards_follow_content_width(self) -> None:
         forms_source = STATEMENT_CSS_PATH.read_text(encoding="utf-8-sig")
 
