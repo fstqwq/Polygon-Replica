@@ -22,6 +22,7 @@ from app.impl.problem.file import (
     files_delete,
     files_download,
     files_new,
+    files_new_directory,
     files_rename,
     files_save,
     files_upload,
@@ -397,6 +398,7 @@ class TestSecurity(E2ETestBase):
         marker = suite_root() / f"files-save-escape-{uuid.uuid4().hex[:8]}.txt"
         marker.unlink(missing_ok=True)
         resp = files_save(
+            request=_request("/problems/alice/sample/files/save"),
             problem="alice/sample",
             user="alice",
             path="../../" + marker.name,
@@ -412,22 +414,23 @@ class TestSecurity(E2ETestBase):
         marker = suite_root() / f"files-upload-escape-{uuid.uuid4().hex[:8]}.txt"
         marker.unlink(missing_ok=True)
         upload = self._FakeUpload(b"owned\n")
-        with self.assertRaises(HTTPException) as denied:
-            asyncio.run(
-                files_upload(
-                    problem="alice/sample",
-                    user="alice",
-                    path="../../" + marker.name,
-                    upload=upload,
-                )
+        response = asyncio.run(
+            files_upload(
+                request=_request("/problems/alice/sample/files/upload"),
+                problem="alice/sample",
+                user="alice",
+                path="../../" + marker.name,
+                upload=upload,
             )
-        self.assertEqual(denied.exception.status_code, 400)
-        self.assertIn("invalid path", str(denied.exception.detail).lower())
+        )
+        self.assertEqual(response.status_code, 303)
+        self.assertIn("invalid path", self._first_flash_message(response).lower())
         self.assertFalse(marker.exists())
 
     def test_files_save_rejects_textarea_content_over_shared_limit(self) -> None:
         oversized = ("x" * (TEXTAREA_MAX_BYTES + 32)) + "\n"
         resp = files_save(
+            request=_request("/problems/alice/sample/files/save"),
             problem="alice/sample",
             user="alice",
             path="notes/oversized.txt",
@@ -439,34 +442,59 @@ class TestSecurity(E2ETestBase):
     def test_files_upload_rejects_payload_over_shared_upload_limit(self) -> None:
         upload = self._FakeUpload(b"123456789")
         with patch("app.main_util.UPLOAD_MAX_BYTES", 8):
-            with self.assertRaises(HTTPException) as denied:
-                asyncio.run(
-                    files_upload(
-                        problem="alice/sample",
-                        user="alice",
-                        path="notes/upload-too-large.txt",
-                        upload=upload,
-                    )
+            response = asyncio.run(
+                files_upload(
+                    request=_request("/problems/alice/sample/files/upload"),
+                    problem="alice/sample",
+                    user="alice",
+                    path="notes/upload-too-large.txt",
+                    upload=upload,
                 )
-        self.assertEqual(denied.exception.status_code, 400)
-        self.assertIn("uploaded file is too large", str(denied.exception.detail).lower())
+            )
+        self.assertEqual(response.status_code, 303)
+        self.assertIn(
+            "uploaded file is too large",
+            self._first_flash_message(response).lower(),
+        )
 
     def test_files_new_rejects_path_traversal_escape(self) -> None:
         marker = suite_root() / f"files-new-escape-{uuid.uuid4().hex[:8]}.txt"
         marker.unlink(missing_ok=True)
         resp = files_new(
+            request=_request("/problems/alice/sample/files/new"),
             problem="alice/sample",
             user="alice",
-            path="../../" + marker.name,
+            name="../../" + marker.name,
         )
         self.assertEqual(resp.status_code, 303)
-        self.assertIn("invalid path", self._first_flash_message(resp).lower())
+        self.assertIn(
+            "name must not contain path separators",
+            self._first_flash_message(resp).lower(),
+        )
         self.assertFalse(marker.exists())
+
+    def test_files_new_directory_rejects_path_traversal_escape(self) -> None:
+        marker_name = f"files-directory-escape-{uuid.uuid4().hex[:8]}"
+        resp = files_new_directory(
+            request=_request("/problems/alice/sample/files/new-directory"),
+            problem="alice/sample",
+            user="alice",
+            name=f"../{marker_name}",
+            dir="notes",
+        )
+        self.assertEqual(resp.status_code, 303)
+        self.assertIn(
+            "name must not contain path separators",
+            self._first_flash_message(resp).lower(),
+        )
+        ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
+        self.assertFalse((ws / marker_name).exists())
 
     def test_files_create_template_rejects_path_traversal_escape(self) -> None:
         marker = suite_root() / f"files-template-escape-{uuid.uuid4().hex[:8]}.cpp"
         marker.unlink(missing_ok=True)
         resp = files_create_template(
+            request=_request("/problems/alice/sample/files/create-template"),
             problem="alice/sample",
             user="alice",
             path="../../" + marker.name,
@@ -480,6 +508,7 @@ class TestSecurity(E2ETestBase):
         marker = suite_root() / f"files-delete-escape-{uuid.uuid4().hex[:8]}.txt"
         marker.unlink(missing_ok=True)
         resp = files_delete(
+            request=_request("/problems/alice/sample/files/delete"),
             problem="alice/sample",
             user="alice",
             path="../../" + marker.name,
@@ -490,6 +519,7 @@ class TestSecurity(E2ETestBase):
 
     def test_files_delete_redirect_preserves_query_delimiter_for_directory_only(self) -> None:
         resp = files_delete(
+            request=_request("/problems/alice/sample/files/delete"),
             problem="alice/sample",
             user="alice",
             path="notes/missing-delete-target.txt",
@@ -511,15 +541,17 @@ class TestSecurity(E2ETestBase):
         marker = suite_root() / f"files-rename-escape-{uuid.uuid4().hex[:8]}.txt"
         marker.unlink(missing_ok=True)
         resp = files_rename(
+            request=_request("/problems/alice/sample/files/rename"),
             problem="alice/sample",
             user="alice",
             old_path=old_rel,
-            new_path="../../" + marker.name,
+            new_name="../../" + marker.name,
+            dir="notes",
         )
         self.assertEqual(resp.status_code, 303)
         messages = _flash_messages_from_response(resp)
         self.assertTrue(messages)
-        self.assertIn("invalid path", messages[0].lower())
+        self.assertIn("name must not contain path separators", messages[0].lower())
         self.assertTrue(old_abs.exists())
         self.assertFalse(marker.exists())
 
@@ -531,10 +563,12 @@ class TestSecurity(E2ETestBase):
         old_abs.write_text("keep\n", encoding="utf-8")
 
         resp = files_rename(
+            request=_request("/problems/alice/sample/files/rename"),
             problem="alice/sample",
             user="alice",
             old_path=old_rel,
-            new_path="notes/.env",
+            new_name=".env",
+            dir="notes",
         )
         self.assertEqual(resp.status_code, 303)
         messages = _flash_messages_from_response(resp)
@@ -542,6 +576,29 @@ class TestSecurity(E2ETestBase):
         self.assertIn("hidden path is not allowed", messages[0].lower())
         self.assertTrue(old_abs.exists())
         self.assertFalse((ws / "notes/.env").exists())
+
+    def test_files_rename_cannot_move_a_file_from_another_folder(self) -> None:
+        ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
+        old_rel = f"notes/security-folder-rename-{uuid.uuid4().hex[:8]}.txt"
+        old_abs = ws / old_rel
+        old_abs.parent.mkdir(parents=True, exist_ok=True)
+        old_abs.write_text("keep\n", encoding="utf-8")
+
+        resp = files_rename(
+            request=_request("/problems/alice/sample/files/rename"),
+            problem="alice/sample",
+            user="alice",
+            old_path=old_rel,
+            new_name="moved.txt",
+            dir="config",
+        )
+        self.assertEqual(resp.status_code, 303)
+        self.assertIn(
+            "selected file is not in the current folder",
+            self._first_flash_message(resp).lower(),
+        )
+        self.assertTrue(old_abs.exists())
+        self.assertFalse((ws / "config/moved.txt").exists())
 
     def test_files_download_rejects_path_traversal_escape(self) -> None:
         with self.assertRaises(HTTPException) as denied:

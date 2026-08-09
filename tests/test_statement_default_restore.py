@@ -63,6 +63,9 @@ class TestStatementDefaultRestore(WorkspaceTestBase):
                     target.write_text(content, encoding="utf-8")
 
                 response = files_restore_default(
+                    request=_request(
+                        f"/problems/{self.problem}/files/restore-default"
+                    ),
                     problem=self.problem,
                     user=self.user,
                     path=selected,
@@ -94,7 +97,12 @@ class TestStatementDefaultRestore(WorkspaceTestBase):
 
         missing = "statement/olymp.sty"
         (ws / missing).unlink()
-        files_restore_default(problem=self.problem, user=self.user, path=missing)
+        files_restore_default(
+            request=_request(f"/problems/{self.problem}/files/restore-default"),
+            problem=self.problem,
+            user=self.user,
+            path=missing,
+        )
         self.assertEqual(
             (ws / missing).read_text(encoding="utf-8"),
             STATEMENT_DEFAULT_FILES[missing],
@@ -112,6 +120,9 @@ class TestStatementDefaultRestore(WorkspaceTestBase):
         for rel, expected_message in rejected.items():
             with self.subTest(path=rel):
                 response = files_restore_default(
+                    request=_request(
+                        f"/problems/{self.problem}/files/restore-default"
+                    ),
                     problem=self.problem,
                     user=self.user,
                     path=rel,
@@ -135,6 +146,9 @@ class TestStatementDefaultRestore(WorkspaceTestBase):
 
         with self.assertRaises(HTTPException) as denied:
             files_restore_default(
+                request=_request(
+                    f"/problems/{self.problem}/files/restore-default"
+                ),
                 problem=self.problem,
                 user=reader,
                 path="statement/olymp.sty",

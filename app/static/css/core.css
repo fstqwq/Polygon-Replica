@@ -867,6 +867,14 @@ form {
   white-space: nowrap;
 }
 
+.form-submit-row {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-3);
+  margin-top: var(--space-4);
+}
+
 .metadata-system-limits {
   display: grid;
   gap: var(--space-2);

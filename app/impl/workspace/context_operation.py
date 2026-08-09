@@ -3,7 +3,7 @@ import json
 import os
 import time
 from pathlib import Path
-from urllib.parse import quote_plus
+from typing import TypedDict
 from fastapi import HTTPException
 from app.impl.runtime.config import config
 from app.impl.workspace.artifact import (
@@ -197,16 +197,30 @@ def _normalize_repo_dir(raw: str | None) -> str:
         parts.append(item)
     return '/'.join(parts)
 
-def files_browse_query_tail(repo_dir: str) -> str:
-    parts: list[str] = []
-    dir_norm = _normalize_repo_dir(repo_dir)
-    if dir_norm:
-        parts.append(f'dir={quote_plus(dir_norm)}')
-    if not parts:
-        return ''
-    return '&' + '&'.join(parts)
+class RepoBrowserEntry(TypedDict):
+    name: str
+    path: str
 
-def build_repo_browser_entries(workspace: Path, paths: list[str], browse_dir: str) -> tuple[str, str, list[dict[str, str]], list[dict[str, str]], int]:
+
+class RepoBrowserBreadcrumb(TypedDict):
+    label: str
+    path: str
+
+
+class RepoBrowserContext(TypedDict):
+    directory: str
+    breadcrumbs: list[RepoBrowserBreadcrumb]
+    directories: list[RepoBrowserEntry]
+    files: list[RepoBrowserEntry]
+
+
+def build_repo_browser_context(
+    workspace: Path,
+    paths: list[str],
+    browse_dir: str,
+    *,
+    root_label: str,
+) -> RepoBrowserContext:
     entries: list[tuple[str, bool]] = []
     for rel in paths:
         if not rel:
@@ -244,34 +258,23 @@ def build_repo_browser_entries(workspace: Path, paths: list[str], browse_dir: st
             child_files.append({'name': rel, 'path': f'{prefix}{rel}' if prefix else rel})
     dirs = [{'name': name, 'path': child_dirs[name]} for name in sorted(child_dirs)]
     files = sorted(child_files, key=lambda row: row['name'])
-    parent = dir_norm.rsplit('/', 1)[0] if '/' in dir_norm else ''
-    return (dir_norm, parent, dirs, files, len(entries))
+    breadcrumbs: list[RepoBrowserBreadcrumb] = [{'label': root_label, 'path': ''}]
+    current_path = ''
+    for part in dir_norm.split('/') if dir_norm else []:
+        current_path = f'{current_path}/{part}' if current_path else part
+        breadcrumbs.append({'label': part, 'path': current_path})
+    return {
+        'directory': dir_norm,
+        'breadcrumbs': breadcrumbs,
+        'directories': dirs,
+        'files': files,
+    }
 
 def kind_for_path(path: str) -> str:
     for row in _C.CORE_SOURCE_TARGETS:
         if row['path'] == path:
             return row['kind']
     return ''
-
-def default_files_selected_path(workspace: Path, listed_paths: list[str]) -> str:
-    for rel in ['config/problem.json', 'statement/problem.tex', 'config/build.json', 'solutions/accepted.cpp']:
-        try:
-            candidate = safe_workspace_path(workspace, rel)
-        except HTTPException:
-            continue
-        if candidate.exists() and candidate.is_file() and (not candidate.is_symlink()):
-            return rel
-    for rel in listed_paths:
-        normalized_rel = normalize_workspace_rel_path(rel)
-        if not normalized_rel:
-            continue
-        try:
-            candidate = safe_workspace_path(workspace, normalized_rel)
-        except HTTPException:
-            continue
-        if candidate.exists() and candidate.is_file() and (not candidate.is_symlink()):
-            return normalized_rel
-    return 'config/problem.json'
 
 def template_for_kind(kind: str) -> str:
     key = kind.strip().lower()

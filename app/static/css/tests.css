@@ -161,4 +161,10 @@
   padding: var(--space-3);
 }
 
+@container problem-content (max-width: 640px) {
+  .tests-generation-head {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}
 

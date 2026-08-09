@@ -16,6 +16,8 @@ WORKSPACE_CSS_PATH = ROOT / "app" / "static" / "css" / "problem_workspace.css"
 COMPONENT_CSS_PATH = ROOT / "app" / "static" / "css" / "problem_components.css"
 STATEMENT_CSS_PATH = ROOT / "app" / "static" / "css" / "statement.css"
 FILES_CSS_PATH = ROOT / "app" / "static" / "css" / "files.css"
+RUN_CSS_PATH = ROOT / "app" / "static" / "css" / "run.css"
+TESTS_CSS_PATH = ROOT / "app" / "static" / "css" / "tests.css"
 CONTEST_CSS_PATH = ROOT / "app" / "static" / "css" / "contest.css"
 UI_JS_PATH = ROOT / "app" / "static" / "ui.js"
 JS_ROOT = ROOT / "app" / "static" / "js"
@@ -190,7 +192,9 @@ class TestPublicContracts(unittest.TestCase):
         verification_source = (ROOT / "app" / "static" / "css" / "40_verification.css").read_text(
             encoding="utf-8-sig"
         )
-        tests_source = FILES_CSS_PATH.read_text(encoding="utf-8-sig")
+        files_source = FILES_CSS_PATH.read_text(encoding="utf-8-sig")
+        run_source = RUN_CSS_PATH.read_text(encoding="utf-8-sig")
+        tests_source = TESTS_CSS_PATH.read_text(encoding="utf-8-sig")
         templates = "\n".join(
             path.read_text(encoding="utf-8-sig")
             for path in sorted((ROOT / "app" / "template").glob("*.html"))
@@ -204,11 +208,12 @@ class TestPublicContracts(unittest.TestCase):
         self.assertNotRegex(layout_source, r"(?m)^section\s*[,{]")
 
         self.assertIn("@container problem-content (max-width: 900px)", workspace_source)
-        self.assertIn("@container problem-content (max-width: 900px)", tests_source)
+        self.assertIn("@container problem-content (max-width: 900px)", files_source)
         self.assertIn("@container problem-content (max-width: 820px)", forms_source)
-        self.assertIn("@container problem-content (max-width: 820px)", tests_source)
+        self.assertIn("@container problem-content (max-width: 820px)", run_source)
         self.assertIn("@container problem-content (max-width: 760px)", verification_source)
         self.assertIn("@container problem-content (max-width: 640px)", forms_source)
+        self.assertIn("@container problem-content (max-width: 640px)", tests_source)
         self.assertIn("min-width: 38rem;", verification_source)
 
         table_cells = re.search(

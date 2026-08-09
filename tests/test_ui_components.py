@@ -1355,6 +1355,7 @@ class TestUIComponents(UIHelpersMixin, E2ETestBase):
         self.assertEqual(validator_abs.read_bytes(), b"int main(){\n    return 7;\n}\n")
 
         files_saved = files_save(
+            request=_request(f"/problems/{self.problem}/files/save"),
             problem=self.problem,
             user=self.user,
             path=validator_rel,

@@ -170,10 +170,9 @@
     {% endif %}
     {% endif %}
     {% endfor %}
-    {% if not interaction_section_enabled %}
-    <p class="muted">Switch to <code>interactive</code> mode to edit this section.</p>
-    {% endif %}
-    <button class="btn" type="submit">Save Statement</button>
+    <div class="form-submit-row statement-save-actions">
+      <button class="btn primary-action" type="submit">Save Statement</button>
+    </div>
   </form>
 </section>
 {% if log_refs or log %}

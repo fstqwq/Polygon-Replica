@@ -6,51 +6,96 @@
 {% include "_flash_message.html" %}
 
 <div class="files-grid">
-  <section class="content-section files-panel files-panel-browser">
-    <h2>Repository Browser</h2>
-    <div class="inline-meta-row">
-      <p><strong>Current folder:</strong> <code>{{ browse_dir if browse_dir else "/" }}</code></p>
-      {% if browse_dir %}
-      <a href="?dir={{ browse_parent }}">Go Up</a>
-      {% endif %}
-    </div>
+  <section class="content-section files-panel files-panel-browser" aria-label="Repository files">
+    <nav class="files-breadcrumb" aria-label="Current folder">
+      {% for crumb in browser.breadcrumbs %}
+        {% if loop.last %}
+        <strong>{{ crumb.label }}</strong>
+        {% else %}
+        <a
+          href="{{ problem_href('problem_files', query=({'dir': crumb.path} if crumb.path else None)) }}"
+        >{{ crumb.label }}</a>
+        {% endif %}
+        {% if not loop.last or loop.first %}<span class="files-breadcrumb-separator" aria-hidden="true">/</span>{% endif %}
+      {% endfor %}
+    </nav>
     {% if files_truncated %}
     <p><em>Repository listing is capped at {{ file_limit }} entries; narrow by folder for complete browsing.</em></p>
     {% endif %}
-    <div class="table-scroll">
-    <table class="table-base files-browser-table">
-      <tr><th>Type</th><th>Path</th></tr>
-      {% for d in browse_dirs %}
-      <tr>
-        <td class="table-cell-nowrap">dir</td>
-        <td class="table-cell-break"><a href="?dir={{ d.path }}"><code>{{ d.path }}/</code></a></td>
-      </tr>
+    <ul class="files-browser-list">
+      {% for d in browser.directories %}
+      <li>
+        <a class="files-browser-entry files-browser-directory" href="{{ problem_href('problem_files', query={'dir': d.path}) }}">
+          <code>{{ d.name }}/</code>
+        </a>
+      </li>
       {% endfor %}
-      {% for f in browse_files %}
-      <tr>
-        <td class="table-cell-nowrap">file</td>
-        <td class="table-cell-break"><a href="?path={{ f.path }}&dir={{ browse_dir }}"><code>{{ f.path }}</code></a></td>
-      </tr>
+      {% for f in browser.files %}
+      <li>
+        <a class="files-browser-entry files-browser-file{% if f.path == selected %} active{% endif %}" href="{{ problem_href('problem_files', query=({'path': f.path, 'dir': browser.directory} if browser.directory else {'path': f.path})) }}"{% if f.path == selected %} aria-current="page"{% endif %}>
+          <code>{{ f.name }}</code>
+        </a>
+      </li>
       {% endfor %}
-    </table>
-    </div>
-    {% if not browse_dirs and not browse_files %}
+    </ul>
+    {% if not browser.directories and not browser.files %}
     <p class="muted">No entries.</p>
     {% endif %}
+    <div class="files-browser-actions">
+      <details class="files-operation-disclosure">
+        <summary>New file</summary>
+        <form class="files-operation-form" method="post" action="{{ problem_href('files_new') }}">
+          <label for="create-file-name">File name</label>
+          <div class="files-operation-action-row">
+            <input id="create-file-name" name="name" value="new-file.txt" />
+            <button class="btn" type="submit"{% if not ctx.access.can_write %} disabled title="{{ ctx.access.write_block_reason }}"{% endif %}>Create</button>
+          </div>
+          <input type="hidden" name="selected" value="{{ selected }}" />
+          <input type="hidden" name="dir" value="{{ browser.directory }}" />
+        </form>
+      </details>
+      <details class="files-operation-disclosure">
+        <summary>New directory</summary>
+        <form class="files-operation-form" method="post" action="{{ problem_href('files_new_directory') }}">
+          <label for="create-directory-name">Directory name</label>
+          <div class="files-operation-action-row">
+            <input id="create-directory-name" name="name" value="new-directory" />
+            <button class="btn" type="submit"{% if not ctx.access.can_write %} disabled title="{{ ctx.access.write_block_reason }}"{% endif %}>Create</button>
+          </div>
+          <input type="hidden" name="dir" value="{{ browser.directory }}" />
+        </form>
+      </details>
+      <details class="files-operation-disclosure">
+        <summary>Upload file</summary>
+        <form class="files-operation-form" method="post" enctype="multipart/form-data" action="{{ problem_href('files_upload') }}">
+          <input type="hidden" name="dir" value="{{ browser.directory }}" />
+          <p class="muted">Upload to <code>{{ browser.directory if browser.directory else "/" }}</code> using the local file name.</p>
+          <div class="files-operation-action-row">
+            <input id="upload-local-file" type="file" name="upload" required{% if not ctx.access.can_write %} disabled title="{{ ctx.access.write_block_reason }}"{% endif %} />
+            <button class="btn" type="submit"{% if not ctx.access.can_write %} disabled title="{{ ctx.access.write_block_reason }}"{% endif %}>Upload</button>
+          </div>
+        </form>
+      </details>
+    </div>
   </section>
 
   <section class="content-section files-panel files-panel-editor">
-    <h2>Editor</h2>
-    <div class="inline-meta-row">
-      <p><strong>File:</strong> <code>{{ selected }}</code></p>
-      <a class="button-link" href="{{ problem_href('files_download', query={'path': selected}) }}">Download file</a>
+    <div class="files-panel-title-row">
+      <h2>Editor</h2>
+      {% if selected and not selected_missing %}
+      <a class="linkish" href="{{ problem_href('files_download', query={'path': selected}) }}">Download file</a>
+      {% endif %}
     </div>
+    {% if not selected %}
+    <p class="muted">Select a file to edit.</p>
+    {% else %}
+    <p class="files-selected-path"><strong>File:</strong> <code>{{ selected }}</code></p>
     {% if selected_can_restore_default %}
     <div class="inline-meta-row">
       <p class="muted">Restore the canonical template. Current file contents will be overwritten.</p>
       <form class="inline-action" method="post" action="{{ problem_href('files_restore_default') }}" data-confirm-message="Restore the default contents of {{ selected }}? Current file contents will be overwritten.">
         <input type="hidden" name="path" value="{{ selected }}" />
-        <input type="hidden" name="dir" value="{{ browse_dir }}" />
+        <input type="hidden" name="dir" value="{{ browser.directory }}" />
         <button class="btn" type="submit" {% if not ctx.access.can_write %}disabled title="{{ ctx.access.write_block_reason }}"{% endif %}>Restore default</button>
       </form>
     </div>
@@ -61,14 +106,12 @@
     <form class="form-row files-template-form" method="post" action="{{ problem_href('files_create_template') }}">
       <input type="hidden" name="path" value="{{ selected }}" />
       <input type="hidden" name="kind" value="{{ selected_template_kind }}" />
-      <input type="hidden" name="dir" value="{{ browse_dir }}" />
-      <button class="btn" type="submit">Create {{ selected_template_kind }} template</button>
+      <input type="hidden" name="dir" value="{{ browser.directory }}" />
+      <button class="btn" type="submit"{% if not ctx.access.can_write %} disabled title="{{ ctx.access.write_block_reason }}"{% endif %}>Create {{ selected_template_kind }} template</button>
     </form>
     {% endif %}
-    {% elif selected_is_dir %}
-    <p class="flash">Choose a file to edit.</p>
     {% endif %}
-    {% if selected_is_binary and (not selected_missing) and (not selected_is_dir) %}
+    {% if selected_is_binary and (not selected_missing) %}
     <p class="flash">Binary file is read-only in text editor.</p>
     {% if selected_is_pdf %}
     <p class="muted">PDF preview:</p>
@@ -88,80 +131,46 @@
       {% endif %}
       <form method="post" action="{{ problem_href('files_save') }}">
         <input type="hidden" name="path" value="{{ selected }}" />
-        <input type="hidden" name="dir" value="{{ browse_dir }}" />
+        <input type="hidden" name="dir" value="{{ browser.directory }}" />
         <textarea
           name="content"
           data-code-editor="1"
           data-code-path="{{ selected }}"
           data-code-height="520"
-          {% if content_truncated %}readonly{% endif %}
+          {% if content_truncated or not ctx.access.can_write %}readonly{% endif %}
         >{{ content }}</textarea>
-        <button class="btn primary-action" type="submit" {% if content_truncated %}disabled title="Cannot save truncated file view"{% endif %}>Save</button>
+        <div class="form-submit-row files-save-actions">
+          <button class="btn primary-action" type="submit"{% if content_truncated or not ctx.access.can_write %} disabled title="{% if content_truncated %}Cannot save truncated file view{% else %}{{ ctx.access.write_block_reason }}{% endif %}"{% endif %}>Save</button>
+        </div>
       </form>
     {% endif %}
-  </section>
-
-  <section class="content-section files-panel files-panel-ops">
-    <h2>File Operations</h2>
-    <div class="form-stack selected-path-actions-list">
-      <div class="form-block">
-        <h3>Create File</h3>
-        <form class="form-stack selected-path-form" method="post" action="{{ problem_href('files_new') }}">
-          <div class="form-row">
-            <label for="create-file-path">Path</label>
-            <input id="create-file-path" name="path" value="{{ (browse_dir ~ '/' if browse_dir else (selected_parent ~ '/' if selected_parent else '')) ~ 'new-file.txt' }}" />
-            <button class="btn" type="submit">Create</button>
-          </div>
-          <input type="hidden" name="dir" value="{{ browse_dir }}" />
-        </form>
-      </div>
-      <div class="form-block">
-        <h3>Upload File</h3>
-        <form class="form-stack selected-path-form" method="post" enctype="multipart/form-data" action="{{ problem_href('files_upload') }}">
-          <div class="form-row">
-            <label for="upload-target-path">Target path</label>
-            <input id="upload-target-path" name="path" value="{{ selected }}" />
-            <button class="btn" type="submit">Upload</button>
-          </div>
-          <input type="hidden" name="dir" value="{{ browse_dir }}" />
-          <div class="form-row">
-            <label for="upload-local-file">Local file</label>
-            <input id="upload-local-file" type="file" name="upload" />
-          </div>
-        </form>
-      </div>
-      <details class="form-block">
-        <summary>Advanced (Rename/Delete)</summary>
-        <div class="form-stack selected-path-actions-list">
-          <div class="form-block">
-            <h3>Rename Path</h3>
-            <form class="form-stack selected-path-form" method="post" action="{{ problem_href('files_rename') }}">
-              <div class="form-row">
-                <label for="rename-old-path">Current path</label>
-                <input id="rename-old-path" name="old_path" value="{{ selected }}" />
+    {% if not selected_missing %}
+    <details class="files-selected-actions">
+      <summary>Rename or delete</summary>
+      <div class="files-operation-advanced-body">
+          <div class="files-operation-block">
+            <h3>Rename</h3>
+            <form class="files-operation-form" method="post" action="{{ problem_href('files_rename') }}">
+              <input type="hidden" name="old_path" value="{{ selected }}" />
+              <div class="files-operation-action-row">
+                <input id="rename-new-path" name="new_name" value="{{ selected_name }}" aria-label="File name" />
+                <button class="btn" type="submit"{% if not ctx.access.can_write %} disabled title="{{ ctx.access.write_block_reason }}"{% endif %}>Rename</button>
               </div>
-              <div class="form-row">
-                <label for="rename-new-path">New path</label>
-                <input id="rename-new-path" name="new_path" value="{{ selected }}" />
-                <button class="btn" type="submit">Rename</button>
-              </div>
-              <input type="hidden" name="dir" value="{{ browse_dir }}" />
+              <input type="hidden" name="dir" value="{{ browser.directory }}" />
             </form>
           </div>
-          <div class="form-block">
-            <h3>Delete Path</h3>
-            <form class="form-stack selected-path-form" method="post" action="{{ problem_href('files_delete') }}" data-confirm-message="Delete path {{ selected }}? This cannot be undone; uncommitted changes will be lost.">
-              <div class="form-row">
-                <label for="delete-path">Target path</label>
-                <input id="delete-path" name="path" value="{{ selected }}" />
-                <button class="btn danger-link" type="submit">Delete</button>
-              </div>
-              <input type="hidden" name="dir" value="{{ browse_dir }}" />
+          <div class="files-operation-block files-operation-danger">
+            <h3>Delete</h3>
+            <form class="files-operation-form" method="post" action="{{ problem_href('files_delete') }}" data-confirm-message="Delete path {{ selected }}? This cannot be undone; uncommitted changes will be lost.">
+              <input type="hidden" name="path" value="{{ selected }}" />
+              <input type="hidden" name="dir" value="{{ browser.directory }}" />
+              <button class="btn danger-link" type="submit"{% if not ctx.access.can_write %} disabled title="{{ ctx.access.write_block_reason }}"{% endif %}>Delete file</button>
             </form>
           </div>
-        </div>
-      </details>
-    </div>
+      </div>
+    </details>
+    {% endif %}
+    {% endif %}
   </section>
 </div>
 {% endblock %}

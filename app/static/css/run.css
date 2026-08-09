@@ -5,4 +5,9 @@
   gap: var(--space-4);
 }
 
+@container problem-content (max-width: 820px) {
+  .run-execute-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
 

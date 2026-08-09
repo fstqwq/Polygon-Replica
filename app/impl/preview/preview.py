@@ -202,7 +202,11 @@ def statement_redirect_url(
     return f"{base}?{urlencode(query)}"
 
 
-def statement_editor_sections(workspace: Path, mode: str, language: str) -> tuple[list[dict[str, object]], dict[str, str], bool]:
+def statement_editor_sections(
+    workspace: Path,
+    mode: str,
+    language: str,
+) -> list[dict[str, object]]:
     section_paths = statement_editor_section_paths(language)
     interaction_enabled = mode != "pass-fail"
     specs: tuple[tuple[str, str, str, str], ...] = (
@@ -214,7 +218,6 @@ def statement_editor_sections(workspace: Path, mode: str, language: str) -> tupl
         ("notes", "notes_tex", "Notes", ""),
     )
     rows: list[dict[str, object]] = []
-    path_map: dict[str, str] = {}
     for key, field_name, label, fallback in specs:
         rel = section_paths[key]
         content_text, content_truncated = read_workspace_source_with_default(workspace, rel, fallback)
@@ -230,8 +233,7 @@ def statement_editor_sections(workspace: Path, mode: str, language: str) -> tupl
                 "enabled": bool(enabled),
             }
         )
-        path_map[key] = rel.as_posix()
-    return rows, path_map, interaction_enabled
+    return rows
 
 
 def extract_latex_failure_summary(log_text: str, summary_obj: dict[str, object] | None = None) -> str:
@@ -342,11 +344,13 @@ def preview_page(request: Request, problem: str, user: Annotated[str, Depends(re
                 preview_id = cached_id
     safe_mode = statement_mode_from_ctx(ctx)
     if has_statement_language:
-        statement_sections, section_path_map, interaction_section_enabled = statement_editor_sections(workspace, safe_mode, current_language)
+        statement_sections = statement_editor_sections(
+            workspace,
+            safe_mode,
+            current_language,
+        )
     else:
         statement_sections = []
-        section_path_map = {}
-        interaction_section_enabled = False
     ctx["page_title"] = "Statements"
     log = ''
     log_truncated = False
@@ -449,9 +453,7 @@ def preview_page(request: Request, problem: str, user: Annotated[str, Depends(re
             'preview_id': preview_id,
             'previews': previews,
             'statement_sections': statement_sections,
-            'statement_section_paths': section_path_map,
             'statement_assets_dir': statement_assets_dir,
-            'interaction_section_enabled': bool(interaction_section_enabled),
             'statement_template_path': STATEMENT_TEMPLATE_REL.as_posix(),
             'statement_problem_path': STATEMENT_PROBLEM_REL.as_posix(),
             'statement_style_path': STATEMENT_STYLE_REL.as_posix(),

@@ -1,50 +1,74 @@
 from __future__ import annotations
 
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Annotated
-from urllib.parse import quote_plus
 
 from fastapi import Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
 
 from app.impl.auth.session import require_session_user
 from app.impl.auth.shared import redirect_response, template_response
-from app.impl.contest.workspace_scope import contest_workspace_context_from_request
+from app.impl.contest.workspace_scope import (
+    contest_workspace_context_from_request,
+    problem_href_builder,
+)
 from app.impl.runtime.config import config
 from app.impl.workspace.access import require_write_access
 from app.impl.workspace.context_operation import (
     audit,
     build_line_focus_context,
-    build_repo_browser_entries,
-    default_files_selected_path,
-    files_browse_query_tail,
+    build_repo_browser_context,
     kind_for_path,
     parse_line_param,
     template_for_kind,
 )
 from app.impl.workspace.context_ui import page_ctx
 from app.impl.workspace.solution import ensure_solution_metadata_for_source
-from app.main_util import normalize_workspace_rel_path, safe_workspace_path
+from app.main_util import (
+    normalize_workspace_rel_path,
+    problem_slug_leaf,
+    safe_workspace_path,
+)
 from app.service.statement.constant import STATEMENT_DEFAULT_FILES
 
 _C = config.constants
 
 
 def _files_redirect_href(
+    request: Request,
     problem: str,
-    user: str,
     *,
     path: str = '',
-    browse_tail: str = '',
+    browse_dir: str = '',
 ) -> str:
-    query_parts: list[str] = []
+    query: dict[str, str] = {}
     if path:
-        query_parts.append(f'path={quote_plus(path)}')
-    if browse_tail:
-        query_parts.append(browse_tail.lstrip('&'))
-    if not query_parts:
-        return f'/problems/{problem}/files'
-    return f'/problems/{problem}/files?' + '&'.join(query_parts)
+        query['path'] = path
+    if browse_dir:
+        query['dir'] = browse_dir
+    return problem_href_builder(request, problem)(
+        'problem_files',
+        query=query or None,
+    )
+
+
+def _files_write_context(request: Request, problem: str, user: str) -> dict:
+    ctx = page_ctx(
+        problem,
+        user,
+        include_branches=False,
+        refresh_status=False,
+        include_recent=False,
+        contest_workspace=contest_workspace_context_from_request(request),
+    )
+    require_write_access(ctx)
+    return ctx
+
+
+def _repository_parent(path: str) -> str:
+    parent = PurePosixPath(path).parent.as_posix()
+    return '' if parent == '.' else parent
+
 
 def files_page(request: Request, problem: str, user: Annotated[str, Depends(require_session_user)]):
     ctx = page_ctx(
@@ -54,12 +78,12 @@ def files_page(request: Request, problem: str, user: Annotated[str, Depends(requ
     )
     workspace = Path(ctx['workspace']['path'])
     selected = normalize_workspace_rel_path(request.query_params.get('path'))
+    requested_dir = request.query_params.get('dir')
     line_raw = request.query_params.get('line')
     selected_line = parse_line_param(line_raw, default=1)
     content = ''
     content_truncated = False
     selected_missing = False
-    selected_is_dir = False
     selected_is_binary = False
     selected_is_pdf = False
     selected_media_type = ''
@@ -69,50 +93,47 @@ def files_page(request: Request, problem: str, user: Annotated[str, Depends(requ
         limit=_C.WORKSPACE_FILE_LIST_LIMIT,
         require_allowed_root=False,
     )
-    default_selected = default_files_selected_path(workspace, files)
-    if not selected:
-        selected = default_selected
-    try:
-        selected = config.workspace_file_service.normalize_path(selected, require_allowed_root=False)
-        selected_view = config.workspace_file_service.file_view(
-            workspace,
-            selected,
-            char_limit=_C.WORKSPACE_FILE_VIEW_CHAR_LIMIT,
-            require_allowed_root=False,
-        )
-    except (HTTPException, ValueError):
-        selected = default_selected
-        selected_view = config.workspace_file_service.file_view(
-            workspace,
-            selected,
-            char_limit=_C.WORKSPACE_FILE_VIEW_CHAR_LIMIT,
-            require_allowed_root=False,
-        )
-        auto_message = f'invalid path; opened {selected}'
-    selected_missing = not selected_view.exists
-    selected_is_dir = selected_view.is_dir
-    selected_is_binary = selected_view.is_binary
-    selected_is_pdf = selected_view.is_pdf
-    selected_media_type = selected_view.media_type
-    content = selected_view.content
-    content_truncated = selected_view.content_truncated
-    selected_can_restore_default = (
-        selected in STATEMENT_DEFAULT_FILES
-        and not selected_is_dir
-        and (selected_missing or not selected_is_binary)
-    )
-    selected_template_kind = kind_for_path(selected)
-    selected_parent = str(Path(selected).parent)
-    if selected_parent in {'.', ''}:
-        selected_parent = ''
-    requested_dir = request.query_params.get('dir')
-    browse_dir_default = ''
-    browse_dir, browse_parent, browse_dirs, browse_files, browse_total = build_repo_browser_entries(
+    if requested_dir is None and selected:
+        requested_dir = _repository_parent(selected)
+    browser = build_repo_browser_context(
         workspace,
         files,
-        requested_dir if requested_dir is not None else browse_dir_default,
+        requested_dir or '',
+        root_label=problem_slug_leaf(ctx['problem']['slug']),
     )
-    browse_query_tail = files_browse_query_tail(browse_dir)
+    if selected:
+        try:
+            selected = config.workspace_file_service.normalize_path(
+                selected,
+                require_allowed_root=False,
+            )
+        except (HTTPException, ValueError):
+            selected = ''
+            auto_message = 'invalid path'
+    if selected and _repository_parent(selected) != browser['directory']:
+        selected = ''
+    if selected:
+        selected_view = config.workspace_file_service.file_view(
+            workspace,
+            selected,
+            char_limit=_C.WORKSPACE_FILE_VIEW_CHAR_LIMIT,
+            require_allowed_root=False,
+        )
+        if selected_view.is_dir:
+            selected = ''
+        else:
+            selected_missing = not selected_view.exists
+            selected_is_binary = selected_view.is_binary
+            selected_is_pdf = selected_view.is_pdf
+            selected_media_type = selected_view.media_type
+            content = selected_view.content
+            content_truncated = selected_view.content_truncated
+    selected_can_restore_default = (
+        bool(selected)
+        and selected in STATEMENT_DEFAULT_FILES
+        and (selected_missing or not selected_is_binary)
+    )
+    selected_template_kind = kind_for_path(selected) if selected else ''
     line_focus = build_line_focus_context(content, selected_line) if line_raw else None
     line_jump_requested = bool(line_raw)
     line_jump_missing = bool(line_jump_requested and line_focus is None)
@@ -125,22 +146,16 @@ def files_page(request: Request, problem: str, user: Annotated[str, Depends(requ
         'files_truncated': files_truncated,
         'file_limit': _C.WORKSPACE_FILE_LIST_LIMIT,
         'selected': selected,
+        'selected_name': PurePosixPath(selected).name if selected else '',
         'content': content,
         'content_truncated': content_truncated,
         'content_char_limit': _C.WORKSPACE_FILE_VIEW_CHAR_LIMIT,
         'selected_line': selected_line,
-        'selected_parent': selected_parent,
-        'browse_dir': browse_dir,
-        'browse_parent': browse_parent,
-        'browse_dirs': browse_dirs,
-        'browse_files': browse_files,
-        'browse_total': browse_total,
-        'browse_query_tail': browse_query_tail,
+        'browser': browser,
         'line_focus': line_focus,
         'line_jump_requested': line_jump_requested,
         'line_jump_missing': line_jump_missing,
         'selected_missing': selected_missing,
-        'selected_is_dir': selected_is_dir,
         'selected_is_binary': selected_is_binary,
         'selected_is_pdf': selected_is_pdf,
         'selected_media_type': selected_media_type,
@@ -151,14 +166,14 @@ def files_page(request: Request, problem: str, user: Annotated[str, Depends(requ
     return template_response(request, 'files.html', template_context)
 
 def files_save(
+    request: Request,
     problem: str,
     user: Annotated[str, Depends(require_session_user)],
     path: Annotated[str, Form()],
     content: Annotated[str, Form()],
     dir: Annotated[str, Form()] = '',
 ):
-    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
-    require_write_access(ctx)
+    ctx = _files_write_context(request, problem, user)
     workspace = Path(ctx['workspace']['path'])
     msg = 'saved'
     try:
@@ -167,41 +182,97 @@ def files_save(
     except ValueError as exc:
         msg = str(exc)
     return redirect_response(
-        _files_redirect_href(problem, user, path=path, browse_tail=files_browse_query_tail(dir)),
+        _files_redirect_href(request, problem, path=path, browse_dir=dir),
         status_code=303,
         message=msg,
     )
 
 def files_new(
+    request: Request,
     problem: str,
     user: Annotated[str, Depends(require_session_user)],
-    path: Annotated[str, Form()],
+    name: Annotated[str, Form()],
+    selected: Annotated[str, Form()] = '',
     dir: Annotated[str, Form()] = '',
 ):
-    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
-    require_write_access(ctx)
+    ctx = _files_write_context(request, problem, user)
     workspace = Path(ctx['workspace']['path'])
     msg = 'created'
+    selected_path = selected
     try:
-        created_path = config.workspace_file_service.create_empty(workspace, path, require_allowed_root=False)
+        path = config.workspace_file_service.child_path(
+            workspace,
+            dir,
+            name,
+            require_allowed_root=False,
+        )
+        created_path = config.workspace_file_service.create_empty(
+            workspace,
+            path,
+            require_allowed_root=False,
+        )
+        selected_path = created_path
         audit(ctx['user']['id'], ctx['problem']['id'], 'files.new', {'path': created_path})
     except ValueError as exc:
         msg = str(exc)
     return redirect_response(
-        _files_redirect_href(problem, user, path=path, browse_tail=files_browse_query_tail(dir)),
+        _files_redirect_href(
+            request,
+            problem,
+            path=selected_path,
+            browse_dir=dir,
+        ),
+        status_code=303,
+        message=msg,
+    )
+
+
+def files_new_directory(
+    request: Request,
+    problem: str,
+    user: Annotated[str, Depends(require_session_user)],
+    name: Annotated[str, Form()],
+    dir: Annotated[str, Form()] = '',
+):
+    ctx = _files_write_context(request, problem, user)
+    workspace = Path(ctx['workspace']['path'])
+    msg = 'directory created'
+    browse_dir = dir
+    try:
+        path = config.workspace_file_service.child_path(
+            workspace,
+            dir,
+            name,
+            require_allowed_root=False,
+        )
+        browse_dir = config.workspace_file_service.create_directory(
+            workspace,
+            path,
+            require_allowed_root=False,
+        )
+        audit(
+            ctx['user']['id'],
+            ctx['problem']['id'],
+            'files.new_directory',
+            {'path': browse_dir},
+        )
+    except ValueError as exc:
+        msg = str(exc)
+    return redirect_response(
+        _files_redirect_href(request, problem, browse_dir=browse_dir),
         status_code=303,
         message=msg,
     )
 
 def files_create_template(
+    request: Request,
     problem: str,
     user: Annotated[str, Depends(require_session_user)],
     path: Annotated[str, Form()],
     kind: Annotated[str, Form()],
     dir: Annotated[str, Form()] = '',
 ):
-    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
-    require_write_access(ctx)
+    ctx = _files_write_context(request, problem, user)
     workspace = Path(ctx['workspace']['path'])
     msg = 'template created'
     try:
@@ -225,26 +296,20 @@ def files_create_template(
     except ValueError as exc:
         msg = str(exc)
     return redirect_response(
-        _files_redirect_href(problem, user, path=path, browse_tail=files_browse_query_tail(dir)),
+        _files_redirect_href(request, problem, path=path, browse_dir=dir),
         status_code=303,
         message=msg,
     )
 
 
 def files_restore_default(
+    request: Request,
     problem: str,
     user: Annotated[str, Depends(require_session_user)],
     path: Annotated[str, Form()],
     dir: Annotated[str, Form()] = '',
 ):
-    ctx = page_ctx(
-        problem,
-        user,
-        include_branches=False,
-        refresh_status=False,
-        include_recent=False,
-    )
-    require_write_access(ctx)
+    ctx = _files_write_context(request, problem, user)
     workspace = Path(ctx['workspace']['path'])
     selected = path
     message = 'default statement file restored'
@@ -268,10 +333,10 @@ def files_restore_default(
         message = str(exc)
     return redirect_response(
         _files_redirect_href(
+            request,
             problem,
-            user,
             path=selected,
-            browse_tail=files_browse_query_tail(dir),
+            browse_dir=dir,
         ),
         status_code=303,
         message=message,
@@ -279,49 +344,74 @@ def files_restore_default(
 
 
 async def files_upload(
+    request: Request,
     problem: str,
     user: Annotated[str, Depends(require_session_user)],
-    path: Annotated[str, Form()],
     upload: Annotated[UploadFile, File(...)],
+    path: Annotated[str, Form()] = '',
     dir: Annotated[str, Form()] = '',
 ):
-    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
-    require_write_access(ctx)
+    ctx = _files_write_context(request, problem, user)
     workspace = Path(ctx['workspace']['path'])
+    message = 'uploaded'
+    selected = path
     try:
+        if not selected:
+            upload_name = str(upload.filename or '').replace('\\', '/').rsplit('/', 1)[-1]
+            if not upload_name or upload_name in {'.', '..'}:
+                raise ValueError('uploaded file name is required')
+            selected = f'{dir}/{upload_name}' if dir else upload_name
         uploaded_path, total_bytes = await config.workspace_file_service.upload_file(
             workspace,
-            path,
+            selected,
             upload,
             require_allowed_root=False,
         )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-    except OSError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-    audit(ctx['user']['id'], ctx['problem']['id'], 'files.upload', {'path': uploaded_path, 'bytes': total_bytes})
+    except (ValueError, OSError) as exc:
+        message = str(exc)
+    else:
+        audit(ctx['user']['id'], ctx['problem']['id'], 'files.upload', {'path': uploaded_path, 'bytes': total_bytes})
+    finally:
+        await upload.close()
     return redirect_response(
-        _files_redirect_href(problem, user, path=path, browse_tail=files_browse_query_tail(dir)),
+        _files_redirect_href(request, problem, path=selected, browse_dir=dir),
         status_code=303,
-        message='uploaded',
+        message=message,
     )
 
 def files_rename(
+    request: Request,
     problem: str,
     user: Annotated[str, Depends(require_session_user)],
     old_path: Annotated[str, Form()],
-    new_path: Annotated[str, Form()],
+    new_name: Annotated[str, Form()],
     dir: Annotated[str, Form()] = '',
 ):
-    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
-    require_write_access(ctx)
+    ctx = _files_write_context(request, problem, user)
     workspace = Path(ctx['workspace']['path'])
-    selected = new_path
+    selected = old_path
     msg = 'renamed'
     try:
+        normalized_old_path = config.workspace_file_service.normalize_path(
+            old_path,
+            require_allowed_root=False,
+        )
+        normalized_dir = config.workspace_file_service.normalize_path(
+            dir,
+            allow_empty=True,
+            require_allowed_root=False,
+        )
+        if _repository_parent(normalized_old_path) != normalized_dir:
+            raise ValueError('selected file is not in the current folder')
+        new_path = config.workspace_file_service.child_path(
+            workspace,
+            normalized_dir,
+            new_name,
+            require_allowed_root=False,
+        )
         old_path, selected = config.workspace_file_service.rename_path(
             workspace,
-            old_path,
+            normalized_old_path,
             new_path,
             require_allowed_root=False,
         )
@@ -330,19 +420,19 @@ def files_rename(
         selected = old_path
         msg = str(exc)
     return redirect_response(
-        _files_redirect_href(problem, user, path=selected, browse_tail=files_browse_query_tail(dir)),
+        _files_redirect_href(request, problem, path=selected, browse_dir=dir),
         status_code=303,
         message=msg,
     )
 
 def files_delete(
+    request: Request,
     problem: str,
     user: Annotated[str, Depends(require_session_user)],
     path: Annotated[str, Form()],
     dir: Annotated[str, Form()] = '',
 ):
-    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
-    require_write_access(ctx)
+    ctx = _files_write_context(request, problem, user)
     workspace = Path(ctx['workspace']['path'])
     msg = 'deleted'
     try:
@@ -351,7 +441,7 @@ def files_delete(
     except ValueError as exc:
         msg = str(exc)
     return redirect_response(
-        _files_redirect_href(problem, user, browse_tail=files_browse_query_tail(dir)),
+        _files_redirect_href(request, problem, browse_dir=dir),
         status_code=303,
         message=msg,
     )

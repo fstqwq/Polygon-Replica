@@ -19,6 +19,7 @@ from app.impl.problem.file import (
     files_delete,
     files_download,
     files_new,
+    files_new_directory,
     files_page,
     files_rename,
     files_restore_default,
@@ -230,6 +231,11 @@ router.add_api_route(
 router.add_api_route(
     "/problems/{problem:path}/files/new",
     files_new,
+    methods=["POST"],
+)
+router.add_api_route(
+    "/problems/{problem:path}/files/new-directory",
+    files_new_directory,
     methods=["POST"],
 )
 router.add_api_route(

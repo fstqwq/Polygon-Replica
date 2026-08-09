@@ -615,6 +615,12 @@ class TestBackendMinimal(E2ETestBase):
         html = resp.body.decode("utf-8", errors="replace")
         self.assertIn("Delete current language", html)
         self.assertIn("/statement/languages/delete", html)
+        self.assertNotIn("Switch to interactive mode", html)
+        self.assertIn('class="form-submit-row statement-save-actions"', html)
+        self.assertIn(
+            'class="btn primary-action" type="submit">Save Statement</button>',
+            html,
+        )
 
     def test_preview_page_lists_compile_assets_and_contestant_attachments_separately(self) -> None:
         ws = Path(config.workspace_service.workspace_context(self.problem, self.user, include_recent=False)["workspace"]["path"])

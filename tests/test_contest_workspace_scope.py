@@ -576,6 +576,150 @@ class TestContestWorkspaceScope(ContestActionBase):
         )
         self.assertEqual(unscoped_problems_main.get("aria-current"), "page")
 
+    def test_scoped_files_navigation_and_mutation_keep_browser_state(self) -> None:
+        contest_slug, contest_id, actor_user_id = self.create_contest("files")
+        self._add_default_problem(contest_id, actor_user_id, idx="A")
+        cookie = self._session_cookie("alice")
+        workspace = Path(
+            config.workspace_service.ensure_workspace("alice/sample", "alice")
+        )
+        (workspace / "notes").mkdir(exist_ok=True)
+
+        from app.main import app
+
+        with TestClient(app, base_url="https://testserver") as client:
+            page = client.get(
+                f"/problems/alice/sample/files?path=config%2Fproblem.json"
+                f"&contest={contest_slug}",
+                headers={"cookie": cookie},
+            )
+            directory = client.get(
+                f"/problems/alice/sample/files?path=config&dir=config"
+                f"&contest={contest_slug}",
+                headers={"cookie": cookie},
+            )
+            created = client.post(
+                f"/problems/alice/sample/files/new?contest={contest_slug}",
+                data={
+                    "name": "scoped + file.txt",
+                    "dir": "notes",
+                },
+                headers={
+                    "cookie": cookie,
+                    "origin": "https://testserver",
+                },
+                follow_redirects=False,
+            )
+            created_directory = client.post(
+                f"/problems/alice/sample/files/new-directory"
+                f"?contest={contest_slug}",
+                data={
+                    "name": "scoped + directory",
+                    "dir": "notes",
+                },
+                headers={
+                    "cookie": cookie,
+                    "origin": "https://testserver",
+                },
+                follow_redirects=False,
+            )
+            uploaded = client.post(
+                f"/problems/alice/sample/files/upload?contest={contest_slug}",
+                data={"dir": "config"},
+                files={"upload": ("scoped + payload.txt", b"payload\n")},
+                headers={
+                    "cookie": cookie,
+                    "origin": "https://testserver",
+                },
+                follow_redirects=False,
+            )
+
+        self.assertEqual(page.status_code, 200, page.text)
+        document = _HtmlElements()
+        document.feed(page.text)
+        config_href = next(
+            attrs["href"]
+            for tag, attrs in document.elements
+            if tag == "a"
+            and parse_qs(urlsplit(attrs.get("href", "")).query).get("dir")
+            == ["config"]
+        )
+        self.assertEqual(urlsplit(config_href).path, "/problems/alice/sample/files")
+        self.assertEqual(
+            parse_qs(urlsplit(config_href).query),
+            {
+                "path": ["config/problem.json"],
+                "dir": ["config"],
+                "contest": [contest_slug],
+            },
+        )
+        for tag, attrs in document.elements:
+            for attribute in ("href", "action", "src"):
+                value = attrs.get(attribute, "")
+                if value.startswith("/problems/"):
+                    with self.subTest(tag=tag, attribute=attribute, value=value):
+                        self.assertEqual(
+                            parse_qs(urlsplit(value).query).get("contest"),
+                            [contest_slug],
+                        )
+
+        self.assertEqual(directory.status_code, 200, directory.text)
+        self.assertIn('aria-label="Current folder"', directory.text)
+        self.assertIn("<strong>config</strong>", directory.text)
+        self.assertIn("<code>problem.json</code>", directory.text)
+        self.assertIn("Select a file to edit.", directory.text)
+        self.assertNotIn('data-code-editor="1"', directory.text)
+        self.assertNotIn(">Download file</a>", directory.text)
+        self.assertNotIn("Repository Browser", directory.text)
+        self.assertNotIn("Current folder:", directory.text)
+        self.assertNotIn("Go Up", directory.text)
+
+        self.assertEqual(created.status_code, 303, created.text)
+        created_location = urlsplit(created.headers["location"])
+        self.assertEqual(created_location.path, "/problems/alice/sample/files")
+        self.assertEqual(
+            parse_qs(created_location.query),
+            {
+                "path": ["notes/scoped + file.txt"],
+                "dir": ["notes"],
+                "contest": [contest_slug],
+            },
+        )
+
+        self.assertEqual(
+            created_directory.status_code,
+            303,
+            created_directory.text,
+        )
+        created_directory_location = urlsplit(
+            created_directory.headers["location"]
+        )
+        self.assertEqual(
+            created_directory_location.path,
+            "/problems/alice/sample/files",
+        )
+        self.assertEqual(
+            parse_qs(created_directory_location.query),
+            {
+                "dir": ["notes/scoped + directory"],
+                "contest": [contest_slug],
+            },
+        )
+        self.assertTrue((workspace / "notes/scoped + file.txt").is_file())
+        self.assertTrue((workspace / "notes/scoped + directory").is_dir())
+
+        self.assertEqual(uploaded.status_code, 303, uploaded.text)
+        uploaded_location = urlsplit(uploaded.headers["location"])
+        self.assertEqual(uploaded_location.path, "/problems/alice/sample/files")
+        self.assertEqual(
+            parse_qs(uploaded_location.query),
+            {
+                "path": ["config/scoped + payload.txt"],
+                "dir": ["config"],
+                "contest": [contest_slug],
+            },
+        )
+
     def test_problem_templates_do_not_construct_problem_urls(self) -> None:
         template_root = Path("app/template")
         route_names: set[str] = set()

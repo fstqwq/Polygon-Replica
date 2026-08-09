@@ -1707,13 +1707,62 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         self.assertIn("files-pdf-preview", html)
         self.assertNotIn('data-code-editor="1"', html)
 
-    def test_files_page_uses_two_column_panel_layout_classes(self) -> None:
+    def test_files_page_uses_browser_and_editor_layout(self) -> None:
         resp = files_page(_request("/problems/alice/sample/files"), "alice/sample", "alice")
         self.assertEqual(resp.status_code, 200)
         html = resp.body.decode("utf-8", errors="replace")
         self.assertIn('class="content-section files-panel files-panel-browser"', html)
         self.assertIn('class="content-section files-panel files-panel-editor"', html)
-        self.assertIn('class="content-section files-panel files-panel-ops"', html)
+        self.assertIn('class="files-breadcrumb"', html)
+        self.assertIn('class="files-browser-list"', html)
+        self.assertNotIn("Repository Browser", html)
+        self.assertNotIn("Current folder:", html)
+        self.assertNotIn("<th>Type</th>", html)
+        self.assertNotIn("File Operations", html)
+        self.assertIn("<strong>sample</strong>", html)
+        self.assertIn('class="files-breadcrumb-separator" aria-hidden="true">/</span>', html)
+        self.assertIn(">New file</summary>", html)
+        self.assertIn(">New directory</summary>", html)
+        self.assertIn(">Upload file</summary>", html)
+        self.assertIn('name="name" value="new-file.txt"', html)
+        self.assertIn('name="name" value="new-directory"', html)
+        self.assertIn("Select a file to edit.", html)
+        self.assertNotIn(">Rename or delete</summary>", html)
+
+        selected = files_page(
+            _request(
+                "/problems/alice/sample/files",
+                "path=config/problem.json&dir=config",
+            ),
+            "alice/sample",
+            "alice",
+        )
+        self.assertEqual(selected.status_code, 200)
+        selected_html = selected.body.decode("utf-8", errors="replace")
+        self.assertIn(">Rename or delete</summary>", selected_html)
+        self.assertIn('name="new_name" value="problem.json"', selected_html)
+        self.assertNotIn("New path", selected_html)
+        self.assertIn(">sample</a>", selected_html)
+        self.assertNotIn("files-breadcrumb-root", selected_html)
+        self.assertIn("files-breadcrumb-separator", selected_html)
+        self.assertIn('class="form-submit-row files-save-actions"', selected_html)
+        self.assertIn(
+            'class="btn primary-action" type="submit">Save</button>',
+            selected_html,
+        )
+
+        cross_folder = files_page(
+            _request(
+                "/problems/alice/sample/files",
+                "path=config/problem.json&dir=notes",
+            ),
+            "alice/sample",
+            "alice",
+        )
+        self.assertEqual(cross_folder.status_code, 200)
+        cross_folder_html = cross_folder.body.decode("utf-8", errors="replace")
+        self.assertIn("Select a file to edit.", cross_folder_html)
+        self.assertNotIn('data-code-path="config/problem.json"', cross_folder_html)
 
     def test_contests_root_page_is_top_level_without_selected_contest(self) -> None:
         slug = f"ui-root-contest-{uuid.uuid4().hex[:8]}"

@@ -68,6 +68,32 @@ class WorkspaceFileService:
         if is_repository_answer_path(Path(normalized).parts):
             raise ValueError("repository answer files are not allowed")
 
+    def child_path(
+        self,
+        workspace: Path,
+        raw_directory: str,
+        raw_name: str,
+        *,
+        require_allowed_root: bool,
+    ) -> str:
+        directory = self.normalize_path(
+            raw_directory,
+            allow_empty=True,
+            require_allowed_root=require_allowed_root,
+        )
+        name = raw_name.strip()
+        if not name:
+            raise ValueError("name is required")
+        if name in {".", ".."} or "/" in name or "\\" in name:
+            raise ValueError("name must not contain path separators")
+        parent = safe_workspace_path(workspace, directory) if directory else workspace
+        if not parent.is_dir() or parent.is_symlink():
+            raise ValueError("current folder not found")
+        return self.normalize_path(
+            f"{directory}/{name}" if directory else name,
+            require_allowed_root=require_allowed_root,
+        )
+
     def list_entries(self, workspace: Path, raw_path: str, *, limit: int, require_allowed_root: bool) -> WorkspaceFileList:
         normalized = self.normalize_path(raw_path, allow_empty=True, require_allowed_root=require_allowed_root)
         entries, truncated = self._git_service.list_files_capped(workspace, normalized or ".", limit=limit)
@@ -155,6 +181,18 @@ class WorkspaceFileService:
         self._reject_repository_answer_path(normalized)
         with self._workspace_service.workspace_lock(workspace):
             self._git_service.write_file(workspace, normalized, "")
+        return normalized
+
+    def create_directory(self, workspace: Path, raw_path: str, *, require_allowed_root: bool) -> str:
+        normalized = self.normalize_path(raw_path, require_allowed_root=require_allowed_root)
+        self._reject_repository_answer_path(normalized)
+        with self._workspace_service.workspace_lock(workspace):
+            target = safe_workspace_path(workspace, normalized)
+            if target.exists():
+                raise ValueError("path already exists")
+            if not target.parent.is_dir() or target.parent.is_symlink():
+                raise ValueError("current folder not found")
+            target.mkdir()
         return normalized
 
     async def upload_file(self, workspace: Path, raw_path: str, upload: UploadFile, *, require_allowed_root: bool) -> tuple[str, int]:
