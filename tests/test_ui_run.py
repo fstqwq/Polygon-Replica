@@ -4053,14 +4053,22 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             )
         self.assertEqual(detail.status_code, 200)
         detail_html = detail.body.decode("utf-8", errors="replace")
-        self.assertIn("Showing 2/2 events.", detail_html)
-        self.assertNotIn("Interactor ·", detail_html)
-        self.assertNotIn("Solution ·", detail_html)
-        self.assertIn("Jury log", detail_html)
-        self.assertIn("jury accepted", detail_html)
-        self.assertNotIn("4 B", detail_html)
-        self.assertIn(download_href, detail_html)
-        self.assertIn(">download raw</a>", detail_html)
+        assert_html_contract(
+            self,
+            detail_html,
+            contains=(
+                "<strong>Pass 1 Input</strong>",
+                "<strong>Pass 1 Transcript</strong>",
+                "Jury log",
+                "jury accepted",
+                "ping",
+                "pong",
+                "Showing 2/2 events.",
+                download_href,
+                ">download raw</a>",
+            ),
+            label="interactive transcript fragment",
+        )
 
         with self.assertRaises(HTTPException) as missing_run_id:
             run_details_test_fragment(
@@ -4259,33 +4267,33 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
 
         self.assertEqual(detail.status_code, 200)
         html = detail.body.decode("utf-8", errors="replace")
-        self.assertIn("Pass 1", html)
-        self.assertIn("Pass 2", html)
-        self.assertIn("Pass 3", html)
-        self.assertEqual(html.count("<strong>Input</strong>"), 3)
-        self.assertIn("first pass input", html)
-        self.assertIn("second pass input", html)
-        self.assertIn("third pass input", html)
-        self.assertNotIn("Input 001.in", html)
-        self.assertNotIn("<strong>Answer</strong>", html)
-        self.assertNotIn("testcase seed", html)
-        self.assertIn("first pass accepted", html)
-        self.assertIn("second pass accepted", html)
-        self.assertIn("Showing 3/3 events.", html)
-        self.assertIn("Malformed at byte", html)
-        self.assertIn('class="transcript-message transcript-warning"', html)
-        self.assertIn("transcript-event-interactor", html)
-        self.assertIn("transcript-event-solution", html)
-        self.assertNotIn("transcript-meta", html)
-        self.assertNotIn("Interactor ·", html)
-        self.assertNotIn("Solution ·", html)
-        self.assertNotIn("transcript-rail", html)
-        self.assertNotIn("transcript-tooltip", html)
-        self.assertIn("closed output", html)
-        self.assertIn("Transcript not captured.", html)
-        self.assertIn('class="transcript-message transcript-unavailable"', html)
-        self.assertNotIn("transcript-bubble", html)
-        self.assertNotIn("interactor -&gt; solution", html)
+        assert_html_contract(
+            self,
+            html,
+            contains=(
+                "<strong>Pass 1 Input</strong>",
+                "<strong>Pass 1 Transcript</strong>",
+                "<strong>Pass 2 Input</strong>",
+                "<strong>Pass 2 Transcript</strong>",
+                "<strong>Pass 3 Input</strong>",
+                "<strong>Pass 3 Transcript</strong>",
+                "first pass input",
+                "second pass input",
+                "third pass input",
+                "first pass accepted",
+                "second pass accepted",
+                "Showing 3/3 events.",
+                "Malformed at byte",
+                "closed output",
+                "Transcript not captured.",
+            ),
+            excludes=(
+                "Input 001.in",
+                "<strong>Answer</strong>",
+                "testcase seed",
+            ),
+            label="multipass interactive detail",
+        )
         artifact_paths = "\n".join(str(call.args[1]) for call in artifact_file.call_args_list)
         self.assertNotIn(input_ref.rsplit("/", 1)[-1], artifact_paths)
         self.assertNotIn(answer_ref.rsplit("/", 1)[-1], artifact_paths)

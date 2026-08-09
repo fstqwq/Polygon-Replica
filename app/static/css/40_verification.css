@@ -577,6 +577,11 @@ body.verification-compact .run-details-page-compact .verification-detail-wrap {
   max-height: calc(100vh - 10px);
 }
 
+.verification-test-detail-popup {
+  width: min(920px, calc(100vw - 48px));
+  max-height: calc(100vh - 32px);
+}
+
 .verification-detail-popup .ui-popup-content {
   display: block;
   min-width: 0;
@@ -740,9 +745,9 @@ body.verification-compact .run-details-page-compact .verification-detail-wrap {
 
 .transcript-payload {
   width: 100%;
-  min-height: 34px;
+  min-height: 0;
   margin: 0;
-  padding: var(--space-2) 22px;
+  padding: 2px 12px;
   border: 0;
   background: transparent;
   color: var(--transcript-payload);
@@ -750,7 +755,7 @@ body.verification-compact .run-details-page-compact .verification-detail-wrap {
   overflow-wrap: anywhere;
   word-break: break-word;
   font-size: var(--font-size-ui-sm);
-  line-height: 1.4;
+  line-height: 1.3;
 }
 
 .transcript-event-solution .transcript-payload,
@@ -771,7 +776,7 @@ body.verification-compact .run-details-page-compact .verification-detail-wrap {
 
 .transcript-omitted {
   display: block;
-  padding: 0 22px var(--space-1);
+  padding: 0 12px 2px;
   font-size: var(--font-size-ui-xs);
 }
 
@@ -799,15 +804,6 @@ body.verification-compact .run-details-page-compact .verification-detail-wrap {
   color: var(--muted);
 }
 
-.interactive-pass-list {
-  display: block;
-}
-
-.interactive-pass {
-  display: block;
-  min-width: 0;
-}
-
 .interactive-pass > * + * {
   margin-top: var(--space-3);
 }
@@ -816,10 +812,6 @@ body.verification-compact .run-details-page-compact .verification-detail-wrap {
   margin-top: var(--space-6);
   padding-top: var(--space-5);
   border-top: 1px solid var(--line);
-}
-
-.interactive-pass h3 {
-  margin: 0;
 }
 
 .jury-log-cell {

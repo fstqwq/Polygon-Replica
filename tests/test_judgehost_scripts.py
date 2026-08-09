@@ -501,6 +501,46 @@ class TestJudgehostScripts(unittest.TestCase):
             )
             self.assertFalse(any(".polygon-pass" in path.name for path in testcase.rglob("*")))
 
+    def test_pass_capture_splits_cumulative_judge_messages_by_pass(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            capture = self._write_pass_capture(root, max_bytes=1024 * 1024)
+            testcase = root / "testcase"
+            first = self._write_domjudge_pass(
+                testcase,
+                "1",
+                overrides={
+                    "feedback/judgemessage.txt": b"First pass OK",
+                },
+            )
+            (first / "feedback/nextpass.in").write_bytes(b"next input\n")
+            continuation = self._run_pass_capture(capture, first, 42)
+            self.assertEqual(continuation.returncode, 0, continuation.stderr)
+
+            second = self._write_domjudge_pass(
+                testcase,
+                "2",
+                overrides={
+                    "feedback/judgemessage.txt": b"First pass OKSecond pass OK",
+                },
+            )
+            final = self._run_pass_capture(capture, second, 43)
+            self.assertEqual(final.returncode, 0, final.stderr)
+            bundle = parse_pass_bundle(
+                (second / "feedback/teammessage.txt").read_bytes(),
+                max_bundle_bytes=1024 * 1024,
+                max_member_bytes=1024 * 1024,
+            )
+            assert bundle is not None
+            self.assertEqual(
+                bundle.pass_files(1)["judgemessage.txt"],
+                b"First pass OK",
+            )
+            self.assertEqual(
+                bundle.pass_files(2)["judgemessage.txt"],
+                b"Second pass OK",
+            )
+
     def test_pass_capture_resolves_domjudge_pass_input_symlinks(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

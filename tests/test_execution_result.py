@@ -199,6 +199,7 @@ class TestPassBundle(unittest.TestCase):
                 ("final-pass-number", b"2\n"),
                 *_complete_pass_entries(1),
                 ("passes/2/input", b"next input"),
+                ("passes/2/judgemessage.txt", b"final judge message"),
                 ("passes/2/teammessage.txt", b"final team message"),
             ]
         )
@@ -222,6 +223,7 @@ class TestPassBundle(unittest.TestCase):
                 ("passes/1/program.meta", b"cpu-time: 1"),
                 ("passes/1/compare.meta", b"exitcode: 42"),
                 ("passes/2/input", b"next"),
+                ("passes/2/judgemessage.txt", b""),
                 ("passes/2/teammessage.txt", b""),
             ]
         )

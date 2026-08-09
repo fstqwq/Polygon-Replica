@@ -54,6 +54,7 @@ def _pass_bundle_bytes(
     final_pass_number: int,
     historical_files: dict[int, dict[str, bytes]],
     final_input: bytes,
+    final_judge_message: bytes,
     final_team_message: bytes,
 ) -> bytes:
     entries: list[tuple[str, bytes]] = [
@@ -68,6 +69,10 @@ def _pass_bundle_bytes(
     entries.extend(
         [
             (f"passes/{final_pass_number}/input", final_input),
+            (
+                f"passes/{final_pass_number}/judgemessage.txt",
+                final_judge_message,
+            ),
             (
                 f"passes/{final_pass_number}/teammessage.txt",
                 final_team_message,
@@ -1490,6 +1495,7 @@ class TestJudgehostService(E2ETestBase):
                 }
             },
             final_input=b"second input\n",
+            final_judge_message=b"second ok\n",
             final_team_message=b"final team\n",
         )
         service.domjudge_add_judging_run(
@@ -1523,14 +1529,16 @@ class TestJudgehostService(E2ETestBase):
         self.assertEqual(str((passes[0] or {}).get("verdict") or ""), "OK")
         first_output_ref = str((passes[0] or {}).get("output_ref") or "").strip()
         final_output_ref = str((passes[1] or {}).get("output_ref") or "").strip()
+        first_judge_ref = str(
+            (passes[0] or {}).get("judge_message_ref") or ""
+        ).strip()
+        final_judge_ref = str(
+            (passes[1] or {}).get("judge_message_ref") or ""
+        ).strip()
         self.assertEqual(service.resolve_artifact_blob(first_output_ref), b"first output\n")
         self.assertEqual(service.resolve_artifact_blob(final_output_ref), noisy_output)
-        feedback_files = row.get("feedback_files") if isinstance(row, dict) else []
-        self.assertTrue(feedback_files)
-        first_feedback_token = str(feedback_files[0] or "")
-        self.assertTrue(first_feedback_token.startswith("blob://sha256/"))
-        self.assertEqual(service.resolve_artifact_blob(first_feedback_token), b"ok\n")
-
+        self.assertEqual(service.resolve_artifact_blob(first_judge_ref), b"first ok\n")
+        self.assertEqual(service.resolve_artifact_blob(final_judge_ref), b"second ok\n")
         run_root = self._verification_artifact_root(verification_id) / "runs" / run_id
         self.assertFalse((run_root / "001.out").exists())
 

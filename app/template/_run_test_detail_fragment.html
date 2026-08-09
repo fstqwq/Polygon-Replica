@@ -54,14 +54,12 @@
     {% endif %}
 
     {% if cell.detail.is_interactive %}
-    <div class="interactive-pass-list">
       {% for pass_row in cell.detail.pass_rows %}
       {% set jury_log = pass_row.jury_log_preview %}
       {% set transcript = pass_row.interactive_transcript %}
       <section class="interactive-pass">
-        <h3>{{ pass_row.pass_label }}</h3>
-        {{ artifact_preview_card('Input', pass_row.input_preview, 'interactive-pass-input') }}
-        <table class="table-base table-compact sol-metrics interactive-pass-summary">
+        {{ artifact_preview_card(pass_row.pass_label + ' Input', pass_row.input_preview) }}
+        <table class="table-base table-compact sol-metrics">
           <colgroup>
             <col class="status-col" />
             <col class="fb-col" />
@@ -105,7 +103,7 @@
 
         <div class="transcript">
           <div class="transcript-head">
-            <strong>Transcript</strong>
+            <strong>{{ pass_row.pass_label }} Transcript</strong>
             {% if transcript.download_verification_id %}
             <a href="{{ problem_href('artifact_file', verification_id=transcript.download_verification_id, rel_path=transcript.download_rel_path) }}">download raw</a>
             {% endif %}
@@ -131,7 +129,6 @@
         </div>
       </section>
       {% endfor %}
-    </div>
     {% else %}
     {% set final_row = cell.detail.final_row if cell.detail.final_row else None %}
     {% if final_row %}

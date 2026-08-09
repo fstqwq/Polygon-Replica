@@ -1550,6 +1550,12 @@ class ResultProcessor:
                 else "historical pass artifact capture was incomplete: "
                 + metadata_warning
             )
+        final_judge_message_ref = output_diff_token
+        if pass_bundle is not None:
+            final_judge_message_ref = _bundled_ref(
+                final_pass_number,
+                "judgemessage.txt",
+            )
         case_result = build_case_result(
             test_name=domjudge_text(row["test_name"]),
             runresult=runresult,
@@ -1562,7 +1568,7 @@ class ResultProcessor:
             output_run_ref=output_run_token,
             output_error_ref=output_err_token,
             output_system_ref=output_sys_token,
-            output_diff_ref=output_diff_token,
+            output_diff_ref=final_judge_message_ref,
             metadata_ref=metadata_token,
             compare_metadata_ref=compare_meta_token,
             team_message_ref=team_message_token,
