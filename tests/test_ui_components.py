@@ -111,6 +111,16 @@ class TestUIComponents(UIHelpersMixin, E2ETestBase):
         )
         self.assertEqual(resp.status_code, 200)
 
+    def test_packages_nav_uses_none_for_an_unbuilt_package(self) -> None:
+        resp = general_page(
+            _request(f"/problems/{self.problem}/general"), self.problem, self.user
+        )
+        self.assertEqual(resp.status_code, 200)
+        html = resp.body.decode("utf-8", errors="replace")
+        packages_nav = html.split(">Packages</a>", maxsplit=1)[1].split("</div>", maxsplit=1)[0]
+        self.assertIn(">none</span>", packages_nav)
+        self.assertNotIn(">missing</span>", packages_nav)
+
     def test_solutions_nav_status_shows_no_main_correct_hint_when_missing_main(
         self,
     ) -> None:

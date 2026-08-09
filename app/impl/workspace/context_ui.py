@@ -447,7 +447,7 @@ def _build_problem_nav_status(ctx: dict) -> dict[str, dict[str, object]]:
         export_outdated = head_revision is not None and head_revision > 0 and (export_revision != head_revision)
         export_nav: dict[str, object] = {'text': f'built for v{export_revision}', 'danger': bool(export_outdated)}
     else:
-        export_nav = {'text': 'missing', 'danger': True}
+        export_nav = {'text': 'none', 'danger': True}
     if export_source_commit and problem_id > 0:
         current_export = config.export_service.latest_succeeded_export_job(
             problem_id,
