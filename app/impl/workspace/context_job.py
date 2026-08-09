@@ -8,7 +8,6 @@ from app.service.problem_package.service import PublishedRevision
 from app.service.verification.types import Kind, Status
 from app.service.verification.runtime import normalize_pass_limit, normalize_problem_mode
 
-from app.impl.workspace.context_job_helper import allocate_run_id
 from app.impl.workspace.context_operation import audit
 from app.impl.workspace.context_verification import (
     remember_verification_fingerprint,
