@@ -9,6 +9,7 @@ from types import SimpleNamespace
 
 from app.runtime_value import build_runtime_values
 from app.service.judgehost.toolkit import DomjudgeToolkit
+from app.service.judgehost.pass_bundle import parse_pass_bundle
 
 
 config = SimpleNamespace(constants=build_runtime_values(), judgehost_task_service=None)
@@ -23,6 +24,73 @@ class TestJudgehostScripts(unittest.TestCase):
             constants=config.constants,
         )
         config.judgehost_task_service = SimpleNamespace(toolkit=DomjudgeToolkit(state))
+
+    def _write_pass_capture(self, root: Path, *, max_bytes: int) -> Path:
+        capture = root / "pass-capture"
+        toolkit = config.judgehost_task_service.toolkit
+        capture.write_bytes(toolkit.pass_capture_script(max_bytes=max_bytes))
+        os.chmod(capture, 0o755)
+        return capture
+
+    @staticmethod
+    def _write_domjudge_pass(
+        testcase_dir: Path,
+        number: str,
+        *,
+        overrides: dict[str, bytes] | None = None,
+        omitted: frozenset[str] = frozenset(),
+    ) -> Path:
+        pass_dir = testcase_dir / number
+        feedback = pass_dir / "feedback"
+        feedback.mkdir(parents=True)
+        files = {
+            "testdata.in": f"input {number}\n".encode(),
+            "program.out": f"output {number}\n".encode(),
+            "program.err": f"stderr {number}\n".encode(),
+            "system.out": f"system {number}\n".encode(),
+            "program.meta": (
+                "time-used: cpu-time\n"
+                f"cpu-time: 0.{number}\n"
+                f"wall-time: 0.{number}\n"
+                f"memory-bytes: {int(number) * 1024}\n"
+                "custom-program-field: retained\n"
+            ).encode(),
+            "compare.meta": (
+                "exitcode: 42\n"
+                f"custom-compare-field: pass-{number}\n"
+            ).encode(),
+            "feedback/judgemessage.txt": f"judge {number}\n".encode(),
+            "feedback/teammessage.txt": f"team {number}\n".encode(),
+        }
+        files.update(overrides or {})
+        for relative, content in files.items():
+            if relative in omitted:
+                continue
+            target = pass_dir / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(content)
+        return pass_dir
+
+    @staticmethod
+    def _run_pass_capture(
+        capture: Path,
+        pass_dir: Path,
+        exit_status: int,
+        *,
+        env: dict[str, str] | None = None,
+    ) -> subprocess.CompletedProcess[bytes]:
+        return subprocess.run(
+            [
+                str(capture),
+                str(pass_dir / "testdata.in"),
+                str(pass_dir / "feedback"),
+                str(exit_status),
+            ],
+            cwd=pass_dir,
+            env=env,
+            capture_output=True,
+            check=False,
+        )
 
     def test_domjudge_compare_script_shifts_framework_args_before_checker(self) -> None:
         service = config.judgehost_task_service
@@ -323,7 +391,295 @@ class TestJudgehostScripts(unittest.TestCase):
         ).decode("utf-8")
         self.assertIn("#!/bin/sh", script_text)
         self.assertIn("Auto-generated build script for interactor by Polygon2DOMjudge", script_text)
-        self.assertIn("g++ -Wall -DDOMJUDGE -O2 interactor.cpp -std=gnu++20 -o run", script_text)
+        self.assertIn("g++ -Wall -DDOMJUDGE -O2 interactor.cpp -std=gnu++20 -o interactor", script_text)
+        self.assertIn("cp interactive.runjury run", script_text)
+
+    def test_pass_capture_reads_exact_historical_siblings_on_final_pass(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            capture = self._write_pass_capture(root, max_bytes=1024 * 1024)
+            testcase = root / "testcase"
+            first_program_meta = b"cpu-time: 0.11\nraw-program-field: keep-me\n"
+            first_compare_meta = b"exitcode: 42\nraw-compare-field: keep-me\n"
+            first = self._write_domjudge_pass(
+                testcase,
+                "1",
+                overrides={
+                    "testdata.in": b"actual first input\n",
+                    "program.out": b"actual first output\n",
+                    "program.meta": first_program_meta,
+                    "compare.meta": first_compare_meta,
+                },
+                omitted=frozenset({"feedback/teammessage.txt"}),
+            )
+            first_team = first / "feedback/teammessage.txt"
+            (first / "feedback/nextpass.in").write_bytes(b"next input\n")
+            continuation = self._run_pass_capture(capture, first, 42)
+            self.assertEqual(continuation.returncode, 0, continuation.stderr)
+            self.assertFalse(first_team.exists())
+            self.assertFalse(any(".polygon-pass" in path.name for path in first.rglob("*")))
+
+            second = self._write_domjudge_pass(
+                testcase,
+                "2",
+                overrides={
+                    "testdata.in": b"actual second input\n",
+                    "feedback/teammessage.txt": b"second team message\n",
+                },
+            )
+            second_team = second / "feedback/teammessage.txt"
+            second_original_team = second_team.read_bytes()
+            (second / "feedback/nextpass.in").write_bytes(b"third input\n")
+            continuation = self._run_pass_capture(capture, second, 42)
+            self.assertEqual(continuation.returncode, 0, continuation.stderr)
+            self.assertEqual(second_team.read_bytes(), second_original_team)
+
+            third = self._write_domjudge_pass(
+                testcase,
+                "3",
+                overrides={
+                    "testdata.in": b"actual third input\n",
+                    "feedback/teammessage.txt": b"genuine final team message\n",
+                },
+            )
+            final = self._run_pass_capture(capture, third, 43)
+            self.assertEqual(final.returncode, 0, final.stderr)
+            bundle = parse_pass_bundle(
+                (third / "feedback/teammessage.txt").read_bytes(),
+                max_bundle_bytes=1024 * 1024,
+                max_member_bytes=1024 * 1024,
+            )
+            assert bundle is not None
+            self.assertEqual(bundle.final_pass_number, 3)
+            self.assertEqual(bundle.pass_files(1)["input"], b"actual first input\n")
+            self.assertEqual(bundle.pass_files(1)["program.out"], b"actual first output\n")
+            self.assertEqual(bundle.pass_files(1)["program.meta"], first_program_meta)
+            self.assertEqual(bundle.pass_files(1)["compare.meta"], first_compare_meta)
+            self.assertEqual(bundle.pass_files(1)["teammessage.txt"], b"")
+            self.assertEqual(bundle.pass_files(2)["input"], b"actual second input\n")
+            self.assertEqual(bundle.pass_files(2)["teammessage.txt"], b"second team message\n")
+            self.assertEqual(bundle.pass_files(3)["input"], b"actual third input\n")
+            self.assertEqual(
+                bundle.pass_files(3)["teammessage.txt"],
+                b"genuine final team message\n",
+            )
+            self.assertFalse(any(".polygon-pass" in path.name for path in testcase.rglob("*")))
+
+    def test_pass_capture_final_pass_one_has_empty_history(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            capture = self._write_pass_capture(root, max_bytes=1024 * 1024)
+            final = self._write_domjudge_pass(root / "testcase", "1")
+            result = self._run_pass_capture(capture, final, 43)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            bundle = parse_pass_bundle(
+                (final / "feedback/teammessage.txt").read_bytes(),
+                max_bundle_bytes=1024 * 1024,
+                max_member_bytes=1024 * 1024,
+            )
+            assert bundle is not None
+            self.assertEqual(bundle.final_pass_number, 1)
+            self.assertEqual([item.number for item in bundle.passes], [1])
+            self.assertEqual(bundle.pass_files(1)["input"], b"input 1\n")
+            self.assertEqual(bundle.pass_files(1)["teammessage.txt"], b"team 1\n")
+
+    def test_pass_capture_budget_reduces_all_historical_passes_together(self) -> None:
+        profiles = (
+            (
+                {"program.out": b"x" * 40_000},
+                "metadata-input-only",
+            ),
+            (
+                {"program.out": b"x" * 40_000, "testdata.in": b"y" * 40_000},
+                "metadata-only",
+            ),
+        )
+        for overrides, expected_status in profiles:
+            with self.subTest(expected_status=expected_status), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                capture = self._write_pass_capture(root, max_bytes=20_000)
+                testcase = root / "testcase"
+                self._write_domjudge_pass(testcase, "1", overrides=overrides)
+                final = self._write_domjudge_pass(testcase, "2")
+                result = self._run_pass_capture(capture, final, 43)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                bundle = parse_pass_bundle(
+                    (final / "feedback/teammessage.txt").read_bytes(),
+                    max_bundle_bytes=20_000,
+                    max_member_bytes=100_000,
+                )
+                assert bundle is not None
+                self.assertEqual(bundle.passes[0].capture_status, expected_status)
+
+    def test_pass_capture_missing_full_file_downgrades_history(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            capture = self._write_pass_capture(root, max_bytes=1024 * 1024)
+            testcase = root / "testcase"
+            self._write_domjudge_pass(
+                testcase,
+                "1",
+                omitted=frozenset({"program.err"}),
+            )
+            final = self._write_domjudge_pass(testcase, "2")
+            result = self._run_pass_capture(capture, final, 43)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            bundle = parse_pass_bundle(
+                (final / "feedback/teammessage.txt").read_bytes(),
+                max_bundle_bytes=1024 * 1024,
+                max_member_bytes=1024 * 1024,
+            )
+            assert bundle is not None
+            self.assertEqual(bundle.passes[0].capture_status, "metadata-input-only")
+
+    def test_pass_capture_unreadable_full_file_downgrades_history(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            capture = self._write_pass_capture(root, max_bytes=1024 * 1024)
+            testcase = root / "testcase"
+            first = self._write_domjudge_pass(testcase, "1")
+            unreadable = first / "program.out"
+            os.chmod(unreadable, 0)
+            if os.access(unreadable, os.R_OK):
+                self.skipTest("the test user can read mode-000 files")
+            final = self._write_domjudge_pass(testcase, "2")
+            result = self._run_pass_capture(capture, final, 43)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            bundle = parse_pass_bundle(
+                (final / "feedback/teammessage.txt").read_bytes(),
+                max_bundle_bytes=1024 * 1024,
+                max_member_bytes=1024 * 1024,
+            )
+            assert bundle is not None
+            self.assertEqual(bundle.passes[0].capture_status, "metadata-input-only")
+
+    def test_pass_capture_missing_metadata_preserves_genuine_team_message(self) -> None:
+        for missing_metadata in ("program.meta", "compare.meta"):
+            with self.subTest(missing_metadata=missing_metadata), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                capture = self._write_pass_capture(root, max_bytes=1024 * 1024)
+                testcase = root / "testcase"
+                self._write_domjudge_pass(
+                    testcase,
+                    "1",
+                    omitted=frozenset({missing_metadata}),
+                )
+                final = self._write_domjudge_pass(
+                    testcase,
+                    "2",
+                    overrides={"feedback/teammessage.txt": b"genuine team\n"},
+                )
+                result = self._run_pass_capture(capture, final, 43)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(
+                    (final / "feedback/teammessage.txt").read_bytes(),
+                    b"genuine team\n",
+                )
+
+    def test_pass_capture_rejects_invalid_sibling_layouts(self) -> None:
+        for invalid_layout in ("missing", "noncanonical", "symlink"):
+            with self.subTest(invalid_layout=invalid_layout), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                capture = self._write_pass_capture(root, max_bytes=1024 * 1024)
+                testcase = root / "testcase"
+                if invalid_layout == "missing":
+                    final = self._write_domjudge_pass(testcase, "2")
+                elif invalid_layout == "noncanonical":
+                    final = self._write_domjudge_pass(testcase, "02")
+                else:
+                    actual = self._write_domjudge_pass(root / "actual", "1")
+                    testcase.mkdir()
+                    (testcase / "1").symlink_to(actual, target_is_directory=True)
+                    final = self._write_domjudge_pass(testcase, "2")
+                genuine = final / "feedback/teammessage.txt"
+                original = genuine.read_bytes()
+                result = self._run_pass_capture(capture, final, 43)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(genuine.read_bytes(), original)
+
+    def test_pass_capture_rejects_feedback_outside_current_pass(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            capture = self._write_pass_capture(root, max_bytes=1024 * 1024)
+            final = self._write_domjudge_pass(root / "testcase", "1")
+            original = (final / "feedback/teammessage.txt").read_bytes()
+            outside = root / "outside-feedback"
+            outside.mkdir()
+            result = subprocess.run(
+                [
+                    str(capture),
+                    str(final / "testdata.in"),
+                    str(outside),
+                    "43",
+                ],
+                cwd=final,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual((final / "feedback/teammessage.txt").read_bytes(), original)
+            self.assertEqual(list(outside.iterdir()), [])
+
+    def test_pass_capture_tar_or_atomic_replace_failure_preserves_team_message(self) -> None:
+        for failed_command in ("tar", "mv"):
+            with self.subTest(failed_command=failed_command), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                capture = self._write_pass_capture(root, max_bytes=1024 * 1024)
+                final = self._write_domjudge_pass(
+                    root / "testcase",
+                    "1",
+                    overrides={"feedback/teammessage.txt": b"genuine team\n"},
+                )
+                fake_bin = root / "fake-bin"
+                fake_bin.mkdir()
+                failed = fake_bin / failed_command
+                failed.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+                os.chmod(failed, 0o755)
+                env = dict(os.environ)
+                env["PATH"] = f"{fake_bin}{os.pathsep}{env['PATH']}"
+                result = self._run_pass_capture(capture, final, 43, env=env)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(
+                    (final / "feedback/teammessage.txt").read_bytes(),
+                    b"genuine team\n",
+                )
+                self.assertFalse(any(".polygon-pass" in path.name for path in final.rglob("*")))
+
+    def test_compare_and_interactive_wrappers_preserve_real_exit_status(self) -> None:
+        toolkit = config.judgehost_task_service.toolkit
+        for script_name, executable_name in (
+            ("normal.compare", "checker"),
+            ("main.compare", "checker"),
+            ("interactive.runjury", "interactor"),
+        ):
+            with self.subTest(script_name=script_name), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                executable_dir = root / "executable"
+                executable_dir.mkdir()
+                wrapper = executable_dir / "run"
+                wrapper.write_text(toolkit.load_script_asset(script_name), encoding="utf-8")
+                executable = executable_dir / executable_name
+                executable.write_text("#!/bin/sh\nexit 43\n", encoding="utf-8")
+                capture = executable_dir / "pass-capture"
+                capture.write_bytes(toolkit.pass_capture_script(max_bytes=1024 * 1024))
+                for path in (wrapper, executable, capture):
+                    os.chmod(path, 0o755)
+                final = self._write_domjudge_pass(root / "testcase", "1")
+                test_output = final / "testdata.out"
+                test_output.write_bytes(b"answer\n")
+                result = subprocess.run(
+                    [
+                        str(wrapper),
+                        str(final / "testdata.in"),
+                        str(test_output),
+                        str(final / "feedback"),
+                    ],
+                    input=b"team output\n",
+                    cwd=final,
+                    capture_output=True,
+                    check=False,
+                )
+                self.assertEqual(result.returncode, 43, result.stderr)
 
     def test_domjudge_generate_run_script_executes_submission_runner_with_payload_args(self) -> None:
         service = config.judgehost_task_service

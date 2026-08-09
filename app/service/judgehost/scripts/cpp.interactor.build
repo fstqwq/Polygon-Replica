@@ -1,0 +1,6 @@
+#!/bin/sh
+# Auto-generated build script for {{ROLE}} by Polygon2DOMjudge
+set -e
+{{CPP_EXECUTABLE_BUILD_CMD}} {{SOURCE_NAME}} -std=gnu++20 -o interactor
+cp interactive.runjury run
+chmod +x run interactor pass-capture

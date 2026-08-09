@@ -363,7 +363,7 @@ class TaskQueue:
                 run_id=run_id,
                 verification_id=verification_id,
             )
-            selected_test_row = decode_case_test_row(case_result)
+            selected_test_row = decode_case_test_row(case_result, test_name=test_name)
             recovered_error = case_result.feedback_text
             summary_error = str(summary.get("error") or "")
             if (not summary_error) and recovered_error and runresult in {
@@ -395,6 +395,7 @@ class TaskQueue:
                 "task_status": row["status"],
                 "error": str(case_summary.get("error") or ""),
                 "summary": case_summary,
+                "execution_result": case_result,
             }
         task_status = str(row["status"] or "")
         if task_status in {self.STATUS_FAILED, self.STATUS_COMPLETED}:

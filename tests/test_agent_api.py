@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 
 from tests.common import E2ETestBase
 from tests.db_helpers import db_execute, db_fetch_one
+from tests.execution_result_helpers import execution_result
 from tests.ui_support import AUTH_COOKIE_NAME, _cookie_value_from_response, _register_with_password_envelope
 from app.impl.runtime.config import config
 from app.main import app
@@ -1091,16 +1092,19 @@ class TestAgentAPI(E2ETestBase):
                         "test_name": "001.in",
                         "expected_behavior": "accepted",
                         "status": VerificationTaskStore.TASK_DONE,
-                        "verdict": "TL",
-                        "runtime_sec": 1.5,
-                        "cpu_sec": 1.4,
-                        "wall_sec": 1.6,
-                        "memory_kb": 65536,
-                        "compile_log": "",
-                        "diagnostics_json": '[{"kind":"runtime","message":"time limit exceeded"}]',
-                        "error_text": "required=[AC], allowed=[AC], got=[TL]",
-                        "feedback_text": "time limit exceeded",
-                        "output_ref": "blob-output",
+                        "result": execution_result(
+                            "TL",
+                            runtime_sec=1.5,
+                            cpu_sec=1.4,
+                            wall_sec=1.6,
+                            memory_kb=65536,
+                            output_ref="blob-output",
+                            error="required=[AC], allowed=[AC], got=[TL]",
+                            feedback="time limit exceeded",
+                            diagnostics=(
+                                {"kind": "runtime", "message": "time limit exceeded"},
+                            ),
+                        ),
                     }
                 ],
                 edges=[],

@@ -15,7 +15,7 @@ from app.service.judgehost.shared import (
 from app.db import now_iso
 from app.service.judgehost.domjudge.cache import domjudge_json_hash
 from app.service.judgehost.domjudge.client import domjudge_parse_script_id, domjudge_script_hash_field, domjudge_script_id
-from app.service.judgehost.limits import truncate_stored_log_bytes
+from app.service.judgehost.limits import truncate_stored_log_bytes, run_output_kb
 from app.service.judgehost.file_stream import DomjudgeDownloadFile
 from app.service.platform.runtime_blob_store import PayloadFile
 from app.service.judgehost.runtime import (
@@ -30,7 +30,6 @@ from app.service.judgehost.runtime import (
 )
 from app.service.verification.task_result_finalize import finalize_verification_task_result
 from app.service.verification.task_scheduler import notify_verification_case_reported
-
 from app.service.judgehost.case_result import build_case_result, decode_case_test_row
 from app.service.judgehost.core import JudgehostCore
 from app.service.judgehost.batch_scheduler_models import CaseReportTelemetry, CaseResult, HostLeaseRelease
@@ -38,6 +37,19 @@ from app.service.judgehost.state import JudgehostState
 from app.service.judgehost.task_queue import TaskQueue
 from app.service.judgehost.toolchain_versions import ToolchainVersionCollector
 from app.service.judgehost.toolkit import DomjudgeToolkit
+from app.service.judgehost.pass_bundle import (
+    InvalidPassBundle,
+    PassBundle,
+    parse_pass_bundle,
+)
+from app.service.verification.execution_result import (
+    CAPTURE_COMPLETE,
+    ExecutionPassResult,
+    ExecutionUsage,
+    PassArtifacts,
+    execution_result_json,
+    normalize_execution_result,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +58,53 @@ _diag_logger = logging.getLogger("uvicorn.error")
 
 def _answer_correct_from_compare_exit_code(compare_exit_code: int) -> bool:
     return int(compare_exit_code) == 42
+
+
+_PASS_CACHE_FILE_NAMES = {
+    "input": "input",
+    "program.out": "program-out",
+    "program.err": "program-err",
+    "system.out": "system-out",
+    "program.meta": "program-meta",
+    "compare.meta": "compare-meta",
+    "judgemessage.txt": "judgemessage",
+    "teammessage.txt": "teammessage",
+}
+
+
+def _pass_cache_file_name(number: int, name: str) -> str:
+    return f"pass-{number}-{_PASS_CACHE_FILE_NAMES[name]}"
+
+
+def _optional_meta_float(meta: dict[str, str], key: str) -> float | None:
+    raw = meta.get(key)
+    if raw is None:
+        return None
+    try:
+        return max(0.0, float(raw))
+    except (TypeError, ValueError):
+        return None
+
+
+def _program_meta_usage(payload: bytes) -> ExecutionUsage:
+    meta = domjudge_parse_meta_text(payload.decode("utf-8", errors="replace"))
+    time_used_key = meta.get("time-used")
+    runtime_sec = _optional_meta_float(meta, "time-used")
+    if runtime_sec is None and time_used_key in meta:
+        runtime_sec = _optional_meta_float(meta, time_used_key)
+    memory_raw = meta.get("memory-bytes")
+    memory_kb: int | None = None
+    if memory_raw is not None:
+        try:
+            memory_kb = max(0, int(memory_raw) // 1024)
+        except (TypeError, ValueError):
+            memory_kb = None
+    return ExecutionUsage(
+        runtime_sec=runtime_sec,
+        cpu_sec=_optional_meta_float(meta, "cpu-time"),
+        wall_sec=_optional_meta_float(meta, "wall-time"),
+        memory_kb=memory_kb,
+    )
 
 
 class ResultProcessor:
@@ -348,18 +407,9 @@ class ResultProcessor:
         task_store.save_task_result(
             domjudge_text(row["id"]),
             status=task_store.TASK_CANCELLED,
-            verdict="",
             run_id=domjudge_text(row["run_id"]),
             judgehost_task_id=domjudge_text(row["judgehost_task_id"]),
-            runtime_sec=None,
-            cpu_sec=None,
-            wall_sec=None,
-            memory_kb=None,
-            compile_log="",
-            diagnostics_json="[]",
-            error_text=cancel_reason,
-            feedback_text="",
-            output_ref="",
+            result=normalize_execution_result(error=cancel_reason),
         )
         return True
 
@@ -454,19 +504,9 @@ class ResultProcessor:
         verification_task_store.save_task_result(
             final_result.task_id,
             status=final_result.status,
-            verdict=final_result.verdict,
             run_id=final_result.run_id,
             judgehost_task_id=final_result.judgehost_task_id,
-            runtime_sec=final_result.runtime_sec,
-            cpu_sec=final_result.cpu_sec,
-            wall_sec=final_result.wall_sec,
-            memory_kb=final_result.memory_kb,
-            compile_log=final_result.compile_log,
-            diagnostics_json=final_result.diagnostics_json,
-            error_text=final_result.error_text,
-            feedback_text=final_result.feedback_text,
-            output_ref=final_result.output_ref,
-            answer_correct=final_result.answer_correct,
+            result=final_result.result,
         )
         if final_result.fail_flag_reason:
             verification_task_store.set_fail_flag(
@@ -568,12 +608,12 @@ class ResultProcessor:
                     or f"{test_name}: judgehost case result missing"
                 )
                 continue
-            test_row = decode_case_test_row(case_result)
+            test_row = decode_case_test_row(case_result, test_name=test_name)
             runresult = case_result.runresult
             verdict = case_result.verdict
-            cpu_ms = max(0, int(round(case_result.cpu_sec * 1000.0)))
-            wall_ms = max(0, int(round(case_result.wall_sec * 1000.0)))
-            memory_kb = case_result.memory_kb
+            cpu_ms = max(0, int(round((case_result.cpu_sec or 0.0) * 1000.0)))
+            wall_ms = max(0, int(round((case_result.wall_sec or 0.0) * 1000.0)))
+            memory_kb = case_result.memory_kb or 0
             feedback_text = case_result.feedback_text
             runresult_token = domjudge_lower_text(runresult)
             usage_time_user += cpu_ms
@@ -1149,6 +1189,15 @@ class ResultProcessor:
         task_kind = self._toolkit.task_kind(task_payload, verification_source=verification_source)
         compile_only = task_kind == self._TASK_KIND_COMPILE_ONLY
 
+        def _load_json_object(raw: object) -> dict[str, object]:
+            text = domjudge_text(raw)
+            if not text:
+                return {}
+            try:
+                return cast(dict[str, object], json.loads(text))
+            except Exception:
+                return {}
+
         payload_files: dict[str, bytes] = {}
 
         def _capture_payload_file(
@@ -1158,6 +1207,8 @@ class ResultProcessor:
             allow_empty: bool = False,
         ) -> bytes:
             if value is None:
+                if allow_empty:
+                    payload_files[name] = b""
                 return b""
             raw = self._toolkit.payload_blob_bytes(value)
             if (not raw) and (not allow_empty):
@@ -1173,12 +1224,78 @@ class ResultProcessor:
                 payload.get("output_run"),
                 allow_empty=True,
             )
-        _capture_payload_file("program.err", payload.get("output_error"))
-        _capture_payload_file("system.out", payload.get("output_system"))
-        _capture_payload_file("judgemessage.txt", payload.get("output_diff"))
-        metadata_blob = _capture_payload_file("program.meta", payload.get("metadata"))
-        compare_meta_blob = _capture_payload_file("compare.meta", payload.get("compare_metadata"))
-        _capture_payload_file("teammessage.txt", payload.get("team_message"))
+        _capture_payload_file("program.err", payload.get("output_error"), allow_empty=True)
+        _capture_payload_file("system.out", payload.get("output_system"), allow_empty=True)
+        _capture_payload_file("judgemessage.txt", payload.get("output_diff"), allow_empty=True)
+        metadata_blob = _capture_payload_file(
+            "program.meta",
+            payload.get("metadata"),
+            allow_empty=True,
+        )
+        compare_meta_blob = _capture_payload_file(
+            "compare.meta",
+            payload.get("compare_metadata"),
+            allow_empty=True,
+        )
+        team_message_blob = self._toolkit.payload_blob_bytes(payload.get("team_message"))
+
+        interactive = domjudge_lower_text(row["mode"]) == "interactive"
+        run_cfg_for_capture = _load_json_object(row["run_config_json"])
+        pass_limit = max(1, domjudge_parse_int(run_cfg_for_capture.get("pass_limit"), 1))
+        capture_expected = interactive or pass_limit > 1
+        bundle_limit_bytes = min(
+            8 * 1024 * 1024,
+            max(1024, int(run_output_kb(self._s.constants) * 1024 * 3 // 4)),
+        )
+        callback_pass = max(0, domjudge_parse_int(payload.get("pass"), 0))
+        pass_bundle: PassBundle | None = None
+        capture_warning = ""
+        rejected_bundle = False
+        try:
+            pass_bundle = parse_pass_bundle(
+                team_message_blob,
+                max_bundle_bytes=bundle_limit_bytes,
+                max_member_bytes=bundle_limit_bytes,
+            )
+            if (
+                pass_bundle is not None
+                and callback_pass > 0
+                and callback_pass != pass_bundle.final_pass_number
+            ):
+                raise InvalidPassBundle(
+                    "callback pass does not match final-pass-number"
+                )
+        except InvalidPassBundle as exc:
+            pass_bundle = None
+            rejected_bundle = True
+            capture_warning = f"historical pass artifact capture was incomplete: {exc}"
+        if pass_bundle is None:
+            payload_files["teammessage.txt"] = (
+                b"" if rejected_bundle else team_message_blob
+            )
+            if capture_expected and not capture_warning:
+                capture_warning = "historical pass artifact capture was incomplete: bundle missing"
+        else:
+            for bundled_pass in pass_bundle.passes:
+                for name, content in bundled_pass.files.items():
+                    cache_name = _pass_cache_file_name(bundled_pass.number, name)
+                    payload_files[cache_name] = content
+            final_files = pass_bundle.pass_files(pass_bundle.final_pass_number)
+            payload_files["teammessage.txt"] = final_files["teammessage.txt"]
+            reduced: dict[str, list[int]] = {}
+            for bundled_pass in pass_bundle.passes[:-1]:
+                if bundled_pass.capture_status != CAPTURE_COMPLETE:
+                    reduced.setdefault(bundled_pass.capture_status, []).append(
+                        bundled_pass.number
+                    )
+            if reduced:
+                groups = [
+                    f"passes {', '.join(str(number) for number in numbers)} {status}"
+                    for status, numbers in reduced.items()
+                ]
+                capture_warning = (
+                    "historical pass artifacts were reduced: " + "; ".join(groups)
+                )
 
         runtime_sec = domjudge_parse_float(payload.get("runtime"), 0.0)
         cpu_sec = runtime_sec
@@ -1199,17 +1316,13 @@ class ResultProcessor:
             )
             compare_exit_code = domjudge_parse_int(compare_meta.get("exitcode"), -1)
         answer_correct = _answer_correct_from_compare_exit_code(compare_exit_code)
+        final_usage = (
+            _program_meta_usage(metadata_blob)
+            if metadata_blob
+            else ExecutionUsage()
+        )
 
         score_text = domjudge_text(payload.get("score"))
-
-        def _load_json_object(raw: object) -> dict[str, object]:
-            text = domjudge_text(raw)
-            if not text:
-                return {}
-            try:
-                return cast(dict[str, object], json.loads(text))
-            except Exception:
-                return {}
 
         source_name = domjudge_text(row["source_name"])
         source_hash = domjudge_lower_text(row["source_hash"])
@@ -1230,7 +1343,7 @@ class ResultProcessor:
         run_hash = domjudge_lower_text(row["run_hash"])
         compare_hash = domjudge_lower_text(row["compare_hash"])
         compile_cfg = _load_json_object(row["compile_config_json"])
-        run_cfg = _load_json_object(row["run_config_json"])
+        run_cfg = run_cfg_for_capture
         compare_cfg = _load_json_object(row["compare_config_json"])
         runresult = domjudge_lower_text(payload.get("runresult"), default="internal-error")
         runresult = domjudge_rewrite_untrusted_runresult(
@@ -1290,23 +1403,10 @@ class ResultProcessor:
                 report=report_telemetry,
             )
             return 1 if accepted else case_id
-        cached_payloads = self._toolkit.store_case_cache(
-            key_parts={"key_hash": case_key_hash, "signature": case_signature},
-            tags={
-                "source_hash": source_hash,
-                "testcase_hash": testcase_hash,
-                "verification_source": verification_source,
-                "task_kind": task_kind,
-            },
-            runresult=runresult,
-            runtime_sec=runtime_sec,
-            cpu_sec=cpu_sec,
-            wall_sec=wall_sec,
-            memory_kb=memory_kb,
-            score_text=score_text,
-            files=cache_files,
-            shortcut_eligible=shortcut_eligible,
-        )
+        cached_payloads = {
+            name: self._s.runtime_blob_store.put_bytes(content)
+            for name, content in cache_files.items()
+        }
 
         def _case_blob_token(blob_name: str) -> str:
             payload = cached_payloads.get(blob_name)
@@ -1335,6 +1435,121 @@ class ResultProcessor:
                 if not debug_text:
                     debug_text = domjudge_text(debug_context["batch_debug_text"])
                 feedback_text = domjudge_feedback_text_from_text(debug_text)
+        def _bundled_ref(number: int, name: str) -> str:
+            if (
+                pass_bundle is not None
+                and number == pass_bundle.final_pass_number
+                and name == "teammessage.txt"
+            ):
+                return team_message_token
+            return _case_blob_token(_pass_cache_file_name(number, name))
+
+        historical_passes: list[ExecutionPassResult] = []
+        incomplete_metadata_passes: list[int] = []
+        final_pass_number = 1
+        final_input_ref = domjudge_text(row["input_ref"])
+        if pass_bundle is not None:
+            final_pass_number = pass_bundle.final_pass_number
+            final_input_ref = _bundled_ref(final_pass_number, "input")
+            for bundled_pass in pass_bundle.passes[:-1]:
+                files = bundled_pass.files
+                usage = _program_meta_usage(files["program.meta"])
+                compare_meta = domjudge_parse_meta_text(
+                    files["compare.meta"].decode("utf-8", errors="replace")
+                )
+                historical_compare_exit = domjudge_parse_int(
+                    compare_meta.get("exitcode"),
+                    -1,
+                )
+                if (
+                    None in (
+                        usage.runtime_sec,
+                        usage.cpu_sec,
+                        usage.wall_sec,
+                        usage.memory_kb,
+                    )
+                    or historical_compare_exit < 0
+                ):
+                    incomplete_metadata_passes.append(bundled_pass.number)
+                historical_judge_ref = _bundled_ref(
+                    bundled_pass.number,
+                    "judgemessage.txt",
+                )
+                historical_team_ref = _bundled_ref(
+                    bundled_pass.number,
+                    "teammessage.txt",
+                )
+                historical_error_ref = _bundled_ref(
+                    bundled_pass.number,
+                    "program.err",
+                )
+                historical_feedback, _historical_feedback_files = (
+                    self._domjudge_feedback_text_and_files(
+                        runresult="correct",
+                        output_error_ref=historical_error_ref,
+                        output_diff_ref=historical_judge_ref,
+                        team_message_ref=historical_team_ref,
+                    )
+                )
+                historical_passes.append(
+                    ExecutionPassResult(
+                        number=bundled_pass.number,
+                        capture_status=bundled_pass.capture_status,
+                        runresult="correct",
+                        verdict="OK",
+                        score_text="",
+                        answer_correct=_answer_correct_from_compare_exit_code(
+                            historical_compare_exit
+                        ),
+                        usage=usage,
+                        feedback=historical_feedback,
+                        artifacts=PassArtifacts(
+                            input_ref=_bundled_ref(bundled_pass.number, "input"),
+                            output_ref=(
+                                ""
+                                if interactive
+                                else _bundled_ref(
+                                    bundled_pass.number,
+                                    "program.out",
+                                )
+                            ),
+                            transcript_ref=(
+                                _bundled_ref(
+                                    bundled_pass.number,
+                                    "program.out",
+                                )
+                                if interactive
+                                else ""
+                            ),
+                            stderr_ref=historical_error_ref,
+                            system_ref=_bundled_ref(
+                                bundled_pass.number,
+                                "system.out",
+                            ),
+                            judge_message_ref=historical_judge_ref,
+                            team_message_ref=historical_team_ref,
+                            metadata_ref=_bundled_ref(
+                                bundled_pass.number,
+                                "program.meta",
+                            ),
+                            compare_metadata_ref=_bundled_ref(
+                                bundled_pass.number,
+                                "compare.meta",
+                            ),
+                        ),
+                    )
+                )
+        if incomplete_metadata_passes:
+            metadata_warning = (
+                "pass metadata missing for passes "
+                + ", ".join(str(number) for number in incomplete_metadata_passes)
+            )
+            capture_warning = (
+                f"{capture_warning}; {metadata_warning}"
+                if capture_warning
+                else "historical pass artifact capture was incomplete: "
+                + metadata_warning
+            )
         case_result = build_case_result(
             test_name=domjudge_text(row["test_name"]),
             runresult=runresult,
@@ -1354,6 +1569,30 @@ class ResultProcessor:
             feedback_text=feedback_text,
             feedback_files=feedback_files,
             answer_correct=answer_correct,
+            input_ref=final_input_ref,
+            interactive=interactive,
+            pass_number=final_pass_number,
+            historical_passes=tuple(historical_passes),
+            warnings=() if not capture_warning else (capture_warning,),
+            usage=final_usage,
+        )
+        self._toolkit.store_case_cache(
+            key_parts={"key_hash": case_key_hash, "signature": case_signature},
+            tags={
+                "source_hash": source_hash,
+                "testcase_hash": testcase_hash,
+                "verification_source": verification_source,
+                "task_kind": task_kind,
+            },
+            runresult=runresult,
+            runtime_sec=runtime_sec,
+            cpu_sec=cpu_sec,
+            wall_sec=wall_sec,
+            memory_kb=memory_kb,
+            score_text=score_text,
+            result_json=execution_result_json(case_result),
+            files=cached_payloads,
+            shortcut_eligible=shortcut_eligible,
         )
         now_text = now_iso()
         outcome = self._s.batch_scheduler.commit_case_result(
@@ -1687,19 +1926,9 @@ class ResultProcessor:
                             verification_task_store.overwrite_task_result(
                                 final_result.task_id,
                                 status=final_result.status,
-                                verdict=final_result.verdict,
                                 run_id=final_result.run_id,
                                 judgehost_task_id=final_result.judgehost_task_id,
-                                runtime_sec=final_result.runtime_sec,
-                                cpu_sec=final_result.cpu_sec,
-                                wall_sec=final_result.wall_sec,
-                                memory_kb=final_result.memory_kb,
-                                compile_log=final_result.compile_log,
-                                diagnostics_json=final_result.diagnostics_json,
-                                error_text=final_result.error_text,
-                                feedback_text=final_result.feedback_text,
-                                output_ref=final_result.output_ref,
-                                answer_correct=final_result.answer_correct,
+                                result=final_result.result,
                             )
                             verification_id = str(verification_task_row["verification_id"] or "")
                             if verification_id and final_result.fail_flag_reason:

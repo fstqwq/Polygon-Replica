@@ -1,6 +1,7 @@
 {
   "unit": [
     "test_build_config_format.py",
+    "test_execution_result.py",
     "test_judgehost_host_telemetry.py",
     "test_judgehost_identity.py",
     "test_judgehost_simulation.py",

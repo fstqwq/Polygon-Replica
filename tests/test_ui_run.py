@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from tests.db_helpers import db_execute, db_fetch_one, write_preview_summary
+from tests.execution_result_helpers import execution_result
 
 import asyncio
 import base64
@@ -4262,16 +4263,14 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
                     "test_name": "001.in",
                     "expected_behavior": "accepted",
                     "status": VerificationTaskStore.TASK_DONE,
-                    "verdict": "OK",
-                    "runtime_sec": 0.003,
-                    "cpu_sec": 0.002,
-                    "wall_sec": 0.003,
-                    "memory_kb": 1024,
-                    "compile_log": "",
-                    "diagnostics_json": "[]",
-                    "error_text": "",
-                    "feedback_text": "",
-                    "output_ref": output_ref,
+                    "result": execution_result(
+                        "OK",
+                        runtime_sec=0.003,
+                        cpu_sec=0.002,
+                        wall_sec=0.003,
+                        memory_kb=1024,
+                        output_ref=output_ref,
+                    ),
                 }
             ],
             edges=[],
@@ -4510,16 +4509,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
                     "test_name": "001.in",
                     "expected_behavior": "accepted",
                     "status": VerificationTaskStore.TASK_DONE,
-                    "verdict": "AC",
-                    "runtime_sec": 0.007,
-                    "cpu_sec": 0.006,
-                    "wall_sec": 0.007,
-                    "memory_kb": 2048,
-                    "compile_log": "",
-                    "diagnostics_json": "[]",
-                    "error_text": "",
-                    "feedback_text": "tree is valid",
-                    "output_ref": "",
+                    "result": execution_result("AC", feedback="tree is valid"),
                 },
                 {
                     "id": f"vt-runtime-generate-detail-{uuid.uuid4().hex[:8]}",
@@ -4529,16 +4519,14 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
                     "test_name": "001.in",
                     "expected_behavior": "accepted",
                     "status": VerificationTaskStore.TASK_DONE,
-                    "verdict": "OK",
-                    "runtime_sec": 0.003,
-                    "cpu_sec": 0.002,
-                    "wall_sec": 0.003,
-                    "memory_kb": 1024,
-                    "compile_log": "",
-                    "diagnostics_json": "[]",
-                    "error_text": "",
-                    "feedback_text": "",
-                    "output_ref": output_ref,
+                    "result": execution_result(
+                        "OK",
+                        runtime_sec=0.003,
+                        cpu_sec=0.002,
+                        wall_sec=0.003,
+                        memory_kb=1024,
+                        output_ref=output_ref,
+                    ),
                 },
             ],
             edges=[],
@@ -4793,10 +4781,12 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
                 "test_name": test_name,
                 "expected_behavior": "accepted",
                 "status": status,
-                "verdict": verdict,
-                "output_ref": output_ref,
-                "error_text": error_text,
-                "feedback_text": feedback_text,
+                "result": execution_result(
+                    verdict,
+                    output_ref=output_ref,
+                    error=error_text,
+                    feedback=feedback_text,
+                ),
             }
 
         tasks: list[dict[str, object]] = [
@@ -4860,8 +4850,10 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
                         if index == 6
                         else VerificationTaskStore.TASK_DONE
                     ),
-                    "verdict": "SK" if is_duplicate else "OK",
-                    "output_ref": "" if is_duplicate else f"blob://solution-{index}",
+                    "result": execution_result(
+                        "SK" if is_duplicate else "OK",
+                        output_ref="" if is_duplicate else f"blob://solution-{index}",
+                    ),
                 }
             )
         config.verification_task_store.replace_graph(

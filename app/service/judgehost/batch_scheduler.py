@@ -197,9 +197,10 @@ class BatchScheduler(BatchSchedulerResultMixin):
 
     @staticmethod
     def _case_row(case: CaseRecord) -> JudgehostCaseRow:
+        result = case.result
         row = asdict(case)
         row.pop("heap_generation")
-        result = row.pop("result")
+        row.pop("result")
         row.pop("terminal_result")
         row.pop("requeue_on_abort")
         row.pop("claim_generation")
@@ -213,7 +214,7 @@ class BatchScheduler(BatchSchedulerResultMixin):
                 row[field] = None
         else:
             for field in result_fields:
-                row[field] = result[field]
+                row[field] = getattr(result, field)
         return row  # type: ignore[return-value]
 
     @staticmethod

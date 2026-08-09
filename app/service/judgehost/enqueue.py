@@ -706,6 +706,13 @@ class TaskEnqueue:
         compile_mem_mb = max(64, int(getattr(self._s.constants, "TOOLCHAIN_COMPILE_MEMORY_MB", 2048) or 2048))
         compile_output_limit_kb = compile_output_kb(self._s.constants)
         run_output_limit_kb = run_output_kb(self._s.constants)
+        pass_bundle_max_bytes = min(
+            8 * 1024 * 1024,
+            max(1024, int(run_output_limit_kb * 1024 * 3 // 4)),
+        )
+        pass_capture_script = self._toolkit.pass_capture_script(
+            max_bytes=pass_bundle_max_bytes,
+        )
         run_process_limit = max(
             1,
             int(getattr(self._s.constants, "RUN_EXEC_PROCESS_LIMIT", 1024) or 1024),
@@ -789,6 +796,14 @@ class TaskEnqueue:
                     ("build", self._toolkit.cpp_executable_build_script("interactor.cpp", role="interactor"), True)
                 )
                 run_files.append(("interactor.cpp", interactor_source_bytes, False))
+                run_files.append(
+                    (
+                        "interactive.runjury",
+                        self._toolkit.load_script_asset("interactive.runjury").encode("utf-8"),
+                        True,
+                    )
+                )
+                run_files.append(("pass-capture", pass_capture_script, True))
                 if testlib_header_bytes:
                     run_files.append(("testlib.h", testlib_header_bytes, False))
             else:
@@ -818,6 +833,8 @@ class TaskEnqueue:
                         compare_files.append(("testlib.h", testlib_header_bytes, False))
             else:
                 compare_files.append(("run", self._toolkit.compare_script(main_correct=main_correct), True))
+                if pass_limit > 1:
+                    compare_files.append(("pass-capture", pass_capture_script, True))
                 if checker_source_bytes:
                     compare_files.append(("checker.cpp", checker_source_bytes, False))
                     if testlib_header_bytes:

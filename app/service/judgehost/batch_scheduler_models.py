@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from typing import TypedDict
 
 from app.service.platform.runtime_blob_store import PayloadFile
+from app.service.verification.execution_result import ExecutionResult
 
 
 @dataclass(frozen=True)
@@ -23,26 +24,7 @@ class ExecutionBatchSpec:
     compare_files: tuple[tuple[str, bytes, bool], ...] = ()
 
 
-@dataclass(frozen=True)
-class CaseResult:
-    runresult: str
-    verdict: str
-    runtime_sec: float
-    cpu_sec: float
-    wall_sec: float
-    memory_kb: int
-    score_text: str
-    output_run_ref: str
-    output_error_ref: str
-    output_system_ref: str
-    output_diff_ref: str
-    metadata_ref: str
-    compare_metadata_ref: str
-    team_message_ref: str
-    feedback_text: str
-    feedback_files: tuple[str, ...]
-    answer_correct: bool
-    test_row_json: str
+CaseResult = ExecutionResult
 
 
 class LastJudgingRow(TypedDict):

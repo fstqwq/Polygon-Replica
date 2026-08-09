@@ -7,6 +7,7 @@ from collections import deque
 from dataclasses import dataclass
 from typing import Callable, cast
 
+from app.service.verification.execution_result import ExecutionResult
 from app.service.verification.task_store import VerificationTaskRow, VerificationTaskStore
 
 
@@ -22,20 +23,56 @@ class TaskPublishResult:
 class TaskExecutionResult:
     task_id: str
     status: str
-    verdict: str
     run_id: str
     judgehost_task_id: str
-    runtime_sec: float | None
-    cpu_sec: float | None
-    wall_sec: float | None
-    memory_kb: int | None
-    compile_log: str
-    diagnostics_json: str
-    error_text: str
-    feedback_text: str
-    output_ref: str
+    result: ExecutionResult
     fail_flag_reason: str = ""
-    answer_correct: bool = False
+
+    @property
+    def verdict(self) -> str:
+        return self.result.verdict
+
+    @property
+    def runtime_sec(self) -> float | None:
+        return self.result.runtime_sec
+
+    @property
+    def cpu_sec(self) -> float | None:
+        return self.result.cpu_sec
+
+    @property
+    def wall_sec(self) -> float | None:
+        return self.result.wall_sec
+
+    @property
+    def memory_kb(self) -> int | None:
+        return self.result.memory_kb
+
+    @property
+    def compile_log(self) -> str:
+        return self.result.compile.log
+
+    @property
+    def diagnostics_json(self) -> str:
+        from app.service.platform.hashing import canonical_json
+
+        return canonical_json(list(self.result.compile.diagnostics), ensure_ascii=False)
+
+    @property
+    def error_text(self) -> str:
+        return self.result.outcome.error
+
+    @property
+    def feedback_text(self) -> str:
+        return self.result.feedback_text
+
+    @property
+    def output_ref(self) -> str:
+        return self.result.output_run_ref
+
+    @property
+    def answer_correct(self) -> bool:
+        return self.result.answer_correct
 
 
 @dataclass(frozen=True)
@@ -273,19 +310,7 @@ def _save_results(
             {
                 "task_id": result.task_id,
                 "status": result.status,
-                "verdict": result.verdict,
-                "run_id": result.run_id,
-                "judgehost_task_id": result.judgehost_task_id,
-                "runtime_sec": result.runtime_sec,
-                "cpu_sec": result.cpu_sec,
-                "wall_sec": result.wall_sec,
-                "memory_kb": result.memory_kb,
-                "compile_log": result.compile_log,
-                "diagnostics_json": result.diagnostics_json,
-                "error_text": result.error_text,
-                "feedback_text": result.feedback_text,
-                "output_ref": result.output_ref,
-                "answer_correct": result.answer_correct,
+                "result": result.result,
             }
             for result in results
         ]

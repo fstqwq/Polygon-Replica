@@ -1,15 +1,24 @@
 from __future__ import annotations
 
+import json
 import secrets
 import sqlite3
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import re
 from typing import TypedDict, cast
 
 from app.db import DB, now_iso
 from app.service.platform.error_text import aux_display_text_limit_bytes, bounded_display_text
+from app.service.platform.hashing import canonical_json
 from app.service.platform.rwlock import WriterPriorityRWLock
-from app.service.verification.task_metadata import normalize_diagnostics_json_text
+from app.service.verification.task_metadata import canonical_diagnostics
+from app.service.verification.execution_result import (
+    ExecutionResult,
+    execution_result_from_json,
+    execution_result_json,
+    execution_result_with_outcome,
+    normalize_execution_result,
+)
 
 
 class VerificationTaskRow(TypedDict):
@@ -23,6 +32,8 @@ class VerificationTaskRow(TypedDict):
     expected_behavior: str
     queue_index: int
     status: str
+    result: ExecutionResult
+    result_json: str
     verdict: str
     run_id: str
     judgehost_task_id: str
@@ -92,6 +103,60 @@ def _test_name_order(test_name: str) -> tuple[int, str]:
     return (10**9, token)
 
 
+def _diagnostics_from_text(text: str) -> tuple[dict[str, object], ...]:
+    if not text:
+        return ()
+    return tuple(cast(list[dict[str, object]], json.loads(text)))
+
+
+def _result_from_task_item(item: dict[str, object]) -> ExecutionResult:
+    supplied = item.get("result")
+    if isinstance(supplied, ExecutionResult):
+        return supplied
+    return normalize_execution_result(
+        verdict=str(item.get("verdict") or ""),
+        answer_correct=bool(item.get("answer_correct")),
+        error=str(item.get("error_text") or ""),
+        feedback=str(item.get("feedback_text") or ""),
+        compile_log=str(item.get("compile_log") or ""),
+        compile_diagnostics=_diagnostics_from_text(
+            str(item.get("diagnostics_json") or "[]")
+        ),
+    )
+
+
+def _bounded_result(result: ExecutionResult, *, limit_bytes: int) -> ExecutionResult:
+    passes = tuple(
+        replace(
+            pass_result,
+            feedback=bounded_display_text(
+                pass_result.feedback,
+                limit_bytes=limit_bytes,
+            ),
+        )
+        for pass_result in result.passes
+    )
+    diagnostics = canonical_diagnostics(
+        list(result.compile.diagnostics),
+        list_limit=64,
+        message_limit=limit_bytes,
+    )["rows"]
+    return normalize_execution_result(
+        passes=passes,
+        verdict=result.verdict,
+        score_text=result.score_text,
+        answer_correct=result.answer_correct,
+        error=bounded_display_text(result.outcome.error, limit_bytes=limit_bytes),
+        feedback=bounded_display_text(result.outcome.feedback, limit_bytes=limit_bytes),
+        compile_log=bounded_display_text(result.compile.log, limit_bytes=limit_bytes),
+        compile_diagnostics=diagnostics,
+        warnings=(
+            bounded_display_text(warning, limit_bytes=limit_bytes)
+            for warning in result.warnings
+        ),
+    )
+
+
 class VerificationTaskStore:
     TASK_PENDING = "pending"
     TASK_QUEUED = "queued"
@@ -155,10 +220,6 @@ class VerificationTaskStore:
                 initial_status = str(item.get("status") or self.TASK_PENDING)
                 logical_run_ids[task_id] = str(item.get("logical_run_id") or "")
                 final_status = ""
-                runtime_sec = item.get("runtime_sec")
-                cpu_sec = item.get("cpu_sec")
-                wall_sec = item.get("wall_sec")
-                memory_kb = item.get("memory_kb")
                 finished_at = None
                 if initial_status in {self.TASK_DONE, self.TASK_FAILED, self.TASK_CANCELLED}:
                     final_status = initial_status
@@ -174,9 +235,9 @@ class VerificationTaskStore:
                     """
                     INSERT INTO verification_tasks(
                         id,verification_id,predecessor_task_id,task_kind,source_path,logical_run_id,test_name,expected_behavior,
-                        final_status,verdict,runtime_sec,cpu_sec,wall_sec,memory_kb,answer_correct,compile_log,diagnostics_json,error_text,feedback_text,output_ref,finished_at,created_at
+                        final_status,result_json,finished_at,created_at
                     )
-                    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
                     """,
                     [
                         task_id,
@@ -188,20 +249,7 @@ class VerificationTaskStore:
                         str(item.get("test_name") or ""),
                         str(item.get("expected_behavior") or ""),
                         final_status,
-                        str(item.get("verdict") or ""),
-                        runtime_sec,
-                        cpu_sec,
-                        wall_sec,
-                        memory_kb,
-                        1 if bool(item.get("answer_correct")) else 0,
-                        self._normalize_display_text(str(item.get("compile_log") or "")),
-                        normalize_diagnostics_json_text(
-                            str(item.get("diagnostics_json") or "[]"),
-                            message_limit=self._limit_bytes(),
-                        ),
-                        self._normalize_display_text(str(item.get("error_text") or "")),
-                        self._normalize_display_text(str(item.get("feedback_text") or "")),
-                        str(item.get("output_ref") or ""),
+                        execution_result_json(_result_from_task_item(item)),
                         finished_at,
                         now_text,
                     ],
@@ -277,6 +325,8 @@ class VerificationTaskStore:
         with self._runtime_lock.read_lock():
             runtime_logical_run_id = self._logical_run_id_by_task_id.get(task_id, "")
         logical_run_id = str(row["logical_run_id"] or runtime_logical_run_id)
+        result_json = str(row["result_json"] or "{}")
+        result = execution_result_from_json(result_json)
         return {
             "id": task_id,
             "verification_id": verification_id,
@@ -288,19 +338,24 @@ class VerificationTaskStore:
             "expected_behavior": expected_behavior,
             "queue_index": index,
             "status": status,
-            "verdict": str(row["verdict"] or ""),
+            "result": result,
+            "result_json": result_json,
+            "verdict": result.verdict,
             "run_id": runtime.run_id if runtime is not None else "",
             "judgehost_task_id": runtime.judgehost_task_id if runtime is not None else "",
-            "runtime_sec": cast(float | None, row["runtime_sec"]),
-            "cpu_sec": cast(float | None, row["cpu_sec"]),
-            "wall_sec": cast(float | None, row["wall_sec"]),
-            "memory_kb": cast(int | None, row["memory_kb"]),
-            "answer_correct": bool(row["answer_correct"]),
-            "compile_log": str(row["compile_log"] or ""),
-            "diagnostics_json": str(row["diagnostics_json"] or "[]"),
-            "error_text": str(row["error_text"] or ""),
-            "feedback_text": str(row["feedback_text"] or ""),
-            "output_ref": str(row["output_ref"] or ""),
+            "runtime_sec": result.runtime_sec,
+            "cpu_sec": result.cpu_sec,
+            "wall_sec": result.wall_sec,
+            "memory_kb": result.memory_kb,
+            "answer_correct": result.answer_correct,
+            "compile_log": result.compile.log,
+            "diagnostics_json": canonical_json(
+                list(result.compile.diagnostics),
+                ensure_ascii=False,
+            ),
+            "error_text": result.outcome.error,
+            "feedback_text": result.feedback_text,
+            "output_ref": result.output_run_ref,
             "started_at": started_at,
             "finished_at": finished_at,
             "created_at": created_at,
@@ -319,6 +374,7 @@ class VerificationTaskStore:
         task_id = str(row["id"] or "")
         with self._runtime_lock.read_lock():
             runtime_logical_run_id = self._logical_run_id_by_task_id.get(task_id, "")
+        result = execution_result_from_json(str(row["result_json"] or "{}"))
         return {
             "id": task_id,
             "verification_id": str(row["verification_id"] or ""),
@@ -328,7 +384,7 @@ class VerificationTaskStore:
             "test_name": str(row["test_name"] or ""),
             "expected_behavior": str(row["expected_behavior"] or ""),
             "status": status,
-            "verdict": str(row["verdict"] or ""),
+            "verdict": result.verdict,
         }
 
     def list_rows(self, verification_id: str) -> list[VerificationTaskRow]:
@@ -342,7 +398,7 @@ class VerificationTaskStore:
             for row in self.db.fetch_all(
                 """
                 SELECT id,verification_id,task_kind,source_path,logical_run_id,
-                       test_name,expected_behavior,final_status,verdict
+                       test_name,expected_behavior,final_status,result_json
                 FROM verification_tasks
                 WHERE verification_id=?
                 """,
@@ -490,13 +546,17 @@ class VerificationTaskStore:
                 conn.execute(
                     """
                     UPDATE verification_tasks
-                    SET final_status=?, verdict=?, feedback_text=?, finished_at=?
+                    SET final_status=?, result_json=?, finished_at=?
                     WHERE id=? AND final_status=''
                     """,
                     [
                         self.TASK_DONE,
-                        "SK",
-                        self._normalize_display_text(feedback_text),
+                        execution_result_json(
+                            normalize_execution_result(
+                                verdict="SK",
+                                feedback=self._normalize_display_text(feedback_text),
+                            )
+                        ),
                         now_iso(),
                         child_id,
                     ],
@@ -511,38 +571,17 @@ class VerificationTaskStore:
         task_id: str,
         *,
         status: str,
-        verdict: str,
         run_id: str,
         judgehost_task_id: str,
-        runtime_sec: float | None,
-        cpu_sec: float | None,
-        wall_sec: float | None,
-        memory_kb: int | None,
-        compile_log: str,
-        diagnostics_json: str,
-        error_text: str,
-        feedback_text: str,
-        output_ref: str,
-        answer_correct: bool = False,
+        result: ExecutionResult,
     ) -> None:
+        _ = run_id, judgehost_task_id
         self.save_task_results(
             [
                 {
                     "task_id": task_id,
                     "status": status,
-                    "verdict": verdict,
-                    "run_id": run_id,
-                    "judgehost_task_id": judgehost_task_id,
-                    "runtime_sec": runtime_sec,
-                    "cpu_sec": cpu_sec,
-                    "wall_sec": wall_sec,
-                    "memory_kb": memory_kb,
-                    "compile_log": compile_log,
-                    "diagnostics_json": diagnostics_json,
-                    "error_text": error_text,
-                    "feedback_text": feedback_text,
-                    "output_ref": output_ref,
-                    "answer_correct": answer_correct,
+                    "result": result,
                 }
             ]
         )
@@ -550,7 +589,6 @@ class VerificationTaskStore:
     def save_task_results(self, results: list[dict[str, object]]) -> set[str]:
         if not results:
             return set()
-        limit_bytes = self._limit_bytes()
         task_ids = [str(result["task_id"]) for result in results]
         with self._runtime_lock.read_lock():
             logical_run_ids = {
@@ -561,20 +599,10 @@ class VerificationTaskStore:
             {
                 "task_id": str(result["task_id"]),
                 "status": str(result["status"]),
-                "verdict": str(result["verdict"]),
-                "runtime_sec": result["runtime_sec"],
-                "cpu_sec": result["cpu_sec"],
-                "wall_sec": result["wall_sec"],
-                "memory_kb": result["memory_kb"],
-                "answer_correct": bool(result["answer_correct"]),
-                "compile_log": bounded_display_text(str(result["compile_log"]), limit_bytes=limit_bytes),
-                "diagnostics_json": normalize_diagnostics_json_text(
-                    str(result["diagnostics_json"]),
-                    message_limit=limit_bytes,
+                "result": _bounded_result(
+                    cast(ExecutionResult, result["result"]),
+                    limit_bytes=self._limit_bytes(),
                 ),
-                "error_text": bounded_display_text(str(result["error_text"]), limit_bytes=limit_bytes),
-                "feedback_text": bounded_display_text(str(result["feedback_text"]), limit_bytes=limit_bytes),
-                "output_ref": str(result["output_ref"]),
             }
             for result in results
         ]
@@ -591,9 +619,38 @@ class VerificationTaskStore:
             ).fetchall()
             rows_by_id = {str(row["id"]): row for row in rows}
             owner_by_output_ref: dict[tuple[str, str], tuple[str, str]] = {}
-            existing_owner_by_key: dict[tuple[str, str], tuple[str, str] | None] = {}
             effective_params: list[list[object]] = []
             content_duplicate_roots: set[str] = set()
+            verification_ids = sorted(
+                {
+                    str(row["verification_id"] or "")
+                    for row in rows
+                    if str(row["verification_id"] or "")
+                }
+            )
+            if verification_ids:
+                owner_rows = conn.execute(
+                    f"""
+                    SELECT id,verification_id,test_name,result_json
+                    FROM verification_tasks
+                    WHERE verification_id IN ({','.join('?' for _ in verification_ids)})
+                      AND task_kind='generate-input' AND final_status=?
+                    ORDER BY finished_at ASC, id ASC
+                    """,
+                    [*verification_ids, self.TASK_DONE],
+                ).fetchall()
+                for owner_row in owner_rows:
+                    owner_result = execution_result_from_json(
+                        str(owner_row["result_json"] or "{}")
+                    )
+                    output_ref = owner_result.output_run_ref
+                    if owner_result.verdict.upper() == "SK" or not output_ref:
+                        continue
+                    owner_by_output_ref.setdefault(
+                        (str(owner_row["verification_id"]), output_ref),
+                        (str(owner_row["id"]), str(owner_row["test_name"] or "")),
+                    )
+            effective_result_by_id: dict[str, ExecutionResult] = {}
             for result in normalized_results:
                 task_id = str(result["task_id"])
                 row = rows_by_id.get(task_id)
@@ -601,49 +658,33 @@ class VerificationTaskStore:
                     continue
                 verification_id = str(row["verification_id"] or "")
                 task_kind = str(row["task_kind"] or "")
-                output_ref = str(result["output_ref"])
-                effective_verdict = str(result["verdict"])
-                effective_feedback = str(result["feedback_text"])
+                execution_result = cast(ExecutionResult, result["result"])
+                output_ref = execution_result.output_run_ref
+                effective_result = execution_result
                 if (
                     task_kind == "generate-input"
                     and str(result["status"]) == self.TASK_DONE
-                    and effective_verdict.upper() != "SK"
+                    and execution_result.verdict.upper() != "SK"
                     and output_ref
                 ):
                     owner_key = (verification_id, output_ref)
                     owner = owner_by_output_ref.get(owner_key)
                     if owner is None:
-                        if owner_key not in existing_owner_by_key:
-                            owner_row = conn.execute(
-                                """
-                                SELECT id, test_name
-                                FROM verification_tasks
-                                WHERE verification_id=? AND task_kind='generate-input'
-                                  AND final_status=? AND UPPER(verdict)<>? AND output_ref=?
-                                ORDER BY finished_at ASC, id ASC
-                                LIMIT 1
-                                """,
-                                [verification_id, self.TASK_DONE, "SK", output_ref],
-                            ).fetchone()
-                            existing_owner_by_key[owner_key] = (
-                                None
-                                if owner_row is None
-                                else (str(owner_row["id"]), str(owner_row["test_name"] or ""))
-                            )
-                        owner = existing_owner_by_key[owner_key]
-                    if owner is None:
                         owner_by_output_ref[owner_key] = (task_id, str(row["test_name"] or ""))
                     elif owner[0] != task_id:
-                        effective_verdict = "SK"
-                        effective_feedback = (
-                            "duplicate generated input; skipped, same as "
-                            f"{owner[1]}"
+                        effective_result = execution_result_with_outcome(
+                            execution_result,
+                            verdict="SK",
+                            feedback=self._normalize_display_text(
+                                "duplicate generated input; skipped, same as "
+                                f"{owner[1]}"
+                            ),
                         )
                         content_duplicate_roots.add(task_id)
                 if (
                     task_kind == "generate-input"
                     and str(result["status"]) == self.TASK_DONE
-                    and effective_verdict.upper() == "SK"
+                    and effective_result.verdict.upper() == "SK"
                 ):
                     content_duplicate_roots.add(task_id)
                 finished_at = (
@@ -651,21 +692,12 @@ class VerificationTaskStore:
                     if str(result["status"]) in {self.TASK_DONE, self.TASK_FAILED, self.TASK_CANCELLED}
                     else None
                 )
+                effective_result_by_id[task_id] = effective_result
                 effective_params.append(
                     [
                         result["status"],
-                        effective_verdict,
-                        result["runtime_sec"],
-                        result["cpu_sec"],
-                        result["wall_sec"],
-                        result["memory_kb"],
-                        1 if bool(result["answer_correct"]) else 0,
                         logical_run_ids[task_id],
-                        result["compile_log"],
-                        result["diagnostics_json"],
-                        result["error_text"],
-                        self._normalize_display_text(effective_feedback),
-                        output_ref,
+                        execution_result_json(effective_result),
                         finished_at,
                         task_id,
                     ]
@@ -673,10 +705,7 @@ class VerificationTaskStore:
             conn.executemany(
                 """
                 UPDATE verification_tasks
-                SET final_status=?, verdict=?, runtime_sec=?, cpu_sec=?, wall_sec=?,
-                    memory_kb=?, answer_correct=?, logical_run_id=?, compile_log=?,
-                    diagnostics_json=?, error_text=?, feedback_text=?, output_ref=?,
-                    finished_at=?
+                SET final_status=?, logical_run_id=?, result_json=?, finished_at=?
                 WHERE id=? AND final_status=''
                 """,
                 effective_params,
@@ -689,7 +718,8 @@ class VerificationTaskStore:
                 if row is None or str(row["task_kind"] or "") != "generate-input":
                     continue
                 if str(result["status"]) == self.TASK_DONE and (
-                    task_id in content_duplicate_roots or str(result["verdict"]).upper() == "SK"
+                    task_id in content_duplicate_roots
+                    or effective_result_by_id[task_id].verdict.upper() == "SK"
                 ):
                     skipped_task_ids.add(task_id)
             for verification_id in {
@@ -725,51 +755,24 @@ class VerificationTaskStore:
         task_id: str,
         *,
         status: str,
-        verdict: str,
         run_id: str,
         judgehost_task_id: str,
-        runtime_sec: float | None,
-        cpu_sec: float | None,
-        wall_sec: float | None,
-        memory_kb: int | None,
-        compile_log: str,
-        diagnostics_json: str,
-        error_text: str,
-        feedback_text: str,
-        output_ref: str,
-        answer_correct: bool = False,
+        result: ExecutionResult,
     ) -> None:
+        _ = judgehost_task_id
         with self._runtime_lock.read_lock():
             logical_run_id = self._logical_run_id_by_task_id.get(task_id, run_id)
         finished_at = now_iso() if status in {self.TASK_DONE, self.TASK_FAILED, self.TASK_CANCELLED} else None
-        limit_bytes = self._limit_bytes()
-        safe_compile_log = bounded_display_text(compile_log, limit_bytes=limit_bytes)
-        safe_error_text = bounded_display_text(error_text, limit_bytes=limit_bytes)
-        safe_feedback_text = bounded_display_text(feedback_text, limit_bytes=limit_bytes)
-        safe_diagnostics_json = normalize_diagnostics_json_text(
-            diagnostics_json,
-            message_limit=limit_bytes,
-        )
         self.db.execute(
             """
             UPDATE verification_tasks
-            SET final_status=?, verdict=?, runtime_sec=?, cpu_sec=?, wall_sec=?, memory_kb=?, answer_correct=?, logical_run_id=?, compile_log=?, diagnostics_json=?, error_text=?, feedback_text=?, output_ref=?, finished_at=COALESCE(?, finished_at)
+            SET final_status=?, logical_run_id=?, result_json=?, finished_at=COALESCE(?, finished_at)
             WHERE id=?
             """,
             [
                 status,
-                verdict,
-                runtime_sec,
-                cpu_sec,
-                wall_sec,
-                memory_kb,
-                1 if bool(answer_correct) else 0,
                 logical_run_id,
-                safe_compile_log,
-                safe_diagnostics_json,
-                safe_error_text,
-                safe_feedback_text,
-                output_ref,
+                execution_result_json(result),
                 finished_at,
                 task_id,
             ],
@@ -795,18 +798,9 @@ class VerificationTaskStore:
             self.save_task_result(
                 str(row["id"]),
                 status=self.TASK_CANCELLED,
-                verdict="",
                 run_id=str(row["run_id"] or ""),
                 judgehost_task_id=str(row["judgehost_task_id"] or ""),
-                runtime_sec=None,
-                cpu_sec=None,
-                wall_sec=None,
-                memory_kb=None,
-                compile_log="",
-                diagnostics_json="[]",
-                error_text=safe_reason,
-                feedback_text="",
-                output_ref="",
+                result=normalize_execution_result(error=safe_reason),
             )
         self.db.execute(
             "UPDATE verifications SET finished_at=COALESCE(finished_at, ?), fail_reason=CASE WHEN fail_reason='' THEN ? ELSE fail_reason END WHERE id=?",
@@ -830,18 +824,9 @@ class VerificationTaskStore:
             self.save_task_result(
                 str(row["id"]),
                 status=self.TASK_CANCELLED,
-                verdict="",
                 run_id=str(row["run_id"] or ""),
                 judgehost_task_id=str(row["judgehost_task_id"] or ""),
-                runtime_sec=None,
-                cpu_sec=None,
-                wall_sec=None,
-                memory_kb=None,
-                compile_log="",
-                diagnostics_json="[]",
-                error_text=safe_reason,
-                feedback_text="",
-                output_ref="",
+                result=normalize_execution_result(error=safe_reason),
             )
 
     def set_fail_flag(self, verification_id: str, *, reason: str) -> None:

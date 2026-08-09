@@ -15,11 +15,6 @@ from app.service.judgehost.identity import domjudge_submit_id
 from app.service.judgehost.shared import domjudge_lower_text, domjudge_path_name, domjudge_text
 from app.service.judgehost.runtime import (
     domjudge_bool,
-    domjudge_feedback_text_and_files,
-    domjudge_parse_float,
-    domjudge_parse_int,
-    domjudge_parse_meta_text,
-    domjudge_verdict_from_runresult,
 )
 from app.service.verification.identity import canonical_verification_id
 from app.service.platform.runtime_blob_store import PayloadFile
@@ -35,8 +30,7 @@ from app.service.judgehost.dispatch_cache import (
     DispatchCacheMixin,
     _DomjudgeCacheEntry,
 )
-from app.service.judgehost.case_result import build_case_result
-from app.service.judgehost.batch_scheduler_models import CaseResult, CompileSubmission, ExecutionBatchSpec
+from app.service.judgehost.batch_scheduler_models import CompileSubmission, ExecutionBatchSpec
 from app.service.judgehost.result import ResultProcessor
 from app.service.judgehost.state import JudgehostState
 from app.service.judgehost.task_queue import TaskQueue
@@ -356,65 +350,6 @@ class DispatchHandler(DispatchCacheMixin):
             "value": dict(cache_value),
             "files": dict(cache_files),
         }
-
-    def _domjudge_cached_case_bundle(
-        self,
-        *,
-        test_name: str,
-        runresult: str,
-        built: dict[str, object],
-        payloads: dict[str, PayloadFile],
-    ) -> CaseResult:
-        output_run_ref = domjudge_text(built.get("output_run_ref"))
-        output_error_ref = domjudge_text(built.get("output_error_ref")) or None
-        output_diff_ref = domjudge_text(built.get("output_diff_ref")) or None
-        team_message_ref = domjudge_text(built.get("team_message_ref")) or None
-        blob_by_ref = {
-            payload.blob_ref or "": self._s.runtime_blob_store.read(payload, max_bytes=16 * 1024 * 1024)
-            for name, payload in payloads.items()
-            if name != "program.out"
-        }
-        feedback_text, feedback_files = domjudge_feedback_text_and_files(
-            read_blob=blob_by_ref.get,
-            runresult=runresult,
-            output_error_ref=output_error_ref or "",
-            output_diff_ref=output_diff_ref or "",
-            team_message_ref=team_message_ref or "",
-        )
-        compare_exit_code = -1
-        compare_meta_file = payloads.get("compare.meta")
-        if compare_meta_file is not None:
-            compare_meta_blob = self._s.runtime_blob_store.read(compare_meta_file, max_bytes=1024 * 1024)
-            compare_meta = domjudge_parse_meta_text(
-                compare_meta_blob.decode("utf-8", errors="replace")
-            )
-            compare_exit_code = domjudge_parse_int(compare_meta.get("exitcode"), -1)
-        runtime_sec = domjudge_parse_float(built.get("runtime_sec"), 0.0)
-        cpu_sec = domjudge_parse_float(built.get("cpu_sec"), 0.0)
-        wall_sec = domjudge_parse_float(built.get("wall_sec"), 0.0)
-        memory_kb = domjudge_parse_int(built.get("memory_kb"), 0)
-        answer_correct = compare_exit_code == 42
-        return build_case_result(
-            test_name=test_name,
-            runresult=runresult,
-            verdict=domjudge_verdict_from_runresult(runresult),
-            runtime_sec=runtime_sec,
-            cpu_sec=cpu_sec,
-            wall_sec=wall_sec,
-            memory_kb=memory_kb,
-            score_text=domjudge_text(built.get("score_text")),
-            output_run_ref=output_run_ref,
-            output_error_ref=output_error_ref or "",
-            output_system_ref=domjudge_text(built.get("output_system_ref")),
-            output_diff_ref=output_diff_ref or "",
-            metadata_ref=domjudge_text(built.get("metadata_ref")),
-            compare_metadata_ref=domjudge_text(built.get("compare_metadata_ref")),
-            team_message_ref=team_message_ref or "",
-            feedback_text=feedback_text,
-            feedback_files=feedback_files,
-            answer_correct=answer_correct,
-        )
-
 
     def _domjudge_stage_task(self, task: dict[str, object], *, execution_signature: str = "") -> int:
         task_id, run_id, payload = self._domjudge_task_payload(task)

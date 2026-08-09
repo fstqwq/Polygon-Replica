@@ -7,6 +7,15 @@ shift 3
 
 HERE="$(CDPATH= cd -- "$(dirname "$0")" && pwd)"
 mkdir -p "$FEEDBACK"
+capture_on_exit() {
+  RC=$?
+  trap - EXIT
+  if [ -x "$HERE/pass-capture" ]; then
+    "$HERE/pass-capture" "$TESTIN" "$FEEDBACK" "$RC" >/dev/null 2>&1 || true
+  fi
+  exit "$RC"
+}
+trap capture_on_exit EXIT
 TEAMOUT="$FEEDBACK/team.out"
 # Main-correct verification validates the produced output with the checker
 # against itself. This lets custom checkers reject malformed output without

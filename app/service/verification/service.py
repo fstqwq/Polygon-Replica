@@ -31,6 +31,11 @@ from app.service.verification.signature import verification_manifest
 from app.service.verification.source import select_source
 from app.service.verification.task_metadata import normalize_diagnostics_json_text
 from app.service.verification.task_store import VerificationTaskStore
+from app.service.verification.execution_result import (
+    execution_result_from_json,
+    execution_result_json,
+    normalize_execution_result,
+)
 from app.service.verification.test_spec import load_tests_spec_entries, manual_test_sources, prepare_tests_spec_runtime
 
 from app.service.judgehost.api import Judgehost
@@ -607,7 +612,7 @@ class VerificationService:
     def verification_task_output_ref(self, verification_id: str, task_id: str) -> tuple[str, str] | None:
         row = self.db.fetch_one(
             """
-            SELECT test_name,output_ref
+            SELECT test_name,result_json
             FROM verification_tasks
             WHERE verification_id=? AND id=?
             """,
@@ -615,7 +620,8 @@ class VerificationService:
         )
         if row is None:
             return None
-        return (str(row["test_name"] or ""), str(row["output_ref"] or ""))
+        result = execution_result_from_json(str(row["result_json"] or "{}"))
+        return (str(row["test_name"] or ""), result.output_run_ref)
 
     def workspace_verification_run_ids(
         self,
@@ -648,9 +654,7 @@ class VerificationService:
             if answer_ref:
                 tokens.add(answer_ref)
         for row in self.task_store.list_rows(safe_verification_id):
-            output_ref = str(row["output_ref"] or "")
-            if output_ref:
-                tokens.add(output_ref)
+            tokens.update(row["result"].artifact_refs())
         return tokens
 
     def verification_has_artifact_token(self, verification_id: str, token: str) -> bool:
@@ -828,9 +832,8 @@ class VerificationService:
     def _normalize_stored_display_text(self, *, limit_bytes: int) -> None:
         task_rows = self.db.fetch_all(
             """
-            SELECT id,compile_log,diagnostics_json,error_text,feedback_text
+            SELECT id,result_json
             FROM verification_tasks
-            WHERE compile_log<>'' OR diagnostics_json<>'[]' OR error_text<>'' OR feedback_text<>''
             """
         )
         verification_rows = self.db.fetch_all(
@@ -839,31 +842,40 @@ class VerificationService:
         changed = False
         with self.db.conn() as conn:
             for row in task_rows:
-                safe_compile_log = bounded_display_text(str(row["compile_log"] or ""), limit_bytes=limit_bytes)
-                safe_error_text = bounded_display_text(str(row["error_text"] or ""), limit_bytes=limit_bytes)
-                safe_feedback_text = bounded_display_text(str(row["feedback_text"] or ""), limit_bytes=limit_bytes)
+                current_json = str(row["result_json"] or "{}")
+                result = execution_result_from_json(current_json)
+                safe_compile_log = bounded_display_text(result.compile.log, limit_bytes=limit_bytes)
+                safe_error_text = bounded_display_text(result.outcome.error, limit_bytes=limit_bytes)
+                safe_feedback_text = bounded_display_text(result.outcome.feedback, limit_bytes=limit_bytes)
                 safe_diagnostics_json = normalize_diagnostics_json_text(
-                    str(row["diagnostics_json"] or "[]"),
+                    json.dumps(list(result.compile.diagnostics), ensure_ascii=False),
                     message_limit=limit_bytes,
                 )
-                if (
-                    safe_compile_log == str(row["compile_log"] or "")
-                    and safe_error_text == str(row["error_text"] or "")
-                    and safe_feedback_text == str(row["feedback_text"] or "")
-                    and safe_diagnostics_json == str(row["diagnostics_json"] or "[]")
-                ):
+                normalized = normalize_execution_result(
+                    passes=result.passes,
+                    verdict=result.verdict,
+                    score_text=result.score_text,
+                    answer_correct=result.answer_correct,
+                    error=safe_error_text,
+                    feedback=safe_feedback_text,
+                    compile_log=safe_compile_log,
+                    compile_diagnostics=cast(
+                        list[dict[str, object]],
+                        json.loads(safe_diagnostics_json),
+                    ),
+                    warnings=result.warnings,
+                )
+                normalized_json = execution_result_json(normalized)
+                if normalized_json == current_json:
                     continue
                 conn.execute(
                     """
                     UPDATE verification_tasks
-                    SET compile_log=?, diagnostics_json=?, error_text=?, feedback_text=?
+                    SET result_json=?
                     WHERE id=?
                     """,
                     [
-                        safe_compile_log,
-                        safe_diagnostics_json,
-                        safe_error_text,
-                        safe_feedback_text,
+                        normalized_json,
                         str(row["id"] or ""),
                     ],
                 )

@@ -1,4 +1,5 @@
 from __future__ import annotations
+import json
 from dataclasses import dataclass
 from typing import cast
 
@@ -10,6 +11,10 @@ from app.service.platform.error_text import (
     normalize_display_text,
 )
 from app.service.verification.task_metadata import canonical_diagnostics, diagnostics_json_text
+from app.service.verification.execution_result import (
+    ExecutionResult,
+    normalize_execution_result,
+)
 from app.service.verification.task_scheduler import TaskExecutionResult
 from app.service.verification.task_store import VerificationTaskRow, VerificationTaskStore
 from app.service.verification.test_rows import build_verification_test_row
@@ -200,6 +205,36 @@ def _task_row_to_test_row(row: VerificationTaskRow) -> dict[str, object]:
     )
 
 
+def _canonical_task_result(
+    parts: _TaskSummaryParts,
+    *,
+    source: ExecutionResult | None,
+    verdict: str,
+    error_text: str,
+    feedback_text: str,
+    output_ref: str,
+    answer_correct: bool,
+) -> ExecutionResult:
+    passes = () if source is None else source.passes
+    warnings = () if source is None else source.warnings
+    score_text = "" if source is None else source.score_text
+    _ = output_ref
+    return normalize_execution_result(
+        passes=passes,
+        verdict=verdict,
+        score_text=score_text,
+        answer_correct=answer_correct,
+        error=error_text,
+        feedback=feedback_text,
+        compile_log=parts.compile_log,
+        compile_diagnostics=cast(
+            list[dict[str, object]],
+            json.loads(parts.diagnostics_json),
+        ),
+        warnings=warnings,
+    )
+
+
 def finalize_verification_task_result(task_row: VerificationTaskRow, *, result: dict[str, object]) -> TaskExecutionResult:
     verification_id = str(task_row["verification_id"] or "")
     task_id = str(task_row["id"] or "")
@@ -214,6 +249,21 @@ def finalize_verification_task_result(task_row: VerificationTaskRow, *, result: 
     error_text = summary_error_text or result_error_text
     missing_case_result = bool(result.get("missing_case_result"))
     parts = _summary_parts(result_summary, run_status=result_status, error_text=error_text)
+    source_result = cast(ExecutionResult | None, result.get("execution_result"))
+    if source_result is not None:
+        parts = _TaskSummaryParts(
+            verdict=source_result.verdict or parts.verdict,
+            runtime_sec=source_result.runtime_sec,
+            cpu_sec=source_result.cpu_sec,
+            wall_sec=source_result.wall_sec,
+            memory_kb=source_result.memory_kb,
+            compile_log=parts.compile_log,
+            diagnostics_json=parts.diagnostics_json,
+            error_text=source_result.outcome.error or parts.error_text,
+            feedback_text=source_result.feedback_text or parts.feedback_text,
+            output_ref=source_result.output_run_ref or parts.output_ref,
+            answer_correct=source_result.answer_correct,
+        )
     materialized_output_ref, materialized_output_file = _materialize_run_output(
         judgehost_task_id=judgehost_task_id,
         test_name=test_name,
@@ -225,24 +275,22 @@ def finalize_verification_task_result(task_row: VerificationTaskRow, *, result: 
         return TaskExecutionResult(
             task_id=task_id,
             status=VerificationTaskStore.TASK_FAILED,
-            verdict="",
             run_id=run_id,
             judgehost_task_id=judgehost_task_id,
-            runtime_sec=None,
-            cpu_sec=None,
-            wall_sec=None,
-            memory_kb=None,
-            compile_log=parts.compile_log,
-            diagnostics_json=parts.diagnostics_json,
-            error_text=parts.error_text,
-            feedback_text="",
-            output_ref="",
+            result=_canonical_task_result(
+                parts,
+                source=None,
+                verdict="",
+                error_text=parts.error_text,
+                feedback_text="",
+                output_ref="",
+                answer_correct=False,
+            ),
             fail_flag_reason=(
                 verification_task_fail_reason(task_row, error_text=fail_reason)
                 if task_kind == TASK_MAIN_CORRECT
                 else ""
             ),
-            answer_correct=False,
         )
 
     if task_kind == TASK_GENERATE_INPUT:
@@ -255,40 +303,36 @@ def finalize_verification_task_result(task_row: VerificationTaskRow, *, result: 
             return TaskExecutionResult(
                 task_id=task_id,
                 status=VerificationTaskStore.TASK_FAILED,
-                verdict=parts.verdict or "FL",
                 run_id=run_id,
                 judgehost_task_id=judgehost_task_id,
-                runtime_sec=parts.runtime_sec,
-                cpu_sec=parts.cpu_sec,
-                wall_sec=parts.wall_sec,
-                memory_kb=parts.memory_kb,
-                compile_log=parts.compile_log,
-                diagnostics_json=parts.diagnostics_json,
-                error_text=fail_reason,
-                feedback_text=parts.feedback_text,
-                output_ref=materialized_output_ref,
+                result=_canonical_task_result(
+                    parts,
+                    source=source_result,
+                    verdict=parts.verdict or "FL",
+                    error_text=fail_reason,
+                    feedback_text=parts.feedback_text,
+                    output_ref=materialized_output_ref,
+                    answer_correct=parts.answer_correct,
+                ),
                 fail_flag_reason=verification_task_fail_reason(task_row, error_text=fail_reason),
-                answer_correct=parts.answer_correct,
             )
         if materialized_output_file is None:
             fail_message = f"generated input output missing for {test_name}"
             return TaskExecutionResult(
                 task_id=task_id,
                 status=VerificationTaskStore.TASK_FAILED,
-                verdict="FL",
                 run_id=run_id,
                 judgehost_task_id=judgehost_task_id,
-                runtime_sec=parts.runtime_sec,
-                cpu_sec=parts.cpu_sec,
-                wall_sec=parts.wall_sec,
-                memory_kb=parts.memory_kb,
-                compile_log=parts.compile_log,
-                diagnostics_json=parts.diagnostics_json,
-                error_text=fail_message,
-                feedback_text=parts.feedback_text,
-                output_ref=materialized_output_ref,
+                result=_canonical_task_result(
+                    parts,
+                    source=source_result,
+                    verdict="FL",
+                    error_text=fail_message,
+                    feedback_text=parts.feedback_text,
+                    output_ref=materialized_output_ref,
+                    answer_correct=parts.answer_correct,
+                ),
                 fail_flag_reason=verification_task_fail_reason(task_row, error_text=fail_message),
-                answer_correct=parts.answer_correct,
             )
         from app.impl.runtime.config import config
 
@@ -299,20 +343,18 @@ def finalize_verification_task_result(task_row: VerificationTaskRow, *, result: 
             return TaskExecutionResult(
                 task_id=task_id,
                 status=VerificationTaskStore.TASK_FAILED,
-                verdict="FL",
                 run_id=run_id,
                 judgehost_task_id=judgehost_task_id,
-                runtime_sec=parts.runtime_sec,
-                cpu_sec=parts.cpu_sec,
-                wall_sec=parts.wall_sec,
-                memory_kb=parts.memory_kb,
-                compile_log=parts.compile_log,
-                diagnostics_json=parts.diagnostics_json,
-                error_text=fail_message,
-                feedback_text=fail_message,
-                output_ref=materialized_output_ref,
+                result=_canonical_task_result(
+                    parts,
+                    source=source_result,
+                    verdict="FL",
+                    error_text=fail_message,
+                    feedback_text=fail_message,
+                    output_ref=materialized_output_ref,
+                    answer_correct=parts.answer_correct,
+                ),
                 fail_flag_reason=verification_task_fail_reason(task_row, error_text=fail_message),
-                answer_correct=parts.answer_correct,
             )
         _register_verification_artifact(
             verification_id=verification_id,
@@ -323,19 +365,17 @@ def finalize_verification_task_result(task_row: VerificationTaskRow, *, result: 
         return TaskExecutionResult(
             task_id=task_id,
             status=VerificationTaskStore.TASK_DONE,
-            verdict=parts.verdict or "OK",
             run_id=run_id,
             judgehost_task_id=judgehost_task_id,
-            runtime_sec=parts.runtime_sec,
-            cpu_sec=parts.cpu_sec,
-            wall_sec=parts.wall_sec,
-            memory_kb=parts.memory_kb,
-            compile_log=parts.compile_log,
-            diagnostics_json=parts.diagnostics_json,
-            error_text=parts.error_text,
-            feedback_text=parts.feedback_text,
-            output_ref=materialized_output_ref,
-            answer_correct=parts.answer_correct,
+            result=_canonical_task_result(
+                parts,
+                source=source_result,
+                verdict=parts.verdict or "OK",
+                error_text=parts.error_text,
+                feedback_text=parts.feedback_text,
+                output_ref=materialized_output_ref,
+                answer_correct=parts.answer_correct,
+            ),
         )
 
     task_status = VerificationTaskStore.TASK_DONE if result_status == Status.OK.value else VerificationTaskStore.TASK_FAILED
@@ -350,20 +390,18 @@ def finalize_verification_task_result(task_row: VerificationTaskRow, *, result: 
             return TaskExecutionResult(
                 task_id=task_id,
                 status=VerificationTaskStore.TASK_FAILED,
-                verdict="FL",
                 run_id=run_id,
                 judgehost_task_id=judgehost_task_id,
-                runtime_sec=parts.runtime_sec,
-                cpu_sec=parts.cpu_sec,
-                wall_sec=parts.wall_sec,
-                memory_kb=parts.memory_kb,
-                compile_log=parts.compile_log,
-                diagnostics_json=parts.diagnostics_json,
-                error_text=fail_message,
-                feedback_text=parts.feedback_text,
-                output_ref=materialized_output_ref,
+                result=_canonical_task_result(
+                    parts,
+                    source=source_result,
+                    verdict="FL",
+                    error_text=fail_message,
+                    feedback_text=parts.feedback_text,
+                    output_ref=materialized_output_ref,
+                    answer_correct=parts.answer_correct,
+                ),
                 fail_flag_reason=verification_task_fail_reason(task_row, error_text=fail_message),
-                answer_correct=parts.answer_correct,
             )
         _register_verification_artifact(
             verification_id=verification_id,
@@ -374,18 +412,16 @@ def finalize_verification_task_result(task_row: VerificationTaskRow, *, result: 
     return TaskExecutionResult(
         task_id=task_id,
         status=task_status,
-        verdict=parts.verdict,
         run_id=run_id,
         judgehost_task_id=judgehost_task_id,
-        runtime_sec=parts.runtime_sec,
-        cpu_sec=parts.cpu_sec,
-        wall_sec=parts.wall_sec,
-        memory_kb=parts.memory_kb,
-        compile_log=parts.compile_log,
-        diagnostics_json=parts.diagnostics_json,
-        error_text=final_error,
-        feedback_text=parts.feedback_text,
-        output_ref=materialized_output_ref,
+        result=_canonical_task_result(
+            parts,
+            source=source_result,
+            verdict=parts.verdict,
+            error_text=final_error,
+            feedback_text=parts.feedback_text,
+            output_ref=materialized_output_ref,
+            answer_correct=parts.answer_correct,
+        ),
         fail_flag_reason=fail_flag_reason,
-        answer_correct=parts.answer_correct,
     )

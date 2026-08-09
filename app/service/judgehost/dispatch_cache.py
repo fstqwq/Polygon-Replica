@@ -22,6 +22,7 @@ from app.service.judgehost.batch_scheduler_models import (
     ExecutionBatchRow,
     JudgehostCaseRow,
 )
+from app.service.verification.execution_result import execution_result_from_json
 
 logger = logging.getLogger(__name__)
 _DomjudgeCacheEntry = TypedDict(
@@ -99,7 +100,7 @@ class DispatchCacheMixin:
         )
         if cached_read is None:
             return None
-        cached_entry, cached_payloads = cached_read
+        cached_entry, _cached_payloads = cached_read
         cached_exact = self._domjudge_cache_entry(cached_entry)
         if cached_exact is not None:
             cached_obj = cached_exact["value"]
@@ -125,22 +126,31 @@ class DispatchCacheMixin:
                 if expected_behavior == "compile":
                     self._toolkit.cache_delete(self.CASE_CACHE_KIND, case_key_hash, case_signature)
                 return None
-            built = self._toolkit.build_cached_case(
-                cache_value=cached_obj,
-                cache_files=cached_exact["files"],
-            )
-            cached_result = self._domjudge_cached_case_bundle(
-                test_name=domjudge_text(case_row["test_name"]),
-                runresult=cached_runresult,
-                built=built,
-                payloads=cached_payloads,
-            )
+            result_json = domjudge_text(cached_obj.get("result_json"))
+            if not result_json:
+                self._toolkit.cache_delete(
+                    self.CASE_CACHE_KIND,
+                    case_key_hash,
+                    case_signature,
+                )
+                return None
+            cached_result = execution_result_from_json(result_json)
+            if any(
+                self._s.runtime_blob_store.descriptor(token) is None
+                for token in cached_result.artifact_refs()
+            ):
+                self._toolkit.cache_delete(
+                    self.CASE_CACHE_KIND,
+                    case_key_hash,
+                    case_signature,
+                )
+                return None
             if cached_verdict == "OK" and (not compile_only):
                 # Cached OK result must carry a resolvable output artifact.
                 if not cached_result.output_run_ref:
                     self._toolkit.cache_delete(self.CASE_CACHE_KIND, case_key_hash, case_signature)
                     return None
-            if requires_output_blob and "program.out" not in cached_payloads:
+            if requires_output_blob and not cached_result.output_run_ref:
                 self._toolkit.cache_delete(self.CASE_CACHE_KIND, case_key_hash, case_signature)
                 return None
             return cached_result

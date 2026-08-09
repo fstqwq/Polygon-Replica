@@ -123,8 +123,18 @@ class TestBackendMinimal(E2ETestBase):
             }.issubset(workspace_columns)
         )
 
-    def test_current_verification_task_schema_has_answer_correct(self) -> None:
-        self.assertIn("answer_correct", CURRENT_SCHEMA_COLUMNS["verification_tasks"])
+    def test_current_verification_task_schema_has_only_unified_result(self) -> None:
+        columns = set(CURRENT_SCHEMA_COLUMNS["verification_tasks"])
+        self.assertIn("result_json", columns)
+        self.assertTrue(
+            {
+                "verdict",
+                "runtime_sec",
+                "memory_kb",
+                "answer_correct",
+                "output_ref",
+            }.isdisjoint(columns)
+        )
 
     def test_current_sanity_schema_has_per_check_messages(self) -> None:
         self.assertIn("status", CURRENT_SCHEMA_COLUMNS["verification_sanity_checks"])

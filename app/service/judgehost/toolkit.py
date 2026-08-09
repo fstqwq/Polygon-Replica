@@ -22,7 +22,7 @@ from app.service.judgehost.shared import (
     domjudge_path_name,
     domjudge_text,
 )
-from app.service.judgehost.runtime import domjudge_bool, domjudge_parse_float, domjudge_parse_int
+from app.service.judgehost.runtime import domjudge_bool
 from app.service.platform.hashing import compile_command_digest, sha256_hex_text
 from app.service.platform.runtime_blob_store import PayloadFile
 from app.service.platform.runtime_cache_index import RuntimeCacheEntry, RuntimeCacheIndex
@@ -163,37 +163,6 @@ class DomjudgeToolkit:
             return None
         return self._s.runtime_blob_store.read(descriptor, max_bytes=max_bytes)
 
-    def build_cached_case(
-        self,
-        *,
-        cache_value: dict[str, object],
-        cache_files: dict[str, object] | None = None,
-    ) -> dict[str, object]:
-        mapping = {
-            "program.out": "output_run_ref",
-            "program.err": "output_error_ref",
-            "system.out": "output_system_ref",
-            "judgemessage.txt": "output_diff_ref",
-            "program.meta": "metadata_ref",
-            "compare.meta": "compare_metadata_ref",
-            "teammessage.txt": "team_message_ref",
-        }
-        rel_map: dict[str, str] = {}
-        files_map = {} if cache_files is None else cache_files
-        for blob_name, rel_key in mapping.items():
-            if blob_name not in files_map:
-                continue
-            rel_map[rel_key] = domjudge_text(dict(files_map[blob_name]).get("blob_ref"))
-        return {
-            "runresult": domjudge_lower_text(cache_value.get("runresult"), default="correct"),
-            "runtime_sec": domjudge_parse_float(cache_value.get("runtime_sec"), 0.0),
-            "cpu_sec": domjudge_parse_float(cache_value.get("cpu_sec"), 0.0),
-            "wall_sec": domjudge_parse_float(cache_value.get("wall_sec"), 0.0),
-            "memory_kb": max(0, domjudge_parse_int(cache_value.get("memory_kb"), 0)),
-            "score_text": domjudge_text(cache_value.get("score_text")),
-            **rel_map,
-        }
-
     def set_hash_from_blobs(self, blobs: list[bytes]) -> str:
         return domjudge_set_hash_from_blobs(blobs)
 
@@ -295,7 +264,8 @@ class DomjudgeToolkit:
         wall_sec: float,
         memory_kb: int,
         score_text: str,
-        files: dict[str, bytes],
+        result_json: str,
+        files: dict[str, bytes | PayloadFile],
         shortcut_eligible: bool,
     ) -> dict[str, PayloadFile]:
         entry = self._s.runtime_cache_index.put(
@@ -309,6 +279,7 @@ class DomjudgeToolkit:
                 "wall_sec": float(max(0.0, wall_sec)),
                 "memory_kb": int(max(0, memory_kb)),
                 "score_text": domjudge_text(score_text),
+                "result_json": result_json,
                 "shortcut_eligible": bool(shortcut_eligible),
             },
             files=files,
@@ -484,7 +455,9 @@ class DomjudgeToolkit:
         compiler = domjudge_text(getattr(self._s.constants, "TOOLCHAIN_CPP_COMPILER", "g++"), default="g++")
         safe_source = shlex.quote(domjudge_path_name(source_name, default="interactor.cpp"))
         safe_role = domjudge_text(role, default="executable")
-        template = self.load_script_asset("cpp.executable.build")
+        template = self.load_script_asset(
+            "cpp.interactor.build" if safe_role == "interactor" else "cpp.executable.build"
+        )
         rendered = self.render_script_template(
             template,
             {
@@ -492,6 +465,14 @@ class DomjudgeToolkit:
                 "CPP_EXECUTABLE_BUILD_CMD": f"{shlex.quote(compiler)} -Wall -DDOMJUDGE -O2",
                 "SOURCE_NAME": safe_source,
             },
+        )
+        return rendered.encode("utf-8")
+
+    def pass_capture_script(self, *, max_bytes: int) -> bytes:
+        template = self.load_script_asset("pass-capture")
+        rendered = self.render_script_template(
+            template,
+            {"BUNDLE_MAX_BYTES": str(max(1024, int(max_bytes)))},
         )
         return rendered.encode("utf-8")
 

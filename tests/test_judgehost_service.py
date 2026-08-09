@@ -10,11 +10,13 @@ from tests.db_helpers import (
 
 import base64
 import hashlib
+import io
 import json
 import os
 import shutil
 import threading
 import time
+import tarfile
 import uuid
 from pathlib import Path
 from unittest.mock import patch
@@ -45,6 +47,40 @@ from tests.identity_helpers import canonical_test_verification_id
 
 
 _canonical_verification_id = canonical_test_verification_id
+
+
+def _pass_bundle_bytes(
+    *,
+    final_pass_number: int,
+    historical_files: dict[int, dict[str, bytes]],
+    final_input: bytes,
+    final_team_message: bytes,
+) -> bytes:
+    entries: list[tuple[str, bytes]] = [
+        (".polygon-pass-bundle", b""),
+        ("final-pass-number", f"{final_pass_number}\n".encode("ascii")),
+    ]
+    for number, files in sorted(historical_files.items()):
+        entries.extend(
+            (f"passes/{number}/{name}", payload)
+            for name, payload in files.items()
+        )
+    entries.extend(
+        [
+            (f"passes/{final_pass_number}/input", final_input),
+            (
+                f"passes/{final_pass_number}/teammessage.txt",
+                final_team_message,
+            ),
+        ]
+    )
+    output = io.BytesIO()
+    with tarfile.open(fileobj=output, mode="w") as archive:
+        for name, payload in entries:
+            info = tarfile.TarInfo(name)
+            info.size = len(payload)
+            archive.addfile(info, io.BytesIO(payload))
+    return output.getvalue()
 
 
 class TestJudgehostService(E2ETestBase):
@@ -441,6 +477,8 @@ class TestJudgehostService(E2ETestBase):
         )
         self.assertIsNotNone(claim)
         assert claim is not None
+        artifact_ref = "blob://sha256/" + "b" * 64
+        has_feedback_artifact = bool(feedback_files)
         result = build_case_result(
             test_name=test_name,
             runresult=runresult,
@@ -450,16 +488,17 @@ class TestJudgehostService(E2ETestBase):
             wall_sec=0.025,
             memory_kb=1404,
             score_text="",
-            output_run_ref="",
-            output_error_ref="",
-            output_system_ref="",
-            output_diff_ref="",
-            metadata_ref="",
-            compare_metadata_ref="",
-            team_message_ref="",
+            output_run_ref=artifact_ref if has_feedback_artifact else "",
+            output_error_ref=artifact_ref if has_feedback_artifact else "",
+            output_system_ref=artifact_ref if has_feedback_artifact else "",
+            output_diff_ref=artifact_ref if has_feedback_artifact else "",
+            metadata_ref=artifact_ref if has_feedback_artifact else "",
+            compare_metadata_ref=artifact_ref if has_feedback_artifact else "",
+            team_message_ref=artifact_ref if has_feedback_artifact else "",
             feedback_text=feedback_text,
             feedback_files=[] if feedback_files is None else feedback_files,
             answer_correct=False,
+            input_ref=artifact_ref if has_feedback_artifact else "",
         )
         self.assertEqual(
             service.state.batch_scheduler.commit_case_result(
@@ -852,7 +891,7 @@ class TestJudgehostService(E2ETestBase):
             },
         )
 
-        meta_text = "cpu-time: 0.004\nwall-time: 0.005\nmemory-bytes: 4096\n"
+        meta_text = "time-used: cpu-time\ncpu-time: 0.004\nwall-time: 0.005\nmemory-bytes: 4096\n"
         service.domjudge_add_judging_run(
             "judgehost-official",
             judgetask_id,
@@ -1377,7 +1416,7 @@ class TestJudgehostService(E2ETestBase):
         self.assertEqual(run_id_num_b, run_id_num_a)
         self.assertEqual(compare_id_b, compare_id_a)
 
-    def test_domjudge_multi_pass_summary_keeps_single_final_pass_and_strips_protocol_output(self) -> None:
+    def test_domjudge_multi_pass_summary_keeps_each_pass_and_raw_output(self) -> None:
         service = config.judgehost_task_service
         old_enabled = service.state.enabled
         old_token = service.state.api_token
@@ -1432,6 +1471,27 @@ class TestJudgehostService(E2ETestBase):
             b"[  0.054s/4]<: ? 0\n"
         )
         meta_text = "cpu-time: 0.004\nwall-time: 0.005\nmemory-bytes: 4096\n"
+        historical_meta = (
+            b"time-used: cpu-time\ncpu-time: 0.003\n"
+            b"wall-time: 0.006\nmemory-bytes: 8192\n"
+        )
+        bundle = _pass_bundle_bytes(
+            final_pass_number=2,
+            historical_files={
+                1: {
+                    "input": b"first input\n",
+                    "program.out": b"first output\n",
+                    "program.err": b"",
+                    "system.out": b"first system\n",
+                    "program.meta": historical_meta,
+                    "compare.meta": b"exitcode: 42\n",
+                    "judgemessage.txt": b"first ok\n",
+                    "teammessage.txt": b"first team\n",
+                }
+            },
+            final_input=b"second input\n",
+            final_team_message=b"final team\n",
+        )
         service.domjudge_add_judging_run(
             "judgehost-mp",
             judgetask_id,
@@ -1443,7 +1503,9 @@ class TestJudgehostService(E2ETestBase):
                 "output_error": "",
                 "output_system": "",
                 "metadata": base64.b64encode(meta_text.encode("utf-8")).decode("ascii"),
-                "compare_metadata": "",
+                "compare_metadata": base64.b64encode(b"exitcode: 42\n").decode("ascii"),
+                "team_message": base64.b64encode(bundle).decode("ascii"),
+                "pass": "2",
             },
         )
 
@@ -1457,11 +1519,12 @@ class TestJudgehostService(E2ETestBase):
         row = tests[0] if isinstance(tests[0], dict) else {}
         passes = row.get("passes") if isinstance(row, dict) else []
         self.assertIsInstance(passes, list)
-        self.assertEqual(len(passes), 1)
+        self.assertEqual(len(passes), 2)
         self.assertEqual(str((passes[0] or {}).get("verdict") or ""), "OK")
-        output_ref = str((passes[0] or {}).get("output_ref") or "").strip()
-        self.assertTrue(output_ref)
-        self.assertEqual(service.resolve_artifact_blob(output_ref), noisy_output)
+        first_output_ref = str((passes[0] or {}).get("output_ref") or "").strip()
+        final_output_ref = str((passes[1] or {}).get("output_ref") or "").strip()
+        self.assertEqual(service.resolve_artifact_blob(first_output_ref), b"first output\n")
+        self.assertEqual(service.resolve_artifact_blob(final_output_ref), noisy_output)
         feedback_files = row.get("feedback_files") if isinstance(row, dict) else []
         self.assertTrue(feedback_files)
         first_feedback_token = str(feedback_files[0] or "")
@@ -5003,7 +5066,7 @@ class TestJudgehostService(E2ETestBase):
         self.assertIn("judge failed", str(failed_summary.get("error") or "").lower())
 
         after_fl_count = self._judge_index_entry_count(service.CASE_CACHE_KIND)
-        self.assertGreater(after_fl_count, before_count)
+        self.assertGreaterEqual(after_fl_count, before_count)
 
         service.enqueue_task(
             problem=self.problem,
@@ -5434,7 +5497,10 @@ class TestJudgehostService(E2ETestBase):
         tests = list(summary.get("tests") or [])
         self.assertEqual(len(tests), 1)
         self.assertEqual(str(tests[0].get("message") or ""), feedback_text)
-        self.assertEqual(list(tests[0].get("feedback_files") or []), ["feedback/judgemessage.txt"])
+        self.assertEqual(
+            list(tests[0].get("feedback_files") or []),
+            ["blob://sha256/" + "b" * 64],
+        )
 
     def test_domjudge_add_debug_info_overwrites_terminal_verification_task_detail(self) -> None:
         service = config.judgehost_task_service

@@ -4,6 +4,7 @@ import secrets
 from pathlib import Path
 
 from app.impl.runtime.config import config
+from app.service.verification.execution_result import normalize_execution_result
 from app.service.problem.solution_metadata import normalize_expected_behavior
 from app.service.verification.task_store import VerificationTaskStore
 from app.service.verification.types import Kind, Status
@@ -123,18 +124,14 @@ def record_async_run_failure(
     task_store.save_task_result(
         task_id,
         status=VerificationTaskStore.TASK_FAILED,
-        verdict="FL",
         run_id=run_id,
         judgehost_task_id="",
-        runtime_sec=0.0,
-        cpu_sec=0.0,
-        wall_sec=0.0,
-        memory_kb=0,
-        compile_log=detail_error,
-        diagnostics_json="[]",
-        error_text=detail_error,
-        feedback_text=detail_error,
-        output_ref="",
+        result=normalize_execution_result(
+            verdict="FL",
+            error=detail_error,
+            feedback=detail_error,
+            compile_log=detail_error,
+        ),
     )
     config.verification_service.update_verification_record_status(
         resolved_verification_id,

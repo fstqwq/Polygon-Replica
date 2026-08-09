@@ -20,6 +20,7 @@ from app.service.verification.task_scheduler import (
     register_verification_runtime_coordinator,
     unregister_verification_runtime_coordinator,
 )
+from app.service.verification.execution_result import normalize_execution_result
 from app.service.verification.task_store import VerificationTaskRow, VerificationTaskStore
 from app.service.verification.task_result_finalize import verification_task_fail_reason
 from app.service.verification.test_rows import build_verification_test_row
@@ -748,18 +749,9 @@ def _empty_task_result(
     return TaskExecutionResult(
         task_id=task_id,
         status=status,
-        verdict=verdict,
         run_id=run_id,
         judgehost_task_id=judgehost_task_id,
-        runtime_sec=None,
-        cpu_sec=None,
-        wall_sec=None,
-        memory_kb=None,
-        compile_log="",
-        diagnostics_json="[]",
-        error_text=error_text,
-        feedback_text="",
-        output_ref="",
+        result=normalize_execution_result(verdict=verdict, error=error_text),
         fail_flag_reason=fail_flag_reason,
     )
 
@@ -773,19 +765,12 @@ def _skipped_downstream_task_result(task_row: VerificationTaskRow) -> TaskPublis
         terminal_result=TaskExecutionResult(
             task_id=task_id,
             status=VerificationTaskStore.TASK_DONE,
-            verdict="SK",
             run_id="",
             judgehost_task_id="",
-            runtime_sec=None,
-            cpu_sec=None,
-            wall_sec=None,
-            memory_kb=None,
-            compile_log="",
-            diagnostics_json="[]",
-            error_text="",
-            feedback_text="skipped because generate-input was skipped",
-            output_ref="",
-            answer_correct=False,
+            result=normalize_execution_result(
+                verdict="SK",
+                feedback="skipped because generate-input was skipped",
+            ),
         ),
     )
 
@@ -846,19 +831,12 @@ def _publish_generate_task(task_row: VerificationTaskRow, *, execution: TaskExec
                 terminal_result=TaskExecutionResult(
                     task_id=task_id,
                     status=VerificationTaskStore.TASK_DONE,
-                    verdict="SK",
                     run_id=run_id,
                     judgehost_task_id="",
-                    runtime_sec=None,
-                    cpu_sec=None,
-                    wall_sec=None,
-                    memory_kb=None,
-                    compile_log="",
-                    diagnostics_json="[]",
-                    error_text="",
-                    feedback_text=feedback_text,
-                    output_ref=owner_output_ref,
-                    answer_correct=False,
+                    result=normalize_execution_result(
+                        verdict="SK",
+                        feedback=feedback_text,
+                    ),
                 ),
             )
         prepared = prepared_payload_for_uploaded_source(

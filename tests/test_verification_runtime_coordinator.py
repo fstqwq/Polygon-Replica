@@ -3,8 +3,17 @@ from __future__ import annotations
 import threading
 import time
 import unittest
+from typing import cast
 from unittest.mock import patch
 
+from app.service.verification.execution_result import (
+    CAPTURE_COMPLETE,
+    ExecutionPassResult,
+    ExecutionResult,
+    ExecutionUsage,
+    PassArtifacts,
+    normalize_execution_result,
+)
 from app.service.verification.task_scheduler import (
     TaskExecutionResult,
     TaskPublishResult,
@@ -12,6 +21,46 @@ from app.service.verification.task_scheduler import (
     VerificationRuntimeCoordinator,
 )
 from app.service.verification.task_store import VerificationTaskStore
+
+
+def _execution_result(
+    verdict: str,
+    *,
+    feedback: str = "",
+    error: str = "",
+    output_ref: str = "",
+) -> ExecutionResult:
+    passes: tuple[ExecutionPassResult, ...] = ()
+    if output_ref:
+        placeholder_ref = "blob://sha256/" + ("0" * 64)
+        passes = (
+            ExecutionPassResult(
+                number=1,
+                capture_status=CAPTURE_COMPLETE,
+                runresult="wrong-answer",
+                verdict=verdict,
+                score_text="",
+                answer_correct=False,
+                usage=ExecutionUsage(0.01, 0.01, 0.01, 1),
+                feedback=feedback,
+                artifacts=PassArtifacts(
+                    input_ref=placeholder_ref,
+                    output_ref=output_ref,
+                    stderr_ref=placeholder_ref,
+                    system_ref=placeholder_ref,
+                    judge_message_ref=placeholder_ref,
+                    team_message_ref=placeholder_ref,
+                    metadata_ref=placeholder_ref,
+                    compare_metadata_ref=placeholder_ref,
+                ),
+            ),
+        )
+    return normalize_execution_result(
+        passes=passes,
+        verdict=verdict,
+        feedback=feedback,
+        error=error,
+    )
 
 
 def _task_row(
@@ -106,20 +155,11 @@ class _InMemoryTaskStore:
         task_id: str,
         *,
         status: str,
-        verdict: str,
         run_id: str,
         judgehost_task_id: str,
-        runtime_sec: float | None,
-        cpu_sec: float | None,
-        wall_sec: float | None,
-        memory_kb: int | None,
-        compile_log: str,
-        diagnostics_json: str,
-        error_text: str,
-        feedback_text: str,
-        output_ref: str,
-        answer_correct: bool = False,
+        result: ExecutionResult,
     ) -> None:
+        _ = run_id, judgehost_task_id
         with self._lock:
             for row in self._rows:
                 if str(row["id"]) != task_id:
@@ -127,42 +167,40 @@ class _InMemoryTaskStore:
                 if str(row["status"]) == VerificationTaskStore.TASK_CANCELLED:
                     return
                 row["status"] = status
-                row["verdict"] = verdict
-                row["run_id"] = run_id
-                row["compile_log"] = compile_log
-                row["diagnostics_json"] = diagnostics_json
-                row["error_text"] = error_text
-                row["feedback_text"] = feedback_text
-                row["output_ref"] = output_ref
-                row["answer_correct"] = bool(answer_correct)
+                row["verdict"] = result.verdict
+                row["runtime_sec"] = result.runtime_sec
+                row["cpu_sec"] = result.cpu_sec
+                row["wall_sec"] = result.wall_sec
+                row["memory_kb"] = result.memory_kb
+                row["compile_log"] = result.compile.log
+                row["diagnostics_json"] = "[]"
+                row["error_text"] = result.outcome.error
+                row["feedback_text"] = result.outcome.feedback
+                row["output_ref"] = result.output_run_ref
+                row["answer_correct"] = result.outcome.answer_correct
+                row["result"] = result
                 self.saved_task_ids.append(task_id)
                 return
 
-    def save_task_results(self, results: list[dict[str, object]]) -> None:
+    def save_task_results(self, results: list[dict[str, object]]) -> set[str]:
         self.save_batch_sizes.append(len(results))
+        skipped_task_ids: set[str] = set()
         for result in results:
+            execution_result = cast(ExecutionResult, result["result"])
+            task_id = str(result["task_id"])
             self.save_task_result(
-                str(result["task_id"]),
+                task_id,
                 status=str(result["status"]),
-                verdict=str(result["verdict"]),
-                run_id=str(result["run_id"]),
-                judgehost_task_id=str(result["judgehost_task_id"]),
-                runtime_sec=result["runtime_sec"],  # type: ignore[arg-type]
-                cpu_sec=result["cpu_sec"],  # type: ignore[arg-type]
-                wall_sec=result["wall_sec"],  # type: ignore[arg-type]
-                memory_kb=result["memory_kb"],  # type: ignore[arg-type]
-                compile_log=str(result["compile_log"]),
-                diagnostics_json=str(result["diagnostics_json"]),
-                error_text=str(result["error_text"]),
-                feedback_text=str(result["feedback_text"]),
-                output_ref=str(result["output_ref"]),
-                answer_correct=bool(result["answer_correct"]),
+                run_id="",
+                judgehost_task_id="",
+                result=execution_result,
             )
             if (
                 str(result["status"]) == VerificationTaskStore.TASK_DONE
-                and str(result["verdict"]).upper() == "SK"
+                and execution_result.verdict.upper() == "SK"
             ):
-                stack = [str(result["task_id"])]
+                skipped_task_ids.add(task_id)
+                stack = [task_id]
                 while stack:
                     parent_id = stack.pop()
                     for edge_parent, child_id in self._edges:
@@ -173,10 +211,17 @@ class _InMemoryTaskStore:
                             if str(row["id"]) != child_id:
                                 continue
                             if str(row["status"]) == VerificationTaskStore.TASK_PENDING:
+                                skipped = _execution_result(
+                                    "SK",
+                                    feedback="skipped because generate-input was skipped",
+                                )
                                 row["status"] = VerificationTaskStore.TASK_DONE
-                                row["verdict"] = "SK"
-                                row["feedback_text"] = "skipped because generate-input was skipped"
+                                row["verdict"] = skipped.verdict
+                                row["feedback_text"] = skipped.outcome.feedback
+                                row["result"] = skipped
+                                skipped_task_ids.add(child_id)
                             break
+        return skipped_task_ids
 
     def cancel_unfinished_tasks(self, verification_id: str, *, reason: str) -> None:
         with self._lock:
@@ -270,18 +315,9 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
         final_result = TaskExecutionResult(
             task_id="vt-generate",
             status=VerificationTaskStore.TASK_DONE,
-            verdict="OK",
             run_id="r-generate",
             judgehost_task_id="jt-generate",
-            runtime_sec=0.01,
-            cpu_sec=0.01,
-            wall_sec=0.01,
-            memory_kb=1,
-            compile_log="",
-            diagnostics_json="[]",
-            error_text="",
-            feedback_text="",
-            output_ref="",
+            result=_execution_result("OK"),
         )
 
         def _publish(row: dict[str, object]) -> TaskPublishResult:
@@ -383,18 +419,12 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
                 terminal_result=TaskExecutionResult(
                     task_id=task_id,
                     status=VerificationTaskStore.TASK_DONE,
-                    verdict="SK",
                     run_id="",
                     judgehost_task_id="",
-                    runtime_sec=None,
-                    cpu_sec=None,
-                    wall_sec=None,
-                    memory_kb=None,
-                    compile_log="",
-                    diagnostics_json="[]",
-                    error_text="",
-                    feedback_text="duplicate generator invocation; skipped, same as 001.in",
-                    output_ref="",
+                    result=_execution_result(
+                        "SK",
+                        feedback="duplicate generator invocation; skipped, same as 001.in",
+                    ),
                 ),
             )
 
@@ -476,18 +506,9 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
                         "final_result": TaskExecutionResult(
                             task_id=task_id,
                             status=VerificationTaskStore.TASK_DONE,
-                            verdict="OK",
                             run_id=f"r-{task_id}",
                             judgehost_task_id=judgehost_task_id,
-                            runtime_sec=0.01,
-                            cpu_sec=0.01,
-                            wall_sec=0.01,
-                            memory_kb=1,
-                            compile_log="",
-                            diagnostics_json="[]",
-                            error_text="",
-                            feedback_text="",
-                            output_ref="",
+                            result=_execution_result("OK"),
                         )
                     },
                 )
@@ -608,18 +629,14 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
         final_result = TaskExecutionResult(
             task_id="vt-generate",
             status=VerificationTaskStore.TASK_FAILED,
-            verdict="WA",
             run_id="r-generate",
             judgehost_task_id="jt-vt-generate",
-            runtime_sec=0.01,
-            cpu_sec=0.01,
-            wall_sec=0.01,
-            memory_kb=1,
-            compile_log="",
-            diagnostics_json="[]",
-            error_text="validator rejected generated input for 001.in",
-            feedback_text="validator rejected generated input for 001.in",
-            output_ref="blob://sha256/" + ("1" * 64),
+            result=_execution_result(
+                "WA",
+                error="validator rejected generated input for 001.in",
+                feedback="validator rejected generated input for 001.in",
+                output_ref="blob://sha256/" + ("1" * 64),
+            ),
             fail_flag_reason="generate-input / generators/gen.cpp / 001.in: validator rejected generated input for 001.in",
         )
 
@@ -784,18 +801,9 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
                 terminal_result=TaskExecutionResult(
                     task_id=task_id,
                     status=VerificationTaskStore.TASK_DONE,
-                    verdict="AC",
                     run_id=f"run-{task_id}",
                     judgehost_task_id=f"judgehost-{task_id}",
-                    runtime_sec=0.001,
-                    cpu_sec=0.001,
-                    wall_sec=0.001,
-                    memory_kb=1,
-                    compile_log="",
-                    diagnostics_json="[]",
-                    error_text="",
-                    feedback_text="",
-                    output_ref="",
+                    result=_execution_result("AC"),
                 ),
             )
 
@@ -865,18 +873,9 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
             return TaskExecutionResult(
                 task_id=task_id,
                 status=VerificationTaskStore.TASK_DONE,
-                verdict="AC",
                 run_id=str(row["run_id"]),
                 judgehost_task_id=str(row["judgehost_task_id"]),
-                runtime_sec=0.001,
-                cpu_sec=0.001,
-                wall_sec=0.001,
-                memory_kb=1,
-                compile_log="",
-                diagnostics_json="[]",
-                error_text="",
-                feedback_text="",
-                output_ref="",
+                result=_execution_result("AC"),
             )
 
         coordinator = VerificationRuntimeCoordinator(

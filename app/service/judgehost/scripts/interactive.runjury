@@ -1,0 +1,11 @@
+#!/bin/sh
+TESTIN="$1"
+TESTOUT="$2"
+FEEDBACK="$3"
+shift 3
+HERE="$(CDPATH= cd -- "$(dirname "$0")" && pwd)"
+set +e
+"$HERE/interactor" "$TESTIN" "$TESTOUT" "$FEEDBACK" "$@"
+RC=$?
+"$HERE/pass-capture" "$TESTIN" "$FEEDBACK" "$RC" >/dev/null 2>&1 || true
+exit "$RC"

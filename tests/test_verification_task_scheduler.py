@@ -12,6 +12,58 @@ from app.service.disk.verification_store import VerificationStore
 from app.service.verification.task_metadata import canonical_diagnostics, canonical_truncated_text, diagnostics_json_text
 from app.service.verification.task_store import VerificationTaskStore
 from app.service.verification.plan import VerificationTestPlan
+from app.service.verification.execution_result import (
+    CAPTURE_COMPLETE,
+    ExecutionPassResult,
+    ExecutionResult,
+    ExecutionUsage,
+    PassArtifacts,
+    normalize_execution_result,
+)
+
+
+def _execution_result(
+    *,
+    verdict: str,
+    output_ref: str = "",
+    feedback: str = "",
+    compile_log: str = "",
+    diagnostics: list[dict[str, object]] | None = None,
+    answer_correct: bool = False,
+) -> ExecutionResult:
+    passes = ()
+    if output_ref:
+        artifact_ref = "blob://sha256/" + "a" * 64
+        passes = (
+            ExecutionPassResult(
+                number=1,
+                capture_status=CAPTURE_COMPLETE,
+                runresult="correct",
+                verdict=verdict,
+                score_text="",
+                answer_correct=answer_correct,
+                usage=ExecutionUsage(0.01, 0.01, 0.01, 1),
+                feedback=feedback,
+                artifacts=PassArtifacts(
+                    input_ref=artifact_ref,
+                    output_ref=output_ref,
+                    stderr_ref=artifact_ref,
+                    system_ref=artifact_ref,
+                    judge_message_ref=artifact_ref,
+                    team_message_ref=artifact_ref,
+                    metadata_ref=artifact_ref,
+                    compare_metadata_ref=artifact_ref,
+                ),
+            ),
+        )
+    return normalize_execution_result(
+        passes=passes,
+        verdict=verdict,
+        answer_correct=answer_correct,
+        feedback=feedback,
+        compile_log=compile_log,
+        compile_diagnostics=() if diagnostics is None else diagnostics,
+    )
 
 
 def _task_row(
@@ -810,6 +862,11 @@ class TestVerificationTaskScheduler(E2ETestBase):
         }
         result = {
             "status": "ok",
+            "execution_result": _execution_result(
+                verdict="WA",
+                output_ref=str(output_file.blob_ref),
+                feedback="validator rejected generated input\nline 2 detail",
+            ),
             "summary": {
                 "tests": [
                     {
@@ -882,6 +939,11 @@ class TestVerificationTaskScheduler(E2ETestBase):
         }
         result = {
             "status": "ok",
+            "execution_result": _execution_result(
+                verdict="OK",
+                output_ref=str(output_file.blob_ref),
+                feedback="validator accepted",
+            ),
             "summary": {
                 "tests": [
                     {
@@ -1006,18 +1068,9 @@ class TestVerificationTaskScheduler(E2ETestBase):
         task_store.save_task_result(
             "vt-running",
             status=VerificationTaskStore.TASK_DONE,
-            verdict="AC",
             run_id="r-a",
             judgehost_task_id="jt-a",
-            runtime_sec=0.1,
-            cpu_sec=0.1,
-            wall_sec=0.1,
-            memory_kb=1,
-            compile_log="",
-            diagnostics_json="[]",
-            error_text="",
-            feedback_text="",
-            output_ref="",
+            result=_execution_result(verdict="AC"),
         )
         rows = {
             str(row["id"]): row
@@ -1164,19 +1217,16 @@ class TestVerificationTaskScheduler(E2ETestBase):
         task_store.save_task_result(
             "vt-cap",
             status=VerificationTaskStore.TASK_FAILED,
-            verdict="CE",
             run_id="r-cap",
             judgehost_task_id="jt-cap",
-            runtime_sec=None,
-            cpu_sec=None,
-            wall_sec=None,
-            memory_kb=None,
-            compile_log=oversized,
-            diagnostics_json=diagnostics_json,
-            error_text=oversized,
-            feedback_text=oversized,
-            output_ref="",
-            answer_correct=True,
+            result=normalize_execution_result(
+                verdict="CE",
+                answer_correct=True,
+                error=oversized,
+                feedback=oversized,
+                compile_log=oversized,
+                compile_diagnostics=json.loads(diagnostics_json),
+            ),
         )
         row = task_store.list_rows(verification_id)[0]
         self.assertTrue(bool(row["answer_correct"]))
@@ -1248,34 +1298,22 @@ class TestVerificationTaskScheduler(E2ETestBase):
         task_store.save_task_result(
             "vt-generate-owner",
             status=VerificationTaskStore.TASK_DONE,
-            verdict="OK",
             run_id="r-owner",
             judgehost_task_id="jt-owner",
-            runtime_sec=0.01,
-            cpu_sec=0.01,
-            wall_sec=0.01,
-            memory_kb=1,
-            compile_log="",
-            diagnostics_json="[]",
-            error_text="",
-            feedback_text="",
-            output_ref="blob://same-generated-input",
+            result=_execution_result(
+                verdict="OK",
+                output_ref="blob://same-generated-input",
+            ),
         )
         task_store.save_task_result(
             "vt-generate-duplicate",
             status=VerificationTaskStore.TASK_DONE,
-            verdict="OK",
             run_id="r-duplicate",
             judgehost_task_id="jt-duplicate",
-            runtime_sec=0.01,
-            cpu_sec=0.01,
-            wall_sec=0.01,
-            memory_kb=1,
-            compile_log="",
-            diagnostics_json="[]",
-            error_text="",
-            feedback_text="",
-            output_ref="blob://same-generated-input",
+            result=_execution_result(
+                verdict="OK",
+                output_ref="blob://same-generated-input",
+            ),
         )
         rows = {str(row["id"]): row for row in task_store.list_rows(verification_id)}
         self.assertEqual(str(rows["vt-generate-owner"]["verdict"]), "OK")

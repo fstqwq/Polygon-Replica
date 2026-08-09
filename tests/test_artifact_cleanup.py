@@ -22,6 +22,10 @@ from app.service.platform.maintenance import (
 from app.service.platform.runtime_blob_store import RuntimeBlobStore
 from app.service.platform.runtime_cache_index import RuntimeCacheIndex
 from app.service.repository.workspace import WorkspaceService
+from app.service.verification.execution_result import (
+    execution_result_json,
+    normalize_execution_result,
+)
 from app.service.verification.task_store import VerificationTaskStore
 from app.setting import Settings
 from tests.isolated_db_helpers import (
@@ -203,11 +207,14 @@ class TestArtifactCleanup(unittest.TestCase):
             """
             INSERT INTO verification_tasks(
                 id,verification_id,task_kind,source_path,test_name,
-                expected_behavior,final_status,verdict,created_at
+                expected_behavior,final_status,result_json,created_at
             ) VALUES('task-cleanup','ver-c1ea4','run','solutions/ac.cpp',
-                     '001.in','accepted','ok','AC',?)
+                     '001.in','accepted','ok',?,?)
             """,
-            (now,),
+            (
+                execution_result_json(normalize_execution_result(verdict="AC")),
+                now,
+            ),
         )
         self._execute(
             """

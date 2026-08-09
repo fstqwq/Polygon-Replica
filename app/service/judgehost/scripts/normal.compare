@@ -7,6 +7,15 @@ shift 3
 
 HERE="$(CDPATH= cd -- "$(dirname "$0")" && pwd)"
 mkdir -p "$FEEDBACK"
+capture_on_exit() {
+  RC=$?
+  trap - EXIT
+  if [ -x "$HERE/pass-capture" ]; then
+    "$HERE/pass-capture" "$TESTIN" "$FEEDBACK" "$RC" >/dev/null 2>&1 || true
+  fi
+  exit "$RC"
+}
+trap capture_on_exit EXIT
 TEAMOUT="$FEEDBACK/team.out"
 # DOMjudge testcase_run.sh contract:
 #   compare is invoked as:

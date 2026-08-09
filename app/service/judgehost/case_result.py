@@ -1,15 +1,17 @@
 from __future__ import annotations
 
-import json
-from typing import cast
-
-from app.service.platform.hashing import canonical_json
 from app.service.verification.test_rows import (
     build_verification_test_pass_row,
     build_verification_test_row,
 )
-
-from app.service.judgehost.batch_scheduler_models import CaseResult
+from app.service.verification.execution_result import (
+    CAPTURE_COMPLETE,
+    ExecutionPassResult,
+    ExecutionResult,
+    ExecutionUsage,
+    PassArtifacts,
+    normalize_execution_result,
+)
 
 
 def build_case_result(
@@ -32,62 +34,111 @@ def build_case_result(
     feedback_text: str,
     feedback_files: list[str] | tuple[str, ...],
     answer_correct: bool,
-) -> CaseResult:
-    resolved_runtime = max(0.0, float(runtime_sec))
-    resolved_cpu = max(0.0, float(cpu_sec if cpu_sec > 0.0 else resolved_runtime))
-    resolved_wall = max(0.0, float(wall_sec if wall_sec > 0.0 else resolved_cpu))
-    resolved_memory = max(0, int(memory_kb))
-    time_ms = int(round(resolved_runtime * 1000.0))
-    time_user_ms = int(round(resolved_cpu * 1000.0))
-    time_wall_ms = int(round(resolved_wall * 1000.0))
-    feedback_file_tokens = tuple(str(item) for item in feedback_files if str(item))
-    test_row = build_verification_test_row(
-        test_name=test_name,
-        verdict=verdict,
-        time_ms=time_ms,
-        time_user_ms=time_user_ms,
-        time_wall_ms=time_wall_ms,
-        memory_kb=resolved_memory,
-        message=feedback_text,
-        output_ref=output_run_ref,
-        feedback_files=list(feedback_file_tokens),
-        passes=[
-            build_verification_test_pass_row(
-                verdict=verdict,
-                time_ms=time_ms,
-                time_user_ms=time_user_ms,
-                time_wall_ms=time_wall_ms,
-                memory_kb=resolved_memory,
-                feedback=feedback_text,
-                output_ref=output_run_ref,
-                runresult=runresult,
-                answer_correct=answer_correct,
-            )
-        ],
-        runresult=runresult,
-        answer_correct=answer_correct,
+    input_ref: str = "",
+    interactive: bool = False,
+    pass_number: int = 1,
+    historical_passes: tuple[ExecutionPassResult, ...] = (),
+    warnings: tuple[str, ...] = (),
+    usage: ExecutionUsage | None = None,
+) -> ExecutionResult:
+    resolved_usage = usage or ExecutionUsage(
+        runtime_sec=max(0.0, float(runtime_sec)),
+        cpu_sec=max(0.0, float(cpu_sec)),
+        wall_sec=max(0.0, float(wall_sec)),
+        memory_kb=max(0, int(memory_kb)),
     )
-    return CaseResult(
+    if runresult == "compiler-error" or not (
+        input_ref
+        and output_run_ref
+        and metadata_ref
+        and compare_metadata_ref
+        and output_error_ref
+        and output_system_ref
+        and output_diff_ref
+        and team_message_ref
+    ):
+        return normalize_execution_result(
+            verdict=verdict,
+            score_text=score_text,
+            answer_correct=answer_correct,
+            feedback=feedback_text,
+            warnings=warnings,
+        )
+    final_pass = ExecutionPassResult(
+        number=max(1, int(pass_number)),
+        capture_status=CAPTURE_COMPLETE,
         runresult=runresult,
         verdict=verdict,
-        runtime_sec=resolved_runtime,
-        cpu_sec=resolved_cpu,
-        wall_sec=resolved_wall,
-        memory_kb=resolved_memory,
         score_text=score_text,
-        output_run_ref=output_run_ref,
-        output_error_ref=output_error_ref,
-        output_system_ref=output_system_ref,
-        output_diff_ref=output_diff_ref,
-        metadata_ref=metadata_ref,
-        compare_metadata_ref=compare_metadata_ref,
-        team_message_ref=team_message_ref,
-        feedback_text=feedback_text,
-        feedback_files=feedback_file_tokens,
         answer_correct=bool(answer_correct),
-        test_row_json=canonical_json(test_row, ensure_ascii=False),
+        usage=resolved_usage,
+        feedback=feedback_text,
+        artifacts=PassArtifacts(
+            input_ref=input_ref,
+            output_ref="" if interactive else output_run_ref,
+            transcript_ref=output_run_ref if interactive else "",
+            stderr_ref=output_error_ref,
+            system_ref=output_system_ref,
+            judge_message_ref=output_diff_ref,
+            team_message_ref=team_message_ref,
+            metadata_ref=metadata_ref,
+            compare_metadata_ref=compare_metadata_ref,
+        ),
+    )
+    _ = feedback_files
+    return normalize_execution_result(
+        passes=(*historical_passes, final_pass),
+        verdict=verdict,
+        score_text=score_text,
+        answer_correct=answer_correct,
+        feedback=feedback_text,
+        warnings=warnings,
     )
 
 
-def decode_case_test_row(result: CaseResult) -> dict[str, object]:
-    return cast(dict[str, object], json.loads(result.test_row_json))
+def decode_case_test_row(result: ExecutionResult, *, test_name: str) -> dict[str, object]:
+    passes = [
+        build_verification_test_pass_row(
+            verdict=pass_result.verdict,
+            time_ms=(
+                0
+                if pass_result.usage.runtime_sec is None
+                else int(round(pass_result.usage.runtime_sec * 1000.0))
+            ),
+            time_user_ms=(
+                0
+                if pass_result.usage.cpu_sec is None
+                else int(round(pass_result.usage.cpu_sec * 1000.0))
+            ),
+            time_wall_ms=(
+                0
+                if pass_result.usage.wall_sec is None
+                else int(round(pass_result.usage.wall_sec * 1000.0))
+            ),
+            memory_kb=pass_result.usage.memory_kb,
+            feedback=pass_result.feedback,
+            output_ref=(
+                pass_result.artifacts.output_ref
+                or pass_result.artifacts.transcript_ref
+            ),
+            runresult=pass_result.runresult,
+            pass_number=pass_result.number,
+            answer_correct=pass_result.answer_correct,
+        )
+        for pass_result in result.passes
+    ]
+    usage = result.outcome.usage
+    return build_verification_test_row(
+        test_name=test_name,
+        verdict=result.outcome.verdict,
+        time_ms=0 if usage.runtime_sec is None else int(round(usage.runtime_sec * 1000.0)),
+        time_user_ms=0 if usage.cpu_sec is None else int(round(usage.cpu_sec * 1000.0)),
+        time_wall_ms=0 if usage.wall_sec is None else int(round(usage.wall_sec * 1000.0)),
+        memory_kb=usage.memory_kb,
+        message=result.outcome.feedback,
+        output_ref=result.output_run_ref,
+        feedback_files=list(result.feedback_files),
+        passes=passes,
+        runresult=result.runresult,
+        answer_correct=result.answer_correct,
+    )
