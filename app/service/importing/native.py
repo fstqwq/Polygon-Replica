@@ -16,7 +16,6 @@ from app.service.platform.workspace_path import (
     is_repository_answer_path,
 )
 from app.service.problem.test_spec import load_tests_spec
-from app.service.problem_package.manifest import load_manifest, validate_manifest_files
 from app.service.statement.constant import STATEMENT_SECTIONS_DIR
 
 
@@ -54,7 +53,28 @@ def _entry_map_from_zip(zf: zipfile.ZipFile, anchor: str) -> dict[str, zipfile.Z
         raw[normalized] = info
     if anchor in raw:
         return raw
-    raise ValueError(f"{anchor} not found at Native package root")
+    suffix = "/" + anchor
+    package_roots = [
+        path[: -len(anchor)]
+        for path in raw
+        if path.endswith(suffix)
+    ]
+    if len(package_roots) != 1:
+        raise ValueError(f"{anchor} not found at Native package root")
+    package_root = package_roots[0]
+    if any(not path.startswith(package_root) for path in raw):
+        raise ValueError("Native package contains files outside its package root")
+    nested: dict[str, zipfile.ZipInfo] = {}
+    for path, info in raw.items():
+        relative = path.removeprefix(package_root)
+        if not relative:
+            continue
+        if relative in nested:
+            raise ValueError(f"duplicate Native package path: {relative}")
+        nested[relative] = info
+    if anchor not in nested:
+        raise ValueError(f"{anchor} not found at Native package root")
+    return nested
 
 
 def _validated_native_entries(
@@ -168,8 +188,10 @@ class NativePackageImportService:
 
         with zipfile.ZipFile(io.BytesIO(raw), "r") as zf:
             entry_map = _entry_map_from_zip(zf, NATIVE_PACKAGE_ANCHOR)
-            if "test_data/manifest.json" not in entry_map:
-                raise ValueError("source-only Native packages are no longer supported")
+            source_entries = {
+                rel: info for rel, info in entry_map.items() if not rel.startswith("test_data/")
+            }
+            _validated_native_entries(source_entries)
             staging_root = workspace.parent / f".native-import-{uuid.uuid4().hex}"
             written_total = 0
             try:
@@ -185,20 +207,15 @@ class NativePackageImportService:
                         display_name=rel,
                     )
                     mode = info.external_attr >> 16
-                    if mode and stat.S_ISLNK(mode):
+                    file_type = stat.S_IFMT(mode)
+                    if file_type == stat.S_IFLNK:
                         raise ValueError(f"native package contains a symbolic link: {rel}")
-                    if mode and not stat.S_ISREG(mode):
+                    if file_type not in {0, stat.S_IFREG}:
                         raise ValueError(f"native package contains a special file: {rel}")
                     if mode:
                         (staging_root / target_rel).chmod(stat.S_IMODE(mode))
 
-                manifest = load_manifest(staging_root / "test_data" / "manifest.json")
-                validate_manifest_files(staging_root, manifest)
-                shutil.rmtree(staging_root / "test_data", ignore_errors=False)
-                source_entries = {
-                    rel: info for rel, info in entry_map.items() if not rel.startswith("test_data/")
-                }
-                _validated_native_entries(source_entries)
+                shutil.rmtree(staging_root / "test_data", ignore_errors=True)
 
                 _clear_workspace_tree(workspace)
                 for child in staging_root.iterdir():

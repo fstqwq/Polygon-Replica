@@ -510,7 +510,7 @@ class TestPublishedRevisionExport(E2ETestBase):
                     expected,
                 )
 
-    def test_native_import_validates_then_discards_materialized_data(self) -> None:
+    def test_native_import_discards_materialized_data(self) -> None:
         _problem_id, _commit, materialization = self._materialize()
         _stored, archive = config.problem_package_service.native_archive(materialization["id"])
         with tempfile.TemporaryDirectory(prefix="native-import-") as temp:
@@ -525,19 +525,76 @@ class TestPublishedRevisionExport(E2ETestBase):
             self.assertFalse((workspace / "test_data").exists())
             self.assertFalse((workspace / "tests" / "answers").exists())
 
-    def test_native_import_rejects_source_only_archives(self) -> None:
+    def test_native_import_accepts_source_only_archives_with_package_root(self) -> None:
         with tempfile.TemporaryDirectory(prefix="native-source-only-") as temp:
             archive = Path(temp) / "source-only.zip"
             with zipfile.ZipFile(archive, "w") as package:
-                package.writestr("config/problem.json", "{}\n")
+                package.writestr("sample-snapshot/config/problem.json", "{}\n")
+                package.writestr("sample-snapshot/solutions/backup.cpp", "// restored\n")
             workspace = Path(temp) / "workspace"
             workspace.mkdir()
-            with self.assertRaisesRegex(ValueError, "source-only Native packages"):
+            (workspace / "old.txt").write_text("old\n", encoding="utf-8")
+            NativePackageImportService().import_package(
+                workspace,
+                archive.name,
+                archive.read_bytes(),
+            )
+            self.assertTrue((workspace / "config" / "problem.json").is_file())
+            self.assertEqual(
+                (workspace / "solutions" / "backup.cpp").read_text(encoding="utf-8"),
+                "// restored\n",
+            )
+            self.assertFalse((workspace / "old.txt").exists())
+
+    def test_native_import_ignores_partial_materialized_data(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="native-partial-data-") as temp:
+            archive = Path(temp) / "partial.zip"
+            with zipfile.ZipFile(archive, "w") as package:
+                package.writestr("config/problem.json", "{}\n")
+                package.writestr("solutions/restored.cpp", "// restored\n")
+                package.writestr("test_data/tests/001/input", "1\n")
+            workspace = Path(temp) / "workspace"
+            workspace.mkdir()
+            NativePackageImportService().import_package(
+                workspace,
+                archive.name,
+                archive.read_bytes(),
+            )
+            self.assertTrue((workspace / "solutions" / "restored.cpp").is_file())
+            self.assertFalse((workspace / "test_data").exists())
+
+    def test_downloaded_workspace_snapshot_can_be_imported(self) -> None:
+        workspace, _problem_id, _commit = self._publish_problem()
+        dirty_source = workspace / "solutions" / "snapshot-roundtrip.cpp"
+        dirty_source.parent.mkdir(parents=True, exist_ok=True)
+        dirty_source.write_text("dirty workspace copy\n", encoding="utf-8")
+        context = config.workspace_service.workspace_context(
+            self.problem,
+            self.user,
+            include_recent=False,
+        )
+        archive = config.export_service.create_workspace_snapshot(
+            self.problem,
+            workspace_id=int(context["workspace"]["id"]),
+        )
+        try:
+            with tempfile.TemporaryDirectory(prefix="snapshot-roundtrip-") as temp:
+                restored = Path(temp) / "workspace"
+                restored.mkdir()
                 NativePackageImportService().import_package(
-                    workspace,
+                    restored,
                     archive.name,
                     archive.read_bytes(),
                 )
+                self.assertEqual(
+                    (restored / "solutions" / "snapshot-roundtrip.cpp").read_text(
+                        encoding="utf-8"
+                    ),
+                    "dirty workspace copy\n",
+                )
+                self.assertFalse((restored / "test_data").exists())
+        finally:
+            shutil.rmtree(archive.parent, ignore_errors=True)
 
     def test_icpc_conversion_rejects_missing_statements(self) -> None:
         workspace, problem_id, _commit = self._publish_problem()
