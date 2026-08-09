@@ -303,7 +303,7 @@ class VerificationService:
             return {}
         sanity_check_results = self._verification_sanity_check_results(safe_verification_id)
         return {
-            "mode": str(row["mode"] or _DETAIL_SCALAR_DEFAULTS["mode"]),
+            "mode": str(row["mode"] or ""),
             "pass_limit": int(row["pass_limit"] or _DETAIL_SCALAR_DEFAULTS["pass_limit"]),
             "run_config_json": str(row["run_config_json"] or ""),
             "error": str(row["error"] or ""),

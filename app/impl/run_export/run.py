@@ -187,6 +187,9 @@ def run_details_test_fragment(request: Request, problem: str, user: Annotated[st
     test_name = normalize_run_test_name_token(request.query_params.get('test'))
     if not test_name:
         raise HTTPException(status_code=400, detail='test is required')
+    run_id = normalize_run_id_token(request.query_params.get('run_id'))
+    if not run_id:
+        raise HTTPException(status_code=400, detail='run_id is required')
 
     detail_ctx = build_run_detail_context(
         ctx,
@@ -194,12 +197,15 @@ def run_details_test_fragment(request: Request, problem: str, user: Annotated[st
         requested_verification_id=requested_verification_id,
         include_row_details=True,
         detail_test_name=test_name,
+        detail_run_id=run_id,
     )
+    detail_columns = detail_ctx['detail_columns']
+    if len(detail_columns) != 1 or str(detail_columns[0].get('id') or '') != run_id:
+        raise HTTPException(status_code=404, detail='run detail not found')
     detail_rows = detail_ctx['detail_rows']
     if not detail_rows:
         raise HTTPException(status_code=404, detail='test detail not found')
     row = detail_rows[0]
-    detail_columns = detail_ctx['detail_columns']
     fragment_context: dict[str, object] = {
         'ctx': ctx,
         'row': row,

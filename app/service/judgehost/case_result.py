@@ -65,7 +65,7 @@ def build_case_result(
             warnings=warnings,
         )
     final_pass = ExecutionPassResult(
-        number=max(1, int(pass_number)),
+        number=int(pass_number),
         capture_status=CAPTURE_COMPLETE,
         runresult=runresult,
         verdict=verdict,
@@ -117,10 +117,11 @@ def decode_case_test_row(result: ExecutionResult, *, test_name: str) -> dict[str
             ),
             memory_kb=pass_result.usage.memory_kb,
             feedback=pass_result.feedback,
-            output_ref=(
-                pass_result.artifacts.output_ref
-                or pass_result.artifacts.transcript_ref
-            ),
+            capture_status=pass_result.capture_status,
+            input_ref=pass_result.artifacts.input_ref,
+            output_ref=pass_result.artifacts.output_ref,
+            transcript_ref=pass_result.artifacts.transcript_ref,
+            judge_message_ref=pass_result.artifacts.judge_message_ref,
             runresult=pass_result.runresult,
             pass_number=pass_result.number,
             answer_correct=pass_result.answer_correct,

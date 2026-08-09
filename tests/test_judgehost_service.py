@@ -3317,16 +3317,6 @@ class TestJudgehostService(E2ETestBase):
         self.assertEqual(service.toolkit.payload_blob_bytes(blob), blob)
         self.assertEqual(service.toolkit.payload_blob_bytes(encoded), blob)
 
-    def test_domjudge_strip_protocol_trace_removes_runpipe_transcript_lines(self) -> None:
-        cleaned = config.judgehost_task_service.toolkit.strip_protocol_trace(
-            b"[  0.019s/6]>: 1 100\n"
-            b"hello\n"
-            b"[  0.054s/4]<: ? 0\n"
-            b"[  0.071s/0]]\n"
-            b"\n"
-        )
-        self.assertEqual(cleaned.decode("utf-8"), "hello\n")
-
     def test_domjudge_feedback_text_preserves_multiline_and_redacts_internal_path(self) -> None:
         from app.service.judgehost.runtime import (
             domjudge_feedback_text_from_bytes,

@@ -39,15 +39,111 @@
 <div class="sol-list">
   {% for cell in row.cells %}
   {% set col = detail_columns[loop.index0] %}
-  {% set final_row = cell.detail.final_row if cell.detail and cell.detail.final_row else None %}
-  {% if final_row %}
-  {% set diagnostics_entries = cell.detail.compile_diagnostics if cell.detail and cell.detail.compile_diagnostics else [] %}
-  {% set diagnostics_error = (cell.detail.compile_error_display if cell.detail and cell.detail.compile_error_display else '') %}
+  {% if cell.detail %}
+  {% set diagnostics_entries = cell.detail.compile_diagnostics if cell.detail.compile_diagnostics else [] %}
+  {% set diagnostics_error = cell.detail.compile_error_display if cell.detail.compile_error_display else '' %}
   {% set has_diagnostics = diagnostics_error or (diagnostics_entries | length) > 0 %}
   <section class="sol-card" data-run-id="{{ col.id }}">
     <div class="sol-head">
       <strong class="sol-title">{{ col.title }}</strong>
     </div>
+    {% if cell.detail.mode_malformed %}
+    <p class="test-generation-alert tone-warn">This verification has no valid persisted mode, so its artifacts cannot be interpreted.</p>
+    {% endif %}
+    {% if has_diagnostics %}
+    <div class="compile-diagnostics-card">
+      <div class="compile-diagnostics-head"><strong>Diagnostics</strong></div>
+      {% if diagnostics_error %}
+      <p class="compile-diagnostics-error">{{ diagnostics_error }}</p>
+      {% endif %}
+      {% if diagnostics_entries %}
+      <pre class="compile-diagnostics-log">{% for d in diagnostics_entries %}{{ d.location_display }}: {{ d.level_upper or (d.level | upper) }}: {{ d.message }}{% if d.message_truncated %} [truncated]{% endif %}
+{% endfor %}</pre>
+      {% endif %}
+    </div>
+    {% endif %}
+
+    {% if cell.detail.is_interactive %}
+    <div class="interactive-pass-list">
+      {% for pass_row in cell.detail.pass_rows %}
+      {% set jury_log = pass_row.jury_log_preview %}
+      {% set transcript = pass_row.interactive_transcript %}
+      <section class="interactive-pass">
+        <h3>{{ pass_row.pass_label }}</h3>
+        <table class="table-base table-compact sol-metrics interactive-pass-summary">
+          <colgroup>
+            <col class="status-col" />
+            <col class="fb-col" />
+          </colgroup>
+          <thead>
+            <tr>
+              <th>Status</th>
+              <th>Jury log</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td class="status-cell tone-{{ pass_row.kind or 'neutral' }}">
+                <div class="status-inline">
+                  <span class="vcode{{ ' vcode-info' if pass_row.text_tone == 'info' else '' }}">{{ pass_row.verdict_short or '-' }}</span>
+                  {% if pass_row.time_display and pass_row.time_display != '-' %}
+                  <span class="vmeta{{ ' vmeta-warn' if pass_row.time_tone == 'warn' else '' }}">{{ pass_row.time_display }}</span>
+                  {% endif %}
+                  {% if pass_row.memory_display and pass_row.memory_display != '-' %}
+                  <span class="vmeta">{{ pass_row.memory_display }}</span>
+                  {% endif %}
+                </div>
+              </td>
+              <td class="fb-cell jury-log-cell">
+                {% if jury_log.available %}
+                  {% if jury_log.text == '(empty)' %}
+                  <span class="muted">—</span>
+                  {% else %}
+                  <pre class="jury-log-preview">{{ jury_log.text }}</pre>
+                  {% endif %}
+                  {% if jury_log.download_verification_id %}
+                  <a class="jury-log-download" href="{{ problem_href('artifact_file', verification_id=jury_log.download_verification_id, rel_path=jury_log.download_rel_path) }}">download</a>
+                  {% endif %}
+                {% else %}
+                <span class="muted">{{ jury_log.message }}</span>
+                {% endif %}
+              </td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div class="transcript">
+          <div class="transcript-head">
+            <strong>Transcript</strong>
+            {% if transcript.download_verification_id %}
+            <a href="{{ problem_href('artifact_file', verification_id=transcript.download_verification_id, rel_path=transcript.download_rel_path) }}">download raw</a>
+            {% endif %}
+          </div>
+          {% if transcript.available %}
+            {% if transcript.state == 'malformed' %}
+            <p class="transcript-message transcript-warning">Malformed at byte {{ transcript.error_offset }}: {{ transcript.error_reason }}.</p>
+            {% endif %}
+            <div class="transcript-list">
+              {% for event in transcript.events %}
+              <div class="transcript-event transcript-event-{{ event.source }}">
+                <pre class="transcript-payload{{ ' transcript-payload-meta' if event.kind == 'eof' or event.payload_display == '(empty)' else '' }}">{{ event.payload_display }}</pre>
+                {% if event.payload_bytes_omitted %}
+                <span class="transcript-omitted">… {{ event.payload_bytes_omitted }} B omitted</span>
+                {% endif %}
+              </div>
+              {% endfor %}
+            </div>
+            <p class="transcript-count">Showing {{ transcript.events_shown }}/{{ transcript.events_total }} events.</p>
+          {% else %}
+          <p class="transcript-message transcript-unavailable">Transcript {{ transcript.message }}.</p>
+          {% endif %}
+        </div>
+      </section>
+      {% endfor %}
+    </div>
+    {% else %}
+    {% set final_row = cell.detail.final_row if cell.detail.final_row else None %}
+    {% if final_row %}
     {% set feedback_text = final_row.feedback_display or '-' %}
     <table class="table-base table-compact sol-metrics">
       <colgroup>
@@ -55,10 +151,7 @@
         <col class="fb-col" />
       </colgroup>
       <thead>
-        <tr>
-          <th>Status</th>
-          <th>Feedback</th>
-        </tr>
+        <tr><th>Status</th><th>Feedback</th></tr>
       </thead>
       <tbody>
         <tr>
@@ -77,41 +170,7 @@
         </tr>
       </tbody>
     </table>
-    {% if has_diagnostics %}
-    <div class="compile-diagnostics-card">
-      <div class="compile-diagnostics-head">
-        <div><strong>Diagnostics</strong></div>
-      </div>
-      {% if diagnostics_error %}
-      <p class="compile-diagnostics-error">{{ diagnostics_error }}</p>
-      {% endif %}
-      {% if diagnostics_entries %}
-      <pre class="compile-diagnostics-log">{% for d in diagnostics_entries %}{{ d.location_display }}: {{ d.level_upper or (d.level | upper) }}: {{ d.message }}{% if d.message_truncated %} [truncated]{% endif %}
-{% endfor %}</pre>
-      {% endif %}
-    </div>
-    {% endif %}
     <div class="sol-output">
-      {% if final_row.interactive_transcript and final_row.interactive_transcript.available %}
-      <div class="transcript">
-        <div class="transcript-head">
-          <strong>Transcript (first {{ final_row.interactive_transcript.shown }} lines)</strong>
-          {% if final_row.output_preview and final_row.output_preview.available and final_row.output_preview.download_verification_id %}
-          <a href="{{ problem_href('artifact_file', verification_id=final_row.output_preview.download_verification_id, rel_path=final_row.output_preview.download_rel_path) }}">download</a>
-          {% endif %}
-        </div>
-        <div class="transcript-list">
-          {% for item in final_row.interactive_transcript.rows %}
-          <div class="transcript-row transcript-{{ item.side }}">
-            <span class="transcript-bubble">{{ item.text }}</span>
-          </div>
-          {% endfor %}
-        </div>
-        {% if final_row.interactive_transcript.truncated %}
-        <div class="muted">Transcript truncated.</div>
-        {% endif %}
-      </div>
-      {% else %}
       <div class="sol-output-head">
         <strong>Output</strong>
         {% if final_row.output_preview and final_row.output_preview.available and final_row.output_preview.download_verification_id %}
@@ -126,15 +185,15 @@
       {% elif not has_diagnostics %}
       <p class="muted empty-text">(output missing)</p>
       {% endif %}
-      {% endif %}
     </div>
+    {% else %}
+    <p class="muted">No details.</p>
+    {% endif %}
+    {% endif %}
   </section>
   {% else %}
   <section class="sol-card" data-run-id="{{ col.id }}">
-    <div class="sol-head">
-      <strong class="sol-title">{{ col.title }}</strong>
-      <span class="muted">-</span>
-    </div>
+    <div class="sol-head"><strong class="sol-title">{{ col.title }}</strong></div>
     <p class="muted">No details.</p>
   </section>
   {% endif %}
