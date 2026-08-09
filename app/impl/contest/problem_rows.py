@@ -12,6 +12,10 @@ from app.impl.workspace.context_component_status import (
 from app.impl.workspace.problem_config import read_problem_config
 from app.impl.workspace.solution import list_solution_sources
 from app.impl.workspace.test_spec import read_tests_spec
+from app.service.problem.content_review import (
+    ProblemContentReview,
+    problem_content_review,
+)
 from app.service.problem.resource_limits import resource_limit_display
 from app.service.problem.readiness import ProblemReadiness, WorkspaceReadinessSubject
 from app.service.repository.revision import workspace_upstream_revision_display
@@ -50,6 +54,7 @@ class ContestProblemDisplayRow(TypedDict):
     output_component_display: str
     validator_display: str
     details_available: bool
+    content_review: ProblemContentReview | None
     workspace_revision_display: str
     workspace_revision_warn: bool
     dirty: bool
@@ -249,6 +254,7 @@ def _contest_problem_rows(
         output_component_display = "missing"
         validator_display = "missing"
         details_available = False
+        content_review: ProblemContentReview | None = None
 
         if can_problem_read:
             try:
@@ -296,18 +302,36 @@ def _contest_problem_rows(
                 )
                 solution_count = len(solution_sources)
                 statement_language_names = statement_languages(workspace)
-                validator_display = validator_status_context(workspace)["display"]
+                validator_status = validator_status_context(workspace)
+                validator_display = validator_status["display"]
                 if mode == "interactive":
                     output_component_label = "Interactor"
-                    output_component_display = interactor_status_context(workspace)[
-                        "display"
-                    ]
+                    output_component_status = interactor_status_context(workspace)
+                    output_component_display = output_component_status["display"]
                 else:
                     checker_status = checker_status_context(workspace)
+                    output_component_status = checker_status
                     output_component_display = (
                         checker_status["standard_checker"]
                         or checker_status["display"]
                     )
+                content_review = problem_content_review(
+                    time_limit_ms=time_limit_ms,
+                    memory_limit_mb=memory_limit_mb,
+                    test_count=test_count,
+                    tests_valid=True,
+                    solution_count=solution_count,
+                    solutions_truncated=solutions_truncated,
+                    main_solution_ready=solution_count > 0,
+                    output_component_label=output_component_label,
+                    output_component_display=output_component_display,
+                    output_component_ready=(
+                        output_component_status["mode"] == "repository"
+                    ),
+                    validator_display=validator_display,
+                    validator_ready=validator_status["mode"] == "repository",
+                    statement_language_names=statement_language_names,
+                )
                 details_available = True
             except (OSError, RuntimeError, ValueError):
                 workspace_revision_display = "unavailable"
@@ -339,6 +363,7 @@ def _contest_problem_rows(
                 "output_component_display": output_component_display,
                 "validator_display": validator_display,
                 "details_available": details_available,
+                "content_review": content_review,
                 "workspace_revision_display": workspace_revision_display,
                 "workspace_revision_warn": workspace_revision_warn,
                 "dirty": dirty,

@@ -269,6 +269,26 @@
   overflow-wrap: anywhere;
 }
 
+.workspace-review-warning-list {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 2px var(--space-3);
+}
+
+.workspace-review-warning {
+  display: contents;
+}
+
+.workspace-review-warning-label {
+  color: var(--text-secondary);
+  font-size: var(--font-size-ui-xs);
+}
+
+.workspace-review-warning strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .access-page {
   display: grid;
   gap: var(--space-4);

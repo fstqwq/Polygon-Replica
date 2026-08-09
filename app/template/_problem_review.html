@@ -25,7 +25,7 @@
 </div>
 {%- endmacro %}
 
-{% macro workspace_review(readiness) -%}
+{% macro workspace_review(readiness, content_review) -%}
 <div class="workspace-review-summary">
   {% if readiness %}
   {% set workspace = readiness.workspace %}
@@ -48,6 +48,24 @@
     <span class="workspace-review-value">
       <strong class="{{ verification_tone }}">{{ verification.display }}</strong>
       {% if verification.reason_short %}<span class="workspace-review-detail">{{ verification.reason_short }}</span>{% endif %}
+    </span>
+  </div>
+  <div class="workspace-review-row workspace-review-content">
+    <span class="workspace-review-label">Content</span>
+    <span class="workspace-review-value">
+      {% if content_review and content_review.warnings %}
+      <span class="workspace-review-warning-list">
+        {% for warning in content_review.warnings %}
+        {% set warning_tone = 'warn' if warning.tone == 'warning' else 'danger' %}
+        <span class="workspace-review-warning">
+          <span class="workspace-review-warning-label">{{ warning.label }}:</span>
+          <strong class="{{ warning_tone }}">{{ warning.display }}</strong>
+        </span>
+        {% endfor %}
+      </span>
+      {% else %}
+      <strong>ready</strong>
+      {% endif %}
     </span>
   </div>
   {% else %}

@@ -43,6 +43,7 @@ from app.impl.workspace.context_component_status import (
     validator_status_context,
 )
 from app.impl.workspace.problem_config import read_problem_config
+from app.service.problem.content_review import problem_content_review
 from app.service.problem.readiness import WorkspaceReadinessSubject
 from app.service.repository.revision import workspace_revision_info
 from app.service.problem.resource_limits import resource_limit_display
@@ -203,6 +204,33 @@ def page_ctx(
         ctx['tests_spec_status'] = _tests_spec_status_context(workspace_path)
     except Exception:
         ctx['tests_spec_status'] = {'mode': 'invalid', 'display': 'invalid', 'total': 0, 'manual': 0, 'gen': 0, 'sample': 0}
+    statement_language_names = statement_languages(workspace_path)
+    if safe_mode == 'interactive':
+        output_component_label = 'Interactor'
+        output_component_status = ctx['interactor_status']
+        output_component_display = str(output_component_status['display'])
+    else:
+        output_component_label = 'Checker'
+        output_component_status = ctx['checker_status']
+        output_component_display = str(
+            output_component_status['standard_checker']
+            or output_component_status['display']
+        )
+    ctx['content_review'] = problem_content_review(
+        time_limit_ms=time_limit_ms,
+        memory_limit_mb=memory_limit_mb,
+        test_count=int(ctx['tests_spec_status']['total']),
+        tests_valid=ctx['tests_spec_status']['mode'] != 'invalid',
+        solution_count=int(ctx['solutions_status']['count']),
+        solutions_truncated=bool(ctx['solutions_status']['truncated']),
+        main_solution_ready=ctx['solutions_status']['mode'] == 'ready',
+        output_component_label=output_component_label,
+        output_component_display=output_component_display,
+        output_component_ready=output_component_status['mode'] == 'repository',
+        validator_display=str(ctx['validator_status']['display']),
+        validator_ready=ctx['validator_status']['mode'] == 'repository',
+        statement_language_names=statement_language_names,
+    )
     empty_changes = {'counts': {'added': 0, 'modified': 0, 'deleted': 0, 'renamed': 0, 'untracked': 0, 'conflicted': 0, 'typechange': 0, 'other': 0}, 'rows': [], 'total': 0, 'truncated': False, 'limit': None}
     if include_workspace_changes:
         try:

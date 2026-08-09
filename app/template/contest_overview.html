@@ -31,27 +31,24 @@
       </td>
       <td class="contest-problem-details-cell">
         {% if row.details_available %}
+        {% set content = row.content_review %}
         <span class="contest-problem-detail">
           {{ row.mode }}{% if row.pass_limit > 1 %} · {{ row.pass_limit }} passes{% endif %}
-          · <span class="{{ 'warn' if row.time_limit_warn else '' }}">{{ row.time_limit_display }}</span>
-          / <span class="{{ 'warn' if row.memory_limit_warn else '' }}">{{ row.memory_limit_display }}</span>
+          · <span class="{{ 'warn' if content.time_limit.tone == 'warning' else '' }}">{{ content.time_limit.display }}</span>
+          / <span class="{{ 'warn' if content.memory_limit.tone == 'warning' else '' }}">{{ content.memory_limit.display }}</span>
         </span>
         <span class="contest-problem-detail contest-problem-detail-summary">
-          <span class="{{ 'danger' if row.test_count == 0 else '' }}">{{ row.test_count }} test{% if row.test_count != 1 %}s{% endif %}</span>
-          · <span class="{{ 'danger' if row.solution_count == 0 else '' }}">{{ row.solution_count }}{% if row.solutions_truncated %}+{% endif %} solution{% if row.solution_count != 1 or row.solutions_truncated %}s{% endif %}</span>
+          <span class="{{ 'danger' if content.tests.tone == 'danger' else '' }}">{{ content.tests.display }}</span>
+          · <span class="{{ 'danger' if content.solutions.tone == 'danger' else '' }}">{{ content.solutions.display }}</span>
         </span>
         <span class="contest-problem-detail contest-problem-detail-components">
-          {{ row.output_component_label }}: <span class="{{ 'danger' if row.output_component_display == 'missing' else '' }}">{{ row.output_component_display }}</span>
+          {{ content.output_component.label }}: <span class="{{ 'danger' if content.output_component.tone == 'danger' else '' }}">{{ content.output_component.display }}</span>
         </span>
         <span class="contest-problem-detail contest-problem-detail-components">
-          Validator: <span class="{{ 'danger' if row.validator_display == 'missing' else '' }}">{{ row.validator_display }}</span>
+          {{ content.validator.label }}: <span class="{{ 'danger' if content.validator.tone == 'danger' else '' }}">{{ content.validator.display }}</span>
         </span>
         <span class="contest-problem-detail contest-problem-detail-languages">
-          {% if row.statement_language_count == 1 or row.statement_language_count == 2 %}
-          Languages: {{ row.statement_language_names | join(" · ") }}
-          {% else %}
-          Languages: <span class="{{ 'danger' if row.statement_language_count == 0 else '' }}">{{ row.statement_language_count if row.statement_language_count > 2 else "none" }}</span>
-          {% endif %}
+          {{ content.languages.label }}: <span class="{{ 'danger' if content.languages.tone == 'danger' else '' }}">{{ content.languages.display }}</span>
         </span>
         {% else %}
         <span class="contest-problem-detail contest-problem-detail-summary danger">unavailable</span>

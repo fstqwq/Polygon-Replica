@@ -609,6 +609,11 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
                 'class="workspace-review-label">Upstream</span>',
                 'class="workspace-review-label">Workspace</span>',
                 "Verification",
+                'class="workspace-review-label">Content</span>',
+                "Tests:",
+                "Solutions:",
+                "Checker:",
+                "Validator:",
                 "Publish new revision",
             ),
             excludes=(
@@ -624,6 +629,12 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         self.assertNotIn("Problem Access", html)
         self.assertNotIn("<h2>Access</h2>", html)
         self.assertNotIn("Branch Operations", html)
+        review_html = html.split("<h2>Review</h2>", maxsplit=1)[1].split(
+            "<h2>Publish</h2>", maxsplit=1
+        )[0]
+        self.assertNotIn("Languages:", review_html)
+        self.assertNotIn("Time limit:", review_html)
+        self.assertNotIn("Memory limit:", review_html)
 
     def test_clean_workspace_has_one_empty_message_and_disables_publish(self) -> None:
         self._ensure_committed_head("alice/sample", "alice")

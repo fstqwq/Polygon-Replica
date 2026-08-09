@@ -28,7 +28,7 @@
 <div class="workspace-page-layout">
   <section class="content-section workspace-controls-panel">
     <h2>Review</h2>
-    {{ workspace_review(ctx.readiness) }}
+    {{ workspace_review(ctx.readiness, ctx.content_review) }}
 
     {% if ctx.workspace_needs_update %}
     <form method="post" action="{{ problem_href('merge_start') }}">
