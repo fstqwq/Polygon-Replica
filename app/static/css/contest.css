@@ -251,15 +251,17 @@
   white-space: normal;
 }
 
-.table-base .contest-problem-revision-cell {
+.table-base .contest-problem-review-cell {
   min-width: 190px;
   font-size: var(--font-size-ui-xs);
 }
 
-.contest-problem-revision-line {
-  display: block;
+.contest-problem-review-cell .problem-review-list {
+  gap: 0;
+}
+
+.contest-problem-review-cell .problem-review-line {
   line-height: 1.4;
-  overflow-wrap: anywhere;
 }
 
 @media (max-width: 640px) {
@@ -310,5 +312,3 @@
 .inline-meta-row > p {
   margin: 0;
 }
-
-

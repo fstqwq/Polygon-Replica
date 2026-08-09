@@ -49,10 +49,10 @@ from app.impl.workspace.run_test_generation import (
     build_test_generation_views,
     generation_warning_message,
 )
-from app.impl.workspace.context_verification import (
-    _expected_status_rule,
-    _status_rule_expected_display,
-    _verification_solution_match,
+from app.service.verification.result_match import (
+    expected_status_rule,
+    status_rule_expected_display,
+    verification_solution_match,
 )
 from app.impl.workspace.run_view_list import (
     _latest_iso_timestamp,
@@ -872,9 +872,9 @@ def build_run_detail_context(
                 mapped_expected = _expected_from_workspace_source(source_rel)
             if mapped_expected:
                 expected_behavior = mapped_expected
-        matched, completed, observed_pass, match_reason = _verification_solution_match(expected_behavior, status, summary)
-        required_codes, allowed_codes = _expected_status_rule(expected_behavior)
-        expected_display = _status_rule_expected_display(expected_behavior)
+        matched, completed, observed_pass, match_reason = verification_solution_match(expected_behavior, status, summary)
+        required_codes, allowed_codes = expected_status_rule(expected_behavior)
+        expected_display = status_rule_expected_display(expected_behavior)
         expected_is_ac_only = bool(required_codes == ('AC',) and allowed_codes == ('AC',))
         got_short = run_actual_short(status, summary)
         got_display = run_actual_display(status, summary)

@@ -287,6 +287,20 @@ body.problem-layout:not(.verification-compact) {
   color: var(--warn);
 }
 
+.problem-review-list {
+  display: grid;
+  gap: 0.15rem;
+}
+
+.problem-review-line {
+  display: block;
+  line-height: 1.3;
+}
+
+.problem-review-reason {
+  overflow-wrap: anywhere;
+}
+
 .problem-section-tab.active .problem-section-tab-status:not(.section-tab-status-danger):not(.section-tab-status-warn) {
   color: var(--accent-hover);
 }
@@ -1417,17 +1431,6 @@ tr.verification-row-failed > td {
 .contest-problem-detail-components,
 .contest-problem-detail-languages {
   white-space: normal;
-}
-
-.table-base .contest-problem-revision-cell {
-  min-width: 190px;
-  font-size: var(--font-size-ui-xs);
-}
-
-.contest-problem-revision-line {
-  display: block;
-  line-height: 1.4;
-  overflow-wrap: anywhere;
 }
 
 @media (max-width: 640px) {

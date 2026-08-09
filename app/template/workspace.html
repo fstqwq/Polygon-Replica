@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% from "_component_dialogs.html" import change_badges %}
+{% from "_problem_review.html" import problem_review %}
 {% block content %}
 <h1 class="page-title">Workspace</h1>
 {% include "_flash_message.html" %}
@@ -26,11 +27,8 @@
 
 <div class="workspace-page-layout">
   <section class="content-section workspace-controls-panel">
-    {% set ws_revision = ctx.workspace_revision if ctx.workspace_revision is defined else {} %}
-    {% set local_rev_raw = ws_revision.get('local') if ws_revision else none %}
-    {% set published_rev_raw = ws_revision.get('upstream') if ws_revision else none %}
-    <h2>Revision</h2>
-    <p>Workspace on <strong>{{ ('v' ~ local_rev_raw) if local_rev_raw is not none else 'no revision' }}</strong> / Upstream <strong>{{ ('v' ~ published_rev_raw) if published_rev_raw is not none else 'none' }}</strong></p>
+    <h2>Review</h2>
+    {{ problem_review(ctx.readiness, show_verification_reason=true) }}
 
     {% if ctx.workspace_needs_update %}
     <form method="post" action="{{ problem_href('merge_start') }}">

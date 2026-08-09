@@ -9,10 +9,10 @@ from app.service.verification.types import Kind, Status
 from app.service.verification.runtime import normalize_pass_limit, normalize_problem_mode
 
 from app.impl.workspace.context_operation import audit
-from app.impl.workspace.context_verification import (
+from app.service.verification.workspace_fingerprint import (
     remember_verification_fingerprint,
-    _verification_sources_fingerprint,
-    _verification_sources_signature,
+    verification_sources_fingerprint,
+    verification_sources_signature,
 )
 from app.impl.workspace.published_materialization import ensure_published_materialization
 from app.impl.workspace.problem_config import read_problem_config
@@ -103,8 +103,8 @@ def start_verification_job(
     if workspace_path:
         try:
             workspace_obj = Path(workspace_path)
-            fingerprint = _verification_sources_fingerprint(workspace_obj)
-            signature = _verification_sources_signature(workspace_obj)
+            fingerprint = verification_sources_fingerprint(workspace_obj)
+            signature = verification_sources_signature(workspace_obj)
         except Exception:
             fingerprint = ""
             signature = ""

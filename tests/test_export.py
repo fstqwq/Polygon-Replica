@@ -237,6 +237,46 @@ class TestPublishedRevisionExport(E2ETestBase):
         self.assertEqual(restored["id"], first["id"])
         self.assertTrue(config.problem_package_service.native_archive(restored["id"])[1].is_file())
 
+    def test_published_readiness_is_metadata_only_and_never_writes(self) -> None:
+        problem_id, _commit, materialization = self._materialize()
+        with (
+            patch("app.service.problem_package.service.sha256_file", side_effect=AssertionError("readiness must not hash archives")) as hash_file,
+            patch.object(config.problem_package_service, "_archive_path", side_effect=AssertionError("readiness must not resolve archives")) as archive_path,
+            patch.object(config.problem_package_service, "_validate_materialization", side_effect=AssertionError("readiness must not validate archives")) as validate,
+            patch.object(config.problem_package_service, "_invalidate_materialization", side_effect=AssertionError("readiness must not invalidate packages")) as invalidate,
+            patch.object(config.db, "execute", side_effect=AssertionError("readiness must not write SQLite")) as execute,
+            patch.object(config.db, "write_transaction", side_effect=AssertionError("readiness must not start write transactions")) as write_transaction,
+        ):
+            readiness = config.problem_package_service.published_readiness_many(
+                [problem_id]
+            )[problem_id]
+
+        self.assertEqual(readiness["status"], "ready")
+        self.assertEqual(readiness["materialization_id"], materialization["id"])
+        hash_file.assert_not_called()
+        archive_path.assert_not_called()
+        validate.assert_not_called()
+        invalidate.assert_not_called()
+        execute.assert_not_called()
+        write_transaction.assert_not_called()
+
+    def test_corrupt_package_is_invalidated_only_when_consumed(self) -> None:
+        problem_id, _commit, materialization = self._materialize()
+        _stored, archive = config.problem_package_service.native_archive(
+            materialization["id"]
+        )
+        archive.write_bytes(b"corrupt package")
+
+        before = config.problem_package_service.published_readiness(problem_id)
+        self.assertEqual(before["status"], "ready")
+
+        with self.assertRaisesRegex(ValueError, "integrity check failed"):
+            config.problem_package_service.native_archive(materialization["id"])
+
+        after = config.problem_package_service.published_readiness(problem_id)
+        self.assertEqual(after["status"], "blocked")
+        self.assertIn("rebuild required", after["missing_reason"])
+
     def test_concurrent_materialization_request_fails_fast(self) -> None:
         _workspace, problem_id, _commit = self._publish_problem()
         revision = config.problem_package_service.published_revision(problem_id)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from enum import StrEnum
+from typing import TypedDict
 
 
 class Kind(StrEnum):
@@ -18,6 +19,22 @@ class Status(StrEnum):
 
 
 ACTIVE = frozenset((Status.QUEUED.value, Status.PENDING.value, Status.RUNNING.value))
+
+
+class WorkspaceVerificationRow(TypedDict):
+    id: str
+    status: str
+    signature: str
+    source_commit: str
+    kind: str
+    fail_reason: str
+    error: str
+    sanity_status: str
+    created_at: str
+    finished_at: str
+
+
+WorkspaceVerificationKey = tuple[int, int]
 
 _CANCEL_REASONS = frozenset(
     (

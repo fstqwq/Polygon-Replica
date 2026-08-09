@@ -48,9 +48,10 @@ import app.impl.tests_spec.verification as tests_spec_verification_module
 import app.impl.workspace.context_job as workspace_job_module
 import app.impl.workspace.context_job_helper as workspace_job_helper_module
 import app.impl.workspace.context_ui as workspace_ui_module
-import app.impl.workspace.context_verification as workspace_verification_module
 import app.impl.workspace.run_view_detail as workspace_run_view_detail_module
 import app.impl.workspace.run_view_list as workspace_run_view_list_module
+from app.service.verification.result_match import verification_solution_match
+from app.service.verification.workspace_fingerprint import verification_sources_signature
 from app.impl.runtime.config import config
 _API_MODULES = (
     admin_panel_module,
@@ -99,8 +100,8 @@ run_export_impl = SimpleNamespace(
 )
 workspace_impl = SimpleNamespace(
     _run_cell_kind=workspace_run_view_list_module._run_cell_kind,
-    _verification_solution_match=workspace_verification_module._verification_solution_match,
-    _verification_sources_signature=workspace_verification_module._verification_sources_signature,
+    _verification_solution_match=verification_solution_match,
+    _verification_sources_signature=verification_sources_signature,
     build_run_detail_context=workspace_run_view_detail_module.build_run_detail_context,
     record_async_run_failure=workspace_job_helper_module.record_async_run_failure,
     run_list_rows=workspace_run_view_list_module.run_list_rows,

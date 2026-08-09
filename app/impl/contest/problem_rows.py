@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Literal, TypedDict
+from typing import TypedDict
 
 from app.impl.runtime.config import config
 from app.impl.workspace.context_component_status import (
@@ -13,7 +13,7 @@ from app.impl.workspace.problem_config import read_problem_config
 from app.impl.workspace.solution import list_solution_sources
 from app.impl.workspace.test_spec import read_tests_spec
 from app.service.problem.resource_limits import resource_limit_display
-from app.service.problem_package.service import ProblemReadiness
+from app.service.problem.readiness import ProblemReadiness, WorkspaceReadinessSubject
 from app.service.repository.revision import workspace_upstream_revision_display
 from app.service.statement.context import statement_languages
 from app.service.verification.runtime import (
@@ -24,9 +24,6 @@ from app.service.verification.runtime import (
 from app.service.workspace.state import WorkspaceState
 
 _C = config.constants
-
-PackageRevisionStatus = Literal["ready", "buildable", "blocked"]
-
 
 class ContestProblemDisplayRow(TypedDict):
     contest_problem_id: int
@@ -56,63 +53,17 @@ class ContestProblemDisplayRow(TypedDict):
     workspace_revision_display: str
     workspace_revision_warn: bool
     dirty: bool
-    package_revision_display: str
-    package_revision_status: PackageRevisionStatus
-    published_commit: str
-    published_revision_number: int | None
-    materialized_commit: str
-    materialized_revision_number: int | None
-    materialization_id: str
-    archive_sha256: str
-    current_is_materialized: bool
-    package_statement_languages: list[str]
-    package_missing_reason: str
+    readiness: ProblemReadiness | None
     can_problem_read: bool
     can_problem_write: bool
     created_at: str
 
 
-def package_revision_display(
-    readiness: ProblemReadiness,
-) -> tuple[str, PackageRevisionStatus]:
-    published_revision = readiness["published_revision_number"]
-    status = readiness["status"]
-    if status == "ready":
-        return f"Native ready on v{published_revision}", "ready"
-    if status == "buildable":
-        return f"Native pending for v{published_revision}", "buildable"
-    if published_revision is None:
-        return "Native blocked", "blocked"
-    return f"Native blocked on v{published_revision}", "blocked"
-
-
-def _inaccessible_package_readiness(problem_id: int) -> ProblemReadiness:
-    return {
-        "problem_id": problem_id,
-        "published_commit": "",
-        "published_revision_number": None,
-        "materialized_commit": "",
-        "materialized_revision_number": None,
-        "materialization_id": "",
-        "archive_sha256": "",
-        "current_is_materialized": False,
-        "status": "blocked",
-        "statement_languages": [],
-        "missing_reason": "problem access required",
-    }
-
-
 def _workspace_revision_display(
     workspace_state: WorkspaceState,
-    readiness: ProblemReadiness,
 ) -> tuple[str, bool]:
     local_revision = workspace_state["revision_local"]
-    published_revision = readiness["published_revision_number"]
-    upstream_revision = (
-        published_revision
-        if published_revision is not None
-        else workspace_state["revision_upstream"]
-    )
+    upstream_revision = workspace_state["revision_upstream"]
     warn = (
         local_revision is None
         or upstream_revision is None
@@ -142,10 +93,12 @@ def _resolved_workspace_path(
     return workspace
 
 
-def contest_problem_rows(
+def _contest_problem_rows(
     contest_id: int,
     username: str,
     user_id: int,
+    *,
+    include_review: bool,
 ) -> list[ContestProblemDisplayRow]:
     rows = config.contest_service.contest_problems(contest_id)
     access_by_problem = config.workspace_service.access_contexts(
@@ -158,15 +111,9 @@ def contest_problem_rows(
         if bool(access_by_problem[row["problem_id"]]["can_read"])
     ]
     # The ACL batch is the boundary for all package and workspace I/O below.
-    # Mutation paths persist local status; published readiness supplies the live
-    # upstream revision, so a list render does not need to rescan every Git tree.
+    # Mutation paths persist local status. A list render only refreshes a
+    # workspace whose revision state has never been recorded.
     readable_problem_ids = [row["problem_id"] for row in readable_rows]
-    readiness_by_problem = {
-        row["problem_id"]: config.problem_package_service.readiness(
-            row["problem_id"]
-        )
-        for row in readable_rows
-    }
     workspace_by_problem = (
         config.workspace_service.workspace_rows(readable_problem_ids, user_id)
         if readable_problem_ids
@@ -234,6 +181,48 @@ def contest_problem_rows(
             user_id,
         )
 
+    readiness_subjects: list[WorkspaceReadinessSubject] = []
+    if include_review:
+        for row in readable_rows:
+            problem_id = row["problem_id"]
+            if problem_id in workspace_errors:
+                continue
+            workspace_state = workspace_by_problem.get(problem_id)
+            if workspace_state is None:
+                continue
+            workspace = _resolved_workspace_path(
+                workspace_state,
+                problem_slug=row["problem_slug"],
+                username=username,
+            )
+            if workspace is None:
+                workspace_errors.add(problem_id)
+                continue
+            behind_count = workspace_state["revision_behind_count"] or 0
+            readiness_subjects.append(
+                {
+                    "problem_id": problem_id,
+                    "workspace_id": workspace_state["id"],
+                    "workspace_path": workspace,
+                    "head_commit": workspace_state["head_commit"],
+                    "dirty": bool(workspace_state["dirty"]),
+                    "local_revision": workspace_state["revision_local"],
+                    "upstream_revision": workspace_state["revision_upstream"],
+                    "needs_update": bool(
+                        workspace_state["revision_upstream_higher"]
+                        or behind_count > 0
+                    ),
+                }
+            )
+    readiness_by_problem = (
+        config.problem_readiness_service.readiness_many(
+            readiness_subjects,
+            explain_verification=False,
+        )
+        if readiness_subjects
+        else {}
+    )
+
     result: list[ContestProblemDisplayRow] = []
     for row in rows:
         problem_id = row["problem_id"]
@@ -243,13 +232,7 @@ def contest_problem_rows(
         can_problem_read = bool(problem_access["can_read"])
         can_problem_write = bool(problem_access["can_write"])
 
-        if can_problem_read:
-            readiness = readiness_by_problem[problem_id]
-            package_display, package_status = package_revision_display(readiness)
-        else:
-            readiness = _inaccessible_package_readiness(problem_id)
-            package_display = "Package unavailable"
-            package_status = "blocked"
+        readiness = readiness_by_problem.get(problem_id)
 
         workspace_revision_display = "unavailable"
         workspace_revision_warn = False
@@ -282,7 +265,7 @@ def contest_problem_rows(
                 (
                     workspace_revision_display,
                     workspace_revision_warn,
-                ) = _workspace_revision_display(workspace_state, readiness)
+                ) = _workspace_revision_display(workspace_state)
                 dirty = bool(workspace_state["dirty"])
 
                 _payload, general_config, _config_path = read_problem_config(workspace)
@@ -359,24 +342,36 @@ def contest_problem_rows(
                 "workspace_revision_display": workspace_revision_display,
                 "workspace_revision_warn": workspace_revision_warn,
                 "dirty": dirty,
-                "package_revision_display": package_display,
-                "package_revision_status": package_status,
-                "published_commit": readiness["published_commit"],
-                "published_revision_number": readiness[
-                    "published_revision_number"
-                ],
-                "materialized_commit": readiness["materialized_commit"],
-                "materialized_revision_number": readiness[
-                    "materialized_revision_number"
-                ],
-                "materialization_id": readiness["materialization_id"],
-                "archive_sha256": readiness["archive_sha256"],
-                "current_is_materialized": readiness["current_is_materialized"],
-                "package_statement_languages": readiness["statement_languages"],
-                "package_missing_reason": readiness["missing_reason"],
+                "readiness": readiness,
                 "can_problem_read": can_problem_read,
                 "can_problem_write": can_problem_write,
                 "created_at": row["created_at"],
             }
         )
     return result
+
+
+def contest_overview_problem_rows(
+    contest_id: int,
+    username: str,
+    user_id: int,
+) -> list[ContestProblemDisplayRow]:
+    return _contest_problem_rows(
+        contest_id,
+        username,
+        user_id,
+        include_review=True,
+    )
+
+
+def contest_management_problem_rows(
+    contest_id: int,
+    username: str,
+    user_id: int,
+) -> list[ContestProblemDisplayRow]:
+    return _contest_problem_rows(
+        contest_id,
+        username,
+        user_id,
+        include_review=False,
+    )

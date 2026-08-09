@@ -73,6 +73,27 @@ class ProblemPackageStore:
             return None
         return {"id": int(row["id"]), "slug": str(row["slug"]), "repo_name": str(row["repo_name"])}
 
+    def problems(self, problem_ids: list[int]) -> dict[int, PublishedProblem]:
+        ids = list(dict.fromkeys(int(problem_id) for problem_id in problem_ids))
+        result: dict[int, PublishedProblem] = {}
+        for offset in range(0, len(ids), 300):
+            chunk = ids[offset : offset + 300]
+            if not chunk:
+                continue
+            placeholders = ",".join("?" for _problem_id in chunk)
+            rows = self.db.fetch_all(
+                f"SELECT id,slug,repo_name FROM problems WHERE id IN ({placeholders})",
+                chunk,
+            )
+            for row in rows:
+                problem_id = int(row["id"])
+                result[problem_id] = {
+                    "id": problem_id,
+                    "slug": str(row["slug"]),
+                    "repo_name": str(row["repo_name"]),
+                }
+        return result
+
     def materialization(self, materialization_id: str) -> MaterializationRow | None:
         row = self.db.fetch_one("SELECT * FROM problem_package_materializations WHERE id=?", [materialization_id])
         return None if row is None else _materialization(row)
@@ -88,6 +109,43 @@ class ProblemPackageStore:
             [int(problem_id), source_commit],
         )
         return None if row is None else _materialization(row)
+
+    def materializations_for_revisions(
+        self,
+        revisions: list[tuple[int, str]],
+    ) -> dict[tuple[int, str], MaterializationRow]:
+        keys = list(
+            dict.fromkeys(
+                (int(problem_id), source_commit)
+                for problem_id, source_commit in revisions
+            )
+        )
+        result: dict[tuple[int, str], MaterializationRow] = {}
+        for offset in range(0, len(keys), 300):
+            chunk = keys[offset : offset + 300]
+            if not chunk:
+                continue
+            values = ",".join("(?,?)" for _key in chunk)
+            params = [value for key in chunk for value in key]
+            rows = self.db.fetch_all(
+                f"""
+                WITH requested(problem_id,source_commit) AS (VALUES {values})
+                SELECT m.*
+                FROM problem_package_materializations m
+                JOIN requested r
+                  ON r.problem_id=m.problem_id
+                 AND r.source_commit=m.source_commit
+                """,
+                params,
+            )
+            for row in rows:
+                materialization = _materialization(row)
+                key = (
+                    materialization["problem_id"],
+                    materialization["source_commit"],
+                )
+                result[key] = materialization
+        return result
 
     def all_available_materializations(self) -> list[MaterializationRow]:
         rows = self.db.fetch_all(

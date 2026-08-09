@@ -5,7 +5,7 @@ from typing import Annotated
 from fastapi import Request, Depends
 
 from app.impl.auth.shared import template_response
-from app.impl.contest.problem_rows import contest_problem_rows
+from app.impl.contest.problem_rows import contest_overview_problem_rows
 from app.impl.contest.workspace_scope import add_contest_problem_hrefs
 
 from app.impl.contest.shared import _contest_ctx
@@ -18,7 +18,7 @@ def contest_overview_page(request: Request, contest: str, user: Annotated[str, D
     rows = add_contest_problem_hrefs(
         request,
         contest_slug=str(ctx["contest"]["slug"]),
-        rows=contest_problem_rows(
+        rows=contest_overview_problem_rows(
             contest_id,
             str(ctx["user"]["username"]),
             user_id,
@@ -29,12 +29,18 @@ def contest_overview_page(request: Request, contest: str, user: Annotated[str, D
         default=0,
     )
     package_ready_count = sum(
-        1 for row in rows if row["package_revision_status"] == "ready"
+        1
+        for row in rows
+        if row["readiness"] is not None
+        and row["readiness"]["package"]["state"] == "ready"
     )
-    package_buildable_count = sum(
-        1 for row in rows if row["package_revision_status"] == "buildable"
+    package_required_count = sum(
+        1
+        for row in rows
+        if row["readiness"] is not None
+        and row["readiness"]["package"]["state"] == "required"
     )
-    package_blocked_count = len(rows) - package_ready_count - package_buildable_count
+    package_blocked_count = len(rows) - package_ready_count - package_required_count
     return template_response(
         request,
         "contest_overview.html",
@@ -43,7 +49,7 @@ def contest_overview_page(request: Request, contest: str, user: Annotated[str, D
             "problem_rows": rows,
             "owner_prefix_chars": owner_prefix_chars,
             "package_ready_count": package_ready_count,
-            "package_buildable_count": package_buildable_count,
+            "package_required_count": package_required_count,
             "package_blocked_count": package_blocked_count,
         },
     )

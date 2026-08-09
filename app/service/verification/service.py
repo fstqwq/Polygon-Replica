@@ -17,7 +17,11 @@ from app.service.problem.test_spec import (
     parse_gen_command_tokens,
 )
 from app.service.repository.workspace import WorkspaceService
-from app.service.verification.types import Kind
+from app.service.verification.types import (
+    Kind,
+    WorkspaceVerificationKey,
+    WorkspaceVerificationRow,
+)
 from app.service.verification.identity import canonical_verification_id
 
 from app.service.verification.read_model import (
@@ -747,6 +751,66 @@ class VerificationService:
             kinds=kinds,
         )
         return [dict(row) for row in rows]
+
+    def workspace_verification_rows(
+        self,
+        problem_id: int,
+        workspace_id: int,
+        *,
+        limit: int = 40,
+        kinds: tuple[str, ...] = (Kind.ALL.value,),
+    ) -> list[WorkspaceVerificationRow]:
+        return self._verification_store.workspace_verification_rows(
+            int(problem_id),
+            int(workspace_id),
+            limit=max(1, int(limit)),
+            kinds=kinds,
+        )
+
+    def workspace_verification_rows_many(
+        self,
+        subjects: list[WorkspaceVerificationKey],
+        *,
+        limit: int = 40,
+        kinds: tuple[str, ...] = (Kind.ALL.value,),
+    ) -> dict[WorkspaceVerificationKey, list[WorkspaceVerificationRow]]:
+        return self._verification_store.workspace_verification_rows_many(
+            subjects,
+            limit=max(1, int(limit)),
+            kinds=kinds,
+        )
+
+    def latest_workspace_verification(
+        self,
+        problem_id: int,
+        workspace_id: int,
+        *,
+        ok_only: bool = False,
+    ) -> WorkspaceVerificationRow | None:
+        rows = self._verification_store.workspace_verification_rows(
+            int(problem_id),
+            int(workspace_id),
+            limit=40,
+            ok_only=bool(ok_only),
+        )
+        return rows[0] if rows else None
+
+    def workspace_source_commit_verification(
+        self,
+        problem_id: int,
+        workspace_id: int,
+        source_commit: str,
+        *,
+        kinds: tuple[str, ...] = (Kind.ALL.value, Kind.CUSTOM.value),
+        ok_only: bool = False,
+    ) -> WorkspaceVerificationRow | None:
+        return self._verification_store.workspace_source_commit_verification_row(
+            int(problem_id),
+            int(workspace_id),
+            source_commit,
+            kinds=kinds,
+            ok_only=bool(ok_only),
+        )
 
     def begin_verification_record(
         self,

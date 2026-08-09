@@ -55,15 +55,14 @@
     {% set nav_status = ctx.nav_status if ctx.nav_status is defined else {} %}
     {% set problem_mode = ctx.problem_mode if ctx.problem_mode is defined else "pass-fail" %}
     {% set statement_meta_nav = nav_status.get('statement_languages', {}) %}
-    {% set verification_status = ctx.verification_status.display if ctx.verification_status is defined else "none" %}
-    {% set verification_mode = ctx.verification_status.mode if ctx.verification_status is defined else verification_status %}
-    {% set verification_error = ctx.verification_status.error if ctx.verification_status is defined else "" %}
-    {% set verification_warn = ctx.verification_status.warn if ctx.verification_status is defined else false %}
-    {% set verification_stale_reason = ctx.verification_status.stale_reason if ctx.verification_status is defined else "" %}
-    {% set verification_tooltip = verification_stale_reason if verification_mode == 'stale' else verification_error %}
+    {% set verification_review = ctx.readiness.verification if ctx.readiness is defined else {} %}
+    {% set verification_status = verification_review.get('display', 'none') %}
+    {% set verification_mode = verification_review.get('result', 'none') %}
+    {% set verification_tone = verification_review.get('tone', 'danger') %}
+    {% set verification_tooltip = verification_review.get('reason_short', '') %}
     {% if verification_mode == 'failed' and (not verification_tooltip) %}
     {% set verification_tooltip = 'verification failed; open Verification for details' %}
-    {% elif verification_mode == 'stale' and (not verification_tooltip) %}
+    {% elif verification_review.get('stale') and (not verification_tooltip) %}
     {% set verification_tooltip = 'changed: verification inputs' %}
     {% endif %}
     {% set tests_nav = nav_status.get('tests', {}) %}
@@ -154,7 +153,7 @@
           <input class="page-target" type="hidden" name="page" value="{{ problem_page_target }}" />
           <button class="problem-section-tab-action-control" type="submit" {% if not ctx.access.can_write %}disabled title="{{ ctx.access.write_block_reason }}"{% endif %}>Start</button>
         </form>
-        <span class="problem-section-tab-status {{ 'section-tab-status-danger' if verification_mode in ['none', 'failed'] else 'section-tab-status-warn' if verification_warn else '' }}">{{ verification_status }}</span>
+        <span class="problem-section-tab-status {{ 'section-tab-status-danger' if verification_tone == 'danger' else 'section-tab-status-warn' if verification_tone == 'warning' else '' }}">{{ verification_status }}</span>
       </div>
       {% set export_nav = nav_status.get('export', {}) %}
       <div class="section-tab problem-section-tab problem-section-action-tab{{ ' active' if problem_section == 'export' else '' }}">
@@ -168,7 +167,7 @@
           <button class="problem-section-tab-action-control" type="submit" {% if not ctx.access.can_write or not ctx.workspace.head_commit %}disabled title="{{ ctx.access.write_block_reason if not ctx.access.can_write else 'Commit changes before building a package' }}"{% endif %}>Build</button>
         </form>
         {% endif %}
-        <span class="problem-section-tab-status {{ 'section-tab-status-danger' if export_nav.get('danger') else '' }}">{{ export_nav.get("text", "-") }}</span>
+        <span class="problem-section-tab-status {{ 'section-tab-status-danger' if export_nav.get('danger') else 'section-tab-status-warn' if export_nav.get('warn') else '' }}">{{ export_nav.get("text", "-") }}</span>
       </div>
     </nav>
     <div class="page-grid{% if ctx.page_wide_content %} page-grid-wide{% endif %}">

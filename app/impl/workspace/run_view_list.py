@@ -10,7 +10,7 @@ from app.service.platform.error_text import bounded_display_text, normalize_disp
 from app.service.problem.solution_metadata import infer_expected_behavior_from_name, normalize_expected_behavior
 from app.service.verification.runtime import coerce_int, normalize_problem_mode
 
-from app.impl.workspace.context_verification import _verification_solution_match
+from app.service.verification.result_match import verification_solution_match
 from app.impl.workspace.run_display import run_verdict_short
 
 _C = config.constants
@@ -76,7 +76,7 @@ def _run_cell_kind(verdict: str, expected_behavior: str) -> str:
         return "ok" if short == "AC" else "fail"
     if normalized == "unknown":
         return "neutral"
-    matched, _completed, _observed_pass, _reason = _verification_solution_match(
+    matched, _completed, _observed_pass, _reason = verification_solution_match(
         normalized,
         "ok",
         {"tests": [{"verdict": short}]},

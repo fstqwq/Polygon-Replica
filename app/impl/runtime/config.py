@@ -15,6 +15,7 @@ from app.service.verification.service import VerificationService
 from app.service.verification.task_store import VerificationTaskStore
 from app.service.export.service import ExportService
 from app.service.problem_package.service import ProblemPackageService
+from app.service.problem.readiness import ProblemReadinessService
 from app.service.repository.git import GitService
 from app.service.repository.merge import WorkspaceMergeService
 from app.service.platform.runtime_blob_store import RuntimeBlobStore
@@ -69,6 +70,7 @@ class RuntimeConfig:
     judgehost_task_service: Judgehost = field(init=False)
     export_service: ExportService = field(init=False)
     problem_package_service: ProblemPackageService = field(init=False)
+    problem_readiness_service: ProblemReadinessService = field(init=False)
     worker_queue_service: WorkerQueueService = field(init=False)
     artifact_cleanup_service: ArtifactCleanupService = field(init=False)
     maintenance_service: MaintenanceCoordinator = field(init=False)
@@ -201,6 +203,10 @@ class RuntimeConfig:
             self.settings,
             artifact_file_resolver=self.runtime_blob_store.descriptor,
             verification_id_allocator=self.verification_service.allocate_verification_id,
+        )
+        self.problem_readiness_service = ProblemReadinessService(
+            self.verification_service,
+            self.problem_package_service,
         )
         self.export_service = ExportService(
             self.db,

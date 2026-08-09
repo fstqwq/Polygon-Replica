@@ -12,13 +12,14 @@ from tests.db_helpers import (
 
 from app.service.platform.git_process import run_git
 from app.impl.contest.problem_rows import (
-    contest_problem_rows,
-    package_revision_display,
+    contest_management_problem_rows,
+    contest_overview_problem_rows,
 )
 from app.service.problem.resource_limits import resource_limit_display
 from starlette.requests import Request
 
 from tests.common import E2ETestBase
+from tests.identity_helpers import canonical_test_verification_id
 from tests.ui_support import (
     Path,
     UIHelpersMixin,
@@ -57,52 +58,6 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
     seed_primary_workspace = False
     seed_default_workspace = True
 
-    def test_package_revision_display_separates_ready_buildable_and_blocked(self) -> None:
-        base = {
-            "problem_id": 7,
-            "published_commit": "a" * 40,
-            "published_revision_number": 3,
-            "materialized_commit": "a" * 40,
-            "materialized_revision_number": 3,
-            "materialization_id": "mat-current",
-            "archive_sha256": "b" * 64,
-            "current_is_materialized": True,
-            "status": "ready",
-            "statement_languages": ["english"],
-            "missing_reason": "",
-        }
-        self.assertEqual(
-            package_revision_display(base),
-            ("Native ready on v3", "ready"),
-        )
-        buildable = {
-            **base,
-            "materialized_commit": "",
-            "materialized_revision_number": None,
-            "materialization_id": "",
-            "archive_sha256": "",
-            "current_is_materialized": False,
-            "status": "buildable",
-        }
-        self.assertEqual(
-            package_revision_display(buildable),
-            ("Native pending for v3", "buildable"),
-        )
-        blocked = {
-            **base,
-            "materialized_commit": "",
-            "materialized_revision_number": None,
-            "materialization_id": "",
-            "archive_sha256": "",
-            "current_is_materialized": False,
-            "status": "blocked",
-            "missing_reason": "no complete Native materialization",
-        }
-        self.assertEqual(
-            package_revision_display(blocked),
-            ("Native blocked on v3", "blocked"),
-        )
-
     def test_contest_problem_rows_batch_acl_skips_inaccessible_workspaces(self) -> None:
         problem = {
             "contest_problem_id": 11,
@@ -123,19 +78,6 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
             "write_block_reason": "problem write access required",
             "manage_block_reason": "problem manage access required",
         }
-        readiness = {
-            "problem_id": 7,
-            "published_commit": "",
-            "published_revision_number": None,
-            "materialized_commit": "",
-            "materialized_revision_number": None,
-            "materialization_id": "",
-            "archive_sha256": "",
-            "current_is_materialized": False,
-            "status": "blocked",
-            "statement_languages": [],
-            "missing_reason": "no published Git revision",
-        }
         with (
             patch.object(
                 config.contest_service,
@@ -150,21 +92,19 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
             patch.object(config.workspace_service, "workspace_rows") as workspace_rows,
             patch.object(config.workspace_service, "ensure_workspace") as ensure_workspace,
             patch.object(
-                config.problem_package_service,
-                "readiness",
-                return_value=readiness,
-            ) as package_readiness,
+                config.problem_readiness_service,
+                "readiness_many",
+            ) as problem_readiness,
         ):
-            rows = contest_problem_rows(5, "alice", 3)
+            rows = contest_overview_problem_rows(5, "alice", 3)
 
         access_contexts.assert_called_once_with([7], 3)
         workspace_rows.assert_not_called()
         ensure_workspace.assert_not_called()
-        package_readiness.assert_not_called()
+        problem_readiness.assert_not_called()
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["workspace_revision_display"], "no problem access")
-        self.assertEqual(rows[0]["package_revision_status"], "blocked")
-        self.assertEqual(rows[0]["package_revision_display"], "Package unavailable")
+        self.assertIsNone(rows[0]["readiness"])
         self.assertNotIn("revision_display", rows[0])
 
     def test_contest_problem_rows_reuses_stored_workspace_status(self) -> None:
@@ -202,18 +142,6 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
             "write_block_reason": "",
             "manage_block_reason": "",
         }
-        readiness = {
-            "problem_id": problem_id,
-            "published_commit": "a" * 40,
-            "published_revision_number": 3,
-            "materialized_commit": "",
-            "materialized_revision_number": None,
-            "materialization_id": "",
-            "archive_sha256": "",
-            "current_is_materialized": False,
-            "statement_languages": [],
-            "missing_reason": "no complete Native materialization",
-        }
         with (
             patch.object(
                 config.contest_service,
@@ -236,21 +164,21 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
                 "refresh_workspace_status_with_ids",
             ) as refresh_workspace_status,
             patch.object(
-                config.problem_package_service,
-                "readiness",
-                return_value=readiness,
-            ),
+                config.problem_readiness_service,
+                "readiness_many",
+            ) as problem_readiness,
         ):
-            rows = contest_problem_rows(5, self.default_user, user_id)
+            rows = contest_management_problem_rows(5, self.default_user, user_id)
 
         workspace_rows.assert_called_once_with([problem_id], user_id)
         ensure_workspace.assert_not_called()
         refresh_workspace_status.assert_not_called()
+        problem_readiness.assert_not_called()
         self.assertEqual(
             rows[0]["workspace_revision_display"],
-            "Workspace on v2 / Upstream v3",
+            "Workspace on v2 / Upstream v2",
         )
-        self.assertTrue(rows[0]["workspace_revision_warn"])
+        self.assertFalse(rows[0]["workspace_revision_warn"])
 
     def test_resource_limit_display_uses_shared_units_and_warning_boundaries(self) -> None:
         self.assertEqual(
@@ -428,8 +356,23 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
         self.assertIn("1 blocked", overview_html)
         self.assertNotIn(" buildable</span>", overview_html)
         self.assertNotIn(" available</span>", overview_html)
-        self.assertIn("Native blocked", overview_html)
-        self.assertIn("Workspace on v", overview_html)
+        self.assertRegex(
+            overview_html,
+            r'Verification:\s*<span class="danger">none</span>',
+        )
+        self.assertRegex(
+            overview_html,
+            r'Package:\s*<span class="danger">blocked</span>',
+        )
+        upstream_marker = "Upstream: <strong>"
+        workspace_marker = 'Workspace: <strong class="">'
+        self.assertIn(upstream_marker, overview_html)
+        self.assertIn(workspace_marker, overview_html)
+        self.assertLess(
+            overview_html.index(upstream_marker),
+            overview_html.index(workspace_marker),
+        )
+        self.assertIn("<th>Revision</th>", overview_html)
 
         problems_page = contest_problems_page(
             _app_request(f"/contests/{contest_slug}/problems"),
@@ -448,6 +391,51 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
         self.assertNotIn("<th>Idx</th>", problems_html)
         self.assertNotIn("<th class=\"problem-list-head\">Problem ID</th>", problems_html)
         self.assertIn("/problems/change-general", problems_html)
+
+    def test_contest_review_hides_verification_failure_reason(self) -> None:
+        contest_slug = f"review-reason-{uuid.uuid4().hex[:8]}"
+        self._create_contest(contest_slug)
+        workspace_service.grant_repo_access("alice/sample", "alice", "owner")
+        add_resp = contest_problems_add(
+            contest=contest_slug,
+            user="alice",
+            problem_slugs=["alice/sample"],
+            q="",
+        )
+        self.assertEqual(add_resp.status_code, 303)
+        ctx = workspace_service.workspace_context(
+            "alice/sample",
+            "alice",
+            include_recent=False,
+        )
+        verification_id = canonical_test_verification_id(
+            f"contest-review:{uuid.uuid4().hex}"
+        )
+        config.verification_service.begin_verification_record(
+            verification_id=verification_id,
+            problem_id=int(ctx["problem"]["id"]),
+            workspace_id=int(ctx["workspace"]["id"]),
+            signature="",
+            source_commit=str(ctx["workspace"]["head_commit"] or ""),
+            kind="all",
+            status="failed",
+        )
+        db_execute(
+            "UPDATE verifications SET fail_reason=? WHERE id=?",
+            ["private checker detail", verification_id],
+        )
+
+        overview = contest_overview_page(
+            _app_request(f"/contests/{contest_slug}/overview"),
+            contest_slug,
+            "alice",
+        )
+        html = overview.body.decode("utf-8", errors="replace")
+        self.assertRegex(
+            html,
+            r'Verification:\s*<span class="warn">failed \(stale\)</span>',
+        )
+        self.assertNotIn("private checker detail", html)
 
     def test_change_names_tl_ml_creates_per_problem_commit(self) -> None:
         problem_slug = f"alice/ui-bulk-{uuid.uuid4().hex[:8]}"

@@ -42,9 +42,9 @@ from app.impl.workspace.context_component_status import (
     interactor_status_context,
     validator_status_context,
 )
-from app.impl.workspace.context_verification import _verification_status_context
 from app.impl.workspace.problem_config import read_problem_config
-from app.service.repository.revision import git_commit_count, workspace_revision_info
+from app.service.problem.readiness import WorkspaceReadinessSubject
+from app.service.repository.revision import workspace_revision_info
 from app.service.problem.resource_limits import resource_limit_display
 
 _C = config.constants
@@ -211,26 +211,26 @@ def page_ctx(
             ctx['workspace_changes'] = empty_changes
     else:
         ctx['workspace_changes'] = empty_changes
+    readiness_subject: WorkspaceReadinessSubject = {
+        'problem_id': int(ctx['problem']['id']),
+        'workspace_id': int(ctx['workspace']['id']),
+        'workspace_path': workspace_path,
+        'head_commit': workspace_head,
+        'dirty': workspace_dirty,
+        'local_revision': ctx['workspace_revision']['local'],
+        'upstream_revision': ctx['workspace_revision']['upstream'],
+        'needs_update': bool(ctx['workspace_needs_update']),
+    }
     try:
-        ctx['verification_status'] = _verification_status_context(
-            int(ctx['problem']['id']),
-            int(ctx['user']['id']),
-            int(ctx['workspace']['id']),
-            workspace_path=workspace_path,
+        ctx['readiness'] = config.problem_readiness_service.readiness(
+            readiness_subject,
+            explain_verification=True,
         )
     except Exception:
-        ctx['verification_status'] = {
-            'mode': 'none',
-            'display': 'none',
-            'last_status': 'none',
-            'run_id': '',
-            'run_ids': '',
-            'verification_id': '',
-            'error': '',
-            'created_at': '',
-            'stale': False,
-            'stale_reason': '',
-        }
+        logger.exception("problem readiness projection failed for %s", problem)
+        ctx['readiness'] = config.problem_readiness_service.unavailable(
+            readiness_subject
+        )
     latest_verification = ctx.get('latest_artifact_verification')
     ctx['latest_verification_version'] = artifact_version_number(latest_verification['id']) if latest_verification else None
     ctx['nav_status'] = _build_problem_nav_status(ctx)
@@ -415,39 +415,31 @@ def _build_problem_nav_status(ctx: dict) -> dict[str, dict[str, object]]:
         solutions_text = solutions_count_display or solutions_display or 'missing'
     solutions_danger = solutions_mode != 'ready'
     nav['solutions'] = {'text': solutions_text, 'danger': solutions_danger}
-    verification_status = cast(dict[str, object], ctx['verification_status'])
-    verification_mode_raw = cast(str | None, verification_status.get('mode'))
-    verification_display_raw = cast(str | None, verification_status.get('display'))
-    verification_mode = verification_mode_raw or verification_display_raw or 'none'
-    verification_display = verification_display_raw or 'none'
+    readiness = cast(dict[str, object], ctx['readiness'])
+    verification_status = cast(dict[str, object], readiness['verification'])
+    verification_tone = cast(str, verification_status['tone'])
     nav['run'] = {
-        'text': verification_display,
-        'danger': verification_mode in {'none', 'failed'},
-        'warn': bool(verification_status.get('warn')),
+        'text': cast(str, verification_status['display']),
+        'danger': verification_tone == 'danger',
+        'warn': verification_tone == 'warning',
     }
-    workspace_row = cast(dict[str, object], ctx['workspace'])
     problem_row = cast(dict[str, object], ctx['problem'])
-    workspace_id = _to_int(_row_value(workspace_row, 'id', 0))
     problem_id = _to_int(_row_value(problem_row, 'id', 0))
-    workspace_path_raw = _row_value(workspace_row, 'path', '')
-    workspace_head_raw = _row_value(workspace_row, 'head_commit', '')
-    workspace_path_text = cast(str | None, workspace_path_raw) or ''
-    workspace_head = cast(str | None, workspace_head_raw) or ''
-    workspace_revision = cast(int | None, ctx.get('workspace_version'))
-    head_revision = workspace_revision if workspace_revision is not None and workspace_revision > 0 else None
-    if head_revision is None and workspace_path_text and workspace_head:
-        head_revision = git_commit_count(Path(workspace_path_text), workspace_head)
-    export_source_commit = ''
-    export_revision: int | None = None
-    if workspace_id > 0 and problem_id > 0 and workspace_path_text:
-        export_source_commit = config.export_service.latest_source_commit(problem_id)
-        if export_source_commit:
-            export_revision = git_commit_count(Path(workspace_path_text), export_source_commit)
-    if export_revision is not None and export_revision > 0:
-        export_outdated = head_revision is not None and head_revision > 0 and (export_revision != head_revision)
-        export_nav: dict[str, object] = {'text': f'built for v{export_revision}', 'danger': bool(export_outdated)}
+    package_status = cast(dict[str, object], readiness['package'])
+    package_state = cast(str, package_status['state'])
+    package_revision = cast(int | None, package_status['revision_number'])
+    if package_state == 'ready' and package_revision is not None:
+        package_text = f'ready on v{package_revision}'
+    elif package_state == 'required':
+        package_text = 'not built'
     else:
-        export_nav = {'text': 'none', 'danger': True}
+        package_text = 'blocked'
+    export_nav: dict[str, object] = {
+        'text': package_text,
+        'danger': package_state == 'blocked',
+        'warn': package_state == 'required',
+    }
+    export_source_commit = config.export_service.latest_source_commit(problem_id)
     if export_source_commit and problem_id > 0:
         current_export = config.export_service.latest_succeeded_export_job(
             problem_id,

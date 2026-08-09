@@ -54,7 +54,10 @@ from tests.ui_support import (
     workspace_service,
 )
 import app.impl.workspace.context_job as workspace_context_job
-import app.impl.workspace.context_verification as workspace_verification_module
+import app.service.problem.readiness as problem_readiness_module
+import app.service.verification.result_match as verification_result_module
+import app.service.verification.workspace_fingerprint as workspace_fingerprint_module
+from app.service.problem.readiness import WorkspaceReadinessSubject
 from app.service.verification.task_store import VerificationTaskStore
 from app.service.verification.types import Kind
 
@@ -72,6 +75,49 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
 
         async def close(self) -> None:
             return None
+
+    def _problem_readiness(
+        self,
+        *,
+        problem_id: int,
+        workspace_id: int,
+        workspace_path: Path,
+        dirty: bool = True,
+    ) -> dict[str, object]:
+        workspace_row = config.workspace_service.workspace_rows(
+            [problem_id],
+            config.workspace_service.known_user_id("alice"),
+        )[problem_id]
+        subject: WorkspaceReadinessSubject = {
+            "problem_id": problem_id,
+            "workspace_id": workspace_id,
+            "workspace_path": workspace_path,
+            "head_commit": workspace_row["head_commit"],
+            "dirty": dirty,
+            "local_revision": workspace_row["revision_local"],
+            "upstream_revision": workspace_row["revision_upstream"],
+            "needs_update": False,
+        }
+        package = {
+            "problem_id": problem_id,
+            "published_commit": workspace_row["head_commit"],
+            "published_revision_number": workspace_row["revision_upstream"],
+            "materialized_revision_number": None,
+            "materialization_id": "",
+            "status": "buildable",
+            "missing_reason": "Package not built",
+        }
+        with patch.object(
+            config.problem_package_service,
+            "published_readiness",
+            return_value=package,
+        ):
+            return dict(
+                config.problem_readiness_service.readiness(
+                    subject,
+                    explain_verification=True,
+                )
+            )
 
     @staticmethod
     def _verification_id_for_run(run_id: str) -> str:
@@ -1171,7 +1217,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             html,
             r'class="problem-section-tab-status section-tab-status-warn">\s*ok \(stale\)\s*</span>',
         )
-        self.assertIn("changed: verification inputs", html)
+        self.assertIn("verification inputs changed", html)
 
     def test_verification_sidebar_marks_stale_when_general_info_changes(self) -> None:
         problem = f"alice/verify-stale-general-{uuid.uuid4().hex[:8]}"
@@ -1216,7 +1262,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             html,
             r'class="problem-section-tab-status section-tab-status-warn">\s*failed \(stale\)\s*</span>',
         )
-        self.assertIn("changed: verification inputs", html)
+        self.assertIn("verification inputs changed", html)
 
     def test_verification_sidebar_prefers_current_workspace_signature_over_export_verification(self) -> None:
         problem = f"alice/verify-export-not-stale-{uuid.uuid4().hex[:8]}"
@@ -1224,7 +1270,6 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         ctx = workspace_service.workspace_context(problem, "alice", include_recent=False)
         problem_id = int(ctx["problem"]["id"])
         workspace_id = int(ctx["workspace"]["id"])
-        user_id = int(ctx["user"]["id"])
         current_signature = workspace_impl._verification_sources_signature(ws)
         workspace_verification_id = canonical_test_verification_id(f"ver-workspace-{uuid.uuid4().hex[:8]}")
         export_verification_id = canonical_test_verification_id(f"ver-export-{uuid.uuid4().hex[:8]}")
@@ -1247,13 +1292,13 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             created_at="2026-02-23T00:00:01Z",
         )
 
-        status = workspace_verification_module._verification_status_context(
-            problem_id,
-            user_id,
-            workspace_id,
+        readiness = self._problem_readiness(
+            problem_id=problem_id,
+            workspace_id=workspace_id,
             workspace_path=ws,
         )
-        self.assertEqual(status["mode"], "pass")
+        status = readiness["verification"]
+        self.assertEqual(status["result"], "ok")
         self.assertEqual(status["verification_id"], workspace_verification_id)
         self.assertFalse(status["stale"])
 
@@ -1263,9 +1308,8 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         ctx = workspace_service.workspace_context(problem, "alice", include_recent=False)
         problem_id = int(ctx["problem"]["id"])
         workspace_id = int(ctx["workspace"]["id"])
-        user_id = int(ctx["user"]["id"])
         verification_id = canonical_test_verification_id(f"ver-clean-manifest-{uuid.uuid4().hex[:8]}")
-        signature = workspace_verification_module._verification_sources_signature(ws)
+        signature = workspace_fingerprint_module.verification_sources_signature(ws)
         self._insert_stage_verification(
             verification_id=verification_id,
             problem_id=problem_id,
@@ -1273,12 +1317,13 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             signature=signature,
             status="ok",
         )
-        status = workspace_verification_module._verification_status_context(
-            problem_id,
-            user_id,
-            workspace_id,
+        readiness = self._problem_readiness(
+            problem_id=problem_id,
+            workspace_id=workspace_id,
             workspace_path=ws,
+            dirty=False,
         )
+        status = readiness["verification"]
         self.assertEqual(status["verification_id"], verification_id)
         self.assertFalse(status["stale"])
 
@@ -1289,9 +1334,8 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         ctx = workspace_service.workspace_context(problem, "alice", include_recent=False)
         problem_id = int(ctx["problem"]["id"])
         workspace_id = int(ctx["workspace"]["id"])
-        user_id = int(ctx["user"]["id"])
         verification_id = canonical_test_verification_id(f"ver-cache-{uuid.uuid4().hex[:8]}")
-        fingerprint = workspace_verification_module._verification_sources_fingerprint(ws)
+        fingerprint = workspace_fingerprint_module.verification_sources_fingerprint(ws)
 
         self._insert_stage_verification(
             verification_id=verification_id,
@@ -1300,7 +1344,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             signature=f"sig-{uuid.uuid4().hex}",
             status="ok",
         )
-        workspace_verification_module.remember_verification_fingerprint(
+        workspace_fingerprint_module.remember_verification_fingerprint(
             problem_id,
             workspace_id,
             fingerprint,
@@ -1308,16 +1352,16 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         )
 
         with patch.object(
-            workspace_verification_module,
-            "_verification_sources_signature",
+            problem_readiness_module,
+            "verification_sources_signature",
             side_effect=AssertionError("full hash should be skipped"),
         ) as full_hash:
-            status = workspace_verification_module._verification_status_context(
-                problem_id,
-                user_id,
-                workspace_id,
+            readiness = self._problem_readiness(
+                problem_id=problem_id,
+                workspace_id=workspace_id,
                 workspace_path=ws,
             )
+            status = readiness["verification"]
 
         full_hash.assert_not_called()
         self.assertEqual(status["verification_id"], verification_id)
@@ -1329,7 +1373,6 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         ctx = workspace_service.workspace_context(problem, "alice", include_recent=False)
         problem_id = int(ctx["problem"]["id"])
         workspace_id = int(ctx["workspace"]["id"])
-        user_id = int(ctx["user"]["id"])
         signature = workspace_impl._verification_sources_signature(ws)
         verification_id = canonical_test_verification_id(f"ver-fill-{uuid.uuid4().hex[:8]}")
 
@@ -1341,26 +1384,24 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             status="ok",
         )
 
-        first = workspace_verification_module._verification_status_context(
-            problem_id,
-            user_id,
-            workspace_id,
+        first = self._problem_readiness(
+            problem_id=problem_id,
+            workspace_id=workspace_id,
             workspace_path=ws,
-        )
+        )["verification"]
         self.assertEqual(first["verification_id"], verification_id)
         self.assertFalse(first["stale"])
 
         with patch.object(
-            workspace_verification_module,
-            "_verification_sources_signature",
+            problem_readiness_module,
+            "verification_sources_signature",
             side_effect=AssertionError("full hash should be cached after first match"),
         ) as full_hash:
-            second = workspace_verification_module._verification_status_context(
-                problem_id,
-                user_id,
-                workspace_id,
+            second = self._problem_readiness(
+                problem_id=problem_id,
+                workspace_id=workspace_id,
                 workspace_path=ws,
-            )
+            )["verification"]
 
         full_hash.assert_not_called()
         self.assertEqual(second["verification_id"], verification_id)
@@ -1372,7 +1413,6 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         ctx = workspace_service.workspace_context(problem, "alice", include_recent=False)
         problem_id = int(ctx["problem"]["id"])
         workspace_id = int(ctx["workspace"]["id"])
-        user_id = int(ctx["user"]["id"])
         verification_id = canonical_test_verification_id(f"ver-stale-cache-{uuid.uuid4().hex[:8]}")
 
         self._insert_stage_verification(
@@ -1383,26 +1423,24 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             status="ok",
         )
 
-        first = workspace_verification_module._verification_status_context(
-            problem_id,
-            user_id,
-            workspace_id,
+        first = self._problem_readiness(
+            problem_id=problem_id,
+            workspace_id=workspace_id,
             workspace_path=ws,
-        )
+        )["verification"]
         self.assertEqual(first["verification_id"], verification_id)
         self.assertTrue(first["stale"])
 
         with patch.object(
-            workspace_verification_module,
-            "_verification_sources_signature",
+            problem_readiness_module,
+            "verification_sources_signature",
             side_effect=AssertionError("stale fingerprint should cache current signature"),
         ) as full_hash:
-            second = workspace_verification_module._verification_status_context(
-                problem_id,
-                user_id,
-                workspace_id,
+            second = self._problem_readiness(
+                problem_id=problem_id,
+                workspace_id=workspace_id,
                 workspace_path=ws,
-            )
+            )["verification"]
 
         full_hash.assert_not_called()
         self.assertEqual(second["verification_id"], verification_id)
@@ -2326,6 +2364,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             summary_extra={
                 "status": "running",
                 "verification_id": verification_id,
+                "signature": workspace_impl._verification_sources_signature(ws),
                 "execution_model": "task-dag",
                 "task_graph": True,
                 "solution_count": 1,
@@ -2451,6 +2490,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             summary_extra={
                 "status": "running",
                 "verification_id": verification_id,
+                "signature": workspace_fingerprint_module.verification_sources_signature(ws),
                 "execution_model": "task-dag",
                 "task_graph": True,
                 "solution_count": 1,
@@ -4156,9 +4196,9 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         self.assertEqual(rej_reason, "")
 
     def test_status_rule_expected_display_uses_not_and_any_shorthand(self) -> None:
-        self.assertEqual(workspace_verification_module._status_rule_expected_display("accepted"), "AC")
-        self.assertEqual(workspace_verification_module._status_rule_expected_display("rejected"), "not AC")
-        self.assertEqual(workspace_verification_module._status_rule_expected_display("unknown"), "any")
+        self.assertEqual(verification_result_module.status_rule_expected_display("accepted"), "AC")
+        self.assertEqual(verification_result_module.status_rule_expected_display("rejected"), "not AC")
+        self.assertEqual(verification_result_module.status_rule_expected_display("unknown"), "any")
 
         rejected_all_ac = {
             "tests": [

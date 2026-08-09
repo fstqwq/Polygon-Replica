@@ -36,7 +36,7 @@ from app.impl.workspace.run_display import run_actual_failed_codes, verification
 from app.impl.workspace.context_job_helper import allocate_run_id
 from app.impl.workspace.context_operation import audit
 from app.impl.workspace.context_run_detail import normalize_run_id_token
-from app.impl.workspace.context_verification import _verification_solution_match
+from app.service.verification.result_match import verification_solution_match
 from app.impl.workspace.sanity_checks import (
     SANITY_FAILED,
     SANITY_PENDING,
@@ -528,7 +528,7 @@ def _logical_run_summary(
             "memory_kb_peak": max_memory_kb,
         },
     }
-    matched, completed, observed_pass, reason = _verification_solution_match(
+    matched, completed, observed_pass, reason = verification_solution_match(
         logical_run.expected_behavior,
         run_status,
         summary,

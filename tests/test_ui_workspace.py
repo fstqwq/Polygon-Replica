@@ -604,7 +604,14 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         assert_html_contract(
             self,
             html,
-            contains=("Workspace on <strong>", "Upstream", "Publish new revision"),
+            contains=(
+                "<h2>Review</h2>",
+                "Upstream: <strong>",
+                "Workspace: <strong",
+                "Verification",
+                "Package",
+                "Publish new revision",
+            ),
             excludes=(
                 "/problems/alice/sample/git/pull",
                 "My Files",
@@ -811,10 +818,44 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         self.assertNotIn('data-sudo-required="1"', html)
         self.assertIn('data-sudo-required="0"', html)
 
-    def test_workspace_page_omits_problem_readiness_overview(self) -> None:
+    def test_workspace_review_shows_verification_failure_reason(self) -> None:
+        ctx = workspace_service.workspace_context(
+            "alice/sample",
+            "alice",
+            include_recent=False,
+        )
+        problem_id = int(ctx["problem"]["id"])
+        workspace_id = int(ctx["workspace"]["id"])
+        verification_id = canonical_test_verification_id(
+            f"workspace-review:{uuid.uuid4().hex}"
+        )
+        config.verification_service.begin_verification_record(
+            verification_id=verification_id,
+            problem_id=problem_id,
+            workspace_id=workspace_id,
+            signature="",
+            source_commit=str(ctx["workspace"]["head_commit"] or ""),
+            kind="all",
+            status="failed",
+        )
+        db_execute(
+            "UPDATE verifications SET fail_reason=? WHERE id=?",
+            ["checker exited with code 1", verification_id],
+        )
+
         resp = workspace_page(_request("/problems/alice/sample/workspace"), "alice/sample", "alice")
         self.assertEqual(resp.status_code, 200)
         html = resp.body.decode("utf-8", errors="replace")
+        self.assertIn("<h2>Review</h2>", html)
+        self.assertRegex(
+            html,
+            r'Verification:\s*<span class="(?:danger|warn)">failed(?: \(stale\))?</span>',
+        )
+        self.assertIn("checker exited with code 1", html)
+        self.assertRegex(
+            html,
+            r'data-tooltip="[^"]*checker exited with code 1"',
+        )
         self.assertNotIn("Problem Readiness", html)
         self.assertNotIn("readiness-overview", html)
 

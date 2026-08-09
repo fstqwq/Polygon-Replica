@@ -50,6 +50,7 @@
     "test_maintenance_http.py",
     "test_polygon_package_preview.py",
     "test_preview.py",
+    "test_problem_readiness.py",
     "test_security.py",
     "test_smtp_config.py",
     "test_ui_auth.py",

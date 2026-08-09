@@ -8,7 +8,7 @@ from app.impl.workspace.context_operation import (
     run_solution_options_context,
     workspace_rel_file_exists,
 )
-from app.impl.workspace.context_verification import _verification_sources_signature
+from app.service.verification.workspace_fingerprint import verification_sources_signature
 from app.impl.workspace.verification_dag import run_workspace_verification_dag
 from app.service.problem.solution_metadata import normalize_expected_behavior
 from app.service.problem_package.service import MaterializationRow, PublishedRevision
@@ -81,7 +81,7 @@ def ensure_published_materialization(
             workspace_dirty=False,
             targets=targets,
             verification_id=verification_id,
-            signature=_verification_sources_signature(snapshot),
+            signature=verification_sources_signature(snapshot),
             source_commit=commit,
             kind=Kind.ALL.value,
             snapshot_root_override=snapshot,

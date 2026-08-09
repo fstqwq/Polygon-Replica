@@ -18,7 +18,7 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import TypedDict
+from typing import Literal, TypedDict
 
 from app.db import DB, now_iso
 from app.service.platform.fs.op import extract_git_archive
@@ -71,17 +71,16 @@ class MaterializationOperationBusy(RuntimeError):
     """The revision is already being validated, read, or rebuilt."""
 
 
-class ProblemReadiness(TypedDict):
+PublishedPackageStatus = Literal["ready", "buildable", "blocked"]
+
+
+class PublishedPackageReadiness(TypedDict):
     problem_id: int
     published_commit: str
     published_revision_number: int | None
-    materialized_commit: str
     materialized_revision_number: int | None
     materialization_id: str
-    archive_sha256: str
-    current_is_materialized: bool
-    status: str
-    statement_languages: list[str]
+    status: PublishedPackageStatus
     missing_reason: str
 
 
@@ -149,6 +148,12 @@ class ProblemPackageService:
         problem = self.store.problem(int(problem_id))
         if problem is None:
             raise ValueError("problem not found")
+        return self._published_revision_for_problem(problem)
+
+    def _published_revision_for_problem(
+        self,
+        problem: PublishedProblem,
+    ) -> PublishedRevision:
         bare_repo = self._bare_repo(problem)
         resolved = run_git(
             ["git", "-C", str(bare_repo), "rev-parse", "--verify", "refs/heads/main^{commit}"],
@@ -169,6 +174,25 @@ class ProblemPackageService:
             revision_number=int(count.stdout.strip()),
             bare_repo=bare_repo,
         )
+
+    def published_revisions_many(
+        self,
+        problem_ids: list[int],
+    ) -> tuple[dict[int, PublishedRevision], dict[int, str]]:
+        ids = list(dict.fromkeys(int(problem_id) for problem_id in problem_ids))
+        problems = self.store.problems(ids)
+        revisions: dict[int, PublishedRevision] = {}
+        errors: dict[int, str] = {}
+        for problem_id in ids:
+            problem = problems.get(problem_id)
+            if problem is None:
+                errors[problem_id] = "problem not found"
+                continue
+            try:
+                revisions[problem_id] = self._published_revision_for_problem(problem)
+            except (OSError, RuntimeError, ValueError):
+                errors[problem_id] = "no published Git revision"
+        return revisions, errors
 
     def revision_number(self, problem_id: int, source_commit: str) -> int | None:
         problem = self.store.problem(int(problem_id))
@@ -213,18 +237,6 @@ class ProblemPackageService:
             bare_repo=bare_repo,
         )
 
-    @staticmethod
-    def _statement_languages(bare_repo: Path, source_commit: str) -> list[str]:
-        result = run_git(
-            ["git", "-C", str(bare_repo), "ls-tree", "--name-only", f"{source_commit}:statement-sections"],
-            timeout=120,
-        )
-        if result.returncode != 0:
-            return []
-        languages = {line.strip() for line in result.stdout.splitlines() if line.strip()}
-        priority = {"english": 0, "chinese": 1}
-        return sorted(languages, key=lambda language: (priority.get(language, len(priority)), language))
-
     def published_config(self, revision: PublishedRevision) -> dict[str, object]:
         result = run_git(
             ["git", "-C", str(revision.bare_repo), "show", f"{revision.source_commit}:config/problem.json"],
@@ -237,100 +249,85 @@ class ProblemPackageService:
             raise ValueError("published problem config must be an object")
         return payload
 
-    def readiness(self, problem_id: int) -> ProblemReadiness:
-        try:
-            published = self.published_revision(int(problem_id))
-        except (OSError, RuntimeError, ValueError):
+    @staticmethod
+    def _published_readiness(
+        problem_id: int,
+        published: PublishedRevision | None,
+        materialization: MaterializationRow | None,
+        error: str = "",
+    ) -> PublishedPackageReadiness:
+        if published is None:
             return {
-                "problem_id": int(problem_id),
+                "problem_id": problem_id,
                 "published_commit": "",
                 "published_revision_number": None,
-                "materialized_commit": "",
                 "materialized_revision_number": None,
                 "materialization_id": "",
-                "archive_sha256": "",
-                "current_is_materialized": False,
                 "status": "blocked",
-                "statement_languages": [],
-                "missing_reason": "no published Git revision",
+                "missing_reason": error or "no published Git revision",
             }
-        materialization = self.store.materialization_for_revision(
-            int(problem_id), published.source_commit
-        )
         if materialization is None:
             return {
-                "problem_id": int(problem_id),
+                "problem_id": problem_id,
                 "published_commit": published.source_commit,
                 "published_revision_number": published.revision_number,
-                "materialized_commit": "",
                 "materialized_revision_number": None,
                 "materialization_id": "",
-                "archive_sha256": "",
-                "current_is_materialized": False,
                 "status": "buildable",
-                "statement_languages": self._statement_languages(
-                    published.bare_repo, published.source_commit
-                ),
-                "missing_reason": "Package required",
+                "missing_reason": "Package not built",
             }
         if materialization["status"] != "available":
             return {
-                "problem_id": int(problem_id),
+                "problem_id": problem_id,
                 "published_commit": published.source_commit,
                 "published_revision_number": published.revision_number,
-                "materialized_commit": materialization["source_commit"],
                 "materialized_revision_number": materialization["revision_number"],
                 "materialization_id": materialization["id"],
-                "archive_sha256": materialization["archive_sha256"],
-                "current_is_materialized": False,
                 "status": "blocked",
-                "statement_languages": self._statement_languages(
-                    published.bare_repo, published.source_commit
-                ),
-                "missing_reason": "Native materialization is unavailable; explicit rebuild required",
+                "missing_reason": "Package unavailable; rebuild required",
             }
-        validated = self.available_materialization(
-            int(problem_id), published.source_commit
-        )
-        if validated is None:
-            current = self.store.materialization_for_revision(
-                int(problem_id), published.source_commit
-            )
-            reason = (
-                    "Package is unavailable; explicit rebuild required"
-                if current is not None and current["status"] == "unavailable"
-                else "Package is currently busy"
-            )
-            return {
-                "problem_id": int(problem_id),
-                "published_commit": published.source_commit,
-                "published_revision_number": published.revision_number,
-                "materialized_commit": materialization["source_commit"],
-                "materialized_revision_number": materialization["revision_number"],
-                "materialization_id": materialization["id"],
-                "archive_sha256": materialization["archive_sha256"],
-                "current_is_materialized": False,
-                "status": "blocked",
-                "statement_languages": self._statement_languages(
-                    published.bare_repo, published.source_commit
-                ),
-                "missing_reason": reason,
-            }
-        materialization = validated
         return {
-            "problem_id": int(problem_id),
+            "problem_id": problem_id,
             "published_commit": published.source_commit,
             "published_revision_number": published.revision_number,
-            "materialized_commit": materialization["source_commit"],
             "materialized_revision_number": materialization["revision_number"],
             "materialization_id": materialization["id"],
-            "archive_sha256": materialization["archive_sha256"],
-            "current_is_materialized": True,
             "status": "ready",
-            "statement_languages": self._statement_languages(
-                published.bare_repo, materialization["source_commit"]
-            ),
             "missing_reason": "",
+        }
+
+    def published_readiness(
+        self,
+        problem_id: int,
+    ) -> PublishedPackageReadiness:
+        return self.published_readiness_many([int(problem_id)])[int(problem_id)]
+
+    def published_readiness_many(
+        self,
+        problem_ids: list[int],
+    ) -> dict[int, PublishedPackageReadiness]:
+        ids = list(dict.fromkeys(int(problem_id) for problem_id in problem_ids))
+        revisions, errors = self.published_revisions_many(ids)
+        materializations = self.store.materializations_for_revisions(
+            [
+                (problem_id, revision.source_commit)
+                for problem_id, revision in revisions.items()
+            ]
+        )
+        return {
+            problem_id: self._published_readiness(
+                problem_id,
+                revisions.get(problem_id),
+                (
+                    materializations.get(
+                        (problem_id, revisions[problem_id].source_commit)
+                    )
+                    if problem_id in revisions
+                    else None
+                ),
+                errors.get(problem_id, ""),
+            )
+            for problem_id in ids
         }
 
     def _archive_path(self, row: MaterializationRow) -> Path:

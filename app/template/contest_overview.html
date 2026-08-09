@@ -1,12 +1,13 @@
 {% extends "contest_base.html" %}
 {% from "_problem_slug_link.html" import problem_slug_link %}
+{% from "_problem_review.html" import problem_review %}
 {% block content %}
 <div class="page-title-inline contest-problems-title">
   <h1 class="page-title">Problems</h1>
   <p class="contest-package-summary">
     Packages:
-    <span>{{ package_ready_count }} ready</span>{% if package_buildable_count %},
-    <span class="warn">{{ package_buildable_count }} buildable</span>{% endif %}{% if package_blocked_count %},
+    <span>{{ package_ready_count }} ready</span>{% if package_required_count %},
+    <span class="warn">{{ package_required_count }} not built</span>{% endif %}{% if package_blocked_count %},
     <span class="danger">{{ package_blocked_count }} blocked</span>{% endif %}
   </p>
 </div>
@@ -56,10 +57,7 @@
         <span class="contest-problem-detail contest-problem-detail-summary danger">unavailable</span>
         {% endif %}
       </td>
-      <td class="contest-problem-revision-cell">
-        <span class="contest-problem-revision-line{{ ' revision-alert' if row.workspace_revision_warn else '' }}">{{ row.workspace_revision_display }}</span>
-        <span class="contest-problem-revision-line{% if row.package_revision_status == 'buildable' %} warn{% elif row.package_revision_status == 'blocked' %} danger{% endif %}">{{ row.package_revision_display }}</span>
-      </td>
+      <td class="contest-problem-review-cell">{{ problem_review(row.readiness) }}</td>
     </tr>
     {% endfor %}
   </table>
