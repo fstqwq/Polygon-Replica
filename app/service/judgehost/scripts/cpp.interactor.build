@@ -3,4 +3,6 @@
 set -e
 {{CPP_EXECUTABLE_BUILD_CMD}} {{SOURCE_NAME}} -std=gnu++20 -o interactor
 cp interactive.runjury run
-chmod +x run interactor pass-capture
+# DOMjudge downloads executable payload files read-only. pass-capture is already
+# marked executable by the get_files response, so the build must not mutate it.
+chmod +x run interactor

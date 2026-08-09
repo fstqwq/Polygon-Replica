@@ -393,6 +393,42 @@ class TestJudgehostScripts(unittest.TestCase):
         self.assertIn("Auto-generated build script for interactor by Polygon2DOMjudge", script_text)
         self.assertIn("g++ -Wall -DDOMJUDGE -O2 interactor.cpp -std=gnu++20 -o interactor", script_text)
         self.assertIn("cp interactive.runjury run", script_text)
+        self.assertIn("chmod +x run interactor", script_text)
+        self.assertNotIn("chmod +x run interactor pass-capture", script_text)
+
+    def test_domjudge_cpp_interactor_build_does_not_mutate_auxiliary_payload(self) -> None:
+        service = config.judgehost_task_service
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            build_script = root / "build"
+            build_script.write_bytes(
+                service.toolkit.cpp_executable_build_script(
+                    "interactor.cpp",
+                    role="interactor",
+                )
+            )
+            (root / "interactor.cpp").write_text(
+                "int main(){return 0;}\n",
+                encoding="utf-8",
+            )
+            (root / "interactive.runjury").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            pass_capture = root / "pass-capture"
+            pass_capture.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            os.chmod(build_script, 0o755)
+            os.chmod(pass_capture, 0o500)
+
+            result = subprocess.run(
+                [str(build_script)],
+                cwd=root,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(pass_capture.stat().st_mode & 0o777, 0o500)
+            self.assertTrue(os.access(root / "run", os.X_OK))
+            self.assertTrue(os.access(root / "interactor", os.X_OK))
 
     def test_pass_capture_reads_exact_historical_siblings_on_final_pass(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

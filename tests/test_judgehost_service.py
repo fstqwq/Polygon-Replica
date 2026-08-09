@@ -2231,6 +2231,8 @@ class TestJudgehostService(E2ETestBase):
         build_text = build_item.payload.path.read_text(encoding="utf-8", errors="replace")
         self.assertIn("-DDOMJUDGE", build_text)
         self.assertIn("interactor.cpp", build_text)
+        pass_capture_item = next(item for item in run_files if item.filename == "pass-capture")
+        self.assertTrue(pass_capture_item.is_executable)
 
 
 
