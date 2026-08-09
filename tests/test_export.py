@@ -102,6 +102,19 @@ class TestPublishedRevisionExport(E2ETestBase):
             revision,
             self._verification_builder(problem_id),
         )
+        self.assertRegex(materialization["verification_id"], r"^ver-[0-9a-f]+$")
+        build = db_fetch_one(
+            """SELECT verification_id FROM problem_package_builds
+               WHERE problem_id=? AND source_commit=?""",
+            [problem_id, commit],
+        )
+        verification = db_fetch_one(
+            "SELECT id FROM verifications WHERE id=?",
+            [materialization["verification_id"]],
+        )
+        self.assertIsNotNone(build)
+        self.assertIsNotNone(verification)
+        self.assertEqual(str(build["verification_id"]), materialization["verification_id"])
         return problem_id, commit, materialization
 
     def test_latest_succeeded_export_job_matches_commit_and_type(self) -> None:
@@ -179,6 +192,10 @@ class TestPublishedRevisionExport(E2ETestBase):
             self.assertNotIn("dirty-only.txt", names)
             manifest = json.loads(package.read("test_data/manifest.json"))
             self.assertEqual(manifest["source_commit"], commit)
+            self.assertEqual(
+                manifest["verification"]["id"],
+                materialization["verification_id"],
+            )
             self.assertEqual(package.read("test_data/tests/001/input"), b"1\n")
             self.assertEqual(package.read("test_data/tests/001/answer"), b"2\n")
 
@@ -272,6 +289,8 @@ class TestPublishedRevisionExport(E2ETestBase):
         )
 
         self.assertEqual(rebuilt["id"], first["id"])
+        self.assertNotEqual(rebuilt["verification_id"], first["verification_id"])
+        self.assertRegex(rebuilt["verification_id"], r"^ver-[0-9a-f]+$")
         self.assertIsNone(db_fetch_one("SELECT id FROM exports WHERE id=?", [export_id]))
         with config.problem_package_service.open_reader(rebuilt["id"]) as native:
             answer = native.payload(native.manifest["tests"][0], "answer")

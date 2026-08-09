@@ -18,6 +18,7 @@ from app.service.problem.test_spec import (
 )
 from app.service.repository.workspace import WorkspaceService
 from app.service.verification.types import Kind
+from app.service.verification.identity import canonical_verification_id
 
 from app.service.verification.read_model import (
     logical_run_ids,
@@ -755,6 +756,7 @@ class VerificationService:
         status: str,
         detail: dict[str, object] | None = None,
     ) -> None:
+        canonical_verification_id(verification_id)
         self._verification_store.create_or_update_record(
             verification_id=verification_id,
             problem_id=int(problem_id),
@@ -1022,7 +1024,11 @@ class VerificationService:
         assert snapshot_root is not None
         manifest = verification_manifest(snapshot_root)
         signature = manifest.signature
-        target_verification_id = verification_id or self._verification_store.allocate_id()
+        target_verification_id = (
+            canonical_verification_id(verification_id)
+            if verification_id
+            else self._verification_store.allocate_id()
+        )
         run_workspace_verification_dag(
             problem,
             username,

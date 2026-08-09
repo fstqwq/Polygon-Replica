@@ -195,6 +195,7 @@ class RuntimeConfig:
             self.db,
             self.settings,
             artifact_file_resolver=self.runtime_blob_store.descriptor,
+            verification_id_allocator=self.verification_service.allocate_verification_id,
         )
         self.export_service = ExportService(
             self.db,

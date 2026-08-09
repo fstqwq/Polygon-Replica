@@ -89,26 +89,6 @@ class ProblemPackageStore:
         )
         return None if row is None else _materialization(row)
 
-    def latest_available(self, problem_id: int) -> MaterializationRow | None:
-        row = self.db.fetch_one(
-            """
-            SELECT * FROM problem_package_materializations
-            WHERE problem_id=? AND status='available'
-            ORDER BY revision_number DESC,created_at DESC LIMIT 1
-            """,
-            [int(problem_id)],
-        )
-        return None if row is None else _materialization(row)
-
-    def available_revisions(self, problem_id: int) -> list[MaterializationRow]:
-        rows = self.db.fetch_all(
-            """SELECT * FROM problem_package_materializations
-               WHERE problem_id=? AND status='available'
-               ORDER BY revision_number DESC,created_at DESC""",
-            [int(problem_id)],
-        )
-        return [_materialization(row) for row in rows]
-
     def all_available_materializations(self) -> list[MaterializationRow]:
         rows = self.db.fetch_all(
             """SELECT * FROM problem_package_materializations

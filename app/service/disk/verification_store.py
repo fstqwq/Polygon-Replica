@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-import secrets
 from typing import TypedDict
 
 from app.db import DB, now_iso
 from app.service.platform.error_text import bounded_display_text
+from app.service.verification.identity import new_verification_id
 from app.service.verification.types import ACTIVE, Kind, Status
 
 
@@ -46,10 +46,17 @@ class VerificationStore:
 
     def allocate_id(self) -> str:
         for _ in range(8):
-            candidate = f"ver-{secrets.token_hex(6)}"
-            if self.db.fetch_one("SELECT id FROM verifications WHERE id=?", [candidate]) is None:
+            candidate = new_verification_id()
+            collision = self.db.fetch_one(
+                """SELECT id FROM verifications WHERE id=?
+                   UNION ALL
+                   SELECT verification_id AS id FROM problem_package_builds
+                   WHERE verification_id=? LIMIT 1""",
+                [candidate, candidate],
+            )
+            if collision is None:
                 return candidate
-        return f"ver-{secrets.token_hex(8)}"
+        raise RuntimeError("could not allocate verification id")
 
     def _record_row(self, row: dict[str, object]) -> VerificationRecordRow:
         workspace_id_raw = row["workspace_id"]

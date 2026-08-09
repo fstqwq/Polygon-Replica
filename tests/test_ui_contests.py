@@ -57,7 +57,7 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
     seed_primary_workspace = False
     seed_default_workspace = True
 
-    def test_package_revision_display_separates_current_stale_and_missing(self) -> None:
+    def test_package_revision_display_separates_ready_buildable_and_blocked(self) -> None:
         base = {
             "problem_id": 7,
             "published_commit": "a" * 40,
@@ -67,35 +67,40 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
             "materialization_id": "mat-current",
             "archive_sha256": "b" * 64,
             "current_is_materialized": True,
+            "status": "ready",
             "statement_languages": ["english"],
             "missing_reason": "",
         }
         self.assertEqual(
             package_revision_display(base),
-            ("Package on v3", "current"),
+            ("Native ready on v3", "ready"),
         )
-        stale = {
-            **base,
-            "materialized_commit": "c" * 40,
-            "materialized_revision_number": 2,
-            "current_is_materialized": False,
-        }
-        self.assertEqual(
-            package_revision_display(stale),
-            ("Package on v2", "stale"),
-        )
-        missing = {
+        buildable = {
             **base,
             "materialized_commit": "",
             "materialized_revision_number": None,
             "materialization_id": "",
             "archive_sha256": "",
             "current_is_materialized": False,
+            "status": "buildable",
+        }
+        self.assertEqual(
+            package_revision_display(buildable),
+            ("Native pending for v3", "buildable"),
+        )
+        blocked = {
+            **base,
+            "materialized_commit": "",
+            "materialized_revision_number": None,
+            "materialization_id": "",
+            "archive_sha256": "",
+            "current_is_materialized": False,
+            "status": "blocked",
             "missing_reason": "no complete Native materialization",
         }
         self.assertEqual(
-            package_revision_display(missing),
-            ("Package none", "missing"),
+            package_revision_display(blocked),
+            ("Native blocked on v3", "blocked"),
         )
 
     def test_contest_problem_rows_batch_acl_skips_inaccessible_workspaces(self) -> None:
@@ -127,6 +132,7 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
             "materialization_id": "",
             "archive_sha256": "",
             "current_is_materialized": False,
+            "status": "blocked",
             "statement_languages": [],
             "missing_reason": "no published Git revision",
         }
@@ -155,7 +161,7 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
         package_readiness.assert_not_called()
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["workspace_revision_display"], "no problem access")
-        self.assertEqual(rows[0]["package_revision_status"], "missing")
+        self.assertEqual(rows[0]["package_revision_status"], "blocked")
         self.assertEqual(rows[0]["package_revision_display"], "Package unavailable")
         self.assertNotIn("revision_display", rows[0])
 
@@ -332,10 +338,10 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
         self.assertIn('class="danger">missing</span>', overview_html)
         self.assertIn("Packages:", overview_html)
         self.assertIn("0 ready", overview_html)
-        self.assertIn("1 none", overview_html)
-        self.assertNotIn(" stale</span>", overview_html)
+        self.assertIn("1 blocked", overview_html)
+        self.assertNotIn(" buildable</span>", overview_html)
         self.assertNotIn(" available</span>", overview_html)
-        self.assertIn("Package none", overview_html)
+        self.assertIn("Native blocked", overview_html)
         self.assertIn("Workspace on v", overview_html)
 
         problems_page = contest_problems_page(

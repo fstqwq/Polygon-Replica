@@ -80,6 +80,7 @@ class ProblemReadiness(TypedDict):
     materialization_id: str
     archive_sha256: str
     current_is_materialized: bool
+    status: str
     statement_languages: list[str]
     missing_reason: str
 
@@ -92,11 +93,13 @@ class ProblemPackageService:
         db: DB,
         settings: Settings,
         artifact_file_resolver: Callable[[str], PayloadFile | None],
+        verification_id_allocator: Callable[[], str],
     ) -> None:
         self.db = db
         self.settings = settings
         self.store = ProblemPackageStore(db)
         self._artifact_file_resolver = artifact_file_resolver
+        self._verification_id_allocator = verification_id_allocator
         self._locks_guard = threading.Lock()
         self._build_locks: dict[tuple[int, str], threading.RLock] = {}
 
@@ -183,6 +186,33 @@ class ProblemPackageService:
             return None
         return int(count.stdout.strip())
 
+    def published_revision_at(
+        self,
+        problem_id: int,
+        source_commit: str,
+        revision_number: int,
+    ) -> PublishedRevision:
+        problem = self.store.problem(int(problem_id))
+        if problem is None:
+            raise ValueError("problem not found")
+        bare_repo = self._bare_repo(problem)
+        resolved = run_git(
+            ["git", "-C", str(bare_repo), "rev-parse", "--verify", f"{source_commit}^{{commit}}"],
+            timeout=120,
+        )
+        commit = resolved.stdout.strip()
+        if resolved.returncode != 0 or commit != source_commit:
+            raise ValueError("frozen published revision is unavailable")
+        derived_revision = self.revision_number(int(problem_id), source_commit)
+        if derived_revision != int(revision_number):
+            raise ValueError("frozen Git revision number changed")
+        return PublishedRevision(
+            problem=problem,
+            source_commit=source_commit,
+            revision_number=int(revision_number),
+            bare_repo=bare_repo,
+        )
+
     @staticmethod
     def _statement_languages(bare_repo: Path, source_commit: str) -> list[str]:
         result = run_git(
@@ -220,10 +250,13 @@ class ProblemPackageService:
                 "materialization_id": "",
                 "archive_sha256": "",
                 "current_is_materialized": False,
+                "status": "blocked",
                 "statement_languages": [],
                 "missing_reason": "no published Git revision",
             }
-        materialization = self.latest_available_materialization(int(problem_id))
+        materialization = self.store.materialization_for_revision(
+            int(problem_id), published.source_commit
+        )
         if materialization is None:
             return {
                 "problem_id": int(problem_id),
@@ -234,11 +267,56 @@ class ProblemPackageService:
                 "materialization_id": "",
                 "archive_sha256": "",
                 "current_is_materialized": False,
+                "status": "buildable",
                 "statement_languages": self._statement_languages(
                     published.bare_repo, published.source_commit
                 ),
-                "missing_reason": "no complete Native materialization; Export this problem first",
+                "missing_reason": "published revision will be materialized by Contest Build",
             }
+        if materialization["status"] != "available":
+            return {
+                "problem_id": int(problem_id),
+                "published_commit": published.source_commit,
+                "published_revision_number": published.revision_number,
+                "materialized_commit": materialization["source_commit"],
+                "materialized_revision_number": materialization["revision_number"],
+                "materialization_id": materialization["id"],
+                "archive_sha256": materialization["archive_sha256"],
+                "current_is_materialized": False,
+                "status": "blocked",
+                "statement_languages": self._statement_languages(
+                    published.bare_repo, published.source_commit
+                ),
+                "missing_reason": "Native materialization is unavailable; explicit rebuild required",
+            }
+        validated = self.available_materialization(
+            int(problem_id), published.source_commit
+        )
+        if validated is None:
+            current = self.store.materialization_for_revision(
+                int(problem_id), published.source_commit
+            )
+            reason = (
+                "Native materialization is unavailable; explicit rebuild required"
+                if current is not None and current["status"] == "unavailable"
+                else "Native materialization is currently busy"
+            )
+            return {
+                "problem_id": int(problem_id),
+                "published_commit": published.source_commit,
+                "published_revision_number": published.revision_number,
+                "materialized_commit": materialization["source_commit"],
+                "materialized_revision_number": materialization["revision_number"],
+                "materialization_id": materialization["id"],
+                "archive_sha256": materialization["archive_sha256"],
+                "current_is_materialized": False,
+                "status": "blocked",
+                "statement_languages": self._statement_languages(
+                    published.bare_repo, published.source_commit
+                ),
+                "missing_reason": reason,
+            }
+        materialization = validated
         return {
             "problem_id": int(problem_id),
             "published_commit": published.source_commit,
@@ -247,8 +325,11 @@ class ProblemPackageService:
             "materialized_revision_number": materialization["revision_number"],
             "materialization_id": materialization["id"],
             "archive_sha256": materialization["archive_sha256"],
-            "current_is_materialized": materialization["source_commit"] == published.source_commit,
-            "statement_languages": self._statement_languages(published.bare_repo, materialization["source_commit"]),
+            "current_is_materialized": True,
+            "status": "ready",
+            "statement_languages": self._statement_languages(
+                published.bare_repo, materialization["source_commit"]
+            ),
             "missing_reason": "",
         }
 
@@ -316,13 +397,6 @@ class ProblemPackageService:
             self._invalidate_materialization(row, str(exc))
             return None
         return row
-
-    def latest_available_materialization(self, problem_id: int) -> MaterializationRow | None:
-        for row in self.store.available_revisions(int(problem_id)):
-            available = self.available_materialization(int(problem_id), row["source_commit"])
-            if available is not None:
-                return available
-        return None
 
     @staticmethod
     def _copy_source_tree(source: Path, target: Path) -> None:
@@ -556,7 +630,7 @@ class ProblemPackageService:
         invalidate_exports: bool,
     ) -> MaterializationRow:
         build_id = f"pb-{uuid.uuid4().hex}"
-        verification_id = f"pv-{uuid.uuid4().hex}"
+        verification_id = self._verification_id_allocator()
         build = self.store.create_or_retry_build(
             build_id=build_id,
             problem_id=int(revision.problem["id"]),
@@ -696,6 +770,10 @@ class ProblemPackageService:
                 raise ValueError("Native manifest revision does not match materialization")
             if manifest["source_digest"] != row["source_digest"]:
                 raise ValueError("Native manifest source digest does not match materialization")
+            if manifest["verification"]["id"] != row["verification_id"]:
+                raise ValueError(
+                    "Native manifest verification does not match materialization"
+                )
             validate_manifest_files(extraction, manifest)
             yield NativePackageReader(
                 materialization=row,

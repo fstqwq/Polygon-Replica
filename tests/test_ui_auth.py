@@ -1404,7 +1404,7 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
                     "judged_case_count": 42,
                     "last_judging_at": raw_last_judging,
                     "last_judging": {
-                        "verification_id": "ver-0123456789abcdef",
+                        "verification_id": "ver-123456789abcdef",
                         "problem_slug": "alice/sample",
                         "task_kind": "solution-run",
                         "source_label": "ac.cpp",
@@ -1437,7 +1437,7 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         self.assertIn(config.templates.env.filters["local_time"](raw_last_judging), html)
         self.assertNotIn(raw_last_judging, html)
         self.assertIn(
-            'href="/problems/alice/sample/run/details?verification_id=ver-0123456789abcdef"',
+            'href="/problems/alice/sample/run/details?verification_id=ver-123456789abcdef"',
             html,
         )
         self.assertIn("Solution Run · <code>alice/sample</code> · ac.cpp / 001.in", html)

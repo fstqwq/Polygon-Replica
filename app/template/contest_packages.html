@@ -42,8 +42,8 @@
     <article class="contest-build-card">
       <h3>ICPC Package Bundle</h3>
       <p class="muted">
-        Build one ICPC ZIP per problem, a <code>manifest.json</code>, and an outer bundle
-        archive from the frozen Native revisions selected when the job starts.
+        Freeze every published problem revision, materialize missing Native packages,
+        then build one ICPC ZIP per problem and an outer bundle archive.
       </p>
       <form method="post" action="/contests/{{ ctx.contest.slug }}/packages/build/start">
         <input type="hidden" name="outputs" value="icpc_bundle" />

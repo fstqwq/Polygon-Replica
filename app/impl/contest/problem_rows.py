@@ -24,7 +24,7 @@ from app.service.verification.runtime import (
 
 _C = config.constants
 
-PackageRevisionStatus = Literal["current", "stale", "missing"]
+PackageRevisionStatus = Literal["ready", "buildable", "blocked"]
 
 
 class ContestProblemDisplayRow(TypedDict):
@@ -74,13 +74,15 @@ class ContestProblemDisplayRow(TypedDict):
 def package_revision_display(
     readiness: ProblemReadiness,
 ) -> tuple[str, PackageRevisionStatus]:
-    materialized_revision = readiness["materialized_revision_number"]
-    if materialized_revision is None:
-        return "Package none", "missing"
-    status: PackageRevisionStatus = (
-        "current" if readiness["current_is_materialized"] else "stale"
-    )
-    return f"Package on v{materialized_revision}", status
+    published_revision = readiness["published_revision_number"]
+    status = readiness["status"]
+    if status == "ready":
+        return f"Native ready on v{published_revision}", "ready"
+    if status == "buildable":
+        return f"Native pending for v{published_revision}", "buildable"
+    if published_revision is None:
+        return "Native blocked", "blocked"
+    return f"Native blocked on v{published_revision}", "blocked"
 
 
 def _inaccessible_package_readiness(problem_id: int) -> ProblemReadiness:
@@ -93,6 +95,7 @@ def _inaccessible_package_readiness(problem_id: int) -> ProblemReadiness:
         "materialization_id": "",
         "archive_sha256": "",
         "current_is_materialized": False,
+        "status": "blocked",
         "statement_languages": [],
         "missing_reason": "problem access required",
     }
@@ -123,7 +126,7 @@ def contest_problem_rows(
         else:
             readiness = _inaccessible_package_readiness(problem_id)
             package_display = "Package unavailable"
-            package_status = "missing"
+            package_status = "blocked"
 
         workspace_revision_display = "unavailable"
         workspace_revision_warn = False

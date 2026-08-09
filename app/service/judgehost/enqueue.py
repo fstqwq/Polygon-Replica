@@ -9,11 +9,12 @@ from pathlib import Path
 from app.db import now_iso
 from app.service.judgehost.domjudge.cache import domjudge_source_hash
 from app.service.judgehost.limits import compile_output_kb, run_output_kb
-from app.service.judgehost.identity import canonical_verification_id, compile_key
+from app.service.judgehost.identity import compile_key
 from app.service.judgehost.shared import _RUN_ID_RE, domjudge_lower_text, domjudge_path_name, domjudge_text
 from app.service.judgehost.runtime import domjudge_bool, domjudge_parse_int
 from app.service.platform.hashing import domjudge_executable_hash, sha256_hex_json
 from app.service.platform.runtime_blob_store import PayloadFile, RuntimeBlobStore
+from app.service.verification.identity import canonical_verification_id
 from app.service.run.runtime import RUN_TEST_NAME_RE
 from app.service.platform.testlib_source import workspace_testlib_header
 

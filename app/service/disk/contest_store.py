@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import sqlite3
-from typing import Literal, TypedDict
+from typing import TypedDict
 
 from app.main_util import problem_slug_leaf
-from app.db import DB
+from app.db import DB, is_sqlite_locked_error
+from app.service.contest.model import ContestBuildFreezeResult, ContestBuildRevision
 
 
 class ContestContextRecord(TypedDict):
@@ -79,13 +80,6 @@ class ContestAttachmentRecord(TypedDict):
     key: str
     rel_path: str
     created_at: str
-
-
-class ContestBuildFreezeResult(TypedDict):
-    outcome: Literal["created", "already_running", "not_ready"]
-    job_id: str
-    contest_slug: str
-    missing_materializations: list[str]
 
 
 class ContestDiskStore:
@@ -681,6 +675,7 @@ class ContestDiskStore:
         actor_user_id: int,
         job_type: str,
         created_at: str,
+        revisions: list[ContestBuildRevision],
     ) -> ContestBuildFreezeResult:
         def transaction(connection) -> ContestBuildFreezeResult:
             contest = connection.execute(
@@ -700,34 +695,69 @@ class ContestDiskStore:
                     "outcome": "already_running",
                     "job_id": str(active["id"]),
                     "contest_slug": str(contest["slug"]),
-                    "missing_materializations": [],
+                    "blocked_problems": [],
                 }
             rows = connection.execute(
-                """SELECT
-                       cp.id AS contest_problem_id,cp.position,cp.label,
-                       cp.problem_id,cp.statement_folder,p.slug AS problem_slug,
-                       m.id AS materialization_id,m.source_commit,m.revision_number,
-                       m.archive_sha256
+                """SELECT cp.id AS contest_problem_id,cp.position,cp.label,
+                       cp.problem_id,cp.statement_folder,p.slug AS problem_slug
                    FROM contest_problems cp
                    JOIN problems p ON p.id=cp.problem_id
-                   LEFT JOIN problem_package_materializations m ON m.id=(
-                       SELECT candidate.id
-                       FROM problem_package_materializations candidate
-                       WHERE candidate.problem_id=cp.problem_id
-                         AND candidate.status='available'
-                       ORDER BY candidate.revision_number DESC,candidate.created_at DESC
-                       LIMIT 1
-                   )
                    WHERE cp.contest_id=?
                    ORDER BY cp.position,cp.id""",
                 [int(contest_id)],
             ).fetchall()
-            missing = [
-                str(row["problem_slug"])
+            roster = [
+                (
+                    int(row["contest_problem_id"]),
+                    int(row["position"]),
+                    str(row["label"]),
+                    int(row["problem_id"]),
+                    str(row["statement_folder"]),
+                    str(row["problem_slug"]),
+                )
                 for row in rows
-                if row["materialization_id"] is None
             ]
-            status = "failed" if missing else "running"
+            expected_roster = [
+                (
+                    int(row["contest_problem_id"]),
+                    int(row["position"]),
+                    str(row["label"]),
+                    int(row["problem_id"]),
+                    str(row["statement_folder"]),
+                    str(row["problem_slug"]),
+                )
+                for row in revisions
+            ]
+            if roster != expected_roster:
+                return {
+                    "outcome": "roster_changed",
+                    "job_id": "",
+                    "contest_slug": str(contest["slug"]),
+                    "blocked_problems": [],
+                }
+            blocked: list[str] = []
+            materializations: dict[int, tuple[str | None, str | None]] = {}
+            for revision in revisions:
+                materialization = connection.execute(
+                    """SELECT id,status,archive_sha256
+                       FROM problem_package_materializations
+                       WHERE problem_id=? AND source_commit=?""",
+                    [int(revision["problem_id"]), str(revision["source_commit"])],
+                ).fetchone()
+                if materialization is not None and str(materialization["status"]) == "unavailable":
+                    blocked.append(str(revision["problem_slug"]))
+                    continue
+                materializations[int(revision["contest_problem_id"])] = (
+                    None if materialization is None else str(materialization["id"]),
+                    None if materialization is None else str(materialization["archive_sha256"]),
+                )
+            if blocked:
+                return {
+                    "outcome": "not_ready",
+                    "job_id": "",
+                    "contest_slug": str(contest["slug"]),
+                    "blocked_problems": blocked,
+                }
             connection.execute(
                 """INSERT INTO contest_jobs(
                        id,contest_id,actor_user_id,job_type,status,
@@ -738,41 +768,62 @@ class ContestDiskStore:
                     int(contest_id),
                     int(actor_user_id),
                     job_type,
-                    status,
+                    "running",
                     int(contest["source_generation"]),
                     created_at,
-                    created_at if missing else None,
+                    None,
                 ],
             )
-            if not missing:
-                for row in rows:
-                    connection.execute(
-                        """INSERT INTO contest_build_items(
-                               job_id,contest_problem_id,position,label,problem_id,
-                               statement_folder,source_commit,revision_number,
-                               materialization_id,archive_sha256
-                           ) VALUES(?,?,?,?,?,?,?,?,?,?)""",
-                        [
-                            job_id,
-                            int(row["contest_problem_id"]),
-                            int(row["position"]),
-                            str(row["label"]),
-                            int(row["problem_id"]),
-                            str(row["statement_folder"]),
-                            str(row["source_commit"]),
-                            int(row["revision_number"]),
-                            str(row["materialization_id"]),
-                            str(row["archive_sha256"]),
-                        ],
-                    )
+            for revision in revisions:
+                materialization_id, archive_sha256 = materializations[
+                    int(revision["contest_problem_id"])
+                ]
+                connection.execute(
+                    """INSERT INTO contest_build_items(
+                           job_id,contest_problem_id,position,label,problem_id,
+                           statement_folder,source_commit,revision_number,
+                           materialization_id,archive_sha256
+                       ) VALUES(?,?,?,?,?,?,?,?,?,?)""",
+                    [
+                        job_id,
+                        int(revision["contest_problem_id"]),
+                        int(revision["position"]),
+                        str(revision["label"]),
+                        int(revision["problem_id"]),
+                        str(revision["statement_folder"]),
+                        str(revision["source_commit"]),
+                        int(revision["revision_number"]),
+                        materialization_id,
+                        archive_sha256,
+                    ],
+                )
             return {
-                "outcome": "not_ready" if missing else "created",
+                "outcome": "created",
                 "job_id": job_id,
                 "contest_slug": str(contest["slug"]),
-                "missing_materializations": missing,
+                "blocked_problems": [],
             }
 
-        return self.db.write_transaction(transaction)
+        with self.db.conn() as connection:
+            connection.execute("PRAGMA busy_timeout=0")
+            try:
+                connection.execute("BEGIN IMMEDIATE")
+            except sqlite3.OperationalError as exc:
+                if not is_sqlite_locked_error(exc):
+                    raise
+                return {
+                    "outcome": "busy",
+                    "job_id": "",
+                    "contest_slug": "",
+                    "blocked_problems": [],
+                }
+            try:
+                result = transaction(connection)
+                connection.commit()
+                return result
+            except Exception:
+                connection.rollback()
+                raise
 
     def bump_source_generation(self, contest_id: int) -> int:
         def transaction(connection) -> int:
@@ -888,11 +939,62 @@ class ContestDiskStore:
                 "statement_folder": str(row["statement_folder"]),
                 "source_commit": str(row["source_commit"]),
                 "revision_number": int(row["revision_number"]),
-                "materialization_id": str(row["materialization_id"]),
-                "archive_sha256": str(row["archive_sha256"]),
+                "materialization_id": str(row["materialization_id"] or ""),
+                "archive_sha256": str(row["archive_sha256"] or ""),
             }
             for row in rows
         ]
+
+    def bind_build_item_materialization(
+        self,
+        *,
+        job_id: str,
+        contest_problem_id: int,
+        problem_id: int,
+        source_commit: str,
+        materialization_id: str,
+        archive_sha256: str,
+    ) -> None:
+        def transaction(connection) -> None:
+            materialization = connection.execute(
+                """SELECT problem_id,source_commit,archive_sha256,status
+                   FROM problem_package_materializations WHERE id=?""",
+                [materialization_id],
+            ).fetchone()
+            if materialization is None or str(materialization["status"]) != "available":
+                raise ValueError("Native materialization is unavailable")
+            if (
+                int(materialization["problem_id"]) != int(problem_id)
+                or str(materialization["source_commit"]) != source_commit
+                or str(materialization["archive_sha256"]) != archive_sha256
+            ):
+                raise ValueError("Native materialization does not match frozen revision")
+            cursor = connection.execute(
+                """UPDATE contest_build_items
+                   SET materialization_id=?,archive_sha256=?
+                   WHERE job_id=? AND contest_problem_id=?
+                     AND problem_id=? AND source_commit=?
+                     AND (
+                         (materialization_id IS NULL AND archive_sha256 IS NULL)
+                         OR (materialization_id=? AND archive_sha256=?)
+                     )""",
+                [
+                    materialization_id,
+                    archive_sha256,
+                    job_id,
+                    int(contest_problem_id),
+                    int(problem_id),
+                    source_commit,
+                    materialization_id,
+                    archive_sha256,
+                ],
+            )
+            if cursor.rowcount != 1:
+                raise ValueError(
+                    "Contest build item Native identity no longer matches its frozen value"
+                )
+
+        self.db.write_transaction(transaction)
 
     def artifact_rows(self, contest_id: int, *, limit: int) -> list[ContestArtifactRecord]:
         rows = self.db.fetch_all(

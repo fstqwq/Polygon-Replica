@@ -10,7 +10,8 @@ from fastapi.responses import JSONResponse, PlainTextResponse, Response
 from app.impl.agent.shared import require_agent_token, workspace_context_for_identity
 from app.impl.auth.shared import json_error_response
 from app.impl.runtime.config import config
-from app.impl.workspace.context_job import build_full_verification_targets, start_export_job, start_verification_job
+from app.impl.workspace.context_job import start_export_job, start_verification_job
+from app.impl.workspace.published_materialization import build_full_verification_targets
 from app.impl.workspace.context_job_helper import allocate_run_id, allocate_verification_id
 from app.impl.workspace.context_operation import audit
 from app.impl.workspace.context_run_detail import normalize_run_test_name_token

@@ -28,6 +28,7 @@ from app.impl.problem.merge_op import merge_apply, merge_compare, merge_page
 from tests.assertion_helpers import assert_html_contract
 from tests.package_builders import polygon_contest_package, polygon_problem_package
 from tests.common import E2ETestBase
+from tests.identity_helpers import canonical_test_verification_id
 
 from tests.ui_support import (
     AUTH_COOKIE_NAME,
@@ -288,7 +289,9 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         )
         self.assertIsNotNone(workspace_row)
         workspace_id = int(workspace_row["id"])
-        verification_id = f"ver-delete-history-{uuid.uuid4().hex[:8]}"
+        verification_id = canonical_test_verification_id(
+            f"delete-history:{uuid.uuid4().hex}"
+        )
         config.verification_service.begin_verification_record(
             verification_id=verification_id,
             problem_id=int(row_before["id"]),

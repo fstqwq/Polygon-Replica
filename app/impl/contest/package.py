@@ -156,16 +156,26 @@ def contest_packages_build_start(
         contest_id=contest_id,
         contest_slug=str(ctx["contest"]["slug"]),
         actor_user_id=int(ctx["user"]["id"]),
+        actor_username=user,
         outputs=requested_outputs,
         language=current_language,
         insert_blank_pages=insert_blank_pages,
     )
+    conflict = reason in {
+        "already_running",
+        "busy",
+        "roster_changed",
+    } or reason.startswith("not_ready:")
     if queued:
         message = "contest build queued"
-    elif reason == "already_running":
-        message = f"contest build already running ({job_id})"
-    else:
+    elif not conflict:
         message = f"contest build queue rejected ({reason})"
+    else:
+        detail: object = {
+            "reason": reason,
+            "active_job_id": job_id if reason == "already_running" else "",
+        }
+        raise HTTPException(status_code=409, detail=detail)
     audit(
         int(ctx["user"]["id"]),
         None,

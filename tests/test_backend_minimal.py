@@ -14,6 +14,7 @@ from fastapi import HTTPException
 from app.db import CURRENT_SCHEMA_COLUMNS
 from tests.db_helpers import db_connection, db_execute, db_fetch_one, db_write_transaction, write_preview_summary
 from tests.common import E2ETestBase
+from tests.identity_helpers import canonical_test_verification_id
 from tests.ui_support import _flash_messages_from_response, _request
 from app.impl.preview.preview import (
     preview_page,
@@ -163,7 +164,7 @@ class TestBackendMinimal(E2ETestBase):
     def test_verification_detail_lives_in_db_without_sidecar_file(self) -> None:
         config.workspace_service.ensure_workspace("alice/sample", "alice")
         ctx = config.workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
-        verification_id = self.random_id("ver-detail-db")
+        verification_id = canonical_test_verification_id(self.random_id("ver-detail-db"))
         config.verification_service.begin_verification_record(
             verification_id=verification_id,
             problem_id=int(ctx["problem"]["id"]),
@@ -219,7 +220,9 @@ class TestBackendMinimal(E2ETestBase):
     def test_verification_detail_partial_tests_meta_uses_index_not_selected_position(self) -> None:
         config.workspace_service.ensure_workspace("alice/sample", "alice")
         ctx = config.workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
-        verification_id = self.random_id("ver-detail-partial-meta")
+        verification_id = canonical_test_verification_id(
+            self.random_id("ver-detail-partial-meta")
+        )
         config.verification_service.begin_verification_record(
             verification_id=verification_id,
             problem_id=int(ctx["problem"]["id"]),
@@ -246,7 +249,9 @@ class TestBackendMinimal(E2ETestBase):
     def test_verification_detail_skips_duplicate_tests_meta_names(self) -> None:
         config.workspace_service.ensure_workspace("alice/sample", "alice")
         ctx = config.workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
-        verification_id = self.random_id("ver-detail-dup-meta")
+        verification_id = canonical_test_verification_id(
+            self.random_id("ver-detail-dup-meta")
+        )
         config.verification_service.begin_verification_record(
             verification_id=verification_id,
             problem_id=int(ctx["problem"]["id"]),
@@ -271,7 +276,9 @@ class TestBackendMinimal(E2ETestBase):
     def test_verification_artifact_refs_live_in_db_not_metadata(self) -> None:
         config.workspace_service.ensure_workspace("alice/sample", "alice")
         ctx = config.workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
-        verification_id = self.random_id("ver-artifact-refs-db")
+        verification_id = canonical_test_verification_id(
+            self.random_id("ver-artifact-refs-db")
+        )
         config.verification_service.begin_verification_record(
             verification_id=verification_id,
             problem_id=int(ctx["problem"]["id"]),
@@ -322,7 +329,9 @@ class TestBackendMinimal(E2ETestBase):
     def test_verification_detail_omits_redundant_runtime_fields(self) -> None:
         config.workspace_service.ensure_workspace("alice/sample", "alice")
         ctx = config.workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
-        verification_id = self.random_id("ver-metadata-trimmed")
+        verification_id = canonical_test_verification_id(
+            self.random_id("ver-metadata-trimmed")
+        )
         config.verification_service.begin_verification_record(
             verification_id=verification_id,
             problem_id=int(ctx["problem"]["id"]),
@@ -389,7 +398,9 @@ class TestBackendMinimal(E2ETestBase):
 
     def test_load_verification_record_returns_plain_dict(self) -> None:
         ctx = config.workspace_service.workspace_context(self.problem, self.user, include_recent=False)
-        verification_id = self.random_id("ver-record-dict")
+        verification_id = canonical_test_verification_id(
+            self.random_id("ver-record-dict")
+        )
         config.verification_service.begin_verification_record(
             verification_id=verification_id,
             problem_id=int(ctx["problem"]["id"]),
@@ -405,7 +416,9 @@ class TestBackendMinimal(E2ETestBase):
 
     def test_create_verification_record_uses_canonical_verification_root(self) -> None:
         ctx = config.workspace_service.workspace_context(self.problem, self.user, include_recent=False)
-        verification_id = self.random_id("ver-artifact-path")
+        verification_id = canonical_test_verification_id(
+            self.random_id("ver-artifact-path")
+        )
         config.verification_service.begin_verification_record(
             verification_id=verification_id,
             problem_id=int(ctx["problem"]["id"]),

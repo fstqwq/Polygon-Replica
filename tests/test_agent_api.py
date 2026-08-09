@@ -901,7 +901,7 @@ class TestAgentAPI(E2ETestBase):
             self.assertEqual(verify.status_code, 200, verify.text)
             verify_payload = verify.json()
             verification_id = str(verify_payload.get("verification_id") or "")
-            self.assertRegex(verification_id, r"^ver-[0-9a-f]{12}$")
+            self.assertRegex(verification_id, r"^ver-[0-9a-f]+$")
             self.assertEqual(str(verify_payload.get("status") or ""), "queued")
 
             verify_status = client.get(f"/agent/v1/verification/{verification_id}/status", headers=self._bearer(readonly_token))

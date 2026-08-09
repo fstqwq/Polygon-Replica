@@ -11,7 +11,7 @@ from typing import TypedDict
 from app.db import now_iso
 from app.service.judgehost.domjudge.cache import domjudge_hash_of_hashes
 from app.service.judgehost.domjudge.client import domjudge_script_id
-from app.service.judgehost.identity import canonical_verification_id, domjudge_submit_id
+from app.service.judgehost.identity import domjudge_submit_id
 from app.service.judgehost.shared import domjudge_lower_text, domjudge_path_name, domjudge_text
 from app.service.judgehost.runtime import (
     domjudge_bool,
@@ -21,6 +21,7 @@ from app.service.judgehost.runtime import (
     domjudge_parse_meta_text,
     domjudge_verdict_from_runresult,
 )
+from app.service.verification.identity import canonical_verification_id
 from app.service.platform.runtime_blob_store import PayloadFile
 from app.service.platform.admission import MaintenanceAdmissionGate
 from app.service.run.runtime import RUN_TEST_NAME_RE

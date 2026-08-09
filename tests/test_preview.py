@@ -32,6 +32,7 @@ from app.service.statement.render import render_statement_main
 from app.service.statement.signature import statement_sources_signature
 from app.service.verification.signature import verification_fingerprint, verification_signature
 from tests.common import E2ETestBase
+from tests.identity_helpers import canonical_test_verification_id
 from app.impl.runtime.config import config
 
 preview_service = config.preview_service
@@ -435,7 +436,7 @@ class TestPreview(E2ETestBase):
             ),
             encoding="utf-8",
         )
-        verification_id = self.random_id("ver-preview-sample-sync")
+        verification_id = canonical_test_verification_id(self.random_id("ver-preview-sample-sync"))
         payloads = {
             ("001.in", "input_ref"): config.runtime_blob_store.put_bytes(b"build-manual-input\n"),
             ("001.in", "answer_ref"): config.runtime_blob_store.put_bytes(b"build-manual-answer\n"),
@@ -517,7 +518,7 @@ class TestPreview(E2ETestBase):
             ),
             encoding="utf-8",
         )
-        verification_id = self.random_id("ver-preview-custom-sample")
+        verification_id = canonical_test_verification_id(self.random_id("ver-preview-custom-sample"))
         input_file = config.runtime_blob_store.put_bytes(b"custom-sample-input\n")
         answer_file = config.runtime_blob_store.put_bytes(b"custom-sample-answer\n")
 
@@ -694,7 +695,7 @@ class TestPreview(E2ETestBase):
         self.assertIn("sample_sync", json.dumps(read_preview_summary(preview_id)))
 
     def test_validate_custom_sample_outputs_uses_exact_diff_without_checker(self) -> None:
-        verification_id = self.random_id("ver-validate-sample")
+        verification_id = canonical_test_verification_id(self.random_id("ver-validate-sample"))
         artifact_root = config.fs_manager.prepare_verification_root(verification_id).resolve()
         logs_root = artifact_root / "logs"
         logs_root.mkdir(parents=True, exist_ok=True)
@@ -756,7 +757,7 @@ class TestPreview(E2ETestBase):
         self.assertEqual((logs_root / "validate.log").read_text(encoding="utf-8"), "001.in: ok\n")
 
     def test_validate_custom_sample_outputs_uses_custom_input_without_sample_only(self) -> None:
-        verification_id = self.random_id("ver-validate-sample-custom-input")
+        verification_id = canonical_test_verification_id(self.random_id("ver-validate-sample-custom-input"))
         artifact_root = config.fs_manager.prepare_verification_root(verification_id).resolve()
         logs_root = artifact_root / "logs"
         logs_root.mkdir(parents=True, exist_ok=True)

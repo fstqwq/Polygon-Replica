@@ -8,6 +8,7 @@ from pathlib import Path, PurePosixPath
 from typing import Literal, TypedDict
 
 from app.db import DB, now_iso
+from app.service.contest.model import ContestBuildRevision
 from app.service.contest.statement_meta import infer_contest_header_fields
 from app.service.disk.contest_store import ContestDiskStore
 from app.service.platform.hashing import sha256_file
@@ -91,9 +92,15 @@ class ContestJob(TypedDict):
 
 
 class ContestBuildFreeze(TypedDict):
-    outcome: Literal["created", "already_running", "not_ready"]
+    outcome: Literal[
+        "created",
+        "already_running",
+        "busy",
+        "roster_changed",
+        "not_ready",
+    ]
     job_id: str
-    missing_materializations: list[str]
+    blocked_problems: list[str]
 
 
 class ContestArtifact(TypedDict):
@@ -828,6 +835,7 @@ class ContestService:
         actor_user_id: int,
         job_type: str,
         summary: dict[str, object],
+        revisions: list[ContestBuildRevision],
     ) -> ContestBuildFreeze:
         job_id = f"cj-{secrets.token_hex(6)}"
         result = self._store.freeze_build_job(
@@ -836,23 +844,12 @@ class ContestService:
             actor_user_id=int(actor_user_id),
             job_type=job_type,
             created_at=now_iso(),
+            revisions=revisions,
         )
         outcome = result["outcome"]
-        missing = result["missing_materializations"]
-        if outcome != "already_running":
+        blocked = result["blocked_problems"]
+        if outcome == "created":
             stored_summary = dict(summary)
-            if missing:
-                detail = ", ".join(missing[:10])
-                stored_summary.update(
-                    {
-                        "status": "failed",
-                        "error": (
-                            "Native materialization required; Export these problems first: "
-                            f"{detail}"
-                        ),
-                        "missing_materializations": missing,
-                    }
-                )
             self._write_job_summary(
                 result["contest_slug"],
                 result["job_id"],
@@ -861,11 +858,30 @@ class ContestService:
         return {
             "outcome": outcome,
             "job_id": result["job_id"],
-            "missing_materializations": missing,
+            "blocked_problems": blocked,
         }
 
     def build_items(self, job_id: str) -> list[dict[str, object]]:
         return self._store.build_items(job_id)
+
+    def bind_build_item_materialization(
+        self,
+        *,
+        job_id: str,
+        contest_problem_id: int,
+        problem_id: int,
+        source_commit: str,
+        materialization_id: str,
+        archive_sha256: str,
+    ) -> None:
+        self._store.bind_build_item_materialization(
+            job_id=job_id,
+            contest_problem_id=int(contest_problem_id),
+            problem_id=int(problem_id),
+            source_commit=source_commit,
+            materialization_id=materialization_id,
+            archive_sha256=archive_sha256,
+        )
 
     def update_job(
         self,

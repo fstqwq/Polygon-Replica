@@ -249,8 +249,8 @@ CREATE TABLE IF NOT EXISTS contest_build_items (
     statement_folder TEXT NOT NULL DEFAULT '',
     source_commit TEXT NOT NULL,
     revision_number INTEGER NOT NULL,
-    materialization_id TEXT NOT NULL,
-    archive_sha256 TEXT NOT NULL,
+    materialization_id TEXT,
+    archive_sha256 TEXT,
     UNIQUE(job_id,contest_problem_id),
     FOREIGN KEY(job_id) REFERENCES contest_jobs(id),
     FOREIGN KEY(problem_id) REFERENCES problems(id),
@@ -1038,9 +1038,82 @@ class DB:
         with sqlite3.connect(self.path) as conn:
             self._prepare_connection(conn)
             conn.executescript(SCHEMA)
+            self._make_contest_build_materialization_nullable(conn)
             self._validate_existing_schema(conn)
             conn.executescript(SCHEMA_INDEXES)
             conn.commit()
+
+    @staticmethod
+    def _make_contest_build_materialization_nullable(
+        conn: sqlite3.Connection,
+    ) -> None:
+        columns = {
+            str(row[1]): bool(row[3])
+            for row in conn.execute(
+                "PRAGMA table_info(contest_build_items)"
+            ).fetchall()
+        }
+        current = (
+            columns.get("materialization_id"),
+            columns.get("archive_sha256"),
+        )
+        if current == (False, False):
+            return
+        if current != (True, True):
+            raise IncompatibleSchemaError(
+                "contest_build_items materialization columns have inconsistent nullability"
+            )
+        conn.commit()
+        conn.execute("PRAGMA foreign_keys=OFF")
+        try:
+            conn.executescript(
+                """
+                BEGIN IMMEDIATE;
+                ALTER TABLE contest_build_items
+                    RENAME TO contest_build_items_not_nullable;
+                CREATE TABLE contest_build_items (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    job_id TEXT NOT NULL,
+                    contest_problem_id INTEGER NOT NULL,
+                    position INTEGER NOT NULL,
+                    label TEXT NOT NULL,
+                    problem_id INTEGER NOT NULL,
+                    statement_folder TEXT NOT NULL DEFAULT '',
+                    source_commit TEXT NOT NULL,
+                    revision_number INTEGER NOT NULL,
+                    materialization_id TEXT,
+                    archive_sha256 TEXT,
+                    UNIQUE(job_id,contest_problem_id),
+                    FOREIGN KEY(job_id) REFERENCES contest_jobs(id),
+                    FOREIGN KEY(problem_id) REFERENCES problems(id),
+                    FOREIGN KEY(materialization_id)
+                        REFERENCES problem_package_materializations(id)
+                );
+                INSERT INTO contest_build_items(
+                    id,job_id,contest_problem_id,position,label,problem_id,
+                    statement_folder,source_commit,revision_number,
+                    materialization_id,archive_sha256
+                )
+                SELECT
+                    id,job_id,contest_problem_id,position,label,problem_id,
+                    statement_folder,source_commit,revision_number,
+                    materialization_id,archive_sha256
+                FROM contest_build_items_not_nullable;
+                DROP TABLE contest_build_items_not_nullable;
+                COMMIT;
+                """
+            )
+        except Exception:
+            if conn.in_transaction:
+                conn.rollback()
+            raise
+        finally:
+            conn.execute("PRAGMA foreign_keys=ON")
+        violation = conn.execute("PRAGMA foreign_key_check").fetchone()
+        if violation is not None:
+            raise IncompatibleSchemaError(
+                "contest_build_items schema update produced a foreign-key violation"
+            )
 
     def _db_file_exists(self) -> bool:
         return self.path.exists() and self.path.stat().st_size > 0

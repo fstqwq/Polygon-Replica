@@ -14,6 +14,7 @@ from fastapi import HTTPException
 from starlette.requests import Request
 
 from tests.common import E2ETestBase, suite_root
+from tests.identity_helpers import canonical_test_verification_id
 from app.impl.runtime.config import config
 from app.impl.problem.checker import checker_rename_source, checker_set_standard
 from app.impl.problem.file import (
@@ -200,7 +201,7 @@ class TestSecurity(E2ETestBase):
         problem_id = int(alice_ctx["problem"]["id"])
         alice_workspace_id = int(alice_ctx["workspace"]["id"])
 
-        verification_id = f"ver-sec-artifact-{uuid.uuid4().hex[:8]}"
+        verification_id = canonical_test_verification_id(f"ver-sec-artifact-{uuid.uuid4().hex[:8]}")
         _build_ref, artifact_root = self._fixture_verification_root(
             problem="alice/sample",
             workspace_id=alice_workspace_id,
@@ -237,7 +238,7 @@ class TestSecurity(E2ETestBase):
         problem_id = int(alice_ctx["problem"]["id"])
         alice_workspace_id = int(alice_ctx["workspace"]["id"])
 
-        verification_id = f"ver-sec-path-{uuid.uuid4().hex[:8]}"
+        verification_id = canonical_test_verification_id(f"ver-sec-path-{uuid.uuid4().hex[:8]}")
         _build_ref, artifact_root = self._fixture_verification_root(
             problem="alice/sample",
             workspace_id=alice_workspace_id,
@@ -277,7 +278,7 @@ class TestSecurity(E2ETestBase):
         problem_id = int(alice_ctx["problem"]["id"])
         alice_workspace_id = int(alice_ctx["workspace"]["id"])
 
-        verification_id = f"ver-sec-cancel-{uuid.uuid4().hex[:8]}"
+        verification_id = canonical_test_verification_id(f"ver-sec-cancel-{uuid.uuid4().hex[:8]}")
         run_id = f"r-sec-cancel-{uuid.uuid4().hex[:8]}"
         db_execute(
             """
@@ -348,8 +349,8 @@ class TestSecurity(E2ETestBase):
         alice_workspace_id = int(alice_ctx["workspace"]["id"])
         bob_workspace_id = int(bob_ctx["workspace"]["id"])
 
-        foreign_verification_id = f"ver-sec-blob-a-{uuid.uuid4().hex[:8]}"
-        local_verification_id = f"ver-sec-blob-b-{uuid.uuid4().hex[:8]}"
+        foreign_verification_id = canonical_test_verification_id(f"ver-sec-blob-a-{uuid.uuid4().hex[:8]}")
+        local_verification_id = canonical_test_verification_id(f"ver-sec-blob-b-{uuid.uuid4().hex[:8]}")
         for verification_id, workspace_id in [
             (foreign_verification_id, alice_workspace_id),
             (local_verification_id, bob_workspace_id),

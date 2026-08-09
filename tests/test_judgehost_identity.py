@@ -3,21 +3,30 @@ from __future__ import annotations
 import unittest
 
 from app.service.judgehost.identity import (
-    canonical_verification_id,
     compile_key,
     domjudge_job_id,
     domjudge_submit_id,
 )
+from app.service.verification.identity import canonical_verification_id
 
 
 class TestJudgehostIdentity(unittest.TestCase):
     def test_verification_id_maps_directly_to_signed_64_bit_domain(self) -> None:
-        self.assertEqual(domjudge_job_id("ver-0"), 0)
+        self.assertEqual(domjudge_job_id("ver-1"), 1)
         self.assertEqual(domjudge_job_id("ver-7fffffffffffffff"), (1 << 63) - 1)
-        self.assertEqual(domjudge_job_id("ver-8000000000000000"), 0)
+        with self.assertRaisesRegex(RuntimeError, "invalid verification id"):
+            domjudge_job_id("ver-8000000000000000")
 
     def test_verification_id_rejects_noncanonical_tokens(self) -> None:
-        for token in ("", "verification", "ver-test", "ver-AB", "ver-1-extra"):
+        for token in (
+            "",
+            "verification",
+            "ver-0",
+            "ver-01",
+            "ver-test",
+            "ver-AB",
+            "ver-1-extra",
+        ):
             with self.subTest(token=token), self.assertRaisesRegex(
                 RuntimeError,
                 "invalid verification id",

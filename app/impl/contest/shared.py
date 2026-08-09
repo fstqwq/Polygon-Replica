@@ -15,6 +15,7 @@ from app.impl.contest.common import _contest_problem_slug_file_token
 from app.impl.workspace.access import workspace_access_context
 from app.impl.workspace.context_operation import audit, normalize_contest_slug_required
 from app.impl.workspace.context import global_user_ctx
+from app.impl.workspace.published_materialization import ensure_published_materialization
 from app.service.sandbox.base import ExecResult
 from app.service.statement.constant import DEFAULT_OLYMP_STY
 from app.service.statement.context import normalize_statement_language
@@ -1161,6 +1162,7 @@ def _queue_contest_job(
     contest_id: int,
     contest_slug: str,
     actor_user_id: int,
+    actor_username: str,
     outputs: tuple[str, ...],
     language: str = "",
     insert_blank_pages: bool = False,
@@ -1188,17 +1190,49 @@ def _queue_contest_job(
     }
     if job_language:
         initial_summary["language"] = job_language
+    revisions: list[dict[str, object]] = []
+    for row in config.contest_service.contest_problems(int(contest_id)):
+        try:
+            published = config.problem_package_service.published_revision(
+                int(row["problem_id"])
+            )
+        except (OSError, RuntimeError, ValueError) as exc:
+            return (
+                "",
+                False,
+                f"not_ready:{row['problem_slug']}: {exc}",
+            )
+        revisions.append(
+            {
+                "contest_problem_id": int(row["contest_problem_id"]),
+                "position": int(row["position"]),
+                "label": str(row["idx"]),
+                "problem_id": int(row["problem_id"]),
+                "statement_folder": str(row["statement_folder"]),
+                "problem_slug": str(row["problem_slug"]),
+                "source_commit": published.source_commit,
+                "revision_number": published.revision_number,
+            }
+        )
+    if not revisions:
+        return ("", False, "not_ready:contest has no problems")
     frozen = config.contest_service.freeze_build_job(
         contest_id=contest_id,
         actor_user_id=actor_user_id,
         job_type=_CONTEST_JOB_TYPE_BUILD,
         summary=initial_summary,
+        revisions=revisions,
     )
     job_id = str(frozen["job_id"])
     if frozen["outcome"] == "already_running":
         return (job_id, False, "already_running")
+    if frozen["outcome"] == "busy":
+        return ("", False, "busy")
+    if frozen["outcome"] == "roster_changed":
+        return ("", False, "roster_changed")
     if frozen["outcome"] == "not_ready":
-        return (job_id, False, "not_ready")
+        detail = ",".join(frozen["blocked_problems"])
+        return ("", False, f"not_ready:{detail}")
     try:
         _snapshot_contest_sources(
             contest_id=contest_id,
@@ -1218,6 +1252,64 @@ def _queue_contest_job(
 
     def _runner() -> None:
         try:
+            materialization_results: list[dict[str, object]] = []
+            for entry in config.contest_service.build_items(job_id):
+                result: dict[str, object] = {
+                    "problem_id": int(entry["problem_id"]),
+                    "problem_slug": str(entry["problem_slug"]),
+                    "source_commit": str(entry["source_commit"]),
+                    "revision_number": int(entry["revision_number"]),
+                    "status": "failed",
+                    "materialization_id": "",
+                    "error": "",
+                }
+                try:
+                    revision = config.problem_package_service.published_revision_at(
+                        int(entry["problem_id"]),
+                        str(entry["source_commit"]),
+                        int(entry["revision_number"]),
+                    )
+                    materialization = ensure_published_materialization(
+                        revision=revision,
+                        actor_user_id=int(actor_user_id),
+                        actor_username=actor_username,
+                    )
+                    config.contest_service.bind_build_item_materialization(
+                        job_id=job_id,
+                        contest_problem_id=int(entry["contest_problem_id"]),
+                        problem_id=int(entry["problem_id"]),
+                        source_commit=str(entry["source_commit"]),
+                        materialization_id=materialization["id"],
+                        archive_sha256=materialization["archive_sha256"],
+                    )
+                    result["status"] = "success"
+                    result["materialization_id"] = materialization["id"]
+                except Exception as exc:
+                    result["error"] = str(exc)
+                materialization_results.append(result)
+            failed_materializations = [
+                result
+                for result in materialization_results
+                if result["status"] != "success"
+            ]
+            if failed_materializations:
+                config.contest_service.update_job(
+                    contest_id,
+                    job_id,
+                    "failed",
+                    {
+                        **initial_summary,
+                        "status": "failed",
+                        "phase": "materialization",
+                        "materializations": materialization_results,
+                        "error": "; ".join(
+                            f"{row['problem_slug']}: {row['error']}"
+                            for row in failed_materializations
+                        ),
+                    },
+                    finished=True,
+                )
+                return
             output_results: dict[str, dict[str, object]] = {}
             for output in requested_outputs:
                 try:
@@ -1255,6 +1347,7 @@ def _queue_contest_job(
             final_summary: dict[str, object] = {
                 **initial_summary,
                 "status": status,
+                "materializations": materialization_results,
                 "outputs": output_results,
                 "successful_outputs": successful,
             }

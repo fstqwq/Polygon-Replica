@@ -12,6 +12,7 @@ from typing import NotRequired, TypedDict, cast
 
 from app.service.platform.hashing import sha256_file
 from app.service.problem.test_spec import load_tests_spec
+from app.service.verification.identity import canonical_verification_id
 
 
 class NativeFileEntry(TypedDict):
@@ -156,6 +157,10 @@ def load_manifest(path: Path) -> NativeManifest:
         raise ValueError("Native package verification provenance is invalid")
     if not all(isinstance(verification[key], str) and verification[key] for key in verification):
         raise ValueError("Native package verification provenance is invalid")
+    try:
+        canonical_verification_id(verification["id"])
+    except RuntimeError as exc:
+        raise ValueError("Native package verification provenance is invalid") from exc
     tests = raw["tests"]
     if not isinstance(tests, list) or not tests:
         raise ValueError("Native package must contain tests")

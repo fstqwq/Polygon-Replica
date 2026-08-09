@@ -5,9 +5,9 @@
   <h1 class="page-title">Problems</h1>
   <p class="contest-package-summary">
     Packages:
-    <span>{{ package_ready_count }} ready</span>{% if package_stale_count %},
-    <span class="warn">{{ package_stale_count }} stale</span>{% endif %}{% if package_none_count %},
-    <span class="danger">{{ package_none_count }} none</span>{% endif %}
+    <span>{{ package_ready_count }} ready</span>{% if package_buildable_count %},
+    <span class="warn">{{ package_buildable_count }} buildable</span>{% endif %}{% if package_blocked_count %},
+    <span class="danger">{{ package_blocked_count }} blocked</span>{% endif %}
   </p>
 </div>
 
@@ -58,7 +58,7 @@
       </td>
       <td class="contest-problem-revision-cell">
         <span class="contest-problem-revision-line{{ ' revision-alert' if row.workspace_revision_warn else '' }}">{{ row.workspace_revision_display }}</span>
-        <span class="contest-problem-revision-line{% if row.package_revision_status == 'stale' %} warn{% elif row.package_revision_status == 'missing' %} danger{% endif %}">{{ row.package_revision_display }}</span>
+        <span class="contest-problem-revision-line{% if row.package_revision_status == 'buildable' %} warn{% elif row.package_revision_status == 'blocked' %} danger{% endif %}">{{ row.package_revision_display }}</span>
       </td>
     </tr>
     {% endfor %}

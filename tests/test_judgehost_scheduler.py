@@ -1068,13 +1068,14 @@ class TestJudgehostScheduler(unittest.TestCase):
                 verification_id="ver-2",
                 compile_key=colliding_key,
             )
+        scheduler._verification_by_domjudge_job_id[2] = "ver-1"
         with self.assertRaisesRegex(RuntimeError, "batch id collision"):
             _create_staged_batch(
                 scheduler,
                 task_id="collision-c",
                 run_id="run-collision-c",
                 ordinals=[3],
-                verification_id="ver-8000000000000001",
+                verification_id="ver-2",
                 compile_key=low_key,
             )
 

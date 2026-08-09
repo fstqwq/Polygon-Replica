@@ -160,7 +160,7 @@ class TestArtifactCleanup(unittest.TestCase):
             """
             INSERT INTO verifications(
                 id,problem_id,workspace_id,signature,source_commit,kind,status,created_at
-            ) VALUES('ver-cleanup',?,?,?,?,?,?,?)
+            ) VALUES('ver-c1ea4',?,?,?,?,?,?,?)
             """,
             (
                 self.problem_id,
@@ -173,30 +173,30 @@ class TestArtifactCleanup(unittest.TestCase):
             ),
         )
         self._execute(
-            "INSERT INTO verification_selected_tests VALUES('ver-cleanup',0,'001.in')"
+            "INSERT INTO verification_selected_tests VALUES('ver-c1ea4',0,'001.in')"
         )
         self._execute(
-            "INSERT INTO verification_source_paths VALUES('ver-cleanup',0,'solutions/ac.cpp')"
+            "INSERT INTO verification_source_paths VALUES('ver-c1ea4',0,'solutions/ac.cpp')"
         )
         self._execute(
             """
             INSERT INTO verification_sanity_checks(
                 verification_id,ordinal,check_name,status,checked_count
-            ) VALUES('ver-cleanup',0,'sample','passed',1)
+            ) VALUES('ver-c1ea4',0,'sample','passed',1)
             """
         )
         self._execute(
             """
             INSERT INTO verification_sanity_check_messages(
                 verification_id,check_name,ordinal,severity,test_name,message
-            ) VALUES('ver-cleanup','sample',0,'info','001.in','ok')
+            ) VALUES('ver-c1ea4','sample',0,'info','001.in','ok')
             """
         )
         self._execute(
             """
             INSERT INTO verification_tests_meta(
                 verification_id,ordinal,test_name
-            ) VALUES('ver-cleanup',0,'001.in')
+            ) VALUES('ver-c1ea4',0,'001.in')
             """
         )
         self._execute(
@@ -204,7 +204,7 @@ class TestArtifactCleanup(unittest.TestCase):
             INSERT INTO verification_tasks(
                 id,verification_id,task_kind,source_path,test_name,
                 expected_behavior,final_status,verdict,created_at
-            ) VALUES('task-cleanup','ver-cleanup','run','solutions/ac.cpp',
+            ) VALUES('task-cleanup','ver-c1ea4','run','solutions/ac.cpp',
                      '001.in','accepted','ok','AC',?)
             """,
             (now,),
@@ -213,7 +213,7 @@ class TestArtifactCleanup(unittest.TestCase):
             """
             INSERT INTO verification_artifact_refs(
                 verification_id,test_name,input_ref,answer_ref,updated_at
-            ) VALUES('ver-cleanup','001.in','blob://input','blob://answer',?)
+            ) VALUES('ver-c1ea4','001.in','blob://input','blob://answer',?)
             """,
             (now,),
         )
@@ -221,7 +221,7 @@ class TestArtifactCleanup(unittest.TestCase):
             """
             INSERT INTO previews(
                 id,problem_id,workspace_id,verification_id,status,created_at
-            ) VALUES('preview-cleanup',?,?, 'ver-cleanup','ok',?)
+            ) VALUES('preview-cleanup',?,?, 'ver-c1ea4','ok',?)
             """,
             (self.problem_id, self.workspace_id, now),
         )
@@ -232,7 +232,7 @@ class TestArtifactCleanup(unittest.TestCase):
                 archive_rel_path,archive_sha256,archive_size_bytes,verification_id,
                 status,created_at,checked_at,unavailable_reason
             ) VALUES('pm-cleanup',? ,?,1,?,'materializations/native.zip',?,10,
-                     'ver-cleanup','available',?,?,'')
+                     'ver-c1ea4','available',?,?,'')
             """,
             (self.problem_id, "c" * 40, "d" * 64, "e" * 64, now, now),
         )
@@ -243,7 +243,7 @@ class TestArtifactCleanup(unittest.TestCase):
                 materialization_id,error,created_at,started_at,finished_at
             ) VALUES('pb-cleanup',?,?,?,'complete','succeeded','pm-cleanup','',?,?,?)
             """,
-            (self.problem_id, "c" * 40, "ver-cleanup", now, now, now),
+            (self.problem_id, "c" * 40, "ver-c1ea4", now, now, now),
         )
         self._execute(
             """
@@ -405,7 +405,7 @@ class TestArtifactCleanup(unittest.TestCase):
     def test_cleanup_deletes_derived_epoch_and_preserves_durable_data(self) -> None:
         durable_files = self._seed_generated_data()
         self.verification_task_store.set_fail_flag(
-            "ver-cleanup",
+            "ver-c1ea4",
             reason="must be cleared",
         )
         with isolated_db_connection(self.db) as connection:
@@ -500,7 +500,7 @@ class TestArtifactCleanup(unittest.TestCase):
         self.assertEqual(self.judgehost.reset_count, 1)
         self.assertEqual(self.process_reset_count, 1)
         self.assertEqual(
-            self.verification_task_store.fail_state("ver-cleanup"),
+            self.verification_task_store.fail_state("ver-c1ea4"),
             (False, ""),
         )
         self.assertLess(self.settings.db_path.stat().st_size, database_size_before)
@@ -970,7 +970,7 @@ class TestArtifactCleanup(unittest.TestCase):
                 "id": "judge-task",
                 "run_id": "judge-run",
                 "problem_slug": "admin/sample",
-                "verification_id": "ver-judge",
+                "verification_id": "ver-1ad6e",
                 "status": "queued",
             }
         )

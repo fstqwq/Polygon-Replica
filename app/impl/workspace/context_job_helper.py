@@ -26,7 +26,7 @@ def _verification_id_for_run(run_id: str, verification_id: str) -> str:
         return safe_verification_id
     if not run_id:
         raise RuntimeError("run id is required")
-    return f"ver-{run_id}"
+    return allocate_verification_id()
 
 
 def _failed_test_name(error_text: str, synthesized_test_names: list[str] | None) -> str:

@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 # tests.common installs isolated /tmp paths before app modules can create runtime config.
 from tests.common import E2ETestBase, config
+from tests.identity_helpers import canonical_test_verification_id
 
 from app.service.disk.verification_store import VerificationStore
 from app.service.verification.task_metadata import canonical_diagnostics, canonical_truncated_text, diagnostics_json_text
@@ -25,7 +26,7 @@ def _task_row(
 ) -> dict[str, object]:
     return {
         "id": task_id,
-        "verification_id": "verification",
+        "verification_id": "ver-1",
         "predecessor_task_id": "",
         "task_kind": task_kind,
         "source_path": source_path,
@@ -208,7 +209,9 @@ class TestVerificationTaskScheduler(E2ETestBase):
             _publish_run_task,
         )
 
-        verification_id = self.random_id("ver-force-recompile")
+        verification_id = canonical_test_verification_id(
+            self.random_id("ver-force-recompile")
+        )
         source_file = config.runtime_blob_store.put_bytes(b"int main(){return 0;}\n")
         input_file = config.runtime_blob_store.put_bytes(b"1\n")
         execution = TaskExecutionContext(
@@ -326,7 +329,9 @@ class TestVerificationTaskScheduler(E2ETestBase):
     def test_sanity_stability_probes_pass_on_non_ac_non_fl(self) -> None:
         from app.impl.workspace.sanity_checks import run_verification_sanity_checks
 
-        verification_id = self.random_id("ver-sanity-stable")
+        verification_id = canonical_test_verification_id(
+            self.random_id("ver-sanity-stable")
+        )
         logs_dir = config.fs_manager.prepare_verification_root(verification_id).resolve() / "logs"
         calls: list[dict[str, object]] = []
 
@@ -374,7 +379,9 @@ class TestVerificationTaskScheduler(E2ETestBase):
     def test_sanity_boundary_coverage_warning_keeps_verification_ok(self) -> None:
         from app.impl.workspace.sanity_checks import BOUNDARY_COVERAGE_CHECK, run_verification_sanity_checks
 
-        verification_id = self.random_id("ver-sanity-boundary")
+        verification_id = canonical_test_verification_id(
+            self.random_id("ver-sanity-boundary")
+        )
         logs_dir = config.fs_manager.prepare_verification_root(verification_id).resolve() / "logs"
 
         def _fake_enqueue_task(**kwargs: object) -> str:
@@ -415,7 +422,9 @@ class TestVerificationTaskScheduler(E2ETestBase):
     def test_sanity_runtime_threshold_warning_uses_answer_correct_summary(self) -> None:
         from app.impl.workspace.sanity_checks import BOUNDARY_COVERAGE_CHECK, SUMMARY_RUNTIME_THRESHOLD_CHECK, run_verification_sanity_checks
 
-        verification_id = self.random_id("ver-sanity-runtime")
+        verification_id = canonical_test_verification_id(
+            self.random_id("ver-sanity-runtime")
+        )
         logs_dir = config.fs_manager.prepare_verification_root(verification_id).resolve() / "logs"
 
         def _fake_enqueue_task(**kwargs: object) -> str:
@@ -570,7 +579,9 @@ class TestVerificationTaskScheduler(E2ETestBase):
     def test_sanity_stability_probe_failure_does_not_skip_later_checks(self) -> None:
         from app.impl.workspace.sanity_checks import EMPTY_OUTPUT_STABILITY_CHECK, UNICODE_OUTPUT_STABILITY_CHECK, run_verification_sanity_checks
 
-        verification_id = self.random_id("ver-sanity-ac")
+        verification_id = canonical_test_verification_id(
+            self.random_id("ver-sanity-ac")
+        )
         logs_dir = config.fs_manager.prepare_verification_root(verification_id).resolve() / "logs"
         calls: list[dict[str, object]] = []
 
@@ -606,7 +617,9 @@ class TestVerificationTaskScheduler(E2ETestBase):
     def test_sanity_stability_probe_fails_on_unicode_fl(self) -> None:
         from app.impl.workspace.sanity_checks import UNICODE_OUTPUT_STABILITY_CHECK, run_verification_sanity_checks
 
-        verification_id = self.random_id("ver-sanity-fl")
+        verification_id = canonical_test_verification_id(
+            self.random_id("ver-sanity-fl")
+        )
         logs_dir = config.fs_manager.prepare_verification_root(verification_id).resolve() / "logs"
         calls: list[dict[str, object]] = []
 
@@ -956,10 +969,11 @@ class TestVerificationTaskScheduler(E2ETestBase):
 
 
     def test_cancel_not_started_tasks_leaves_leased_rows_reportable(self) -> None:
-        self._insert_verification_row("ver-cancel")
+        verification_id = canonical_test_verification_id("cancel")
+        self._insert_verification_row(verification_id)
         task_store = config.verification_task_store
         task_store.replace_graph(
-            "ver-cancel",
+            verification_id,
             tasks=[
                 {
                     "id": "vt-running",
@@ -985,7 +999,10 @@ class TestVerificationTaskScheduler(E2ETestBase):
             ],
             edges=[],
         )
-        task_store.cancel_not_started_tasks("ver-cancel", reason="verification cancelled by user")
+        task_store.cancel_not_started_tasks(
+            verification_id,
+            reason="verification cancelled by user",
+        )
         task_store.save_task_result(
             "vt-running",
             status=VerificationTaskStore.TASK_DONE,
@@ -1002,7 +1019,10 @@ class TestVerificationTaskScheduler(E2ETestBase):
             feedback_text="",
             output_ref="",
         )
-        rows = {str(row["id"]): row for row in task_store.list_rows("ver-cancel")}
+        rows = {
+            str(row["id"]): row
+            for row in task_store.list_rows(verification_id)
+        }
         self.assertEqual(str(rows["vt-running"]["status"]), VerificationTaskStore.TASK_DONE)
         self.assertEqual(str(rows["vt-pending"]["status"]), VerificationTaskStore.TASK_CANCELLED)
 
@@ -1118,7 +1138,9 @@ class TestVerificationTaskScheduler(E2ETestBase):
         self.assertEqual(int(counts["running"]), 1)
 
     def test_task_store_caps_frontend_display_fields(self) -> None:
-        verification_id = f"ver-display-cap-{self.test_id}"
+        verification_id = canonical_test_verification_id(
+            f"display-cap:{self.test_id}"
+        )
         self._insert_verification_row(verification_id)
         task_store = config.verification_task_store
         task_store.replace_graph(
@@ -1169,7 +1191,9 @@ class TestVerificationTaskScheduler(E2ETestBase):
         self.assertLessEqual(len(str(diagnostics_rows[0].get("message") or "").encode("utf-8")), limit)
 
     def test_task_store_deduplicates_generated_content_and_skips_descendants(self) -> None:
-        verification_id = f"ver-generated-dedup-{self.test_id}"
+        verification_id = canonical_test_verification_id(
+            f"generated-dedup:{self.test_id}"
+        )
         self._insert_verification_row(verification_id)
         task_store = config.verification_task_store
         task_store.replace_graph(
@@ -1267,7 +1291,7 @@ class TestVerificationTaskScheduler(E2ETestBase):
     def test_startup_cancel_task_graph_verifications_reconciles_stale_rows(self) -> None:
         from app.impl.auth.internal.runtime import _startup_cancel_task_graph_verifications
 
-        verification_id = "ver-startup-reconcile"
+        verification_id = canonical_test_verification_id("startup-reconcile")
         self._insert_verification_row(verification_id)
         config.verification_service.persist_verification_detail(
             verification_id,
@@ -1321,7 +1345,7 @@ class TestVerificationTaskScheduler(E2ETestBase):
     def test_startup_finalize_cancelled_verifications_fills_missing_finished_at(self) -> None:
         from app.impl.auth.internal.runtime import _startup_finalize_cancelled_verifications
 
-        verification_id = "ver-startup-user-cancel"
+        verification_id = canonical_test_verification_id("startup-user-cancel")
         self._insert_verification_row(verification_id)
         config.verification_service.update_verification_record_status(
             verification_id,
@@ -1499,7 +1523,9 @@ class TestVerificationTaskScheduler(E2ETestBase):
         self.assertIn('"message":"aaaaaaa..."', diagnostics_json)
 
     def test_task_store_persists_fail_flag(self) -> None:
-        verification_id = f"ver-task-store-{self.test_id}"
+        verification_id = canonical_test_verification_id(
+            f"task-store:{self.test_id}"
+        )
         self._insert_verification_row(verification_id)
         store = config.verification_task_store
         store.set_fail_flag(verification_id, reason="main failed")
@@ -1507,7 +1533,9 @@ class TestVerificationTaskScheduler(E2ETestBase):
         self.assertIsNotNone(VerificationStore(config.db).record_row(verification_id))
 
     def test_task_store_keeps_first_fail_flag_reason(self) -> None:
-        verification_id = f"ver-task-store-first-{self.test_id}"
+        verification_id = canonical_test_verification_id(
+            f"task-store-first:{self.test_id}"
+        )
         self._insert_verification_row(verification_id)
         store = config.verification_task_store
         store.set_fail_flag(verification_id, reason="generate-input / generators/gen.cpp / 001.in: validator failed")

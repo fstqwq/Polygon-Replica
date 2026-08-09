@@ -15,6 +15,7 @@ from app.service.statement.render import statement_title_for_language
 from app.service.statement.signature import statement_sources_signature
 from app.service.repository.revision import workspace_verification_source
 from tests.common import E2ETestBase
+from tests.identity_helpers import canonical_test_verification_id
 from tests.assertion_helpers import assert_html_contract
 
 from tests.ui_support import (
@@ -73,7 +74,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
 
     @staticmethod
     def _verification_id_for_run(run_id: str) -> str:
-        return f"ver-{str(run_id or '').strip()}"
+        return canonical_test_verification_id(f"run:{run_id}")
 
     def _insert_verification_row(
         self,
@@ -255,7 +256,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         verification_token = (
             str(verification_id or "").strip()
             or str(verification.get("id") or "").strip()
-            or f"ver-{run_id}"
+            or self._verification_id_for_run(run_id)
         )
         verification_source = str(verification.get("source") or "").strip().lower()
         inferred_kind = str(kind or "").strip().lower()
@@ -1095,7 +1096,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         signature = workspace_impl._verification_sources_signature(ws)
 
         self._insert_verification_row(
-            verification_id=f"ver-stale-{uuid.uuid4().hex[:8]}",
+            verification_id=canonical_test_verification_id(f"ver-stale-{uuid.uuid4().hex[:8]}"),
             problem_id=problem_id,
             workspace_id=workspace_id,
             build_id=self.random_id("b-verify-stale"),
@@ -1131,7 +1132,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         signature = workspace_impl._verification_sources_signature(ws)
 
         self._insert_verification_row(
-            verification_id=f"ver-stale-general-{uuid.uuid4().hex[:8]}",
+            verification_id=canonical_test_verification_id(f"ver-stale-general-{uuid.uuid4().hex[:8]}"),
             problem_id=problem_id,
             workspace_id=workspace_id,
             build_id=self.random_id("b-verify-stale-general"),
@@ -1175,8 +1176,8 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         workspace_id = int(ctx["workspace"]["id"])
         user_id = int(ctx["user"]["id"])
         current_signature = workspace_impl._verification_sources_signature(ws)
-        workspace_verification_id = f"ver-workspace-{uuid.uuid4().hex[:8]}"
-        export_verification_id = f"ver-export-{uuid.uuid4().hex[:8]}"
+        workspace_verification_id = canonical_test_verification_id(f"ver-workspace-{uuid.uuid4().hex[:8]}")
+        export_verification_id = canonical_test_verification_id(f"ver-export-{uuid.uuid4().hex[:8]}")
 
         self._insert_stage_verification(
             verification_id=workspace_verification_id,
@@ -1213,7 +1214,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         problem_id = int(ctx["problem"]["id"])
         workspace_id = int(ctx["workspace"]["id"])
         user_id = int(ctx["user"]["id"])
-        verification_id = f"ver-clean-manifest-{uuid.uuid4().hex[:8]}"
+        verification_id = canonical_test_verification_id(f"ver-clean-manifest-{uuid.uuid4().hex[:8]}")
         signature = workspace_verification_module._verification_sources_signature(ws)
         self._insert_stage_verification(
             verification_id=verification_id,
@@ -1239,7 +1240,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         problem_id = int(ctx["problem"]["id"])
         workspace_id = int(ctx["workspace"]["id"])
         user_id = int(ctx["user"]["id"])
-        verification_id = f"ver-cache-{uuid.uuid4().hex[:8]}"
+        verification_id = canonical_test_verification_id(f"ver-cache-{uuid.uuid4().hex[:8]}")
         fingerprint = workspace_verification_module._verification_sources_fingerprint(ws)
 
         self._insert_stage_verification(
@@ -1280,7 +1281,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         workspace_id = int(ctx["workspace"]["id"])
         user_id = int(ctx["user"]["id"])
         signature = workspace_impl._verification_sources_signature(ws)
-        verification_id = f"ver-fill-{uuid.uuid4().hex[:8]}"
+        verification_id = canonical_test_verification_id(f"ver-fill-{uuid.uuid4().hex[:8]}")
 
         self._insert_stage_verification(
             verification_id=verification_id,
@@ -1322,7 +1323,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         problem_id = int(ctx["problem"]["id"])
         workspace_id = int(ctx["workspace"]["id"])
         user_id = int(ctx["user"]["id"])
-        verification_id = f"ver-stale-cache-{uuid.uuid4().hex[:8]}"
+        verification_id = canonical_test_verification_id(f"ver-stale-cache-{uuid.uuid4().hex[:8]}")
 
         self._insert_stage_verification(
             verification_id=verification_id,
@@ -1389,7 +1390,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
         problem_id = int(ctx["problem"]["id"])
         workspace_id = int(ctx["workspace"]["id"])
-        verification_id = f"inv-rerun-link-{uuid.uuid4().hex[:8]}"
+        verification_id = canonical_test_verification_id(f"inv-rerun-link-{uuid.uuid4().hex[:8]}")
         run_ok = f"r-rerun-link-ok-{uuid.uuid4().hex[:8]}"
         run_wa = f"r-rerun-link-wa-{uuid.uuid4().hex[:8]}"
         build_id = self.random_id("b-rerun-link")
@@ -1539,8 +1540,8 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         problem_id = int(ctx["problem"]["id"])
         workspace_id = int(ctx["workspace"]["id"])
 
-        old_verification = f"ver-old-{uuid.uuid4().hex[:8]}"
-        new_verification = f"ver-new-{uuid.uuid4().hex[:8]}"
+        old_verification = canonical_test_verification_id(f"ver-old-{uuid.uuid4().hex[:8]}")
+        new_verification = canonical_test_verification_id(f"ver-new-{uuid.uuid4().hex[:8]}")
         old_run_1 = f"r-old-1-{uuid.uuid4().hex[:8]}"
         old_run_2 = f"r-old-2-{uuid.uuid4().hex[:8]}"
         new_run = f"r-new-{uuid.uuid4().hex[:8]}"
@@ -1602,8 +1603,8 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
         problem_id = int(ctx["problem"]["id"])
         workspace_id = int(ctx["workspace"]["id"])
-        working_id = f"ver-source-working-{uuid.uuid4().hex[:8]}"
-        revision_id = f"ver-source-revision-{uuid.uuid4().hex[:8]}"
+        working_id = canonical_test_verification_id(f"ver-source-working-{uuid.uuid4().hex[:8]}")
+        revision_id = canonical_test_verification_id(f"ver-source-revision-{uuid.uuid4().hex[:8]}")
         self._insert_stage_verification(
             verification_id=working_id,
             problem_id=problem_id,
@@ -1651,7 +1652,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
         problem_id = int(ctx["problem"]["id"])
         workspace_id = int(ctx["workspace"]["id"])
-        verification_id = f"inv-rejudge-{uuid.uuid4().hex[:8]}"
+        verification_id = canonical_test_verification_id(f"inv-rejudge-{uuid.uuid4().hex[:8]}")
         run_ok = f"r-rejudge-ok-{uuid.uuid4().hex[:8]}"
         run_pending = f"r-rejudge-pending-{uuid.uuid4().hex[:8]}"
         run_ok_root = Path(os.environ["POLYGON_REPLICA_RUN_ROOT"]) / run_ok
@@ -1720,7 +1721,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
         problem_id = int(ctx["problem"]["id"])
         workspace_id = int(ctx["workspace"]["id"])
-        verification_id = f"inv-cancel-{uuid.uuid4().hex[:8]}"
+        verification_id = canonical_test_verification_id(f"inv-cancel-{uuid.uuid4().hex[:8]}")
         run_id = f"r-cancel-running-{uuid.uuid4().hex[:8]}"
         build_id = self.random_id("b-cancel-run")
         self._insert_verification_row(
@@ -1808,7 +1809,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
         problem_id = int(ctx["problem"]["id"])
         workspace_id = int(ctx["workspace"]["id"])
-        verification_id = f"inv-cancel-pending-{uuid.uuid4().hex[:8]}"
+        verification_id = canonical_test_verification_id(f"inv-cancel-pending-{uuid.uuid4().hex[:8]}")
         build_id = self.random_id("b-cancel-pending")
         self._insert_verification_row(
             verification_id=verification_id,
@@ -1870,7 +1871,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
         problem_id = int(ctx["problem"]["id"])
         workspace_id = int(ctx["workspace"]["id"])
-        verification_id = f"inv-cancel-domjudge-pending-{uuid.uuid4().hex[:8]}"
+        verification_id = canonical_test_verification_id(f"inv-cancel-domjudge-pending-{uuid.uuid4().hex[:8]}")
         run_id = f"r-cancel-domjudge-pending-{uuid.uuid4().hex[:8]}"
         build_id = self.random_id("b-cancel-domjudge-pending")
         self._insert_verification_row(
@@ -1936,7 +1937,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
         problem_id = int(ctx["problem"]["id"])
         workspace_id = int(ctx["workspace"]["id"])
-        verification_id = f"ver-list-failed-{uuid.uuid4().hex[:8]}"
+        verification_id = canonical_test_verification_id(f"ver-list-failed-{uuid.uuid4().hex[:8]}")
         build_id = self.random_id("b-list-failed")
         build_root = config.fs_manager.prepare_verification_root(build_id).resolve()
         build_root.mkdir(parents=True, exist_ok=True)
@@ -2012,7 +2013,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
         problem_id = int(ctx["problem"]["id"])
         workspace_id = int(ctx["workspace"]["id"])
-        verification_id = f"inv-verif-task-status-{uuid.uuid4().hex[:8]}"
+        verification_id = canonical_test_verification_id(f"inv-verif-task-status-{uuid.uuid4().hex[:8]}")
         run_id = f"r-verif-task-status-{uuid.uuid4().hex[:8]}"
         build_id = self.random_id("b-verif-lifecycle")
         run_root = config.fs_manager.prepare_verification_root(verification_id).resolve()
@@ -2166,7 +2167,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
         problem_id = int(ctx["problem"]["id"])
         workspace_id = int(ctx["workspace"]["id"])
-        verification_id = f"inv-verif-running-issue-{uuid.uuid4().hex[:8]}"
+        verification_id = canonical_test_verification_id(f"inv-verif-running-issue-{uuid.uuid4().hex[:8]}")
         run_id = f"r-running-issue-{uuid.uuid4().hex[:8]}"
         self._insert_verification_row(
             verification_id=verification_id,
@@ -2233,7 +2234,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
         problem_id = int(ctx["problem"]["id"])
         workspace_id = int(ctx["workspace"]["id"])
-        verification_id = f"inv-verif-task-graph-{uuid.uuid4().hex[:8]}"
+        verification_id = canonical_test_verification_id(f"inv-verif-task-graph-{uuid.uuid4().hex[:8]}")
         main_run_id = f"r-main-{uuid.uuid4().hex[:8]}"
         solution_run_id = f"r-solution-{uuid.uuid4().hex[:8]}"
         self._insert_verification_row(
@@ -2369,7 +2370,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
         problem_id = int(ctx["problem"]["id"])
         workspace_id = int(ctx["workspace"]["id"])
-        verification_id = f"inv-verif-task-stale-summary-{uuid.uuid4().hex[:8]}"
+        verification_id = canonical_test_verification_id(f"inv-verif-task-stale-summary-{uuid.uuid4().hex[:8]}")
         solution_run_id = f"r-stale-summary-{uuid.uuid4().hex[:8]}"
         self._insert_verification_row(
             verification_id=verification_id,
@@ -2487,7 +2488,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
         problem_id = int(ctx["problem"]["id"])
         workspace_id = int(ctx["workspace"]["id"])
-        verification_id = f"inv-verif-task-generate-{uuid.uuid4().hex[:8]}"
+        verification_id = canonical_test_verification_id(f"inv-verif-task-generate-{uuid.uuid4().hex[:8]}")
         solution_run_id = f"r-solution-{uuid.uuid4().hex[:8]}"
         self._insert_verification_row(
             verification_id=verification_id,
@@ -2573,7 +2574,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
         problem_id = int(ctx["problem"]["id"])
         workspace_id = int(ctx["workspace"]["id"])
-        verification_id = f"inv-verif-task-solution-status-{uuid.uuid4().hex[:8]}"
+        verification_id = canonical_test_verification_id(f"inv-verif-task-solution-status-{uuid.uuid4().hex[:8]}")
         solution_run_id = f"r-solution-status-{uuid.uuid4().hex[:8]}"
         self._insert_verification_row(
             verification_id=verification_id,
@@ -2681,7 +2682,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
         problem_id = int(ctx["problem"]["id"])
         workspace_id = int(ctx["workspace"]["id"])
-        verification_id = f"inv-verif-task-cancelled-column-{uuid.uuid4().hex[:8]}"
+        verification_id = canonical_test_verification_id(f"inv-verif-task-cancelled-column-{uuid.uuid4().hex[:8]}")
         accepted_run_id = f"r-accepted-{uuid.uuid4().hex[:8]}"
         self._insert_verification_row(
             verification_id=verification_id,
@@ -2821,7 +2822,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
         problem_id = int(ctx["problem"]["id"])
         workspace_id = int(ctx["workspace"]["id"])
-        verification_id = f"inv-verif-main-cancel-{uuid.uuid4().hex[:8]}"
+        verification_id = canonical_test_verification_id(f"inv-verif-main-cancel-{uuid.uuid4().hex[:8]}")
         self._insert_verification_row(
             verification_id=verification_id,
             problem_id=problem_id,
@@ -2933,7 +2934,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         ctx = workspace_service.workspace_context(problem, "alice", include_recent=False)
         problem_id = int(ctx["problem"]["id"])
         workspace_id = int(ctx["workspace"]["id"])
-        verification_id = f"inv-verif-sidebar-running-{uuid.uuid4().hex[:8]}"
+        verification_id = canonical_test_verification_id(f"inv-verif-sidebar-running-{uuid.uuid4().hex[:8]}")
         solution_run_id = f"r-sidebar-running-{uuid.uuid4().hex[:8]}"
         self._insert_verification_row(
             verification_id=verification_id,
@@ -3056,7 +3057,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
         problem_id = int(ctx["problem"]["id"])
         workspace_id = int(ctx["workspace"]["id"])
-        verification_id = f"inv-verif-step-shape-{uuid.uuid4().hex[:8]}"
+        verification_id = canonical_test_verification_id(f"inv-verif-step-shape-{uuid.uuid4().hex[:8]}")
         build_id = self.random_id("b-verif-step-shape")
         build_root = Path(os.environ["POLYGON_REPLICA_ARTIFACTS_ROOT"]) / "alice/sample" / build_id
         build_root.mkdir(parents=True, exist_ok=True)
@@ -3101,9 +3102,11 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         problem_id = int(ctx["problem"]["id"])
         workspace_id = int(ctx["workspace"]["id"])
         actor_user_id = int(ctx["user"]["id"] )
-        verification_id = f"inv-verif-no-validate-{uuid.uuid4().hex[:8]}"
+        verification_id = canonical_test_verification_id(f"inv-verif-no-validate-{uuid.uuid4().hex[:8]}")
         run_id = f"r-verif-no-validate-{uuid.uuid4().hex[:8]}"
-        build_id = self.random_id("b-verif-no-validate")
+        build_id = canonical_test_verification_id(
+            self.random_id("b-verif-no-validate")
+        )
         build_root = Path(os.environ["POLYGON_REPLICA_ARTIFACTS_ROOT"]) / "alice/sample" / build_id
         build_root.mkdir(parents=True, exist_ok=True)
         (build_root / "logs").mkdir(parents=True, exist_ok=True)
@@ -3193,9 +3196,11 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
         problem_id = int(ctx["problem"]["id"])
         workspace_id = int(ctx["workspace"]["id"])
-        verification_id = f"inv-verif-gen-running-{uuid.uuid4().hex[:8]}"
+        verification_id = canonical_test_verification_id(f"inv-verif-gen-running-{uuid.uuid4().hex[:8]}")
         run_id = f"r-verif-gen-running-{uuid.uuid4().hex[:8]}"
-        build_id = f"ver-artifact-gen-running-{uuid.uuid4().hex[:8]}"
+        build_id = canonical_test_verification_id(
+            f"artifact-gen-running:{uuid.uuid4().hex}"
+        )
         self._insert_stage_verification(
             verification_id=build_id,
             problem_id=problem_id,
@@ -3252,7 +3257,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         problem_id = int(ctx["problem"]["id"])
         workspace_id = int(ctx["workspace"]["id"])
         actor_user_id = int(ctx["user"]["id"] )
-        verification_id = f"inv-verif-val-note-{uuid.uuid4().hex[:8]}"
+        verification_id = canonical_test_verification_id(f"inv-verif-val-note-{uuid.uuid4().hex[:8]}")
         run_id = f"r-verif-val-note-{uuid.uuid4().hex[:8]}"
         run_root = Path(os.environ["POLYGON_REPLICA_RUN_ROOT"]) / run_id
         run_root.mkdir(parents=True, exist_ok=True)
@@ -3319,7 +3324,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
         problem_id = int(ctx["problem"]["id"])
         workspace_id = int(ctx["workspace"]["id"])
-        verification_id = f"inv-verif-top-error-{uuid.uuid4().hex[:8]}"
+        verification_id = canonical_test_verification_id(f"inv-verif-top-error-{uuid.uuid4().hex[:8]}")
         build_id = f"ver-artifact-top-error-{uuid.uuid4().hex[:8]}"
         first_run_id = f"r-verif-top-error-1-{uuid.uuid4().hex[:8]}"
         second_run_id = f"r-verif-top-error-2-{uuid.uuid4().hex[:8]}"
@@ -3393,9 +3398,11 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         problem_id = int(ctx["problem"]["id"])
         workspace_id = int(ctx["workspace"]["id"])
         actor_user_id = int(ctx["user"]["id"] )
-        verification_id = f"inv-verif-run-failed-{uuid.uuid4().hex[:8]}"
+        verification_id = canonical_test_verification_id(f"inv-verif-run-failed-{uuid.uuid4().hex[:8]}")
         run_id = f"r-verif-run-failed-{uuid.uuid4().hex[:8]}"
-        build_id = f"ver-artifact-run-failed-{uuid.uuid4().hex[:8]}"
+        build_id = canonical_test_verification_id(
+            f"artifact-run-failed:{uuid.uuid4().hex}"
+        )
         build_root = Path(os.environ["POLYGON_REPLICA_ARTIFACTS_ROOT"]) / "alice/sample" / build_id
         build_root.mkdir(parents=True, exist_ok=True)
         run_root = Path(os.environ["POLYGON_REPLICA_RUN_ROOT"]) / run_id
@@ -3479,9 +3486,11 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         problem_id = int(ctx["problem"]["id"])
         workspace_id = int(ctx["workspace"]["id"])
         actor_user_id = int(ctx["user"]["id"] )
-        verification_id = f"inv-verif-run-cancel-{uuid.uuid4().hex[:8]}"
+        verification_id = canonical_test_verification_id(f"inv-verif-run-cancel-{uuid.uuid4().hex[:8]}")
         run_id = f"r-verif-run-cancel-{uuid.uuid4().hex[:8]}"
-        build_id = f"ver-artifact-run-cancel-{uuid.uuid4().hex[:8]}"
+        build_id = canonical_test_verification_id(
+            f"artifact-run-cancel:{uuid.uuid4().hex}"
+        )
         build_root = Path(os.environ["POLYGON_REPLICA_ARTIFACTS_ROOT"]) / "alice/sample" / build_id
         build_root.mkdir(parents=True, exist_ok=True)
         run_root = Path(os.environ["POLYGON_REPLICA_RUN_ROOT"]) / run_id
@@ -3581,7 +3590,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         (ws / "solutions" / "accepted.cpp").write_text("int main(){return 0;}\n", encoding="utf-8")
         ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
         problem_id = int(ctx["problem"]["id"])
-        verification_id = f"inv-verif-step1-{uuid.uuid4().hex[:8]}"
+        verification_id = canonical_test_verification_id(f"inv-verif-step1-{uuid.uuid4().hex[:8]}")
         run_id = f"r-verif-step1-{uuid.uuid4().hex[:8]}"
         self._insert_verification_row(
             verification_id=verification_id,
@@ -3620,7 +3629,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
         problem_id = int(ctx["problem"]["id"])
         workspace_id = int(ctx["workspace"]["id"])
-        verification_id = f"inv-last-updated-{uuid.uuid4().hex[:8]}"
+        verification_id = canonical_test_verification_id(f"inv-last-updated-{uuid.uuid4().hex[:8]}")
         created_at = "2026-03-03T12:34:56+00:00"
         self._insert_verification_row(
             verification_id=verification_id,
@@ -3651,7 +3660,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
         problem_id = int(ctx["problem"]["id"])
         workspace_id = int(ctx["workspace"]["id"])
-        verification_id = f"inv-step-dicts-{uuid.uuid4().hex[:8]}"
+        verification_id = canonical_test_verification_id(f"inv-step-dicts-{uuid.uuid4().hex[:8]}")
         self._insert_verification_row(
             verification_id=verification_id,
             problem_id=problem_id,
@@ -3703,9 +3712,11 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         problem_id = int(ctx["problem"]["id"])
         workspace_id = int(ctx["workspace"]["id"])
         actor_user_id = int(ctx["user"]["id"] )
-        verification_id = f"inv-verif-skip-{uuid.uuid4().hex[:8]}"
+        verification_id = canonical_test_verification_id(f"inv-verif-skip-{uuid.uuid4().hex[:8]}")
         run_id = f"r-verif-skip-{uuid.uuid4().hex[:8]}"
-        build_id = self.random_id("b-verif-skip")
+        build_id = canonical_test_verification_id(
+            self.random_id("b-verif-skip")
+        )
         build_root = Path(os.environ["POLYGON_REPLICA_ARTIFACTS_ROOT"]) / "alice/sample" / build_id
         build_root.mkdir(parents=True, exist_ok=True)
         run_root = Path(os.environ["POLYGON_REPLICA_RUN_ROOT"]) / run_id
@@ -3809,7 +3820,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
 
         for column_count in (10, 11, 12):
             with self.subTest(column_count=column_count):
-                verification_id = f"ver-wide-{column_count}-{uuid.uuid4().hex[:8]}"
+                verification_id = canonical_test_verification_id(f"ver-wide-{column_count}-{uuid.uuid4().hex[:8]}")
                 tasks: list[dict[str, object]] = []
                 for index in range(column_count):
                     run_id = f"r-wide-{column_count}-{index}"
@@ -3955,7 +3966,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
         problem_id = int(ctx["problem"]["id"])
         workspace_id = int(ctx["workspace"]["id"])
-        verification_id = f"inv-unexpected-ac-text-{uuid.uuid4().hex[:8]}"
+        verification_id = canonical_test_verification_id(f"inv-unexpected-ac-text-{uuid.uuid4().hex[:8]}")
         run_id = f"r-unexpected-ac-text-{uuid.uuid4().hex[:8]}"
         self._insert_verification_row(
             verification_id=verification_id,
@@ -4202,7 +4213,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         (workspace / "solutions").mkdir(parents=True, exist_ok=True)
         (workspace / "solutions" / "tmp.cpp").write_text("int main(){return 0;}\n", encoding="utf-8")
 
-        verification_id = f"ver-runtime-detail-{uuid.uuid4().hex[:8]}"
+        verification_id = canonical_test_verification_id(f"ver-runtime-detail-{uuid.uuid4().hex[:8]}")
         config.verification_service.begin_verification_record(
             verification_id=verification_id,
             problem_id=problem_id,
@@ -4312,7 +4323,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         alice_ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
         problem_id = int(alice_ctx["problem"]["id"])
         alice_workspace_id = int(alice_ctx["workspace"]["id"])
-        verification_id = f"ver-collab-detail-{uuid.uuid4().hex[:8]}"
+        verification_id = canonical_test_verification_id(f"ver-collab-detail-{uuid.uuid4().hex[:8]}")
         artifact_root = config.fs_manager.prepare_verification_root(verification_id).resolve()
         artifact_root.mkdir(parents=True, exist_ok=True)
 
@@ -4440,7 +4451,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         (workspace / "solutions" / "tmp.cpp").write_text("int main(){return 0;}\n", encoding="utf-8")
         (workspace / "generators" / "random_tree.cpp").write_text("int main(){return 0;}\n", encoding="utf-8")
 
-        verification_id = f"ver-generate-detail-{uuid.uuid4().hex[:8]}"
+        verification_id = canonical_test_verification_id(f"ver-generate-detail-{uuid.uuid4().hex[:8]}")
         config.verification_service.begin_verification_record(
             verification_id=verification_id,
             problem_id=problem_id,
@@ -4572,7 +4583,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         (workspace / "solutions" / "tmp.cpp").write_text("int main(){return 0;}\n", encoding="utf-8")
         (workspace / "generators" / "random_tree.cpp").write_text("int main(){return 0;}\n", encoding="utf-8")
 
-        verification_id = f"ver-generate-fail-{uuid.uuid4().hex[:8]}"
+        verification_id = canonical_test_verification_id(f"ver-generate-fail-{uuid.uuid4().hex[:8]}")
         config.verification_service.begin_verification_record(
             verification_id=verification_id,
             problem_id=problem_id,
@@ -4654,7 +4665,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         workspace_id = int(ctx["workspace"]["id"])
         problem_id = int(ctx["problem"]["id"])
 
-        verification_id = f"ver-manual-generate-{uuid.uuid4().hex[:8]}"
+        verification_id = canonical_test_verification_id(f"ver-manual-generate-{uuid.uuid4().hex[:8]}")
         config.verification_service.begin_verification_record(
             verification_id=verification_id,
             problem_id=problem_id,
@@ -4743,7 +4754,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         (workspace / "solutions").mkdir(parents=True, exist_ok=True)
         (workspace / "solutions" / "tmp.cpp").write_text("int main(){return 0;}\n", encoding="utf-8")
 
-        verification_id = f"ver-duplicate-detail-{uuid.uuid4().hex[:8]}"
+        verification_id = canonical_test_verification_id(f"ver-duplicate-detail-{uuid.uuid4().hex[:8]}")
         tests_meta_rows = [
             {
                 "index": index,
@@ -4925,7 +4936,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         (workspace / "solutions").mkdir(parents=True, exist_ok=True)
         (workspace / "solutions" / "bulk.cpp").write_text("int main(){return 0;}\n", encoding="utf-8")
 
-        verification_id = f"ver-detail-limit-{uuid.uuid4().hex[:8]}"
+        verification_id = canonical_test_verification_id(f"ver-detail-limit-{uuid.uuid4().hex[:8]}")
         tests_meta_rows = [
             {
                 "index": index,
@@ -5014,7 +5025,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         (workspace / "solutions").mkdir(parents=True, exist_ok=True)
         (workspace / "solutions" / "std.cpp").write_text("int main(){return 0;}\n", encoding="utf-8")
 
-        verification_id = f"ver-main-correct-diag-{uuid.uuid4().hex[:8]}"
+        verification_id = canonical_test_verification_id(f"ver-main-correct-diag-{uuid.uuid4().hex[:8]}")
         detailed_error = (
             "g++: internal compiler error: File size limit exceeded signal terminated program as\n"
             "Please submit a full bug report."
@@ -5083,7 +5094,9 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
         problem_id = int(ctx["problem"]["id"])
         workspace_id = int(ctx["workspace"]["id"])
-        build_id = self.random_id("b-async-fail")
+        build_id = canonical_test_verification_id(
+            self.random_id("b-async-fail")
+        )
         build_root = self._artifact_root(build_id)
         build_root.mkdir(parents=True, exist_ok=True)
         self._insert_stage_verification(
@@ -5140,7 +5153,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
         problem_id = int(ctx["problem"]["id"])
         workspace_id = int(ctx["workspace"]["id"])
-        verification_id = f"ver-sanity-popup-{uuid.uuid4().hex[:8]}"
+        verification_id = canonical_test_verification_id(f"ver-sanity-popup-{uuid.uuid4().hex[:8]}")
         run_id = f"r-sanity-popup-{uuid.uuid4().hex[:8]}"
         self._insert_verification_row(
             verification_id=verification_id,
@@ -5219,7 +5232,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
         problem_id = int(ctx["problem"]["id"])
         workspace_id = int(ctx["workspace"]["id"])
-        verification_id = f"ver-sanity-warning-{uuid.uuid4().hex[:8]}"
+        verification_id = canonical_test_verification_id(f"ver-sanity-warning-{uuid.uuid4().hex[:8]}")
         run_id = f"run-warning-{uuid.uuid4().hex[:8]}"
         self._insert_verification_row(
             verification_id=verification_id,
@@ -5295,7 +5308,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
         problem_id = int(ctx["problem"]["id"])
         workspace_id = int(ctx["workspace"]["id"])
-        verification_id = f"ver-sanity-ok-failed-{uuid.uuid4().hex[:8]}"
+        verification_id = canonical_test_verification_id(f"ver-sanity-ok-failed-{uuid.uuid4().hex[:8]}")
         run_id = f"run-sanity-ok-failed-{uuid.uuid4().hex[:8]}"
         self._insert_verification_row(
             verification_id=verification_id,
@@ -5370,7 +5383,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
         problem_id = int(ctx["problem"]["id"])
         workspace_id = int(ctx["workspace"]["id"])
-        verification_id = f"ver-runtime-threshold-{uuid.uuid4().hex[:8]}"
+        verification_id = canonical_test_verification_id(f"ver-runtime-threshold-{uuid.uuid4().hex[:8]}")
         slow_run_id = f"run-runtime-threshold-{uuid.uuid4().hex[:8]}"
         mixed_run_id = f"run-runtime-mixed-{uuid.uuid4().hex[:8]}"
         self._insert_verification_row(
@@ -5534,7 +5547,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
         problem_id = int(ctx["problem"]["id"])
         workspace_id = int(ctx["workspace"]["id"])
-        verification_id = f"ver-sanity-list-{uuid.uuid4().hex[:8]}"
+        verification_id = canonical_test_verification_id(f"ver-sanity-list-{uuid.uuid4().hex[:8]}")
         self._insert_verification_row(
             verification_id=verification_id,
             problem_id=problem_id,
@@ -5621,6 +5634,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         self.assertNotIn("2026-02-23T00:01:00Z", preview_html)
 
         run_id = f"ui-runctx-{uuid.uuid4().hex[:8]}"
+        verification_id = self._verification_id_for_run(run_id)
         build_id = self.random_id("ui-rundetail-build")
         (ws / "solutions").mkdir(parents=True, exist_ok=True)
         (ws / "solutions" / "accepted.cpp").write_text("int main(){return 0;}\n", encoding="utf-8")
@@ -5645,13 +5659,18 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             mode="pass-fail",
             status="failed",
             summary=run_summary,
-            artifact_path=str(config.fs_manager.prepare_verification_root(f"ver-{run_id}").resolve()),
+            artifact_path=str(
+                config.fs_manager.prepare_verification_root(verification_id).resolve()
+            ),
             created_at="2026-02-23T00:02:00Z",
             finished_at="2026-02-23T00:02:01Z",
         )
         run_resp = run_page(_request("/problems/alice/sample/run"), "alice/sample", "alice")
         run_html = run_resp.body.decode("utf-8", errors="replace")
-        self.assertIn(f"/problems/alice/sample/run/details?verification_id=ver-{run_id}", run_html)
+        self.assertIn(
+            f"/problems/alice/sample/run/details?verification_id={verification_id}",
+            run_html,
+        )
         self.assertEqual(run_html.count('action="/problems/alice/sample/verification/start"'), 2)
         self.assertIn(
             'class="section-tab problem-section-tab problem-section-action-tab problem-section-action-tab-verification active"',
@@ -5716,7 +5735,9 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
         problem_id = int(ctx["problem"]["id"])
         workspace_id = int(ctx["workspace"]["id"])
-        build_id = self.random_id("b-ver-details")
+        build_id = canonical_test_verification_id(
+            self.random_id("b-ver-details")
+        )
         self._insert_stage_verification(
             verification_id=build_id,
             problem_id=problem_id,
@@ -5728,7 +5749,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             created_at="2026-03-12T00:00:00Z",
             finished_at="2026-03-12T00:00:01Z",
         )
-        verification_id = f"inv-ver-details-{uuid.uuid4().hex[:8]}"
+        verification_id = canonical_test_verification_id(f"inv-ver-details-{uuid.uuid4().hex[:8]}")
         self._insert_verification_row(
             verification_id=verification_id,
             problem_id=problem_id,
@@ -5766,7 +5787,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         problem_id = int(ctx["problem"]["id"])
         workspace_id = int(ctx["workspace"]["id"])
         build_id = self.random_id("b-ver-row-status")
-        verification_id = f"ver-stale-status-{uuid.uuid4().hex[:8]}"
+        verification_id = canonical_test_verification_id(f"ver-stale-status-{uuid.uuid4().hex[:8]}")
         self._insert_verification_row(
             verification_id=verification_id,
             problem_id=problem_id,
@@ -5802,7 +5823,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
         problem_id = int(ctx["problem"]["id"])
         workspace_id = int(ctx["workspace"]["id"])
-        verification_id = f"ver-list-reason-{uuid.uuid4().hex[:8]}"
+        verification_id = canonical_test_verification_id(f"ver-list-reason-{uuid.uuid4().hex[:8]}")
         long_reason = "first line\n" + ("very long reason " * 40).strip()
         self._insert_verification_row(
             verification_id=verification_id,
@@ -5840,7 +5861,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         problem_id = int(ctx["problem"]["id"])
         workspace_id = int(ctx["workspace"]["id"])
         build_id = self.random_id("b-ver-detail-status")
-        verification_id = f"ver-detail-stale-{uuid.uuid4().hex[:8]}"
+        verification_id = canonical_test_verification_id(f"ver-detail-stale-{uuid.uuid4().hex[:8]}")
         self._insert_verification_row(
             verification_id=verification_id,
             problem_id=problem_id,
@@ -5876,7 +5897,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         problem_id = int(ctx["problem"]["id"])
         workspace_id = int(ctx["workspace"]["id"])
         build_id = self.random_id("b-ver-sidebar-status")
-        verification_id = f"ver-sidebar-stale-{uuid.uuid4().hex[:8]}"
+        verification_id = canonical_test_verification_id(f"ver-sidebar-stale-{uuid.uuid4().hex[:8]}")
         self._insert_verification_row(
             verification_id=verification_id,
             problem_id=problem_id,
