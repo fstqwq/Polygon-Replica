@@ -81,8 +81,23 @@ class TestPublicContracts(unittest.TestCase):
         self.assertEqual(offenders, [])
 
         token_source = TOKENS_PATH.read_text(encoding="utf-8-sig")
-        for stale_color in ["#f6eff4", "#fffafd", "#d8c4d3", "#6d3a5f"]:
+        for stale_color in [
+            "#f6eff4",
+            "#fffafd",
+            "#d8c4d3",
+            "#6d3a5f",
+            "#fffbeb",
+            "#a16207",
+            "#fde68a",
+            "#92400e",
+            "#fff7ed",
+            "#c2410c",
+            "#fed7aa",
+            "#9a3412",
+        ]:
             self.assertNotIn(stale_color, token_source.lower())
+        for warning_color in ["#fff9db", "#9a6700", "#e7c64a", "#7a5200"]:
+            self.assertIn(warning_color, token_source.lower())
 
     def test_code_editor_assets_have_one_lazy_loading_owner(self) -> None:
         base_source = (ROOT / "app" / "template" / "base.html").read_text(encoding="utf-8-sig")

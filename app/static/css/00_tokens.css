@@ -11,7 +11,7 @@
   --surface-info: #eff6ff;
   --surface-success: #f0fdf4;
   --surface-danger: #fef2f2;
-  --surface-warning: #fffbeb;
+  --surface-warning: #fff9db;
   --line: #d7dee8;
   --line-strong: #aeb8c7;
   --field-border: #b8c2d0;
@@ -34,10 +34,10 @@
   --danger-link-hover-bg: var(--surface-danger);
   --danger-link-focus: var(--tag-fail-border);
   --danger-link-weight: 700;
-  --warn: #a16207;
+  --warn: #9a6700;
   --warn-bg: var(--surface-warning);
-  --warn-line: #fde68a;
-  --warn-text: #92400e;
+  --warn-line: #e7c64a;
+  --warn-text: #7a5200;
   --tag-ok-fg: var(--ok);
   --tag-ok-bg: var(--surface-success);
   --tag-ok-border: #bbf7d0;
