@@ -8,6 +8,7 @@ from app.service.problem_package.service import (
     ProblemPackageService,
     PublishedPackageReadiness,
 )
+from app.service.repository.revision import parse_verification_source
 from app.service.verification.failure_display import verification_task_failure_hint
 from app.service.verification.service import VerificationService
 from app.service.verification.types import Kind, WorkspaceVerificationRow
@@ -198,7 +199,12 @@ class ProblemReadinessService:
         head_commit = subject["head_commit"]
         if not subject["dirty"] and head_commit:
             commit_row = next(
-                (row for row in rows if row["source_commit"] == head_commit),
+                (
+                    row
+                    for row in rows
+                    if parse_verification_source(row["source_commit"]).base_commit
+                    == head_commit
+                ),
                 None,
             )
             if commit_row is not None:

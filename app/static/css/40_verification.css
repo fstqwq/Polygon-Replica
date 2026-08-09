@@ -814,25 +814,18 @@ body.verification-compact .run-details-page-compact .verification-detail-wrap {
   border-top: 1px solid var(--line);
 }
 
-.jury-log-cell {
+.interactive-feedback-cell {
   position: relative;
   white-space: normal;
 }
 
-.jury-log-preview {
+.feedback-preview {
   margin: 0;
   border: 0;
   background: transparent;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   word-break: break-word;
-  font-size: var(--font-size-ui-xs);
-}
-
-.jury-log-download {
-  display: block;
-  width: fit-content;
-  margin-top: var(--space-1);
   font-size: var(--font-size-ui-xs);
 }
 

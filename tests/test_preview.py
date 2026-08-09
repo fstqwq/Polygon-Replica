@@ -30,7 +30,11 @@ from app.service.statement.context import pick_statement_language, statement_lan
 from app.service.statement.ftl.renderer import render_ftl_template
 from app.service.statement.render import render_statement_main
 from app.service.statement.signature import statement_sources_signature
-from app.service.verification.signature import verification_fingerprint, verification_signature
+from app.service.verification.signature import (
+    verification_fingerprint,
+    verification_manifest,
+    verification_signature,
+)
 from tests.common import E2ETestBase
 from tests.identity_helpers import canonical_test_verification_id
 from app.impl.runtime.config import config
@@ -424,6 +428,22 @@ class TestPreview(E2ETestBase):
 
         self.assertEqual(digest_before, verification_signature(ws))
         self.assertNotEqual(fingerprint_before, verification_fingerprint(ws))
+
+    def test_verification_identity_ignores_empty_source_directories(self) -> None:
+        ws = self._workspace_path()
+        empty_source_dir = ws / "interactors"
+        self.assertEqual(list(empty_source_dir.iterdir()), [])
+        empty_source_dir.rmdir()
+
+        signature_without = verification_signature(ws)
+        manifest_without = verification_manifest(ws).signature
+        fingerprint_without = verification_fingerprint(ws)
+
+        empty_source_dir.mkdir()
+
+        self.assertEqual(signature_without, verification_signature(ws))
+        self.assertEqual(manifest_without, verification_manifest(ws).signature)
+        self.assertEqual(fingerprint_without, verification_fingerprint(ws))
 
     def test_preview_sample_sync_builds_manual_and_generator_from_verification(self) -> None:
         ws = self._workspace_path()

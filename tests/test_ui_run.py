@@ -1338,6 +1338,54 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         self.assertEqual(status["verification_id"], verification_id)
         self.assertFalse(status["stale"])
 
+    def test_clean_workspace_matches_canonical_workspace_source_commit(self) -> None:
+        problem = f"alice/verify-clean-source-{uuid.uuid4().hex[:8]}"
+        ws = self._prepare_verification_workspace(problem)
+        commit_resp = revision_commit(
+            problem=problem,
+            user="alice",
+            message=f"verify-clean-source-{uuid.uuid4().hex[:6]}",
+        )
+        self.assertEqual(commit_resp.status_code, 303)
+        ctx = workspace_service.workspace_context(problem, "alice", include_recent=False)
+        problem_id = int(ctx["problem"]["id"])
+        workspace_id = int(ctx["workspace"]["id"])
+        user_id = int(ctx["user"]["id"])
+        status = workspace_service.refresh_workspace_status_with_ids(
+            ws,
+            problem_id,
+            user_id,
+        )
+        head_commit = str(status["head_commit"])
+        self.assertTrue(head_commit)
+        verification_id = canonical_test_verification_id(
+            f"ver-clean-source-{uuid.uuid4().hex[:8]}"
+        )
+        self._insert_stage_verification(
+            verification_id=verification_id,
+            problem_id=problem_id,
+            workspace_id=workspace_id,
+            signature=f"old-signature-{uuid.uuid4().hex}",
+            source_commit=f"workspace:{head_commit}",
+            status="ok",
+        )
+
+        with patch.object(
+            problem_readiness_module,
+            "verification_sources_signature",
+            side_effect=AssertionError("clean source identity should avoid hashing"),
+        ) as full_hash:
+            status = self._problem_readiness(
+                problem_id=problem_id,
+                workspace_id=workspace_id,
+                workspace_path=ws,
+                dirty=False,
+            )["verification"]
+
+        full_hash.assert_not_called()
+        self.assertEqual(status["verification_id"], verification_id)
+        self.assertFalse(status["stale"])
+
     def test_verification_sidebar_fingerprint_cache_skips_full_hash(self) -> None:
         problem = f"alice/verify-fingerprint-cache-{uuid.uuid4().hex[:8]}"
         ws = self._prepare_verification_workspace(problem)
@@ -3986,6 +4034,9 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         token = "blob://sha256/" + ("a" * 64)
         encoded = base64.urlsafe_b64encode(token.encode("utf-8")).decode("ascii").rstrip("=")
         download_href = f"/problems/alice/sample/artifacts/ver-r-transcript/blob/{encoded}/program.out"
+        feedback_download_href = (
+            f"/problems/alice/sample/artifacts/ver-r-transcript/blob/{encoded}/feedback.log"
+        )
         detail_ctx = {
             "detail_rows": [
                 {
@@ -4017,11 +4068,11 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
                                         "time_display": "1ms (2ms wall)",
                                         "time_tone": "",
                                         "memory_display": "1MB",
-                                        "jury_log_preview": {
+                                        "feedback_preview": {
                                             "available": True,
-                                            "text": "jury accepted",
+                                            "text": "feedback accepted",
                                             "download_verification_id": "ver-r-transcript",
-                                            "download_rel_path": f"blob/{encoded}/jury.log",
+                                            "download_rel_path": f"blob/{encoded}/feedback.log",
                                         },
                                         "interactive_transcript": {
                                             "available": True,
@@ -4059,14 +4110,15 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             contains=(
                 "<strong>Pass 1 Input</strong>",
                 "<strong>Pass 1 Transcript</strong>",
-                "Jury log",
-                "jury accepted",
+                "Feedback",
+                "feedback accepted",
                 "ping",
                 "pong",
                 "Showing 2/2 events.",
                 download_href,
                 ">download raw</a>",
             ),
+            excludes=("Jury log", "feedback-download", feedback_download_href),
             label="interactive transcript fragment",
         )
 

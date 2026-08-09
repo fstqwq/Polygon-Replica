@@ -55,7 +55,7 @@
 
     {% if cell.detail.is_interactive %}
       {% for pass_row in cell.detail.pass_rows %}
-      {% set jury_log = pass_row.jury_log_preview %}
+      {% set feedback = pass_row.feedback_preview %}
       {% set transcript = pass_row.interactive_transcript %}
       <section class="interactive-pass">
         {{ artifact_preview_card(pass_row.pass_label + ' Input', pass_row.input_preview) }}
@@ -67,7 +67,7 @@
           <thead>
             <tr>
               <th>Status</th>
-              <th>Jury log</th>
+              <th>Feedback</th>
             </tr>
           </thead>
           <tbody>
@@ -83,18 +83,15 @@
                   {% endif %}
                 </div>
               </td>
-              <td class="fb-cell jury-log-cell">
-                {% if jury_log.available %}
-                  {% if jury_log.text == '(empty)' %}
+              <td class="fb-cell interactive-feedback-cell">
+                {% if feedback.available %}
+                  {% if feedback.text == '(empty)' %}
                   <span class="muted">—</span>
                   {% else %}
-                  <pre class="jury-log-preview">{{ jury_log.text }}</pre>
-                  {% endif %}
-                  {% if jury_log.download_verification_id %}
-                  <a class="jury-log-download" href="{{ problem_href('artifact_file', verification_id=jury_log.download_verification_id, rel_path=jury_log.download_rel_path) }}">download</a>
+                  <pre class="feedback-preview">{{ feedback.text }}</pre>
                   {% endif %}
                 {% else %}
-                <span class="muted">{{ jury_log.message }}</span>
+                <span class="muted">{{ feedback.message }}</span>
                 {% endif %}
               </td>
             </tr>

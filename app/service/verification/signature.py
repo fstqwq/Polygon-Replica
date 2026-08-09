@@ -92,17 +92,18 @@ def _verification_source_entries(workspace: Path, *, hash_content: bool) -> list
     def _hash_dir(rel_dir: str) -> None:
         root = workspace / rel_dir
         try:
-            if root.is_symlink() or (not root.exists()) or (not root.is_dir()):
-                entries.append({"kind": "dir", "target": rel_dir, "state": "missing"})
+            if not root.exists():
+                return
+            if root.is_symlink() or (not root.is_dir()):
+                entries.append({"kind": "dir", "target": rel_dir, "state": "invalid"})
                 return
             root_resolved = root.resolve()
         except OSError:
-            entries.append({"kind": "dir", "target": rel_dir, "state": "missing"})
+            entries.append({"kind": "dir", "target": rel_dir, "state": "unreadable"})
             return
         if not _is_within_workspace(root_resolved):
             entries.append({"kind": "dir", "target": rel_dir, "state": "invalid"})
             return
-        entries.append({"kind": "dir", "target": rel_dir, "state": "ok"})
         files: list[tuple[str, Path]] = []
         for dirpath, dirnames, filenames in os.walk(root, topdown=True, followlinks=False):
             dir_root = Path(dirpath)

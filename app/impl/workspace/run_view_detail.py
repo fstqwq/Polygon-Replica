@@ -1516,15 +1516,17 @@ def build_run_detail_context(
                                 unavailable_message='missing' if capture_complete else 'not captured',
                             )
                             judge_message_rel = str(row_payload.get('judge_message_rel') or '')
-                            jury_log_preview = _run_detail_preview_unavailable(
+                            feedback_preview = _run_detail_preview_unavailable(
                                 'missing' if capture_complete else 'not captured'
                             )
                             if judge_message_rel:
-                                jury_log_preview = _verification_blob_preview(
+                                feedback_preview = _verification_blob_preview(
                                     source_verification_id,
                                     judge_message_rel,
                                 )
-                            row_payload['jury_log_preview'] = jury_log_preview
+                                feedback_preview['download_verification_id'] = ''
+                                feedback_preview['download_rel_path'] = ''
+                            row_payload['feedback_preview'] = feedback_preview
                         else:
                             checker_log_rel = str(row_payload.get('checker_log_rel') or '')
                             feedback_rel = str(row_payload.get('feedback_rel') or '')
