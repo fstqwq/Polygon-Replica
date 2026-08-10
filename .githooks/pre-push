@@ -1,0 +1,8 @@
+#!/bin/sh
+set -eu
+
+repo_root=$(git rev-parse --show-toplevel)
+cd "$repo_root"
+
+echo "[pre-push] Checking test resource assignments"
+"${PYTHON:-python}" tests/scripts/run_test_groups.py --check-manifest

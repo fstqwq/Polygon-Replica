@@ -13,9 +13,6 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from app.service.platform.worker_queue import WorkerQueueService
-
-
 ROOT = Path(__file__).resolve().parents[2]
 TEST_ROOT = ROOT / "tests"
 MANIFEST_PATH = TEST_ROOT / "resource_groups.json"
@@ -126,6 +123,8 @@ def _write_timing(group: str, elapsed: float, result: TimingResult) -> None:
 
 
 def run_group(group: str, filenames: list[str]) -> bool:
+    from app.service.platform.worker_queue import WorkerQueueService
+
     loader = unittest.defaultTestLoader
     suite = loader.loadTestsFromNames([_module_name(name) for name in filenames])
     if group == "unit" and "app.impl.runtime.config" in sys.modules:
@@ -172,7 +171,12 @@ def run_group(group: str, filenames: list[str]) -> bool:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run resource-classified unittest groups")
-    parser.add_argument("groups", nargs="*", choices=GROUP_ORDER)
+    parser.add_argument(
+        "--check-manifest",
+        action="store_true",
+        help="validate test resource assignments without loading tests",
+    )
+    parser.add_argument("groups", nargs="*")
     return parser.parse_args()
 
 
@@ -180,6 +184,8 @@ def main() -> int:
     args = parse_args()
     manifest = load_manifest()
     validate_resource_contracts(manifest)
+    if args.check_manifest:
+        return 0
     requested = list(args.groups)
     if not requested:
         raw = os.environ.get("POLYGON_REPLICA_TEST_GROUPS", "").strip()

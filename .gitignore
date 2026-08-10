@@ -8,5 +8,7 @@ migration-gates/*
 .*
 !.gitattributes
 !.dockerignore
+!.githooks/
+!.githooks/pre-push
 tmp/
 third_party/polygon-package-examples/contest/contest-41963.zip

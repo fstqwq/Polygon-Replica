@@ -4,6 +4,15 @@
 resource group. The runner rejects missing, stale, or duplicate assignments
 before loading tests.
 
+Enable the repository hooks once per clone:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+The pre-push hook runs only the resource manifest and group-contract checks. It
+does not load or execute tests.
+
 | Group | Allowed resources |
 | --- | --- |
 | `unit` | Pure Python and small temporary files; no runtime config, SQLite, Git, workers, or subprocesses |
