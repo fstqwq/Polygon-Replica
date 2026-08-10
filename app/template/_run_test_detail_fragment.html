@@ -21,9 +21,7 @@
 {% endif %}
 {% if not row.is_interactive %}
 <div class="preview-grid test-data-grid">
-  {% if not row.is_multi_pass %}
   {{ artifact_preview_card('Input ' + row.test_name, row.input_preview) }}
-  {% endif %}
   {{ artifact_preview_card('Answer', row.answer_preview) }}
 </div>
 {% endif %}

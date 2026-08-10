@@ -4261,6 +4261,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             self,
             html,
             contains=(
+                "<strong>Input 001.in</strong>",
                 "<strong>Answer</strong>",
                 "canonical answer",
                 "<strong>Pass 1 Input</strong>",
@@ -4276,7 +4277,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
                 "<strong>Pass 2 Output</strong>",
                 "second pass output",
             ),
-            excludes=("<strong>Input 001.in</strong>", "Jury log", "Transcript"),
+            excludes=("Jury log", "Transcript"),
             label="multi-pass pass-fail detail",
         )
         self.assertLess(html.index("first pass feedback"), html.index("second pass feedback"))

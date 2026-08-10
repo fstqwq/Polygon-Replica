@@ -1592,10 +1592,6 @@ def build_run_detail_context(
                     if output_preview is not None and bool(output_preview.get('available')):
                         answer_preview = output_preview
                         break
-            row_is_multi_pass = any(
-                bool((cell.get('detail') or {}).get('is_multi_pass'))
-                for cell in cells
-            )
             generate_note = dict(row_generate_notes.get(test_name) or {})
             test_cell = _test_name_cell(
                 actual_test_name=test_name,
@@ -1615,7 +1611,6 @@ def build_run_detail_context(
                     'input_preview': input_preview,
                     'answer_preview': answer_preview,
                     'is_interactive': row_is_interactive,
-                    'is_multi_pass': row_is_multi_pass,
                     'generate_detail': (
                         generation_view
                         if generation_view is not None
