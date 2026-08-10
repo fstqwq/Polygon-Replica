@@ -59,6 +59,10 @@ historical tree, hash content, or alter contestant/checker exit status. A pass
 that exceeds DOMjudge's native pass limit ends through `internal-error`; there
 is no final artifact callback for that pass.
 
+DOMjudge does not create `teammessage.txt` when a checker or interactor has no
+team-facing message. Capture represents that optional message as a zero-byte
+regular member so its absence cannot discard the remaining pass evidence.
+
 ## Files, cache, and versions
 
 Source and input files are served by opaque DOMjudge-compatible identifiers.

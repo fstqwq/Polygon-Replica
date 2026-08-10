@@ -83,6 +83,20 @@ make_read_only() {
   chmod 0444 "$1" 2>/dev/null
 }
 
+ensure_optional_message() {
+  MESSAGE_PATH="$1"
+  if [ -e "$MESSAGE_PATH" ] || [ -L "$MESSAGE_PATH" ]; then
+    [ -f "$MESSAGE_PATH" ] && [ ! -L "$MESSAGE_PATH" ]
+    return $?
+  fi
+  : >"$MESSAGE_PATH" 2>/dev/null
+}
+
+ensure_optional_message_read_only() {
+  ensure_optional_message "$1" || return 1
+  make_read_only "$1"
+}
+
 expose_capture() {
   load_testcase_layout "$1" || return 1
   PASS_ONE_FILE="$TESTCASE_DIR/$PASS_ONE_INPUT"
@@ -101,7 +115,8 @@ expose_capture() {
     make_read_only "$PASS_DIR/program.meta" || return 1
     make_read_only "$PASS_DIR/compare.meta" || return 1
     make_read_only "$HISTORY_FEEDBACK/judgemessage.txt" || return 1
-    make_read_only "$HISTORY_FEEDBACK/teammessage.txt" || return 1
+    ensure_optional_message_read_only \
+      "$HISTORY_FEEDBACK/teammessage.txt" || return 1
     make_read_only "$HISTORY_FEEDBACK/nextpass.in" || return 1
     PASS_NUMBER=$((PASS_NUMBER + 1))
   done
@@ -157,6 +172,8 @@ add_complete_history() {
     add_source_member \
       "$PASS_NUMBER/feedback/judgemessage.txt" \
       "passes/$PASS_NUMBER/judgemessage.txt" || return 1
+    ensure_optional_message \
+      "$TESTCASE_DIR/$PASS_NUMBER/feedback/teammessage.txt" || return 1
     add_source_member \
       "$PASS_NUMBER/feedback/teammessage.txt" \
       "passes/$PASS_NUMBER/teammessage.txt" || return 1
@@ -179,6 +196,7 @@ add_final_supplement() {
   else
     add_source_member "$CURRENT_PASS/testdata.in" "passes/$CURRENT_PASS/input" || return 1
   fi
+  ensure_optional_message "$FEEDBACK_DIR/teammessage.txt" || return 1
   add_source_member \
     "$CURRENT_PASS/feedback/teammessage.txt" \
     "passes/$CURRENT_PASS/teammessage.txt"

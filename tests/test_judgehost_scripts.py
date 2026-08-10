@@ -756,6 +756,54 @@ class TestJudgehostScripts(unittest.TestCase):
             self.assertEqual(bundle.pass_files(1)["input"], b"input 1\n")
             self.assertEqual(bundle.pass_files(1)["teammessage.txt"], b"team 1\n")
 
+    def test_pass_capture_represents_absent_domjudge_team_messages_as_empty(self) -> None:
+        for interactive in (False, True):
+            with self.subTest(interactive=interactive), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                capture = self._write_pass_capture(root, max_bytes=1024 * 1024)
+                testcase = root / "testcase"
+                first = self._write_domjudge_pass(
+                    testcase,
+                    "1",
+                    omitted=frozenset({"feedback/teammessage.txt"}),
+                )
+                (first / "feedback/nextpass.in").write_bytes(b"second input\n")
+                self._run_capture_action(capture, "prepare", first)
+                if not interactive:
+                    self._run_capture_action(capture, "expose", first)
+                self._run_capture_action(
+                    capture,
+                    "finish",
+                    first,
+                    exit_status=42,
+                )
+
+                second = self._write_domjudge_pass(
+                    testcase,
+                    "2",
+                    omitted=frozenset({"feedback/teammessage.txt"}),
+                )
+                self._run_capture_action(capture, "prepare", second)
+                if not interactive:
+                    self._run_capture_action(capture, "expose", second)
+                result = self._run_capture_action(
+                    capture,
+                    "finish",
+                    second,
+                    exit_status=43,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+
+                bundle = parse_pass_bundle(
+                    (second / "feedback/teammessage.txt").read_bytes(),
+                    max_bundle_bytes=1024 * 1024,
+                    max_member_bytes=1024 * 1024,
+                )
+                assert bundle is not None
+                self.assertEqual(bundle.final_pass_number, 2)
+                self.assertEqual(bundle.pass_files(1)["teammessage.txt"], b"")
+                self.assertEqual(bundle.pass_files(2)["teammessage.txt"], b"")
+
     def test_pass_capture_preselects_metadata_only_and_runs_tar_once(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
