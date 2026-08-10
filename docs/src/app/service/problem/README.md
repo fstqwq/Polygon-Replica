@@ -12,3 +12,9 @@ publication, execution, or artifacts. Readiness combines read-only Git,
 verification, and package projections without collapsing their states. The
 authored shapes and fallbacks are owned by the
 [problem-source protocol](../../../../protocol/problem-source.md).
+
+Verification readiness considers the records visible from the current
+workspace: records owned by that workspace and problem-level records whose
+`workspace_id` is `NULL`. A record is current only when its persisted commit or
+source signature matches the current workspace content; record ownership is not
+itself source equivalence.

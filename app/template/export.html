@@ -12,7 +12,7 @@
         <option value="icpc">{{ icpc_option_label }}</option>
         <option value="native">{{ native_option_label }}</option>
       </select>
-      <button class="btn primary-action" type="submit">Export</button>
+      <button class="btn primary-action" type="submit" {% if not ctx.access.can_write %}disabled title="{{ ctx.access.write_block_reason }}"{% endif %}>Export</button>
     </form>
   </section>
 </div>
@@ -33,6 +33,8 @@
       <td class="table-cell-actions">
         {% if row.open_kind == 'export' %}
         <a href="{{ problem_href('export_file', export_id=row.open_export_id, filename=row.open_filename) }}">{{ row.open_label }}</a>
+        {% elif row.open_kind == 'materialization' %}
+        <a href="{{ problem_href('materialization_file', materialization_id=row.open_materialization_id) }}">{{ row.open_label }}</a>
         {% elif row.open_kind == 'verification' %}
         <a href="{{ problem_href('run_details_page', query={'verification_id': row.open_verification_id}) }}">{{ row.open_label }}</a>
         {% else %}

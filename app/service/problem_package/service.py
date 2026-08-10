@@ -150,6 +150,20 @@ class ProblemPackageService:
             raise ValueError("problem not found")
         return self._published_revision_for_problem(problem)
 
+    def problem_materializations(
+        self,
+        problem_id: int,
+        *,
+        limit: int = 40,
+    ) -> list[MaterializationRow]:
+        return self.store.problem_materializations(
+            int(problem_id),
+            limit=max(1, int(limit)),
+        )
+
+    def materialization(self, materialization_id: str) -> MaterializationRow | None:
+        return self.store.materialization(materialization_id)
+
     def _published_revision_for_problem(
         self,
         problem: PublishedProblem,

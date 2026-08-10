@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from fastapi.responses import HTMLResponse
 
-from app.impl.run_export.artifact import artifact_file, export_file
+from app.impl.run_export.artifact import artifact_file, export_file, materialization_file
 from app.impl.run_export.export import export_create, export_page
 from app.impl.run_export.run import (
     run_cancel,
@@ -77,5 +77,10 @@ router.add_api_route(
 router.add_api_route(
     "/problems/{problem:path}/exports/{export_id}/{filename}",
     export_file,
+    methods=["GET"],
+)
+router.add_api_route(
+    "/problems/{problem:path}/packages/{materialization_id}/native.zip",
+    materialization_file,
     methods=["GET"],
 )

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import TypedDict
+from typing import Mapping, TypedDict
 
 from app.db import DB, now_iso
 from app.service.verification.lifecycle import AdmissionCommit, VerificationAdmission
@@ -122,6 +122,30 @@ class VerificationStore:
 
         return self.db.write_transaction(_tx)
 
+    def list_visible_rows(
+        self,
+        *,
+        problem_id: int,
+        workspace_id: int,
+        limit: int,
+        kinds: tuple[str, ...],
+    ) -> list[VerificationRecordRow]:
+        kind_tokens = list(kinds) or [Kind.ALL.value, Kind.SAMPLE.value, Kind.CUSTOM.value]
+        placeholders = ",".join(("?" for _ in kind_tokens))
+        rows = self.db.fetch_all(
+            f"""
+            SELECT id,problem_id,workspace_id,signature,source_commit,kind,status,fail_reason,error,sanity_status,created_at,finished_at
+            FROM verifications
+            WHERE problem_id=?
+              AND (workspace_id=? OR workspace_id IS NULL)
+              AND kind IN ({placeholders})
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            [int(problem_id), int(workspace_id), *kind_tokens, max(1, int(limit))],
+        )
+        return [self._record_row(dict(row)) for row in rows]
+
     def list_rows(
         self,
         *,
@@ -143,6 +167,31 @@ class VerificationStore:
             [int(problem_id), int(workspace_id), *kind_tokens, max(1, int(limit))],
         )
         return [self._record_row(dict(row)) for row in rows]
+
+    def visible_verification_rows(
+        self,
+        problem_id: int,
+        workspace_id: int,
+        *,
+        limit: int,
+        kinds: tuple[str, ...] = (Kind.ALL.value, Kind.CUSTOM.value),
+    ) -> list[WorkspaceVerificationRow]:
+        kind_tokens = list(kinds) or [Kind.ALL.value, Kind.CUSTOM.value]
+        placeholders = ",".join(("?" for _ in kind_tokens))
+        rows = self.db.fetch_all(
+            f"""
+            SELECT id,status,signature,source_commit,kind,fail_reason,error,
+                   sanity_status,created_at,finished_at
+            FROM verifications
+            WHERE problem_id=?
+              AND (workspace_id=? OR workspace_id IS NULL)
+              AND kind IN ({placeholders})
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            [problem_id, workspace_id, *kind_tokens, max(1, int(limit))],
+        )
+        return [self._workspace_row(row) for row in rows]
 
     def workspace_verification_rows(
         self,
@@ -167,21 +216,78 @@ class VerificationStore:
         sql += " ORDER BY created_at DESC LIMIT ?"
         params.append(max(1, int(limit)))
         rows = self.db.fetch_all(sql, params)
-        return [
-            {
-                "id": str(row["id"]),
-                "status": str(row["status"] or ""),
-                "signature": str(row["signature"] or ""),
-                "source_commit": str(row["source_commit"] or ""),
-                "kind": str(row["kind"] or ""),
-                "fail_reason": str(row["fail_reason"] or ""),
-                "error": str(row["error"] or ""),
-                "sanity_status": str(row["sanity_status"] or ""),
-                "created_at": str(row["created_at"] or ""),
-                "finished_at": str(row["finished_at"] or ""),
-            }
-            for row in rows
-        ]
+        return [self._workspace_row(row) for row in rows]
+
+    @staticmethod
+    def _workspace_row(row: Mapping[str, object]) -> WorkspaceVerificationRow:
+        return {
+            "id": str(row["id"]),
+            "status": str(row["status"] or ""),
+            "signature": str(row["signature"] or ""),
+            "source_commit": str(row["source_commit"] or ""),
+            "kind": str(row["kind"] or ""),
+            "fail_reason": str(row["fail_reason"] or ""),
+            "error": str(row["error"] or ""),
+            "sanity_status": str(row["sanity_status"] or ""),
+            "created_at": str(row["created_at"] or ""),
+            "finished_at": str(row["finished_at"] or ""),
+        }
+
+    def visible_verification_rows_many(
+        self,
+        subjects: list[WorkspaceVerificationKey],
+        *,
+        limit: int,
+        kinds: tuple[str, ...] = (Kind.ALL.value, Kind.CUSTOM.value),
+    ) -> dict[WorkspaceVerificationKey, list[WorkspaceVerificationRow]]:
+        keys = list(
+            dict.fromkeys(
+                (int(problem_id), int(workspace_id))
+                for problem_id, workspace_id in subjects
+            )
+        )
+        if not keys:
+            return {}
+        kind_tokens = list(kinds) or [Kind.ALL.value, Kind.CUSTOM.value]
+        requested_values = ",".join("(?,?)" for _key in keys)
+        kind_placeholders = ",".join("?" for _kind in kind_tokens)
+        rows = self.db.fetch_all(
+            f"""
+            WITH requested(problem_id,workspace_id) AS (
+                VALUES {requested_values}
+            ), ranked AS (
+                SELECT v.id,r.problem_id,
+                       r.workspace_id AS requested_workspace_id,
+                       v.status,v.signature,v.source_commit,v.kind,
+                       v.fail_reason,v.error,v.sanity_status,
+                       v.created_at,v.finished_at,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY r.problem_id,r.workspace_id
+                           ORDER BY v.created_at DESC
+                       ) AS row_number
+                FROM requested r
+                JOIN verifications v
+                  ON v.problem_id=r.problem_id
+                 AND (v.workspace_id=r.workspace_id OR v.workspace_id IS NULL)
+                WHERE v.kind IN ({kind_placeholders})
+            )
+            SELECT * FROM ranked
+            WHERE row_number<=?
+            ORDER BY problem_id,requested_workspace_id,created_at DESC
+            """,
+            [
+                *(value for key in keys for value in key),
+                *kind_tokens,
+                max(1, int(limit)),
+            ],
+        )
+        result: dict[WorkspaceVerificationKey, list[WorkspaceVerificationRow]] = {
+            key: [] for key in keys
+        }
+        for row in rows:
+            key = (int(row["problem_id"]), int(row["requested_workspace_id"]))
+            result[key].append(self._workspace_row(row))
+        return result
 
     def workspace_verification_rows_many(
         self,

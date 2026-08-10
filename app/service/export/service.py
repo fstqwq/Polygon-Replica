@@ -132,16 +132,12 @@ class ExportService:
     def problem_export_jobs(
         self,
         problem_id: int,
-        actor_user_id: int,
         *,
         limit: int,
-        include_all: bool = False,
     ) -> list[ExportJobRow]:
         return self._store.problem_export_jobs(
             int(problem_id),
-            int(actor_user_id),
             limit=limit,
-            include_all=include_all,
         )
 
     def latest_succeeded_export_job(

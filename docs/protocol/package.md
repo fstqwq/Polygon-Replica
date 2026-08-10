@@ -104,6 +104,12 @@ verification is not ready. Late diagnostic items augment detail display but do
 not change that immutable readiness decision, source identity, or archive
 availability.
 
+Package history is problem-level. Every user with problem read access sees the
+same export jobs and Native materializations, including materializations
+created as a side effect of contest builds. An available Native materialization
+can be downloaded directly from the Packages page. Creating an export remains
+a write-authorized operation.
+
 ## ICPC export
 
 ICPC export produces one hybrid ZIP; there are no selectable compatibility

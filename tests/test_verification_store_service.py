@@ -15,6 +15,64 @@ from tests.verification_service_fixture import VerificationServiceTestBase
 
 
 class TestVerificationStoreService(VerificationServiceTestBase):
+    def test_visible_scope_includes_problem_level_but_not_other_workspaces(self) -> None:
+        self.workspace_service.ensure_user("bob")
+        self.workspace_service.grant_repo_access(self.problem, "bob", "owner")
+        self.workspace_service.ensure_workspace(
+            self.problem,
+            "bob",
+            refresh_status=False,
+        )
+        bob_context = self.workspace_service.workspace_context(
+            self.problem,
+            "bob",
+            include_recent=False,
+        )
+        bob_workspace_id = int(bob_context["workspace"]["id"])
+        verification_ids = {
+            "owned": canonical_test_verification_id(self.random_id("ver-owned")),
+            "published": canonical_test_verification_id(self.random_id("ver-published")),
+            "foreign": canonical_test_verification_id(self.random_id("ver-foreign")),
+        }
+        for scope, workspace_id in (
+            ("owned", self.workspace_id),
+            ("published", None),
+            ("foreign", bob_workspace_id),
+        ):
+            admission = self.verification_service.admit_verification(
+                VerificationAdmission(
+                    verification_id=verification_ids[scope],
+                    problem_id=self.problem_id,
+                    workspace_id=workspace_id,
+                    signature=f"signature-{scope}",
+                    source_commit=f"commit-{scope}",
+                    kind="all",
+                )
+            )
+            self.assertEqual(admission.outcome, "admitted")
+
+        visible_records = self.verification_service.list_visible_verification_rows(
+            self.problem_id,
+            self.workspace_id,
+        )
+        self.assertEqual(
+            {row["id"] for row in visible_records},
+            {verification_ids["owned"], verification_ids["published"]},
+        )
+        visible_readiness_rows = self.verification_service.visible_verification_rows(
+            self.problem_id,
+            self.workspace_id,
+        )
+        self.assertEqual(
+            {row["id"] for row in visible_readiness_rows},
+            {verification_ids["owned"], verification_ids["published"]},
+        )
+        owned_rows = self.verification_service.workspace_verification_rows(
+            self.problem_id,
+            self.workspace_id,
+        )
+        self.assertEqual([row["id"] for row in owned_rows], [verification_ids["owned"]])
+
     def test_verification_detail_lives_in_db_without_sidecar_file(self) -> None:
         self.workspace_service.ensure_workspace(self.problem, self.user)
         ctx = self.workspace_service.workspace_context(self.problem, self.user, include_recent=False)

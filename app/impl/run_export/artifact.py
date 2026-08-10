@@ -70,3 +70,32 @@ def export_file(problem: str, user: Annotated[str, Depends(require_session_user)
         raise HTTPException(status_code=404, detail="artifact file not found")
     download_name = Path(filename).name or "package.zip"
     return FileResponse(file_path, filename=download_name)
+
+
+def materialization_file(
+    problem: str,
+    user: Annotated[str, Depends(require_session_user)],
+    materialization_id: str,
+):
+    user_ctx = global_user_ctx(user)
+    problem_row = config.contest_service.problem_by_slug(problem)
+    if problem_row is None:
+        raise HTTPException(status_code=404, detail="problem not found")
+    problem_id = int(problem_row["id"])
+    access = workspace_access_context(problem_id, int(user_ctx["user"]["id"]))
+    if not bool(access["can_read"]):
+        raise HTTPException(status_code=403, detail=access["read_block_reason"])
+    materialization = config.problem_package_service.materialization(
+        materialization_id
+    )
+    if materialization is None or materialization["problem_id"] != problem_id:
+        raise HTTPException(status_code=404, detail="package not found")
+    try:
+        materialization, file_path = config.problem_package_service.native_archive(
+            materialization_id
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail="package unavailable") from exc
+    slug = Path(str(problem_row["slug"])).name or "problem"
+    filename = f"{slug}-native-v{materialization['revision_number']}.zip"
+    return FileResponse(file_path, filename=filename)

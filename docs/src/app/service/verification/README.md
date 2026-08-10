@@ -31,6 +31,17 @@ or coordinator state. A verification snapshot reads parent, detail, graph,
 locators, and diagnostics consistently before adding process-local runtime
 overlays.
 
+Workspace mutation and visibility are separate scopes. Cancellation and
+workspace-specific execution lookup require a record owned by that workspace.
+History, detail reads, and readiness may also see problem-level published
+verifications (`workspace_id IS NULL`); their original records cannot be
+cancelled or amended from a workspace. Workspace history and readiness exclude
+records owned by another workspace. A collaborator with problem access can
+open such a record by ID for review, but cannot cancel it. Rejudge does not
+mutate the source record: an
+authorized viewer may use its reusable solution paths to create a new
+verification owned by the viewer's current workspace.
+
 The process-local coordinator exists only after activation and while a
 verification is active. It consumes lifecycle commits after SQLite commit and
 is not a durable fact source. SQLite rows survive restart and startup

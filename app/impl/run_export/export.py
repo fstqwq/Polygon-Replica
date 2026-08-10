@@ -154,7 +154,6 @@ def export_page(request: Request, problem: str, user: Annotated[str, Depends(req
         contest_workspace=contest_workspace_context_from_request(request),
     )
     problem_id = int(ctx['problem']['id'])
-    actor_user_id = int(ctx["user"]["id"])
     try:
         published_revision = config.problem_package_service.published_revision(problem_id)
         head_commit = published_revision.source_commit
@@ -175,9 +174,11 @@ def export_page(request: Request, problem: str, user: Annotated[str, Depends(req
     )
     job_rows = config.export_service.problem_export_jobs(
         problem_id,
-        actor_user_id,
         limit=40,
-        include_all=bool(ctx["access"]["can_manage"]),
+    )
+    materialization_rows = config.problem_package_service.problem_materializations(
+        problem_id,
+        limit=40,
     )
     revision_cache: dict[str, int | None] = {}
     archive_summary_cache: dict[tuple[str, str], dict[str, object]] = {}
@@ -249,6 +250,48 @@ def export_page(request: Request, problem: str, user: Annotated[str, Depends(req
                 "open_label": open_label,
             }
         )
+    native_job_materializations = {
+        str(row["materialization_id"])
+        for row in job_rows
+        if str(row["export_type"]) == "native" and str(row["materialization_id"])
+    }
+    for materialization in materialization_rows:
+        materialization_id = str(materialization["id"])
+        if materialization_id in native_job_materializations:
+            continue
+        status = str(materialization["status"])
+        available = status == "available"
+        activity_rows.append(
+            {
+                "created_at": materialization["created_at"],
+                "type_display": "Native",
+                "source_display": f"v{int(materialization['revision_number'])}",
+                "status": status,
+                "detail": (
+                    "native.zip"
+                    if available
+                    else str(
+                        materialization["unavailable_reason"]
+                        or "artifact unavailable"
+                    )
+                ),
+                "open_kind": "materialization" if available else "",
+                "open_materialization_id": materialization_id,
+                "open_label": "zip" if available else "",
+            }
+        )
+    activity_rows.sort(
+        key=lambda item: (
+            str(item["created_at"]),
+            str(
+                item.get("open_export_id")
+                or item.get("open_materialization_id")
+                or ""
+            ),
+        ),
+        reverse=True,
+    )
+    activity_rows = activity_rows[:40]
     return template_response(
         request,
         'export.html',

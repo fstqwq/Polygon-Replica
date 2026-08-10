@@ -46,6 +46,7 @@ from tests.ui_support import (
     config,
     general_page,
     json,
+    export_page,
     revision_commit,
     preview_page,
     run_details_page,
@@ -463,7 +464,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         *,
         verification_id: str,
         problem_id: int,
-        workspace_id: int,
+        workspace_id: int | None,
         kind: str = Kind.ALL,
         signature: str = "",
         status: str = "ok",
@@ -2166,6 +2167,161 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             label="verification source list",
         )
 
+    def test_published_verification_can_be_rejudged_but_not_cancelled(self) -> None:
+        ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
+        (ws / "solutions").mkdir(parents=True, exist_ok=True)
+        (ws / "solutions" / "accepted.cpp").write_text(
+            "int main(){return 0;}\n",
+            encoding="utf-8",
+        )
+        (ws / "solutions" / "fixture.cpp").write_text(
+            "int main(){return 0;}\n",
+            encoding="utf-8",
+        )
+        workspace_service.ensure_user("bob")
+        workspace_service.grant_repo_access("alice/sample", "bob", "read")
+        bob_ws = Path(
+            workspace_service.ensure_workspace(
+                "alice/sample",
+                "bob",
+                refresh_status=False,
+            )
+        )
+        (bob_ws / "solutions").mkdir(parents=True, exist_ok=True)
+        (bob_ws / "solutions" / "accepted.cpp").write_text(
+            "int main(){return 0;}\n",
+            encoding="utf-8",
+        )
+        (bob_ws / "solutions" / "fixture.cpp").write_text(
+            "int main(){return 0;}\n",
+            encoding="utf-8",
+        )
+        ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
+        problem_id = int(ctx["problem"]["id"])
+        workspace_id = int(ctx["workspace"]["id"])
+        published_id = canonical_test_verification_id(
+            f"ver-published-visible-{uuid.uuid4().hex[:8]}"
+        )
+        running_published_id = canonical_test_verification_id(
+            f"ver-published-running-{uuid.uuid4().hex[:8]}"
+        )
+        self._insert_stage_verification(
+            verification_id=published_id,
+            problem_id=problem_id,
+            workspace_id=None,
+            status="ok",
+            source_commit=str(ctx["workspace"]["head_commit"] or ""),
+            summary={"source_paths": ["solutions/fixture.cpp"]},
+        )
+        self._insert_stage_verification(
+            verification_id=running_published_id,
+            problem_id=problem_id,
+            workspace_id=None,
+            status="running",
+            source_commit=str(ctx["workspace"]["head_commit"] or ""),
+        )
+
+        rows = workspace_impl.run_list_rows(problem_id, workspace_id, ws, limit=10)
+        published_row = next(row for row in rows if row["id"] == published_id)
+        self.assertTrue(published_row["published"])
+        self.assertFalse(published_row["owns_verification"])
+
+        list_page = run_page(
+            _request("/problems/alice/sample/run"),
+            "alice/sample",
+            "alice",
+        )
+        list_html = list_page.body.decode("utf-8", errors="replace")
+        self.assertIn("Published verification · original is read-only", list_html)
+        self.assertIn(
+            f'name="verification_id" value="{published_id}"',
+            list_html,
+        )
+        self.assertIn(
+            "Cancel disabled (You are not the owner of this verification)",
+            list_html,
+        )
+
+        detail = workspace_impl.build_run_detail_context(
+            ctx,
+            "pass-fail",
+            requested_verification_id=published_id,
+        )
+        self.assertEqual(detail["verification_id"], published_id)
+        self.assertFalse(detail["owns_verification"])
+        self.assertEqual(
+            detail["verification_scope_notice"],
+            "Published verification · the original record is read-only",
+        )
+
+        with patch(
+            "app.impl.run_export.run.start_verification_job",
+            return_value=True,
+        ) as start_job:
+            rejudge_response = run_rejudge(
+                "alice/sample",
+                "bob",
+                verification_id=published_id,
+            )
+        self.assertEqual(rejudge_response.status_code, 303)
+        start_job.assert_called_once()
+        bob_ctx = workspace_service.workspace_context(
+            "alice/sample",
+            "bob",
+            include_recent=False,
+        )
+        self.assertEqual(
+            start_job.call_args.kwargs["workspace_id"],
+            int(bob_ctx["workspace"]["id"]),
+        )
+        cancel_response = run_export_impl.run_cancel(
+            "alice/sample",
+            "alice",
+            verification_id=running_published_id,
+        )
+        self.assertEqual(cancel_response.status_code, 303)
+        self.assertTrue(
+            any(
+                "not the owner of this verification" in message
+                for message in _flash_messages_from_response(cancel_response)
+            )
+        )
+
+    def test_other_workspace_verification_is_not_listed_and_is_view_only(self) -> None:
+        workspace_service.ensure_user("bob")
+        workspace_service.grant_repo_access("alice/sample", "bob", "owner")
+        workspace_service.ensure_workspace("alice/sample", "bob", refresh_status=False)
+        alice_ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
+        bob_ctx = workspace_service.workspace_context("alice/sample", "bob", include_recent=False)
+        foreign_id = canonical_test_verification_id(
+            f"ver-foreign-hidden-{uuid.uuid4().hex[:8]}"
+        )
+        self._insert_stage_verification(
+            verification_id=foreign_id,
+            problem_id=int(alice_ctx["problem"]["id"]),
+            workspace_id=int(bob_ctx["workspace"]["id"]),
+            status="ok",
+        )
+
+        rows = workspace_impl.run_list_rows(
+            int(alice_ctx["problem"]["id"]),
+            int(alice_ctx["workspace"]["id"]),
+            Path(alice_ctx["workspace"]["path"]),
+            limit=10,
+        )
+        self.assertNotIn(foreign_id, {row["id"] for row in rows})
+        detail = workspace_impl.build_run_detail_context(
+            alice_ctx,
+            "pass-fail",
+            requested_verification_id=foreign_id,
+        )
+        self.assertEqual(detail["verification_id"], foreign_id)
+        self.assertFalse(detail["owns_verification"])
+        self.assertEqual(
+            detail["verification_scope_notice"],
+            "Verification from another workspace · the original record is read-only",
+        )
+
     def test_rejudge_unavailable_consistent_between_list_and_details_while_running(self) -> None:
         ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
         (ws / "solutions").mkdir(parents=True, exist_ok=True)
@@ -3715,7 +3871,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             ):
                 start_resp = verification_start(problem=problem, user="alice", page="statement")
             self.assertEqual(start_resp.status_code, 303)
-            row = config.verification_service.list_workspace_verification_rows(
+            row = config.verification_service.list_visible_verification_rows(
                 problem_id,
                 workspace_id,
                 limit=1,
@@ -6995,6 +7151,93 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             html,
         )
         self.assertNotIn('action="/problems/alice/sample/export/create"', html)
+
+    def test_packages_are_problem_visible_across_users_and_build_origins(self) -> None:
+        from app.impl.run_export.artifact import materialization_file
+
+        workspace_service.ensure_user("bob")
+        workspace_service.grant_repo_access("alice/sample", "bob", "read")
+        workspace_service.ensure_workspace("alice/sample", "bob", refresh_status=False)
+        alice_ctx = workspace_service.workspace_context(
+            "alice/sample",
+            "alice",
+            include_recent=False,
+        )
+        problem_id = int(alice_ctx["problem"]["id"])
+        actor_user_id = int(alice_ctx["user"]["id"])
+        materialization_id = f"pm-visible-{uuid.uuid4().hex[:8]}"
+        source_commit = "9" * 40
+        db_execute(
+            """
+            INSERT INTO problem_package_materializations(
+                id,problem_id,source_commit,revision_number,source_digest,
+                archive_rel_path,archive_sha256,archive_size_bytes,
+                verification_id,status,created_at,checked_at,unavailable_reason
+            ) VALUES(?,?,?,?,?,?,?,?,?,'available',?,?,'')
+            """,
+            [
+                materialization_id,
+                problem_id,
+                source_commit,
+                9,
+                "a" * 64,
+                f"materializations/{problem_id}/{source_commit}/native.zip",
+                "b" * 64,
+                123,
+                canonical_test_verification_id(
+                    f"ver-package-visible-{uuid.uuid4().hex[:8]}"
+                ),
+                "2026-08-11T00:00:00Z",
+                "2026-08-11T00:00:01Z",
+            ],
+        )
+        export_job_id = f"exp-visible-{uuid.uuid4().hex[:8]}"
+        config.export_service.create_export_job(
+            job_id=export_job_id,
+            problem_id=problem_id,
+            actor_user_id=actor_user_id,
+            export_type="icpc",
+            source_commit=source_commit,
+        )
+        config.export_service.mark_export_job_failed(
+            export_job_id,
+            "package failed for alice",
+        )
+
+        page = export_page(
+            _request("/problems/alice/sample/export"),
+            "alice/sample",
+            "bob",
+        )
+        html = page.body.decode("utf-8", errors="replace")
+        self.assertIn("v9", html)
+        self.assertIn("native.zip", html)
+        self.assertIn(
+            f"/problems/alice/sample/packages/{materialization_id}/native.zip",
+            html,
+        )
+        self.assertIn("package failed for alice", html)
+        materialization = config.problem_package_service.materialization(
+            materialization_id
+        )
+        self.assertIsNotNone(materialization)
+        archive = Path(config.settings.artifacts_root) / "fixture-native.zip"
+        archive.write_bytes(b"native package")
+        with patch.object(
+            config.problem_package_service,
+            "native_archive",
+            return_value=(materialization, archive),
+        ):
+            response = materialization_file(
+                "alice/sample",
+                "bob",
+                materialization_id,
+            )
+        self.assertEqual(Path(response.path), archive)
+        self.assertIn(
+            "sample-native-v9.zip",
+            str(response.headers.get("content-disposition") or ""),
+        )
 
     def test_run_verification_details_prefers_verification_record_over_audit(self) -> None:
         from app.impl.workspace.run_view_lifecycle_card import load_verification_detail_summary

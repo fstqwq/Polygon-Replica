@@ -337,7 +337,10 @@ class TestSecurity(E2ETestBase):
             resp = run_cancel("alice/sample", "bob", verification_id=verification_id)
 
         self.assertEqual(resp.status_code, 303)
-        self.assertIn("verification not found", self._first_flash_message(resp).lower())
+        self.assertIn(
+            "not the owner of this verification",
+            self._first_flash_message(resp).lower(),
+        )
         cancel_execution.assert_not_called()
         verification_row = db_fetch_one("SELECT status,finished_at FROM verifications WHERE id=?", [verification_id])
         self.assertIsNotNone(verification_row)

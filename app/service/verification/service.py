@@ -763,7 +763,7 @@ class VerificationService:
         detail = self.verification_detail(verification_id)
         return list(cast(list[str], detail.get("source_paths") or []))
 
-    def list_workspace_verification_rows(
+    def list_visible_verification_rows(
         self,
         problem_id: int,
         workspace_id: int,
@@ -771,13 +771,41 @@ class VerificationService:
         limit: int = 40,
         kinds: tuple[str, ...] = (Kind.ALL, Kind.SAMPLE, Kind.CUSTOM),
     ) -> list[dict[str, object]]:
-        rows = self._verification_store.list_rows(
+        rows = self._verification_store.list_visible_rows(
             problem_id=int(problem_id),
             workspace_id=int(workspace_id),
             limit=int(limit),
             kinds=kinds,
         )
         return [dict(row) for row in rows]
+
+    def visible_verification_rows(
+        self,
+        problem_id: int,
+        workspace_id: int,
+        *,
+        limit: int = 40,
+        kinds: tuple[str, ...] = (Kind.ALL.value,),
+    ) -> list[WorkspaceVerificationRow]:
+        return self._verification_store.visible_verification_rows(
+            int(problem_id),
+            int(workspace_id),
+            limit=max(1, int(limit)),
+            kinds=kinds,
+        )
+
+    def visible_verification_rows_many(
+        self,
+        subjects: list[WorkspaceVerificationKey],
+        *,
+        limit: int = 40,
+        kinds: tuple[str, ...] = (Kind.ALL.value,),
+    ) -> dict[WorkspaceVerificationKey, list[WorkspaceVerificationRow]]:
+        return self._verification_store.visible_verification_rows_many(
+            subjects,
+            limit=max(1, int(limit)),
+            kinds=kinds,
+        )
 
     def workspace_verification_rows(
         self,

@@ -96,20 +96,14 @@ class ExportStore:
     def problem_export_jobs(
         self,
         problem_id: int,
-        actor_user_id: int,
         *,
         limit: int,
-        include_all: bool = False,
     ) -> list[ExportJobRow]:
-        actor_clause = "" if include_all else "AND (j.actor_user_id=? OR j.status='succeeded')"
-        params: list[object] = [int(problem_id)]
-        if not include_all:
-            params.append(int(actor_user_id))
-        params.append(max(1, int(limit)))
+        params: list[object] = [int(problem_id), max(1, int(limit))]
         rows = self.db.fetch_all(
-            f"""SELECT j.*,e.filename,e.sha256,e.size_bytes
+            """SELECT j.*,e.filename,e.sha256,e.size_bytes
                FROM export_jobs j LEFT JOIN exports e ON e.id=j.export_id
-               WHERE j.problem_id=? {actor_clause}
+               WHERE j.problem_id=?
                ORDER BY j.created_at DESC,j.id DESC LIMIT ?""",
             params,
         )

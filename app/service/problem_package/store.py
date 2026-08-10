@@ -110,6 +110,23 @@ class ProblemPackageStore:
         )
         return None if row is None else _materialization(row)
 
+    def problem_materializations(
+        self,
+        problem_id: int,
+        *,
+        limit: int,
+    ) -> list[MaterializationRow]:
+        rows = self.db.fetch_all(
+            """
+            SELECT * FROM problem_package_materializations
+            WHERE problem_id=?
+            ORDER BY created_at DESC,id DESC
+            LIMIT ?
+            """,
+            [int(problem_id), max(1, int(limit))],
+        )
+        return [_materialization(row) for row in rows]
+
     def materializations_for_revisions(
         self,
         revisions: list[tuple[int, str]],

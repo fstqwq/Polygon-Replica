@@ -610,6 +610,7 @@ def build_run_detail_context(
 
     workspace = Path(ctx['workspace']['path'])
     problem_id = int(ctx['problem']['id'])
+    workspace_id = int(ctx['workspace']['id'])
     problem_slug = ctx['problem']['slug']
     username = ctx['user']['username']
     fallback_time_limit_ms = 0
@@ -648,7 +649,21 @@ def build_run_detail_context(
         if verification_snapshot is not None
         else None
     )
-    if verification_record is not None and int(verification_record['problem_id'] or 0) == problem_id:
+    verification_workspace_id = (
+        verification_record["workspace_id"]
+        if verification_record is not None
+        else None
+    )
+    verification_visible = bool(
+        verification_record is not None
+        and int(verification_record["problem_id"] or 0) == problem_id
+    )
+    owns_verification = bool(
+        verification_visible
+        and verification_workspace_id is not None
+        and int(verification_workspace_id) == workspace_id
+    )
+    if verification_visible and verification_record is not None:
         task_rows = cast(
             list[VerificationTaskRow],
             verification_snapshot["tasks"],
@@ -1759,7 +1774,7 @@ def build_run_detail_context(
     if verification_created_at:
         last_updated_candidates.append(verification_created_at)
     last_updated = _latest_iso_timestamp(last_updated_candidates)
-    verification_id = verification_id_hint
+    verification_id = verification_id_hint if verification_visible else ""
     if (not verification_details) and verification_id:
         detail_snapshot = load_verification_detail_summary(problem_id, verification_id)
         detail_details = detail_snapshot.get('details')
@@ -1869,6 +1884,21 @@ def build_run_detail_context(
 
     return {
         'verification_id': verification_id,
+        'owns_verification': owns_verification,
+        'cancel_disabled_reason': (
+            'You are not the owner of this verification'
+            if verification_visible and not owns_verification and bool(status_summary['has_running'])
+            else ''
+        ),
+        'verification_scope_notice': (
+            'Published verification · the original record is read-only'
+            if verification_visible and verification_workspace_id is None
+            else (
+                'Verification from another workspace · the original record is read-only'
+                if verification_visible and not owns_verification
+                else ''
+            )
+        ),
         'detail_columns': columns,
         'detail_rows': detail_rows,
         'selected_program_ids': selected_program_ids,

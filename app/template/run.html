@@ -30,7 +30,7 @@
     <td class="verification-list-created-cell">
       <a href="{{ problem_href('run_details_page', query={'verification_id': r.id}) }}"><span class="verification-list-created-date">{{ created_parts[0] }}</span>{% if created_parts|length > 1 %} <span class="verification-list-created-time">{{ created_parts[1] }}</span>{% endif %}</a>
     </td>
-    <td class="verification-list-source-cell">{{ r.source_display }}</td>
+    <td class="verification-list-source-cell">{{ r.source_display }}{% if r.published %}<br /><span class="muted">Published verification · original is read-only</span>{% endif %}</td>
     <td class="verification-list-kind-cell">{{ r.kind }}</td>
     <td class="verification-list-status-cell">
       {% if r.status_tone == "warn" %}
@@ -54,11 +54,13 @@
     </td>
     <td class="verification-actions">
       <a href="{{ problem_href('run_details_page', query={'verification_id': r.id}) }}">View</a>
-      {% if r.has_running %}
+      {% if r.owns_verification and r.has_running %}
       <form class="inline-form verification-inline-action" method="post" action="{{ problem_href('run_cancel') }}">
         <input type="hidden" name="verification_id" value="{{ r.id }}" />
         <a href="#" class="linkish danger-link" data-submit-form="1">Cancel</a>
       </form>
+      {% elif r.cancel_disabled_reason %}
+      <span class="muted" title="{{ r.cancel_disabled_reason }}">Cancel disabled ({{ r.cancel_disabled_reason }})</span>
       {% endif %}
       {% if not r.has_running %}
       <form

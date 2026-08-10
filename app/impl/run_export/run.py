@@ -88,7 +88,11 @@ def run_page(request: Request, problem: str, user: Annotated[str, Depends(requir
         )
         cancel_verification_id = requested_verification_id or detail_ctx["verification_id"]
         detail_ctx["cancel_verification_id"] = cancel_verification_id
-        detail_ctx["cancel_available"] = bool(cancel_verification_id and detail_ctx["detail_running"])
+        detail_ctx["cancel_available"] = bool(
+            detail_ctx["owns_verification"]
+            and cancel_verification_id
+            and detail_ctx["detail_running"]
+        )
         detail_table_compact = _run_detail_use_compact_layout(detail_ctx)
         detail_ctx["detail_table_compact"] = detail_table_compact
         detail_page_ctx = dict(ctx)
@@ -163,7 +167,11 @@ def run_details_page(request: Request, problem: str, user: Annotated[str, Depend
     )
     cancel_verification_id = requested_verification_id or detail_ctx["verification_id"]
     detail_ctx["cancel_verification_id"] = cancel_verification_id
-    detail_ctx["cancel_available"] = bool(cancel_verification_id and detail_ctx["detail_running"])
+    detail_ctx["cancel_available"] = bool(
+        detail_ctx["owns_verification"]
+        and cancel_verification_id
+        and detail_ctx["detail_running"]
+    )
     detail_table_compact = _run_detail_use_compact_layout(detail_ctx)
     detail_ctx["detail_table_compact"] = detail_table_compact
     detail_page_ctx = dict(ctx)
@@ -239,14 +247,16 @@ def run_cancel(problem: str, user: Annotated[str, Depends(require_session_user)]
     actor_user_id = int(ctx["user"]["id"])
     problem_id = int(ctx["problem"]["id"])
     workspace_id = int(ctx["workspace"]["id"])
-    verification_exists = config.verification_service.workspace_verification_exists(
-        problem_id,
-        workspace_id,
-        safe_verification_id,
-    )
     details_url = f"/problems/{problem}/run/details?verification_id={quote_plus(safe_verification_id)}"
-    if not verification_exists:
+    record = config.verification_service.verification_record(safe_verification_id)
+    if record is None or int(record.get("problem_id") or 0) != problem_id:
         return redirect_response(details_url, status_code=303, message="verification not found")
+    if int(record.get("workspace_id") or 0) != workspace_id:
+        return redirect_response(
+            details_url,
+            status_code=303,
+            message="cancel unavailable: you are not the owner of this verification",
+        )
     reason = "verification cancelled by user"
     transition = config.verification_service.cancel_verification(
         safe_verification_id,
@@ -451,7 +461,6 @@ def run_rejudge(
     verification_id: Annotated[str, Form()] = "",
 ):
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False, include_workspace_changes=False)
-    require_write_access(ctx)
     safe_verification_id = normalize_run_id_token(verification_id)
     if not safe_verification_id:
         return redirect_response(f"/problems/{problem}/run", status_code=303, message="verification id is required")
@@ -461,7 +470,7 @@ def run_rejudge(
         return redirect_response(details_url, status_code=303, message="verification not found")
     problem_id = int(ctx["problem"]["id"])
     workspace_id = int(ctx["workspace"]["id"])
-    if int(record.get("problem_id") or 0) != problem_id or int(record.get("workspace_id") or 0) != workspace_id:
+    if int(record.get("problem_id") or 0) != problem_id:
         return redirect_response(details_url, status_code=303, message="verification not found")
     if str(record.get("status") or "") in ACTIVE:
         return redirect_response(details_url, status_code=303, message="rejudge unavailable: verification still running")

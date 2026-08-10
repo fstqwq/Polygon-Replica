@@ -344,7 +344,7 @@ class ProblemReadinessService:
         *,
         explain_verification: bool = True,
     ) -> ProblemReadiness:
-        rows = self.verification_service.workspace_verification_rows(
+        rows = self.verification_service.visible_verification_rows(
             subject["problem_id"],
             subject["workspace_id"],
             limit=40,
@@ -368,7 +368,7 @@ class ProblemReadinessService:
     ) -> dict[int, ProblemReadiness]:
         if not subjects:
             return {}
-        verification_rows = self.verification_service.workspace_verification_rows_many(
+        verification_rows = self.verification_service.visible_verification_rows_many(
             [
                 (subject["problem_id"], subject["workspace_id"])
                 for subject in subjects

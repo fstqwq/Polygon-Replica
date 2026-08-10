@@ -10,8 +10,12 @@
 {% include "_flash_message.html" %}
 <div class="run-details-page{% if detail_table_compact %} run-details-page-compact{% endif %}">
 
+{% if verification_scope_notice %}
+<p class="muted">{{ verification_scope_notice }}</p>
+{% endif %}
+
 <section class="content-section verification-header-section">
-  {% if detail_status or detail_task_counts or detail_fail_flag or detail_last_updated or cancel_available or (rerun_solution_paths and not detail_running) %}
+  {% if detail_status or detail_task_counts or detail_fail_flag or detail_last_updated or cancel_available or cancel_disabled_reason or (rerun_solution_paths and not detail_running) %}
   <div class="preview-card verification-task-status-card">
     <div class="content-heading-row verification-task-status-head">
       <div class="verification-task-status-title">
@@ -28,18 +32,20 @@
           {% endif %}
         {% endif %}
       </div>
-      {% if detail_last_updated or cancel_available or (rerun_solution_paths and not detail_running) %}
+      {% if detail_last_updated or cancel_available or cancel_disabled_reason or (rerun_solution_paths and not detail_running) %}
       <div class="verification-task-status-tools">
         {% if detail_last_updated %}
         <div class="muted verification-detail-meta">Last&nbsp;updated:&nbsp;{{ (detail_last_updated | local_time) | replace(' ', '&nbsp;') | safe }}</div>
         {% endif %}
-        {% if cancel_available or (rerun_solution_paths and not detail_running) %}
+        {% if cancel_available or cancel_disabled_reason or (rerun_solution_paths and not detail_running) %}
         <div class="verification-detail-actions">
           {% if cancel_available %}
           <form class="inline-form verification-inline-action" method="post" action="{{ problem_href('run_cancel') }}">
             <input type="hidden" name="verification_id" value="{{ cancel_verification_id }}" />
             <a href="#" class="linkish danger-link" data-submit-form="1">Cancel</a>
           </form>
+          {% elif cancel_disabled_reason %}
+          <span class="muted" title="{{ cancel_disabled_reason }}">Cancel disabled ({{ cancel_disabled_reason }})</span>
           {% endif %}
           {% if rerun_solution_paths and not detail_running %}
           <form

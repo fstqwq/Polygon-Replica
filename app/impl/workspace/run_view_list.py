@@ -163,6 +163,7 @@ def _verification_row_to_list_item(row: dict[str, object]) -> dict[str, object] 
         status_display = "ok (has warning)"
     elif status == "ok" and sanity_status == "failed":
         status_display = "ok (sanity failed)"
+    published = row.get("workspace_id") is None
     return {
         "index": 0,
         "id": verification_id,
@@ -179,6 +180,13 @@ def _verification_row_to_list_item(row: dict[str, object]) -> dict[str, object] 
         "fail_reason_title": fail_reason_title,
         "has_running": status == "running",
         "is_failed": status == "failed",
+        "published": published,
+        "owns_verification": not published,
+        "cancel_disabled_reason": (
+            "You are not the owner of this verification"
+            if published and status == "running"
+            else ""
+        ),
     }
 
 
@@ -188,7 +196,7 @@ def run_list_rows(problem_id: int, workspace_id: int, workspace: Path, limit: in
     result: list[dict[str, object]] = []
     seen_ids: set[str] = set()
     revision_cache: dict[str, int | None] = {}
-    verification_rows = config.verification_service.list_workspace_verification_rows(
+    verification_rows = config.verification_service.list_visible_verification_rows(
         int(problem_id),
         int(workspace_id),
         limit=max(limit_cap * 2, 80),

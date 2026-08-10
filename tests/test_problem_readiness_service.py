@@ -62,7 +62,7 @@ class _VerificationRows:
         self.detail_calls = 0
         self.task_store = cast(VerificationTaskStore, None)
 
-    def workspace_verification_rows(
+    def visible_verification_rows(
         self,
         problem_id: int,
         workspace_id: int,
@@ -71,7 +71,7 @@ class _VerificationRows:
         self.single_calls += 1
         return list(self.rows.get((problem_id, workspace_id), ()))
 
-    def workspace_verification_rows_many(
+    def visible_verification_rows_many(
         self,
         subjects: list[tuple[int, int]],
         **_kwargs: object,
@@ -174,3 +174,27 @@ class TestProblemReadinessService(unittest.TestCase):
         self.assertEqual(projected["verification_id"], verification_id)
         self.assertEqual(projected["result"], "failed")
         self.assertEqual(projected["reason_short"], "checker exited with code 1")
+
+    def test_problem_level_verification_matching_workspace_head_is_current(self) -> None:
+        published_id = "ver-readiness-published"
+        service, _verification = self._service(
+            [
+                _verification_row(
+                    "ver-readiness-newer-stale",
+                    source_commit="c" * 40,
+                    status="failed",
+                ),
+                _verification_row(
+                    published_id,
+                    source_commit=self.subject["head_commit"],
+                    status="ok",
+                ),
+            ]
+        )
+
+        readiness = service.readiness(self.subject)
+
+        projected = readiness["verification"]
+        self.assertEqual(projected["verification_id"], published_id)
+        self.assertEqual(projected["result"], "ok")
+        self.assertFalse(projected["stale"])
