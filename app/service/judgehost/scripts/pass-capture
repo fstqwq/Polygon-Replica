@@ -99,7 +99,6 @@ copy_pass_judge_message() {
 }
 
 validate_pass_layout() {
-  CURRENT_DIR=$(pwd -P 2>/dev/null) || return 1
   FINAL_NUMBER=${CURRENT_DIR##*/}
   case "$FINAL_NUMBER" in
     [1-9]|[1-9][0-9]*) ;;
@@ -243,10 +242,10 @@ write_bundle() {
 polygon_capture_pass() {
   FEEDBACK_ARG="$2"
   EXIT_STATUS="$3"
-  CURRENT_DIR=$(pwd -P 2>/dev/null) || return 0
+  FEEDBACK_DIR=$(CDPATH= cd -- "$FEEDBACK_ARG" 2>/dev/null && pwd -P) || return 0
+  CURRENT_DIR=$(CDPATH= cd -- "$FEEDBACK_DIR/.." 2>/dev/null && pwd -P) || return 0
   EXPECTED_FEEDBACK_DIR="$CURRENT_DIR/feedback"
   [ -d "$EXPECTED_FEEDBACK_DIR" ] && [ ! -L "$EXPECTED_FEEDBACK_DIR" ] || return 0
-  FEEDBACK_DIR=$(CDPATH= cd -- "$FEEDBACK_ARG" 2>/dev/null && pwd -P) || return 0
   [ "$FEEDBACK_DIR" = "$EXPECTED_FEEDBACK_DIR" ] || return 0
 
   if [ "$EXIT_STATUS" -eq 42 ] && [ -f "$FEEDBACK_DIR/nextpass.in" ]; then

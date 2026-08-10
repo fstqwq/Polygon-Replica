@@ -78,6 +78,7 @@ class TestJudgehostScripts(unittest.TestCase):
         exit_status: int,
         *,
         env: dict[str, str] | None = None,
+        cwd: Path | None = None,
     ) -> subprocess.CompletedProcess[bytes]:
         return subprocess.run(
             [
@@ -86,11 +87,74 @@ class TestJudgehostScripts(unittest.TestCase):
                 str(pass_dir / "feedback"),
                 str(exit_status),
             ],
-            cwd=pass_dir,
+            cwd=cwd or pass_dir,
             env=env,
             capture_output=True,
             check=False,
         )
+
+    def test_pass_capture_uses_feedback_path_when_called_from_judging_root(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            capture = self._write_pass_capture(root, max_bytes=1024 * 1024)
+            endpoint = root / "endpoint-default"
+            testcase = endpoint / "submission" / "judging" / "testcase123"
+            cached_input = endpoint / "testcase" / "123" / "source-hash.in"
+            cached_input.parent.mkdir(parents=True)
+            cached_input.write_bytes(b"first input\n")
+
+            first = self._write_domjudge_pass(
+                testcase,
+                "1",
+                overrides={"feedback/judgemessage.txt": b"first pass\n"},
+                omitted=frozenset({"feedback/teammessage.txt"}),
+            )
+            first_input = first / "testdata.in"
+            first_input.unlink()
+            first_input.symlink_to(cached_input)
+            (first / "feedback/nextpass.in").write_bytes(b"second input\n")
+            first_result = self._run_pass_capture(
+                capture,
+                first,
+                42,
+                cwd=endpoint,
+            )
+            self.assertEqual(first_result.returncode, 0, first_result.stderr)
+            self.assertFalse((first / "feedback/teammessage.txt").exists())
+
+            second = self._write_domjudge_pass(
+                testcase,
+                "2",
+                overrides={"feedback/judgemessage.txt": b"first pass\nsecond pass\n"},
+            )
+            second_input = second / "testdata.in"
+            second_input.unlink()
+            second_input.symlink_to(first / "feedback/nextpass.in")
+            final_result = self._run_pass_capture(
+                capture,
+                second,
+                43,
+                cwd=endpoint,
+            )
+            self.assertEqual(final_result.returncode, 0, final_result.stderr)
+
+            bundle = parse_pass_bundle(
+                (second / "feedback/teammessage.txt").read_bytes(),
+                max_bundle_bytes=1024 * 1024,
+                max_member_bytes=1024 * 1024,
+            )
+            assert bundle is not None
+            self.assertEqual(bundle.final_pass_number, 2)
+            self.assertEqual(bundle.pass_files(1)["input"], b"first input\n")
+            self.assertEqual(bundle.pass_files(2)["input"], b"second input\n")
+            self.assertEqual(
+                bundle.pass_files(1)["judgemessage.txt"],
+                b"first pass\n",
+            )
+            self.assertEqual(
+                bundle.pass_files(2)["judgemessage.txt"],
+                b"second pass\n",
+            )
 
     def test_domjudge_compare_script_shifts_framework_args_before_checker(self) -> None:
         service = config.judgehost_task_service
