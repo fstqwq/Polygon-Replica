@@ -38,15 +38,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         bubblewrap \
         libseccomp2 \
         tini \
-    && mktexlsr >/dev/null 2>&1 || true \
+    && mktexlsr >/dev/null \
     && fmtutil-sys --byfmt pdflatex >/dev/null \
     && fmtutil-sys --byfmt xelatex >/dev/null \
-    && updmap-sys >/dev/null 2>&1 || true \
+    && updmap-sys >/dev/null \
     && rm -rf /var/lib/apt/lists/*
 
 # Replace the default ubuntu uid 1000 with our judgehost user so file
 # ownership on bind mounts and named volumes lines up with the host install.
-RUN userdel -r ubuntu 2>/dev/null || true \
+RUN if id -u ubuntu >/dev/null 2>&1; then userdel -r ubuntu; fi \
     && groupadd --gid 1000 judgehost \
     && useradd --uid 1000 --gid judgehost --create-home --shell /bin/bash judgehost
 
