@@ -4140,6 +4140,147 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             )
         self.assertEqual(empty_run_id.exception.status_code, 400)
 
+    def test_pass_fail_detail_renders_every_pass(self) -> None:
+        workspace_service.ensure_workspace("alice/sample", "alice")
+        ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
+        workspace_id = int(ctx["workspace"]["id"])
+        problem_id = int(ctx["problem"]["id"])
+        workspace = Path(str(ctx["workspace"]["path"]))
+        (workspace / "solutions").mkdir(parents=True, exist_ok=True)
+        (workspace / "solutions" / "two-pass.cpp").write_text(
+            "int main(){return 0;}\n",
+            encoding="utf-8",
+        )
+
+        verification_id = canonical_test_verification_id(
+            f"ver-pass-fail-detail-{uuid.uuid4().hex[:8]}"
+        )
+        config.verification_service.begin_verification_record(
+            verification_id=verification_id,
+            problem_id=problem_id,
+            workspace_id=workspace_id,
+            signature="",
+            kind=Kind.ALL,
+            status="ok",
+            detail={"status": "ok", "mode": "pass-fail", "pass_limit": 2},
+        )
+
+        def store(role: str, payload: bytes) -> str:
+            return config.verification_service.store_verification_blob(
+                verification_id=verification_id,
+                test_name="001.in",
+                role=role,
+                file_name=f"{role}.txt",
+                payload=payload,
+            )
+
+        original_input_ref = store("input", b"original input\n")
+        answer_ref = store("answer", b"canonical answer\n")
+        first_input_ref = store("pass-one-input", b"original input\n")
+        second_input_ref = store("pass-two-input", b"next pass input\n")
+        first_output_ref = store("pass-one-output", b"first pass output\n")
+        second_output_ref = store("pass-two-output", b"second pass output\n")
+        common_ref = store("metadata", b"metadata\n")
+        config.verification_service.update_verification_artifact_refs(
+            verification_id,
+            "001.in",
+            {"input_ref": original_input_ref, "answer_ref": answer_ref},
+        )
+
+        config.verification_task_store.replace_graph(
+            verification_id,
+            tasks=[
+                {
+                    "id": f"vt-pass-fail-{uuid.uuid4().hex[:8]}",
+                    "task_kind": "solution-run",
+                    "source_path": "solutions/two-pass.cpp",
+                    "logical_run_id": "two-pass.cpp",
+                    "test_name": "001.in",
+                    "expected_behavior": "accepted",
+                    "status": VerificationTaskStore.TASK_DONE,
+                    "result": normalize_execution_result(
+                        passes=(
+                            ExecutionPassResult(
+                                number=1,
+                                capture_status=CAPTURE_COMPLETE,
+                                runresult="correct",
+                                verdict="OK",
+                                score_text="",
+                                answer_correct=True,
+                                usage=ExecutionUsage(0.002, 0.001, 0.002, 1024),
+                                feedback="first pass feedback",
+                                artifacts=PassArtifacts(
+                                    input_ref=first_input_ref,
+                                    output_ref=first_output_ref,
+                                    stderr_ref=common_ref,
+                                    system_ref=common_ref,
+                                    judge_message_ref=common_ref,
+                                    team_message_ref=common_ref,
+                                    metadata_ref=common_ref,
+                                    compare_metadata_ref=common_ref,
+                                ),
+                            ),
+                            ExecutionPassResult(
+                                number=2,
+                                capture_status=CAPTURE_COMPLETE,
+                                runresult="wrong-answer",
+                                verdict="WA",
+                                score_text="",
+                                answer_correct=False,
+                                usage=ExecutionUsage(0.003, 0.002, 0.003, 1536),
+                                feedback="second pass feedback",
+                                artifacts=PassArtifacts(
+                                    input_ref=second_input_ref,
+                                    output_ref=second_output_ref,
+                                    stderr_ref=common_ref,
+                                    system_ref=common_ref,
+                                    judge_message_ref=common_ref,
+                                    team_message_ref=common_ref,
+                                    metadata_ref=common_ref,
+                                    compare_metadata_ref=common_ref,
+                                ),
+                            ),
+                        )
+                    ),
+                }
+            ],
+            edges=[],
+        )
+
+        detail = run_details_test_fragment(
+            _request(
+                "/problems/alice/sample/run/details/test-fragment",
+                f"verification_id={verification_id}&test=001.in&run_id=two-pass.cpp",
+            ),
+            "alice/sample",
+            "alice",
+        )
+        self.assertEqual(detail.status_code, 200)
+        html = detail.body.decode("utf-8", errors="replace")
+        assert_html_contract(
+            self,
+            html,
+            contains=(
+                "<strong>Input 001.in</strong>",
+                "original input",
+                "<strong>Answer</strong>",
+                "canonical answer",
+                "<th>Pass 1 Status</th>",
+                "first pass feedback",
+                "<strong>Pass 1 Output</strong>",
+                "first pass output",
+                "<strong>Pass 2 Input</strong>",
+                "next pass input",
+                "<th>Pass 2 Status</th>",
+                "second pass feedback",
+                "<strong>Pass 2 Output</strong>",
+                "second pass output",
+            ),
+            excludes=("<strong>Pass 1 Input</strong>", "Jury log", "Transcript"),
+            label="multi-pass pass-fail detail",
+        )
+        self.assertLess(html.index("first pass feedback"), html.index("second pass feedback"))
+
     def test_interactive_detail_uses_persisted_mode_and_renders_every_pass(self) -> None:
         workspace_service.ensure_workspace("alice/sample", "alice")
         ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)

@@ -1052,6 +1052,10 @@ def build_run_detail_context(
                         'feedback_display': feedback_display,
                         'pass_rows': pass_rows,
                         'final_row': final_row,
+                        'is_multi_pass': bool(
+                            int(verification_details.get('pass_limit') or 1) > 1
+                            or len(pass_rows) > 1
+                        ),
                         'compile_error_display': detail_compile_error,
                         'compile_diagnostics': detail_compile_diagnostics,
                     }
@@ -1498,17 +1502,19 @@ def build_run_detail_context(
                             else:
                                 output_preview = _verification_blob_preview(source_verification_id, output_rel)
                         row_payload['output_preview'] = output_preview
+                        capture_status = str(row_payload.get('capture_status') or '')
+                        capture_complete = capture_status == 'complete'
+                        input_ref = str(row_payload.get('input_ref') or '')
+                        pass_input_preview = _run_detail_preview_unavailable(
+                            'missing' if capture_complete else 'not captured'
+                        )
+                        if input_ref:
+                            pass_input_preview = _verification_blob_preview(
+                                source_verification_id,
+                                input_ref,
+                            )
+                        row_payload['input_preview'] = pass_input_preview
                         if interactive_mode:
-                            capture_status = str(row_payload.get('capture_status') or '')
-                            capture_complete = capture_status == 'complete'
-                            input_ref = str(row_payload.get('input_ref') or '')
-                            pass_input_preview = _run_detail_preview_unavailable('not captured')
-                            if input_ref:
-                                pass_input_preview = _verification_blob_preview(
-                                    source_verification_id,
-                                    input_ref,
-                                )
-                            row_payload['input_preview'] = pass_input_preview
                             transcript_rel = str(row_payload.get('transcript_rel') or '')
                             row_payload['interactive_transcript'] = _verification_transcript(
                                 source_verification_id,

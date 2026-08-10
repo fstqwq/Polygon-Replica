@@ -804,11 +804,11 @@ body.verification-compact .run-details-page-compact .verification-detail-wrap {
   color: var(--muted);
 }
 
-.interactive-pass > * + * {
+.execution-pass > * + * {
   margin-top: var(--space-3);
 }
 
-.interactive-pass + .interactive-pass {
+.execution-pass + .execution-pass {
   margin-top: var(--space-6);
   padding-top: var(--space-5);
   border-top: 1px solid var(--line);

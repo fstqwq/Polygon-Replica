@@ -57,7 +57,7 @@
       {% for pass_row in cell.detail.pass_rows %}
       {% set feedback = pass_row.feedback_preview %}
       {% set transcript = pass_row.interactive_transcript %}
-      <section class="interactive-pass">
+      <section class="execution-pass">
         {{ artifact_preview_card(pass_row.pass_label + ' Input', pass_row.input_preview) }}
         <table class="table-base table-compact sol-metrics">
           <colgroup>
@@ -127,27 +127,31 @@
       </section>
       {% endfor %}
     {% else %}
-    {% set final_row = cell.detail.final_row if cell.detail.final_row else None %}
-    {% if final_row %}
-    {% set feedback_text = final_row.feedback_display or '-' %}
+    {% if cell.detail.pass_rows %}
+    {% for pass_row in cell.detail.pass_rows %}
+    {% set feedback_text = pass_row.feedback_display or '-' %}
+    <section class="execution-pass">
+    {% if cell.detail.is_multi_pass and pass_row.pass_number > 1 %}
+      {{ artifact_preview_card(pass_row.pass_label + ' Input', pass_row.input_preview) }}
+    {% endif %}
     <table class="table-base table-compact sol-metrics">
       <colgroup>
         <col class="status-col" />
         <col class="fb-col" />
       </colgroup>
       <thead>
-        <tr><th>Status</th><th>Feedback</th></tr>
+        <tr><th>{{ pass_row.pass_label + ' Status' if cell.detail.is_multi_pass else 'Status' }}</th><th>Feedback</th></tr>
       </thead>
       <tbody>
         <tr>
-          <td class="status-cell tone-{{ final_row.kind or 'neutral' }}">
+          <td class="status-cell tone-{{ pass_row.kind or 'neutral' }}">
             <div class="status-inline">
-              <span class="vcode{{ ' vcode-info' if final_row.text_tone == 'info' else '' }}">{{ final_row.verdict_short or '-' }}</span>
-              {% if final_row.time_display and final_row.time_display != '-' %}
-              <span class="vmeta{{ ' vmeta-warn' if final_row.time_tone == 'warn' else '' }}">{{ final_row.time_display }}</span>
+              <span class="vcode{{ ' vcode-info' if pass_row.text_tone == 'info' else '' }}">{{ pass_row.verdict_short or '-' }}</span>
+              {% if pass_row.time_display and pass_row.time_display != '-' %}
+              <span class="vmeta{{ ' vmeta-warn' if pass_row.time_tone == 'warn' else '' }}">{{ pass_row.time_display }}</span>
               {% endif %}
-              {% if final_row.memory_display and final_row.memory_display != '-' %}
-              <span class="vmeta">{{ final_row.memory_display }}</span>
+              {% if pass_row.memory_display and pass_row.memory_display != '-' %}
+              <span class="vmeta">{{ pass_row.memory_display }}</span>
               {% endif %}
             </div>
           </td>
@@ -157,20 +161,22 @@
     </table>
     <div class="sol-output">
       <div class="sol-output-head">
-        <strong>Output</strong>
-        {% if final_row.output_preview and final_row.output_preview.available and final_row.output_preview.download_verification_id %}
-        <a href="{{ problem_href('artifact_file', verification_id=final_row.output_preview.download_verification_id, rel_path=final_row.output_preview.download_rel_path) }}">download</a>
+        <strong>{{ pass_row.pass_label + ' Output' if cell.detail.is_multi_pass else 'Output' }}</strong>
+        {% if pass_row.output_preview and pass_row.output_preview.available and pass_row.output_preview.download_verification_id %}
+        <a href="{{ problem_href('artifact_file', verification_id=pass_row.output_preview.download_verification_id, rel_path=pass_row.output_preview.download_rel_path) }}">download</a>
         {% endif %}
       </div>
-      {% if final_row.output_preview and final_row.output_preview.available and final_row.output_preview.text != '(empty)' %}
-      <pre class="preview-content">{{ final_row.output_preview.text }}</pre>
-      {% if final_row.output_preview.truncated %}
-      <div class="muted">Showing first {{ final_row.output_preview.limit }} bytes.</div>
+      {% if pass_row.output_preview and pass_row.output_preview.available and pass_row.output_preview.text != '(empty)' %}
+      <pre class="preview-content">{{ pass_row.output_preview.text }}</pre>
+      {% if pass_row.output_preview.truncated %}
+      <div class="muted">Showing first {{ pass_row.output_preview.limit }} bytes.</div>
       {% endif %}
       {% elif not has_diagnostics %}
       <p class="muted empty-text">(output missing)</p>
       {% endif %}
     </div>
+    </section>
+    {% endfor %}
     {% else %}
     <p class="muted">No details.</p>
     {% endif %}
