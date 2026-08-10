@@ -7,6 +7,8 @@ Documentation describes the current system and is organized by ownership:
   failure semantics.
 - `operations/` owns deployment and operator behavior.
 - `src/` mirrors the actual application package responsibilities.
+- `coding-style.md` owns Python authoring and import rules.
+- `testing.md` owns test selection and assertion policy.
 - `implementation/findings.md` records defects, risks, and refactors.
 
 Each fact has one home. Other documents link to its owner instead of copying it.

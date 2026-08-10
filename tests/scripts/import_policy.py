@@ -76,7 +76,7 @@ def _load_first_wave(path: Path | None) -> list[str]:
 
 def _load_boundaries(path: Path | None) -> dict:
     if path is None:
-        return {"version": 1, "firstWave": [], "layers": []}
+        return {"firstWave": [], "layers": []}
     data = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(data, dict):
         raise ValueError(f"invalid boundaries config: {path}")
@@ -89,7 +89,7 @@ def _load_boundaries(path: Path | None) -> dict:
 
 def _in_prefixes(module_name: str, prefixes: Iterable[str]) -> bool:
     for prefix in prefixes:
-        p = str(prefix).strip()
+        p = str(prefix).strip().rstrip(".")
         if not p:
             continue
         if module_name == p or module_name.startswith(f"{p}."):
@@ -113,22 +113,18 @@ def _resolve_imported_module(importer_module: str, node: ast.ImportFrom) -> str:
 def _layer_for_module(module_name: str, layers: list[dict]) -> dict | None:
     for layer in layers:
         for raw in layer.get("match", []):
-            prefix = str(raw or "").strip()
-            if not prefix:
-                continue
-            if module_name.startswith(prefix):
+            prefix = str(raw or "").strip().rstrip(".")
+            if prefix and _in_prefixes(module_name, (prefix,)):
                 return layer
     return None
 
 
 def _target_allowed(target_module: str, allowed: list[str]) -> bool:
     for raw in allowed:
-        prefix = str(raw or "").strip()
+        prefix = str(raw or "").strip().rstrip(".")
         if not prefix:
             continue
-        if target_module == prefix.rstrip("."):
-            return True
-        if target_module.startswith(prefix):
+        if target_module == prefix or target_module.startswith(f"{prefix}."):
             return True
     return False
 
@@ -241,6 +237,8 @@ def _plural_name_violations_for_module(
             continue
         if not segment.endswith("s"):
             continue
+        if segment.endswith(("ss", "us", "is")):
+            continue
         if safe_segment in exceptions:
             continue
         violations.append(segment)
@@ -313,7 +311,7 @@ def collect_audit(
                     line=1,
                     importer=module,
                     target=module,
-                    message="dynamic re-export chain is prohibited in first-wave modules",
+                    message="dynamic re-export chain is prohibited in application modules",
                     first_wave=in_first_wave,
                 )
             )
@@ -406,6 +404,26 @@ def collect_audit(
                     imported = str(alias.name or "").strip()
                     if not imported:
                         continue
+                    if module.startswith("app.") and imported.startswith("app."):
+                        layer = _layer_for_module(module, layers)
+                        if layer is not None and not _target_allowed(
+                            imported,
+                            list(layer.get("allow", [])),
+                        ):
+                            violations.append(
+                                Violation(
+                                    rule="BOUNDARY_LAYER_VIOLATION",
+                                    file=rel,
+                                    line=int(node.lineno),
+                                    importer=module,
+                                    target=imported,
+                                    message=(
+                                        f"layer `{layer.get('name', 'unknown')}` "
+                                        f"cannot import `{imported}`"
+                                    ),
+                                    first_wave=in_first_wave,
+                                )
+                            )
                     if module.startswith("app.") and _in_prefixes(module, first_wave):
                         candidate = imported
                         if candidate in module_set and _in_prefixes(candidate, first_wave):

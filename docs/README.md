@@ -20,6 +20,8 @@ Read the smallest set that owns the change.
 ## Implementation and operations
 
 - [Application package map](src/README.md)
+- [Python coding and import policy](coding-style.md)
+- [Testing policy](testing.md)
 - [SQLite implementation notes](implementation/sqlite.md)
 - [Findings ledger](implementation/findings.md)
 - [Configuration](operations/configuration.md)

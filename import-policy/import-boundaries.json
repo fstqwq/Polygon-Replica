@@ -1,0 +1,60 @@
+{
+  "firstWave": [
+    "app.route",
+    "app.impl.auth",
+    "app.impl.run_export",
+    "app.impl.workspace",
+    "app.service.statement"
+  ],
+  "layers": [
+    {
+      "name": "route",
+      "match": [
+        "app.route"
+      ],
+      "allow": [
+        "app.route",
+        "app.impl"
+      ]
+    },
+    {
+      "name": "implementation",
+      "match": [
+        "app.impl"
+      ],
+      "allow": [
+        "app.impl",
+        "app.service",
+        "app.db",
+        "app.main_constant",
+        "app.main_util",
+        "app.runtime_value",
+        "app.setting"
+      ]
+    },
+    {
+      "name": "service",
+      "match": [
+        "app.service"
+      ],
+      "allow": [
+        "app.service",
+        "app.db",
+        "app.main_constant",
+        "app.main_util",
+        "app.runtime_value",
+        "app.setting",
+        "app.impl.runtime.config",
+        "app.impl.workspace.verification_dag"
+      ]
+    }
+  ],
+  "namingPolicy": {
+    "scopePrefixes": [
+      "app.impl.auth",
+      "app.impl.run_export",
+      "app.impl.workspace",
+      "app.service.statement"
+    ]
+  }
+}

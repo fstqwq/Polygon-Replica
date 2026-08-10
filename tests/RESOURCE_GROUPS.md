@@ -1,5 +1,9 @@
 # Test Resource Groups
 
+Assertion selection and UI test scope are defined by the
+[testing policy](../docs/testing.md). This document owns only CI resource
+classification and execution.
+
 `tests/resource_groups.json` assigns every `test_*.py` module to exactly one
 resource group. The runner rejects missing, stale, or duplicate assignments
 before loading tests.

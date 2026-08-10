@@ -10,6 +10,7 @@ from pathlib import Path
 from tests.scripts import import_policy
 ROOT = Path(__file__).resolve().parents[1]
 IMPORT_POLICY_SCRIPT = ROOT / "tests" / "scripts" / "import_policy.py"
+IMPORT_BOUNDARIES = ROOT / "import-policy" / "import-boundaries.json"
 
 
 class TestImportPolicy(unittest.TestCase):
@@ -30,6 +31,18 @@ _export_public(globals(), module)
                 plural_exceptions=["process"],
             ),
             [],
+        )
+        self.assertEqual(
+            import_policy._plural_name_violations_for_module("app.impl.workspace.access"),
+            [],
+        )
+        self.assertEqual(
+            import_policy._plural_name_violations_for_module("app.service.problem.readiness"),
+            [],
+        )
+        self.assertEqual(
+            import_policy._plural_name_violations_for_module("app.service.workspace.files"),
+            ["files"],
         )
         self.assertEqual(import_policy._plural_name_violations_for_module("app.impl.auth.middleware"), [])
 
@@ -55,6 +68,8 @@ _export_public(globals(), module)
                 [
                     sys.executable,
                     str(IMPORT_POLICY_SCRIPT),
+                    "--boundaries",
+                    str(IMPORT_BOUNDARIES),
                     "audit",
                     "--format",
                     "json",
@@ -74,6 +89,7 @@ _export_public(globals(), module)
             self.assertIn("summary", payload)
             self.assertIsInstance(payload["violations"], list)
             self.assertIsInstance(payload["cycles"], list)
+            self.assertGreater(int(payload["meta"]["firstWaveModuleCount"]), 0)
             first_wave_blockers = [
                 row
                 for row in payload["violations"]
@@ -85,7 +101,13 @@ _export_public(globals(), module)
 
     def test_import_policy_check_needs_no_baseline(self) -> None:
         proc = subprocess.run(
-            [sys.executable, str(IMPORT_POLICY_SCRIPT), "check"],
+            [
+                sys.executable,
+                str(IMPORT_POLICY_SCRIPT),
+                "--boundaries",
+                str(IMPORT_BOUNDARIES),
+                "check",
+            ],
             cwd=ROOT,
             capture_output=True,
             text=True,

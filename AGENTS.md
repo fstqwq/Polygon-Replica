@@ -20,6 +20,11 @@ Repository rules:
 - Do not hide compatibility identity in constants, cache-key salts, variable
   names, or other hard-coded markers. Externally required protocol version
   fields remain valid.
+- Product and protocol documents define behavior; tests provide selected
+  executable evidence and do not create a contract. Follow
+  [docs/testing.md](docs/testing.md).
+- Python imports follow the layout and dependency rules in
+  [docs/coding-style.md](docs/coding-style.md).
 - Do not run tests on Windows. Ask which Linux environment and virtualenv to use
   before running tests.
 - Preserve unrelated worktree changes. Do not commit or push unless requested.

@@ -57,6 +57,12 @@ based on present impact, not on an imagined future architecture.
 | OPS-003 | risk | Docker build steps use broad failure suppression around some package/TeX setup, which can defer dependency failure until runtime. | container build |
 | OPS-004 | risk | The host installer replaces `/etc/polygon-replica.env` with mode `0644`; a rerun drops an operator-added encryption key, while adding the key without tightening permissions exposes it to local users. | host installer |
 
+## Testing and CI
+
+| ID | Class | Finding and current impact | Suggested owner |
+| --- | --- | --- | --- |
+| TST-001 | refactor | UI and public-contract tests frequently pin template text, CSS classes, DOM fragments, and internal read-model details, so presentation changes accumulate assertions without adding equivalent behavioral protection. | test suite |
+
 ## Resolved in this rewrite
 
 - JH-003: invalid hostnames are rejected instead of aliased.
