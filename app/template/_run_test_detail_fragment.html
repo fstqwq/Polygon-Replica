@@ -69,14 +69,7 @@
           <thead>
             <tr>
               <th>Status</th>
-              <th>
-                <div class="content-heading-row">
-                  <span>Feedback</span>
-                  {% if feedback.available and feedback.download_verification_id %}
-                  <a class="content-heading-action" href="{{ problem_href('artifact_file', verification_id=feedback.download_verification_id, rel_path=feedback.download_rel_path) }}">download</a>
-                  {% endif %}
-                </div>
-              </th>
+              <th>Feedback</th>
             </tr>
           </thead>
           <tbody>
