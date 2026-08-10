@@ -72,7 +72,7 @@ echo "[1/6] Installing system dependencies..."
 
 echo "  Initializing TeX formats..."
 if command -v fmtutil-sys >/dev/null 2>&1; then
-  "${SUDO[@]}" mktexlsr >/dev/null 2>&1 || true
+  "${SUDO[@]}" mktexlsr >/dev/null
   "${SUDO[@]}" fmtutil-sys --byfmt pdflatex >/dev/null
   "${SUDO[@]}" fmtutil-sys --byfmt xelatex >/dev/null
 fi
@@ -282,21 +282,31 @@ else
 fi
 
 echo "[5/6] Writing runtime environment file..."
-TMP_ENV_FILE="$(mktemp)"
-cat >"$TMP_ENV_FILE" <<'EOF'
-export POLYGON_REPLICA_DB=/var/lib/polygon-replica/metadata.db
-export POLYGON_REPLICA_BARE_ROOT=/srv/polygon-replica/git
-export POLYGON_REPLICA_WORKSPACE_ROOT=/srv/polygon-replica/workspaces
-export POLYGON_REPLICA_ARTIFACTS_ROOT=/srv/polygon-replica/export
-export POLYGON_REPLICA_CACHE_ROOT=/tmp/polygon-replica
-export POLYGON_REPLICA_CONTEST_SOURCE_ROOT=/var/lib/polygon-replica/contest-sources
-export POLYGON_REPLICA_BACKUP_ROOT=/var/backups/polygon-replica
-export POLYGON_REPLICA_TLS_KEY_PATH=/var/lib/polygon-replica/tls/dev-localhost.key
-export POLYGON_REPLICA_TLS_CERT_PATH=/var/lib/polygon-replica/tls/dev-localhost.crt
-EOF
 ENV_FILE="/etc/polygon-replica.env"
-"${SUDO[@]}" install -m 0644 "$TMP_ENV_FILE" "$ENV_FILE"
-rm -f "$TMP_ENV_FILE"
+TMP_EXISTING_ENV_FILE="$(mktemp)"
+TMP_RENDERED_ENV_FILE="$(mktemp)"
+TMP_INSTALLED_ENV_FILE=""
+cleanup_runtime_env_files() {
+  rm -f "$TMP_EXISTING_ENV_FILE" "$TMP_RENDERED_ENV_FILE"
+  if [[ -n "$TMP_INSTALLED_ENV_FILE" ]]; then
+    "${SUDO[@]}" rm -f "$TMP_INSTALLED_ENV_FILE"
+  fi
+}
+trap cleanup_runtime_env_files EXIT
+if "${SUDO[@]}" test -f "$ENV_FILE"; then
+  "${SUDO[@]}" cat "$ENV_FILE" >"$TMP_EXISTING_ENV_FILE"
+fi
+bash "$REPO_ROOT/scripts/render_runtime_env.sh" \
+  "$TMP_EXISTING_ENV_FILE" \
+  "$TMP_RENDERED_ENV_FILE"
+TMP_INSTALLED_ENV_FILE="$("${SUDO[@]}" mktemp /etc/.polygon-replica.env.XXXXXX)"
+"${SUDO[@]}" install -o root -g root -m 0600 \
+  "$TMP_RENDERED_ENV_FILE" \
+  "$TMP_INSTALLED_ENV_FILE"
+"${SUDO[@]}" mv -f "$TMP_INSTALLED_ENV_FILE" "$ENV_FILE"
+TMP_INSTALLED_ENV_FILE=""
+cleanup_runtime_env_files
+trap - EXIT
 
 echo "[6/6] Installing systemd service..."
 SERVICE_UNIT_SRC="$REPO_ROOT/scripts/systemd/polygon-replica.service"

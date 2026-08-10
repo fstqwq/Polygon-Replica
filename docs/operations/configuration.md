@@ -31,7 +31,14 @@ Launcher-only variables are not application storage configuration:
 | systemd unit | host `127.0.0.1`, port `8001`, keepalive `30` seconds, and proxy-header acceptance are fixed in the rendered unit |
 
 `POLYGON_REPLICA_RUNTIME_USER` is installer input, not application runtime
-configuration.
+configuration. The systemd installer stores bootstrap assignments in
+`/etc/polygon-replica.env` as `root:root` mode `0600`. Rerunning it replaces the
+installer-owned root and TLS-path values while retaining other valid,
+uniquely-named single-line assignments such as
+`POLYGON_REPLICA_ENCRYPTION_KEY`. The renderer accepts an optional shell
+`export` prefix in an existing file but always writes systemd-compatible
+`NAME=VALUE` records. It rejects unbalanced quotes and a trailing escape that
+would turn the record into a multiline continuation.
 
 ## Durable application settings
 

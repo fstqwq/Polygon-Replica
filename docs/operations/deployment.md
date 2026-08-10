@@ -31,7 +31,12 @@ sudo POLYGON_REPLICA_RUNTIME_USER=polygon ./scripts/install_host.sh
 The installer installs host packages, configures user namespaces, creates
 runtime roots, probes bubblewrap and TeX as `polygon`, builds `.venv` as that
 account, writes `/etc/polygon-replica.env`, renders and verifies the systemd
-unit, and starts it. Direct root runtime is rejected.
+unit, and starts it. Direct root runtime is rejected. The environment file is
+owned by root with mode `0600`; rerunning the installer refreshes its managed
+paths while preserving valid operator-managed assignments and `#` or `;`
+comments. Shell-style input assignments with an optional `export` prefix are
+accepted during migration and rewritten as systemd `NAME=VALUE` records;
+unbalanced quotes and multiline continuations are rejected before replacement.
 
 Inspect the result:
 
@@ -48,17 +53,17 @@ Generate and retain a stable encryption key if SMTP credentials will be stored:
 python3 -c 'import base64,secrets; print(base64.urlsafe_b64encode(secrets.token_bytes(32)).decode().rstrip("="))'
 ```
 
-Before adding the key, restrict the installer-created environment file, then add
-`POLYGON_REPLICA_ENCRYPTION_KEY=<key>` and restart:
+Add `POLYGON_REPLICA_ENCRYPTION_KEY=<key>` and restart:
 
 ```bash
-sudo chmod 0600 /etc/polygon-replica.env
 sudoedit /etc/polygon-replica.env
 sudo systemctl restart polygon-replica.service
 ```
 
-Losing or changing the key makes the stored SMTP password unreadable. Re-running
-the installer replaces this file, so preserve and restore the key afterward.
+Losing or changing the key makes the stored SMTP password unreadable. Installer
+reruns preserve this operator-owned assignment. Duplicate keys or records that
+are not single-line environment assignments make the installer stop before
+replacing the active file.
 
 ## Docker Compose installation
 
