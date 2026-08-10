@@ -31,7 +31,7 @@ _TERMINAL_BATCH_STATUSES = {"completed", "failed"}
 class _Node:
     node_id: str
     verification_id: str
-    logical_run_id: str
+    verification_program_id: str
     program_key: str
     timing_kind: str
     scheduler_task_kind: str
@@ -112,8 +112,8 @@ class JudgehostSimulation:
         self._now = 0.0
         self._nodes: dict[str, _Node] = {}
         self._verifications: dict[str, _Verification] = {}
-        self._logical_totals: dict[tuple[str, str], int] = {}
-        self._logical_completed: dict[tuple[str, str], int] = {}
+        self._program_totals: dict[tuple[str, str], int] = {}
+        self._program_completed: dict[tuple[str, str], int] = {}
         self._case_node_ids: dict[int, str] = {}
         self._batch_ids: set[int] = set()
         self._batch_hosts: dict[int, set[str]] = {}
@@ -175,6 +175,13 @@ class JudgehostSimulation:
         for host in self._hosts:
             self._transition_host(host, host.state, at_sec=makespan)
         return self._report(makespan)
+
+    def _receipt_generation(self, case_id: int) -> int:
+        receipt = self.scheduler.acquire_case_callback_receipt(case_id)
+        if receipt is None:
+            raise AssertionError(f"case {case_id} has no callback identity")
+        self.scheduler.release_case_callback_receipt(receipt.receipt_id)
+        return receipt.claim_generation
 
     def _event_handlers(self) -> Mapping[str, Callable[..., None]]:
         return {
@@ -296,7 +303,7 @@ class JudgehostSimulation:
         node = _Node(
             node_id=node_id,
             verification_id=verification.verification_id,
-            logical_run_id=f"logical:{program_key}",
+            verification_program_id=program_key,
             program_key=program_key,
             timing_kind=timing_kind,
             scheduler_task_kind=scheduler_kind,
@@ -318,8 +325,10 @@ class JudgehostSimulation:
         )
         self._nodes[node_id] = node
         verification.node_ids.append(node_id)
-        logical_key = (node.verification_id, node.logical_run_id)
-        self._logical_totals[logical_key] = self._logical_totals.get(logical_key, 0) + 1
+        program_identity = (node.verification_id, node.verification_program_id)
+        self._program_totals[program_identity] = (
+            self._program_totals.get(program_identity, 0) + 1
+        )
         for dependency_id in dependencies:
             self._nodes[dependency_id].children.append(node_id)
         return node_id
@@ -356,7 +365,7 @@ class JudgehostSimulation:
         batch_id = self.scheduler.create_batch_with_cases(
             task_id=node.task_id,
             run_id=node.run_id,
-            logical_run_id=node.logical_run_id,
+            verification_program_id=node.verification_program_id,
             execution_signature=_sha256(f"execution:{node.program_key}"),
             task_kind=node.scheduler_task_kind,
             verification_id=node.verification_id,
@@ -557,9 +566,12 @@ class JudgehostSimulation:
                 self._case_node_ids[int(host.current_rows[0]["id"])]
             ].compile_duration_sec,
         )
-        if not self.scheduler.record_compile_result(
-            int(batch_id),
-            compile_success=1,
+        if not self.scheduler.record_compile_success(
+            int(host.current_rows[0]["id"]),
+            hostname=host.hostname,
+            receipt_generation=self._receipt_generation(
+                int(host.current_rows[0]["id"])
+            ),
             compile_output_b64="",
             compile_metadata_b64="",
             updated_at=self._now_text(),
@@ -597,6 +609,7 @@ class JudgehostSimulation:
         claim = self.scheduler.claim_case_reporting(
             numeric_case_id,
             hostname=host.hostname,
+            receipt_generation=self._receipt_generation(numeric_case_id),
             now_text=self._now_text(),
         )
         if claim is None:
@@ -666,18 +679,23 @@ class JudgehostSimulation:
         verification.remaining_node_count -= 1
         if verification.first_progress_sec is None:
             verification.first_progress_sec = self._now
-        logical_key = (node.verification_id, node.logical_run_id)
-        self._logical_completed[logical_key] = self._logical_completed.get(logical_key, 0) + 1
-        if self._logical_completed[logical_key] == self._logical_totals[logical_key]:
-            ready = self.scheduler.finish_logical_runs(
+        program_identity = (node.verification_id, node.verification_program_id)
+        self._program_completed[program_identity] = (
+            self._program_completed.get(program_identity, 0) + 1
+        )
+        if (
+            self._program_completed[program_identity]
+            == self._program_totals[program_identity]
+        ):
+            ready = self.scheduler.finish_programs(
                 node.verification_id,
-                [node.logical_run_id],
+                [node.verification_program_id],
                 now_text=self._now_text(),
             )
             self._trace_event(
-                "logical_run_closed",
+                "verification_program_closed",
                 verification_id=node.verification_id,
-                logical_run_id=node.logical_run_id,
+                verification_program_id=node.verification_program_id,
             )
             for batch_id in ready:
                 self._finalize_batch(batch_id)

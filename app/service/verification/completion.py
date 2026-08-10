@@ -3,6 +3,10 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable
 
 from app.service.judgehost.case_result import CaseTerminalReport
+from app.service.judgehost.completion import (
+    CaseCompletionReport,
+    DiagnosticAppendResult,
+)
 from app.service.judgehost.limits import STORED_LOG_TRUNCATED_MARKER
 from app.service.platform.error_text import normalize_display_text
 from app.service.platform.runtime_blob_store import RuntimeBlobStore
@@ -11,10 +15,10 @@ from app.service.verification.execution_result import (
     execution_result_with_outcome,
     normalize_execution_result,
 )
+from app.service.verification.result_match import verification_execution_result_match
 from app.service.verification.task_completion import (
     CompletionCommit,
     TaskCompletion,
-    TaskCompletionAmendment,
 )
 from app.service.verification.task_store import VerificationTaskRow, VerificationTaskStore
 from app.service.verification.types import Status
@@ -208,7 +212,7 @@ class VerificationTaskCompletionService:
         report_ok: bool,
     ) -> TaskCompletion:
         test_name = task_row["test_name"]
-        if not report_ok:
+        if not (report_ok and _accepted_verdict(result.verdict)):
             error_text = _final_error(
                 result,
                 fallback=f"main correct failed on {test_name}",
@@ -261,10 +265,7 @@ class VerificationTaskCompletionService:
                 run_id=run_id,
                 result=result,
                 error_text=error_text,
-                set_fail_reason=task_kind in {
-                    TASK_GENERATE_INPUT,
-                    TASK_MAIN_CORRECT,
-                },
+                set_fail_reason=True,
             )
 
         if task_kind == TASK_GENERATE_INPUT:
@@ -281,16 +282,38 @@ class VerificationTaskCompletionService:
                 result=result,
                 report_ok=report_ok,
             )
-        return TaskCompletion(
-            task_id=task_row["id"],
-            status=(
-                VerificationTaskStore.TASK_DONE
-                if report_ok
-                else VerificationTaskStore.TASK_FAILED
-            ),
+        matched, completed, _observed_pass, mismatch_reason = (
+            verification_execution_result_match(
+                task_row["expected_behavior"],
+                result,
+            )
+        )
+        if matched:
+            return TaskCompletion(
+                task_id=task_row["id"],
+                status=VerificationTaskStore.TASK_DONE,
+                run_id=run_id,
+                judgehost_task_id=task_row["judgehost_task_id"],
+                result=result,
+            )
+        error_text = (
+            normalize_display_text(mismatch_reason)
+            if mismatch_reason
+            else _final_error(
+                result,
+                fallback=(
+                    "solution result did not match expected behavior"
+                    if completed
+                    else "solution execution did not produce a complete result"
+                ),
+            )
+        )
+        return self._failed_completion(
+            task_row,
             run_id=run_id,
-            judgehost_task_id=task_row["judgehost_task_id"],
             result=result,
+            error_text=error_text,
+            set_fail_reason=True,
         )
 
     def commit(
@@ -307,45 +330,57 @@ class VerificationTaskCompletionService:
             self._post_commit_notifier(committed.verification_id, committed)
         return committed
 
-    def reported(
+    def reported_many(
         self,
-        judgehost_task_id: str,
-        test_name: str,
-        report: CaseTerminalReport,
-        verification_id: str = "",
+        reports: tuple[CaseCompletionReport, ...],
     ) -> bool:
-        task_row = self._task_store.find_runtime_row_by_judgehost_case(
-            judgehost_task_id,
-            test_name,
-        )
-        if task_row is None:
-            return True
-        if not self._report_matches_task(
-            task_row,
-            report,
-            judgehost_task_id=judgehost_task_id,
-            verification_id=verification_id,
-        ):
+        completions: list[TaskCompletion] = []
+        verification_ids: set[str] = set()
+        task_ids: set[str] = set()
+        for candidate in reports:
+            verification_task_id = candidate.verification_task_id
+            if not verification_task_id:
+                continue
+            task_row = self._task_store.runtime_row(verification_task_id)
+            if task_row is None:
+                return False
+            if (
+                task_row["test_name"] != candidate.test_name
+                or verification_task_id in task_ids
+                or not self._report_matches_task(
+                    task_row,
+                    candidate.report,
+                    judgehost_task_id=candidate.judgehost_task_id,
+                    verification_id=candidate.verification_id,
+                )
+            ):
+                return False
+            task_ids.add(verification_task_id)
+            verification_ids.add(task_row["verification_id"])
+            completions.append(self.prepare(task_row, candidate.report))
+        if len(verification_ids) > 1:
             return False
-        self.commit((self.prepare(task_row, report),))
+        if completions:
+            self.commit(completions)
         return True
 
     def cancelled(
         self,
+        verification_task_id: str,
         judgehost_task_id: str,
         test_name: str,
         reason: str,
     ) -> bool:
-        task_row = self._task_store.find_runtime_row_by_judgehost_case(
-            judgehost_task_id,
-            test_name,
-        )
+        task_row = self._task_store.runtime_row(verification_task_id)
         if task_row is None:
             return True
-        verification_id = task_row["verification_id"]
-        _failed, existing_fail_reason = self._task_store.fail_state(verification_id)
+        if (
+            task_row["test_name"] != test_name
+            or task_row["judgehost_task_id"] != judgehost_task_id
+        ):
+            return False
         cancel_reason = normalize_display_text(
-            reason or existing_fail_reason or "verification cancelled by user"
+            reason or "verification cancelled by user"
         )
         self.commit(
             (
@@ -361,64 +396,21 @@ class VerificationTaskCompletionService:
         )
         return True
 
-    def amend_debug(
+    def append(
         self,
-        judgehost_task_id: str,
-        test_name: str,
-        report: CaseTerminalReport,
-    ) -> bool:
-        task_row = self._task_store.find_runtime_row_by_judgehost_case(
-            judgehost_task_id,
-            test_name,
-        )
-        if task_row is None:
-            return True
-        if not self._report_matches_task(
-            task_row,
-            report,
-            judgehost_task_id=judgehost_task_id,
-        ):
-            return False
-        report_result = report["execution_result"]
-        error_text = normalize_display_text(
-            report_result.outcome.error or report["error"]
-        )
-        feedback_text = normalize_display_text(
-            report_result.feedback_text or error_text
-        )
-        expected_fail_reason = ""
-        fail_reason = ""
-        fail_reason_origin = ""
-        if (
-            task_row["status"] == VerificationTaskStore.TASK_FAILED
-            and task_row["task_kind"] in {TASK_GENERATE_INPUT, TASK_MAIN_CORRECT}
-        ):
-            fail_reason_origin = verification_task_fail_reason(
-                task_row,
-                error_text="",
-            )
-            current_error = _final_error(task_row["result"], fallback="")
-            if current_error:
-                expected_fail_reason = verification_task_fail_reason(
-                    task_row,
-                    error_text=current_error,
-                )
-            if error_text:
-                fail_reason = verification_task_fail_reason(
-                    task_row,
-                    error_text=error_text,
-                )
-        commit = self._task_store.amend_task_completion(
-            TaskCompletionAmendment(
-                task_id=task_row["id"],
-                error_text=error_text,
-                feedback_text=feedback_text,
-                fail_reason_origin=fail_reason_origin,
-                expected_fail_reason=expected_fail_reason,
-                fail_reason=fail_reason,
+        *,
+        task_id: str,
+        kind: str,
+        hostname: str,
+        text: str,
+        received_at: str,
+    ) -> DiagnosticAppendResult:
+        return DiagnosticAppendResult(
+            outcome=self._task_store.append_diagnostic(
+                task_id=task_id,
+                kind=kind,
+                hostname=hostname,
+                text=text,
+                received_at=received_at,
             )
         )
-        if commit is None:
-            return False
-        self._post_commit_notifier(commit.verification_id, commit)
-        return True

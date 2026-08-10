@@ -11,12 +11,12 @@ from pathlib import Path
 
 from domjudge_contract import (
     APPROVAL_FILENAME,
-    JUDGEDAEMON_SOURCE,
     SOURCE_REQUIREMENTS,
     UPSTREAM_PEELED_COMMIT,
     UPSTREAM_REPOSITORY,
     UPSTREAM_TAG,
     state_dir,
+    verified_behaviors,
 )
 
 
@@ -81,20 +81,34 @@ def main() -> None:
                 f"peeled_tag={peeled_tag_commit}"
             )
 
-        source_path = checkout / JUDGEDAEMON_SOURCE
-        source = source_path.read_text(encoding="utf-8")
-        missing = {
-            behavior: [literal for literal in literals if literal not in source]
-            for behavior, literals in SOURCE_REQUIREMENTS.items()
+        sources = {
+            relative: (checkout / relative).read_text(encoding="utf-8")
+            for relative in SOURCE_REQUIREMENTS
         }
-        missing = {behavior: literals for behavior, literals in missing.items() if literals}
+        missing = {
+            f"{relative.as_posix()}:{behavior}": [
+                literal for literal in literals if literal not in sources[relative]
+            ]
+            for relative, requirements in SOURCE_REQUIREMENTS.items()
+            for behavior, literals in requirements.items()
+        }
+        missing = {
+            behavior: literals
+            for behavior, literals in missing.items()
+            if literals
+        }
         if missing:
             details = "; ".join(
                 f"{behavior}: {literals!r}" for behavior, literals in sorted(missing.items())
             )
             raise RuntimeError(f"official DOMjudge source does not satisfy mock contract: {details}")
 
-        source_digest = hashlib.sha256(source_path.read_bytes()).hexdigest()
+        source_digests = {
+            relative.as_posix(): hashlib.sha256(
+                (checkout / relative).read_bytes()
+            ).hexdigest()
+            for relative in SOURCE_REQUIREMENTS
+        }
         _atomic_json(
             approval_path,
             {
@@ -102,14 +116,14 @@ def main() -> None:
                 "repository": UPSTREAM_REPOSITORY,
                 "tag": UPSTREAM_TAG,
                 "commit": actual_commit,
-                "source": JUDGEDAEMON_SOURCE.as_posix(),
-                "source_sha256": source_digest,
-                "verified_behaviors": sorted(SOURCE_REQUIREMENTS),
+                "source_sha256s": source_digests,
+                "verified_behaviors": verified_behaviors(),
             },
         )
         print(
             "approved DOMjudge Judgehost wire contract "
-            f"tag={UPSTREAM_TAG} commit={actual_commit} source_sha256={source_digest}"
+            f"tag={UPSTREAM_TAG} commit={actual_commit} "
+            f"source_sha256s={source_digests}"
         )
 
 

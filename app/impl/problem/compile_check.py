@@ -176,7 +176,7 @@ def judgehost_compile_check_error(
             upload_filename=source_name,
             run_id=run_id,
             verification_id=verification_id,
-            verification_run_ids=[run_id],
+            verification_program_id="compile-check",
             expected_behavior="compile",
             verification_source=verification_source.strip() or "problem.save_source",
             prepared_payload=dict(prepared_payload) if isinstance(prepared_payload, dict) else None,

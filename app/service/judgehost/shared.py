@@ -7,7 +7,7 @@ from typing import cast
 
 from app.service.judgehost.limits import compile_output_kb, run_output_kb
 
-_RUN_ID_RE = re.compile(r"^[A-Za-z0-9._-]{1,80}$")
+_SCHEDULING_TOKEN_RE = re.compile(r"^[A-Za-z0-9._-]{1,80}$")
 _HOSTNAME_RE = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
 _DOMJUDGE_CONTEST_ID_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 _DOMJUDGE_CACHE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")

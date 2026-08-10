@@ -10,12 +10,19 @@ from urllib.parse import urlparse
 from fastapi.testclient import TestClient
 
 from tests.common import E2ETestBase
-from tests.db_helpers import db_execute, db_fetch_one
-from tests.archive_support import archive_view_from_bytes
+from tests.db_helpers import (
+    activate_test_verification,
+    admit_test_verification,
+    db_execute,
+    db_fetch_one,
+    verification_programs_for_tasks,
+)
 from tests.execution_result_helpers import execution_result
 from tests.ui_support import AUTH_COOKIE_NAME, _cookie_value_from_response, _register_with_password_envelope
 from app.impl.runtime.config import config
 from app.main import app
+from app.service.verification.lifecycle import PlannedTask, verification_task_id
+from app.service.verification.task_completion import TaskCompletion
 from app.service.verification.task_store import VerificationTaskStore
 
 workspace_service = config.workspace_service
@@ -187,15 +194,15 @@ class TestAgentAPI(E2ETestBase):
         archive.write_bytes(b"agent export payload")
 
         def materialize(_snapshot: Path, commit: str, _revision: int, verification_id: str) -> str:
-            config.verification_service.begin_verification_record(
+            admission = admit_test_verification(
                 verification_id=verification_id,
                 problem_id=problem_id,
                 workspace_id=None,
                 signature="agent-export-fixture",
                 source_commit=commit,
                 kind="all",
-                status="ok",
             )
+            self.assertEqual(admission.outcome, "admitted")
             input_ref = config.verification_service.store_verification_blob(
                 verification_id=verification_id,
                 test_name="001.in",
@@ -210,11 +217,42 @@ class TestAgentAPI(E2ETestBase):
                 file_name="001.ans",
                 payload=b"2\n",
             )
-            config.verification_service.update_verification_artifact_refs(
+            task_id = verification_task_id(
                 verification_id,
+                "accepted",
                 "001.in",
-                {"input_ref": input_ref, "answer_ref": answer_ref},
             )
+            tasks = [
+                PlannedTask(
+                    task_id=task_id,
+                    predecessor_task_id=None,
+                    task_kind="main-correct",
+                    source_path="solutions/ac_python.py",
+                    program_id="accepted",
+                    test_name="001.in",
+                    expected_behavior="accepted",
+                )
+            ]
+            activation = activate_test_verification(
+                verification_id,
+                programs=verification_programs_for_tasks(tasks),
+                tasks=tasks,
+            )
+            self.assertEqual(activation.outcome, "activated")
+            completion = config.verification_task_store.commit_task_completions(
+                [
+                    TaskCompletion(
+                        task_id=task_id,
+                        status=VerificationTaskStore.TASK_DONE,
+                        run_id="",
+                        judgehost_task_id="",
+                        result=execution_result("OK"),
+                        input_ref=input_ref,
+                        answer_ref=answer_ref,
+                    )
+                ]
+            )
+            self.assertEqual(completion.parent_transition, "ok")
             return verification_id
 
         revision = config.problem_package_service.published_revision(problem_id)
@@ -850,21 +888,12 @@ class TestAgentAPI(E2ETestBase):
 
         oversized_entry_zip = self._workspace_zip({"solutions/bomb.txt": "x" * 17})
         oversized_total_zip = self._workspace_zip({"solutions/a.txt": "1234567890", "solutions/b.txt": "abcdefghij"})
-        with archive_view_from_bytes(
-            oversized_entry_zip, max_expanded_bytes=16
-        ) as archive:
-            with self.assertRaisesRegex(ValueError, "expanded zip payload is too large"):
-                config.workspace_archive_service.compare_zip(workspace, archive)
-        with archive_view_from_bytes(
-            oversized_total_zip, max_expanded_bytes=16
-        ) as archive:
-            with self.assertRaisesRegex(ValueError, "expanded zip payload is too large"):
-                config.workspace_archive_service.compare_zip(workspace, archive)
-        with archive_view_from_bytes(
-            oversized_total_zip, max_expanded_bytes=16
-        ) as archive:
-            with self.assertRaisesRegex(ValueError, "expanded zip payload is too large"):
-                config.workspace_archive_service.apply_zip(workspace, archive)
+        with self.assertRaisesRegex(ValueError, "workspace archive entry is too large"):
+            config.workspace_archive_service.compare_zip(workspace, oversized_entry_zip, max_bytes=16)
+        with self.assertRaisesRegex(ValueError, "workspace archive payload is too large"):
+            config.workspace_archive_service.compare_zip(workspace, oversized_total_zip, max_bytes=16)
+        with self.assertRaisesRegex(ValueError, "workspace archive payload is too large"):
+            config.workspace_archive_service.apply_zip(workspace, oversized_total_zip, max_bytes=16)
         self.assertEqual(sentinel.read_text(encoding="utf-8"), "keep\n")
 
     def test_agent_verification_export_workspace_and_commit_endpoints(self) -> None:
@@ -1038,6 +1067,8 @@ class TestAgentAPI(E2ETestBase):
         source = workspace / "solutions" / "ac_python.py"
         source.parent.mkdir(parents=True, exist_ok=True)
         source.write_text("print('ok')\n", encoding="utf-8")
+        accepted_source = workspace / "solutions" / "accepted.cpp"
+        accepted_source.write_text("int main() { return 0; }\n", encoding="utf-8")
 
         with TestClient(app, raise_server_exceptions=False) as client:
             connect = self._connect_agent(client, auth_cookie)
@@ -1056,13 +1087,47 @@ class TestAgentAPI(E2ETestBase):
             problem_id = int(ctx["problem"]["id"])
             workspace_id = int(ctx["workspace"]["id"])
             verification_id = config.verification_service.allocate_verification_id()
-            config.verification_service.begin_verification_record(
+            admission = admit_test_verification(
                 verification_id=verification_id,
                 problem_id=problem_id,
                 workspace_id=workspace_id,
                 signature="",
+                source_commit="",
                 kind="all",
-                status="failed",
+            )
+            self.assertEqual(admission.outcome, "admitted")
+            accepted_task_id = verification_task_id(
+                verification_id,
+                "accepted",
+                "001.in",
+            )
+            task_id = verification_task_id(
+                verification_id,
+                "solution-0",
+                "001.in",
+            )
+            tasks = [
+                PlannedTask(
+                    task_id=accepted_task_id,
+                    predecessor_task_id=None,
+                    task_kind="main-correct",
+                    source_path="solutions/accepted.cpp",
+                    program_id="accepted",
+                    test_name="001.in",
+                    expected_behavior="accepted",
+                ),
+                PlannedTask(
+                    task_id=task_id,
+                    predecessor_task_id=accepted_task_id,
+                    task_kind="solution-run",
+                    source_path="solutions/ac_python.py",
+                    program_id="solution-0",
+                    test_name="001.in",
+                    expected_behavior="accepted",
+                ),
+            ]
+            activation = activate_test_verification(
+                verification_id,
                 detail={
                     "mode": "pass-fail",
                     "selected_test_names": ["001.in"],
@@ -1089,20 +1154,25 @@ class TestAgentAPI(E2ETestBase):
                         },
                     ],
                 },
+                programs=verification_programs_for_tasks(tasks),
+                tasks=tasks,
             )
-            task_store = config.verification_task_store
-            task_store.replace_graph(
-                verification_id,
-                tasks=[
-                    {
-                        "id": task_store.allocate_id(),
-                        "task_kind": "solution-run",
-                        "source_path": "solutions/ac_python.py",
-                        "logical_run_id": "run-ac-python",
-                        "test_name": "001.in",
-                        "expected_behavior": "accepted",
-                        "status": VerificationTaskStore.TASK_DONE,
-                        "result": execution_result(
+            self.assertEqual(activation.outcome, "activated")
+            completion = config.verification_task_store.commit_task_completions(
+                [
+                    TaskCompletion(
+                        task_id=accepted_task_id,
+                        status=VerificationTaskStore.TASK_DONE,
+                        run_id="run-main-correct",
+                        judgehost_task_id="",
+                        result=execution_result("OK"),
+                    ),
+                    TaskCompletion(
+                        task_id=task_id,
+                        status=VerificationTaskStore.TASK_DONE,
+                        run_id="run-ac-python",
+                        judgehost_task_id="",
+                        result=execution_result(
                             "TL",
                             runtime_sec=1.5,
                             cpu_sec=1.4,
@@ -1115,16 +1185,11 @@ class TestAgentAPI(E2ETestBase):
                                 {"kind": "runtime", "message": "time limit exceeded"},
                             ),
                         ),
-                    }
-                ],
-                edges=[],
+                        fail_reason="required=[AC], allowed=[AC], got=[TL]",
+                    )
+                ]
             )
-            config.verification_service.update_verification_record_status(
-                verification_id,
-                status="failed",
-                fail_reason="required=[AC], allowed=[AC], got=[TL]",
-                finished=True,
-            )
+            self.assertEqual(completion.parent_transition, "failed")
 
             detail_resp = client.get(
                 f"/agent/v1/verification/{verification_id}/detail",

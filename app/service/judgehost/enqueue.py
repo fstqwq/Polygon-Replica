@@ -16,11 +16,14 @@ from app.service.judgehost.limits import (
     run_output_kb,
 )
 from app.service.judgehost.identity import compile_key
-from app.service.judgehost.shared import _RUN_ID_RE, domjudge_lower_text, domjudge_path_name, domjudge_text
+from app.service.judgehost.shared import domjudge_lower_text, domjudge_path_name, domjudge_text
 from app.service.judgehost.runtime import domjudge_bool, domjudge_parse_int
 from app.service.platform.hashing import domjudge_executable_hash, sha256_hex_json
 from app.service.platform.runtime_blob_store import PayloadFile, RuntimeBlobStore
-from app.service.verification.identity import canonical_verification_id
+from app.service.verification.identity import (
+    canonical_verification_id,
+    new_verification_id,
+)
 from app.service.verification.runtime import normalize_memory_limit_mb
 from app.service.run.runtime import RUN_TEST_NAME_RE
 from app.service.platform.testlib_source import workspace_testlib_header
@@ -314,7 +317,7 @@ class TaskEnqueue:
     def _verification_id(self, verification_id: str) -> str:
         token = TaskEnqueue._normalize_text(verification_id)
         if not token:
-            token = self._s.verification_store.allocate_id()
+            token = new_verification_id()
         return canonical_verification_id(token)
 
     def _collect_verification_payload(
@@ -522,8 +525,8 @@ class TaskEnqueue:
         upload_filename: str | None,
         selected_tests: list[str],
         verification_id: str,
-        verification_run_ids: list[str],
-        logical_run_id: str,
+        verification_task_id: str,
+        verification_program_id: str,
         expected_behavior: str,
         verification_source: str,
         run_id: str,
@@ -606,8 +609,8 @@ class TaskEnqueue:
             "entry_point": entry_point,
             "selected_tests": list(selected_tests),
             "verification_id": verification_id,
-            "verification_run_ids": list(verification_run_ids),
-            "logical_run_id": logical_run_id,
+            "verification_task_id": verification_task_id,
+            "verification_program_id": verification_program_id,
             "expected_behavior": expected_behavior,
             "verification_source": verification_source,
             "task_kind": safe_task_kind,
@@ -934,8 +937,8 @@ class TaskEnqueue:
         run_id: str,
         selected_tests: list[str] | None,
         verification_id: str,
-        verification_run_ids: list[str] | None,
-        logical_run_id: str | None = None,
+        verification_task_id: str = "",
+        verification_program_id: str,
         expected_behavior: str,
         verification_source: str,
         task_kind: str = "",
@@ -943,9 +946,10 @@ class TaskEnqueue:
         compile_only: bool = False,
     ) -> dict[str, object]:
         selected = self._normalize_list(selected_tests, matcher=RUN_TEST_NAME_RE)
-        verification_run_id_list = self._normalize_list(verification_run_ids, matcher=_RUN_ID_RE)
         safe_run_id = self._core.normalize_run_id(run_id)
-        safe_logical_run_id = self._core.normalize_run_id(logical_run_id or safe_run_id)
+        safe_verification_program_id = self._core.normalize_verification_program_id(
+            verification_program_id
+        )
         payload = self._build_task_payload(
             problem=problem,
             username=username,
@@ -957,8 +961,8 @@ class TaskEnqueue:
             upload_filename=upload_filename,
             selected_tests=selected,
             verification_id=verification_id,
-            verification_run_ids=verification_run_id_list,
-            logical_run_id=safe_logical_run_id,
+            verification_task_id=str(verification_task_id or ""),
+            verification_program_id=safe_verification_program_id,
             expected_behavior=expected_behavior,
             verification_source=verification_source,
             task_kind=task_kind,
@@ -980,7 +984,6 @@ class TaskEnqueue:
         source_label: str,
         selected_tests: list[str],
         verification_id: str,
-        verification_run_ids: list[str],
         expected_behavior: str,
         verification_source: str,
         task_kind: str = "",
@@ -1032,8 +1035,8 @@ class TaskEnqueue:
         run_id: str | None = None,
         selected_tests: list[str] | None,
         verification_id: str = "",
-        verification_run_ids: list[str] | None = None,
-        logical_run_id: str | None = None,
+        verification_task_id: str = "",
+        verification_program_id: str,
         expected_behavior: str,
         verification_source: str,
         task_kind: str = "",
@@ -1045,12 +1048,12 @@ class TaskEnqueue:
         service_class: str = "background",
     ) -> str:
         safe_run_id = self._core.normalize_run_id(run_id if run_id else verification_id)
-        safe_logical_run_id = self._core.normalize_run_id(logical_run_id or safe_run_id)
+        safe_verification_program_id = self._core.normalize_verification_program_id(
+            verification_program_id
+        )
         safe_verification_id = self._verification_id(verification_id)
+        safe_verification_task_id = str(verification_task_id or "")
         selected = self._normalize_list(selected_tests, matcher=RUN_TEST_NAME_RE)
-        verification_run_id_list = self._normalize_list(verification_run_ids, matcher=_RUN_ID_RE)
-        if not verification_run_id_list:
-            verification_run_id_list = [safe_run_id]
         verification_payload_override = None
         if prepared_payload is not None and "verification_payload" in prepared_payload:
             verification_payload_override = dict(
@@ -1067,8 +1070,8 @@ class TaskEnqueue:
             upload_filename=upload_filename,
             selected_tests=selected,
             verification_id=safe_verification_id,
-            verification_run_ids=verification_run_id_list,
-            logical_run_id=safe_logical_run_id,
+            verification_task_id=safe_verification_task_id,
+            verification_program_id=safe_verification_program_id,
             expected_behavior=expected_behavior,
             verification_source=verification_source,
             task_kind=task_kind,
@@ -1094,8 +1097,8 @@ class TaskEnqueue:
         payload["submission_path"] = TaskEnqueue._normalize_text(submission_path)
         payload["selected_tests"] = list(selected)
         payload["verification_id"] = safe_verification_id
-        payload["verification_run_ids"] = list(verification_run_id_list)
-        payload["logical_run_id"] = safe_logical_run_id
+        payload["verification_task_id"] = safe_verification_task_id
+        payload["verification_program_id"] = safe_verification_program_id
         payload["expected_behavior"] = expected_behavior
         payload["verification_source"] = verification_source
         payload["task_kind"] = safe_task_kind
@@ -1143,7 +1146,6 @@ class TaskEnqueue:
                 source_label=source_label,
                 selected_tests=selected,
                 verification_id=safe_verification_id,
-                verification_run_ids=verification_run_id_list,
                 expected_behavior=expected_behavior,
                 verification_source=verification_source,
                 task_kind=safe_task_kind,
@@ -1158,6 +1160,7 @@ class TaskEnqueue:
                 "artifact_verification_id": str(artifact_verification_id),
                 "mode": str(mode),
                 "verification_id": safe_verification_id,
+                "verification_task_id": safe_verification_task_id,
                 "status": self.STATUS_ENQUEUING,
                 "payload": dict(payload),
                 "result": {},
@@ -1206,33 +1209,70 @@ class TaskEnqueue:
             updates={"updated_at": now_iso()},
         )
         if queued is None:
-            self._s.batch_scheduler.cancel_staged_task_cases(
+            self._s.batch_scheduler.discard_staged_task_cases(
                 task_id,
-                now_text=now_iso(),
-            )
-            self._dispatch.finalize_batch_if_ready(
-                batch_id,
-                error_text="judgehost task staging lost its queued transition",
+                batch_id=batch_id,
             )
             raise RuntimeError("judgehost task staging lost its queued transition")
-        if not self._dispatch.activate_task_cases(task_id):
+
+        def _expose_staged_cases() -> None:
+            if not self._dispatch.activate_task_cases(task_id):
+                raise RuntimeError("judgehost task staged no cases")
+
+        try:
+            if safe_verification_task_id:
+                exposed = self._s.verification_task_store.bind_and_expose_judgehost_runtime(
+                    safe_verification_task_id,
+                    run_id=safe_run_id,
+                    judgehost_task_id=task_id,
+                    expose=_expose_staged_cases,
+                )
+            else:
+                _expose_staged_cases()
+                exposed = True
+        except Exception as exc:
             finished_at = now_iso()
+            self._s.batch_scheduler.discard_staged_task_cases(
+                task_id,
+                batch_id=batch_id,
+            )
             self._s.task_registry.transition(
                 task_id,
                 expected={self.STATUS_QUEUED},
                 status=self.STATUS_FAILED,
                 updates={
-                    "result": {"run_status": "failed", "error": "judgehost task staged no cases"},
-                    "error_text": "judgehost task staged no cases",
+                    "result": {"run_status": "failed", "error": str(exc)},
+                    "error_text": str(exc),
                     "updated_at": finished_at,
                     "completed_at": finished_at,
                 },
             )
-            self._dispatch.finalize_batch_if_ready(
-                batch_id,
-                error_text="judgehost task staged no cases",
+            raise
+        if not exposed:
+            finished_at = now_iso()
+            self._s.batch_scheduler.discard_staged_task_cases(
+                task_id,
+                batch_id=batch_id,
             )
-            raise RuntimeError("judgehost task staged no cases")
+            self._s.task_registry.transition(
+                task_id,
+                expected={self.STATUS_QUEUED},
+                status=self.STATUS_FAILED,
+                updates={
+                    "result": {
+                        "run_status": "failed",
+                        "error": "verification task refused judgehost runtime binding",
+                    },
+                    "error_text": "verification task refused judgehost runtime binding",
+                    "updated_at": finished_at,
+                    "completed_at": finished_at,
+                },
+            )
+            raise RuntimeError("verification task refused judgehost runtime binding")
+        self._dispatch.complete_task_exposure(
+            task_id=task_id,
+            batch_id=batch_id,
+        )
         return task_id
 
     def enqueue_compile_only_task(
@@ -1245,7 +1285,7 @@ class TaskEnqueue:
         upload_filename: str,
         run_id: str,
         verification_id: str,
-        verification_run_ids: list[str] | None = None,
+        verification_program_id: str,
         expected_behavior: str = "compile",
         verification_source: str = "compile.only",
         prepared_payload: dict[str, object] | None = None,
@@ -1261,7 +1301,7 @@ class TaskEnqueue:
             run_id=run_id,
             selected_tests=[],
             verification_id=TaskEnqueue._normalize_text(verification_id),
-            verification_run_ids=list(verification_run_ids or [run_id]),
+            verification_program_id=verification_program_id,
             expected_behavior=expected_behavior or "compile",
             verification_source=verification_source or "compile.only",
             task_kind=self._TASK_KIND_COMPILE_ONLY,

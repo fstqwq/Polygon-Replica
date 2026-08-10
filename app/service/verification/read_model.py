@@ -81,15 +81,10 @@ def solution_source_paths(rows: list[VerificationTaskReadRow]) -> list[str]:
     return values
 
 
-def logical_run_ids(rows: list[VerificationTaskReadRow], *, include_main_correct: bool = False) -> list[str]:
+def program_ids(rows: list[VerificationTaskReadRow]) -> list[str]:
     values: list[str] = []
     for row in rows:
-        task_kind = str(row["task_kind"] or "")
-        if task_kind == "generate-input":
-            continue
-        if (not include_main_correct) and task_kind == "main-correct":
-            continue
-        logical_run_id = str(row["logical_run_id"] or "")
-        if logical_run_id and logical_run_id not in values:
-            values.append(logical_run_id)
+        program_id = str(row["program_id"] or "")
+        if program_id and program_id not in values:
+            values.append(program_id)
     return values

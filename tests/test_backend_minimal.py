@@ -13,7 +13,11 @@ from fastapi import HTTPException
 
 from app.db import CURRENT_SCHEMA_COLUMNS
 from tests.db_helpers import db_connection, db_execute, db_fetch_one, db_write_transaction, write_preview_summary
-from tests.common import E2ETestBase
+from tests.common import (
+    E2ETestBase,
+    clear_startup_recovery_abort_fault,
+    install_startup_recovery_abort_fault,
+)
 from tests.identity_helpers import canonical_test_verification_id
 from tests.ui_support import _flash_messages_from_response, _request
 from app.impl.preview.preview import (
@@ -29,7 +33,10 @@ from app.impl.preview.preview import (
     statement_language_delete,
 )
 from app.impl.run_export.artifact import artifact_file
-from app.impl.auth.internal.runtime import _startup_clear_all_caches
+from app.impl.auth.internal.runtime import (
+    _startup_clear_all_caches,
+    _startup_reset_runtime_state,
+)
 from app.impl.runtime.config import config
 from app.impl.problem.compile_check import judgehost_compile_check_error
 from app.impl.workspace.context_ui import page_ctx
@@ -42,6 +49,17 @@ from app.service.statement.render import (
 from app.service.statement.signature import statement_sources_signature
 from app.service.disk.verification_store import VerificationStore
 from app.service.platform.git_process import run_git
+from app.service.verification.execution_result import normalize_execution_result
+from app.service.verification.lifecycle import (
+    ActivationPlan,
+    PlannedTask,
+    VerificationCompileSpec,
+    VerificationAdmission,
+    VerificationProgram,
+    verification_task_id,
+)
+from app.service.verification.task_completion import TaskCompletion
+from app.service.verification.task_store import VerificationTaskStore
 
 
 TEXTAREA_MAX_BYTES = int(CONFIG_REGISTRY.defaults()["TEXTAREA_MAX_BYTES"])
@@ -49,6 +67,68 @@ TEXTAREA_MAX_BYTES = int(CONFIG_REGISTRY.defaults()["TEXTAREA_MAX_BYTES"])
 
 class TestBackendMinimal(E2ETestBase):
     seed_default_workspace = True
+
+    def _activate_verification(
+        self,
+        *,
+        verification_id: str,
+        problem_id: int,
+        workspace_id: int,
+        signature: str = "",
+        kind: str = "all",
+        detail: dict[str, object] | None = None,
+    ) -> str:
+        admission = config.verification_service.admit_verification(
+            VerificationAdmission(
+                verification_id=verification_id,
+                problem_id=problem_id,
+                workspace_id=workspace_id,
+                signature=signature,
+                source_commit="",
+                kind=kind,
+            )
+        )
+        self.assertEqual(admission.outcome, "admitted")
+        program_id = "accepted"
+        test_name = "001.in"
+        task_id = verification_task_id(
+            verification_id,
+            program_id,
+            test_name,
+        )
+        activation = config.verification_service.activate_verification(
+            ActivationPlan.build(
+                verification_id,
+                detail=dict(detail or {}),
+                programs=(
+                    VerificationProgram(
+                        program_id=program_id,
+                        kind="main-correct",
+                        source_path="fixture.cpp",
+                        compile_spec=VerificationCompileSpec(
+                            source_name="fixture.cpp",
+                            source_file=config.runtime_blob_store.put_bytes(
+                                b"int main(){return 0;}\n"
+                            ),
+                        ),
+                        expected_behavior="accepted",
+                    ),
+                ),
+                tasks=(
+                    PlannedTask(
+                        task_id=task_id,
+                        predecessor_task_id=None,
+                        task_kind="main-correct",
+                        source_path="fixture.cpp",
+                        program_id=program_id,
+                        test_name=test_name,
+                        expected_behavior="accepted",
+                    ),
+                ),
+            )
+        )
+        self.assertEqual(activation.outcome, "activated")
+        return task_id
 
     def _statement_title(self, workspace: Path, language: str = "english") -> str:
         return statement_title_for_language(
@@ -93,6 +173,58 @@ class TestBackendMinimal(E2ETestBase):
         self.assertFalse(artifact_file.exists())
         self.assertFalse(runtime_file.exists())
         self.assertFalse(durable_log.exists())
+
+    def test_startup_recovery_failure_preserves_runtime_storage(self) -> None:
+        context = config.workspace_service.workspace_context(
+            self.problem,
+            self.user,
+            include_recent=False,
+        )
+        verification_id = canonical_test_verification_id(
+            f"startup-recovery-failure:{self.test_id}"
+        )
+        task_id = self._activate_verification(
+            verification_id=verification_id,
+            problem_id=int(context["problem"]["id"]),
+            workspace_id=int(context["workspace"]["id"]),
+        )
+        marker = config.fs_manager.runtime_root / "startup-recovery-marker"
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text("must survive\n", encoding="utf-8")
+
+        install_startup_recovery_abort_fault()
+        try:
+            with patch(
+                "app.impl.auth.internal.runtime._startup_cancel_summary_rows"
+            ), patch(
+                "app.impl.auth.internal.runtime._startup_cancel_judgehost_inflight"
+            ) as cancel_judgehost, patch(
+                "app.impl.auth.internal.runtime._startup_clear_all_caches",
+                wraps=_startup_clear_all_caches,
+            ) as clear_caches:
+                with self.assertRaisesRegex(
+                    sqlite3.IntegrityError,
+                    "forced startup recovery failure",
+                ):
+                    _startup_reset_runtime_state()
+        finally:
+            clear_startup_recovery_abort_fault()
+
+        cancel_judgehost.assert_not_called()
+        clear_caches.assert_not_called()
+        self.assertTrue(marker.exists())
+        verification = db_fetch_one(
+            "SELECT status FROM verifications WHERE id=?",
+            [verification_id],
+        )
+        task = db_fetch_one(
+            "SELECT final_status FROM verification_tasks WHERE id=?",
+            [task_id],
+        )
+        self.assertIsNotNone(verification)
+        self.assertIsNotNone(task)
+        self.assertEqual(str(verification["status"]), "running")
+        self.assertEqual(str(task["final_status"]), "")
 
     def test_current_problem_schema_has_no_name_column(self) -> None:
         self.assertNotIn("name", CURRENT_SCHEMA_COLUMNS["problems"])
@@ -184,13 +316,12 @@ class TestBackendMinimal(E2ETestBase):
         config.workspace_service.ensure_workspace("alice/sample", "alice")
         ctx = config.workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
         verification_id = canonical_test_verification_id(self.random_id("ver-detail-db"))
-        config.verification_service.begin_verification_record(
+        self._activate_verification(
             verification_id=verification_id,
             problem_id=int(ctx["problem"]["id"]),
             workspace_id=int(ctx["workspace"]["id"]),
             signature="sig-db-only",
             kind="all",
-            status="running",
             detail={
                 "mode": "pass-fail",
                 "pass_limit": 2,
@@ -242,13 +373,12 @@ class TestBackendMinimal(E2ETestBase):
         verification_id = canonical_test_verification_id(
             self.random_id("ver-detail-partial-meta")
         )
-        config.verification_service.begin_verification_record(
+        self._activate_verification(
             verification_id=verification_id,
             problem_id=int(ctx["problem"]["id"]),
             workspace_id=int(ctx["workspace"]["id"]),
             signature="sig-partial-meta",
             kind="custom",
-            status="running",
             detail={
                 "selected_test_names": ["002.in"],
                 "tests_meta_rows": [
@@ -271,13 +401,12 @@ class TestBackendMinimal(E2ETestBase):
         verification_id = canonical_test_verification_id(
             self.random_id("ver-detail-dup-meta")
         )
-        config.verification_service.begin_verification_record(
+        self._activate_verification(
             verification_id=verification_id,
             problem_id=int(ctx["problem"]["id"]),
             workspace_id=int(ctx["workspace"]["id"]),
             signature="sig-dup-meta",
             kind="custom",
-            status="running",
             detail={
                 "selected_test_names": ["001.in"],
                 "tests_meta_rows": [
@@ -298,13 +427,12 @@ class TestBackendMinimal(E2ETestBase):
         verification_id = canonical_test_verification_id(
             self.random_id("ver-artifact-refs-db")
         )
-        config.verification_service.begin_verification_record(
+        task_id = self._activate_verification(
             verification_id=verification_id,
             problem_id=int(ctx["problem"]["id"]),
             workspace_id=int(ctx["workspace"]["id"]),
             signature="",
             kind="all",
-            status="running",
             detail={"status": "running", "selected_test_names": ["001.in"]},
         )
         input_ref = config.verification_service.store_verification_blob(
@@ -321,10 +449,18 @@ class TestBackendMinimal(E2ETestBase):
             file_name="001.ans",
             payload=b"6\n",
         )
-        config.verification_service.update_verification_artifact_refs(
-            verification_id,
-            "001.in",
-            {"input_ref": input_ref, "answer_ref": answer_ref},
+        config.verification_task_store.commit_task_completions(
+            (
+                TaskCompletion(
+                    task_id=task_id,
+                    status=VerificationTaskStore.TASK_DONE,
+                    run_id="r-backend-fixture",
+                    judgehost_task_id="",
+                    result=normalize_execution_result(verdict="AC"),
+                    input_ref=input_ref,
+                    answer_ref=answer_ref,
+                ),
+            )
         )
 
         self.assertEqual(
@@ -351,13 +487,12 @@ class TestBackendMinimal(E2ETestBase):
         verification_id = canonical_test_verification_id(
             self.random_id("ver-metadata-trimmed")
         )
-        config.verification_service.begin_verification_record(
+        self._activate_verification(
             verification_id=verification_id,
             problem_id=int(ctx["problem"]["id"]),
             workspace_id=int(ctx["workspace"]["id"]),
             signature="sig-123",
             kind="all",
-            status="running",
             detail={
                 "mode": "pass-fail",
                 "pass_limit": 1,
@@ -420,13 +555,12 @@ class TestBackendMinimal(E2ETestBase):
         verification_id = canonical_test_verification_id(
             self.random_id("ver-record-dict")
         )
-        config.verification_service.begin_verification_record(
+        self._activate_verification(
             verification_id=verification_id,
             problem_id=int(ctx["problem"]["id"]),
             workspace_id=int(ctx["workspace"]["id"]),
             signature="",
             kind="all",
-            status="running",
         )
         row = VerificationStore(config.db).record_row(verification_id)
         self.assertIsInstance(row, dict)
@@ -438,23 +572,25 @@ class TestBackendMinimal(E2ETestBase):
         verification_id = canonical_test_verification_id(
             self.random_id("ver-artifact-path")
         )
-        config.verification_service.begin_verification_record(
+        self._activate_verification(
             verification_id=verification_id,
             problem_id=int(ctx["problem"]["id"]),
             workspace_id=int(ctx["workspace"]["id"]),
             signature="",
             kind="all",
-            status="running",
         )
 
-        config.verification_service.begin_verification_record(
-            verification_id=verification_id,
-            problem_id=int(ctx["problem"]["id"]),
-            workspace_id=int(ctx["workspace"]["id"]),
-            signature="",
-            kind="all",
-            status="running",
+        duplicate = config.verification_service.admit_verification(
+            VerificationAdmission(
+                verification_id=verification_id,
+                problem_id=int(ctx["problem"]["id"]),
+                workspace_id=int(ctx["workspace"]["id"]),
+                signature="",
+                source_commit="",
+                kind="all",
+            )
         )
+        self.assertEqual(duplicate.outcome, "already-exists")
 
         row = VerificationStore(config.db).record_row(verification_id)
         assert row is not None

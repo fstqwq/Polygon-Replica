@@ -155,18 +155,20 @@ async def agent_verification_start(request: Request):
 async def agent_verification_status(request: Request, verification_id: str):
     identity = require_agent_token(request, min_scope="readonly")
     ctx = _agent_problem_ctx(identity)
-    detail = config.verification_service.workspace_verification_detail(
-        int(identity.problem_id),
-        int(ctx["workspace"]["id"]),
-        verification_id,
-    )
-    if detail is None:
+    snapshot = config.verification_service.verification_snapshot(verification_id)
+    if (
+        snapshot is None
+        or int(snapshot["record"]["problem_id"]) != int(identity.problem_id)
+        or snapshot["record"]["workspace_id"] != int(ctx["workspace"]["id"])
+    ):
         return json_error_response("verification not found", status_code=404)
-    runtime_summary = config.verification_service.verification_runtime_summary(verification_id)
+    runtime_summary = config.verification_service.verification_runtime_summary_from_tasks(
+        snapshot["tasks"]
+    )
     return _json_body(
         {
             "verification_id": verification_id,
-            "status": str(detail["status"] or ""),
+            "status": str(snapshot["record"]["status"] or ""),
             "runtime_summary": runtime_summary,
         }
     )
@@ -510,13 +512,12 @@ def _agent_verification_detail_yaml(ctx: dict[str, object], verification_id: str
 async def agent_verification_detail(request: Request, verification_id: str):
     identity = require_agent_token(request, min_scope="readonly")
     ctx = _agent_problem_ctx(identity)
-    record = config.verification_service.verification_record(verification_id)
     detail = config.verification_service.workspace_verification_detail(
         int(identity.problem_id),
         int(ctx["workspace"]["id"]),
         verification_id,
     )
-    if record is None or detail is None:
+    if detail is None:
         return _plain_text("verification not found\n", status_code=404)
     test_name = normalize_run_test_name_token(str(request.query_params.get("test_name") or ""))
     source_filter = str(request.query_params.get("source") or "")

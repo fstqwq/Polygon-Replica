@@ -5,7 +5,6 @@ from datetime import datetime, timezone
 
 from app.db import now_iso
 from app.service.judgehost.runtime import parse_iso_utc
-from app.service.verification.task_scheduler import notify_verification_task_terminal
 
 from app.service.judgehost.case_result import (
     CaseTerminalReport,
@@ -159,13 +158,11 @@ class TaskQueue:
         task_id: str,
         hostname: str,
         payload: dict[str, object],
-        notify_terminal: bool = True,
     ) -> dict[str, object]:
         return self._report_result(
             task_id=task_id,
             hostname=hostname,
             payload=payload,
-            notify_terminal=notify_terminal,
             record_host_event=True,
         )
 
@@ -174,13 +171,11 @@ class TaskQueue:
         *,
         task_id: str,
         payload: dict[str, object],
-        notify_terminal: bool = True,
     ) -> dict[str, object]:
         return self._report_result(
             task_id=task_id,
             hostname="internal-finalizer",
             payload=payload,
-            notify_terminal=notify_terminal,
             record_host_event=False,
         )
 
@@ -190,7 +185,6 @@ class TaskQueue:
         task_id: str,
         hostname: str,
         payload: dict[str, object],
-        notify_terminal: bool,
         record_host_event: bool,
     ) -> dict[str, object]:
         if not task_id:
@@ -284,8 +278,6 @@ class TaskQueue:
                 task_id=task_id,
                 run_id=run_id,
             )
-        if verification_id and notify_terminal:
-            notify_verification_task_terminal(verification_id, task_id)
         return {
             "task_id": task_id,
             "verification_id": verification_id,
@@ -405,7 +397,7 @@ class TaskQueue:
             }
             if task_kind == self._TASK_KIND_MAIN_CORRECT:
                 run_status = "ok" if verdict == "OK" else "failed"
-            elif verdict == "CE" or runresult in {
+            elif verdict in {"CE", "FL"} or runresult in {
                 "compiler-error",
                 "checker-fail",
                 "compare-error",

@@ -3,16 +3,120 @@ from __future__ import annotations
 import heapq
 import time
 
-from app.service.judgehost.case_result import build_case_result
 from app.service.judgehost.batch_scheduler_models import (
     CaseClaim,
+    CaseCallbackReceipt,
     CaseClaimBusy,
+    CaseRecord,
     CaseReportTelemetry,
     CaseResult,
+    ExecutionBatchRecord,
     HostLeaseRelease,
     JudgehostCaseRow,
+    PendingCaseDiagnostic,
+    ProgramTerminalClaim,
+    ProgramTerminalClaimOutcome,
     ExecutionBatchFinalizationClaim,
 )
+from app.service.judgehost.case_result import build_case_result
+from app.service.judgehost.runtime import domjudge_verdict_from_runresult
+from app.service.platform.error_text import bounded_display_text
+from app.service.platform.hashing import canonical_json, sha256_hex_json
+
+
+_PENDING_DIAGNOSTIC_KINDS = frozenset({"debug-info", "internal-error"})
+_PENDING_DIAGNOSTIC_MAX_ITEMS = 32
+
+
+def _pending_diagnostic_payload(
+    diagnostics: list[PendingCaseDiagnostic],
+) -> dict[str, object]:
+    return {
+        "items": [
+            {
+                "kind": item.kind,
+                "hostname": item.hostname,
+                "text": item.text,
+                "received_at": item.received_at,
+                "digest": item.digest,
+            }
+            for item in diagnostics
+        ]
+    }
+
+
+def _pending_diagnostic_size(diagnostics: list[PendingCaseDiagnostic]) -> int:
+    return len(
+        canonical_json(
+            _pending_diagnostic_payload(diagnostics),
+            ensure_ascii=False,
+        ).encode("utf-8")
+    )
+
+
+def _new_pending_diagnostic(
+    *,
+    kind: str,
+    hostname: str,
+    text: str,
+    received_at: str,
+    limit_bytes: int,
+) -> PendingCaseDiagnostic:
+    if kind not in _PENDING_DIAGNOSTIC_KINDS:
+        raise ValueError(f"unknown judgehost diagnostic kind: {kind}")
+    if not hostname or len(hostname) > 255:
+        raise ValueError("judgehost diagnostic hostname is invalid")
+    if not received_at or len(received_at) > 64:
+        raise ValueError("judgehost diagnostic received-at timestamp is invalid")
+    normalized_text = bounded_display_text(
+        text,
+        limit_bytes=max(1, int(limit_bytes)),
+    )
+    if not normalized_text:
+        raise ValueError("judgehost diagnostic text is required")
+    digest = sha256_hex_json(
+        {"kind": kind, "hostname": hostname, "text": normalized_text},
+        ensure_ascii=False,
+    )
+    return PendingCaseDiagnostic(
+        kind=kind,
+        hostname=hostname,
+        text=normalized_text,
+        received_at=received_at,
+        digest=digest,
+    )
+
+
+def _fit_single_pending_diagnostic(
+    diagnostic: PendingCaseDiagnostic,
+    *,
+    limit_bytes: int,
+) -> PendingCaseDiagnostic | None:
+    def _candidate(prefix_chars: int) -> PendingCaseDiagnostic:
+        prefix = diagnostic.text[:prefix_chars].rstrip()
+        return PendingCaseDiagnostic(
+            kind=diagnostic.kind,
+            hostname=diagnostic.hostname,
+            text=f"{prefix}..." if prefix else "...",
+            received_at=diagnostic.received_at,
+            digest=diagnostic.digest,
+        )
+
+    shortest = _candidate(0)
+    if _pending_diagnostic_size([shortest]) > limit_bytes:
+        return None
+    low = 0
+    high = max(0, len(diagnostic.text) - 1)
+    best = shortest
+    while low <= high:
+        middle = (low + high) // 2
+        candidate = _candidate(middle)
+        if _pending_diagnostic_size([candidate]) <= limit_bytes:
+            best = candidate
+            low = middle + 1
+        else:
+            high = middle - 1
+    return best
 
 
 class BatchSchedulerResultMixin:
@@ -62,7 +166,7 @@ class BatchSchedulerResultMixin:
             ]
             return {"batch": self._batch_row(batch), "cases": cases}
 
-    def abort_batch_finalization(
+    def schedule_batch_finalization_retry(
         self,
         batch_id: int,
         *,
@@ -71,9 +175,18 @@ class BatchSchedulerResultMixin:
     ) -> bool:
         with self._lock:
             batch = self._batches.get(int(batch_id))
-            if batch is None or batch.status != "finalizing":
+            if batch is None or batch.status not in {
+                "open",
+                "finalize-pending",
+                "finalizing",
+            }:
                 return False
-            self._mutate_batch_locked(batch, status="finalize-pending", updated_at=now_text)
+            if batch.status == "finalizing":
+                self._mutate_batch_locked(
+                    batch,
+                    status="finalize-pending",
+                    updated_at=now_text,
+                )
             deadline = time.monotonic() + max(0.0, float(delay_sec))
             current = self._finalization_retry_deadlines.get(batch.batch_id)
             if current is None or deadline < current:
@@ -94,7 +207,10 @@ class BatchSchedulerResultMixin:
                     continue
                 self._finalization_retry_deadlines.pop(batch_id, None)
                 batch = self._batches.get(batch_id)
-                if batch is not None and batch.status == "finalize-pending":
+                if batch is not None and batch.status in {
+                    "open",
+                    "finalize-pending",
+                }:
                     due.append(batch_id)
         return due
 
@@ -124,81 +240,491 @@ class BatchSchedulerResultMixin:
             self._discard_batch_telemetry_locked(batch.batch_id)
             return True
 
-    def record_compile_result(
+    def _program_failure_case_result_locked(
         self,
-        batch_id: int,
+        batch: ExecutionBatchRecord,
         *,
-        compile_success: int,
-        compile_output_b64: str,
-        compile_metadata_b64: str,
-        failure_text: str = "",
+        test_name: str,
+        feedback_text: str,
+        compile_log: str = "",
+        compile_diagnostics: tuple[dict[str, object], ...] = (),
+    ) -> CaseResult:
+        return build_case_result(
+            test_name=test_name,
+            runresult=batch.failure_runresult,
+            verdict=domjudge_verdict_from_runresult(batch.failure_runresult),
+            runtime_sec=0.0,
+            cpu_sec=0.0,
+            wall_sec=0.0,
+            memory_kb=0,
+            score_text="",
+            output_run_ref="",
+            output_error_ref="",
+            output_system_ref="",
+            output_diff_ref="",
+            metadata_ref="",
+            compare_metadata_ref="",
+            team_message_ref="",
+            feedback_text=feedback_text,
+            feedback_files=(),
+            answer_correct=False,
+            compile_log=compile_log,
+            compile_diagnostics=compile_diagnostics,
+        )
+
+    def _install_program_failure_locked(
+        self,
+        batch: ExecutionBatchRecord,
+        *,
         compile_log: str = "",
         compile_diagnostics: tuple[dict[str, object], ...] = (),
         updated_at: str,
+    ) -> None:
+        if batch.program_failure_result is not None:
+            return
+        batch.program_failure_result = self._program_failure_case_result_locked(
+            batch,
+            test_name="",
+            feedback_text=batch.failure_text,
+            compile_log=compile_log,
+            compile_diagnostics=compile_diagnostics,
+        )
+        for case_id in tuple(self._case_ids_by_batch[batch.batch_id]):
+            case = self._cases[case_id]
+            if case.status in self._TERMINAL_CASE_STATUSES:
+                continue
+            if case.cancel_requested:
+                case.terminal_result = None
+                if case.status == "staged":
+                    continue
+                if case.status in {"reporting", "cache-probing"}:
+                    continue
+                case.cancel_requested = False
+                case.requeue_on_abort = False
+                case.result = None
+                self._transition_case_locked(
+                    case,
+                    "cancelled",
+                    lease_owner=None,
+                    updated_at=updated_at,
+                    refresh_batch=False,
+                )
+                continue
+            case_feedback = batch.failure_text
+            if case.debug_text:
+                if case_feedback in case.debug_text:
+                    case_feedback = case.debug_text
+                elif case.debug_text not in case_feedback:
+                    case_feedback = self._merge_debug_text(
+                        case_feedback,
+                        case.debug_text,
+                    )
+            result = self._program_failure_case_result_locked(
+                batch,
+                test_name=case.test_name,
+                feedback_text=case_feedback,
+                compile_log=compile_log,
+                compile_diagnostics=compile_diagnostics,
+            )
+            if case.status == "staged":
+                case.terminal_result = result
+                continue
+            if case.status == "reporting":
+                # add-judging-run already claimed the canonical candidate.
+                # The program failure may close every other Case, but it must
+                # not replace a result whose report callback linearized first.
+                continue
+            if case.status == "cache-probing":
+                case.terminal_result = result
+                continue
+            case.result = result
+            case.terminal_result = None
+            case.requeue_on_abort = False
+            self._transition_case_locked(
+                case,
+                "reported",
+                lease_owner=case.lease_owner,
+                updated_at=updated_at,
+                refresh_batch=False,
+            )
+        self._refresh_batches_locked({batch.batch_id}, updated_at=updated_at)
+
+    @staticmethod
+    def _program_terminal_claim(
+        outcome: ProgramTerminalClaimOutcome,
+        *,
+        case_id: int,
+        batch_id: int,
+    ) -> ProgramTerminalClaim:
+        return ProgramTerminalClaim(
+            outcome=outcome,
+            case_id=int(case_id),
+            batch_id=int(batch_id),
+        )
+
+    def record_compile_success(
+        self,
+        case_id: int,
+        *,
+        hostname: str,
+        receipt_generation: int,
+        compile_output_b64: str,
+        compile_metadata_b64: str,
+        updated_at: str,
     ) -> bool:
         with self._lock:
-            batch = self._batches.get(int(batch_id))
-            if batch is None or batch.status != "open":
+            case = self._cases.get(int(case_id))
+            if case is None:
                 return False
-            if batch.compile_state == "failed":
-                return compile_success != 1
-            if batch.compile_state == "succeeded" and compile_success == 1:
+            batch = self._batches.get(case.batch_id)
+            if batch is None:
+                return False
+            if (
+                not self._callback_receipt_matches_locked(
+                    case,
+                    hostname=hostname,
+                    receipt_generation=receipt_generation,
+                )
+                or case.status not in {
+                    "leased",
+                    "reporting",
+                    *self._TERMINAL_CASE_STATUSES,
+                }
+            ):
+                return False
+            if batch.failure_runresult or batch.compile_state == "failed":
                 return True
-            failure_runresult = batch.failure_runresult
-            if compile_success != 1 and not failure_runresult:
-                failure_runresult = "compiler-error"
+            if batch.compile_state == "succeeded":
+                evidence: dict[str, object] = {}
+                if not batch.compile_output_b64 and compile_output_b64:
+                    evidence["compile_output_b64"] = compile_output_b64
+                if not batch.compile_metadata_b64 and compile_metadata_b64:
+                    evidence["compile_metadata_b64"] = compile_metadata_b64
+                if evidence:
+                    evidence["updated_at"] = updated_at
+                    self._mutate_batch_locked(batch, **evidence)
+                return True
+            if batch.status != "open" or case.status not in {"leased", "reporting"}:
+                return False
             self._mutate_batch_locked(
                 batch,
-                compile_success=compile_success,
-                compile_state="succeeded" if compile_success == 1 else "failed",
+                compile_success=1,
+                compile_state="succeeded",
                 compile_output_b64=compile_output_b64,
                 compile_metadata_b64=compile_metadata_b64,
-                failure_runresult=failure_runresult,
-                failure_text=batch.failure_text,
                 updated_at=updated_at,
             )
-            if compile_success != 1:
-                feedback = failure_text or "compilation failed"
-                for case_id in tuple(self._case_ids_by_batch[batch.batch_id]):
-                    case = self._cases[case_id]
-                    if case.status in self._TERMINAL_CASE_STATUSES:
-                        continue
-                    result = build_case_result(
-                        test_name=case.test_name,
-                        runresult="compiler-error",
-                        verdict="CE",
-                        runtime_sec=0.0,
-                        cpu_sec=0.0,
-                        wall_sec=0.0,
-                        memory_kb=0,
-                        score_text="",
-                        output_run_ref="",
-                        output_error_ref="",
-                        output_system_ref="",
-                        output_diff_ref="",
-                        metadata_ref="",
-                        compare_metadata_ref="",
-                        team_message_ref="",
-                        feedback_text=feedback,
-                        feedback_files=(),
-                        answer_correct=False,
-                        compile_log=compile_log,
-                        compile_diagnostics=compile_diagnostics,
-                    )
-                    if case.status in {"reporting", "cache-probing"}:
-                        if not case.cancel_requested:
-                            case.terminal_result = result
-                        continue
-                    case.result = result
-                    self._transition_case_locked(
-                        case,
-                        "reported",
-                        lease_owner=case.lease_owner,
-                        updated_at=updated_at,
-                        refresh_batch=False,
-                    )
-                self._refresh_batches_locked({batch.batch_id}, updated_at=updated_at)
             return True
+
+    def claim_compile_failure(
+        self,
+        case_id: int,
+        *,
+        hostname: str,
+        receipt_generation: int,
+        compile_output_b64: str,
+        compile_metadata_b64: str,
+        failure_text: str,
+        compile_log: str,
+        compile_diagnostics: tuple[dict[str, object], ...],
+        updated_at: str,
+    ) -> ProgramTerminalClaim:
+        with self._lock:
+            case = self._cases.get(int(case_id))
+            if case is None:
+                return self._program_terminal_claim(
+                    "rejected",
+                    case_id=case_id,
+                    batch_id=0,
+                )
+            batch = self._batches.get(case.batch_id)
+            if batch is None:
+                return self._program_terminal_claim(
+                    "rejected",
+                    case_id=case.id,
+                    batch_id=case.batch_id,
+                )
+            if not self._callback_receipt_matches_locked(
+                case,
+                hostname=hostname,
+                receipt_generation=receipt_generation,
+            ):
+                return self._program_terminal_claim(
+                    "rejected",
+                    case_id=case.id,
+                    batch_id=batch.batch_id,
+                )
+            if batch.program_failure_result is not None or batch.failure_runresult:
+                return self._program_terminal_claim(
+                    "idempotent",
+                    case_id=case.id,
+                    batch_id=batch.batch_id,
+                )
+            if case.status in {"reporting", *self._TERMINAL_CASE_STATUSES}:
+                return self._program_terminal_claim(
+                    "late",
+                    case_id=case.id,
+                    batch_id=batch.batch_id,
+                )
+            if (
+                batch.status != "open"
+                or case.status != "leased"
+                or case.lease_owner != hostname
+            ):
+                return self._program_terminal_claim(
+                    "rejected",
+                    case_id=case.id,
+                    batch_id=batch.batch_id,
+                )
+            if case.cancel_requested:
+                case.cancel_requested = False
+                case.terminal_result = None
+                case.requeue_on_abort = False
+                case.result = None
+                self._transition_case_locked(
+                    case,
+                    "cancelled",
+                    lease_owner=None,
+                    updated_at=updated_at,
+                )
+                return self._program_terminal_claim(
+                    "cancelled",
+                    case_id=case.id,
+                    batch_id=batch.batch_id,
+                )
+            if batch.compile_state == "succeeded":
+                contradiction = (
+                    "judgehost protocol contradiction: compilation failure "
+                    "reported after compilation succeeded"
+                )
+                if failure_text and failure_text not in contradiction:
+                    contradiction = self._merge_debug_text(
+                        contradiction,
+                        failure_text,
+                    )
+                self._mutate_batch_locked(
+                    batch,
+                    failure_runresult="internal-error",
+                    failure_text=contradiction,
+                    updated_at=updated_at,
+                )
+                self._install_program_failure_locked(
+                    batch,
+                    updated_at=updated_at,
+                )
+                return self._program_terminal_claim(
+                    "claimed",
+                    case_id=case.id,
+                    batch_id=batch.batch_id,
+                )
+            feedback = failure_text or "compilation failed"
+            self._mutate_batch_locked(
+                batch,
+                compile_success=0,
+                compile_state="failed",
+                compile_output_b64=compile_output_b64,
+                compile_metadata_b64=compile_metadata_b64,
+                failure_runresult="compiler-error",
+                failure_text=feedback,
+                updated_at=updated_at,
+            )
+            self._install_program_failure_locked(
+                batch,
+                compile_log=compile_log,
+                compile_diagnostics=compile_diagnostics,
+                updated_at=updated_at,
+            )
+            return self._program_terminal_claim(
+                "claimed",
+                case_id=case.id,
+                batch_id=batch.batch_id,
+            )
+
+    @staticmethod
+    def _append_pending_diagnostic_locked(
+        case: CaseRecord,
+        diagnostic: PendingCaseDiagnostic,
+        *,
+        limit_bytes: int,
+    ) -> str:
+        if not case.verification_task_id:
+            return "not-applicable"
+        limit = max(1, int(limit_bytes))
+        if any(
+            existing.digest == diagnostic.digest
+            for existing in case.pending_diagnostics
+        ):
+            return "duplicate"
+        retained = [*case.pending_diagnostics, diagnostic]
+        while (
+            len(retained) > 1
+            and (
+                len(retained) > _PENDING_DIAGNOSTIC_MAX_ITEMS
+                or _pending_diagnostic_size(retained) > limit
+            )
+        ):
+            retained.pop(0)
+        if _pending_diagnostic_size(retained) > limit:
+            bounded = _fit_single_pending_diagnostic(
+                retained[-1],
+                limit_bytes=limit,
+            )
+            if bounded is None:
+                return "not-applicable"
+            retained = [bounded]
+        case.pending_diagnostics[:] = retained
+        return "persisted"
+
+    @staticmethod
+    def _callback_receipt_matches_locked(
+        case: CaseRecord,
+        *,
+        hostname: str,
+        receipt_generation: int,
+    ) -> bool:
+        expected_hostname = case.lease_owner or case.last_callback_hostname
+        if not expected_hostname or expected_hostname != hostname:
+            return False
+        if case.claim_generation == int(receipt_generation):
+            return True
+        return (
+            case.claim_generation == int(receipt_generation) + 1
+            and case.status in {"reporting", "reported", "cancelled"}
+            and case.last_callback_hostname == hostname
+        )
+
+    def claim_internal_error(
+        self,
+        case_id: int,
+        *,
+        hostname: str,
+        failure_text: str,
+        diagnostic_text: str,
+        receipt_generation: int,
+        diagnostic_limit_bytes: int,
+        updated_at: str,
+    ) -> ProgramTerminalClaim:
+        diagnostic = _new_pending_diagnostic(
+            kind="internal-error",
+            hostname=hostname,
+            text=diagnostic_text,
+            received_at=updated_at,
+            limit_bytes=diagnostic_limit_bytes,
+        )
+        diagnostic_digest = sha256_hex_json(
+            {"case_id": int(case_id), "digest": diagnostic.digest},
+            ensure_ascii=False,
+        )
+        with self._lock:
+            case = self._cases.get(int(case_id))
+            if case is None:
+                return self._program_terminal_claim(
+                    "rejected",
+                    case_id=case_id,
+                    batch_id=0,
+                )
+            batch = self._batches.get(case.batch_id)
+            if batch is None:
+                return self._program_terminal_claim(
+                    "rejected",
+                    case_id=case.id,
+                    batch_id=case.batch_id,
+                )
+            if not self._callback_receipt_matches_locked(
+                case,
+                hostname=hostname,
+                receipt_generation=receipt_generation,
+            ):
+                return self._program_terminal_claim(
+                    "rejected",
+                    case_id=case.id,
+                    batch_id=batch.batch_id,
+                )
+            if batch.program_failure_diagnostic_digest == diagnostic_digest:
+                return self._program_terminal_claim(
+                    "idempotent",
+                    case_id=case.id,
+                    batch_id=batch.batch_id,
+                )
+            if case.status in {"reporting", *self._TERMINAL_CASE_STATUSES}:
+                self._append_pending_diagnostic_locked(
+                    case,
+                    diagnostic,
+                    limit_bytes=diagnostic_limit_bytes,
+                )
+                return self._program_terminal_claim(
+                    "late",
+                    case_id=case.id,
+                    batch_id=batch.batch_id,
+                )
+            if (
+                batch.status != "open"
+                or case.status != "leased"
+                or case.lease_owner != hostname
+            ):
+                return self._program_terminal_claim(
+                    "rejected",
+                    case_id=case.id,
+                    batch_id=batch.batch_id,
+                )
+            if case.cancel_requested:
+                self._append_pending_diagnostic_locked(
+                    case,
+                    diagnostic,
+                    limit_bytes=diagnostic_limit_bytes,
+                )
+                case.cancel_requested = False
+                case.terminal_result = None
+                case.requeue_on_abort = False
+                case.result = None
+                self._transition_case_locked(
+                    case,
+                    "cancelled",
+                    lease_owner=None,
+                    updated_at=updated_at,
+                )
+                return self._program_terminal_claim(
+                    "cancelled",
+                    case_id=case.id,
+                    batch_id=batch.batch_id,
+                )
+            if batch.program_failure_result is not None or batch.failure_runresult:
+                self._append_pending_diagnostic_locked(
+                    case,
+                    diagnostic,
+                    limit_bytes=diagnostic_limit_bytes,
+                )
+                return self._program_terminal_claim(
+                    "late",
+                    case_id=case.id,
+                    batch_id=batch.batch_id,
+                )
+            case.debug_text = self._merge_debug_text(
+                case.debug_text,
+                diagnostic_text,
+            )
+            program_feedback = failure_text
+            if case.debug_text:
+                if program_feedback in case.debug_text:
+                    program_feedback = case.debug_text
+                elif case.debug_text not in program_feedback:
+                    program_feedback = self._merge_debug_text(
+                        program_feedback,
+                        case.debug_text,
+                    )
+            self._mutate_batch_locked(
+                batch,
+                failure_runresult="internal-error",
+                failure_text=program_feedback,
+                program_failure_diagnostic_digest=diagnostic_digest,
+                updated_at=updated_at,
+            )
+            self._install_program_failure_locked(batch, updated_at=updated_at)
+            return self._program_terminal_claim(
+                "claimed",
+                case_id=case.id,
+                batch_id=batch.batch_id,
+            )
 
     def record_batch_failure(
         self,
@@ -212,15 +738,22 @@ class BatchSchedulerResultMixin:
             batch = self._batches.get(int(batch_id))
             if batch is None or batch.status != "open":
                 return False
+            if batch.program_failure_result is not None:
+                return True
             if not batch.failure_runresult:
-                batch.failure_runresult = runresult
-                batch.failure_text = error_text
-                batch.updated_at = updated_at
-                self._touch_batch_locked(batch)
+                self._mutate_batch_locked(
+                    batch,
+                    failure_runresult=runresult,
+                    failure_text=error_text,
+                    updated_at=updated_at,
+                )
             elif batch.failure_runresult == runresult and error_text and not batch.failure_text:
-                batch.failure_text = error_text
-                batch.updated_at = updated_at
-                self._touch_batch_locked(batch)
+                self._mutate_batch_locked(
+                    batch,
+                    failure_text=error_text,
+                    updated_at=updated_at,
+                )
+            self._install_program_failure_locked(batch, updated_at=updated_at)
             return True
 
     def case_execution_row(self, case_id: int) -> dict[str, object] | None:
@@ -241,6 +774,7 @@ class BatchSchedulerResultMixin:
                 "answer_ref": case.answer_ref,
                 "case_status": case.status,
                 "case_lease_owner": case.lease_owner,
+                "last_callback_hostname": case.last_callback_hostname,
                 "run_id": case.run_id,
                 "mode": batch.mode,
                 "source_name": batch.source_name,
@@ -289,11 +823,49 @@ class BatchSchedulerResultMixin:
                 return None
             return self._cases[case_id].result
 
+    def acquire_case_callback_receipt(self, case_id: int) -> CaseCallbackReceipt | None:
+        with self._lock:
+            case = self._cases.get(int(case_id))
+            if case is None:
+                return None
+            batch = self._batches.get(case.batch_id)
+            if batch is None:
+                return None
+            receipt_id = next(self._next_callback_receipt_id)
+            self._case_id_by_callback_receipt[receipt_id] = case.id
+            case.callback_receipt_count += 1
+            return CaseCallbackReceipt(
+                receipt_id=receipt_id,
+                case_id=case.id,
+                batch_id=case.batch_id,
+                verification_id=batch.verification_id,
+                verification_task_id=case.verification_task_id,
+                task_id=case.task_id,
+                run_id=case.run_id,
+                test_name=case.test_name,
+                status=case.status,
+                lease_owner=case.lease_owner or "",
+                last_callback_hostname=case.last_callback_hostname,
+                completion_acknowledged=case.completion_acknowledged,
+                claim_generation=case.claim_generation,
+            )
+
+    def release_case_callback_receipt(self, receipt_id: int) -> None:
+        with self._lock:
+            case_id = self._case_id_by_callback_receipt.pop(int(receipt_id), None)
+            if case_id is None:
+                raise RuntimeError("unknown judgehost callback receipt")
+            case = self._cases.get(case_id)
+            if case is None or case.callback_receipt_count <= 0:
+                raise RuntimeError("judgehost callback receipt counter underflow")
+            case.callback_receipt_count -= 1
+
     def claim_case_reporting(
         self,
         case_id: int,
         *,
         hostname: str,
+        receipt_generation: int,
         now_text: str,
     ) -> CaseClaim | None:
         with self._lock:
@@ -302,7 +874,11 @@ class BatchSchedulerResultMixin:
                 return None
             if case.status == "reporting":
                 raise CaseClaimBusy("judgehost case result is already being processed")
-            if case.status != "leased" or case.lease_owner != hostname:
+            if (
+                case.status != "leased"
+                or case.lease_owner != hostname
+                or case.claim_generation != int(receipt_generation)
+            ):
                 return None
             case.claim_generation += 1
             self._transition_case_locked(
@@ -661,67 +1237,90 @@ class BatchSchedulerResultMixin:
             self._refresh_batches_locked(affected_batch_ids, updated_at=updated_at)
         return aborted
 
-    def request_batch_case_results(
-        self,
-        batch_id: int,
-        *,
-        results: dict[int, CaseResult],
-        updated_at: str,
-    ) -> set[str]:
-        affected_tasks: set[str] = set()
+    def acknowledge_case_completion(self, case_id: int) -> bool:
         with self._lock:
-            batch = self._batches.get(int(batch_id))
-            if batch is None:
-                return affected_tasks
-            affected = False
-            for case_id, result in results.items():
-                case = self._cases.get(int(case_id))
-                if (
-                    case is None
-                    or case.batch_id != batch.batch_id
-                    or case.status in self._TERMINAL_CASE_STATUSES
-                ):
-                    continue
-                affected_tasks.add(case.task_id)
-                affected = True
-                if case.status in {"reporting", "cache-probing"}:
-                    if not case.cancel_requested:
-                        case.terminal_result = result
-                    continue
-                case.result = result
-                self._transition_case_locked(
-                    case,
-                    "reported",
-                    lease_owner=case.lease_owner,
-                    updated_at=updated_at,
-                    refresh_batch=False,
-                )
-            if affected:
-                self._refresh_batches_locked({batch.batch_id}, updated_at=updated_at)
-        return affected_tasks
-
-    def mark_case_verification_published(self, task_id: str, test_name: str) -> bool:
-        with self._lock:
-            case_id = self._latest_case_id_by_task_test.get((task_id, test_name))
-            if case_id is None:
+            case = self._cases.get(int(case_id))
+            if case is None:
                 return False
-            case = self._cases[case_id]
             if case.status not in self._TERMINAL_CASE_STATUSES:
                 return False
-            case.verification_published = True
+            case.completion_acknowledged = True
             return True
 
-    def mark_cases_verification_published(self, case_ids: list[int]) -> int:
+    def acknowledge_case_completions(self, case_ids: list[int]) -> int:
         marked = 0
         with self._lock:
             for case_id in dict.fromkeys(int(raw_case_id) for raw_case_id in case_ids):
                 case = self._cases.get(case_id)
                 if case is None or case.status not in self._TERMINAL_CASE_STATUSES:
                     continue
-                if not case.verification_published:
-                    case.verification_published = True
+                if not case.completion_acknowledged:
+                    case.completion_acknowledged = True
                     marked += 1
         return marked
+
+    def record_case_diagnostic(
+        self,
+        case_id: int,
+        *,
+        kind: str,
+        hostname: str,
+        text: str,
+        receipt_generation: int,
+        diagnostic_limit_bytes: int,
+        now_text: str,
+    ) -> str | None:
+        item = _new_pending_diagnostic(
+            kind=kind,
+            hostname=hostname,
+            text=text,
+            received_at=now_text,
+            limit_bytes=diagnostic_limit_bytes,
+        )
+        with self._lock:
+            case = self._cases.get(int(case_id))
+            if case is None:
+                return None
+            if not self._callback_receipt_matches_locked(
+                case,
+                hostname=hostname,
+                receipt_generation=receipt_generation,
+            ):
+                return "rejected"
+            case.updated_at = now_text
+            if case.status in {"reporting", "reported", "cancelled"}:
+                if not case.verification_task_id:
+                    return "ignored"
+                outcome = self._append_pending_diagnostic_locked(
+                    case,
+                    item,
+                    limit_bytes=diagnostic_limit_bytes,
+                )
+                return "pending" if outcome != "not-applicable" else "ignored"
+            if case.status != "leased" or case.lease_owner != hostname:
+                return "rejected"
+            case.debug_text = self._merge_debug_text(case.debug_text, item.text)
+            return "primary"
+
+    def pending_case_diagnostics(self, case_id: int) -> tuple[PendingCaseDiagnostic, ...]:
+        with self._lock:
+            case = self._cases.get(int(case_id))
+            return () if case is None else tuple(case.pending_diagnostics)
+
+    def acknowledge_case_diagnostic(
+        self,
+        case_id: int,
+        diagnostic: PendingCaseDiagnostic,
+    ) -> bool:
+        with self._lock:
+            case = self._cases.get(int(case_id))
+            if case is None:
+                return False
+            try:
+                case.pending_diagnostics.remove(diagnostic)
+            except ValueError:
+                return False
+            return True
 
     def case_debug_context(self, case_id: int) -> dict[str, object] | None:
         with self._lock:
@@ -858,6 +1457,10 @@ class BatchSchedulerResultMixin:
         cases = [self._cases[case_id] for case_id in case_ids if case_id in self._cases]
         if not cases:
             return
+        if any(case.callback_receipt_count > 0 for case in cases):
+            raise RuntimeError("cannot remove a judgehost case with an active callback receipt")
+        if any(case.pending_diagnostics for case in cases):
+            raise RuntimeError("cannot remove a judgehost case with pending diagnostics")
         affected_batch_ids = {case.batch_id for case in cases}
         affected_task_ids = {case.task_id for case in cases}
         affected_run_ids = {case.run_id for case in cases}
@@ -935,9 +1538,12 @@ class BatchSchedulerResultMixin:
         self._ready_batches.remove(batch_id)
         self._finalization_retry_deadlines.pop(batch_id, None)
         self._refresh_prerequisite_index_locked(batch, ready=False)
-        logical_run_key = (batch.verification_id, batch.logical_run_id)
-        self._batch_id_by_logical_run.pop(logical_run_key, None)
-        self._closed_logical_run_keys.discard(logical_run_key)
+        program_key = (
+            batch.verification_id,
+            batch.verification_program_id,
+        )
+        self._batch_id_by_verification_program.pop(program_key, None)
+        self._closed_program_keys.discard(program_key)
         self._case_ids_by_batch.pop(batch_id, None)
         self._batch_counts.pop(batch_id, None)
         self._batch_specs.pop(batch_id, None)
@@ -979,7 +1585,48 @@ class BatchSchedulerResultMixin:
             for batch_id in affected_batches:
                 if batch_id in self._batches:
                     self._touch_batch_locked(self._batches[batch_id])
-            empty_batches = tuple(batch_id for batch_id in affected_batches if batch_id in self._empty_batch_ids)
+            empty_batches = tuple(
+                batch_id
+                for batch_id in affected_batches
+                if batch_id in self._empty_batch_ids
+            )
+            for batch_id in empty_batches:
+                self._remove_batch_locked(batch_id)
+            return len(empty_batches)
+
+    def forget_runs_if_quiet(self, run_ids: list[str]) -> int | None:
+        safe_run_ids = {run_id for run_id in run_ids if run_id}
+        if not safe_run_ids:
+            return 0
+        with self._lock:
+            affected_batches = {
+                batch_id
+                for run_id in safe_run_ids
+                for batch_id in self._batch_ids_by_run.get(run_id, ())
+            }
+            case_ids = {
+                case_id
+                for run_id in safe_run_ids
+                for case_id in self._case_ids_by_run.get(run_id, ())
+            }
+            cases = [self._cases[case_id] for case_id in case_ids if case_id in self._cases]
+            if any(
+                case.callback_receipt_count > 0
+                or bool(case.pending_diagnostics)
+                or case.status not in self._TERMINAL_CASE_STATUSES
+                or not case.completion_acknowledged
+                for case in cases
+            ):
+                return None
+            self._remove_cases_locked(case_ids)
+            for batch_id in affected_batches:
+                if batch_id in self._batches:
+                    self._touch_batch_locked(self._batches[batch_id])
+            empty_batches = tuple(
+                batch_id
+                for batch_id in affected_batches
+                if batch_id in self._empty_batch_ids
+            )
             for batch_id in empty_batches:
                 self._remove_batch_locked(batch_id)
             return len(empty_batches)
@@ -995,6 +1642,11 @@ class BatchSchedulerResultMixin:
                 for case_id in tuple(self._case_ids_by_batch[batch_id]):
                     case = self._cases[case_id]
                     if case.status in self._TERMINAL_CASE_STATUSES:
+                        continue
+                    if case.status == "staged":
+                        case.cancel_requested = True
+                        case.terminal_result = None
+                        case.requeue_on_abort = False
                         continue
                     case.cancel_requested = False
                     case.terminal_result = None

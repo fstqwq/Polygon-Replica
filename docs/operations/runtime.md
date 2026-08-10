@@ -35,9 +35,11 @@ does not require root.
 ## Startup and shutdown
 
 Startup initializes metadata, marks interrupted package/export work failed,
-applies durable configuration, reconciles unfinished domain work, clears
-startup-scoped caches and worker history, and then starts worker threads.
-Process-local jobs cannot resume across restart.
+applies durable configuration, and atomically terminalizes unfinished
+verification parents and tasks before deleting their runtime blobs. A failed
+verification recovery aborts startup. It then reconciles other unfinished
+domain work, clears startup-scoped caches and worker history, and starts worker
+threads. Process-local jobs cannot resume across restart.
 
 Shutdown stops the worker queue. Operators should expect interrupted
 asynchronous jobs to become terminal during the next startup reconciliation and
@@ -63,3 +65,8 @@ configuration, and exclusive artifact cleanup. Do not manually delete active
 cache subtrees while the process is running. Observe process health, worker
 capacity, Judgehost leases, domain job status, artifact availability, disk
 space, and backup age as separate signals.
+
+Exclusive cleanup closes Judgehost callback admission as well as ordinary work
+admission. It remains busy until in-flight callbacks have released their
+receipts; callbacks arriving after the gate closes are acknowledged without
+touching scheduler, database, or blob state.

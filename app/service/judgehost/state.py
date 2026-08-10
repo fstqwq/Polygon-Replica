@@ -15,7 +15,7 @@ from app.service.repository.workspace import WorkspaceService
 from app.service.verification.task_store import VerificationTaskStore
 
 from app.service.judgehost.batch_scheduler import BatchScheduler
-from app.service.judgehost.completion import CaseCompletionSink
+from app.service.judgehost.completion import CaseCompletionSink, CaseDiagnosticSink
 from app.service.judgehost.task_registry import JudgehostTaskRegistry
 from app.service.judgehost.toolchain_versions import HostToolchainTelemetry
 
@@ -44,6 +44,7 @@ class JudgehostState:
     runtime_cache_index: RuntimeCacheIndex
     verification_task_store: VerificationTaskStore
     case_completion_sink: CaseCompletionSink
+    case_diagnostic_sink: CaseDiagnosticSink
     verification_store: VerificationStore = field(init=False)
 
     lock: threading.Lock = field(default_factory=threading.Lock)

@@ -3,11 +3,15 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import threading
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
 from functools import partial
 from urllib.parse import parse_qsl
 
 from fastapi import HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
+from starlette.background import BackgroundTask
 from starlette.concurrency import run_in_threadpool
 from starlette.datastructures import UploadFile
 from starlette.formparsers import MultiPartParser
@@ -17,7 +21,11 @@ from app.main_util import read_upload_bytes_limited
 from app.service.judgehost.batch_scheduler_models import CaseClaimBusy
 from app.service.judgehost.core import InvalidJudgehostHostname, normalize_judgehost_hostname
 from app.service.judgehost.limits import judgehost_form_part_limit_bytes
-from app.service.judgehost.file_stream import stream_domjudge_file_array, validate_domjudge_file_array
+from app.service.judgehost.file_stream import (
+    DomjudgeDownloadFile,
+    stream_domjudge_file_array,
+    validate_domjudge_file_array,
+)
 
 
 JudgehostPayload = dict[str, str | bytes]
@@ -242,6 +250,63 @@ async def _run_service_call(fn, /, *args, **kwargs):
     return await run_in_threadpool(fn, *args)
 
 
+@contextmanager
+def _callback_admission(service):
+    admitted = service.enter_callback()
+    try:
+        yield admitted
+    finally:
+        if admitted:
+            service.leave_callback()
+
+
+class _CallbackAdmissionRelease:
+    """Release a streaming admission exactly once on close or failure."""
+
+    def __init__(self, service) -> None:
+        self._service = service
+        self._lock = threading.Lock()
+        self._released = False
+
+    def __call__(self) -> None:
+        with self._lock:
+            if self._released:
+                return
+            self._released = True
+        self._service.leave_callback()
+
+
+def _begin_file_download(service) -> _CallbackAdmissionRelease:
+    if not service.enter_callback():
+        raise HTTPException(
+            status_code=503,
+            detail="maintenance in progress",
+            headers={"Retry-After": "5"},
+        )
+    return _CallbackAdmissionRelease(service)
+
+
+def _admitted_file_stream(
+    rows: Sequence[DomjudgeDownloadFile],
+    release: _CallbackAdmissionRelease,
+) -> Iterator[bytes]:
+    try:
+        yield from stream_domjudge_file_array(rows)
+    finally:
+        release()
+
+
+def _file_stream_response(
+    rows: Sequence[DomjudgeDownloadFile],
+    release: _CallbackAdmissionRelease,
+) -> StreamingResponse:
+    return StreamingResponse(
+        _admitted_file_stream(rows, release),
+        media_type="application/json",
+        background=BackgroundTask(release),
+    )
+
+
 async def domjudge_config(request: Request):
     service = _require_judgehost_auth(request)
     return JSONResponse(await _run_service_call(service.domjudge_config))
@@ -259,66 +324,112 @@ async def domjudge_judgehosts_get(request: Request):
 
 async def domjudge_judgehosts_post(request: Request):
     service = _require_judgehost_auth(request)
-    payload = await _request_payload(request)
-    hostname = (payload.get("hostname") or "").strip()
-    if not hostname:
-        raise HTTPException(status_code=400, detail="hostname is required")
-    hostname = _validated_hostname(hostname)
-    rows = await _run_service_call(service.domjudge_register_host, hostname)
-    _record_host_peer_ip(service, request, hostname)
-    return JSONResponse(rows)
+    with _callback_admission(service) as admitted:
+        if not admitted:
+            return JSONResponse([])
+        payload = await _request_payload(request)
+        hostname = (payload.get("hostname") or "").strip()
+        if not hostname:
+            raise HTTPException(status_code=400, detail="hostname is required")
+        hostname = _validated_hostname(hostname)
+        rows = await _run_service_call(service.domjudge_register_host, hostname)
+        _record_host_peer_ip(service, request, hostname)
+        return JSONResponse(rows)
 
 
 async def domjudge_fetch_work(request: Request):
     service = _require_judgehost_auth(request)
-    payload = await _request_payload(request)
-    hostname = _hostname_from_payload(payload, required=True)
-    max_batchsize = _int_or_none(payload.get("max_batchsize"))
-    try:
-        tasks = await _run_service_call(service.domjudge_fetch_work, hostname, max_batchsize=max_batchsize)
-    except (OSError, RuntimeError) as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    _record_host_peer_ip(service, request, hostname)
-    return JSONResponse(tasks)
+    with _callback_admission(service) as admitted:
+        if not admitted:
+            return JSONResponse([])
+        payload = await _request_payload(request)
+        hostname = _hostname_from_payload(payload, required=True)
+        max_batchsize = _int_or_none(payload.get("max_batchsize"))
+        tasks = await _run_service_call(
+            service.domjudge_fetch_work,
+            hostname,
+            max_batchsize=max_batchsize,
+        )
+        _record_host_peer_ip(service, request, hostname)
+        return JSONResponse(tasks)
 
 
 async def domjudge_get_files_source(request: Request, contest_id: str, item_id: str):
     service = _require_judgehost_auth(request)
+    release = _begin_file_download(service)
+    handed_off = False
     try:
-        rows = await _run_service_call(service.domjudge_get_source_files, item_id, contest_id=contest_id)
-        validate_domjudge_file_array(rows)
-    except (OSError, RuntimeError) as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return StreamingResponse(stream_domjudge_file_array(rows), media_type="application/json")
+        try:
+            rows = await _run_service_call(
+                service.domjudge_get_source_files,
+                item_id,
+                contest_id=contest_id,
+            )
+            validate_domjudge_file_array(rows)
+        except (OSError, RuntimeError) as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        response = _file_stream_response(rows, release)
+        handed_off = True
+        return response
+    finally:
+        if not handed_off:
+            release()
 
 
 async def domjudge_get_files_source_submit(request: Request, item_id: str):
     service = _require_judgehost_auth(request)
+    release = _begin_file_download(service)
+    handed_off = False
     try:
-        rows = await _run_service_call(service.domjudge_get_source_files, item_id, contest_id=None)
-        validate_domjudge_file_array(rows)
-    except (OSError, RuntimeError) as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return StreamingResponse(stream_domjudge_file_array(rows), media_type="application/json")
+        try:
+            rows = await _run_service_call(
+                service.domjudge_get_source_files,
+                item_id,
+                contest_id=None,
+            )
+            validate_domjudge_file_array(rows)
+        except (OSError, RuntimeError) as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        response = _file_stream_response(rows, release)
+        handed_off = True
+        return response
+    finally:
+        if not handed_off:
+            release()
 
 
 async def domjudge_get_files_by_type(request: Request, file_type: str, item_id: str):
     service = _require_judgehost_auth(request)
+    release = _begin_file_download(service)
+    handed_off = False
     token = file_type.strip().lower()
     try:
-        if token == "testcase":
-            test_id = _int_or_none(item_id)
-            if test_id is None:
-                raise RuntimeError("invalid testcase id")
-            rows = await _run_service_call(service.domjudge_get_testcase_files, test_id)
-        elif token in {"compile", "run", "compare"}:
-            rows = await _run_service_call(service.domjudge_get_executable_files, token, item_id)
-        else:
-            raise RuntimeError("unknown file type")
-        validate_domjudge_file_array(rows)
-    except (OSError, RuntimeError) as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return StreamingResponse(stream_domjudge_file_array(rows), media_type="application/json")
+        try:
+            if token == "testcase":
+                test_id = _int_or_none(item_id)
+                if test_id is None:
+                    raise RuntimeError("invalid testcase id")
+                rows = await _run_service_call(
+                    service.domjudge_get_testcase_files,
+                    test_id,
+                )
+            elif token in {"compile", "run", "compare"}:
+                rows = await _run_service_call(
+                    service.domjudge_get_executable_files,
+                    token,
+                    item_id,
+                )
+            else:
+                raise RuntimeError("unknown file type")
+            validate_domjudge_file_array(rows)
+        except (OSError, RuntimeError) as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        response = _file_stream_response(rows, release)
+        handed_off = True
+        return response
+    finally:
+        if not handed_off:
+            release()
 
 
 async def domjudge_get_version_commands(request: Request, judgetask_id: int):
@@ -328,68 +439,80 @@ async def domjudge_get_version_commands(request: Request, judgetask_id: int):
 
 async def domjudge_check_versions(request: Request, judgetask_id: int):
     service = _require_judgehost_auth(request)
-    payload = await _request_payload(request)
-    hostname = _hostname_from_payload(payload, required=True)
-    result = await _run_service_call(
-        service.domjudge_check_versions,
-        judgetask_id,
-        hostname=hostname,
-        compiler=(payload.get("compiler") or "").strip(),
-        runner=(payload.get("runner") or "").strip(),
-    )
-    _record_host_peer_ip(service, request, hostname)
-    return JSONResponse(result)
+    with _callback_admission(service) as admitted:
+        if not admitted:
+            return JSONResponse({})
+        payload = await _request_payload(request)
+        hostname = _hostname_from_payload(payload, required=True)
+        result = await _run_service_call(
+            service.domjudge_check_versions,
+            judgetask_id,
+            hostname=hostname,
+            compiler=(payload.get("compiler") or "").strip(),
+            runner=(payload.get("runner") or "").strip(),
+        )
+        _record_host_peer_ip(service, request, hostname)
+        return JSONResponse(result)
 
 
 async def domjudge_update_judging(request: Request, hostname: str, judgetask_id: int):
     service = _require_judgehost_auth(request)
-    hostname = _validated_hostname(hostname)
-    payload = await _request_payload(request)
-    try:
+    with _callback_admission(service) as admitted:
+        if not admitted:
+            return JSONResponse({})
+        hostname = _validated_hostname(hostname)
+        payload = await _request_payload(request)
         await _run_service_call(service.domjudge_update_judging, hostname, judgetask_id, payload)
-    except RuntimeError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    _record_host_peer_ip(service, request, hostname)
-    return JSONResponse({})
+        _record_host_peer_ip(service, request, hostname)
+        return JSONResponse({})
 
 
 async def domjudge_add_judging_run(request: Request, hostname: str, judgetask_id: int):
     service = _require_judgehost_auth(request)
-    hostname = _validated_hostname(hostname)
-    payload = await _request_payload(request)
-    try:
-        result = await _run_service_call(service.domjudge_add_judging_run, hostname, judgetask_id, payload)
-    except CaseClaimBusy as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-    except RuntimeError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    _record_host_peer_ip(service, request, hostname)
-    return JSONResponse(int(result))
+    with _callback_admission(service) as admitted:
+        if not admitted:
+            return JSONResponse(1)
+        hostname = _validated_hostname(hostname)
+        payload = await _request_payload(request)
+        try:
+            result = await _run_service_call(service.domjudge_add_judging_run, hostname, judgetask_id, payload)
+        except CaseClaimBusy as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        _record_host_peer_ip(service, request, hostname)
+        return JSONResponse(int(result))
 
 
 async def domjudge_internal_error(request: Request):
     service = _require_judgehost_auth(request)
-    payload = await _request_payload(request)
-    description = (payload.get("description") or "").strip()
-    judgetask_id = _int_or_none(payload.get("judgetaskid"))
-    result = await _run_service_call(
-        service.domjudge_internal_error,
-        description=description,
-        judgetask_id=judgetask_id,
-        payload=payload,
-    )
-    return JSONResponse(int(result))
+    with _callback_admission(service) as admitted:
+        if not admitted:
+            return JSONResponse(0)
+        payload = await _request_payload(request)
+        description = (payload.get("description") or "").strip()
+        judgetask_id = _int_or_none(payload.get("judgetaskid"))
+        hostname = _hostname_from_payload(payload)
+        result = await _run_service_call(
+            service.domjudge_internal_error,
+            description=description,
+            hostname=hostname,
+            judgetask_id=judgetask_id,
+            payload=payload,
+        )
+        return JSONResponse(int(result))
 
 
 async def domjudge_add_debug_info(request: Request, hostname: str, judgetask_id: int):
     service = _require_judgehost_auth(request)
-    hostname = _validated_hostname(hostname)
-    payload = await _request_payload(request)
-    await _run_service_call(
-        service.domjudge_add_debug_info,
-        hostname=hostname,
-        judgetask_id=judgetask_id,
-        payload=payload,
-    )
-    _record_host_peer_ip(service, request, hostname)
-    return JSONResponse({})
+    with _callback_admission(service) as admitted:
+        if not admitted:
+            return JSONResponse({})
+        hostname = _validated_hostname(hostname)
+        payload = await _request_payload(request)
+        await _run_service_call(
+            service.domjudge_add_debug_info,
+            hostname=hostname,
+            judgetask_id=judgetask_id,
+            payload=payload,
+        )
+        _record_host_peer_ip(service, request, hostname)
+        return JSONResponse({})

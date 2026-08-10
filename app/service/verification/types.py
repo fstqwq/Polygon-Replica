@@ -12,13 +12,12 @@ class Kind(StrEnum):
 
 class Status(StrEnum):
     QUEUED = "queued"
-    PENDING = "pending"
     RUNNING = "running"
     OK = "ok"
     FAILED = "failed"
 
 
-ACTIVE = frozenset((Status.QUEUED.value, Status.PENDING.value, Status.RUNNING.value))
+ACTIVE = frozenset((Status.QUEUED.value, Status.RUNNING.value))
 
 
 class WorkspaceVerificationRow(TypedDict):
@@ -35,15 +34,3 @@ class WorkspaceVerificationRow(TypedDict):
 
 
 WorkspaceVerificationKey = tuple[int, int]
-
-_CANCEL_REASONS = frozenset(
-    (
-        "verification cancelled",
-        "verification cancelled by user",
-        "cancelled on service startup",
-    )
-)
-
-
-def is_cancel_reason(reason: str) -> bool:
-    return reason in _CANCEL_REASONS

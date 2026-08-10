@@ -6,8 +6,16 @@ from unittest.mock import patch
 from app.impl.runtime.config import config
 from app.service.problem.content_review import problem_content_review
 from app.service.problem.readiness import WorkspaceReadinessSubject
+from app.service.verification.lifecycle import PlannedTask, verification_task_id
+from app.service.verification.task_completion import TaskCompletion
+from app.service.verification.task_store import VerificationTaskStore
 from tests.common import E2ETestBase
-from tests.db_helpers import db_execute
+from tests.db_helpers import (
+    activate_test_verification,
+    admit_test_verification,
+    verification_programs_for_tasks,
+)
+from tests.execution_result_helpers import execution_result
 from tests.identity_helpers import canonical_test_verification_id
 
 
@@ -99,21 +107,79 @@ class TestProblemReadiness(E2ETestBase):
             "missing_reason": "Package not built",
         }
 
+    def _seed_verification(
+        self,
+        *,
+        verification_id: str,
+        problem_id: int,
+        workspace_id: int | None,
+        source_commit: str,
+        status: str,
+        fail_reason: str = "",
+    ) -> None:
+        admission = admit_test_verification(
+            verification_id=verification_id,
+            problem_id=problem_id,
+            workspace_id=workspace_id,
+            signature="",
+            source_commit=source_commit,
+            kind="all",
+        )
+        self.assertEqual(admission.outcome, "admitted")
+        task_id = verification_task_id(
+            verification_id,
+            "accepted",
+            "001.in",
+        )
+        tasks = [
+            PlannedTask(
+                task_id=task_id,
+                predecessor_task_id=None,
+                task_kind="main-correct",
+                source_path="solutions/accepted.cpp",
+                program_id="accepted",
+                test_name="001.in",
+                expected_behavior="accepted",
+            )
+        ]
+        activation = activate_test_verification(
+            verification_id,
+            programs=verification_programs_for_tasks(tasks),
+            tasks=tasks,
+        )
+        self.assertEqual(activation.outcome, "activated")
+        if status == "failed":
+            transition = config.verification_service.fail_verification(
+                verification_id,
+                reason=fail_reason,
+            )
+            self.assertEqual(transition.outcome, "transitioned")
+            return
+        if status != "ok":
+            raise AssertionError(f"unsupported verification fixture status: {status}")
+        completion = config.verification_task_store.commit_task_completions(
+            [
+                TaskCompletion(
+                    task_id=task_id,
+                    status=VerificationTaskStore.TASK_DONE,
+                    run_id="",
+                    judgehost_task_id="",
+                    result=execution_result("OK"),
+                )
+            ]
+        )
+        self.assertEqual(completion.parent_transition, "ok")
+
     def test_batch_readiness_is_select_only_and_skips_failure_details(self) -> None:
         subject = self._subject()
         verification_id = canonical_test_verification_id("readiness-batch-failed")
-        config.verification_service.begin_verification_record(
+        self._seed_verification(
             verification_id=verification_id,
             problem_id=subject["problem_id"],
             workspace_id=subject["workspace_id"],
-            signature="",
             source_commit=subject["head_commit"],
-            kind="all",
             status="failed",
-        )
-        db_execute(
-            "UPDATE verifications SET fail_reason=? WHERE id=?",
-            ["checker exited with code 1", verification_id],
+            fail_reason="checker exited with code 1",
         )
         batch_reader = config.verification_service.workspace_verification_rows_many
         with (
@@ -168,26 +234,19 @@ class TestProblemReadiness(E2ETestBase):
         workspace_verification_id = canonical_test_verification_id(
             "readiness-workspace-failed"
         )
-        config.verification_service.begin_verification_record(
+        self._seed_verification(
             verification_id=workspace_verification_id,
             problem_id=subject["problem_id"],
             workspace_id=subject["workspace_id"],
-            signature="",
             source_commit=subject["head_commit"],
-            kind="all",
             status="failed",
+            fail_reason="checker exited with code 1",
         )
-        db_execute(
-            "UPDATE verifications SET fail_reason=? WHERE id=?",
-            ["checker exited with code 1", workspace_verification_id],
-        )
-        config.verification_service.begin_verification_record(
+        self._seed_verification(
             verification_id=canonical_test_verification_id("readiness-package-ok"),
             problem_id=subject["problem_id"],
             workspace_id=None,
-            signature="package-signature",
             source_commit=subject["head_commit"],
-            kind="all",
             status="ok",
         )
 

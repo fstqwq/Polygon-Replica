@@ -9,7 +9,7 @@ The physical DDL and required-column manifest are maintained together in
 | agent access | `agent_registration_codes`, `agent_sessions`, `agent_access_requests`, `agent_tokens` |
 | authoring | `problems`, `repo_acl`, `workspaces` |
 | contests | `contests`, `contest_members`, `contest_problems`, `contest_jobs`, `contest_build_items`, `contest_artifacts`, `contest_attachments` |
-| execution | `previews`, `verifications`, `verification_selected_tests`, `verification_source_paths`, `verification_sanity_checks`, `verification_sanity_check_messages`, `verification_tests_meta`, `verification_tasks`, `verification_artifact_refs` |
+| execution | `previews`, `verifications`, `verification_selected_tests`, `verification_source_paths`, `verification_sanity_checks`, `verification_sanity_check_messages`, `verification_tests_meta`, `verification_tasks`, `verification_artifact_refs`, `verification_task_diagnostics` |
 | packages | `problem_package_materializations`, `problem_package_builds`, `exports`, `export_jobs` |
 | operations | `audit_log`, `system_config`, `smtp_config` |
 
@@ -19,8 +19,13 @@ Important physical facts:
 - `verifications` represents full verification and custom run through `kind`.
 - `verification_tasks.result_json` owns structured task results; the table has
   no physical `output_ref` column.
+- `verification_tasks.program_id` records the program whose source and compile
+  specification are shared by that program's test tasks; task IDs are the
+  natural key `vt~<verification_id>~<program_id>~<test_name>`.
 - `verification_artifact_refs` is keyed by verification/test and stores
   `input_ref` and `answer_ref`.
+- `verification_task_diagnostics` has one bounded, retry-deduplicated late
+  diagnostic snapshot per task; it does not amend `result_json`.
 - materializations are unique by problem/source commit; exports are unique by
   materialization/type/options hash.
 - `system_config` is mutable key/value JSON, `smtp_config` is a singleton, and

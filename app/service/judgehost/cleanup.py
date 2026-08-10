@@ -9,9 +9,18 @@ from app.service.judgehost.task_registry import JudgehostTaskRegistry
 
 
 class _RuntimeCaseStore(Protocol):
-    def forget_runs(self, run_ids: list[str]) -> int: ...
+    def forget_runs_if_quiet(self, run_ids: list[str]) -> int | None: ...
 
     def forget_scope(self, verification_id: str) -> None: ...
+
+
+class _VerificationRuntimeStore(Protocol):
+    def unbind_judgehost_runtime(
+        self,
+        verification_task_id: str,
+        *,
+        judgehost_task_id: str,
+    ) -> bool: ...
 
 
 class JudgehostTerminalCleanup:
@@ -28,11 +37,13 @@ class JudgehostTerminalCleanup:
         self,
         task_registry: JudgehostTaskRegistry,
         case_store: _RuntimeCaseStore,
+        verification_runtime_store: _VerificationRuntimeStore,
         *,
         quiet_sec: float = 60.0,
     ) -> None:
         self._task_registry = task_registry
         self._case_store = case_store
+        self._verification_runtime_store = verification_runtime_store
         self._quiet_sec = max(1.0, float(quiet_sec))
         self._condition = threading.Condition(threading.Lock())
         self._deadlines: list[tuple[float, int, str]] = []
@@ -105,9 +116,18 @@ class JudgehostTerminalCleanup:
             if rows is None:
                 return False
             run_ids = [str(row["run_id"]) for row in rows]
-            self._case_store.forget_runs(run_ids)
+            if self._case_store.forget_runs_if_quiet(run_ids) is None:
+                return False
             self._case_store.forget_scope(verification_id)
             for row in rows:
+                verification_task_id = str(
+                    row.get("verification_task_id") or ""
+                )
+                if verification_task_id:
+                    self._verification_runtime_store.unbind_judgehost_runtime(
+                        verification_task_id,
+                        judgehost_task_id=str(row["id"]),
+                    )
                 self._task_registry.remove(str(row["id"]))
             self._generation_by_verification.pop(verification_id, None)
         return True

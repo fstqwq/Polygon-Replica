@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 from tests.db_helpers import (
+    activate_test_verification,
+    admit_test_verification,
     db_execute,
     db_fetch_one,
     judgehost_cases_for_run,
     judgehost_fetch_case,
     judgehost_fetch_batch,
+    verification_programs_for_tasks,
 )
 
 import base64
@@ -36,6 +39,10 @@ from app.service.judgehost.runtime import domjudge_rewrite_untrusted_runresult
 from app.service.judgehost.toolchain_versions import HostToolchainTelemetry
 from app.service.platform.hashing import domjudge_executable_hash
 from app.service.platform.runtime_blob_store import PayloadFile
+from app.service.verification.diagnostic import compose_task_diagnostic_display
+from app.service.verification.execution_result import normalize_execution_result
+from app.service.verification.lifecycle import PlannedTask, verification_task_id
+from app.service.verification.task_completion import TaskCompletion
 from app.service.verification.task_scheduler import (
     VerificationRuntimeCallbacks,
     VerificationRuntimeCoordinator,
@@ -48,6 +55,9 @@ from tests.identity_helpers import canonical_test_verification_id
 
 
 _canonical_verification_id = canonical_test_verification_id
+_GENERATOR_PROGRAM_ID = "generator-0"
+_ACCEPTED_PROGRAM_ID = "accepted"
+_SOLUTION_PROGRAM_ID = "solution-0"
 
 
 def _pass_bundle_bytes(
@@ -128,6 +138,7 @@ class TestJudgehostService(E2ETestBase):
             runtime_blob_store=config.runtime_blob_store,
             runtime_cache_index=config.runtime_cache_index,
             case_completion_sink=config.verification_task_completion_service,
+            case_diagnostic_sink=config.verification_task_completion_service,
         )
         override_config_values(
             self,
@@ -203,7 +214,11 @@ class TestJudgehostService(E2ETestBase):
             if not token:
                 continue
             rows = task_store.list_rows(token)
-            matched_rows = [row for row in rows if str(row["logical_run_id"] or "") == safe_run_id]
+            matched_rows = [
+                row
+                for row in rows
+                if str(row["run_id"] or "") == safe_run_id
+            ]
             if not matched_rows:
                 continue
             tests = []
@@ -267,77 +282,73 @@ class TestJudgehostService(E2ETestBase):
 
         ctx = config.workspace_service.workspace_context(self.problem, self.user, include_recent=False)
         verification_id = _canonical_verification_id(str(uuid.uuid4()))
+        build_verification_id = _canonical_verification_id(
+            f"build-{uuid.uuid4()}"
+        )
         verification_root = config.fs_manager.prepare_verification_root(verification_id).resolve()
         verification_root.mkdir(parents=True, exist_ok=True)
-        config.verification_service.begin_verification_record(
+        admission = admit_test_verification(
             verification_id=verification_id,
             problem_id=int(ctx["problem"]["id"]),
             workspace_id=int(ctx["workspace"]["id"]),
-            signature="",
-            kind="all",
-            status="running",
-            detail={"verification_id": verification_id, "task_graph": True, "status": "running"},
         )
+        self.assertEqual(admission.outcome, "admitted")
 
         run_id = f"r-immediate-finalize-{uuid.uuid4().hex[:8]}"
-        self._seed_build_verification(verification_id)
-        self._seed_verification_test_artifacts(
+        task_id = verification_task_id(
             verification_id,
-            [("001.in", "ok\n", "ok\n"), ("002.in", "ok2\n", "ok2\n")],
+            _ACCEPTED_PROGRAM_ID,
+            "001.in",
         )
-        judgehost_task_id = service.enqueue_task(
+        tasks = [
+            PlannedTask(
+                task_id=task_id,
+                predecessor_task_id=None,
+                task_kind="main-correct",
+                source_path="solutions/ac.cpp",
+                program_id=_ACCEPTED_PROGRAM_ID,
+                test_name="001.in",
+                expected_behavior="accepted",
+            )
+        ]
+        activation = activate_test_verification(
+            verification_id,
+            programs=verification_programs_for_tasks(tasks),
+            tasks=tasks,
+        )
+        self.assertEqual(activation.outcome, "activated")
+        self._seed_build_verification(
+            build_verification_id,
+            [("001.in", "ok\n", "ok\n")],
+        )
+        service.enqueue_task(
             problem=self.problem,
             username=self.user,
-            artifact_verification_id=verification_id,
+            artifact_verification_id=build_verification_id,
             mode="pass-fail",
             submission_path="solutions/ac.cpp",
             upload_content=None,
             upload_filename=None,
             run_id=run_id,
-            selected_tests=["001.in", "002.in"],
+            selected_tests=["001.in"],
             verification_id=verification_id,
-            verification_run_ids=[run_id],
+            verification_task_id=task_id,
+            verification_program_id=_ACCEPTED_PROGRAM_ID,
             expected_behavior="accepted",
             verification_source="run.execute",
-            task_kind="solution-run",
+            task_kind="main-correct",
             persist_verification_run=False,
         )
         task_store = config.verification_task_store
-        task_store.replace_graph(
-            verification_id,
-            tasks=[
-                {
-                    "id": "vt-case-001",
-                    "task_kind": "solution-run",
-                    "source_path": "solutions/ac.cpp",
-                    "logical_run_id": run_id,
-                    "test_name": "001.in",
-                    "expected_behavior": "accepted",
-                    "queue_index": 1,
-                    "status": VerificationTaskStore.TASK_PENDING,
-                },
-                {
-                    "id": "vt-case-002",
-                    "task_kind": "solution-run",
-                    "source_path": "solutions/ac.cpp",
-                    "logical_run_id": run_id,
-                    "test_name": "002.in",
-                    "expected_behavior": "accepted",
-                    "queue_index": 2,
-                    "status": VerificationTaskStore.TASK_PENDING,
-                },
-            ],
-            edges=[],
-        )
-        task_store.set_task_queued("vt-case-001", run_id=run_id, judgehost_task_id=judgehost_task_id)
-        task_store.set_task_queued("vt-case-002", run_id=run_id, judgehost_task_id=judgehost_task_id)
 
         callbacks = VerificationRuntimeCallbacks(
             publish_task=lambda _row: (_ for _ in ()).throw(RuntimeError("unexpected publish")),
             probe_task_case_cache=lambda _task_ids: set(),
-            resolve_case_result=lambda queued_task_id, test_name: service.poll_task_case_result(queued_task_id, test_name),
             cancel_execution=lambda _reason: None,
-            close_logical_runs=lambda run_ids: service.close_logical_runs(verification_id, run_ids),
+            close_programs=lambda program_ids: service.close_programs(
+                verification_id,
+                program_ids,
+            ),
         )
         coordinator = VerificationRuntimeCoordinator(
             verification_id,
@@ -358,7 +369,7 @@ class TestJudgehostService(E2ETestBase):
             self.assertEqual(len(leased), 1)
             case_id = int(leased[0].get("judgetaskid") or 0)
             self.assertGreater(case_id, 0)
-            task_store.set_task_leased("vt-case-001")
+            task_store.set_task_leased(task_id)
 
             metadata = b"cpu-time: 0.001\nwall-time: 0.001\nmemory-bytes: 4096\n"
             service.domjudge_update_judging(
@@ -389,12 +400,14 @@ class TestJudgehostService(E2ETestBase):
             deadline = time.monotonic() + 2.0
             while time.monotonic() < deadline:
                 rows = {str(row["id"]): row for row in task_store.list_rows(verification_id)}
-                if str(rows["vt-case-001"]["status"] or "") == VerificationTaskStore.TASK_DONE:
+                if str(rows[task_id]["status"] or "") == VerificationTaskStore.TASK_DONE:
                     break
                 time.sleep(0.01)
             rows = {str(row["id"]): row for row in task_store.list_rows(verification_id)}
-            self.assertEqual(str(rows["vt-case-001"]["status"] or ""), VerificationTaskStore.TASK_DONE)
-            self.assertEqual(str(rows["vt-case-002"]["status"] or ""), VerificationTaskStore.TASK_QUEUED)
+            self.assertEqual(
+                str(rows[task_id]["status"] or ""),
+                VerificationTaskStore.TASK_DONE,
+            )
             host = next(
                 row
                 for row in service.status()["hosts"]
@@ -405,7 +418,7 @@ class TestJudgehostService(E2ETestBase):
                 {
                     "verification_id": verification_id,
                     "problem_slug": self.problem,
-                    "task_kind": "solution-run",
+                    "task_kind": "main-correct",
                     "source_label": "ac.cpp",
                     "test_name": "001.in",
                 },
@@ -416,34 +429,217 @@ class TestJudgehostService(E2ETestBase):
             coordinator_thread.join(timeout=2.0)
             self.assertFalse(coordinator_thread.is_alive())
 
-    def _seed_verification_test_artifacts(self, verification_id: str, items: list[tuple[str, str, str]]) -> None:
-        for test_name, input_text, answer_text in items:
-            input_ref = config.verification_service.store_verification_blob(
-                verification_id=verification_id,
-                test_name=test_name,
-                role="input",
-                file_name=test_name,
-                payload=input_text.encode("utf-8"),
-            )
-            answer_name = f"{Path(test_name).stem}.ans"
-            answer_ref = config.verification_service.store_verification_blob(
-                verification_id=verification_id,
-                test_name=test_name,
-                role="answer",
-                file_name=answer_name,
-                payload=answer_text.encode("utf-8"),
-            )
-            config.verification_service.update_verification_artifact_refs(
-                verification_id,
-                test_name,
-                {"input_ref": input_ref, "answer_ref": answer_ref},
-            )
-        metadata = config.verification_service.verification_detail(verification_id)
-        metadata["selected_test_names"] = [test_name for test_name, _input, _answer in items]
-        metadata["run_config_json"] = json.dumps({"checker_mode": "testlib", "checker_args": [], "pass_limit": 1})
-        config.verification_service.persist_verification_detail(verification_id, metadata)
+    def _assert_late_task_inherits_program_failure(
+        self,
+        *,
+        failure_kind: str,
+    ) -> None:
+        service = self._fresh_judgehost_service()
+        host = f"judgehost-late-{failure_kind}"
+        service.domjudge_register_host(host)
+        artifact_verification_id = _canonical_verification_id(
+            f"build-late-{failure_kind}-{uuid.uuid4().hex[:8]}"
+        )
+        self._seed_build_verification(
+            artifact_verification_id,
+            [
+                ("001.in", "first\n", "first\n"),
+                ("002.in", "second\n", "second\n"),
+            ],
+        )
 
-    def _seed_build_verification(self, verification_id: str) -> None:
+        ctx = config.workspace_service.workspace_context(
+            self.problem,
+            self.user,
+            include_recent=False,
+        )
+        verification_id = _canonical_verification_id(
+            f"late-{failure_kind}-{uuid.uuid4().hex[:8]}"
+        )
+        admission = admit_test_verification(
+            verification_id=verification_id,
+            problem_id=int(ctx["problem"]["id"]),
+            workspace_id=int(ctx["workspace"]["id"]),
+        )
+        self.assertEqual(admission.outcome, "admitted")
+        accepted_task_id = verification_task_id(
+            verification_id,
+            _ACCEPTED_PROGRAM_ID,
+            "001.in",
+        )
+        late_task_id = verification_task_id(
+            verification_id,
+            _SOLUTION_PROGRAM_ID,
+            "002.in",
+        )
+        tasks = [
+            PlannedTask(
+                task_id=accepted_task_id,
+                predecessor_task_id=None,
+                task_kind="main-correct",
+                source_path="solutions/ac.cpp",
+                program_id=_ACCEPTED_PROGRAM_ID,
+                test_name="001.in",
+                expected_behavior="accepted",
+            ),
+            PlannedTask(
+                task_id=late_task_id,
+                predecessor_task_id=accepted_task_id,
+                task_kind="solution-run",
+                source_path="solutions/ac.cpp",
+                program_id=_SOLUTION_PROGRAM_ID,
+                test_name="002.in",
+                expected_behavior="unknown",
+            ),
+        ]
+        activation = activate_test_verification(
+            verification_id,
+            programs=verification_programs_for_tasks(tasks),
+            tasks=tasks,
+        )
+        self.assertEqual(activation.outcome, "activated")
+        config.verification_task_store.commit_task_completions(
+            (
+                TaskCompletion(
+                    task_id=accepted_task_id,
+                    status=VerificationTaskStore.TASK_DONE,
+                    run_id="",
+                    judgehost_task_id="",
+                    result=normalize_execution_result(verdict="OK"),
+                ),
+            )
+        )
+
+        first_run_id = f"r-first-{failure_kind}-{uuid.uuid4().hex[:8]}"
+        service.enqueue_task(
+            problem=self.problem,
+            username=self.user,
+            artifact_verification_id=artifact_verification_id,
+            mode="pass-fail",
+            submission_path="solutions/ac.cpp",
+            upload_content=None,
+            upload_filename=None,
+            run_id=first_run_id,
+            selected_tests=["001.in"],
+            verification_id=verification_id,
+            verification_program_id=_SOLUTION_PROGRAM_ID,
+            expected_behavior="unknown",
+            verification_source="run.execute",
+            task_kind="solution-run",
+            persist_verification_run=False,
+        )
+        leased = service.domjudge_fetch_work(host, max_batchsize=1)
+        self.assertEqual(len(leased), 1)
+        first_case_id = int(leased[0]["judgetaskid"])
+        if failure_kind == "compiler-error":
+            service.domjudge_update_judging(
+                host,
+                first_case_id,
+                {
+                    "compile_success": "0",
+                    "output_compile": base64.b64encode(
+                        b"fixture compile failure\n"
+                    ).decode("ascii"),
+                    "compile_metadata": "",
+                },
+            )
+            expected_verdict = "CE"
+            expected_task_status = VerificationTaskStore.TASK_DONE
+        elif failure_kind == "internal-error":
+            service.domjudge_update_judging(
+                host,
+                first_case_id,
+                {
+                    "compile_success": "1",
+                    "output_compile": "",
+                    "compile_metadata": "",
+                },
+            )
+            service.domjudge_internal_error(
+                description="fixture internal error",
+                judgetask_id=first_case_id,
+            )
+            expected_verdict = "FL"
+            expected_task_status = VerificationTaskStore.TASK_FAILED
+        else:  # pragma: no cover - helper contract
+            raise AssertionError(f"unknown failure kind: {failure_kind}")
+
+        first_case = judgehost_fetch_case(service, first_case_id)
+        self.assertIsNotNone(first_case)
+        assert first_case is not None
+        late_run_id = f"r-late-{failure_kind}-{uuid.uuid4().hex[:8]}"
+        service.enqueue_task(
+            verification_task_id=late_task_id,
+            problem=self.problem,
+            username=self.user,
+            artifact_verification_id=artifact_verification_id,
+            mode="pass-fail",
+            submission_path="solutions/ac.cpp",
+            upload_content=None,
+            upload_filename=None,
+            run_id=late_run_id,
+            selected_tests=["002.in"],
+            verification_id=verification_id,
+            verification_program_id=_SOLUTION_PROGRAM_ID,
+            expected_behavior="unknown",
+            verification_source="run.execute",
+            task_kind="solution-run",
+            persist_verification_run=False,
+        )
+
+        late_cases = judgehost_cases_for_run(service, late_run_id)
+        self.assertEqual(len(late_cases), 1)
+        late_case = late_cases[0]
+        self.assertEqual(late_case["batch_id"], first_case["batch_id"])
+        self.assertEqual(str(late_case["status"]), "reported")
+        self.assertFalse(str(late_case["lease_owner"] or ""))
+        late_report = service.poll_task_case_result(
+            str(late_case["task_id"]),
+            "002.in",
+        )
+        self.assertIsNotNone(late_report)
+        assert late_report is not None
+        self.assertEqual(
+            str(late_report["status"]),
+            "failed",
+        )
+        self.assertEqual(
+            late_report["execution_result"].verdict,
+            expected_verdict,
+        )
+        persisted = next(
+            row
+            for row in config.verification_task_store.list_rows(
+                verification_id
+            )
+            if str(row["id"]) == late_task_id
+        )
+        self.assertEqual(
+            str(persisted["status"]),
+            expected_task_status,
+        )
+        self.assertEqual(str(persisted["verdict"]), expected_verdict)
+        self.assertEqual(service.domjudge_fetch_work(host, max_batchsize=1), [])
+
+    def test_late_task_inherits_persisted_compile_failure(self) -> None:
+        self._assert_late_task_inherits_program_failure(
+            failure_kind="compiler-error"
+        )
+
+    def test_late_task_inherits_persisted_internal_error(self) -> None:
+        self._assert_late_task_inherits_program_failure(
+            failure_kind="internal-error"
+        )
+
+    def _seed_build_verification(
+        self,
+        verification_id: str,
+        items: list[tuple[str, str, str]] | None = None,
+        *,
+        run_config: dict[str, object] | None = None,
+        include_run_config: bool = True,
+    ) -> None:
+        fixture_items = items or [("001.in", "ok\n", "ok\n")]
         ws = Path(self._workspace_path())
         (ws / "solutions").mkdir(parents=True, exist_ok=True)
         (ws / "solutions" / "ac.cpp").write_text(
@@ -458,16 +654,81 @@ class TestJudgehostService(E2ETestBase):
         artifact_root = config.fs_manager.prepare_verification_root(verification_id).resolve()
         artifact_root.mkdir(parents=True, exist_ok=True)
         (artifact_root / "logs").mkdir(parents=True, exist_ok=True)
-        config.verification_service.begin_verification_record(
+        admission = admit_test_verification(
             verification_id=verification_id,
             problem_id=problem_id,
             workspace_id=workspace_id,
-            signature="",
-            kind="all",
-            status="ok",
-            detail={},
         )
-        self._seed_verification_test_artifacts(verification_id, [("001.in", "ok\n", "ok\n")])
+        self.assertEqual(admission.outcome, "admitted")
+        tasks: list[PlannedTask] = []
+        completions: list[TaskCompletion] = []
+        for index, (test_name, input_text, answer_text) in enumerate(
+            fixture_items
+        ):
+            task_id = verification_task_id(
+                verification_id,
+                _ACCEPTED_PROGRAM_ID,
+                test_name,
+            )
+            tasks.append(
+                PlannedTask(
+                    task_id=task_id,
+                    predecessor_task_id=None,
+                    task_kind="main-correct",
+                    source_path="solutions/ac.cpp",
+                    program_id=_ACCEPTED_PROGRAM_ID,
+                    test_name=test_name,
+                    expected_behavior="accepted",
+                )
+            )
+            input_ref = config.verification_service.store_verification_blob(
+                verification_id=verification_id,
+                test_name=test_name,
+                role="input",
+                file_name=test_name,
+                payload=input_text.encode("utf-8"),
+            )
+            answer_ref = config.verification_service.store_verification_blob(
+                verification_id=verification_id,
+                test_name=test_name,
+                role="answer",
+                file_name=f"{Path(test_name).stem}.ans",
+                payload=answer_text.encode("utf-8"),
+            )
+            completions.append(
+                TaskCompletion(
+                    task_id=task_id,
+                    status=VerificationTaskStore.TASK_DONE,
+                    run_id=f"r-fixture-{verification_id[4:16]}-{index}",
+                    judgehost_task_id="",
+                    result=normalize_execution_result(verdict="OK"),
+                    input_ref=input_ref,
+                    answer_ref=answer_ref,
+                )
+            )
+        detail: dict[str, object] = {
+            "selected_test_names": [item[0] for item in fixture_items],
+        }
+        if include_run_config:
+            detail["run_config_json"] = json.dumps(
+                run_config
+                or {
+                    "checker_mode": "testlib",
+                    "checker_args": [],
+                    "pass_limit": 1,
+                }
+            )
+        activation = activate_test_verification(
+            verification_id,
+            programs=verification_programs_for_tasks(tasks),
+            tasks=tasks,
+            detail=detail,
+        )
+        self.assertEqual(activation.outcome, "activated")
+        completion = config.verification_task_store.commit_task_completions(
+            completions
+        )
+        self.assertEqual(completion.parent_transition, "ok")
         db_execute(
             "UPDATE verifications SET created_at=?, finished_at=? WHERE id=?",
             ["2026-02-28T00:00:00Z", "2026-02-28T00:00:00Z", verification_id],
@@ -518,9 +779,18 @@ class TestJudgehostService(E2ETestBase):
         feedback_text: str = "",
         feedback_files: list[str] | None = None,
     ) -> None:
+        receipt = service.state.batch_scheduler.acquire_case_callback_receipt(
+            case_id
+        )
+        self.assertIsNotNone(receipt)
+        assert receipt is not None
+        service.state.batch_scheduler.release_case_callback_receipt(
+            receipt.receipt_id
+        )
         claim = service.state.batch_scheduler.claim_case_reporting(
             case_id,
             hostname=hostname,
+            receipt_generation=receipt.claim_generation,
             now_text="2026-04-14T00:00:01+00:00",
         )
         self.assertIsNotNone(claim)
@@ -565,6 +835,7 @@ class TestJudgehostService(E2ETestBase):
         task_id: str,
         run_id: str,
         verification_id: str,
+        verification_task_id: str = "",
         task_kind: str = "main-correct",
     ) -> None:
         service.state.task_registry.insert(
@@ -575,10 +846,12 @@ class TestJudgehostService(E2ETestBase):
                 "username": "owner",
                 "artifact_verification_id": verification_id,
                 "verification_id": verification_id,
+                "verification_task_id": verification_task_id,
                 "mode": "pass-fail",
                 "status": service.STATUS_LEASED,
                 "payload": {
                     "task_kind": task_kind,
+                    "verification_task_id": verification_task_id,
                     "verification_source": "run.execute",
                     "source_path": "solutions/std.cpp",
                 },
@@ -620,7 +893,7 @@ class TestJudgehostService(E2ETestBase):
         batch_id = store.create_batch_with_cases(
             task_id=f"jt-id-base-{uuid.uuid4().hex[:8]}",
             run_id=f"r-id-base-{uuid.uuid4().hex[:8]}",
-            logical_run_id="r-id-base",
+            verification_program_id=_SOLUTION_PROGRAM_ID,
             execution_signature="a" * 64,
             task_kind="solution-run",
             verification_id="ver-1",
@@ -771,7 +1044,7 @@ class TestJudgehostService(E2ETestBase):
             run_id=run_id,
             selected_tests=["001.in"],
             verification_id=verification_id,
-            verification_run_ids=[run_id],
+            verification_program_id=_SOLUTION_PROGRAM_ID,
             expected_behavior="accepted",
             verification_source="verification.start",
             persist_verification_run=False,
@@ -813,6 +1086,7 @@ class TestJudgehostService(E2ETestBase):
                 artifact_verification_id="b-x",
                 submission_path="solutions/ac.cpp",
                 run_id="r-x",
+                verification_program_id=_SOLUTION_PROGRAM_ID,
             )
         self.assertEqual(run_id, "r-x")
         self.assertEqual(mocked_enqueue.call_count, 1)
@@ -823,8 +1097,7 @@ class TestJudgehostService(E2ETestBase):
         self.addCleanup(service.reset_runtime_state)
         verification_id = canonical_test_verification_id(f"b-jh-default-batch-{uuid.uuid4().hex[:8]}")
         run_id = f"r-jh-default-batch-{uuid.uuid4().hex[:8]}"
-        self._seed_build_verification(verification_id)
-        self._seed_verification_test_artifacts(
+        self._seed_build_verification(
             verification_id,
             [
                 ("001.in", "one\n", "one\n"),
@@ -844,7 +1117,7 @@ class TestJudgehostService(E2ETestBase):
             run_id=run_id,
             selected_tests=["001.in", "002.in", "003.in", "004.in"],
             verification_id=_canonical_verification_id(f"inv-{verification_id}"),
-            verification_run_ids=[run_id],
+            verification_program_id=_SOLUTION_PROGRAM_ID,
             expected_behavior="accepted",
             verification_source="run.execute",
         )
@@ -886,7 +1159,7 @@ class TestJudgehostService(E2ETestBase):
             run_id=run_id,
             selected_tests=["001.in"],
             verification_id=_canonical_verification_id("inv-domjudge"),
-            verification_run_ids=[run_id],
+            verification_program_id=_SOLUTION_PROGRAM_ID,
             expected_behavior="accepted",
             verification_source="run.execute",
         )
@@ -1009,7 +1282,7 @@ class TestJudgehostService(E2ETestBase):
             run_id=run_id,
             selected_tests=["001.in"],
             verification_id=_canonical_verification_id("inv-script-provider"),
-            verification_run_ids=[run_id],
+            verification_program_id=_SOLUTION_PROGRAM_ID,
             expected_behavior="accepted",
             verification_source="run.execute",
         )
@@ -1050,7 +1323,7 @@ class TestJudgehostService(E2ETestBase):
             run_id=run_id_a,
             selected_tests=["001.in"],
             verification_id=_canonical_verification_id("inv-script-cache-a"),
-            verification_run_ids=[run_id_a],
+            verification_program_id=_SOLUTION_PROGRAM_ID,
             expected_behavior="accepted",
             verification_source="run.execute",
             bypass_case_result_cache=True,
@@ -1095,7 +1368,7 @@ class TestJudgehostService(E2ETestBase):
             run_id=run_id_b,
             selected_tests=["001.in"],
             verification_id=_canonical_verification_id("inv-script-cache-b"),
-            verification_run_ids=[run_id_b],
+            verification_program_id=_SOLUTION_PROGRAM_ID,
             expected_behavior="accepted",
             verification_source="run.execute",
             bypass_case_result_cache=True,
@@ -1146,7 +1419,7 @@ class TestJudgehostService(E2ETestBase):
             run_id=run_id,
             selected_tests=["001.in"],
             verification_id=_canonical_verification_id("inv-script-miss"),
-            verification_run_ids=[run_id],
+            verification_program_id=_SOLUTION_PROGRAM_ID,
             expected_behavior="accepted",
             verification_source="run.execute",
         )
@@ -1263,7 +1536,7 @@ class TestJudgehostService(E2ETestBase):
             run_id=run_id,
             selected_tests=[],
             verification_id=_canonical_verification_id("inv-generate-recompute"),
-            verification_run_ids=[run_id],
+            verification_program_id=_GENERATOR_PROGRAM_ID,
             expected_behavior="accepted",
             verification_source="verification.generate-input",
             task_kind="generate",
@@ -1295,8 +1568,7 @@ class TestJudgehostService(E2ETestBase):
 
         verification_id = canonical_test_verification_id(f"b-jh-dom-notrunc-{uuid.uuid4().hex[:8]}")
         run_id = f"r-jh-dom-notrunc-{uuid.uuid4().hex[:8]}"
-        self._seed_build_verification(verification_id)
-        self._seed_verification_test_artifacts(
+        self._seed_build_verification(
             verification_id,
             [("001.in", "ok\n", "ok\n"), ("002.in", "second\n", "second\n")],
         )
@@ -1312,7 +1584,7 @@ class TestJudgehostService(E2ETestBase):
             run_id=run_id,
             selected_tests=["001.in", "002.in"],
             verification_id=_canonical_verification_id("inv-domjudge-notrunc"),
-            verification_run_ids=[run_id],
+            verification_program_id=_SOLUTION_PROGRAM_ID,
             expected_behavior="accepted",
             verification_source="build.solve",
         )
@@ -1367,7 +1639,7 @@ class TestJudgehostService(E2ETestBase):
             run_id=run_id_a,
             selected_tests=["001.in"],
             verification_id=_canonical_verification_id("inv-domjudge-cache-b"),
-            verification_run_ids=[run_id_a],
+            verification_program_id=_SOLUTION_PROGRAM_ID,
             expected_behavior="accepted",
             verification_source="run.execute",
         )
@@ -1382,7 +1654,7 @@ class TestJudgehostService(E2ETestBase):
             run_id=run_id_b,
             selected_tests=["001.in"],
             verification_id=_canonical_verification_id("inv-domjudge-cache"),
-            verification_run_ids=[run_id_b],
+            verification_program_id=_SOLUTION_PROGRAM_ID,
             expected_behavior="accepted",
             verification_source="run.execute",
             bypass_case_result_cache=True,
@@ -1459,10 +1731,14 @@ class TestJudgehostService(E2ETestBase):
 
         verification_id = canonical_test_verification_id(f"b-jh-dom-mp-{uuid.uuid4().hex[:8]}")
         run_id = f"r-jh-dom-mp-{uuid.uuid4().hex[:8]}"
-        self._seed_build_verification(verification_id)
-        metadata = config.verification_service.verification_detail(verification_id)
-        metadata["run_config_json"] = json.dumps({"checker_mode": "testlib", "checker_args": [], "pass_limit": 2})
-        config.verification_service.persist_verification_detail(verification_id, metadata)
+        self._seed_build_verification(
+            verification_id,
+            run_config={
+                "checker_mode": "testlib",
+                "checker_args": [],
+                "pass_limit": 2,
+            },
+        )
 
         service.enqueue_task(
             problem=self.problem,
@@ -1475,7 +1751,7 @@ class TestJudgehostService(E2ETestBase):
             run_id=run_id,
             selected_tests=["001.in"],
             verification_id=_canonical_verification_id("inv-domjudge-mp"),
-            verification_run_ids=[run_id],
+            verification_program_id=_SOLUTION_PROGRAM_ID,
             expected_behavior="accepted",
             verification_source="run.execute",
         )
@@ -1629,10 +1905,14 @@ class TestJudgehostService(E2ETestBase):
 
         verification_id = canonical_test_verification_id(f"b-jh-dom-wa2tl-{uuid.uuid4().hex[:8]}")
         run_id = f"r-jh-dom-wa2tl-{uuid.uuid4().hex[:8]}"
-        self._seed_build_verification(verification_id)
-        metadata = config.verification_service.verification_detail(verification_id)
-        metadata["run_config_json"] = json.dumps({"checker_mode": "testlib", "checker_args": [], "time_limit_ms": 6000})
-        config.verification_service.persist_verification_detail(verification_id, metadata)
+        self._seed_build_verification(
+            verification_id,
+            run_config={
+                "checker_mode": "testlib",
+                "checker_args": [],
+                "time_limit_ms": 6000,
+            },
+        )
 
         service.enqueue_task(
             problem=self.problem,
@@ -1645,7 +1925,7 @@ class TestJudgehostService(E2ETestBase):
             run_id=run_id,
             selected_tests=["001.in"],
             verification_id=_canonical_verification_id("inv-domjudge-wa2tl"),
-            verification_run_ids=[run_id],
+            verification_program_id=_SOLUTION_PROGRAM_ID,
             expected_behavior="unknown",
             verification_source="run.execute",
         )
@@ -1719,7 +1999,7 @@ class TestJudgehostService(E2ETestBase):
             run_id=run_id,
             selected_tests=["001.in"],
             verification_id=execution_verification_id,
-            verification_run_ids=[run_id],
+            verification_program_id=_SOLUTION_PROGRAM_ID,
             expected_behavior="accepted",
             verification_source="run.execute",
         )
@@ -1774,11 +2054,15 @@ class TestJudgehostService(E2ETestBase):
         self.assertEqual(second_rows[0]["jobid"], first["jobid"])
         self.assertEqual(second_rows[0]["submitid"], first["submitid"])
 
-        service.domjudge_update_judging(
-            "judgehost-reconnect",
-            case_id,
-            {"compile_success": "0"},
-        )
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "judgehost does not own judging run",
+        ):
+            service.domjudge_update_judging(
+                "judgehost-reconnect",
+                case_id,
+                {"compile_success": "0"},
+            )
         case_row = judgehost_fetch_case(service, case_id)
         self.assertIsNotNone(case_row)
         assert case_row is not None
@@ -1806,8 +2090,10 @@ class TestJudgehostService(E2ETestBase):
         verification_id = _canonical_verification_id(str(uuid.uuid4()))
         run_id = f"r-active-idle-heartbeat-{uuid.uuid4().hex[:8]}"
         host = "judgehost-active-idle-heartbeat"
-        self._seed_build_verification(verification_id)
-        self._seed_verification_test_artifacts(verification_id, [("001.in", "ok\n", "ok\n")])
+        self._seed_build_verification(
+            verification_id,
+            [("001.in", "ok\n", "ok\n")],
+        )
 
         task_id = service.enqueue_task(
             problem=self.problem,
@@ -1820,7 +2106,7 @@ class TestJudgehostService(E2ETestBase):
             run_id=run_id,
             selected_tests=["001.in"],
             verification_id=_canonical_verification_id(str(uuid.uuid4())),
-            verification_run_ids=[run_id],
+            verification_program_id=_SOLUTION_PROGRAM_ID,
             expected_behavior="accepted",
             verification_source="run.execute",
         )
@@ -1878,11 +2164,15 @@ class TestJudgehostService(E2ETestBase):
         self.assertEqual(_host_row().get("last_action"), "versions")
 
         _mark_host_stale()
-        service.domjudge_update_judging(
-            "judgehost-not-owner",
-            case_id,
-            {"compile_success": "1"},
-        )
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "judgehost does not own judging run",
+        ):
+            service.domjudge_update_judging(
+                "judgehost-not-owner",
+                case_id,
+                {"compile_success": "1"},
+            )
         self.assertFalse(_host_row().get("online"))
         self.assertNotIn("judgehost-not-owner", service.state.hosts_state)
 
@@ -1944,7 +2234,7 @@ class TestJudgehostService(E2ETestBase):
                 run_id=run_bad,
                 selected_tests=["999.in"],
                 verification_id=_canonical_verification_id("inv-domjudge-bad"),
-                verification_run_ids=[run_bad],
+                verification_program_id=_SOLUTION_PROGRAM_ID,
                 expected_behavior="accepted",
                 verification_source="run.execute",
             )
@@ -1963,7 +2253,7 @@ class TestJudgehostService(E2ETestBase):
             run_id=run_good,
             selected_tests=["001.in"],
             verification_id=_canonical_verification_id("inv-domjudge-good"),
-            verification_run_ids=[run_good],
+            verification_program_id=_SOLUTION_PROGRAM_ID,
             expected_behavior="accepted",
             verification_source="run.execute",
         )
@@ -2002,7 +2292,7 @@ class TestJudgehostService(E2ETestBase):
             run_id=run_a,
             selected_tests=["001.in"],
             verification_id=_canonical_verification_id("inv-domjudge-cache-a"),
-            verification_run_ids=[run_a],
+            verification_program_id=_SOLUTION_PROGRAM_ID,
             expected_behavior="accepted",
             verification_source="run.execute",
         )
@@ -2033,7 +2323,7 @@ class TestJudgehostService(E2ETestBase):
             run_id=run_b,
             selected_tests=["001.in"],
             verification_id=_canonical_verification_id("inv-domjudge-cache-b"),
-            verification_run_ids=[run_b],
+            verification_program_id=_SOLUTION_PROGRAM_ID,
             expected_behavior="accepted",
             verification_source="run.execute",
         )
@@ -2064,8 +2354,10 @@ class TestJudgehostService(E2ETestBase):
 
         build_a = canonical_test_verification_id(f"b-jh-host-a-{uuid.uuid4().hex[:8]}")
         run_a = f"r-jh-host-a-{uuid.uuid4().hex[:8]}"
-        self._seed_build_verification(build_a)
-        self._seed_verification_test_artifacts(build_a, [("001.in", "alpha\n", "alpha-out\n")])
+        self._seed_build_verification(
+            build_a,
+            [("001.in", "alpha\n", "alpha-out\n")],
+        )
         service.enqueue_task(
             problem=self.problem,
             username=self.user,
@@ -2077,15 +2369,17 @@ class TestJudgehostService(E2ETestBase):
             run_id=run_a,
             selected_tests=["001.in"],
             verification_id=_canonical_verification_id("inv-domjudge-host-a"),
-            verification_run_ids=[run_a],
+            verification_program_id=_SOLUTION_PROGRAM_ID,
             expected_behavior="accepted",
             verification_source="run.execute",
         )
 
         build_b = canonical_test_verification_id(f"b-jh-host-b-{uuid.uuid4().hex[:8]}")
         run_b = f"r-jh-host-b-{uuid.uuid4().hex[:8]}"
-        self._seed_build_verification(build_b)
-        self._seed_verification_test_artifacts(build_b, [("001.in", "beta\n", "beta-out\n")])
+        self._seed_build_verification(
+            build_b,
+            [("001.in", "beta\n", "beta-out\n")],
+        )
         service.enqueue_task(
             problem=self.problem,
             username=self.user,
@@ -2097,7 +2391,7 @@ class TestJudgehostService(E2ETestBase):
             run_id=run_b,
             selected_tests=["001.in"],
             verification_id=_canonical_verification_id("inv-domjudge-host-b"),
-            verification_run_ids=[run_b],
+            verification_program_id=_SOLUTION_PROGRAM_ID,
             expected_behavior="accepted",
             verification_source="run.execute",
         )
@@ -2132,17 +2426,20 @@ class TestJudgehostService(E2ETestBase):
 
         verification_id = canonical_test_verification_id(f"b-jh-passlimit-interactive-{uuid.uuid4().hex[:8]}")
         run_id = f"r-jh-passlimit-interactive-{uuid.uuid4().hex[:8]}"
-        self._seed_build_verification(verification_id)
+        self._seed_build_verification(
+            verification_id,
+            run_config={
+                "checker_mode": "testlib",
+                "checker_args": [],
+                "pass_limit": 7,
+            },
+        )
         ws = Path(self._workspace_path())
         (ws / "interactors").mkdir(parents=True, exist_ok=True)
         (ws / "interactors" / "interactor.cpp").write_text(
             "#include <bits/stdc++.h>\nint main(int, char**){return 0;}\n",
             encoding="utf-8",
         )
-        metadata = config.verification_service.verification_detail(verification_id)
-        metadata["run_config_json"] = json.dumps({"checker_mode": "testlib", "checker_args": [], "pass_limit": 7})
-        config.verification_service.persist_verification_detail(verification_id, metadata)
-
         payload = service.prepare_enqueue_payload(
             problem=self.problem,
             username=self.user,
@@ -2154,7 +2451,7 @@ class TestJudgehostService(E2ETestBase):
             run_id=run_id,
             selected_tests=["001.in"],
             verification_id=_canonical_verification_id("inv-passlimit-interactive"),
-            verification_run_ids=[run_id],
+            verification_program_id=_SOLUTION_PROGRAM_ID,
             expected_behavior="accepted",
             verification_source="run.execute",
         )
@@ -2170,10 +2467,14 @@ class TestJudgehostService(E2ETestBase):
 
         verification_id = canonical_test_verification_id(f"b-jh-passlimit-multipass-{uuid.uuid4().hex[:8]}")
         run_id = f"r-jh-passlimit-multipass-{uuid.uuid4().hex[:8]}"
-        self._seed_build_verification(verification_id)
-        metadata = config.verification_service.verification_detail(verification_id)
-        metadata["run_config_json"] = json.dumps({"checker_mode": "testlib", "checker_args": [], "pass_limit": 7})
-        config.verification_service.persist_verification_detail(verification_id, metadata)
+        self._seed_build_verification(
+            verification_id,
+            run_config={
+                "checker_mode": "testlib",
+                "checker_args": [],
+                "pass_limit": 7,
+            },
+        )
 
         payload = service.prepare_enqueue_payload(
             problem=self.problem,
@@ -2186,7 +2487,7 @@ class TestJudgehostService(E2ETestBase):
             run_id=run_id,
             selected_tests=["001.in"],
             verification_id=_canonical_verification_id("inv-passlimit-pass-fail"),
-            verification_run_ids=[run_id],
+            verification_program_id=_SOLUTION_PROGRAM_ID,
             expected_behavior="accepted",
             verification_source="run.execute",
         )
@@ -2238,7 +2539,7 @@ class TestJudgehostService(E2ETestBase):
             run_id=run_id,
             selected_tests=["001.in"],
             verification_id=_canonical_verification_id("inv-jh-interactor-source"),
-            verification_run_ids=[run_id],
+            verification_program_id=_SOLUTION_PROGRAM_ID,
             expected_behavior="accepted",
             verification_source="run.execute",
             compile_only=False,
@@ -2314,7 +2615,7 @@ class TestJudgehostService(E2ETestBase):
             run_id=f"r-java-entry-{uuid.uuid4().hex[:8]}",
             selected_tests=[],
             verification_id=_canonical_verification_id(str(uuid.uuid4())),
-            verification_run_ids=[],
+            verification_program_id=_SOLUTION_PROGRAM_ID,
             expected_behavior="accepted",
             verification_source="run.execute",
         )
@@ -2344,7 +2645,7 @@ class TestJudgehostService(E2ETestBase):
             run_id=run_id,
             selected_tests=["001.in"],
             verification_id=verification_id,
-            verification_run_ids=[run_id],
+            verification_program_id=_SOLUTION_PROGRAM_ID,
             expected_behavior="accepted",
             verification_source="run.execute",
             persist_verification_run=False,
@@ -2374,7 +2675,7 @@ class TestJudgehostService(E2ETestBase):
                 run_id=f"r-java-missing-main-{uuid.uuid4().hex[:8]}",
                 selected_tests=[],
                 verification_id=_canonical_verification_id(str(uuid.uuid4())),
-                verification_run_ids=[],
+                verification_program_id=_SOLUTION_PROGRAM_ID,
                 expected_behavior="accepted",
                 verification_source="run.execute",
             )
@@ -2452,7 +2753,7 @@ class TestJudgehostService(E2ETestBase):
             run_id=run_id,
             selected_tests=["001.in"],
             verification_id=_canonical_verification_id("inv-jh-generate-scripts"),
-            verification_run_ids=[run_id],
+            verification_program_id=_GENERATOR_PROGRAM_ID,
             expected_behavior="accepted",
             verification_source="generate-input",
             task_kind="generate-input",
@@ -2507,7 +2808,7 @@ class TestJudgehostService(E2ETestBase):
             run_id=run_id,
             selected_tests=["001.in"],
             verification_id=_canonical_verification_id("inv-jh-generate-interactive"),
-            verification_run_ids=[run_id],
+            verification_program_id=_GENERATOR_PROGRAM_ID,
             expected_behavior="accepted",
             verification_source="build.generate-input",
             compile_only=False,
@@ -2559,7 +2860,7 @@ class TestJudgehostService(E2ETestBase):
             run_id=run_id,
             selected_tests=[],
             verification_id=_canonical_verification_id("inv-jh-compile-only-virtual"),
-            verification_run_ids=[run_id],
+            verification_program_id=_SOLUTION_PROGRAM_ID,
             expected_behavior="compile",
             verification_source="build.compile",
             bypass_case_result_cache=True,
@@ -2637,7 +2938,7 @@ class TestJudgehostService(E2ETestBase):
             run_id=run_id,
             selected_tests=[],
             verification_id=_canonical_verification_id("inv-jh-compile-only-multipass"),
-            verification_run_ids=[run_id],
+            verification_program_id=_SOLUTION_PROGRAM_ID,
             expected_behavior="compile",
             verification_source="build.compile",
             bypass_case_result_cache=True,
@@ -2710,7 +3011,7 @@ class TestJudgehostService(E2ETestBase):
             run_id=run_a,
             selected_tests=[],
             verification_id=_canonical_verification_id("inv-jh-compile-only-extra-a"),
-            verification_run_ids=[run_a],
+            verification_program_id=_SOLUTION_PROGRAM_ID,
             expected_behavior="compile",
             verification_source="build.compile",
             compile_only=True,
@@ -2728,7 +3029,7 @@ class TestJudgehostService(E2ETestBase):
             run_id=run_a,
             selected_tests=[],
             verification_id=_canonical_verification_id("inv-jh-compile-only-extra-a"),
-            verification_run_ids=[run_a],
+            verification_program_id=_SOLUTION_PROGRAM_ID,
             expected_behavior="compile",
             verification_source="build.compile",
             compile_only=True,
@@ -2782,7 +3083,7 @@ class TestJudgehostService(E2ETestBase):
                 run_id=run_b,
                 selected_tests=[],
                 verification_id=_canonical_verification_id("inv-jh-compile-only-extra-b"),
-                verification_run_ids=[run_b],
+                verification_program_id=_SOLUTION_PROGRAM_ID,
                 expected_behavior="compile",
                 verification_source="build.compile",
                 compile_only=True,
@@ -2823,7 +3124,7 @@ class TestJudgehostService(E2ETestBase):
             run_id=run_a,
             selected_tests=[],
             verification_id=_canonical_verification_id("inv-jh-compile-only-empty-build-a"),
-            verification_run_ids=[run_a],
+            verification_program_id=_SOLUTION_PROGRAM_ID,
             expected_behavior="compile",
             verification_source="problem.solution.save_source",
             compile_only=True,
@@ -2867,7 +3168,7 @@ class TestJudgehostService(E2ETestBase):
             run_id=run_b,
             selected_tests=[],
             verification_id=_canonical_verification_id("inv-jh-compile-only-empty-build-b"),
-            verification_run_ids=[run_b],
+            verification_program_id=_SOLUTION_PROGRAM_ID,
             expected_behavior="compile",
             verification_source="problem.solution.save_source",
             compile_only=True,
@@ -2904,7 +3205,7 @@ class TestJudgehostService(E2ETestBase):
             run_id=run_id,
             selected_tests=[],
             verification_id=_canonical_verification_id("inv-jh-prepared-merge"),
-            verification_run_ids=[run_id],
+            verification_program_id=_SOLUTION_PROGRAM_ID,
             expected_behavior="compile",
             verification_source="build.compile",
             bypass_case_result_cache=True,
@@ -2932,7 +3233,7 @@ class TestJudgehostService(E2ETestBase):
                 run_id=run_id,
                 selected_tests=[],
                 verification_id=_canonical_verification_id("inv-jh-prepared-merge"),
-                verification_run_ids=[run_id],
+                verification_program_id=_SOLUTION_PROGRAM_ID,
                 expected_behavior="compile",
                 verification_source="build.compile",
                 compile_only=True,
@@ -2974,7 +3275,7 @@ class TestJudgehostService(E2ETestBase):
             run_id=run_id,
             selected_tests=[],
             verification_id=_canonical_verification_id("inv-jh-extra-src"),
-            verification_run_ids=[run_id],
+            verification_program_id=_SOLUTION_PROGRAM_ID,
             expected_behavior="compile",
             verification_source="build.compile",
             compile_only=True,
@@ -2992,7 +3293,7 @@ class TestJudgehostService(E2ETestBase):
             run_id=run_id,
             selected_tests=[],
             verification_id=_canonical_verification_id("inv-jh-extra-src"),
-            verification_run_ids=[run_id],
+            verification_program_id=_SOLUTION_PROGRAM_ID,
             expected_behavior="compile",
             verification_source="build.compile",
             compile_only=True,
@@ -3062,7 +3363,7 @@ class TestJudgehostService(E2ETestBase):
             run_id=run_id,
             selected_tests=[],
             verification_id=_canonical_verification_id("inv-jh-compile-only-ok"),
-            verification_run_ids=[run_id],
+            verification_program_id=_SOLUTION_PROGRAM_ID,
             expected_behavior="compile",
             verification_source="build.compile",
             bypass_case_result_cache=True,
@@ -3134,7 +3435,7 @@ class TestJudgehostService(E2ETestBase):
             run_id=run_id,
             selected_tests=[],
             verification_id=_canonical_verification_id("inv-jh-compile-only-no-output"),
-            verification_run_ids=[run_id],
+            verification_program_id=_SOLUTION_PROGRAM_ID,
             expected_behavior="compile",
             verification_source="build.compile",
             compile_only=True,
@@ -3206,7 +3507,7 @@ class TestJudgehostService(E2ETestBase):
             run_id=run_id,
             selected_tests=[],
             verification_id=_canonical_verification_id("inv-jh-compile-only-ce"),
-            verification_run_ids=[run_id],
+            verification_program_id=_SOLUTION_PROGRAM_ID,
             expected_behavior="compile",
             verification_source="build.compile",
             compile_only=True,
@@ -3278,7 +3579,7 @@ class TestJudgehostService(E2ETestBase):
             run_id=run_id,
             selected_tests=[],
             verification_id=_canonical_verification_id("inv-jh-extra-source"),
-            verification_run_ids=[run_id],
+            verification_program_id=_GENERATOR_PROGRAM_ID,
             expected_behavior="accepted",
             verification_source="build.generate-input",
             task_kind="generate",
@@ -3404,7 +3705,7 @@ class TestJudgehostService(E2ETestBase):
                 run_id=run_id,
                 selected_tests=["001.in"],
                 verification_id=_canonical_verification_id("inv-domjudge-large"),
-                verification_run_ids=[run_id],
+                verification_program_id=_SOLUTION_PROGRAM_ID,
                 expected_behavior="accepted",
                 verification_source="run.execute",
             )
@@ -3500,7 +3801,7 @@ class TestJudgehostService(E2ETestBase):
             run_id=run_id,
             selected_tests=["001.in"],
             verification_id=_canonical_verification_id("inv-domjudge-compile-log"),
-            verification_run_ids=[run_id],
+            verification_program_id=_SOLUTION_PROGRAM_ID,
             expected_behavior="accepted",
             verification_source="run.execute",
         )
@@ -3605,6 +3906,20 @@ class TestJudgehostService(E2ETestBase):
                     headers={"Authorization": "Bearer test-token"},
                 )
                 self.assertEqual(languages.status_code, 200, languages.text)
+                with patch.object(
+                    service,
+                    "domjudge_get_testcase_files",
+                    side_effect=AssertionError(
+                        "closed maintenance admission reached file lookup"
+                    ),
+                ) as get_testcase_files:
+                    download = client.get(
+                        "/api/v4/judgehosts/get_files/testcase/1",
+                        headers={"Authorization": "Bearer test-token"},
+                    )
+                self.assertEqual(download.status_code, 503, download.text)
+                self.assertEqual(download.headers.get("retry-after"), "5")
+                get_testcase_files.assert_not_called()
                 heartbeat = client.post(
                     "/api/v4/judgehosts",
                     data={"hostname": "judgehost-maintenance"},
@@ -3623,6 +3938,73 @@ class TestJudgehostService(E2ETestBase):
             finally:
                 with gate.locked():
                     gate.open_locked()
+
+    def test_file_stream_holds_maintenance_admission_until_body_closes(self) -> None:
+        from app.main import app
+
+        service = config.judgehost_task_service
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
+        stream_started = threading.Event()
+        release_stream = threading.Event()
+        responses: list[object] = []
+        failures: list[Exception] = []
+
+        def blocking_stream(_rows):
+            stream_started.set()
+            yield b"["
+            release_stream.wait(timeout=2)
+            yield b"]"
+
+        def request_download(client: TestClient) -> None:
+            try:
+                responses.append(
+                    client.get(
+                        "/api/v4/judgehosts/get_files/source/1",
+                        headers={"Authorization": "Bearer test-token"},
+                    )
+                )
+            except Exception as exc:  # pragma: no cover - surfaced below
+                failures.append(exc)
+
+        with (
+            patch.object(service, "domjudge_get_source_files", return_value=[]),
+            patch(
+                "app.impl.judgehost.api.stream_domjudge_file_array",
+                side_effect=blocking_stream,
+            ),
+            TestClient(app) as client,
+        ):
+            request_thread = threading.Thread(
+                target=request_download,
+                args=(client,),
+            )
+            request_thread.start()
+            try:
+                self.assertTrue(stream_started.wait(timeout=2))
+                self.assertEqual(service.busy_counts()["callbacks"], 1)
+                started = config.maintenance_service.start_cleanup(
+                    actor_user_id=0,
+                )
+                self.assertFalse(started.accepted)
+                self.assertEqual(started.reason, "busy")
+                self.assertEqual(started.busy["judgehost_callbacks"], 1)
+            finally:
+                release_stream.set()
+                request_thread.join(timeout=2)
+
+        self.assertFalse(request_thread.is_alive())
+        self.assertEqual(failures, [])
+        self.assertEqual(len(responses), 1)
+        self.assertEqual(getattr(responses[0], "status_code", None), 200)
+        self.assertEqual(service.busy_counts()["callbacks"], 0)
 
     def test_fetch_work_long_poll_does_not_hold_maintenance_admission_lock(self) -> None:
         service = config.judgehost_task_service
@@ -3721,8 +4103,10 @@ class TestJudgehostService(E2ETestBase):
         with TestClient(app) as client:
             verification_id = canonical_test_verification_id(f"b-jh-peer-{uuid.uuid4().hex[:8]}")
             run_id = f"r-jh-peer-{uuid.uuid4().hex[:8]}"
-            self._seed_build_verification(verification_id)
-            self._seed_verification_test_artifacts(verification_id, [("001.in", "peer-input\n", "peer-output\n")])
+            self._seed_build_verification(
+                verification_id,
+                [("001.in", "peer-input\n", "peer-output\n")],
+            )
             service.enqueue_task(
                 problem=self.problem,
                 username=self.user,
@@ -3734,7 +4118,7 @@ class TestJudgehostService(E2ETestBase):
                 run_id=run_id,
                 selected_tests=["001.in"],
                 verification_id=_canonical_verification_id("inv-domjudge-peer"),
-                verification_run_ids=[run_id],
+                verification_program_id=_SOLUTION_PROGRAM_ID,
                 expected_behavior="accepted",
                 verification_source="run.execute",
             )
@@ -3796,7 +4180,7 @@ class TestJudgehostService(E2ETestBase):
                 run_id=run_id,
                 selected_tests=["001.in"],
                 verification_id=_canonical_verification_id("inv-domjudge-peer-script"),
-                verification_run_ids=[run_id],
+                verification_program_id=_SOLUTION_PROGRAM_ID,
                 expected_behavior="accepted",
                 verification_source="run.execute",
             )
@@ -3849,7 +4233,7 @@ class TestJudgehostService(E2ETestBase):
             run_id=run_id,
             selected_tests=["001.in"],
             verification_id=_canonical_verification_id("inv-domjudge-spool"),
-            verification_run_ids=[run_id],
+            verification_program_id=_SOLUTION_PROGRAM_ID,
             expected_behavior="accepted",
             verification_source="run.execute",
         )
@@ -3917,10 +4301,10 @@ class TestJudgehostService(E2ETestBase):
 
         verification_id = canonical_test_verification_id(f"b-jh-limits-{uuid.uuid4().hex[:8]}")
         run_id = f"r-jh-limits-{uuid.uuid4().hex[:8]}"
-        self._seed_build_verification(verification_id)
-        metadata = config.verification_service.verification_detail(verification_id)
-        metadata.pop("run_config_json", None)
-        config.verification_service.persist_verification_detail(verification_id, metadata)
+        self._seed_build_verification(
+            verification_id,
+            include_run_config=False,
+        )
         service.enqueue_task(
             problem=self.problem,
             username=self.user,
@@ -3932,7 +4316,7 @@ class TestJudgehostService(E2ETestBase):
             run_id=run_id,
             selected_tests=["001.in"],
             verification_id="",
-            verification_run_ids=[],
+            verification_program_id=_SOLUTION_PROGRAM_ID,
             expected_behavior="accepted",
             verification_source="build.solve",
         )
@@ -4010,17 +4394,15 @@ class TestJudgehostService(E2ETestBase):
 
         verification_id = canonical_test_verification_id(f"b-jh-compare-compile-mem-{uuid.uuid4().hex[:8]}")
         run_id = f"r-jh-compare-compile-mem-{uuid.uuid4().hex[:8]}"
-        self._seed_build_verification(verification_id)
-        metadata = config.verification_service.verification_detail(verification_id)
-        metadata["run_config_json"] = json.dumps(
-            {
+        self._seed_build_verification(
+            verification_id,
+            run_config={
                 "checker_mode": "testlib",
                 "checker_args": [],
                 "pass_limit": 1,
                 "memory_limit_mb": run_mem_mb,
-            }
+            },
         )
-        config.verification_service.persist_verification_detail(verification_id, metadata)
 
         service.enqueue_task(
             problem=self.problem,
@@ -4033,7 +4415,7 @@ class TestJudgehostService(E2ETestBase):
             run_id=run_id,
             selected_tests=["001.in"],
             verification_id="",
-            verification_run_ids=[],
+            verification_program_id=_SOLUTION_PROGRAM_ID,
             expected_behavior="accepted",
             verification_source="build.solve",
         )
@@ -4095,7 +4477,7 @@ class TestJudgehostService(E2ETestBase):
             run_id=run_id,
             selected_tests=["001.in"],
             verification_id="",
-            verification_run_ids=[],
+            verification_program_id=_ACCEPTED_PROGRAM_ID,
             expected_behavior="accepted",
             verification_source="main-correct",
         )
@@ -4139,10 +4521,10 @@ class TestJudgehostService(E2ETestBase):
 
         verification_id = canonical_test_verification_id(f"b-jh-multipass-default-{uuid.uuid4().hex[:8]}")
         run_id = f"r-jh-multipass-default-{uuid.uuid4().hex[:8]}"
-        self._seed_build_verification(verification_id)
-        metadata = config.verification_service.verification_detail(verification_id)
-        metadata.pop("run_config_json", None)
-        config.verification_service.persist_verification_detail(verification_id, metadata)
+        self._seed_build_verification(
+            verification_id,
+            include_run_config=False,
+        )
 
         service.enqueue_task(
             problem=self.problem,
@@ -4155,7 +4537,7 @@ class TestJudgehostService(E2ETestBase):
             run_id=run_id,
             selected_tests=["001.in"],
             verification_id="",
-            verification_run_ids=[],
+            verification_program_id=_SOLUTION_PROGRAM_ID,
             expected_behavior="accepted",
             verification_source="build.solve",
         )
@@ -4181,8 +4563,7 @@ class TestJudgehostService(E2ETestBase):
         run_id_seed = f"r-jh-partial-seed-{uuid.uuid4().hex[:8]}"
         run_id_hit = f"r-jh-full-hit-{uuid.uuid4().hex[:8]}"
         run_id_target = f"r-jh-partial-target-{uuid.uuid4().hex[:8]}"
-        self._seed_build_verification(verification_id)
-        self._seed_verification_test_artifacts(
+        self._seed_build_verification(
             verification_id,
             [("001.in", "ok\n", "ok\n"), ("002.in", "miss\n", "miss\n")],
         )
@@ -4199,7 +4580,7 @@ class TestJudgehostService(E2ETestBase):
             run_id=run_id_seed,
             selected_tests=["001.in"],
             verification_id=_canonical_verification_id("inv-jh-partial-seed"),
-            verification_run_ids=[run_id_seed],
+            verification_program_id=_SOLUTION_PROGRAM_ID,
             expected_behavior="accepted",
             verification_source="run.execute",
         )
@@ -4243,7 +4624,7 @@ class TestJudgehostService(E2ETestBase):
             run_id=run_id_hit,
             selected_tests=["001.in"],
             verification_id=_canonical_verification_id("inv-jh-full-hit"),
-            verification_run_ids=[run_id_hit],
+            verification_program_id=_SOLUTION_PROGRAM_ID,
             expected_behavior="accepted",
             verification_source="run.execute",
         )
@@ -4263,7 +4644,7 @@ class TestJudgehostService(E2ETestBase):
             run_id=run_id_target,
             selected_tests=["001.in", "002.in"],
             verification_id=_canonical_verification_id("inv-jh-partial-target"),
-            verification_run_ids=[run_id_target],
+            verification_program_id=_SOLUTION_PROGRAM_ID,
             expected_behavior="accepted",
             verification_source="run.execute",
         )
@@ -4331,7 +4712,7 @@ class TestJudgehostService(E2ETestBase):
             run_id=run_id_a,
             selected_tests=["001.in"],
             verification_id=_canonical_verification_id("inv-accepted-cache-a"),
-            verification_run_ids=[run_id_a],
+            verification_program_id=_SOLUTION_PROGRAM_ID,
             expected_behavior="accepted",
             verification_source="run.execute",
         )
@@ -4383,7 +4764,7 @@ class TestJudgehostService(E2ETestBase):
             run_id=run_id_b,
             selected_tests=["001.in"],
             verification_id=_canonical_verification_id("inv-accepted-cache-b"),
-            verification_run_ids=[run_id_b],
+            verification_program_id=_SOLUTION_PROGRAM_ID,
             expected_behavior="accepted",
             verification_source="run.execute",
         )
@@ -4417,7 +4798,7 @@ class TestJudgehostService(E2ETestBase):
             run_id=run_id,
             selected_tests=["001.in"],
             verification_id=_canonical_verification_id("inv-checker-fail"),
-            verification_run_ids=[run_id],
+            verification_program_id=_SOLUTION_PROGRAM_ID,
             expected_behavior="accepted",
             verification_source="run.execute",
         )
@@ -4496,7 +4877,7 @@ class TestJudgehostService(E2ETestBase):
             run_id=run_id,
             selected_tests=["001.in"],
             verification_id=_canonical_verification_id("inv-run-error"),
-            verification_run_ids=[run_id],
+            verification_program_id=_SOLUTION_PROGRAM_ID,
             expected_behavior="accepted",
             verification_source="run.execute",
         )
@@ -4577,7 +4958,7 @@ class TestJudgehostService(E2ETestBase):
             run_id=run_id,
             selected_tests=["001.in"],
             verification_id=_canonical_verification_id("inv-compare-neg-tl"),
-            verification_run_ids=[run_id],
+            verification_program_id=_SOLUTION_PROGRAM_ID,
             expected_behavior="wrong-answer-or-time-limit",
             verification_source="run.execute",
         )
@@ -4658,7 +5039,7 @@ class TestJudgehostService(E2ETestBase):
             run_id=run_id,
             selected_tests=["001.in"],
             verification_id=_canonical_verification_id("inv-compare-internal"),
-            verification_run_ids=[run_id],
+            verification_program_id=_SOLUTION_PROGRAM_ID,
             expected_behavior="accepted",
             verification_source="run.execute",
         )
@@ -4716,7 +5097,7 @@ class TestJudgehostService(E2ETestBase):
             run_id=run_id,
             selected_tests=["001.in"],
             verification_id=_canonical_verification_id("inv-compare-debug"),
-            verification_run_ids=[run_id],
+            verification_program_id=_SOLUTION_PROGRAM_ID,
             expected_behavior="accepted",
             verification_source="run.execute",
         )
@@ -4778,7 +5159,7 @@ class TestJudgehostService(E2ETestBase):
             run_id=run_id,
             selected_tests=["001.in"],
             verification_id=_canonical_verification_id("inv-compare-payload"),
-            verification_run_ids=[run_id],
+            verification_program_id=_SOLUTION_PROGRAM_ID,
             expected_behavior="accepted",
             verification_source="run.execute",
         )
@@ -4836,7 +5217,7 @@ class TestJudgehostService(E2ETestBase):
             run_id=run_id,
             selected_tests=["001.in"],
             verification_id=_canonical_verification_id("inv-case-only-id"),
-            verification_run_ids=[run_id],
+            verification_program_id=_SOLUTION_PROGRAM_ID,
             expected_behavior="accepted",
             verification_source="run.execute",
         )
@@ -4893,7 +5274,7 @@ class TestJudgehostService(E2ETestBase):
             run_id=run_id,
             selected_tests=["001.in"],
             verification_id=_canonical_verification_id("inv-compare-jhlog"),
-            verification_run_ids=[run_id],
+            verification_program_id=_SOLUTION_PROGRAM_ID,
             expected_behavior="accepted",
             verification_source="run.execute",
         )
@@ -4956,7 +5337,7 @@ class TestJudgehostService(E2ETestBase):
             run_id=run_id,
             selected_tests=["001.in"],
             verification_id=_canonical_verification_id("inv-compare-strip"),
-            verification_run_ids=[run_id],
+            verification_program_id=_SOLUTION_PROGRAM_ID,
             expected_behavior="accepted",
             verification_source="run.execute",
         )
@@ -5033,7 +5414,7 @@ class TestJudgehostService(E2ETestBase):
             run_id=run_id_a,
             selected_tests=["001.in"],
             verification_id=_canonical_verification_id("inv-fl-cache-a"),
-            verification_run_ids=[run_id_a],
+            verification_program_id=_SOLUTION_PROGRAM_ID,
             expected_behavior="accepted",
             verification_source="run.execute",
         )
@@ -5090,7 +5471,7 @@ class TestJudgehostService(E2ETestBase):
             run_id=run_id_b,
             selected_tests=["001.in"],
             verification_id=_canonical_verification_id("inv-fl-cache-b"),
-            verification_run_ids=[run_id_b],
+            verification_program_id=_SOLUTION_PROGRAM_ID,
             expected_behavior="accepted",
             verification_source="run.execute",
         )
@@ -5126,7 +5507,7 @@ class TestJudgehostService(E2ETestBase):
             run_id=run_id_a,
             selected_tests=["001.in"],
             verification_id=_canonical_verification_id("inv-recompile-a"),
-            verification_run_ids=[run_id_a],
+            verification_program_id=_SOLUTION_PROGRAM_ID,
             expected_behavior="accepted",
             verification_source="run.execute",
         )
@@ -5175,7 +5556,7 @@ class TestJudgehostService(E2ETestBase):
                 run_id=run_id_b,
                 selected_tests=["001.in"],
                 verification_id=_canonical_verification_id("inv-recompile-b"),
-                verification_run_ids=[run_id_b],
+                verification_program_id=_SOLUTION_PROGRAM_ID,
                 expected_behavior="accepted",
                 verification_source="run.execute",
                 bypass_case_result_cache=True,
@@ -5202,8 +5583,7 @@ class TestJudgehostService(E2ETestBase):
 
         verification_id = canonical_test_verification_id(f"b-jh-share-hosts-{uuid.uuid4().hex[:8]}")
         run_id = f"r-jh-share-hosts-{uuid.uuid4().hex[:8]}"
-        self._seed_build_verification(verification_id)
-        self._seed_verification_test_artifacts(
+        self._seed_build_verification(
             verification_id,
             [("001.in", "ok\n", "ok\n"), ("002.in", "ok-2\n", "ok-2\n")],
         )
@@ -5219,7 +5599,7 @@ class TestJudgehostService(E2ETestBase):
             run_id=run_id,
             selected_tests=["001.in", "002.in"],
             verification_id=_canonical_verification_id("inv-share-hosts"),
-            verification_run_ids=[run_id],
+            verification_program_id=_SOLUTION_PROGRAM_ID,
             expected_behavior="accepted",
             verification_source="run.execute",
         )
@@ -5276,8 +5656,7 @@ class TestJudgehostService(E2ETestBase):
         )
 
         verification_id = canonical_test_verification_id(f"b-jh-preempt-{uuid.uuid4().hex[:8]}")
-        self._seed_build_verification(verification_id)
-        self._seed_verification_test_artifacts(
+        self._seed_build_verification(
             verification_id,
             [("001.in", "ok\n", "ok\n"), ("002.in", "ok-2\n", "ok-2\n")],
         )
@@ -5293,7 +5672,7 @@ class TestJudgehostService(E2ETestBase):
             run_id=f"r-jh-preempt-low-{uuid.uuid4().hex[:8]}",
             selected_tests=["001.in"],
             verification_id=_canonical_verification_id("inv-jh-preempt-low"),
-            verification_run_ids=[],
+            verification_program_id=_SOLUTION_PROGRAM_ID,
             expected_behavior="accepted",
             verification_source="run.execute",
             task_kind="solution-run",
@@ -5315,7 +5694,7 @@ class TestJudgehostService(E2ETestBase):
             run_id=f"r-jh-preempt-high-{uuid.uuid4().hex[:8]}",
             selected_tests=["001.in"],
             verification_id=_canonical_verification_id("inv-jh-preempt-high"),
-            verification_run_ids=[],
+            verification_program_id=_GENERATOR_PROGRAM_ID,
             expected_behavior="accepted",
             verification_source="generate-input",
             task_kind="generate-input",
@@ -5379,7 +5758,7 @@ class TestJudgehostService(E2ETestBase):
             run_id=run_id,
             selected_tests=["001.in"],
             verification_id=verification_id,
-            verification_run_ids=[run_id],
+            verification_program_id=_SOLUTION_PROGRAM_ID,
             expected_behavior="accepted",
             verification_source="run.execute",
             persist_verification_run=False,
@@ -5441,7 +5820,7 @@ class TestJudgehostService(E2ETestBase):
         batch_id = service.state.batch_scheduler.create_batch_with_cases(
             task_id=task_id,
             run_id=run_id,
-            logical_run_id=run_id,
+            verification_program_id=_SOLUTION_PROGRAM_ID,
             execution_signature="b" * 64,
             task_kind="solution-run",
             verification_id=verification_id,
@@ -5507,12 +5886,48 @@ class TestJudgehostService(E2ETestBase):
             ["blob://sha256/" + "b" * 64],
         )
 
-    def test_domjudge_add_debug_info_overwrites_terminal_verification_task_detail(self) -> None:
+    def test_domjudge_add_debug_info_preserves_result_and_appends_diagnostic(self) -> None:
         service = config.judgehost_task_service
         self._reset_task_queue_state(service)
         verification_id = _canonical_verification_id(str(uuid.uuid4()))
+        build_verification_id = _canonical_verification_id(
+            f"late-debug-build-{uuid.uuid4()}"
+        )
         run_id = f"r-jh-late-debug-{uuid.uuid4().hex[:8]}"
-        self._seed_build_verification(verification_id)
+        self._seed_build_verification(build_verification_id)
+        ctx = config.workspace_service.workspace_context(
+            self.problem,
+            self.user,
+            include_recent=False,
+        )
+        admission = admit_test_verification(
+            verification_id=verification_id,
+            problem_id=int(ctx["problem"]["id"]),
+            workspace_id=int(ctx["workspace"]["id"]),
+        )
+        self.assertEqual(admission.outcome, "admitted")
+        case_task_id = verification_task_id(
+            verification_id,
+            _ACCEPTED_PROGRAM_ID,
+            "016.in",
+        )
+        tasks = [
+            PlannedTask(
+                task_id=case_task_id,
+                predecessor_task_id=None,
+                task_kind="main-correct",
+                source_path="solutions/ac.cpp",
+                program_id=_ACCEPTED_PROGRAM_ID,
+                test_name="016.in",
+                expected_behavior="accepted",
+            )
+        ]
+        activation = activate_test_verification(
+            verification_id,
+            programs=verification_programs_for_tasks(tasks),
+            tasks=tasks,
+        )
+        self.assertEqual(activation.outcome, "activated")
 
         task_id = f"jt-late-debug-{uuid.uuid4().hex[:8]}"
         self._insert_task_receipt(
@@ -5520,6 +5935,7 @@ class TestJudgehostService(E2ETestBase):
             task_id=task_id,
             run_id=run_id,
             verification_id=verification_id,
+            verification_task_id=case_task_id,
         )
         service.state.task_registry.update(
             task_id,
@@ -5532,27 +5948,18 @@ class TestJudgehostService(E2ETestBase):
             }},
         )
         task_store = config.verification_task_store
-        task_store.replace_graph(
-            verification_id,
-            tasks=[
-                {
-                    "id": "vt-late-debug",
-                    "task_kind": "main-correct",
-                    "source_path": "solutions/ac.cpp",
-                    "logical_run_id": run_id,
-                    "test_name": "016.in",
-                    "expected_behavior": "accepted",
-                    "queue_index": 1,
-                    "status": VerificationTaskStore.TASK_PENDING,
-                }
-            ],
-            edges=[],
+        self.assertTrue(
+            task_store.bind_and_expose_judgehost_runtime(
+                case_task_id,
+                run_id=run_id,
+                judgehost_task_id=task_id,
+                expose=lambda: None,
+            )
         )
-        task_store.set_task_queued("vt-late-debug", run_id=run_id, judgehost_task_id=task_id)
         batch_id = service.state.batch_scheduler.create_batch_with_cases(
             task_id=task_id,
             run_id=run_id,
-            logical_run_id=run_id,
+            verification_program_id=_ACCEPTED_PROGRAM_ID,
             execution_signature="c" * 64,
             task_kind="main-correct",
             verification_id=verification_id,
@@ -5577,6 +5984,7 @@ class TestJudgehostService(E2ETestBase):
             case_rows=[
                 {
                     "task_id": task_id,
+                    "verification_task_id": case_task_id,
                     "run_id": run_id,
                     "test_name": "016.in",
                     "ordinal": 1,
@@ -5607,6 +6015,12 @@ class TestJudgehostService(E2ETestBase):
             if str(row["task_kind"]) == "main-correct" and str(row["test_name"]) == "016.in"
         )
         self.assertEqual(str(before["error_text"] or ""), "main correct failed on 016.in")
+        canonical_result = before["result"]
+        verification_row_before = db_fetch_one(
+            "SELECT fail_reason FROM verifications WHERE id=?",
+            [verification_id],
+        )
+        self.assertIsNotNone(verification_row_before)
 
         feedback_text = "Unexpected character #10, but ' ' expected (testdata.in)"
         service.domjudge_add_debug_info(
@@ -5619,20 +6033,29 @@ class TestJudgehostService(E2ETestBase):
             row for row in task_store.list_rows(verification_id)
             if str(row["task_kind"]) == "main-correct" and str(row["test_name"]) == "016.in"
         )
-        self.assertEqual(str(after["status"]), str(before["status"]))
-        self.assertEqual(str(after["verdict"]), str(before["verdict"]))
-        self.assertEqual(after["result"].passes, before["result"].passes)
-        self.assertEqual(after["result"].compile, before["result"].compile)
-        self.assertEqual(after["result"].warnings, before["result"].warnings)
-        self.assertEqual(str(after["error_text"] or ""), feedback_text)
-        self.assertEqual(str(after["feedback_text"] or ""), feedback_text)
+        self.assertEqual(after["result"], canonical_result)
+        diagnostic_snapshot = task_store.diagnostic_snapshot(
+            case_task_id
+        )
+        display = compose_task_diagnostic_display(
+            after["result"],
+            diagnostic_snapshot,
+        )
+        self.assertEqual(
+            [item["text"] for item in display["late_diagnostics"]],
+            [feedback_text],
+        )
         verification_row = db_fetch_one(
             "SELECT fail_reason FROM verifications WHERE id=?",
             [verification_id],
         )
         self.assertIsNotNone(verification_row)
         assert verification_row is not None
-        self.assertIn(feedback_text, str(verification_row["fail_reason"] or ""))
+        assert verification_row_before is not None
+        self.assertEqual(
+            str(verification_row["fail_reason"] or ""),
+            str(verification_row_before["fail_reason"] or ""),
+        )
 
     def test_domjudge_groups_distinct_generate_input_tasks_in_one_job(self) -> None:
         service = config.judgehost_task_service
@@ -5737,8 +6160,7 @@ class TestJudgehostService(E2ETestBase):
             run_id=run_id_a,
             selected_tests=[],
             verification_id=_canonical_verification_id("shared-generate"),
-            verification_run_ids=[run_id_a],
-            logical_run_id="logical-shared-generate",
+            verification_program_id=_GENERATOR_PROGRAM_ID,
             expected_behavior="accepted",
             verification_source="generate-input",
             task_kind="generate-input",
@@ -5787,8 +6209,7 @@ class TestJudgehostService(E2ETestBase):
             run_id=run_id_b,
             selected_tests=[],
             verification_id=_canonical_verification_id("shared-generate"),
-            verification_run_ids=[run_id_b],
-            logical_run_id="logical-shared-generate",
+            verification_program_id=_GENERATOR_PROGRAM_ID,
             expected_behavior="accepted",
             verification_source="generate-input",
             task_kind="generate-input",
@@ -5923,8 +6344,7 @@ class TestJudgehostService(E2ETestBase):
             run_id=run_id_a,
             selected_tests=[],
             verification_id=_canonical_verification_id("grouped-batch-one"),
-            verification_run_ids=[run_id_a],
-            logical_run_id="logical-grouped-batch-one",
+            verification_program_id=_GENERATOR_PROGRAM_ID,
             expected_behavior="accepted",
             verification_source="generate-input",
             task_kind="generate-input",
@@ -5942,8 +6362,7 @@ class TestJudgehostService(E2ETestBase):
             run_id=run_id_b,
             selected_tests=[],
             verification_id=_canonical_verification_id("grouped-batch-one"),
-            verification_run_ids=[run_id_b],
-            logical_run_id="logical-grouped-batch-one",
+            verification_program_id=_GENERATOR_PROGRAM_ID,
             expected_behavior="accepted",
             verification_source="generate-input",
             task_kind="generate-input",

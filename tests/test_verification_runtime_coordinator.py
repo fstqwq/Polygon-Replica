@@ -4,7 +4,6 @@ import threading
 import time
 import unittest
 
-from app.service.judgehost.case_result import CaseTerminalReport
 from app.service.verification.execution_result import (
     CAPTURE_COMPLETE,
     ExecutionPassResult,
@@ -19,11 +18,7 @@ from app.service.verification.task_scheduler import (
     VerificationRuntimeCallbacks,
     VerificationRuntimeCoordinator,
 )
-from app.service.verification.task_store import (
-    VerificationTaskRow,
-    VerificationTaskStore,
-)
-from app.service.verification.types import Status
+from app.service.verification.task_store import VerificationTaskStore
 
 
 def _execution_result(
@@ -73,16 +68,22 @@ def _task_row(
     status: str,
     queue_index: int,
     source_path: str = "solutions/a.cpp",
-    logical_run_id: str = "",
+    program_id: str = "",
     test_name: str = "001.in",
 ) -> dict[str, object]:
+    if not program_id:
+        program_id = {
+            "generate-input": "generator-0",
+            "main-correct": "accepted",
+            "solution-run": "solution-0",
+        }[task_kind]
     return {
         "id": task_id,
         "verification_id": "verification",
         "predecessor_task_id": "",
         "task_kind": task_kind,
         "source_path": source_path,
-        "logical_run_id": logical_run_id or f"run-{task_id}",
+        "program_id": program_id,
         "test_name": test_name,
         "expected_behavior": "accepted",
         "queue_index": queue_index,
@@ -107,49 +108,11 @@ def _task_row(
     }
 
 
-def _terminal_report(
-    *,
-    judgehost_task_id: str,
-    run_id: str,
-    result: ExecutionResult,
-) -> CaseTerminalReport:
-    return {
-        "task_id": judgehost_task_id,
-        "verification_id": "",
-        "run_id": run_id,
-        "artifact_path": "",
-        "status": Status.OK.value,
-        "task_status": "done",
-        "error": result.outcome.error,
-        "summary": {},
-        "missing_case_result": False,
-        "execution_result": result,
-    }
-
-
 class _FakeCompletionService:
     """Keep coordinator tests focused on committed task transitions."""
 
     def __init__(self, task_store: "_InMemoryTaskStore") -> None:
         self._task_store = task_store
-
-    def prepare(
-        self,
-        task_row: VerificationTaskRow,
-        report: CaseTerminalReport,
-    ) -> TaskCompletion:
-        result = report["execution_result"]
-        return TaskCompletion(
-            task_id=str(task_row["id"]),
-            status=(
-                VerificationTaskStore.TASK_DONE
-                if report["status"] == Status.OK.value
-                else VerificationTaskStore.TASK_FAILED
-            ),
-            run_id=report["run_id"],
-            judgehost_task_id=str(task_row["judgehost_task_id"]),
-            result=result,
-        )
 
     def commit(
         self,
@@ -184,6 +147,11 @@ class _InMemoryTaskStore:
                 )
             ]
 
+    def verification_is_running(self, verification_id: str) -> bool:
+        _ = verification_id
+        with self._lock:
+            return not self._fail_flag
+
     def set_task_queued(self, task_id: str, *, run_id: str, judgehost_task_id: str) -> None:
         with self._lock:
             for row in self._rows:
@@ -193,12 +161,13 @@ class _InMemoryTaskStore:
                     row["judgehost_task_id"] = judgehost_task_id
                     return
 
-    def set_task_leased(self, task_id: str) -> None:
+    def set_task_leased(self, task_id: str) -> bool:
         with self._lock:
             for row in self._rows:
                 if str(row["id"]) == task_id and str(row["status"]) == VerificationTaskStore.TASK_QUEUED:
                     row["status"] = VerificationTaskStore.TASK_LEASED
-                    return
+                    return True
+        return False
 
     def requeue_leased_tasks(self, verification_id: str, judgehost_task_ids: list[str]) -> list[str]:
         allowed = set(judgehost_task_ids)
@@ -223,6 +192,7 @@ class _InMemoryTaskStore:
         committed_task_ids: set[str] = set()
         already_terminal_task_ids: set[str] = set()
         skipped_task_ids: set[str] = set()
+        failure_reason = ""
         terminal_statuses = {
             VerificationTaskStore.TASK_DONE,
             VerificationTaskStore.TASK_FAILED,
@@ -256,6 +226,7 @@ class _InMemoryTaskStore:
                 if completion.fail_reason and not self._fail_flag:
                     self._fail_flag = True
                     self._fail_reason = completion.fail_reason
+                    failure_reason = completion.fail_reason
                 if (
                     completion.status == VerificationTaskStore.TASK_DONE
                     and result.verdict.upper() == "SK"
@@ -286,9 +257,11 @@ class _InMemoryTaskStore:
             committed_task_ids=frozenset(committed_task_ids),
             already_terminal_task_ids=frozenset(already_terminal_task_ids),
             skipped_task_ids=frozenset(skipped_task_ids),
+            parent_transition="failed" if failure_reason else "",
+            failure_reason=failure_reason,
         )
 
-    def cancel_not_started_tasks(self, verification_id: str, *, reason: str) -> None:
+    def cancel_open_tasks(self, verification_id: str, *, reason: str) -> None:
         with self._lock:
             for row in self._rows:
                 if str(row["status"]) in {
@@ -298,14 +271,8 @@ class _InMemoryTaskStore:
                     row["status"] = VerificationTaskStore.TASK_CANCELLED
                     row["cancel_reason"] = reason
 
-    def fail_state(self, verification_id: str) -> tuple[bool, str]:
+    def failure_snapshot(self) -> tuple[bool, str]:
         return (self._fail_flag, self._fail_reason)
-
-    def set_fail_flag(self, verification_id: str, *, reason: str) -> None:
-        if self._fail_flag:
-            return
-        self._fail_flag = True
-        self._fail_reason = reason
 
 
 class TestVerificationRuntimeCoordinator(unittest.TestCase):
@@ -333,7 +300,7 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
                     status=VerificationTaskStore.TASK_PENDING,
                     queue_index=1,
                     source_path="generators/gen.cpp",
-                    logical_run_id="logical-generate",
+                    program_id="generator-0",
                 ),
                 _task_row(
                     "vt-main",
@@ -341,13 +308,13 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
                     status=VerificationTaskStore.TASK_PENDING,
                     queue_index=2,
                     source_path="solutions/main.cpp",
-                    logical_run_id="logical-main",
+                    program_id="accepted",
                 ),
             ],
             edges=[("vt-generate", "vt-main")],
         )
         publish_order: list[str] = []
-        closed_logical_runs: list[str] = []
+        closed_programs: list[str] = []
         completion = TaskCompletion(
             task_id="vt-generate",
             status=VerificationTaskStore.TASK_DONE,
@@ -359,6 +326,11 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
         def _publish(row: dict[str, object]) -> TaskPublishResult:
             task_id = str(row["id"])
             publish_order.append(task_id)
+            store.set_task_queued(
+                task_id,
+                run_id=f"r-{task_id}",
+                judgehost_task_id=f"jt-{task_id}",
+            )
             return TaskPublishResult(
                 task_id=task_id,
                 run_id=f"r-{task_id}",
@@ -368,9 +340,8 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
         callbacks = VerificationRuntimeCallbacks(
             publish_task=_publish,
             probe_task_case_cache=lambda _task_ids: set(),
-            resolve_case_result=lambda _task_id, _test_name: None,
             cancel_execution=lambda _reason: None,
-            close_logical_runs=closed_logical_runs.extend,
+            close_programs=closed_programs.extend,
         )
         completion_service = _FakeCompletionService(store)
         coordinator = VerificationRuntimeCoordinator(
@@ -403,10 +374,10 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
             self.assertEqual(str(rows["vt-generate"]["status"]), VerificationTaskStore.TASK_DONE)
             self.assertEqual(str(rows["vt-main"]["status"]), VerificationTaskStore.TASK_QUEUED)
             self._wait_until(
-                lambda: closed_logical_runs == ["logical-generate"],
+                lambda: closed_programs == ["generator-0"],
                 timeout=2.0,
                 interval=0.01,
-                message="durable logical run result did not close its execution batch",
+                message="durable program result did not close its execution batch",
             )
         finally:
             coordinator.enqueue_cancel("test shutdown")
@@ -422,7 +393,7 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
                     status=VerificationTaskStore.TASK_PENDING,
                     queue_index=1,
                     source_path="generators/gen.cpp",
-                    logical_run_id="logical-generate",
+                    program_id="generator-0",
                 ),
                 _task_row(
                     "vt-main",
@@ -430,7 +401,7 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
                     status=VerificationTaskStore.TASK_PENDING,
                     queue_index=2,
                     source_path="solutions/main.cpp",
-                    logical_run_id="logical-main",
+                    program_id="accepted",
                 ),
                 _task_row(
                     "vt-solution",
@@ -438,7 +409,7 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
                     status=VerificationTaskStore.TASK_PENDING,
                     queue_index=3,
                     source_path="solutions/other.cpp",
-                    logical_run_id="logical-solution",
+                    program_id="solution-0",
                 ),
             ],
             edges=[("vt-generate", "vt-main"), ("vt-main", "vt-solution")],
@@ -471,9 +442,8 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
             callbacks=VerificationRuntimeCallbacks(
                 publish_task=_publish,
                 probe_task_case_cache=lambda _task_ids: set(),
-                resolve_case_result=lambda _task_id, _test_name: None,
                 cancel_execution=lambda _reason: None,
-                close_logical_runs=lambda _run_ids: None,
+                close_programs=lambda _program_ids: None,
             ),
             edges=[("vt-generate", "vt-main"), ("vt-main", "vt-solution")],
         )
@@ -505,11 +475,16 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
         publish_order: list[str] = []
         probe_slices: list[list[str]] = []
         identity_registered: list[bool] = []
-        reports: dict[tuple[str, str], CaseTerminalReport] = {}
+        completion_service = _FakeCompletionService(store)
 
         def _publish(row: dict[str, object]) -> TaskPublishResult:
             task_id = str(row["id"])
             publish_order.append(task_id)
+            store.set_task_queued(
+                task_id,
+                run_id=f"r-{task_id}",
+                judgehost_task_id=f"jt-{task_id}",
+            )
             return TaskPublishResult(
                 task_id=task_id,
                 run_id=f"r-{task_id}",
@@ -536,29 +511,31 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
             )
             for judgehost_task_id in task_ids:
                 task_id = judgehost_task_id.removeprefix("jt-")
-                index = int(task_id.removeprefix("vt-"))
-                test_name = f"{index + 1:03}.in"
-                reports[(judgehost_task_id, test_name)] = _terminal_report(
-                    judgehost_task_id=judgehost_task_id,
-                    run_id=f"r-{task_id}",
-                    result=_execution_result("OK"),
+                commit = completion_service.commit(
+                    [
+                        TaskCompletion(
+                            task_id=task_id,
+                            status=VerificationTaskStore.TASK_DONE,
+                            run_id=f"r-{task_id}",
+                            judgehost_task_id=judgehost_task_id,
+                            result=_execution_result("OK"),
+                        )
+                    ],
+                    notify=False,
                 )
-                coordinator.enqueue_task_terminal(judgehost_task_id)
+                coordinator.enqueue_completion_committed(commit)
             return set()
 
         callbacks = VerificationRuntimeCallbacks(
             publish_task=_publish,
             probe_task_case_cache=_probe,
-            resolve_case_result=lambda task_id, test_name: reports.get(
-                (task_id, test_name)
-            ),
             cancel_execution=lambda _reason: None,
-            close_logical_runs=lambda _run_ids: None,
+            close_programs=lambda _program_ids: None,
         )
         coordinator = VerificationRuntimeCoordinator(
             "ver-large-batch",
             task_store=store,
-            completion_service=_FakeCompletionService(store),
+            completion_service=completion_service,
             callbacks=callbacks,
             edges=[],
         )
@@ -591,7 +568,7 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
                         task_kind="solution-run",
                         status=VerificationTaskStore.TASK_LEASED,
                         queue_index=1,
-                        logical_run_id="logical-expired",
+                        program_id="solution-0",
                     ),
                     "run_id": "r-expired",
                     "judgehost_task_id": "jt-expired",
@@ -609,9 +586,8 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
         callbacks = VerificationRuntimeCallbacks(
             publish_task=lambda _row: (_ for _ in ()).throw(RuntimeError("unexpected publish")),
             probe_task_case_cache=lambda _task_ids: set(),
-            resolve_case_result=lambda _task_id, _test_name: None,
             cancel_execution=lambda _reason: None,
-            close_logical_runs=lambda _run_ids: None,
+            close_programs=lambda _program_ids: None,
             reconcile_expired_leases=_reconcile,
         )
         coordinator = VerificationRuntimeCoordinator(
@@ -653,7 +629,7 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
                     status=VerificationTaskStore.TASK_PENDING,
                     queue_index=2,
                     source_path="solutions/ok.cpp",
-                    logical_run_id="r-solution",
+                    program_id="solution-0",
                 ),
             ],
             edges=[("vt-generate", "vt-solution")],
@@ -674,7 +650,7 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
         )
 
         def _cancel_execution(reason: str) -> None:
-            store.cancel_not_started_tasks("ver-validator-stop", reason=reason)
+            store.cancel_open_tasks("ver-validator-stop", reason=reason)
 
         def _publish(row: dict[str, object]) -> TaskPublishResult:
             task_id = str(row["id"])
@@ -688,9 +664,8 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
         callbacks = VerificationRuntimeCallbacks(
             publish_task=_publish,
             probe_task_case_cache=lambda _task_ids: set(),
-            resolve_case_result=lambda _task_id, _test_name: None,
             cancel_execution=_cancel_execution,
-            close_logical_runs=lambda _run_ids: None,
+            close_programs=lambda _program_ids: None,
         )
         completion_service = _FakeCompletionService(store)
         coordinator = VerificationRuntimeCoordinator(
@@ -713,7 +688,7 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
                 completion_service.commit([completion], notify=False)
             )
             self._wait_until(
-                lambda: store.fail_state("ver-validator-stop")[0],
+                lambda: store.failure_snapshot()[0],
                 timeout=2.0,
                 interval=0.01,
                 message="validator rejection did not set fail flag",
@@ -735,7 +710,7 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
             self.assertEqual(str(rows["vt-solution"]["status"]), VerificationTaskStore.TASK_CANCELLED)
             self.assertEqual(publish_order, ["vt-generate"])
             self.assertEqual(
-                store.fail_state("ver-validator-stop"),
+                store.failure_snapshot(),
                 (True, "generate-input / generators/gen.cpp / 001.in: validator rejected generated input for 001.in"),
             )
         finally:
@@ -753,7 +728,7 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
                         task_kind="solution-run",
                         status=VerificationTaskStore.TASK_LEASED,
                         queue_index=1,
-                        logical_run_id="r-a",
+                        program_id="solution-0",
                         test_name="001.in",
                     ),
                     "run_id": "r-a",
@@ -765,7 +740,7 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
                         task_kind="solution-run",
                         status=VerificationTaskStore.TASK_QUEUED,
                         queue_index=2,
-                        logical_run_id="r-b",
+                        program_id="solution-0",
                         test_name="002.in",
                     ),
                     "run_id": "r-b",
@@ -774,13 +749,11 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
             ],
             edges=[],
         )
-        queued_cancel_reasons: list[str] = []
         callbacks = VerificationRuntimeCallbacks(
             publish_task=lambda _row: (_ for _ in ()).throw(RuntimeError("unexpected publish")),
             probe_task_case_cache=lambda _task_ids: set(),
-            resolve_case_result=lambda _task_id, _test_name: None,
-            cancel_execution=lambda reason: queued_cancel_reasons.append(reason),
-            close_logical_runs=lambda _run_ids: None,
+            cancel_execution=lambda _reason: None,
+            close_programs=lambda _program_ids: None,
         )
         coordinator = VerificationRuntimeCoordinator(
             "ver-runtime-cancel",
@@ -795,7 +768,10 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
             coordinator.enqueue_cancel("verification cancelled by user")
             thread.join(timeout=2.0)
             self.assertFalse(thread.is_alive())
-            store.cancel_not_started_tasks("ver-runtime-cancel", reason="verification cancelled by user")
+            store.cancel_open_tasks(
+                "ver-runtime-cancel",
+                reason="verification cancelled by user",
+            )
             self._wait_until(
                 lambda: str(
                     {
@@ -811,7 +787,6 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
             rows = {str(row["id"]): row for row in store.list_rows("ver-runtime-cancel")}
             self.assertEqual(str(rows["vt-leased"]["status"]), VerificationTaskStore.TASK_LEASED)
             self.assertEqual(str(rows["vt-queued"]["status"]), VerificationTaskStore.TASK_CANCELLED)
-            self.assertEqual(queued_cancel_reasons, ["verification cancelled by user"])
         finally:
             if thread.is_alive():
                 coordinator.enqueue_cancel("test shutdown")
@@ -859,9 +834,8 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
             callbacks=VerificationRuntimeCallbacks(
                 publish_task=_publish,
                 probe_task_case_cache=lambda _task_ids: set(),
-                resolve_case_result=lambda _task_id, _test_name: None,
                 cancel_execution=lambda _reason: None,
-                close_logical_runs=lambda _run_ids: None,
+                close_programs=lambda _program_ids: None,
             ),
             edges=list(zip(task_ids, task_ids[1:])),
         )
@@ -910,14 +884,17 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
             edges=[("vt-parent-a", "vt-child"), ("vt-parent-b", "vt-child")],
         )
         published: list[str] = []
-        reports = {
-            ("judgehost-shared", test_name): _terminal_report(
-                judgehost_task_id="judgehost-shared",
+        completion_service = _FakeCompletionService(store)
+        completions = [
+            TaskCompletion(
+                task_id=task_id,
+                status=VerificationTaskStore.TASK_DONE,
                 run_id="run-shared",
+                judgehost_task_id="judgehost-shared",
                 result=_execution_result("AC"),
             )
-            for test_name in ("001.in", "002.in")
-        }
+            for task_id in ("vt-parent-a", "vt-parent-b")
+        ]
 
         def _publish(row: dict[str, object]) -> TaskPublishResult:
             task_id = str(row["id"])
@@ -927,29 +904,30 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
         coordinator = VerificationRuntimeCoordinator(
             verification_id,
             task_store=store,
-            completion_service=_FakeCompletionService(store),
+            completion_service=completion_service,
             callbacks=VerificationRuntimeCallbacks(
                 publish_task=_publish,
                 probe_task_case_cache=lambda _task_ids: set(),
-                resolve_case_result=lambda task_id, test_name: reports.get(
-                    (task_id, test_name)
-                ),
                 cancel_execution=lambda _reason: None,
-                close_logical_runs=lambda _run_ids: None,
+                close_programs=lambda _program_ids: None,
             ),
             edges=[("vt-parent-a", "vt-child"), ("vt-parent-b", "vt-child")],
         )
         thread = threading.Thread(target=coordinator.run, daemon=True)
         thread.start()
         try:
-            coordinator.enqueue_task_terminal("judgehost-shared")
+            coordinator.enqueue_completion_committed(
+                completion_service.commit(completions, notify=False)
+            )
             self._wait_until(
                 lambda: published == ["vt-child"],
                 timeout=2.0,
                 interval=0.01,
                 message="both committed parent results did not unlock their child",
             )
-            coordinator.enqueue_task_terminal("judgehost-shared")
+            coordinator.enqueue_completion_committed(
+                completion_service.commit(completions, notify=False)
+            )
             coordinator.enqueue_cancel("test shutdown")
             thread.join(timeout=2.0)
             self.assertFalse(thread.is_alive())

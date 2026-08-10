@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import shutil
+import sqlite3
 import tempfile
 import threading
 import zipfile
@@ -15,12 +16,87 @@ from app.service.export.icpc_package import SUBMISSION_RULES
 from app.service.importing.native import NativePackageImportService
 from app.service.platform.git_process import run_git
 from app.service.problem_package.manifest import load_manifest, validate_manifest_files
-from tests.archive_support import import_problem_package
+from app.service.verification.lifecycle import PlannedTask, verification_task_id
+from app.service.verification.task_completion import TaskCompletion
+from app.service.verification.task_store import VerificationTaskStore
 from tests.common import E2ETestBase
-from tests.db_helpers import db_execute, db_fetch_one
+from tests.db_helpers import (
+    activate_test_verification,
+    admit_test_verification,
+    db_execute,
+    db_fetch_one,
+    db_write_transaction,
+    verification_programs_for_tasks,
+)
+from tests.execution_result_helpers import execution_result
 
 
 class TestPublishedRevisionExport(E2ETestBase):
+    def test_materialization_reserves_accepted_program_for_configured_source(
+        self,
+    ) -> None:
+        from app.impl.workspace.published_materialization import (
+            build_full_verification_targets,
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            snapshot = Path(temp_dir)
+            solutions = snapshot / "solutions"
+            solutions.mkdir(parents=True)
+            for source_name, expected_behavior in (
+                ("also_ac.cpp", "accepted"),
+                ("official.cpp", "accepted"),
+                ("wrong.cpp", "wrong_answer"),
+            ):
+                source = solutions / source_name
+                source.write_text(
+                    "int main() { return 0; }\n",
+                    encoding="utf-8",
+                )
+                source.with_name(f"{source.name}.desc").write_text(
+                    f"expected: {expected_behavior}\n",
+                    encoding="utf-8",
+                )
+            build_config = snapshot / "config" / "build.json"
+            build_config.parent.mkdir(parents=True)
+            build_config.write_text(
+                json.dumps(
+                    {
+                        "accepted_solution_source": (
+                            "solutions/official.cpp"
+                        )
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            targets, accepted_source = build_full_verification_targets(
+                snapshot
+            )
+
+        self.assertEqual(accepted_source, "solutions/official.cpp")
+        self.assertEqual(
+            targets,
+            [
+                {
+                    "path": "solutions/also_ac.cpp",
+                    "expected_behavior": "accepted",
+                    "program_id": "solution-0",
+                },
+                {
+                    "path": "solutions/official.cpp",
+                    "expected_behavior": "accepted",
+                    "program_id": "accepted",
+                },
+                {
+                    "path": "solutions/wrong.cpp",
+                    "expected_behavior": "wrong_answer",
+                    "program_id": "solution-1",
+                },
+            ],
+        )
+
     def _publish_problem(self, *, test_id: str = "001") -> tuple[Path, int, str]:
         workspace = Path(self._workspace_path())
         (workspace / "tests" / "manual").mkdir(parents=True, exist_ok=True)
@@ -63,15 +139,16 @@ class TestPublishedRevisionExport(E2ETestBase):
     @staticmethod
     def _verification_builder(problem_id: int, *, input_bytes: bytes = b"1\n", answer_bytes: bytes = b"2\n"):
         def build(_snapshot: Path, commit: str, _revision_number: int, verification_id: str) -> str:
-            config.verification_service.begin_verification_record(
+            admission = admit_test_verification(
                 verification_id=verification_id,
                 problem_id=problem_id,
                 workspace_id=None,
                 signature="materialization-test",
                 source_commit=commit,
                 kind="all",
-                status="ok",
             )
+            if admission.outcome != "admitted":
+                raise AssertionError(f"unexpected admission outcome: {admission.outcome}")
             input_ref = config.verification_service.store_verification_blob(
                 verification_id=verification_id,
                 test_name="001.in",
@@ -86,11 +163,46 @@ class TestPublishedRevisionExport(E2ETestBase):
                 file_name="001.ans",
                 payload=answer_bytes,
             )
-            config.verification_service.update_verification_artifact_refs(
+            task_id = verification_task_id(
                 verification_id,
+                "accepted",
                 "001.in",
-                {"input_ref": input_ref, "answer_ref": answer_ref},
             )
+            tasks = [
+                PlannedTask(
+                    task_id=task_id,
+                    predecessor_task_id=None,
+                    task_kind="main-correct",
+                    source_path="solutions/accepted.cpp",
+                    program_id="accepted",
+                    test_name="001.in",
+                    expected_behavior="accepted",
+                )
+            ]
+            activation = activate_test_verification(
+                verification_id,
+                programs=verification_programs_for_tasks(tasks),
+                tasks=tasks,
+            )
+            if activation.outcome != "activated":
+                raise AssertionError(f"unexpected activation outcome: {activation.outcome}")
+            completion = config.verification_task_store.commit_task_completions(
+                [
+                    TaskCompletion(
+                        task_id=task_id,
+                        status=VerificationTaskStore.TASK_DONE,
+                        run_id="",
+                        judgehost_task_id="",
+                        result=execution_result("OK"),
+                        input_ref=input_ref,
+                        answer_ref=answer_ref,
+                    )
+                ]
+            )
+            if completion.parent_transition != "ok":
+                raise AssertionError(
+                    f"unexpected verification transition: {completion.parent_transition}"
+                )
             return verification_id
 
         return build
@@ -490,11 +602,34 @@ class TestPublishedRevisionExport(E2ETestBase):
 
     def test_icpc_conversion_only_needs_native_after_verification_is_deleted(self) -> None:
         problem_id, commit, materialization = self._materialize()
-        db_execute(
-            "DELETE FROM verification_artifact_refs WHERE verification_id=?",
-            [materialization["verification_id"]],
-        )
-        db_execute("DELETE FROM verifications WHERE id=?", [materialization["verification_id"]])
+        verification_id = str(materialization["verification_id"])
+
+        def delete_verification(conn: sqlite3.Connection) -> None:
+            conn.execute(
+                """
+                DELETE FROM verification_task_diagnostics
+                WHERE task_id IN (
+                    SELECT id FROM verification_tasks WHERE verification_id=?
+                )
+                """,
+                [verification_id],
+            )
+            for table in (
+                "verification_artifact_refs",
+                "verification_selected_tests",
+                "verification_source_paths",
+                "verification_sanity_check_messages",
+                "verification_sanity_checks",
+                "verification_tests_meta",
+                "verification_tasks",
+            ):
+                conn.execute(
+                    f"DELETE FROM {table} WHERE verification_id=?",
+                    [verification_id],
+                )
+            conn.execute("DELETE FROM verifications WHERE id=?", [verification_id])
+
+        db_write_transaction(delete_verification)
 
         def compile_statement(_snapshot: Path, destination: Path, **_kwargs: object) -> bool:
             destination.mkdir(parents=True, exist_ok=True)
@@ -587,8 +722,7 @@ class TestPublishedRevisionExport(E2ETestBase):
         with tempfile.TemporaryDirectory(prefix="native-import-") as temp:
             workspace = Path(temp) / "workspace"
             workspace.mkdir()
-            import_problem_package(
-                NativePackageImportService(),
+            NativePackageImportService().import_package(
                 workspace,
                 archive.name,
                 archive.read_bytes(),
@@ -609,8 +743,7 @@ class TestPublishedRevisionExport(E2ETestBase):
             workspace = Path(temp) / "workspace"
             workspace.mkdir()
             (workspace / "old.txt").write_text("old\n", encoding="utf-8")
-            import_problem_package(
-                NativePackageImportService(),
+            NativePackageImportService().import_package(
                 workspace,
                 archive.name,
                 archive.read_bytes(),
@@ -635,8 +768,7 @@ class TestPublishedRevisionExport(E2ETestBase):
                 package.writestr("test_data/tests/001/input", "1\n")
             workspace = Path(temp) / "workspace"
             workspace.mkdir()
-            import_problem_package(
-                NativePackageImportService(),
+            NativePackageImportService().import_package(
                 workspace,
                 archive.name,
                 archive.read_bytes(),
@@ -662,8 +794,7 @@ class TestPublishedRevisionExport(E2ETestBase):
             with tempfile.TemporaryDirectory(prefix="snapshot-roundtrip-") as temp:
                 restored = Path(temp) / "workspace"
                 restored.mkdir()
-                import_problem_package(
-                    NativePackageImportService(),
+                NativePackageImportService().import_package(
                     restored,
                     archive.name,
                     archive.read_bytes(),
@@ -735,11 +866,7 @@ class TestPublishedRevisionExport(E2ETestBase):
             payload = native.root / "test_data" / "tests" / "001" / "input"
             payload.write_bytes(b"tampered\n")
             with self.assertRaisesRegex(ValueError, "integrity"):
-                validate_manifest_files(
-                    native.root,
-                    manifest,
-                    tests_spec_max_bytes=256 * 1024,
-                )
+                validate_manifest_files(native.root, manifest)
         stored = config.problem_package_service.store.materialization(materialization["id"])
         self.assertIsNotNone(stored)
         self.assertEqual(stored["status"], "available")

@@ -12,6 +12,10 @@ from app.service.verification.plan import VerificationTestPlan
 from app.impl.workspace.verification_payload import prepared_payload_for_uploaded_source
 
 
+_SANITY_ACCEPTED_PROGRAM_ID = "sanity-accepted"
+_SANITY_SAMPLE_OUTPUT_PROGRAM_PREFIX = "sanity-sample-output"
+
+
 @dataclass(frozen=True)
 class SampleOutputValidationResult:
     status: str
@@ -118,8 +122,7 @@ def _custom_input_expected_answer(
         run_id=run_id,
         selected_tests=[plan.test_name],
         verification_id=verification_id,
-        verification_run_ids=[run_id],
-        logical_run_id=run_id,
+        verification_program_id=_SANITY_ACCEPTED_PROGRAM_ID,
         expected_behavior="accepted",
         verification_source="main-correct",
         task_kind="main-correct",
@@ -128,23 +131,23 @@ def _custom_input_expected_answer(
         persist_verification_run=False,
         prepared_payload=prepared,
     )
-    try:
-        case_result = config.judgehost_task_service.wait_for_task_case_result(task_id, plan.test_name)
-        verdict, message = _result_verdict(case_result)
-        if verdict != "OK":
-            raise RuntimeError(message or "accepted solution failed on custom sample input")
-        output_ref, _case_id = config.judgehost_task_service.domjudge_case_output_for_task(
-            task_id,
-            plan.test_name,
-        )
-        if not output_ref:
-            output_ref = _result_output_ref(case_result)
-        answer_file = config.runtime_blob_store.descriptor(output_ref)
-        if answer_file is None:
-            raise RuntimeError("accepted solution output is unavailable for custom sample input")
-        return answer_file
-    finally:
-        config.judgehost_task_service.close_logical_runs(verification_id, [run_id])
+    case_result = config.judgehost_task_service.wait_for_task_case_result(
+        task_id,
+        plan.test_name,
+    )
+    verdict, message = _result_verdict(case_result)
+    if verdict != "OK":
+        raise RuntimeError(message or "accepted solution failed on custom sample input")
+    output_ref, _case_id = config.judgehost_task_service.domjudge_case_output_for_task(
+        task_id,
+        plan.test_name,
+    )
+    if not output_ref:
+        output_ref = _result_output_ref(case_result)
+    answer_file = config.runtime_blob_store.descriptor(output_ref)
+    if answer_file is None:
+        raise RuntimeError("accepted solution output is unavailable for custom sample input")
+    return answer_file
 
 
 def validate_custom_sample_outputs(
@@ -169,17 +172,35 @@ def validate_custom_sample_outputs(
         for plan in test_plans
         if plan.sample and plan.sample_output_text and plan.sample_output_validate
     ]
-    for plan in candidate_plans:
+    opened_program_ids: list[str] = []
+
+    def _close_programs() -> None:
+        if not opened_program_ids:
+            return
+        config.judgehost_task_service.close_programs(
+            verification_id,
+            list(dict.fromkeys(opened_program_ids)),
+        )
+
+    def _finish(result: SampleOutputValidationResult) -> SampleOutputValidationResult:
+        _close_programs()
+        return result
+
+    for plan_index, plan in enumerate(candidate_plans):
         run_id = _validation_run_id(
             verification_id=verification_id,
             test_name=plan.test_name,
             sample_output_text=plan.sample_output_text,
+        )
+        validation_program_id = (
+            f"{_SANITY_SAMPLE_OUTPUT_PROGRAM_PREFIX}-{plan_index}"
         )
         prepared_payload = None
         try:
             if plan.sample_input_custom:
                 if run_verification_payload_base is None:
                     raise RuntimeError("verification payload is required for custom sample input validation")
+                opened_program_ids.append(_SANITY_ACCEPTED_PROGRAM_ID)
                 input_file = config.runtime_blob_store.put_bytes(plan.sample_input_text.encode("utf-8"))
                 answer_file = _custom_input_expected_answer(
                     problem=problem,
@@ -216,8 +237,7 @@ def validate_custom_sample_outputs(
                 run_id=run_id,
                 selected_tests=[plan.test_name],
                 verification_id=verification_id,
-                verification_run_ids=[run_id],
-                logical_run_id=run_id,
+                verification_program_id=validation_program_id,
                 expected_behavior="accepted",
                 verification_source="sanity-check",
                 bypass_case_result_cache=bypass_case_result_cache,
@@ -225,19 +245,25 @@ def validate_custom_sample_outputs(
                 persist_verification_run=False,
                 prepared_payload=prepared_payload,
             )
-            try:
-                case_result = config.judgehost_task_service.wait_for_task_case_result(task_id, plan.test_name)
-            finally:
-                config.judgehost_task_service.close_logical_runs(verification_id, [run_id])
+            opened_program_ids.append(validation_program_id)
+            case_result = config.judgehost_task_service.wait_for_task_case_result(
+                task_id,
+                plan.test_name,
+            )
         except Exception as exc:
-            error_text = f"custom sample output failed on {plan.test_name}: {str(exc) or 'judgehost sample validation failed'}"
-            lines.append(f"{plan.test_name}: failed - {str(exc) or 'judgehost sample validation failed'}")
+            failure = str(exc) or "judgehost sample validation failed"
+            error_text = (
+                f"custom sample output failed on {plan.test_name}: {failure}"
+            )
+            lines.append(f"{plan.test_name}: failed - {failure}")
             _write_log(log_path, lines)
-            return SampleOutputValidationResult(
-                status="failed",
-                validated_count=validated_count,
-                failed_test=plan.test_name,
-                error=error_text,
+            return _finish(
+                SampleOutputValidationResult(
+                    status="failed",
+                    validated_count=validated_count,
+                    failed_test=plan.test_name,
+                    error=error_text,
+                )
             )
         verdict, message = _result_verdict(case_result)
         if verdict == "OK":
@@ -248,16 +274,20 @@ def validate_custom_sample_outputs(
         error_text = f"custom sample output failed on {plan.test_name}: {detail}"
         lines.append(f"{plan.test_name}: failed - {detail}")
         _write_log(log_path, lines)
-        return SampleOutputValidationResult(
-            status="failed",
-            validated_count=validated_count,
-            failed_test=plan.test_name,
-            error=error_text,
+        return _finish(
+            SampleOutputValidationResult(
+                status="failed",
+                validated_count=validated_count,
+                failed_test=plan.test_name,
+                error=error_text,
+            )
         )
     _write_log(log_path, lines)
-    return SampleOutputValidationResult(
-        status="passed",
-        validated_count=validated_count,
-        failed_test="",
-        error="",
+    return _finish(
+        SampleOutputValidationResult(
+            status="passed",
+            validated_count=validated_count,
+            failed_test="",
+            error="",
+        )
     )

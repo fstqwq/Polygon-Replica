@@ -11,7 +11,7 @@ from app.impl.tests_spec.shared import normalize_verification_target_page
 from app.impl.workspace.access import require_write_access
 from app.impl.workspace.context_job import start_verification_job
 from app.impl.workspace.context_ui import page_ctx
-from app.impl.workspace.context_job_helper import allocate_run_id, allocate_verification_id
+from app.impl.workspace.context_job_helper import allocate_verification_id
 from app.impl.workspace.context_operation import audit, run_solution_options_context, workspace_rel_file_exists
 from app.service.problem.solution_metadata import normalize_expected_behavior
 
@@ -54,13 +54,20 @@ def verification_start(problem: str, user: Annotated[str, Depends(require_sessio
         if not any(item['expected_behavior'] == 'accepted' for item in targets):
             raise ValueError('accepted solution source is required')
         targets.sort(key=lambda item: (0 if item['expected_behavior'] == 'accepted' else 1, item['path']))
-        planned_run_ids: list[str] = []
+        solution_program_ids: list[str] = []
+        solution_index = 0
         for target in targets:
-            run_token = allocate_run_id()
-            target['run_id'] = run_token
-            planned_run_ids.append(run_token)
+            if target['path'] == accepted_source:
+                program_id = 'accepted'
+            else:
+                program_id = f'solution-{solution_index}'
+                solution_index += 1
+            target['program_id'] = program_id
+            solution_program_ids.append(program_id)
         verification_details['submission_paths'] = [item['path'] for item in targets]
         verification_details['solution_count'] = len(targets)
+        verification_details['solution_program_ids'] = solution_program_ids
+        verification_details['solution_program_count'] = len(solution_program_ids)
         started = start_verification_job(
             problem,
             user,
@@ -83,6 +90,4 @@ def verification_start(problem: str, user: Annotated[str, Depends(require_sessio
     if verification_details['status'] == 'failed':
         audit(ctx['user']['id'], ctx['problem']['id'], 'verification.start', verification_details)
     return redirect_response(base, status_code=303, message=msg)
-
-
 

@@ -3,13 +3,8 @@ from __future__ import annotations
 from typing import TypedDict
 
 from app.db import DB, now_iso
-from app.service.platform.error_text import (
-    aux_display_text_limit_bytes,
-    bounded_display_text,
-)
-from app.service.verification.identity import new_verification_id
+from app.service.verification.lifecycle import AdmissionCommit, VerificationAdmission
 from app.service.verification.types import (
-    ACTIVE,
     Kind,
     Status,
     WorkspaceVerificationKey,
@@ -39,24 +34,6 @@ class VerificationRecordRow(TypedDict):
 class VerificationStore:
     def __init__(self, db: DB):
         self.db = db
-
-    def _bounded_text(self, value: str) -> str:
-        limit = aux_display_text_limit_bytes(self.db.config_values.snapshot())
-        return bounded_display_text(value, limit_bytes=limit)
-
-    def allocate_id(self) -> str:
-        for _ in range(8):
-            candidate = new_verification_id()
-            collision = self.db.fetch_one(
-                """SELECT id FROM verifications WHERE id=?
-                   UNION ALL
-                   SELECT verification_id AS id FROM problem_package_builds
-                   WHERE verification_id=? LIMIT 1""",
-                [candidate, candidate],
-            )
-            if collision is None:
-                return candidate
-        raise RuntimeError("could not allocate verification id")
 
     def _record_row(self, row: dict[str, object]) -> VerificationRecordRow:
         workspace_id_raw = row["workspace_id"]
@@ -110,84 +87,40 @@ class VerificationStore:
             return None
         return self._record_row(dict(row))
 
-    def create_or_update_record(
-        self,
-        *,
-        verification_id: str,
-        problem_id: int,
-        workspace_id: int | None,
-        signature: str,
-        source_commit: str,
-        kind: str,
-        status: str,
-    ) -> None:
+    def admit(self, request: VerificationAdmission) -> AdmissionCommit:
         now_text = now_iso()
-        existing = self.db.fetch_one("SELECT id FROM verifications WHERE id=?", [verification_id])
-        params = [
-            int(problem_id),
-            int(workspace_id) if workspace_id is not None else None,
-            signature,
-            source_commit,
-            kind or Kind.ALL.value,
-            status or Status.RUNNING.value,
-        ]
-        if existing is None:
-            self.db.execute(
+
+        def _tx(conn) -> AdmissionCommit:
+            cursor = conn.execute(
                 """
                 INSERT INTO verifications(id,problem_id,workspace_id,signature,source_commit,kind,status,fail_reason,created_at,finished_at)
                 VALUES(?,?,?,?,?,?,?,?,?,?)
+                ON CONFLICT(id) DO NOTHING
                 """,
                 [
-                    verification_id,
-                    *params,
+                    request.verification_id,
+                    int(request.problem_id),
+                    (
+                        None
+                        if request.workspace_id is None
+                        else int(request.workspace_id)
+                    ),
+                    request.signature,
+                    request.source_commit,
+                    request.kind or Kind.ALL.value,
+                    Status.QUEUED.value,
                     "",
                     now_text,
                     None,
                 ],
             )
-        else:
-            self.db.execute(
-                """
-                UPDATE verifications
-                SET problem_id=?,workspace_id=?,signature=?,source_commit=?,kind=?,status=?
-                WHERE id=?
-                """,
-                [*params, verification_id],
+            outcome = "admitted" if int(cursor.rowcount or 0) == 1 else "already-exists"
+            return AdmissionCommit(
+                verification_id=request.verification_id,
+                outcome=outcome,
             )
 
-    def cancel_active_verification(self, verification_id: str, *, reason: str, now_text: str) -> bool:
-        cancel_reason = self._bounded_text(
-            reason or "verification cancelled by user"
-        )
-
-        def _tx(conn) -> int:
-            verification_row = conn.execute(
-                """
-                SELECT id,status
-                FROM verifications
-                WHERE id=? AND status IN (?,?,?)
-                """,
-                [verification_id, *ACTIVE],
-            ).fetchone()
-            if verification_row is None:
-                return 0
-            cursor = conn.execute(
-                """
-                UPDATE verifications
-                SET status=?, fail_reason=?, finished_at=COALESCE(finished_at, ?)
-                WHERE id=? AND status IN (?,?,?)
-                """,
-                [
-                    Status.FAILED.value,
-                    cancel_reason,
-                    now_text,
-                    verification_id,
-                    *ACTIVE,
-                ],
-            )
-            return int(cursor.rowcount or 0)
-
-        return int(self.db.write_transaction(_tx)) > 0
+        return self.db.write_transaction(_tx)
 
     def list_rows(
         self,
@@ -440,23 +373,3 @@ class VerificationStore:
         if row is None:
             return ""
         return str(row["id"] or "")
-
-    def update_record_status(
-        self,
-        verification_id: str,
-        *,
-        status: str,
-        fail_reason: str,
-        finished: bool,
-    ) -> None:
-        safe_fail_reason = self._bounded_text(fail_reason)
-        if finished:
-            self.db.execute(
-                "UPDATE verifications SET status=?, fail_reason=?, finished_at=? WHERE id=?",
-                [status, safe_fail_reason, now_iso(), verification_id],
-            )
-            return
-        self.db.execute(
-            "UPDATE verifications SET status=?, fail_reason=?, finished_at=NULL WHERE id=?",
-            [status, safe_fail_reason, verification_id],
-        )

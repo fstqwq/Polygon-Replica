@@ -8,6 +8,7 @@ COMPOSE_FILE="$REPO_ROOT/docker-compose.e2e.yml"
 project_suffix="$(date -u +%Y%m%d%H%M%S)-$$-${RANDOM}"
 export COMPOSE_PROJECT_NAME="polygon-replica-e2e-${project_suffix}"
 export POLYGON_REPLICA_E2E_JUDGEHOST_TOKEN="e2e-${project_suffix}-judgehost-token"
+export POLYGON_REPLICA_E2E_IMAGE="polygon-replica-e2e:${project_suffix}"
 
 compose=(docker compose --ansi never --project-name "$COMPOSE_PROJECT_NAME" --file "$COMPOSE_FILE")
 
@@ -19,6 +20,7 @@ cleanup() {
     "${compose[@]}" logs --no-color app mock-judgehost runner >&2 || true
   fi
   "${compose[@]}" down --volumes --remove-orphans >/dev/null 2>&1 || true
+  docker image rm --force "$POLYGON_REPLICA_E2E_IMAGE" >/dev/null 2>&1 || true
   exit "$status"
 }
 trap cleanup EXIT
@@ -30,7 +32,7 @@ docker compose version >/dev/null
 
 # The mock is not allowed to start until this one-shot verifier has cloned the
 # official tag, checked its exact peeled commit, and approved the declared wire
-# behaviors against judge/judgedaemon.main.php.
+# behaviors against both judgedaemon.main.php and JudgehostController.php.
 "${compose[@]}" run --rm --no-deps domjudge-contract
 
 # Bootstrap has no network at all.  It creates the fresh database, authoring

@@ -7,7 +7,8 @@ from pathlib import Path
 from app.impl.runtime.config import config
 from app.service.repository.revision import workspace_verification_source
 from app.service.problem_package.service import PublishedRevision
-from app.service.verification.types import Kind, Status
+from app.service.verification.lifecycle import VerificationAdmission
+from app.service.verification.types import Kind
 from app.service.verification.runtime import normalize_pass_limit, normalize_problem_mode
 
 from app.impl.workspace.context_operation import audit
@@ -120,38 +121,44 @@ def start_verification_job(
         if key in config.verification_inflight:
             return False
         config.verification_inflight.add(key)
-    if initial_details is not None:
-        try:
-            audit(actor_user_id, problem_id, 'verification.start', initial_details)
-        except Exception:
-            with config.verification_lock:
-                config.verification_inflight.discard(key)
-            raise
-    detail = {
-        "mode": str(initial_details.get("mode") or "pass-fail") if initial_details is not None else "pass-fail",
-        "pass_limit": int(initial_details.get("pass_limit") or 1) if initial_details is not None else 1,
-        "source_paths": [str(item.get("path") or "") for item in targets if str(item.get("path") or "")],
-        "selected_test_names": list(selected_test_names or []),
-        "bypass_case_result_cache": bool(bypass_case_result_cache),
-    }
-    config.verification_service.begin_verification_record(
-        verification_id=verification_id,
-        problem_id=problem_id,
-        workspace_id=workspace_id,
-        signature=signature,
-        source_commit=record_source,
-        kind=kind,
-        status=Status.RUNNING.value,
-        detail=detail,
-    )
-    if kind == Kind.ALL.value and fingerprint and signature:
-        remember_verification_fingerprint(
-            problem_id,
-            workspace_id,
-            fingerprint,
-            verification_id,
-            signature,
+    try:
+        admission = config.verification_service.admit_verification(
+            VerificationAdmission(
+                verification_id=verification_id,
+                problem_id=problem_id,
+                workspace_id=workspace_id,
+                signature=signature,
+                source_commit=record_source,
+                kind=kind,
+            )
         )
+    except Exception:
+        with config.verification_lock:
+            config.verification_inflight.discard(key)
+        raise
+    if admission.outcome != "admitted":
+        with config.verification_lock:
+            config.verification_inflight.discard(key)
+        raise RuntimeError("verification id already exists")
+    try:
+        if initial_details is not None:
+            audit(actor_user_id, problem_id, 'verification.start', initial_details)
+        if kind == Kind.ALL.value and fingerprint and signature:
+            remember_verification_fingerprint(
+                problem_id,
+                workspace_id,
+                fingerprint,
+                verification_id,
+                signature,
+            )
+    except Exception as exc:
+        config.verification_service.fail_verification(
+            verification_id,
+            reason=str(exc) or "verification admission failed",
+        )
+        with config.verification_lock:
+            config.verification_inflight.discard(key)
+        raise
     worker_ref: list[object] = [None]
 
     def _runner() -> None:
@@ -174,14 +181,9 @@ def start_verification_job(
                     bypass_case_result_cache=bypass_case_result_cache,
                 )
             except Exception as exc:
-                detail = dict(config.verification_service.verification_detail(verification_id))
-                detail["error"] = str(exc)
-                config.verification_service.persist_verification_detail(verification_id, detail)
-                config.verification_service.update_verification_record_status(
+                config.verification_service.fail_verification(
                     verification_id,
-                    status=Status.FAILED.value,
-                    fail_reason=str(exc),
-                    finished=True,
+                    reason=str(exc) or "verification worker failed",
                 )
                 raise
         finally:
@@ -201,6 +203,10 @@ def start_verification_job(
         )
         worker_ref[0] = worker
         if not queued:
+            config.verification_service.fail_verification(
+                verification_id,
+                reason=f"verification queue rejected ({submit_reason})",
+            )
             with config.verification_lock:
                 config.verification_inflight.discard(key)
             if submit_reason == 'dedupe_inflight':
@@ -208,7 +214,14 @@ def start_verification_job(
             raise RuntimeError(f'verification queue rejected ({submit_reason})')
         with config.verification_lock:
             config.verification_workers.add(worker)
-    except Exception:
+            if not worker.is_alive():
+                config.verification_workers.discard(worker)
+                config.verification_inflight.discard(key)
+    except Exception as exc:
+        config.verification_service.fail_verification(
+            verification_id,
+            reason=str(exc) or "verification queue submission failed",
+        )
         with config.verification_lock:
             worker = worker_ref[0]
             if worker is not None:

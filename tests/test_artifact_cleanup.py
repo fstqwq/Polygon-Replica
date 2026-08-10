@@ -55,6 +55,7 @@ class _JudgehostStub:
         self.queued = 0
         self.leased = 0
         self.reporting = 0
+        self.callbacks = 0
         self.reset_count = 0
 
     def busy_counts(self) -> dict[str, int]:
@@ -62,6 +63,7 @@ class _JudgehostStub:
             "queued": self.queued,
             "leased": self.leased,
             "reporting": self.reporting,
+            "callbacks": self.callbacks,
         }
 
     def reset_runtime_state(self) -> None:
@@ -206,15 +208,22 @@ class TestArtifactCleanup(unittest.TestCase):
         self._execute(
             """
             INSERT INTO verification_tasks(
-                id,verification_id,task_kind,source_path,test_name,
+                id,verification_id,task_kind,source_path,program_id,test_name,
                 expected_behavior,final_status,result_json,created_at
             ) VALUES('task-cleanup','ver-c1ea4','run','solutions/ac.cpp',
-                     '001.in','accepted','ok',?,?)
+                     'solution-0','001.in','accepted','ok',?,?)
             """,
             (
                 execution_result_json(normalize_execution_result(verdict="AC")),
                 now,
             ),
+        )
+        self._execute(
+            """
+            INSERT INTO verification_task_diagnostics(task_id,snapshot_json,updated_at)
+            VALUES('task-cleanup','{"items":[]}',?)
+            """,
+            (now,),
         )
         self._execute(
             """
@@ -437,10 +446,6 @@ class TestArtifactCleanup(unittest.TestCase):
 
     def test_cleanup_deletes_derived_epoch_and_preserves_durable_data(self) -> None:
         durable_files = self._seed_generated_data()
-        self.verification_task_store.set_fail_flag(
-            "ver-c1ea4",
-            reason="must be cleared",
-        )
         with isolated_db_connection(self.db) as connection:
             connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
         database_size_before = self.settings.db_path.stat().st_size
@@ -477,6 +482,7 @@ class TestArtifactCleanup(unittest.TestCase):
             "verification_sanity_check_messages",
             "verification_sanity_checks",
             "verification_tests_meta",
+            "verification_task_diagnostics",
             "verification_tasks",
             "verifications",
         ):
@@ -532,10 +538,6 @@ class TestArtifactCleanup(unittest.TestCase):
         self.assertEqual(self.worker_queue.reset_count, 1)
         self.assertEqual(self.judgehost.reset_count, 1)
         self.assertEqual(self.process_reset_count, 1)
-        self.assertEqual(
-            self.verification_task_store.fail_state("ver-c1ea4"),
-            (False, ""),
-        )
         self.assertLess(self.settings.db_path.stat().st_size, database_size_before)
 
     def test_database_cleanup_replaces_tables_without_row_deletes(self) -> None:
@@ -629,6 +631,7 @@ class TestArtifactCleanup(unittest.TestCase):
         )
         self.worker_queue.queued = 1
         self.judgehost.reporting = 2
+        self.judgehost.callbacks = 1
         self.assertTrue(coordinator.enter_request())
 
         started = coordinator.start_cleanup(actor_user_id=self.actor_user_id)
@@ -637,6 +640,7 @@ class TestArtifactCleanup(unittest.TestCase):
         self.assertEqual(started.reason, "busy")
         self.assertEqual(started.busy["worker_queued"], 1)
         self.assertEqual(started.busy["judgehost_reporting"], 2)
+        self.assertEqual(started.busy["judgehost_callbacks"], 1)
         self.assertEqual(started.busy["inflight_requests"], 1)
         self.assertTrue(coordinator.allow_new_work())
         self.assertEqual(

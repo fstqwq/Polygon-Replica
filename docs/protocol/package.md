@@ -98,6 +98,12 @@ writer transaction. Lowering the limit does not disable reading, editing,
 building, exporting, or deleting an already over-limit Contest; it only rejects
 new roster entries.
 
+Only a terminal `ok` verification with its once-installed complete task graph is
+eligible for materialization. A queued, running, failed, or pre-activation
+verification is not ready. Late diagnostic items augment detail display but do
+not change that immutable readiness decision, source identity, or archive
+availability.
+
 ## ICPC export
 
 ICPC export produces one hybrid ZIP; there are no selectable compatibility

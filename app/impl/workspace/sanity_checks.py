@@ -156,6 +156,7 @@ def _run_stability_probe(
         test_name=plan.test_name,
         check_name=probe.check_name,
     )
+    program_id = f"sanity-{probe.check_name}"
     task_id = config.judgehost_task_service.enqueue_task(
         problem=problem,
         username=user,
@@ -167,8 +168,7 @@ def _run_stability_probe(
         run_id=run_id,
         selected_tests=[plan.test_name],
         verification_id=verification_id,
-        verification_run_ids=[run_id],
-        logical_run_id=run_id,
+        verification_program_id=program_id,
         expected_behavior="unknown",
         verification_source="sanity-check",
         bypass_case_result_cache=bypass_case_result_cache,
@@ -178,7 +178,10 @@ def _run_stability_probe(
     try:
         return _result_verdict(config.judgehost_task_service.wait_for_task_case_result(task_id, plan.test_name))
     finally:
-        config.judgehost_task_service.close_logical_runs(verification_id, [run_id])
+        config.judgehost_task_service.close_programs(
+            verification_id,
+            [program_id],
+        )
 
 
 def _run_stability_checks(

@@ -8,9 +8,11 @@ import shutil
 import sqlite3
 import threading
 import uuid
+from collections.abc import Callable
 from contextlib import contextmanager
 from pathlib import Path, PurePosixPath
 import re
+from typing import ContextManager
 
 from app.db import DB
 from app.main_constant import (
@@ -143,6 +145,10 @@ class WorkspaceService:
         self._problem_cache: dict[str, dict] = {}
         self._user_cache: dict[str, dict] = {}
         self._cache_lock = threading.Lock()
+        self._problem_deletion_guard: (
+            Callable[[], ContextManager[None]] | None
+        ) = None
+        self._cleanup_problem_runtime: Callable[[str], None] | None = None
 
     def _cache_get(self, cache: dict[str, dict], key: str) -> dict | None:
         with self._cache_lock:
@@ -170,6 +176,17 @@ class WorkspaceService:
         with self._cache_lock:
             self._problem_cache.clear()
             self._user_cache.clear()
+
+    def configure_problem_deletion_runtime(
+        self,
+        *,
+        guard: Callable[[], ContextManager[None]],
+        cleanup_problem_runtime: Callable[[str], None],
+    ) -> None:
+        """Install the process-local exclusion and cleanup boundaries."""
+
+        self._problem_deletion_guard = guard
+        self._cleanup_problem_runtime = cleanup_problem_runtime
 
     def set_cached_user(self, username: str, row: dict[str, object]) -> None:
         safe_username = str(username or "").strip()
@@ -881,12 +898,6 @@ class WorkspaceService:
         ):
             raise RuntimeError("problem repository name is unsafe")
 
-        active_rows = self._store.problem_active_job_rows(problem_id, limit=64)
-        for row in active_rows:
-            if self._is_active_status(row["status"]):
-                kind = str(row["kind"] or "").strip() or "job"
-                raise ValueError(f"cannot delete problem while {kind} jobs are active")
-
         workspace_rows = self._store.workspace_rows_for_problem(problem_id)
         workspace_paths: list[Path] = []
         for row in workspace_rows:
@@ -908,14 +919,13 @@ class WorkspaceService:
             label=f"bare repo path for {safe_problem}",
         )
 
-        run_ids = self._store.delete_problem_metadata(problem_id)
-        try:
-            from app.impl.runtime.config import config
-
-            config.judgehost_task_service.forget_problem_tasks(safe_problem)
-            config.judgehost_task_service.forget_domjudge_runs(run_ids)
-        except Exception:
-            pass
+        deletion_guard = self._problem_deletion_guard
+        cleanup_problem_runtime = self._cleanup_problem_runtime
+        if deletion_guard is None or cleanup_problem_runtime is None:
+            raise RuntimeError("problem deletion runtime is not configured")
+        with deletion_guard():
+            self._store.delete_problem_metadata(problem_id)
+            cleanup_problem_runtime(safe_problem)
 
         fs_warnings: list[str] = []
         for ws_path in workspace_paths:

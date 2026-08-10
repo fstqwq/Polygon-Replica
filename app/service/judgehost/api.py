@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import threading
 
 from app.db import DB, now_iso
-from app.config import ConfigValues
+from app.runtime_value import RuntimeValues
 from app.service.platform.admission import MaintenanceAdmissionGate
 from app.service.platform.fs.layout import FsManager
 from app.service.platform.runtime_blob_store import RuntimeBlobStore
@@ -13,7 +14,7 @@ from app.service.verification.task_store import VerificationTaskStore
 from app.setting import Settings
 
 from app.service.judgehost.cleanup import JudgehostTerminalCleanup
-from app.service.judgehost.completion import CaseCompletionSink
+from app.service.judgehost.completion import CaseCompletionSink, CaseDiagnosticSink
 from app.service.judgehost.core import JudgehostCore
 from app.service.judgehost.dispatch import DispatchHandler
 from app.service.judgehost.enqueue import TaskEnqueue
@@ -40,9 +41,10 @@ class Judgehost:
         workspace_service: WorkspaceService,
         fs_manager: FsManager,
         settings: Settings,
-        config_values: ConfigValues,
+        constants: RuntimeValues,
         *,
         case_completion_sink: CaseCompletionSink,
+        case_diagnostic_sink: CaseDiagnosticSink,
         verification_task_store: VerificationTaskStore,
         runtime_blob_store: RuntimeBlobStore,
         runtime_cache_index: RuntimeCacheIndex,
@@ -53,11 +55,12 @@ class Judgehost:
             db=db,
             workspace_service=workspace_service,
             fs_manager=fs_manager,
-            config_values=config_values,
+            constants=constants,
             runtime_blob_store=runtime_blob_store,
             runtime_cache_index=runtime_cache_index,
             verification_task_store=verification_task_store,
             case_completion_sink=case_completion_sink,
+            case_diagnostic_sink=case_diagnostic_sink,
         )
         self._toolkit = DomjudgeToolkit(self._state)
         self._core = JudgehostCore(self._state)
@@ -68,6 +71,7 @@ class Judgehost:
         self._terminal_cleanup = JudgehostTerminalCleanup(
             self._state.task_registry,
             self._state.batch_scheduler,
+            self._state.verification_task_store,
         )
         self._public_status = PublicJudgehostStatusCache(
             lambda: self.status(),
@@ -75,6 +79,9 @@ class Judgehost:
         )
         self._state.touch_verification_runtime = self._terminal_cleanup.touch
         self._admission_gate: MaintenanceAdmissionGate | None = None
+        self._callback_count_lock = threading.Lock()
+        self._active_callbacks = 0
+        self.apply_runtime_values(constants)
 
     @property
     def state(self) -> JudgehostState:
@@ -105,6 +112,9 @@ class Judgehost:
         return self._enqueue
 
     # Public API delegation.
+    def apply_runtime_values(self, constants: RuntimeValues) -> None:
+        return self._core.apply_runtime_values(constants)
+
     def enabled(self) -> bool:
         return self._core.enabled()
 
@@ -145,6 +155,33 @@ class Judgehost:
     def set_admission_gate(self, gate: MaintenanceAdmissionGate | None) -> None:
         self._admission_gate = gate
 
+    def enter_callback(self) -> bool:
+        gate = self._admission_gate
+        if gate is None:
+            with self._callback_count_lock:
+                self._active_callbacks += 1
+            return True
+        with gate.locked():
+            if not gate.is_open_locked():
+                return False
+            with self._callback_count_lock:
+                self._active_callbacks += 1
+            return True
+
+    def leave_callback(self) -> None:
+        gate = self._admission_gate
+        if gate is None:
+            with self._callback_count_lock:
+                if self._active_callbacks <= 0:
+                    raise RuntimeError("judgehost callback counter underflow")
+                self._active_callbacks -= 1
+            return
+        with gate.locked():
+            with self._callback_count_lock:
+                if self._active_callbacks <= 0:
+                    raise RuntimeError("judgehost callback counter underflow")
+                self._active_callbacks -= 1
+
     @staticmethod
     def _require_admission_locked(gate: MaintenanceAdmissionGate) -> None:
         if not gate.is_open_locked():
@@ -152,10 +189,13 @@ class Judgehost:
 
     def busy_counts(self) -> dict[str, int]:
         counts = self._state.task_registry.maintenance_counts()
+        with self._callback_count_lock:
+            active_callbacks = self._active_callbacks
         return {
             "queued": int(counts.get("queued", 0)),
             "leased": int(counts.get("leased", 0)),
             "reporting": int(counts.get("reporting", 0)),
+            "callbacks": active_callbacks,
         }
 
     def report_result(self, *args, **kwargs):
@@ -199,18 +239,9 @@ class Judgehost:
             raise RuntimeError("verification id is required")
         if not reason:
             raise RuntimeError("judgehost cancellation reason is required")
-        self._state.verification_task_store.set_fail_flag(
-            verification_id,
-            reason=reason,
-        )
         cancellation = self._state.batch_scheduler.request_verification_cancel(
             verification_id,
             now_text=now_iso(),
-        )
-        self._state.verification_task_store.cancel_not_started_tasks(
-            verification_id,
-            reason=reason,
-            protected_judgehost_task_ids=set(cancellation.awaiting_task_ids),
         )
         unbatched_count = self._queue.cancel_unbatched_verification_tasks(
             verification_id,
@@ -256,10 +287,14 @@ class Judgehost:
             self._result._domjudge_finalize_batch_if_ready(batch_id)
         self._terminal_cleanup.schedule(verification_id)
 
-    def close_logical_runs(self, verification_id: str, logical_run_ids: list[str]) -> None:
-        ready_batch_ids = self._state.batch_scheduler.finish_logical_runs(
+    def close_programs(
+        self,
+        verification_id: str,
+        verification_program_ids: list[str],
+    ) -> None:
+        ready_batch_ids = self._state.batch_scheduler.finish_programs(
             verification_id,
-            logical_run_ids,
+            verification_program_ids,
             now_text=now_iso(),
         )
         for batch_id in ready_batch_ids:
@@ -373,7 +408,7 @@ class Judgehost:
         run_id: str | None = None,
         selected_tests: list[str] | None = None,
         verification_id: str = "",
-        verification_run_ids: list[str] | None = None,
+        verification_program_id: str,
         verification_source: str = "run.execute",
         expected_behavior: str | None = None,
         task_kind: str = "",
@@ -397,7 +432,7 @@ class Judgehost:
             run_id=run_id,
             selected_tests=selected_tests,
             verification_id=str(verification_id or ""),
-            verification_run_ids=list(verification_run_ids or []),
+            verification_program_id=verification_program_id,
             expected_behavior=str(expected_behavior or "unknown"),
             verification_source=str(verification_source or "run.execute"),
             task_kind=str(task_kind or ""),
@@ -422,7 +457,7 @@ class Judgehost:
         upload_filename: str,
         run_id: str | None = None,
         verification_id: str = "",
-        verification_run_ids: list[str] | None = None,
+        verification_program_id: str,
         verification_source: str = "compile.only",
         expected_behavior: str = "compile",
         prepared_payload: dict[str, object] | None = None,
@@ -439,7 +474,7 @@ class Judgehost:
             upload_filename=str(upload_filename or "submission.cpp"),
             run_id=str(run_id or ""),
             verification_id=str(verification_id or ""),
-            verification_run_ids=list(verification_run_ids or []),
+            verification_program_id=verification_program_id,
             expected_behavior=str(expected_behavior or "compile"),
             verification_source=str(verification_source or "compile.only"),
             prepared_payload=None if prepared_payload is None else dict(prepared_payload),

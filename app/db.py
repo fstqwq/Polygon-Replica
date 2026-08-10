@@ -388,7 +388,7 @@ CREATE TABLE IF NOT EXISTS verification_tasks (
     predecessor_task_id TEXT,
     task_kind TEXT NOT NULL,
     source_path TEXT NOT NULL,
-    logical_run_id TEXT NOT NULL DEFAULT '',
+    program_id TEXT NOT NULL,
     test_name TEXT NOT NULL,
     expected_behavior TEXT NOT NULL,
     final_status TEXT NOT NULL,
@@ -407,6 +407,13 @@ CREATE TABLE IF NOT EXISTS verification_artifact_refs (
     updated_at TEXT NOT NULL,
     PRIMARY KEY(verification_id, test_name),
     FOREIGN KEY(verification_id) REFERENCES verifications(id)
+);
+
+CREATE TABLE IF NOT EXISTS verification_task_diagnostics (
+    task_id TEXT PRIMARY KEY,
+    snapshot_json TEXT NOT NULL DEFAULT '{"items":[]}',
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY(task_id) REFERENCES verification_tasks(id)
 );
 
 CREATE TABLE IF NOT EXISTS problem_package_materializations (
@@ -549,6 +556,7 @@ CREATE INDEX IF NOT EXISTS idx_verification_tasks_verification_predecessor ON ve
 CREATE INDEX IF NOT EXISTS idx_verification_tasks_predecessor ON verification_tasks(predecessor_task_id);
 CREATE INDEX IF NOT EXISTS idx_verification_tasks_verification_final ON verification_tasks(verification_id, final_status, task_kind);
 CREATE INDEX IF NOT EXISTS idx_verification_artifact_refs_verification_updated ON verification_artifact_refs(verification_id, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_verification_task_diagnostics_updated ON verification_task_diagnostics(updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_problem_package_materializations_problem_revision ON problem_package_materializations(problem_id,revision_number DESC);
 CREATE INDEX IF NOT EXISTS idx_problem_package_materializations_status ON problem_package_materializations(status,checked_at DESC);
 CREATE INDEX IF NOT EXISTS idx_problem_package_builds_status_created ON problem_package_builds(status,created_at);
@@ -828,6 +836,11 @@ CURRENT_SCHEMA_COLUMNS: dict[str, tuple[str, ...]] = {
         "answer_ref",
         "updated_at",
     ),
+    "verification_task_diagnostics": (
+        "task_id",
+        "snapshot_json",
+        "updated_at",
+    ),
     "verification_selected_tests": (
         "verification_id",
         "ordinal",
@@ -897,7 +910,7 @@ CURRENT_SCHEMA_COLUMNS: dict[str, tuple[str, ...]] = {
         "predecessor_task_id",
         "task_kind",
         "source_path",
-        "logical_run_id",
+        "program_id",
         "test_name",
         "expected_behavior",
         "final_status",

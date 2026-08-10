@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass, field
-from typing import TypedDict
+from typing import Literal, TypedDict
 
 from app.service.platform.runtime_blob_store import PayloadFile
 from app.service.verification.execution_result import ExecutionResult
@@ -76,7 +76,7 @@ class HostTelemetryState:
 
 class ExecutionBatchRow(TypedDict):
     batch_id: int
-    logical_run_id: str
+    verification_program_id: str
     execution_signature: str
     task_kind: str
     verification_id: str
@@ -114,6 +114,7 @@ class JudgehostCaseRow(TypedDict):
     id: int
     batch_id: int
     task_id: str
+    verification_task_id: str
     run_id: str
     test_name: str
     ordinal: int
@@ -141,7 +142,8 @@ class JudgehostCaseRow(TypedDict):
     team_message_ref: str
     score_text: str
     debug_text: str
-    verification_published: bool
+    completion_acknowledged: bool
+    last_callback_hostname: str
     created_at: str
     updated_at: str
 
@@ -154,7 +156,7 @@ class ExecutionBatchFinalizationClaim(TypedDict):
 @dataclass
 class ExecutionBatchRecord:
     batch_id: int
-    logical_run_id: str
+    verification_program_id: str
     execution_signature: str
     task_kind: str
     verification_id: str
@@ -183,6 +185,8 @@ class ExecutionBatchRecord:
     debug_text: str
     failure_runresult: str
     failure_text: str
+    program_failure_result: CaseResult | None
+    program_failure_diagnostic_digest: str
     status: str
     created_at: str
     updated_at: str
@@ -194,6 +198,7 @@ class CaseRecord:
     id: int
     batch_id: int
     task_id: str
+    verification_task_id: str
     run_id: str
     test_name: str
     ordinal: int
@@ -209,7 +214,10 @@ class CaseRecord:
     lease_owner: str | None
     result: CaseResult | None
     debug_text: str
-    verification_published: bool
+    completion_acknowledged: bool
+    last_callback_hostname: str
+    callback_receipt_count: int
+    pending_diagnostics: list[PendingCaseDiagnostic]
     cancel_requested: bool
     terminal_result: CaseResult | None
     requeue_on_abort: bool
@@ -261,6 +269,48 @@ class CaseClaim:
     task_id: str
     test_name: str
     cancel_requested: bool
+
+
+@dataclass(frozen=True)
+class CaseCallbackReceipt:
+    receipt_id: int
+    case_id: int
+    batch_id: int
+    verification_id: str
+    verification_task_id: str
+    task_id: str
+    run_id: str
+    test_name: str
+    status: str
+    lease_owner: str
+    last_callback_hostname: str
+    completion_acknowledged: bool
+    claim_generation: int
+
+
+@dataclass(frozen=True)
+class PendingCaseDiagnostic:
+    kind: str
+    hostname: str
+    text: str
+    received_at: str
+    digest: str
+
+
+ProgramTerminalClaimOutcome = Literal[
+    "claimed",
+    "cancelled",
+    "late",
+    "idempotent",
+    "rejected",
+]
+
+
+@dataclass(frozen=True)
+class ProgramTerminalClaim:
+    outcome: ProgramTerminalClaimOutcome
+    case_id: int
+    batch_id: int
 
 
 class CaseClaimBusy(RuntimeError):

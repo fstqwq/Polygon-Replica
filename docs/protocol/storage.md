@@ -45,11 +45,12 @@ archive locators. Contest artifact paths are derived below
 Before the worker queue starts, the application:
 
 1. fails interrupted package builds and export jobs;
-2. cancels unfinished preview, contest-job, verification, verification-task,
-   and Judgehost work;
-3. resets worker history in memory and removes its JSONL;
-4. clears the process-local runtime cache index;
-5. deletes and recreates `cache_root/artifacts` and `cache_root/runtime`.
+2. in one durable recovery transaction, fails unfinished verifications and
+   cancels all of their open tasks; startup stops if that transaction fails;
+3. cancels unfinished preview, contest-job, and Judgehost runtime work;
+4. resets worker history in memory and removes its JSONL;
+5. clears the process-local runtime cache index;
+6. deletes and recreates `cache_root/artifacts` and `cache_root/runtime`.
 
 Preview/verification cache payloads, runtime snapshots/blobs, JudgeFS data,
 Judgehost workdirs, and worker history do not survive startup. Other cache-root
@@ -58,10 +59,12 @@ rows can survive even when their cleanup-safe payloads do not.
 
 ## Maintenance cleanup
 
-Administrative cleanup closes admission and refuses to start while requests,
-worker jobs, or queued/leased/reporting Judgehost work is active. It recreates
+Administrative cleanup closes both ordinary work admission and the Judgehost
+callback admission gate. It refuses to start while requests, callbacks, worker
+jobs, or queued/leased/reporting Judgehost work is active. It recreates
 the preview, verification, package, export, and contest-build metadata tables;
-clears stale workspace verification status and earlier audit rows; empties the entire
-artifact and cache roots; resets process-local execution state; vacuums SQLite;
-and appends a terminal audit event. It does not remove problem, user, workspace,
-contest, membership, contest attachment, configuration, or backup data.
+clears stale workspace verification status and earlier audit rows; empties the
+entire artifact and cache roots; resets process-local execution state; vacuums
+SQLite; and appends a terminal audit event. It does not remove problem, user,
+workspace, contest, membership, contest attachment, configuration, or backup
+data.

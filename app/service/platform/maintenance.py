@@ -8,9 +8,10 @@ import shutil
 import threading
 import time
 import uuid
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Literal, Protocol, TypedDict
+from typing import Callable, Iterator, Literal, Protocol, TypedDict
 
 from app.db import (
     DB,
@@ -215,6 +216,7 @@ class ArtifactCleanupService:
         "verification_sanity_check_messages",
         "verification_sanity_checks",
         "verification_tests_meta",
+        "verification_task_diagnostics",
         "verification_tasks",
         "verifications",
     )
@@ -627,6 +629,31 @@ class MaintenanceCoordinator:
     def allow_new_work(self) -> bool:
         return self._gate.is_open()
 
+    @contextmanager
+    def problem_deletion_guard(self) -> Iterator[None]:
+        """Exclude new runtime work while one problem is deleted.
+
+        The deleting HTTP request is already counted by ``enter_request`` and
+        therefore cannot use the full maintenance busy snapshot verbatim.
+        Worker and Judgehost work are the relevant process-local users of
+        problem execution state.
+        """
+
+        with self._gate.locked():
+            if not self._gate.is_open_locked():
+                raise RuntimeError("maintenance in progress")
+            busy = self._busy_snapshot_locked()
+            runtime_busy = {
+                name: count
+                for name, count in busy.items()
+                if name != "inflight_requests"
+            }
+            if any(count > 0 for count in runtime_busy.values()):
+                raise ValueError(
+                    "cannot delete problem while runtime jobs are active"
+                )
+            yield
+
     def snapshot(self) -> dict[str, object]:
         with self._gate.locked():
             payload = self._snapshot.as_dict()
@@ -642,6 +669,7 @@ class MaintenanceCoordinator:
             "judgehost_queued": int(judgehost.get("queued", 0)),
             "judgehost_leased": int(judgehost.get("leased", 0)),
             "judgehost_reporting": int(judgehost.get("reporting", 0)),
+            "judgehost_callbacks": int(judgehost.get("callbacks", 0)),
             "inflight_requests": int(self._active_requests),
         }
 

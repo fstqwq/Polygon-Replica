@@ -13,13 +13,84 @@ A custom run is represented as a verification with the custom kind. It uses the
 same task storage, Judgehost dispatch, results, and artifact model rather than a
 second run domain.
 
-## Verification DAG
+## Verification lifecycle and DAG
 
-Verification records the selected tests and solution/source paths, then stores
-tasks in `verification_tasks`. Verification kinds are `all`, `sample`, and
-`custom`; their durable statuses are `queued`, `pending`, `running`, `ok`, and
-`failed`. A task identifies its kind, source, logical run, test, expected
-behavior, optional predecessor, final status, and serialized execution result.
+Verification kinds are `all`, `sample`, and `custom`. Their reachable durable
+state transitions are:
+
+```text
+absent -> queued -> running -> ok | failed
+                 \-----------> failed
+```
+
+Admission inserts a `queued` verification with its request identity and no task
+rows. Planning uses a frozen workspace snapshot. Activation changes that row
+from `queued` to `running` and writes the complete detail and complete task graph
+in one transaction. A plan is installed once: it is never deleted, replaced, or
+partially extended. Cancellation or planning/queue failure may instead change a
+`queued` verification directly to `failed`.
+
+`pending` is a task-derived display state, not a persisted verification
+lifecycle state. An `ok` verification has a complete graph, terminal tasks, and
+completed sanity processing. A sanity warning or failure remains attention
+detail on an `ok` verification; it does not reopen or fail the task decision.
+A `failed` verification may have no graph when it failed before activation. A
+terminal verification has no open task rows and cannot return to an active
+state. Startup fails all verification work left in `queued` or `running`;
+coordinators and leases are not reconstructed.
+
+A verification plan has two related identities:
+
+```text
+VerificationProgram
+  - program_id
+  - kind
+  - source_path
+  - compile_spec
+
+VerificationTask
+  - program_id
+  - test_name
+```
+
+A `VerificationProgram` means one source program under one normalized compile
+specification. The generator is a program, the accepted solution is a program,
+and every checked solution is a separate program. Multiple test tasks may
+reference the same program and therefore share its one Judgehost compilation.
+Generator parameters remain part of each task's input payload: they change the
+invocation and result-cache identity, but not the generator program identity.
+If compilation or an active internal error has already failed that program,
+test tasks that become runnable later inherit the same canonical program
+failure; they are not left waiting for a compile that can no longer run.
+
+The accepted program uses `accepted`. Distinct logical generator definitions
+receive `generator-<first-seen-index>`, and checked solutions receive
+`solution-<plan-index>` in the verification's deterministic target order.
+Generator paths remain distinct programs even
+when their current content and compile specification are equal. These names
+identify role and deterministic position in this verification plan; they are
+not global source or cache identities.
+
+A task also carries its task kind, source, expected behavior, optional
+predecessor, final status, and serialized execution result. An empty
+`final_status` is the only durable open state; `done`, `failed`, and `cancelled`
+are terminal. Pending, queued, and leased are process-local task overlays used
+by read models; reporting is a Judgehost case phase rather than a task row
+state.
+
+The durable task ID is the path-safe natural key
+`vt~<verification_id>~<program_id>~<test_name>`. Activation recomputes every
+task key and requires all tasks in one program to retain one consistent program
+definition. It rejects inconsistent or duplicate plan members instead of
+allocating another identity.
+
+Within verification code this identity is `program_id`. At the boundary into
+Judgehost scheduling it is named `verification_program_id`, so it cannot be
+confused with the per-execution `run_id`. Judgehost uses
+`(verification_id, verification_program_id)` to collect the test cases that
+share a compilation. `compile_key` is a separate content-addressed compile-cache
+identity; two different programs may have the same `compile_key` and reuse the
+same cached compilation.
 
 The graph has exactly three task kinds:
 
@@ -29,9 +100,6 @@ The graph has exactly three task kinds:
 - `main-correct` runs the accepted solution after that test's input is ready.
 - `solution-run` runs another solution after the same test's `main-correct`
   task succeeds.
-
-Task statuses are `pending`, `queued`, `leased`, `done`, `failed`, and
-`cancelled`; `leased` is displayed as running by read models.
 
 Thus accepted-solution execution gates the other expected-behavior checks per
 test. Identical generator invocations share one generated result; duplicate
@@ -49,6 +117,24 @@ dependants from that state; it does not receive an uncommitted Judgehost result.
 Predecessor failure or cancellation skips or cancels dependants. Compile-only,
 pass-fail, interactive, and multi-pass execution are mapped to Judgehost batches
 and case results by the verification and Judgehost services.
+
+Completion evaluates each `solution-run` against its authored expected behavior
+using the canonical `ExecutionResult`, not the batch transport status or summary.
+AC, WA, TL, RE, and CE are complete decisions, so an expected CE remains a
+successful verification task even though Judgehost reports the batch as failed.
+A mismatch or an FL/missing/infrastructure outcome fails the task and stores the
+first failure reason, while independent solution tasks continue. Once no task
+remains open, that stored mismatch makes the parent `failed`. Generator,
+`main-correct`, and cancellation failures are hard failures: they fail the
+parent and cancel all remaining open tasks immediately in the same transaction.
+
+Cancellation atomically changes the parent to `failed` and every open task to
+`cancelled`. Already leased or reporting cases then drain in process-local
+Judgehost state, but their late ordinary results cannot change the durable
+decision. A runtime verification moves through dormant, active, draining, and
+retired phases independently of the parent status. Draining state is retained
+for the current process until all work and callback receipts are terminal and
+the verification has been quiet for 60 seconds.
 
 Verification planning preserves the canonical authored memory limit. Judgehost
 dispatch converts it exactly from MiB to KiB by multiplying by 1024; it does not
@@ -99,8 +185,27 @@ Only a task without a terminal status accepts its first completion. A repeated
 or conflicting completion yields the already-persisted result and locators and
 does not amend them. Generator content deduplication and the resulting skipped
 dependants are part of the same commit. The process-local coordinator consumes
-the returned `CompletionCommit`; SQLite remains authoritative when no
+the returned lifecycle commit; SQLite remains authoritative when no
 coordinator exists or a notification is repeated.
+
+Compile failure reported through `update-judging`, the first final run report,
+and an internal error received while a case is active can create the canonical
+terminal result. Their first decision claim is serialized under the Judgehost
+scheduler lock; a program failure can finish unclaimed cases but cannot replace
+a final result whose case is already reporting. SQLite first-wins completion is
+the second durable guard. Evidence received after that decision does not amend it.
+Terminal `add-debug-info` and `internal-error` callbacks append normalized
+`debug-info` or `internal-error` items to the task's late-diagnostic snapshot.
+Each item records hostname, bounded text, receipt time, and a content digest for
+retry deduplication. The digest covers kind, hostname, and bounded text.
+Snapshot size is bounded by the auxiliary display limit; oldest items are
+removed first when necessary.
+
+Late diagnostics do not change task or verification status, verdict, canonical
+result, input/answer locators, first failure reason, or DAG readiness. Detail
+reads compose them with the immutable result for display. An ordinary duplicate
+compile or final-result callback is an idempotent retry, not diagnostic
+evidence.
 
 Per-test generated input and answer locators are stored in
 `verification_artifact_refs.input_ref` and `answer_ref`. Output, transcript,

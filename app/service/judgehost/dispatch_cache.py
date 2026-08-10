@@ -182,6 +182,7 @@ class DispatchCacheMixin:
                 int(batch_id),
                 force_failed=True,
                 error_text="judgehost batch specification disappeared",
+                require_completion_ack=True,
             )
             return False
         try:
@@ -225,6 +226,7 @@ class DispatchCacheMixin:
                 int(batch_id),
                 force_failed=True,
                 error_text=f"judgehost materialization failed: {exc}",
+                require_completion_ack=True,
             )
             return False
         return self._s.batch_scheduler.finish_materialization(
@@ -290,38 +292,17 @@ class DispatchCacheMixin:
                 shortcut = None
             finished_claims.append((claim, shortcut))
             processed += 1
-        outcomes = self._s.batch_scheduler.finish_cache_claims(
+        self._s.batch_scheduler.finish_cache_claims(
             finished_claims,
             updated_at=now_iso(),
         )
-        for claim, _shortcut in finished_claims:
-            outcome = outcomes.get(claim.case_id)
-            try:
-                if outcome == "reported":
-                    self._result._domjudge_publish_reported_case(
-                        task_id=claim.task_id,
-                        test_name=claim.test_name,
-                    )
-                elif outcome == "cancelled":
-                    self._result._publish_verification_case_cancelled(
-                        task_id=claim.task_id,
-                        test_name=claim.test_name,
-                    )
-            except Exception:
-                logger.exception(
-                    "failed to publish cached DOMjudge case batch_id=%s case_id=%s",
-                    int(batch_id),
-                    claim.case_id,
-                )
-            if outcome in {"reported", "cancelled"}:
-                self._result._domjudge_finalize_task_if_ready(
-                    claim.task_id,
-                    batch_row=dict(batch_row),
-                )
         if unprocessed:
             self._s.batch_scheduler.abort_cache_claims(
                 unprocessed,
                 updated_at=now_iso(),
             )
-        self._result._domjudge_finalize_batch_if_ready(batch_id)
+        self._result._domjudge_finalize_batch_if_ready(
+            batch_id,
+            require_completion_ack=True,
+        )
         return processed

@@ -3,19 +3,25 @@ from __future__ import annotations
 import json
 import sqlite3
 import tempfile
+import threading
 from pathlib import Path
 from unittest.mock import patch
 
 # tests.common installs isolated /tmp paths before app modules can create runtime config.
 from tests.common import (
     E2ETestBase,
+    clear_activation_task_abort_fault,
     clear_completion_ref_abort_fault,
     config,
+    install_activation_task_abort_fault,
     install_completion_ref_abort_fault,
 )
 from tests.identity_helpers import canonical_test_verification_id
+from tests.db_helpers import (
+    db_fetch_all,
+    verification_programs_for_tasks,
+)
 
-from app.service.disk.verification_store import VerificationStore
 from app.service.judgehost.case_result import (
     CaseTerminalReport,
     build_case_terminal_report,
@@ -23,7 +29,15 @@ from app.service.judgehost.case_result import (
 from app.service.verification.task_metadata import canonical_diagnostics, canonical_truncated_text, diagnostics_json_text
 from app.service.verification.task_completion import (
     TaskCompletion,
-    TaskCompletionAmendment,
+)
+from app.service.verification.lifecycle import (
+    ActivationPlan,
+    PlannedTask,
+    SanityFinish,
+    VerificationCompileSpec,
+    VerificationProgram,
+    VerificationAdmission,
+    verification_task_id,
 )
 from app.service.verification.task_store import VerificationTaskStore
 from app.service.verification.plan import VerificationTestPlan
@@ -35,6 +49,33 @@ from app.service.verification.execution_result import (
     PassArtifacts,
     normalize_execution_result,
 )
+from app.service.verification.diagnostic import (
+    TaskDiagnosticSnapshot,
+    merge_task_diagnostic_snapshot,
+    new_task_diagnostic_item,
+    task_diagnostic_snapshot_json,
+)
+
+
+def _verification_program(
+    *,
+    program_id: str,
+    kind: str,
+    source_path: str,
+    expected_behavior: str,
+) -> VerificationProgram:
+    return VerificationProgram(
+        program_id=program_id,
+        kind=kind,
+        source_path=source_path,
+        compile_spec=VerificationCompileSpec(
+            source_name=Path(source_path).name,
+            source_file=config.runtime_blob_store.put_bytes(
+                b"int main(){return 0;}\n"
+            ),
+        ),
+        expected_behavior=expected_behavior,
+    )
 
 
 def _execution_result(
@@ -91,6 +132,7 @@ def _terminal_report(
     result: ExecutionResult,
     status: str = "ok",
     missing_case_result: bool = False,
+    summary: dict[str, object] | None = None,
 ) -> CaseTerminalReport:
     return build_case_terminal_report(
         task_id=judgehost_task_id,
@@ -99,7 +141,7 @@ def _terminal_report(
         status=status,
         task_status="done",
         error_text=result.outcome.error,
-        summary={},
+        summary=dict(summary or {}),
         missing_case_result=missing_case_result,
         execution_result=result,
     )
@@ -154,7 +196,7 @@ def _task_row(
     status: str,
     queue_index: int,
     source_path: str = "solutions/a.cpp",
-    logical_run_id: str = "",
+    program_id: str = "solution-0",
     test_name: str = "001.in",
 ) -> dict[str, object]:
     return {
@@ -163,7 +205,7 @@ def _task_row(
         "predecessor_task_id": "",
         "task_kind": task_kind,
         "source_path": source_path,
-        "logical_run_id": logical_run_id,
+        "program_id": program_id,
         "test_name": test_name,
         "expected_behavior": "accepted",
         "queue_index": queue_index,
@@ -215,15 +257,108 @@ def _sanity_test_plan(
 class TestVerificationTaskScheduler(E2ETestBase):
     def _insert_verification_row(self, verification_id: str) -> None:
         ctx = config.workspace_service.workspace_context(self.problem, self.user, include_recent=False)
-        config.verification_service.begin_verification_record(
-            verification_id=verification_id,
-            problem_id=int(ctx["problem"]["id"]),
-            workspace_id=int(ctx["workspace"]["id"]),
-            signature="",
-            kind="all",
-            status="running",
-            detail={"status": "running"},
+        admission = config.verification_service.admit_verification(
+            VerificationAdmission(
+                verification_id=verification_id,
+                problem_id=int(ctx["problem"]["id"]),
+                workspace_id=int(ctx["workspace"]["id"]),
+                signature="",
+                source_commit="",
+                kind="all",
+            )
         )
+        self.assertEqual(admission.outcome, "admitted")
+
+    def _activate_graph(
+        self,
+        verification_id: str,
+        *,
+        tasks: list[dict[str, object]],
+        edges: list[tuple[str, str]],
+        detail: dict[str, object] | None = None,
+    ) -> None:
+        predecessor_by_child: dict[str, str] = {}
+        for parent_id, child_id in edges:
+            if child_id in predecessor_by_child:
+                raise AssertionError(f"duplicate predecessor for {child_id}")
+            predecessor_by_child[child_id] = parent_id
+        planned = tuple(
+            PlannedTask(
+                task_id=str(item["id"]),
+                predecessor_task_id=predecessor_by_child.get(str(item["id"])),
+                task_kind=str(item.get("task_kind") or ""),
+                source_path=str(item.get("source_path") or ""),
+                program_id=str(item.get("program_id") or ""),
+                test_name=str(item.get("test_name") or ""),
+                expected_behavior=str(item.get("expected_behavior") or ""),
+                result=normalize_execution_result(
+                    verdict=str(item.get("verdict") or ""),
+                    feedback=str(item.get("feedback_text") or ""),
+                ),
+            )
+            for item in tasks
+        )
+        accepted_completion: TaskCompletion | None = None
+        if not any(task.program_id == "accepted" for task in planned):
+            accepted_test_name = planned[0].test_name
+            accepted_task_id = verification_task_id(
+                verification_id,
+                "accepted",
+                accepted_test_name,
+            )
+            planned = (
+                PlannedTask(
+                    task_id=accepted_task_id,
+                    predecessor_task_id=None,
+                    task_kind="main-correct",
+                    source_path="solutions/accepted.cpp",
+                    program_id="accepted",
+                    test_name=accepted_test_name,
+                    expected_behavior="accepted",
+                ),
+                *planned,
+            )
+            accepted_completion = TaskCompletion(
+                task_id=accepted_task_id,
+                status=VerificationTaskStore.TASK_DONE,
+                run_id="",
+                judgehost_task_id="",
+                result=normalize_execution_result(verdict="OK"),
+            )
+        activation = config.verification_service.activate_verification(
+            ActivationPlan.build(
+                verification_id,
+                detail=dict(detail or {}),
+                programs=verification_programs_for_tasks(planned),
+                tasks=planned,
+            )
+        )
+        self.assertEqual(activation.outcome, "activated")
+        if accepted_completion is not None:
+            config.verification_task_store.commit_task_completions(
+                (accepted_completion,)
+            )
+        for task_index, item in enumerate(tasks):
+            initial_status = str(
+                item.get("status") or VerificationTaskStore.TASK_PENDING
+            )
+            if initial_status not in {
+                VerificationTaskStore.TASK_QUEUED,
+                VerificationTaskStore.TASK_LEASED,
+            }:
+                continue
+            task_id = str(item["id"])
+            bound = config.verification_task_store.bind_and_expose_judgehost_runtime(
+                task_id,
+                run_id=str(item.get("run_id") or f"r-test-{task_index}"),
+                judgehost_task_id=str(
+                    item.get("judgehost_task_id") or f"jt-{task_id}"
+                ),
+                expose=lambda: None,
+            )
+            self.assertTrue(bound)
+            if initial_status == VerificationTaskStore.TASK_LEASED:
+                config.verification_task_store.set_task_leased(task_id)
 
     def test_memory_limit_is_canonical_before_verification_payloads(self) -> None:
         from app.impl.workspace.verification_dag_plan import (
@@ -405,6 +540,27 @@ class TestVerificationTaskScheduler(E2ETestBase):
         )
         source_file = config.runtime_blob_store.put_bytes(b"int main(){return 0;}\n")
         input_file = config.runtime_blob_store.put_bytes(b"1\n")
+        test_plan = _sanity_test_plan()
+        accepted_program = _verification_program(
+            program_id="accepted",
+            kind=TASK_MAIN_CORRECT,
+            source_path="solutions/std.cpp",
+            expected_behavior="accepted",
+        )
+        generator_program = VerificationProgram(
+            program_id="generator-0",
+            kind=TASK_GENERATE_INPUT,
+            source_path=test_plan.display_source_path,
+            compile_spec=VerificationCompileSpec(
+                source_name=test_plan.execution_source_name,
+                source_file=test_plan.execution_source_file,
+                extra_source_files=tuple(
+                    sorted(test_plan.extra_source_files.items())
+                ),
+                manual_validate_only=True,
+            ),
+            expected_behavior="accepted",
+        )
         execution = TaskExecutionContext(
             problem=self.problem,
             user=self.user,
@@ -412,10 +568,13 @@ class TestVerificationTaskScheduler(E2ETestBase):
             mode="pass-fail",
             pass_limit=1,
             snapshot_root=source_file.path.parent,
-            source_file_by_path={"solutions/std.cpp": source_file},
             artifact_file_by_test_ref={},
-            execution_template_by_key={},
-            test_plan_by_name={"001.in": _sanity_test_plan()},
+            program_by_id={
+                accepted_program.program_id: accepted_program,
+                generator_program.program_id: generator_program,
+            },
+            execution_template_by_program_id={},
+            test_plan_by_name={"001.in": test_plan},
             run_verification_payload_base={},
             generate_verification_payload_base={},
             bypass_case_result_cache=True,
@@ -440,9 +599,11 @@ class TestVerificationTaskScheduler(E2ETestBase):
                     task_kind=TASK_GENERATE_INPUT,
                     status=VerificationTaskStore.TASK_PENDING,
                     queue_index=1,
+                    source_path=test_plan.display_source_path,
+                    program_id="generator-0",
                 ),
                 execution=execution,
-                test_plan=_sanity_test_plan(),
+                test_plan=test_plan,
             )
             _publish_run_task(
                 _task_row(
@@ -451,7 +612,7 @@ class TestVerificationTaskScheduler(E2ETestBase):
                     status=VerificationTaskStore.TASK_PENDING,
                     queue_index=2,
                     source_path="solutions/std.cpp",
-                    logical_run_id="main",
+                    program_id="accepted",
                 ),
                 execution=execution,
             )
@@ -462,7 +623,7 @@ class TestVerificationTaskScheduler(E2ETestBase):
                     status=VerificationTaskStore.TASK_PENDING,
                     queue_index=3,
                     source_path="solutions/std.cpp",
-                    logical_run_id="main",
+                    program_id="accepted",
                 ),
                 execution=execution,
             )
@@ -472,7 +633,7 @@ class TestVerificationTaskScheduler(E2ETestBase):
                 status=VerificationTaskStore.TASK_PENDING,
                 queue_index=4,
                 source_path="solutions/std.cpp",
-                logical_run_id="main",
+                program_id="accepted",
             )
             skipped_row["verdict"] = "SK"
             skipped = _publish_run_task(skipped_row, execution=execution)
@@ -525,6 +686,7 @@ class TestVerificationTaskScheduler(E2ETestBase):
         )
         logs_dir = config.fs_manager.prepare_verification_root(verification_id).resolve() / "logs"
         calls: list[dict[str, object]] = []
+        closed_programs: list[tuple[str, list[str]]] = []
 
         def _fake_enqueue_task(**kwargs: object) -> str:
             calls.append(dict(kwargs))
@@ -543,10 +705,20 @@ class TestVerificationTaskScheduler(E2ETestBase):
                 }
             }
 
+        def _fake_close_programs(
+            closed_verification_id: str,
+            program_ids: list[str],
+        ) -> None:
+            closed_programs.append((closed_verification_id, list(program_ids)))
+
         with patch.object(config.judgehost_task_service, "enqueue_task", side_effect=_fake_enqueue_task), patch.object(
             config.judgehost_task_service,
             "wait_for_task_case_result",
             side_effect=_fake_wait_for_task_case_result,
+        ), patch.object(
+            config.judgehost_task_service,
+            "close_programs",
+            side_effect=_fake_close_programs,
         ):
             result = run_verification_sanity_checks(
                 problem=self.problem,
@@ -565,6 +737,20 @@ class TestVerificationTaskScheduler(E2ETestBase):
         self.assertTrue(all(call["selected_tests"] == ["001.in"] for call in calls))
         self.assertTrue(all(call["expected_behavior"] == "unknown" for call in calls))
         self.assertTrue(all(call["bypass_case_result_cache"] is True for call in calls))
+        self.assertEqual(
+            [str(call["verification_program_id"]) for call in calls],
+            [
+                "sanity-empty_output_stability",
+                "sanity-unicode_output_stability",
+            ],
+        )
+        self.assertEqual(
+            closed_programs,
+            [
+                (verification_id, ["sanity-empty_output_stability"]),
+                (verification_id, ["sanity-unicode_output_stability"]),
+            ],
+        )
         self.assertIn("empty_output_stability 001.in: ok - WA", (logs_dir / "stability.log").read_text(encoding="utf-8"))
 
     def test_sanity_boundary_coverage_warning_keeps_verification_ok(self) -> None:
@@ -681,7 +867,6 @@ class TestVerificationTaskScheduler(E2ETestBase):
         from app.impl.workspace.verification_dag import (
             TASK_MAIN_CORRECT,
             TASK_SOLUTION_RUN,
-            LogicalRunSpec,
             _runtime_threshold_columns_from_tasks,
         )
 
@@ -690,7 +875,7 @@ class TestVerificationTaskScheduler(E2ETestBase):
             task_id: str,
             task_kind: str,
             source_path: str,
-            logical_run_id: str,
+            program_id: str,
         ) -> dict[str, object]:
             return {
                 "id": task_id,
@@ -698,7 +883,7 @@ class TestVerificationTaskScheduler(E2ETestBase):
                 "predecessor_task_id": "",
                 "task_kind": task_kind,
                 "source_path": source_path,
-                "logical_run_id": logical_run_id,
+                "program_id": program_id,
                 "test_name": "001.in",
                 "expected_behavior": "accepted",
                 "queue_index": 1,
@@ -726,18 +911,18 @@ class TestVerificationTaskScheduler(E2ETestBase):
             artifact_verification_id="ver-runtime-columns",
             mode="pass-fail",
             pass_limit=1,
-            logical_runs=[
-                LogicalRunSpec(
-                    logical_run_id="main",
+            programs=[
+                _verification_program(
+                    program_id="accepted",
                     source_path="solutions/std.cpp",
                     expected_behavior="accepted",
-                    task_kind=TASK_MAIN_CORRECT,
+                    kind=TASK_MAIN_CORRECT,
                 ),
-                LogicalRunSpec(
-                    logical_run_id="solution",
+                _verification_program(
+                    program_id="solution-0",
                     source_path="solutions/other.cpp",
                     expected_behavior="accepted",
-                    task_kind=TASK_SOLUTION_RUN,
+                    kind=TASK_SOLUTION_RUN,
                 ),
             ],
             rows=[
@@ -745,13 +930,13 @@ class TestVerificationTaskScheduler(E2ETestBase):
                     task_id="vt-main",
                     task_kind=TASK_MAIN_CORRECT,
                     source_path="solutions/std.cpp",
-                    logical_run_id="main",
+                    program_id="accepted",
                 ),
                 row(
                     task_id="vt-solution",
                     task_kind=TASK_SOLUTION_RUN,
                     source_path="solutions/other.cpp",
-                    logical_run_id="solution",
+                    program_id="solution-0",
                 ),
             ],
             test_names=["001.in"],
@@ -894,18 +1079,19 @@ class TestVerificationTaskScheduler(E2ETestBase):
         from app.impl.workspace.verification_dag import _build_graph
         from app.service.verification.plan import VerificationTestPlan
 
-        class _IdStore:
-            def __init__(self) -> None:
-                self._next = 1
-
-            def allocate_id(self) -> str:
-                current = self._next
-                self._next += 1
-                return f"vt-{current}"
-
+        verification_id = canonical_test_verification_id("graph-natural-keys")
+        source_file_by_path = {
+            "solutions/accepted.cpp": config.runtime_blob_store.put_bytes(
+                b"int main(){return 0;}\n"
+            ),
+            "solutions/wa.cpp": config.runtime_blob_store.put_bytes(
+                b"int main(){return 1;}\n"
+            ),
+        }
         graph = _build_graph(
-            task_store=_IdStore(),
+            verification_id=verification_id,
             accepted_source_path="solutions/accepted.cpp",
+            source_file_by_path=source_file_by_path,
             test_plan_by_name={
                 "001.in": VerificationTestPlan(
                     test_name="001.in",
@@ -944,33 +1130,746 @@ class TestVerificationTaskScheduler(E2ETestBase):
                 {
                     "path": "solutions/accepted.cpp",
                     "expected_behavior": "accepted",
-                    "run_id": "r-main",
+                    "program_id": "accepted",
                 },
                 {
                     "path": "solutions/wa.cpp",
                     "expected_behavior": "wrong_answer",
-                    "run_id": "r-wa",
+                    "program_id": "solution-0",
                 },
             ],
             test_names=["001.in", "002.in"],
         )
-        generate = [row for row in graph.tasks if str(row["task_kind"]) == "generate-input"]
-        main = [row for row in graph.tasks if str(row["task_kind"]) == "main-correct"]
-        solution = [row for row in graph.tasks if str(row["task_kind"]) == "solution-run"]
+        generate = [row for row in graph.tasks if row.task_kind == "generate-input"]
+        main = [row for row in graph.tasks if row.task_kind == "main-correct"]
+        solution = [row for row in graph.tasks if row.task_kind == "solution-run"]
         self.assertEqual(len(generate), 2)
         self.assertEqual(len(main), 2)
         self.assertEqual(len(solution), 2)
         self.assertEqual(len(graph.edges), 5)
-        self.assertEqual({str(row["source_path"]) for row in generate}, {"generators/gen.cpp"})
-        self.assertEqual(len({str(row["logical_run_id"]) for row in generate}), 1)
-        self.assertTrue(str(generate[0]["logical_run_id"]))
-        self.assertEqual(str(generate[0]["verdict"]), "")
-        self.assertEqual(str(generate[1]["verdict"]), "SK")
         self.assertEqual(
-            str(generate[1]["feedback_text"]),
+            [program.program_id for program in graph.programs],
+            ["accepted", "solution-0", "generator-0"],
+        )
+        self.assertEqual({row.source_path for row in generate}, {"generators/gen.cpp"})
+        self.assertEqual({row.program_id for row in generate}, {"generator-0"})
+        self.assertEqual({row.program_id for row in main}, {"accepted"})
+        self.assertEqual({row.program_id for row in solution}, {"solution-0"})
+        self.assertEqual(generate[0].result.verdict, "")
+        self.assertEqual(generate[1].result.verdict, "SK")
+        self.assertEqual(
+            generate[1].result.feedback_text,
             "duplicate generator invocation; skipped, same as 001.in",
         )
-        self.assertIn((str(generate[0]["id"]), str(generate[1]["id"])), graph.edges)
+        self.assertIn((generate[0].task_id, generate[1].task_id), graph.edges)
+        self.assertEqual(
+            generate[0].task_id,
+            verification_task_id(
+                verification_id,
+                "generator-0",
+                "001.in",
+            ),
+        )
+        self.assertEqual(solution[0].program_id, "solution-0")
+
+    def test_custom_run_upload_preserves_source_extension_for_compile_template(
+        self,
+    ) -> None:
+        from app.impl.workspace.verification_dag import (
+            TaskExecutionContext,
+            _build_graph,
+            _execution_template,
+        )
+
+        for source_name, source_content in (
+            ("foo.cpp", b"int main(){return 0;}\n"),
+            ("Main.java", b"class Main { public static void main(String[] a) {} }\n"),
+        ):
+            with self.subTest(source_name=source_name):
+                accepted_path = "solutions/accepted.cpp"
+                uploaded_path = f"uploads/solution-0/{source_name}"
+                accepted_file = config.runtime_blob_store.put_bytes(
+                    b"int main(){return 0;}\n"
+                )
+                uploaded_file = config.runtime_blob_store.put_bytes(
+                    source_content
+                )
+                graph = _build_graph(
+                    verification_id=canonical_test_verification_id(
+                        f"custom-upload-{source_name}"
+                    ),
+                    accepted_source_path=accepted_path,
+                    source_file_by_path={
+                        accepted_path: accepted_file,
+                        uploaded_path: uploaded_file,
+                    },
+                    test_plan_by_name={},
+                    targets=[
+                        {
+                            "path": accepted_path,
+                            "expected_behavior": "accepted",
+                            "program_id": "accepted",
+                        },
+                        {
+                            "path": uploaded_path,
+                            "expected_behavior": "unknown",
+                            "program_id": "solution-0",
+                        },
+                    ],
+                    test_names=[],
+                )
+                program = next(
+                    item
+                    for item in graph.programs
+                    if item.program_id == "solution-0"
+                )
+                execution = TaskExecutionContext(
+                    problem=self.problem,
+                    user=self.user,
+                    verification_id=canonical_test_verification_id(
+                        f"custom-upload-execution-{source_name}"
+                    ),
+                    mode="pass-fail",
+                    pass_limit=1,
+                    snapshot_root=accepted_file.path.parent,
+                    artifact_file_by_test_ref={},
+                    program_by_id={program.program_id: program},
+                    execution_template_by_program_id={},
+                    test_plan_by_name={},
+                    run_verification_payload_base={},
+                    generate_verification_payload_base={},
+                    bypass_case_result_cache=False,
+                )
+                observed: dict[str, str] = {}
+
+                def _prepare_template(**kwargs: object) -> dict[str, object]:
+                    observed["source_name"] = str(
+                        kwargs.get("upload_filename") or ""
+                    )
+                    return {}
+
+                with patch.object(
+                    config.judgehost_task_service,
+                    "prepare_execution_template",
+                    side_effect=_prepare_template,
+                ):
+                    _execution_template(execution, program=program)
+
+                self.assertEqual(observed.get("source_name"), source_name)
+
+    def test_activation_installs_one_immutable_graph(self) -> None:
+        verification_id = canonical_test_verification_id(
+            f"activation-once:{self.test_id}"
+        )
+        self._insert_verification_row(verification_id)
+        task_id = verification_task_id(
+            verification_id,
+            "accepted",
+            "001.in",
+        )
+        plan = ActivationPlan.build(
+            verification_id,
+            detail={"mode": "pass-fail"},
+            programs=(
+                _verification_program(
+                    program_id="accepted",
+                    kind="main-correct",
+                    source_path="solutions/accepted.cpp",
+                    expected_behavior="accepted",
+                ),
+            ),
+            tasks=(
+                PlannedTask(
+                    task_id=task_id,
+                    predecessor_task_id=None,
+                    task_kind="main-correct",
+                    source_path="solutions/accepted.cpp",
+                    program_id="accepted",
+                    test_name="001.in",
+                    expected_behavior="accepted",
+                ),
+            ),
+        )
+
+        first = config.verification_service.activate_verification(plan)
+        duplicate = config.verification_service.activate_verification(plan)
+
+        self.assertEqual(first.outcome, "activated")
+        self.assertEqual(duplicate.outcome, "already-running")
+        rows = config.verification_task_store.list_rows(verification_id)
+        self.assertEqual([str(row["id"]) for row in rows], [task_id])
+
+    def test_natural_task_id_accepts_longest_legal_test_name(self) -> None:
+        from app.service.run.runtime import RUN_TEST_NAME_RE
+
+        test_name = "a" + ("b" * 127) + ".in"
+        self.assertEqual(len(test_name), 131)
+        self.assertIsNotNone(RUN_TEST_NAME_RE.fullmatch(test_name))
+
+        task_id = verification_task_id(
+            canonical_test_verification_id("longest-test-name"),
+            "accepted",
+            test_name,
+        )
+
+        self.assertTrue(task_id.endswith(f"~accepted~{test_name}"))
+
+    def test_activation_rejects_task_identity_mismatch_before_writing(self) -> None:
+        verification_id = canonical_test_verification_id(
+            f"activation-identity:{self.test_id}"
+        )
+        self._insert_verification_row(verification_id)
+        wrong_id = verification_task_id(
+            verification_id,
+            "accepted",
+            "001.in",
+        )
+        plan = ActivationPlan.build(
+            verification_id,
+            detail={"mode": "pass-fail"},
+            programs=(
+                _verification_program(
+                    program_id="accepted",
+                    kind="main-correct",
+                    source_path="solutions/accepted.cpp",
+                    expected_behavior="accepted",
+                ),
+            ),
+            tasks=(
+                PlannedTask(
+                    task_id=wrong_id,
+                    predecessor_task_id=None,
+                    task_kind="main-correct",
+                    source_path="solutions/accepted.cpp",
+                    program_id="accepted",
+                    test_name="002.in",
+                    expected_behavior="accepted",
+                ),
+            ),
+        )
+
+        with self.assertRaisesRegex(ValueError, "does not match its plan identity"):
+            config.verification_service.activate_verification(plan)
+
+        row = config.verification_service.verification_record(verification_id)
+        assert row is not None
+        self.assertEqual(str(row["status"]), "queued")
+        self.assertEqual(config.verification_task_store.list_rows(verification_id), [])
+
+    def test_activation_rejects_inconsistent_program_membership(self) -> None:
+        verification_id = canonical_test_verification_id(
+            f"activation-program:{self.test_id}"
+        )
+        self._insert_verification_row(verification_id)
+        accepted_id = verification_task_id(
+            verification_id,
+            "accepted",
+            "001.in",
+        )
+        solution_id = verification_task_id(
+            verification_id,
+            "solution-0",
+            "001.in",
+        )
+        plan = ActivationPlan.build(
+            verification_id,
+            detail={"mode": "pass-fail"},
+            programs=(
+                _verification_program(
+                    program_id="accepted",
+                    kind="main-correct",
+                    source_path="solutions/accepted.cpp",
+                    expected_behavior="accepted",
+                ),
+                _verification_program(
+                    program_id="solution-0",
+                    kind="solution-run",
+                    source_path="solutions/a.cpp",
+                    expected_behavior="accepted",
+                ),
+            ),
+            tasks=(
+                PlannedTask(
+                    task_id=accepted_id,
+                    predecessor_task_id=None,
+                    task_kind="main-correct",
+                    source_path="solutions/accepted.cpp",
+                    program_id="accepted",
+                    test_name="001.in",
+                    expected_behavior="accepted",
+                ),
+                PlannedTask(
+                    task_id=solution_id,
+                    predecessor_task_id=accepted_id,
+                    task_kind="solution-run",
+                    source_path="solutions/b.cpp",
+                    program_id="solution-0",
+                    test_name="001.in",
+                    expected_behavior="accepted",
+                ),
+            ),
+        )
+
+        with self.assertRaisesRegex(ValueError, "does not match its program"):
+            config.verification_service.activate_verification(plan)
+
+        row = config.verification_service.verification_record(verification_id)
+        assert row is not None
+        self.assertEqual(str(row["status"]), "queued")
+        self.assertEqual(config.verification_task_store.list_rows(verification_id), [])
+
+    def test_activation_rolls_back_parent_detail_and_graph(self) -> None:
+        verification_id = canonical_test_verification_id(
+            f"activation-rollback:{self.test_id}"
+        )
+        self._insert_verification_row(verification_id)
+        task_id = verification_task_id(
+            verification_id,
+            "accepted",
+            "001.in",
+        )
+        plan = ActivationPlan.build(
+            verification_id,
+            detail={
+                "mode": "interactive",
+                "selected_test_names": ["001.in"],
+            },
+            programs=(
+                _verification_program(
+                    program_id="accepted",
+                    kind="main-correct",
+                    source_path="solutions/accepted.cpp",
+                    expected_behavior="accepted",
+                ),
+            ),
+            tasks=(
+                PlannedTask(
+                    task_id=task_id,
+                    predecessor_task_id=None,
+                    task_kind="main-correct",
+                    source_path="solutions/accepted.cpp",
+                    program_id="accepted",
+                    test_name="001.in",
+                    expected_behavior="accepted",
+                ),
+            ),
+        )
+        install_activation_task_abort_fault()
+        try:
+            with self.assertRaisesRegex(
+                sqlite3.IntegrityError,
+                "forced activation task failure",
+            ):
+                config.verification_service.activate_verification(plan)
+        finally:
+            clear_activation_task_abort_fault()
+
+        row = config.verification_service.verification_record(verification_id)
+        assert row is not None
+        self.assertEqual(str(row["status"]), "queued")
+        self.assertEqual(config.verification_task_store.list_rows(verification_id), [])
+        self.assertEqual(
+            config.verification_service.verification_detail(verification_id)[
+                "selected_test_names"
+            ],
+            [],
+        )
+
+    def test_activation_and_cancel_have_one_serial_outcome(self) -> None:
+        verification_id = canonical_test_verification_id(
+            f"activation-cancel-race:{self.test_id}"
+        )
+        self._insert_verification_row(verification_id)
+        task_id = verification_task_id(
+            verification_id,
+            "accepted",
+            "001.in",
+        )
+        plan = ActivationPlan.build(
+            verification_id,
+            detail={"mode": "pass-fail"},
+            programs=(
+                _verification_program(
+                    program_id="accepted",
+                    kind="main-correct",
+                    source_path="solutions/accepted.cpp",
+                    expected_behavior="accepted",
+                ),
+            ),
+            tasks=(
+                PlannedTask(
+                    task_id=task_id,
+                    predecessor_task_id=None,
+                    task_kind="main-correct",
+                    source_path="solutions/accepted.cpp",
+                    program_id="accepted",
+                    test_name="001.in",
+                    expected_behavior="accepted",
+                ),
+            ),
+        )
+        barrier = threading.Barrier(3)
+        outcomes: dict[str, str] = {}
+        failures: list[BaseException] = []
+
+        def _activate() -> None:
+            try:
+                barrier.wait()
+                outcomes["activate"] = (
+                    config.verification_service.activate_verification(plan).outcome
+                )
+            except BaseException as exc:  # pragma: no cover - surfaced below
+                failures.append(exc)
+
+        def _cancel() -> None:
+            try:
+                barrier.wait()
+                outcomes["cancel"] = config.verification_service.cancel_verification(
+                    verification_id,
+                    reason="verification cancelled by user",
+                ).outcome
+            except BaseException as exc:  # pragma: no cover - surfaced below
+                failures.append(exc)
+
+        threads = (
+            threading.Thread(target=_activate),
+            threading.Thread(target=_cancel),
+        )
+        for thread in threads:
+            thread.start()
+        barrier.wait()
+        for thread in threads:
+            thread.join(timeout=5)
+
+        self.assertEqual(failures, [])
+        self.assertFalse(any(thread.is_alive() for thread in threads))
+        self.assertEqual(outcomes["cancel"], "transitioned")
+        self.assertIn(outcomes["activate"], {"activated", "closed"})
+        row = config.verification_service.verification_record(verification_id)
+        assert row is not None
+        self.assertEqual(str(row["status"]), "failed")
+        task_rows = config.verification_task_store.list_rows(verification_id)
+        if outcomes["activate"] == "activated":
+            self.assertEqual(len(task_rows), 1)
+            self.assertEqual(
+                str(task_rows[0]["status"]),
+                VerificationTaskStore.TASK_CANCELLED,
+            )
+        else:
+            self.assertEqual(task_rows, [])
+
+    def test_completion_and_cancel_have_one_serial_outcome(self) -> None:
+        verification_id = canonical_test_verification_id(
+            f"completion-cancel-race:{self.test_id}"
+        )
+        self._insert_verification_row(verification_id)
+        task_id = verification_task_id(
+            verification_id,
+            "accepted",
+            "001.in",
+        )
+        self._activate_graph(
+            verification_id,
+            tasks=[
+                {
+                    "id": task_id,
+                    "task_kind": "main-correct",
+                    "source_path": "solutions/accepted.cpp",
+                    "program_id": "accepted",
+                    "test_name": "001.in",
+                    "expected_behavior": "accepted",
+                }
+            ],
+            edges=[],
+            detail={"mode": "pass-fail", "sanity_status": ""},
+        )
+        completion = TaskCompletion(
+            task_id=task_id,
+            status=VerificationTaskStore.TASK_DONE,
+            run_id="run-completion-cancel",
+            judgehost_task_id="judgehost-completion-cancel",
+            result=normalize_execution_result(verdict="OK"),
+        )
+        barrier = threading.Barrier(3)
+        outcomes: dict[str, str] = {}
+        failures: list[BaseException] = []
+
+        def _complete() -> None:
+            try:
+                barrier.wait()
+                commit = config.verification_task_completion_service.commit(
+                    (completion,)
+                )
+                outcomes["completion"] = (
+                    "committed"
+                    if task_id in commit.committed_task_ids
+                    else "already-terminal"
+                )
+            except BaseException as exc:  # pragma: no cover - surfaced below
+                failures.append(exc)
+
+        def _cancel() -> None:
+            try:
+                barrier.wait()
+                outcomes["cancel"] = config.verification_service.cancel_verification(
+                    verification_id,
+                    reason="verification cancelled by user",
+                ).outcome
+            except BaseException as exc:  # pragma: no cover - surfaced below
+                failures.append(exc)
+
+        threads = (
+            threading.Thread(target=_complete),
+            threading.Thread(target=_cancel),
+        )
+        for thread in threads:
+            thread.start()
+        barrier.wait()
+        for thread in threads:
+            thread.join(timeout=5)
+
+        self.assertEqual(failures, [])
+        self.assertFalse(any(thread.is_alive() for thread in threads))
+        parent = config.verification_service.verification_record(verification_id)
+        assert parent is not None
+        task = config.verification_task_store.list_rows(verification_id)[0]
+        if str(parent["status"]) == "ok":
+            self.assertEqual(outcomes, {
+                "completion": "committed",
+                "cancel": "closed",
+            })
+            self.assertEqual(task["status"], VerificationTaskStore.TASK_DONE)
+        else:
+            self.assertEqual(str(parent["status"]), "failed")
+            self.assertEqual(outcomes, {
+                "completion": "already-terminal",
+                "cancel": "transitioned",
+            })
+            self.assertEqual(
+                task["status"],
+                VerificationTaskStore.TASK_CANCELLED,
+            )
+        self.assertTrue(
+            all(
+                row["status"]
+                in {
+                    VerificationTaskStore.TASK_DONE,
+                    VerificationTaskStore.TASK_FAILED,
+                    VerificationTaskStore.TASK_CANCELLED,
+                }
+                for row in config.verification_task_store.list_rows(
+                    verification_id
+                )
+            )
+        )
+
+    def test_finish_sanity_and_cancel_have_one_serial_outcome(self) -> None:
+        verification_id = canonical_test_verification_id(
+            f"sanity-cancel-race:{self.test_id}"
+        )
+        self._insert_verification_row(verification_id)
+        task_id = verification_task_id(
+            verification_id,
+            "accepted",
+            "001.in",
+        )
+        self._activate_graph(
+            verification_id,
+            tasks=[
+                {
+                    "id": task_id,
+                    "task_kind": "main-correct",
+                    "source_path": "solutions/accepted.cpp",
+                    "program_id": "accepted",
+                    "test_name": "001.in",
+                    "expected_behavior": "accepted",
+                }
+            ],
+            edges=[],
+            detail={"mode": "pass-fail", "sanity_status": "pending"},
+        )
+        completion = config.verification_task_store.commit_task_completions(
+            (
+                TaskCompletion(
+                    task_id=task_id,
+                    status=VerificationTaskStore.TASK_DONE,
+                    run_id="run-sanity-cancel",
+                    judgehost_task_id="judgehost-sanity-cancel",
+                    result=normalize_execution_result(verdict="OK"),
+                ),
+            )
+        )
+        self.assertTrue(completion.sanity_claimed)
+        self.assertEqual(completion.parent_transition, "sanity-running")
+        finish = SanityFinish.build(
+            verification_id,
+            detail={
+                "mode": "pass-fail",
+                "sanity_status": "passed",
+                "sanity_checked_count": 1,
+            },
+        )
+        barrier = threading.Barrier(3)
+        outcomes: dict[str, str] = {}
+        failures: list[BaseException] = []
+
+        def _finish() -> None:
+            try:
+                barrier.wait()
+                outcomes["finish"] = config.verification_service.finish_sanity(
+                    finish
+                ).outcome
+            except BaseException as exc:  # pragma: no cover - surfaced below
+                failures.append(exc)
+
+        def _cancel() -> None:
+            try:
+                barrier.wait()
+                outcomes["cancel"] = config.verification_service.cancel_verification(
+                    verification_id,
+                    reason="verification cancelled by user",
+                ).outcome
+            except BaseException as exc:  # pragma: no cover - surfaced below
+                failures.append(exc)
+
+        threads = (
+            threading.Thread(target=_finish),
+            threading.Thread(target=_cancel),
+        )
+        for thread in threads:
+            thread.start()
+        barrier.wait()
+        for thread in threads:
+            thread.join(timeout=5)
+
+        self.assertEqual(failures, [])
+        self.assertFalse(any(thread.is_alive() for thread in threads))
+        parent = config.verification_service.verification_record(verification_id)
+        assert parent is not None
+        if str(parent["status"]) == "ok":
+            self.assertEqual(outcomes, {
+                "finish": "transitioned",
+                "cancel": "closed",
+            })
+            self.assertEqual(str(parent["sanity_status"]), "passed")
+        else:
+            self.assertEqual(str(parent["status"]), "failed")
+            self.assertEqual(outcomes, {
+                "finish": "closed",
+                "cancel": "transitioned",
+            })
+            self.assertEqual(str(parent["sanity_status"]), "skipped")
+        self.assertTrue(
+            all(
+                row["status"]
+                in {
+                    VerificationTaskStore.TASK_DONE,
+                    VerificationTaskStore.TASK_FAILED,
+                    VerificationTaskStore.TASK_CANCELLED,
+                }
+                for row in config.verification_task_store.list_rows(
+                    verification_id
+                )
+            )
+        )
+
+    def test_verification_lifecycle_rows_satisfy_aggregate_invariants(self) -> None:
+        queued_id = canonical_test_verification_id(
+            f"invariant-queued:{self.test_id}"
+        )
+        running_id = canonical_test_verification_id(
+            f"invariant-running:{self.test_id}"
+        )
+        ok_id = canonical_test_verification_id(f"invariant-ok:{self.test_id}")
+        failed_id = canonical_test_verification_id(
+            f"invariant-failed:{self.test_id}"
+        )
+        for verification_id in (queued_id, running_id, ok_id, failed_id):
+            self._insert_verification_row(verification_id)
+
+        def _accepted_task(verification_id: str) -> dict[str, object]:
+            return {
+                "id": verification_task_id(
+                    verification_id,
+                    "accepted",
+                    "001.in",
+                ),
+                "task_kind": "main-correct",
+                "source_path": "solutions/accepted.cpp",
+                "program_id": "accepted",
+                "test_name": "001.in",
+                "expected_behavior": "accepted",
+            }
+
+        running_task = _accepted_task(running_id)
+        ok_task = _accepted_task(ok_id)
+        self._activate_graph(
+            running_id,
+            tasks=[running_task],
+            edges=[],
+        )
+        self._activate_graph(ok_id, tasks=[ok_task], edges=[])
+        config.verification_task_store.commit_task_completions(
+            (
+                TaskCompletion(
+                    task_id=str(ok_task["id"]),
+                    status=VerificationTaskStore.TASK_DONE,
+                    run_id="run-invariant-ok",
+                    judgehost_task_id="judgehost-invariant-ok",
+                    result=normalize_execution_result(verdict="OK"),
+                ),
+            )
+        )
+        failed = config.verification_service.cancel_verification(
+            failed_id,
+            reason="invariant terminal fixture",
+        )
+        self.assertEqual(failed.outcome, "transitioned")
+
+        violations = db_fetch_all(
+            """
+            SELECT id,'queued-has-tasks' AS violation
+            FROM verifications verification
+            WHERE status='queued'
+              AND EXISTS (
+                  SELECT 1 FROM verification_tasks task
+                  WHERE task.verification_id=verification.id
+              )
+            UNION ALL
+            SELECT id,'running-without-graph'
+            FROM verifications verification
+            WHERE status='running'
+              AND NOT EXISTS (
+                  SELECT 1 FROM verification_tasks task
+                  WHERE task.verification_id=verification.id
+              )
+            UNION ALL
+            SELECT id,'terminal-has-open-task'
+            FROM verifications verification
+            WHERE status IN ('ok','failed')
+              AND EXISTS (
+                  SELECT 1 FROM verification_tasks task
+                  WHERE task.verification_id=verification.id
+                    AND task.final_status=''
+              )
+            UNION ALL
+            SELECT id,'ok-without-graph'
+            FROM verifications verification
+            WHERE status='ok'
+              AND NOT EXISTS (
+                  SELECT 1 FROM verification_tasks task
+                  WHERE task.verification_id=verification.id
+              )
+            UNION ALL
+            SELECT id,'ok-with-active-sanity'
+            FROM verifications
+            WHERE status='ok' AND sanity_status IN ('pending','running')
+            """
+        )
+        self.assertEqual(
+            [(str(row["id"]), str(row["violation"])) for row in violations],
+            [],
+        )
 
 
 
@@ -984,7 +1883,7 @@ class TestVerificationTaskScheduler(E2ETestBase):
             "test_name": "001.in",
             "judgehost_task_id": "jt-generate",
             "run_id": "r-generate",
-            "logical_run_id": "r-generate",
+            "program_id": "generator-0",
         }
         execution_result = _execution_result(
             verdict="WA",
@@ -1024,7 +1923,7 @@ class TestVerificationTaskScheduler(E2ETestBase):
             "test_name": "020.in",
             "judgehost_task_id": "jt-generate",
             "run_id": "r-generate",
-            "logical_run_id": "r-generate",
+            "program_id": "generator-0",
         }
         execution_result = _execution_result(
             verdict="OK",
@@ -1061,7 +1960,7 @@ class TestVerificationTaskScheduler(E2ETestBase):
             "test_name": "001.in",
             "judgehost_task_id": "jt-main-correct",
             "run_id": "r-main-correct",
-            "logical_run_id": "r-main-correct",
+            "program_id": "accepted",
         }
         detailed_error = (
             "g++: internal compiler error: File size limit exceeded signal terminated program as\n"
@@ -1095,20 +1994,228 @@ class TestVerificationTaskScheduler(E2ETestBase):
             f"main-correct / solutions/std.cpp / 001.in: {detailed_error}",
         )
 
+    def test_prepare_main_correct_re_is_a_hard_failure(self) -> None:
+        task_row = {
+            "id": "vt-main-re",
+            "verification_id": "ver-main-re",
+            "task_kind": "main-correct",
+            "source_path": "solutions/std.cpp",
+            "test_name": "001.in",
+            "judgehost_task_id": "jt-main-re",
+            "run_id": "r-main-re",
+            "program_id": "accepted",
+        }
+        final_result = config.verification_task_completion_service.prepare(
+            task_row,
+            _terminal_report(
+                judgehost_task_id="jt-main-re",
+                verification_id="ver-main-re",
+                run_id="r-main-re",
+                result=_execution_result(
+                    verdict="RE",
+                    error="accepted solution crashed",
+                ),
+                status="ok",
+                summary={"tests": [{"verdict": "RE"}]},
+            ),
+        )
 
+        self.assertEqual(final_result.status, VerificationTaskStore.TASK_FAILED)
+        self.assertEqual(final_result.verdict, "RE")
+        self.assertIn("accepted solution crashed", final_result.fail_reason)
 
-    def test_cancel_not_started_tasks_leaves_leased_rows_reportable(self) -> None:
-        verification_id = canonical_test_verification_id("cancel")
+    def test_expected_compile_error_is_a_complete_solution_decision(self) -> None:
+        task_row = {
+            "id": "vt-solution-ce",
+            "verification_id": "ver-solution-ce",
+            "task_kind": "solution-run",
+            "source_path": "solutions/expected-ce.cpp",
+            "test_name": "001.in",
+            "expected_behavior": "rejected",
+            "judgehost_task_id": "jt-solution-ce",
+            "run_id": "r-solution-ce",
+            "program_id": "solution-0",
+        }
+        compile_error = _execution_result(
+            verdict="CE",
+            error="compiler rejected the source",
+            compile_log="compiler rejected the source",
+        )
+
+        completion = config.verification_task_completion_service.prepare(
+            task_row,
+            _terminal_report(
+                judgehost_task_id="jt-solution-ce",
+                verification_id="ver-solution-ce",
+                run_id="r-solution-ce",
+                result=compile_error,
+                status="failed",
+                summary={"error": "compile_error"},
+            ),
+        )
+
+        self.assertEqual(completion.status, VerificationTaskStore.TASK_DONE)
+        self.assertEqual(completion.verdict, "CE")
+        self.assertEqual(completion.compile_log, "compiler rejected the source")
+        self.assertEqual(completion.fail_reason, "")
+
+    def test_expected_runtime_error_is_a_complete_solution_decision(self) -> None:
+        task_row = {
+            "id": "vt-solution-re",
+            "verification_id": "ver-solution-re",
+            "task_kind": "solution-run",
+            "source_path": "solutions/expected-re.cpp",
+            "test_name": "001.in",
+            "expected_behavior": "run_time_error",
+            "judgehost_task_id": "jt-solution-re",
+            "run_id": "r-solution-re",
+            "program_id": "solution-0",
+        }
+        runtime_error = _execution_result(
+            verdict="RE",
+            error="process exited with status 1",
+        )
+
+        completion = config.verification_task_completion_service.prepare(
+            task_row,
+            _terminal_report(
+                judgehost_task_id="jt-solution-re",
+                verification_id="ver-solution-re",
+                run_id="r-solution-re",
+                result=runtime_error,
+                status="failed",
+                summary={"tests": [{"verdict": "RE"}]},
+            ),
+        )
+
+        self.assertEqual(completion.status, VerificationTaskStore.TASK_DONE)
+        self.assertEqual(completion.verdict, "RE")
+        self.assertEqual(completion.error_text, "process exited with status 1")
+        self.assertEqual(completion.fail_reason, "")
+
+    def test_solution_mismatch_waits_for_graph_then_fails_parent(self) -> None:
+        verification_id = canonical_test_verification_id(
+            f"solution-mismatch:{self.test_id}"
+        )
         self._insert_verification_row(verification_id)
-        task_store = config.verification_task_store
-        task_store.replace_graph(
+        accepted_id = verification_task_id(
+            verification_id,
+            "solution-0",
+            "001.in",
+        )
+        rejected_id = verification_task_id(
+            verification_id,
+            "solution-1",
+            "001.in",
+        )
+        self._activate_graph(
             verification_id,
             tasks=[
                 {
-                    "id": "vt-running",
+                    "id": accepted_id,
+                    "task_kind": "solution-run",
+                    "source_path": "solutions/expected-ac.cpp",
+                    "program_id": "solution-0",
+                    "test_name": "001.in",
+                    "expected_behavior": "accepted",
+                },
+                {
+                    "id": rejected_id,
+                    "task_kind": "solution-run",
+                    "source_path": "solutions/expected-wa.cpp",
+                    "program_id": "solution-1",
+                    "test_name": "001.in",
+                    "expected_behavior": "wrong_answer",
+                },
+            ],
+            edges=[],
+        )
+        task_store = config.verification_task_store
+        for task_id, run_id, judgehost_task_id in (
+            (accepted_id, "r-expected-ac", "jt-expected-ac"),
+            (rejected_id, "r-expected-wa", "jt-expected-wa"),
+        ):
+            self.assertTrue(
+                task_store.bind_and_expose_judgehost_runtime(
+                    task_id,
+                    run_id=run_id,
+                    judgehost_task_id=judgehost_task_id,
+                    expose=lambda: None,
+                )
+            )
+        wa_summary = {"tests": [{"verdict": "WA"}]}
+        mismatch_row = task_store.runtime_row(accepted_id)
+        assert mismatch_row is not None
+        mismatch = config.verification_task_completion_service.prepare(
+            mismatch_row,
+            _terminal_report(
+                judgehost_task_id="jt-expected-ac",
+                verification_id=verification_id,
+                run_id="r-expected-ac",
+                result=_execution_result(verdict="WA"),
+                summary=wa_summary,
+            ),
+        )
+        first_commit = config.verification_task_completion_service.commit(
+            (mismatch,),
+            notify=False,
+        )
+        self.assertEqual(mismatch.status, VerificationTaskStore.TASK_FAILED)
+        self.assertIn("required=[AC]", mismatch.fail_reason)
+        self.assertEqual(first_commit.parent_transition, "")
+        parent = config.verification_service.verification_record(verification_id)
+        assert parent is not None
+        self.assertEqual(str(parent["status"]), "running")
+        self.assertEqual(str(parent["fail_reason"]), mismatch.fail_reason)
+
+        matched_row = task_store.runtime_row(rejected_id)
+        assert matched_row is not None
+        matched = config.verification_task_completion_service.prepare(
+            matched_row,
+            _terminal_report(
+                judgehost_task_id="jt-expected-wa",
+                verification_id=verification_id,
+                run_id="r-expected-wa",
+                result=_execution_result(verdict="WA"),
+                summary=wa_summary,
+            ),
+        )
+        final_commit = config.verification_task_completion_service.commit(
+            (matched,),
+            notify=False,
+        )
+        self.assertEqual(matched.status, VerificationTaskStore.TASK_DONE)
+        self.assertEqual(matched.fail_reason, "")
+        self.assertEqual(final_commit.parent_transition, "failed")
+        parent = config.verification_service.verification_record(verification_id)
+        assert parent is not None
+        self.assertEqual(str(parent["status"]), "failed")
+        self.assertEqual(str(parent["fail_reason"]), mismatch.fail_reason)
+
+
+
+    def test_cancel_terminalizes_leased_and_pending_tasks(self) -> None:
+        verification_id = canonical_test_verification_id("cancel")
+        self._insert_verification_row(verification_id)
+        task_store = config.verification_task_store
+        running_id = verification_task_id(
+            verification_id,
+            "solution-0",
+            "001.in",
+        )
+        pending_id = verification_task_id(
+            verification_id,
+            "solution-0",
+            "002.in",
+        )
+        self._activate_graph(
+            verification_id,
+            tasks=[
+                {
+                    "id": running_id,
                     "task_kind": "solution-run",
                     "source_path": "solutions/a.cpp",
-                    "logical_run_id": "r-a",
+                    "program_id": "solution-0",
                     "test_name": "001.in",
                     "expected_behavior": "accepted",
                     "queue_index": 1,
@@ -1116,10 +2223,10 @@ class TestVerificationTaskScheduler(E2ETestBase):
                     "started_at": "2026-03-23T00:00:00Z",
                 },
                 {
-                    "id": "vt-pending",
+                    "id": pending_id,
                     "task_kind": "solution-run",
                     "source_path": "solutions/a.cpp",
-                    "logical_run_id": "r-a",
+                    "program_id": "solution-0",
                     "test_name": "002.in",
                     "expected_behavior": "accepted",
                     "queue_index": 2,
@@ -1128,26 +2235,38 @@ class TestVerificationTaskScheduler(E2ETestBase):
             ],
             edges=[],
         )
-        task_store.cancel_not_started_tasks(
+        transition = config.verification_service.cancel_verification(
             verification_id,
             reason="verification cancelled by user",
         )
-        task_store.commit_task_completions((TaskCompletion(
-            task_id="vt-running",
-            status=VerificationTaskStore.TASK_DONE,
-            run_id="r-a",
-            judgehost_task_id="jt-a",
-            result=_execution_result(verdict="AC"),
-        ),))
+        self.assertEqual(transition.outcome, "transitioned")
+        retry = task_store.commit_task_completions(
+            (
+                TaskCompletion(
+                    task_id=running_id,
+                    status=VerificationTaskStore.TASK_DONE,
+                    run_id="r-a",
+                    judgehost_task_id="jt-a",
+                    result=_execution_result(verdict="AC"),
+                ),
+            )
+        )
         rows = {
             str(row["id"]): row
             for row in task_store.list_rows(verification_id)
         }
-        self.assertEqual(str(rows["vt-running"]["status"]), VerificationTaskStore.TASK_DONE)
-        self.assertEqual(str(rows["vt-pending"]["status"]), VerificationTaskStore.TASK_CANCELLED)
+        self.assertEqual(retry.already_terminal_task_ids, frozenset({running_id}))
+        self.assertEqual(
+            str(rows[running_id]["status"]),
+            VerificationTaskStore.TASK_CANCELLED,
+        )
+        self.assertEqual(
+            str(rows[pending_id]["status"]),
+            VerificationTaskStore.TASK_CANCELLED,
+        )
 
     def test_verification_summary_from_tasks_marks_cancelled_terminal_failed(self) -> None:
-        from app.impl.workspace.verification_dag import LogicalRunSpec, _verification_summary_from_tasks
+        from app.impl.workspace.verification_dag import _verification_summary_from_tasks
 
         rows = [
             {
@@ -1155,7 +2274,7 @@ class TestVerificationTaskScheduler(E2ETestBase):
                 "verification_id": "ver-cancel-summary",
                 "task_kind": "solution-run",
                 "source_path": "solutions/a.cpp",
-                "logical_run_id": "r-a",
+                "program_id": "solution-0",
                 "test_name": "001.in",
                 "expected_behavior": "accepted",
                 "queue_index": 1,
@@ -1184,12 +2303,12 @@ class TestVerificationTaskScheduler(E2ETestBase):
             artifact_verification_id="ver-cancel-summary",
             mode="pass-fail",
             pass_limit=1,
-            logical_runs=[
-                LogicalRunSpec(
-                    logical_run_id="r-a",
+            programs=[
+                _verification_program(
+                    program_id="solution-0",
                     source_path="solutions/a.cpp",
                     expected_behavior="accepted",
-                    task_kind="solution-run",
+                    kind="solution-run",
                 )
             ],
             rows=rows,
@@ -1201,76 +2320,25 @@ class TestVerificationTaskScheduler(E2ETestBase):
         self.assertEqual(str(summary["status"]), "failed")
         self.assertEqual(int(counts["cancelled"]), 1)
 
-    def test_verification_summary_from_tasks_finishes_cancelled_fail_flag_with_leased_rows(self) -> None:
-        from app.impl.workspace.verification_dag import LogicalRunSpec, _verification_summary_from_tasks
-
-        rows = [
-            {
-                "id": "vt-leased",
-                "verification_id": "ver-cancel-leased-summary",
-                "task_kind": "solution-run",
-                "source_path": "solutions/a.cpp",
-                "logical_run_id": "r-a",
-                "test_name": "001.in",
-                "expected_behavior": "accepted",
-                "queue_index": 1,
-                "status": VerificationTaskStore.TASK_LEASED,
-                "verdict": "",
-                "run_id": "r-a",
-                "judgehost_task_id": "jt-a",
-                "runtime_sec": None,
-                "cpu_sec": None,
-                "wall_sec": None,
-                "memory_kb": None,
-                "compile_log": "",
-                "diagnostics_json": "[]",
-                "error_text": "",
-                "feedback_text": "",
-                "output_ref": "",
-                "started_at": "2026-03-23T00:00:00Z",
-                "finished_at": "",
-                "cancel_reason": "",
-                "created_at": "2026-03-23T00:00:00Z",
-                "updated_at": "2026-03-23T00:00:01Z",
-            }
-        ]
-        status, summary, counts = _verification_summary_from_tasks(
-            verification_id="ver-cancel-leased-summary",
-            artifact_verification_id="ver-cancel-leased-summary",
-            mode="pass-fail",
-            pass_limit=1,
-            logical_runs=[
-                LogicalRunSpec(
-                    logical_run_id="r-a",
-                    source_path="solutions/a.cpp",
-                    expected_behavior="accepted",
-                    task_kind="solution-run",
-                )
-            ],
-            rows=rows,
-            test_names=["001.in"],
-            fail_flag=True,
-            fail_reason="verification cancelled by user",
-        )
-        self.assertEqual(status, "failed")
-        self.assertEqual(str(summary["status"]), "failed")
-        self.assertTrue(str(summary["finished_at"] or ""))
-        self.assertEqual(int(counts["running"]), 1)
-
     def test_task_store_caps_frontend_display_fields(self) -> None:
         verification_id = canonical_test_verification_id(
             f"display-cap:{self.test_id}"
         )
         self._insert_verification_row(verification_id)
         task_store = config.verification_task_store
-        task_store.replace_graph(
+        task_id = verification_task_id(
+            verification_id,
+            "solution-0",
+            "001.in",
+        )
+        self._activate_graph(
             verification_id,
             tasks=[
                 {
-                    "id": "vt-cap",
+                    "id": task_id,
                     "task_kind": "solution-run",
                     "source_path": "solutions/a.cpp",
-                    "logical_run_id": "r-cap",
+                    "program_id": "solution-0",
                     "test_name": "001.in",
                     "expected_behavior": "accepted",
                     "queue_index": 1,
@@ -1282,7 +2350,7 @@ class TestVerificationTaskScheduler(E2ETestBase):
         oversized = "x" * 5000
         diagnostics_json = json.dumps([{"level": "error", "message": "y" * 5000}], separators=(",", ":"))
         task_store.commit_task_completions((TaskCompletion(
-            task_id="vt-cap",
+            task_id=task_id,
             status=VerificationTaskStore.TASK_FAILED,
             run_id="r-cap",
             judgehost_task_id="jt-cap",
@@ -1294,8 +2362,13 @@ class TestVerificationTaskScheduler(E2ETestBase):
                 compile_log=oversized,
                 compile_diagnostics=json.loads(diagnostics_json),
             ),
+            fail_reason=oversized,
         ),))
-        row = task_store.list_rows(verification_id)[0]
+        row = next(
+            row
+            for row in task_store.list_rows(verification_id)
+            if str(row["id"]) == task_id
+        )
         self.assertTrue(bool(row["answer_correct"]))
         limit = int(getattr(config.constants, "AUX_DISPLAY_TEXT_LIMIT_BYTES", 2048) or 2048)
         for key in ("compile_log", "error_text", "feedback_text"):
@@ -1313,44 +2386,64 @@ class TestVerificationTaskScheduler(E2ETestBase):
         )
         self._insert_verification_row(verification_id)
         task_store = config.verification_task_store
-        task_store.replace_graph(
+        owner_id = verification_task_id(
+            verification_id,
+            "generator-0",
+            "001.in",
+        )
+        duplicate_id = verification_task_id(
+            verification_id,
+            "generator-0",
+            "002.in",
+        )
+        main_id = verification_task_id(
+            verification_id,
+            "accepted",
+            "002.in",
+        )
+        solution_id = verification_task_id(
+            verification_id,
+            "solution-0",
+            "002.in",
+        )
+        self._activate_graph(
             verification_id,
             tasks=[
                 {
-                    "id": "vt-generate-owner",
+                    "id": owner_id,
                     "task_kind": "generate-input",
                     "source_path": "generators/gen.cpp",
-                    "logical_run_id": "r-generate",
+                    "program_id": "generator-0",
                     "test_name": "001.in",
                     "expected_behavior": "accepted",
                     "queue_index": 1,
                     "status": VerificationTaskStore.TASK_PENDING,
                 },
                 {
-                    "id": "vt-generate-duplicate",
+                    "id": duplicate_id,
                     "task_kind": "generate-input",
                     "source_path": "generators/gen.cpp",
-                    "logical_run_id": "r-generate",
+                    "program_id": "generator-0",
                     "test_name": "002.in",
                     "expected_behavior": "accepted",
                     "queue_index": 2,
                     "status": VerificationTaskStore.TASK_PENDING,
                 },
                 {
-                    "id": "vt-main-duplicate",
+                    "id": main_id,
                     "task_kind": "main-correct",
                     "source_path": "solutions/accepted.cpp",
-                    "logical_run_id": "r-main",
+                    "program_id": "accepted",
                     "test_name": "002.in",
                     "expected_behavior": "accepted",
                     "queue_index": 3,
                     "status": VerificationTaskStore.TASK_PENDING,
                 },
                 {
-                    "id": "vt-solution-duplicate",
+                    "id": solution_id,
                     "task_kind": "solution-run",
                     "source_path": "solutions/wa.cpp",
-                    "logical_run_id": "r-wa",
+                    "program_id": "solution-0",
                     "test_name": "002.in",
                     "expected_behavior": "wrong_answer",
                     "queue_index": 4,
@@ -1358,12 +2451,12 @@ class TestVerificationTaskScheduler(E2ETestBase):
                 },
             ],
             edges=[
-                ("vt-generate-duplicate", "vt-main-duplicate"),
-                ("vt-main-duplicate", "vt-solution-duplicate"),
+                (duplicate_id, main_id),
+                (main_id, solution_id),
             ],
         )
         task_store.commit_task_completions((TaskCompletion(
-            task_id="vt-generate-owner",
+            task_id=owner_id,
             status=VerificationTaskStore.TASK_DONE,
             run_id="r-owner",
             judgehost_task_id="jt-owner",
@@ -1374,7 +2467,7 @@ class TestVerificationTaskScheduler(E2ETestBase):
             input_ref="blob://same-generated-input",
         ),))
         task_store.commit_task_completions((TaskCompletion(
-            task_id="vt-generate-duplicate",
+            task_id=duplicate_id,
             status=VerificationTaskStore.TASK_DONE,
             run_id="r-duplicate",
             judgehost_task_id="jt-duplicate",
@@ -1385,10 +2478,13 @@ class TestVerificationTaskScheduler(E2ETestBase):
             input_ref="blob://same-generated-input",
         ),))
         rows = {str(row["id"]): row for row in task_store.list_rows(verification_id)}
-        self.assertEqual(str(rows["vt-generate-owner"]["verdict"]), "OK")
-        self.assertEqual(str(rows["vt-generate-duplicate"]["verdict"]), "SK")
-        self.assertIn("duplicate generated input; skipped", str(rows["vt-generate-duplicate"]["feedback_text"]))
-        for task_id in ("vt-main-duplicate", "vt-solution-duplicate"):
+        self.assertEqual(str(rows[owner_id]["verdict"]), "OK")
+        self.assertEqual(str(rows[duplicate_id]["verdict"]), "SK")
+        self.assertIn(
+            "duplicate generated input; skipped",
+            str(rows[duplicate_id]["feedback_text"]),
+        )
+        for task_id in (main_id, solution_id):
             self.assertEqual(str(rows[task_id]["status"]), VerificationTaskStore.TASK_DONE)
             self.assertEqual(str(rows[task_id]["verdict"]), "SK")
             self.assertEqual(
@@ -1402,24 +2498,34 @@ class TestVerificationTaskScheduler(E2ETestBase):
         )
         self._insert_verification_row(verification_id)
         task_store = config.verification_task_store
-        task_store.replace_graph(
+        generate_id = verification_task_id(
+            verification_id,
+            "generator-0",
+            "001.in",
+        )
+        main_id = verification_task_id(
+            verification_id,
+            "accepted",
+            "001.in",
+        )
+        self._activate_graph(
             verification_id,
             tasks=[
                 {
-                    "id": "vt-generate-evidence",
+                    "id": generate_id,
                     "task_kind": "generate-input",
                     "source_path": "generators/gen.cpp",
-                    "logical_run_id": "r-generate-evidence",
+                    "program_id": "generator-0",
                     "test_name": "001.in",
                     "expected_behavior": "accepted",
                     "queue_index": 1,
                     "status": VerificationTaskStore.TASK_PENDING,
                 },
                 {
-                    "id": "vt-main-evidence",
+                    "id": main_id,
                     "task_kind": "main-correct",
                     "source_path": "solutions/accepted.cpp",
-                    "logical_run_id": "r-main-evidence",
+                    "program_id": "accepted",
                     "test_name": "001.in",
                     "expected_behavior": "accepted",
                     "queue_index": 2,
@@ -1435,7 +2541,7 @@ class TestVerificationTaskScheduler(E2ETestBase):
         commit = task_store.commit_task_completions(
             (
                 TaskCompletion(
-                    task_id="vt-generate-evidence",
+                    task_id=generate_id,
                     status=VerificationTaskStore.TASK_DONE,
                     run_id="r-generate-evidence",
                     judgehost_task_id="jt-generate-evidence",
@@ -1446,7 +2552,7 @@ class TestVerificationTaskScheduler(E2ETestBase):
                     input_ref=str(input_file.blob_ref),
                 ),
                 TaskCompletion(
-                    task_id="vt-main-evidence",
+                    task_id=main_id,
                     status=VerificationTaskStore.TASK_DONE,
                     run_id="r-main-evidence",
                     judgehost_task_id="jt-main-evidence",
@@ -1459,21 +2565,26 @@ class TestVerificationTaskScheduler(E2ETestBase):
 
         self.assertEqual(
             commit.committed_task_ids,
-            frozenset({"vt-generate-evidence", "vt-main-evidence"}),
+            frozenset({generate_id, main_id}),
         )
         refs = config.verification_service.verification_artifact_refs(
             verification_id
         )["001.in"]
         self.assertEqual(refs["input_ref"], input_file.blob_ref)
         self.assertEqual(refs["answer_ref"], answer_file.blob_ref)
+        verification_row = config.verification_service.verification_record(
+            verification_id
+        )
+        assert verification_row is not None
+        self.assertEqual(str(verification_row["status"]), "failed")
         self.assertEqual(
-            task_store.fail_state(verification_id),
-            (True, "first durable failure context"),
+            str(verification_row["fail_reason"]),
+            "first durable failure context",
         )
         row = next(
             row
             for row in task_store.list_rows(verification_id)
-            if row["id"] == "vt-main-evidence"
+            if row["id"] == main_id
         )
         persisted_result = row["result"]
         self.assertEqual(persisted_result.passes, main_result.passes)
@@ -1491,14 +2602,19 @@ class TestVerificationTaskScheduler(E2ETestBase):
         )
         self._insert_verification_row(verification_id)
         task_store = config.verification_task_store
-        task_store.replace_graph(
+        task_id = verification_task_id(
+            verification_id,
+            "generator-0",
+            "001.in",
+        )
+        self._activate_graph(
             verification_id,
             tasks=[
                 {
-                    "id": "vt-rollback",
+                    "id": task_id,
                     "task_kind": "generate-input",
                     "source_path": "generators/gen.cpp",
-                    "logical_run_id": "r-rollback",
+                    "program_id": "generator-0",
                     "test_name": "001.in",
                     "expected_behavior": "accepted",
                     "queue_index": 1,
@@ -1517,7 +2633,7 @@ class TestVerificationTaskScheduler(E2ETestBase):
                 task_store.commit_task_completions(
                     (
                         TaskCompletion(
-                            task_id="vt-rollback",
+                            task_id=task_id,
                             status=VerificationTaskStore.TASK_FAILED,
                             run_id="r-rollback",
                             judgehost_task_id="jt-rollback",
@@ -1534,14 +2650,17 @@ class TestVerificationTaskScheduler(E2ETestBase):
         finally:
             clear_completion_ref_abort_fault()
 
-        row = task_store.list_rows(verification_id)[0]
+        row = next(
+            row
+            for row in task_store.list_rows(verification_id)
+            if str(row["id"]) == task_id
+        )
         self.assertEqual(row["status"], VerificationTaskStore.TASK_PENDING)
         self.assertEqual(row["result"].verdict, "")
         self.assertEqual(
             config.verification_service.verification_artifact_refs(verification_id),
             {},
         )
-        self.assertEqual(task_store.fail_state(verification_id), (False, ""))
         verification_row = config.verification_service.verification_record(
             verification_id
         )
@@ -1554,14 +2673,19 @@ class TestVerificationTaskScheduler(E2ETestBase):
         )
         self._insert_verification_row(verification_id)
         task_store = config.verification_task_store
-        task_store.replace_graph(
+        task_id = verification_task_id(
+            verification_id,
+            "generator-0",
+            "001.in",
+        )
+        self._activate_graph(
             verification_id,
             tasks=[
                 {
-                    "id": "vt-first-wins",
+                    "id": task_id,
                     "task_kind": "generate-input",
                     "source_path": "generators/gen.cpp",
-                    "logical_run_id": "r-first",
+                    "program_id": "generator-0",
                     "test_name": "001.in",
                     "expected_behavior": "accepted",
                     "queue_index": 1,
@@ -1571,7 +2695,7 @@ class TestVerificationTaskScheduler(E2ETestBase):
             edges=[],
         )
         first = TaskCompletion(
-            task_id="vt-first-wins",
+            task_id=task_id,
             status=VerificationTaskStore.TASK_DONE,
             run_id="r-first",
             judgehost_task_id="jt-first",
@@ -1587,7 +2711,7 @@ class TestVerificationTaskScheduler(E2ETestBase):
         retry = task_store.commit_task_completions(
             (
                 TaskCompletion(
-                    task_id="vt-first-wins",
+                    task_id=task_id,
                     status=VerificationTaskStore.TASK_FAILED,
                     run_id="r-conflict",
                     judgehost_task_id="jt-conflict",
@@ -1605,45 +2729,64 @@ class TestVerificationTaskScheduler(E2ETestBase):
         self.assertEqual(retry.committed_task_ids, frozenset())
         self.assertEqual(
             retry.already_terminal_task_ids,
-            frozenset({"vt-first-wins"}),
+            frozenset({task_id}),
         )
         self.assertEqual(retry.effective_completions[0].verdict, "OK")
-        row = task_store.list_rows(verification_id)[0]
+        row = next(
+            row
+            for row in task_store.list_rows(verification_id)
+            if str(row["id"]) == task_id
+        )
         self.assertEqual(row["status"], VerificationTaskStore.TASK_DONE)
         self.assertEqual(row["verdict"], "OK")
         refs = config.verification_service.verification_artifact_refs(
             verification_id
         )["001.in"]
         self.assertEqual(refs["input_ref"], "blob://first-output")
+        verification_row = config.verification_service.verification_record(
+            verification_id
+        )
+        assert verification_row is not None
+        self.assertEqual(str(verification_row["status"]), "failed")
         self.assertEqual(
-            task_store.fail_state(verification_id),
-            (True, "first failure context"),
+            str(verification_row["fail_reason"]),
+            "first failure context",
         )
 
-    def test_amendment_preserves_terminal_evidence_refs_and_unrelated_failure(self) -> None:
+    def test_late_diagnostic_preserves_terminal_evidence_and_failure(self) -> None:
         verification_id = canonical_test_verification_id(
-            f"completion-amendment:{self.test_id}"
+            f"completion-diagnostic:{self.test_id}"
         )
         self._insert_verification_row(verification_id)
         task_store = config.verification_task_store
-        task_store.replace_graph(
+        first_failure_id = verification_task_id(
+            verification_id,
+            "accepted",
+            "001.in",
+        )
+        diagnostic_task_id = verification_task_id(
+            verification_id,
+            "generator-0",
+            "002.in",
+        )
+        self._activate_graph(
             verification_id,
             tasks=[
                 {
-                    "id": "vt-first-failure",
+                    "id": first_failure_id,
                     "task_kind": "main-correct",
                     "source_path": "solutions/accepted.cpp",
-                    "logical_run_id": "r-first-failure",
+                    "program_id": "accepted",
                     "test_name": "001.in",
                     "expected_behavior": "accepted",
                     "queue_index": 1,
                     "status": VerificationTaskStore.TASK_PENDING,
                 },
                 {
-                    "id": "vt-amended",
+                    "id": diagnostic_task_id,
                     "task_kind": "generate-input",
                     "source_path": "generators/gen.cpp",
-                    "logical_run_id": "r-amended",
+                    "program_id": "generator-0",
                     "test_name": "002.in",
                     "expected_behavior": "accepted",
                     "queue_index": 2,
@@ -1651,6 +2794,14 @@ class TestVerificationTaskScheduler(E2ETestBase):
                 },
             ],
             edges=[],
+        )
+        self.assertTrue(
+            task_store.bind_and_expose_judgehost_runtime(
+                diagnostic_task_id,
+                run_id="r-amended",
+                judgehost_task_id="jt-amended",
+                expose=lambda: None,
+            )
         )
         output_file = config.runtime_blob_store.put_bytes(b"generated input\n")
         original_result = _execution_result(
@@ -1663,7 +2814,7 @@ class TestVerificationTaskScheduler(E2ETestBase):
         task_store.commit_task_completions(
             (
                 TaskCompletion(
-                    task_id="vt-first-failure",
+                    task_id=first_failure_id,
                     status=VerificationTaskStore.TASK_FAILED,
                     run_id="r-first-failure",
                     judgehost_task_id="jt-first-failure",
@@ -1677,7 +2828,7 @@ class TestVerificationTaskScheduler(E2ETestBase):
                     ),
                 ),
                 TaskCompletion(
-                    task_id="vt-amended",
+                    task_id=diagnostic_task_id,
                     status=VerificationTaskStore.TASK_DONE,
                     run_id="r-amended",
                     judgehost_task_id="jt-amended",
@@ -1687,58 +2838,80 @@ class TestVerificationTaskScheduler(E2ETestBase):
             )
         )
 
-        commit = task_store.amend_task_completion(
-            TaskCompletionAmendment(
-                task_id="vt-amended",
-                error_text="late debug detail",
-                feedback_text="late debug detail",
-                expected_fail_reason="generate-input old failure",
-                fail_reason="generate-input conflicting late failure",
-            )
+        outcome = task_store.append_diagnostic(
+            task_id=diagnostic_task_id,
+            kind="debug-info",
+            hostname="judgehost-1",
+            text="late debug detail",
+            received_at="2026-08-10T00:00:00+00:00",
         )
 
-        self.assertIsNotNone(commit)
-        assert commit is not None
-        amended = commit.effective_completions[0]
-        self.assertEqual(amended.status, VerificationTaskStore.TASK_DONE)
-        self.assertEqual(amended.verdict, "OK")
-        self.assertEqual(amended.result.passes, original_result.passes)
-        self.assertEqual(amended.result.compile.log, original_result.compile.log)
+        self.assertEqual(outcome, "persisted")
+        rows = {
+            str(row["id"]): row
+            for row in task_store.list_rows(verification_id)
+        }
+        persisted = rows[diagnostic_task_id]
+        self.assertEqual(persisted["status"], VerificationTaskStore.TASK_DONE)
+        self.assertEqual(persisted["verdict"], "OK")
+        self.assertEqual(persisted["result"].passes, original_result.passes)
         self.assertEqual(
-            [item["message"] for item in amended.result.compile.diagnostics],
+            persisted["result"].compile.log,
+            original_result.compile.log,
+        )
+        self.assertEqual(
+            [
+                item["message"]
+                for item in persisted["result"].compile.diagnostics
+            ],
             [item["message"] for item in original_result.compile.diagnostics],
         )
-        self.assertEqual(amended.result.warnings, original_result.warnings)
-        self.assertEqual(amended.input_ref, output_file.blob_ref)
-        self.assertEqual(amended.answer_ref, "")
-        self.assertEqual(amended.error_text, "late debug detail")
-        self.assertEqual(amended.feedback_text, "late debug detail")
+        self.assertEqual(persisted["result"].warnings, original_result.warnings)
         refs = config.verification_service.verification_artifact_refs(
             verification_id
         )["002.in"]
         self.assertEqual(refs["input_ref"], output_file.blob_ref)
+        diagnostic = task_store.diagnostic_snapshot(diagnostic_task_id)
+        self.assertEqual(len(diagnostic.items), 1)
+        self.assertEqual(diagnostic.items[0].text, "late debug detail")
         self.assertEqual(
-            task_store.fail_state(verification_id),
-            (
-                True,
-                "main-correct / solutions/accepted.cpp / 001.in: first task failed",
+            task_store.append_diagnostic(
+                task_id=diagnostic_task_id,
+                kind="debug-info",
+                hostname="judgehost-1",
+                text="late debug detail",
+                received_at="2026-08-10T00:00:01+00:00",
             ),
+            "duplicate",
+        )
+        verification_row = config.verification_service.verification_record(
+            verification_id
+        )
+        assert verification_row is not None
+        self.assertEqual(
+            str(verification_row["fail_reason"]),
+            "main-correct / solutions/accepted.cpp / 001.in: first task failed",
         )
 
-    def test_persisted_fail_flag_survives_completion_without_failure_reason(self) -> None:
+    def test_cancel_persists_first_failure_and_terminalizes_task(self) -> None:
         verification_id = canonical_test_verification_id(
             f"completion-cancel-reason:{self.test_id}"
         )
         self._insert_verification_row(verification_id)
         task_store = config.verification_task_store
-        task_store.replace_graph(
+        task_id = verification_task_id(
+            verification_id,
+            "solution-0",
+            "001.in",
+        )
+        self._activate_graph(
             verification_id,
             tasks=[
                 {
-                    "id": "vt-cancel-reason",
+                    "id": task_id,
                     "task_kind": "solution-run",
                     "source_path": "solutions/a.cpp",
-                    "logical_run_id": "r-cancel-reason",
+                    "program_id": "solution-0",
                     "test_name": "001.in",
                     "expected_behavior": "accepted",
                     "queue_index": 1,
@@ -1747,60 +2920,50 @@ class TestVerificationTaskScheduler(E2ETestBase):
             ],
             edges=[],
         )
-        task_store.set_fail_flag(
+        transition = config.verification_service.cancel_verification(
             verification_id,
             reason="verification cancelled by user",
         )
-        task_store.commit_task_completions(
-            (
-                TaskCompletion(
-                    task_id="vt-cancel-reason",
-                    status=VerificationTaskStore.TASK_CANCELLED,
-                    run_id="r-cancel-reason",
-                    judgehost_task_id="",
-                    result=normalize_execution_result(
-                        error="verification cancelled by user"
-                    ),
-                ),
-            )
-        )
-
-        self.assertEqual(
-            task_store.fail_state(verification_id),
-            (True, "verification cancelled by user"),
-        )
+        self.assertEqual(transition.outcome, "transitioned")
         row = config.verification_service.verification_record(verification_id)
         assert row is not None
+        self.assertEqual(str(row["status"]), "failed")
         self.assertEqual(
             str(row["fail_reason"] or ""),
             "verification cancelled by user",
         )
+        task_row = next(
+            row
+            for row in task_store.list_rows(verification_id)
+            if str(row["id"]) == task_id
+        )
+        self.assertEqual(
+            str(task_row["status"]),
+            VerificationTaskStore.TASK_CANCELLED,
+        )
 
-    def test_startup_cancel_task_graph_verifications_reconciles_stale_rows(self) -> None:
-        from app.impl.auth.internal.runtime import _startup_cancel_task_graph_verifications
-
+    def test_startup_recovery_terminalizes_running_graph(self) -> None:
         verification_id = canonical_test_verification_id("startup-reconcile")
         self._insert_verification_row(verification_id)
-        config.verification_service.persist_verification_detail(
+        running_id = verification_task_id(
             verification_id,
-            {
-                "verification_id": verification_id,
-                "artifact_verification_id": verification_id,
-                "task_graph": True,
-                "status": "failed",
-                "mode": "pass-fail",
-                "error": "cancelled on service startup",
-            },
+            "solution-0",
+            "001.in",
+        )
+        pending_id = verification_task_id(
+            verification_id,
+            "solution-0",
+            "002.in",
         )
         task_store = config.verification_task_store
-        task_store.replace_graph(
+        self._activate_graph(
             verification_id,
             tasks=[
                 {
-                    "id": "vt-running",
+                    "id": running_id,
                     "task_kind": "solution-run",
                     "source_path": "solutions/a.cpp",
-                    "logical_run_id": "r-a",
+                    "program_id": "solution-0",
                     "test_name": "001.in",
                     "expected_behavior": "accepted",
                     "queue_index": 1,
@@ -1808,10 +2971,10 @@ class TestVerificationTaskScheduler(E2ETestBase):
                     "started_at": "2026-03-23T00:00:00Z",
                 },
                 {
-                    "id": "vt-pending",
+                    "id": pending_id,
                     "task_kind": "solution-run",
                     "source_path": "solutions/a.cpp",
-                    "logical_run_id": "r-a",
+                    "program_id": "solution-0",
                     "test_name": "002.in",
                     "expected_behavior": "accepted",
                     "queue_index": 2,
@@ -1819,39 +2982,52 @@ class TestVerificationTaskScheduler(E2ETestBase):
                 },
             ],
             edges=[],
+            detail={"mode": "pass-fail"},
         )
 
-        _startup_cancel_task_graph_verifications("cancelled on service startup")
+        summary = config.verification_service.recover_startup(
+            reason="cancelled on service startup"
+        )
 
         rows = {str(row["id"]): row for row in task_store.list_rows(verification_id)}
-        self.assertEqual(str(rows["vt-running"]["status"]), VerificationTaskStore.TASK_CANCELLED)
-        self.assertEqual(str(rows["vt-pending"]["status"]), VerificationTaskStore.TASK_CANCELLED)
-        verification_row = VerificationStore(config.db).record_row(verification_id)
+        self.assertEqual(summary.verification_ids, (verification_id,))
+        self.assertEqual(
+            str(rows[running_id]["status"]),
+            VerificationTaskStore.TASK_CANCELLED,
+        )
+        self.assertEqual(
+            str(rows[pending_id]["status"]),
+            VerificationTaskStore.TASK_CANCELLED,
+        )
+        verification_row = config.verification_service.verification_record(
+            verification_id
+        )
         assert verification_row is not None
         self.assertEqual(str(verification_row["status"] or ""), "failed")
 
-    def test_startup_finalize_cancelled_verifications_fills_missing_finished_at(self) -> None:
-        from app.impl.auth.internal.runtime import _startup_finalize_cancelled_verifications
-
-        verification_id = canonical_test_verification_id("startup-user-cancel")
+    def test_startup_recovery_fails_queued_verification_without_graph(self) -> None:
+        verification_id = canonical_test_verification_id("startup-queued")
         self._insert_verification_row(verification_id)
-        config.verification_service.update_verification_record_status(
-            verification_id,
-            status="failed",
-            fail_reason="verification cancelled by user",
-            finished=False,
+
+        summary = config.verification_service.recover_startup(
+            reason="cancelled on service startup"
         )
 
-        _startup_finalize_cancelled_verifications("2026-04-20T00:00:00Z")
-
-        verification_row = VerificationStore(config.db).record_row(verification_id)
+        self.assertEqual(summary.verification_ids, (verification_id,))
+        self.assertEqual(summary.cancelled_task_ids, ())
+        verification_row = config.verification_service.verification_record(
+            verification_id
+        )
         assert verification_row is not None
         self.assertEqual(str(verification_row["status"] or ""), "failed")
-        self.assertEqual(str(verification_row["fail_reason"] or ""), "verification cancelled by user")
-        self.assertEqual(str(verification_row["finished_at"] or ""), "2026-04-20T00:00:00Z")
+        self.assertEqual(
+            str(verification_row["fail_reason"] or ""),
+            "cancelled on service startup",
+        )
+        self.assertTrue(str(verification_row["finished_at"] or ""))
 
     def test_verification_summary_from_tasks_excludes_main_correct_runs_from_solution_columns(self) -> None:
-        from app.impl.workspace.verification_dag import LogicalRunSpec, _verification_summary_from_tasks
+        from app.impl.workspace.verification_dag import _verification_summary_from_tasks
 
         rows = [
             {
@@ -1859,7 +3035,7 @@ class TestVerificationTaskScheduler(E2ETestBase):
                 "verification_id": "ver-graph-summary",
                 "task_kind": "main-correct",
                 "source_path": "solutions/accepted.cpp",
-                "logical_run_id": "r-main",
+                "program_id": "accepted",
                 "test_name": "001.in",
                 "expected_behavior": "accepted",
                 "queue_index": 1,
@@ -1887,7 +3063,7 @@ class TestVerificationTaskScheduler(E2ETestBase):
                 "verification_id": "ver-graph-summary",
                 "task_kind": "solution-run",
                 "source_path": "solutions/wa.cpp",
-                "logical_run_id": "r-wa",
+                "program_id": "solution-0",
                 "test_name": "001.in",
                 "expected_behavior": "wrong_answer",
                 "queue_index": 2,
@@ -1916,18 +3092,18 @@ class TestVerificationTaskScheduler(E2ETestBase):
             artifact_verification_id="ver-artifact-summary",
             mode="pass-fail",
             pass_limit=1,
-            logical_runs=[
-                LogicalRunSpec(
-                    logical_run_id="r-main",
+            programs=[
+                _verification_program(
+                    program_id="accepted",
                     source_path="solutions/accepted.cpp",
                     expected_behavior="accepted",
-                    task_kind="main-correct",
+                    kind="main-correct",
                 ),
-                LogicalRunSpec(
-                    logical_run_id="r-wa",
+                _verification_program(
+                    program_id="solution-0",
                     source_path="solutions/wa.cpp",
                     expected_behavior="wrong_answer",
-                    task_kind="solution-run",
+                    kind="solution-run",
                 ),
             ],
             rows=rows,
@@ -1955,25 +3131,62 @@ class TestVerificationTaskScheduler(E2ETestBase):
         self.assertTrue(bool(diagnostics_meta["rows"][0].get("message_truncated")))
         self.assertIn('"message":"aaaaaaa..."', diagnostics_json)
 
-    def test_task_store_persists_fail_flag(self) -> None:
+    def test_late_diagnostic_limit_counts_serialized_json_escaping(self) -> None:
+        item = new_task_diagnostic_item(
+            kind="debug-info",
+            hostname="judgehost-1",
+            text=('line "quoted"\\path\n' * 64),
+            received_at="2026-08-10T00:00:00+00:00",
+            limit_bytes=4096,
+        )
+
+        merged, outcome = merge_task_diagnostic_snapshot(
+            TaskDiagnosticSnapshot(),
+            item,
+            limit_bytes=256,
+        )
+
+        self.assertEqual(outcome, "persisted")
+        self.assertLessEqual(
+            len(task_diagnostic_snapshot_json(merged).encode("utf-8")),
+            256,
+        )
+        self.assertTrue(merged.items[0].text.endswith("..."))
+        unchanged, tiny_outcome = merge_task_diagnostic_snapshot(
+            merged,
+            new_task_diagnostic_item(
+                kind="internal-error",
+                hostname="judgehost-2",
+                text="new context",
+                received_at="2026-08-10T00:00:01+00:00",
+                limit_bytes=32,
+            ),
+            limit_bytes=1,
+        )
+        self.assertEqual(tiny_outcome, "not-applicable")
+        self.assertEqual(unchanged, merged)
+
+    def test_failure_transition_preserves_first_reason(self) -> None:
         verification_id = canonical_test_verification_id(
             f"task-store:{self.test_id}"
         )
         self._insert_verification_row(verification_id)
-        store = config.verification_task_store
-        store.set_fail_flag(verification_id, reason="main failed")
-        self.assertEqual(store.fail_state(verification_id), (True, "main failed"))
-        self.assertIsNotNone(VerificationStore(config.db).record_row(verification_id))
-
-    def test_task_store_keeps_first_fail_flag_reason(self) -> None:
-        verification_id = canonical_test_verification_id(
-            f"task-store-first:{self.test_id}"
+        first = config.verification_service.fail_verification(
+            verification_id,
+            reason=(
+                "generate-input / generators/gen.cpp / 001.in: "
+                "validator failed"
+            ),
         )
-        self._insert_verification_row(verification_id)
-        store = config.verification_task_store
-        store.set_fail_flag(verification_id, reason="generate-input / generators/gen.cpp / 001.in: validator failed")
-        store.set_fail_flag(verification_id, reason="verification cancelled by user")
+        second = config.verification_service.cancel_verification(
+            verification_id,
+            reason="verification cancelled by user",
+        )
+        self.assertEqual(first.outcome, "transitioned")
+        self.assertEqual(second.outcome, "closed")
+        row = config.verification_service.verification_record(verification_id)
+        assert row is not None
         self.assertEqual(
-            store.fail_state(verification_id),
-            (True, "generate-input / generators/gen.cpp / 001.in: validator failed"),
+            str(row["fail_reason"]),
+            "generate-input / generators/gen.cpp / 001.in: validator failed",
         )

@@ -1,6 +1,12 @@
 from __future__ import annotations
 
-from tests.db_helpers import db_execute, db_fetch_one, write_verification_summary
+from tests.db_helpers import (
+    activate_test_verification,
+    admit_test_verification,
+    db_execute,
+    db_fetch_one,
+    verification_programs_for_tasks,
+)
 
 import asyncio
 import base64
@@ -13,7 +19,7 @@ from unittest.mock import patch
 from fastapi import HTTPException
 from starlette.requests import Request
 
-from tests.common import E2ETestBase, override_config_values, suite_root
+from tests.common import E2ETestBase, suite_root
 from tests.identity_helpers import canonical_test_verification_id
 from app.impl.runtime.config import config
 from app.impl.problem.checker import checker_rename_source, checker_set_standard
@@ -39,16 +45,15 @@ from app.impl.problem.validator import validator_rename_source, validator_save_s
 from app.impl.run_export.artifact import artifact_file
 from app.impl.run_export.run import run_cancel, run_execute
 from app.impl.root.auth_pages import auth_password_meta, login_page
-from app.config import CONFIG_REGISTRY
+from app.main_util import TEXTAREA_MAX_BYTES
+from app.service.verification.lifecycle import PlannedTask, verification_task_id
 from app.service.verification.task_store import VerificationTaskStore
 from tests.ui_support import _register_with_password_envelope
-
-TEXTAREA_MAX_BYTES = int(CONFIG_REGISTRY.defaults()["TEXTAREA_MAX_BYTES"])
 
 db = config.db
 workspace_service = config.workspace_service
 
-FLASH_COOKIE_NAME = config.config_values.FLASH_COOKIE_NAME
+FLASH_COOKIE_NAME = config.constants.FLASH_COOKIE_NAME
 
 
 def _request(
@@ -229,8 +234,6 @@ class TestSecurity(E2ETestBase):
                 "2026-02-25T00:00:01Z",
             ],
         )
-        write_verification_summary(verification_id, {"status": "ok"})
-
         with self.assertRaises(HTTPException) as denied:
             artifact_file("alice/sample", "bob", verification_id, "logs/compile.log")
         self.assertEqual(denied.exception.status_code, 404)
@@ -266,8 +269,6 @@ class TestSecurity(E2ETestBase):
                 "2026-02-25T00:00:01Z",
             ],
         )
-        write_verification_summary(verification_id, {"status": "ok"})
-
         with self.assertRaises(HTTPException) as denied:
             artifact_file("alice/sample", "alice", verification_id, "../outside.txt")
         self.assertEqual(denied.exception.status_code, 400)
@@ -283,40 +284,44 @@ class TestSecurity(E2ETestBase):
 
         verification_id = canonical_test_verification_id(f"ver-sec-cancel-{uuid.uuid4().hex[:8]}")
         run_id = f"r-sec-cancel-{uuid.uuid4().hex[:8]}"
-        db_execute(
-            """
-            INSERT INTO verifications(id,problem_id,workspace_id,signature,kind,status,fail_reason,created_at,finished_at)
-            VALUES(?,?,?,?,?,?,?,?,?)
-            """,
-            [
-                verification_id,
-                problem_id,
-                alice_workspace_id,
-                "",
-                "all",
-                "running",
-                "",
-                "2026-04-13T00:00:00Z",
-                None,
-            ],
+        admission = admit_test_verification(
+            verification_id=verification_id,
+            problem_id=problem_id,
+            workspace_id=alice_workspace_id,
+            signature="",
+            source_commit="",
+            kind="all",
         )
-        config.verification_task_store.replace_graph(
+        self.assertEqual(admission.outcome, "admitted")
+        task_id = verification_task_id(
             verification_id,
-            tasks=[
-                {
-                    "id": "vt-sec-cancel-1",
-                    "task_kind": "solution-run",
-                    "source_path": "solutions/accepted.cpp",
-                    "logical_run_id": run_id,
-                    "test_name": "001.in",
-                    "expected_behavior": "accepted",
-                    "queue_index": 1,
-                    "status": VerificationTaskStore.TASK_QUEUED,
-                    "run_id": run_id,
-                    "judgehost_task_id": "jt-sec-cancel-1",
-                }
-            ],
-            edges=[],
+            "accepted",
+            "001.in",
+        )
+        tasks = [
+            PlannedTask(
+                task_id=task_id,
+                predecessor_task_id=None,
+                task_kind="main-correct",
+                source_path="solutions/accepted.cpp",
+                program_id="accepted",
+                test_name="001.in",
+                expected_behavior="accepted",
+            )
+        ]
+        activation = activate_test_verification(
+            verification_id,
+            programs=verification_programs_for_tasks(tasks),
+            tasks=tasks,
+        )
+        self.assertEqual(activation.outcome, "activated")
+        self.assertTrue(
+            config.verification_task_store.bind_and_expose_judgehost_runtime(
+                task_id,
+                run_id=run_id,
+                judgehost_task_id="jt-sec-cancel-1",
+                expose=lambda: None,
+            )
         )
 
         with patch.object(
@@ -442,17 +447,17 @@ class TestSecurity(E2ETestBase):
         self.assertIn("file content is too long", self._first_flash_message(resp).lower())
 
     def test_files_upload_rejects_payload_over_shared_upload_limit(self) -> None:
-        upload = self._FakeUpload(b"x" * 1025)
-        override_config_values(self, config.config_values, UPLOAD_MAX_BYTES=1024)
-        response = asyncio.run(
-            files_upload(
-                request=_request("/problems/alice/sample/files/upload"),
-                problem="alice/sample",
-                user="alice",
-                path="notes/upload-too-large.txt",
-                upload=upload,
+        upload = self._FakeUpload(b"123456789")
+        with patch("app.main_util.UPLOAD_MAX_BYTES", 8):
+            response = asyncio.run(
+                files_upload(
+                    request=_request("/problems/alice/sample/files/upload"),
+                    problem="alice/sample",
+                    user="alice",
+                    path="notes/upload-too-large.txt",
+                    upload=upload,
+                )
             )
-        )
         self.assertEqual(response.status_code, 303)
         self.assertIn(
             "uploaded file is too large",

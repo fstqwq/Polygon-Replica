@@ -1,6 +1,6 @@
 """Deterministic in-memory scheduling for DOMjudge execution Batches.
 
-An ExecutionBatch is one logical run inside one Verification. Cases are the
+An ExecutionBatch is one program inside one verification. Cases are the
 only lease/report unit. Hosts select work in this fixed order: an existing
 lease, foreground work, a ready Batch in the host's four-entry affinity queue,
 a prerequisite that can unblock one of those Batches, and finally the global
@@ -101,8 +101,8 @@ class BatchScheduler(BatchSchedulerResultMixin):
         self._latest_case_id_by_task_test: dict[tuple[str, str], int] = {}
         self._batch_id_by_task: dict[str, int] = {}
         self._batch_ids_by_run: dict[str, set[int]] = defaultdict(set)
-        self._batch_id_by_logical_run: dict[tuple[str, str], int] = {}
-        self._closed_logical_run_keys: set[tuple[str, str]] = set()
+        self._batch_id_by_verification_program: dict[tuple[str, str], int] = {}
+        self._closed_program_keys: set[tuple[str, str]] = set()
         self._closed_verification_ids: set[str] = set()
         self._script_hash_refcounts: dict[tuple[str, int, str], int] = defaultdict(int)
         self._script_hashes_by_id: dict[tuple[str, int], set[str]] = defaultdict(set)
@@ -115,7 +115,7 @@ class BatchScheduler(BatchSchedulerResultMixin):
         self._scope_sequence_by_verification: dict[str, int] = {}
         self._batch_specs: dict[int, ExecutionBatchSpec] = {}
         # Materialization replaces the descriptor in this canonical map. Keeping
-        # raw and materialized copies separately made warm logical-run appends
+        # raw and materialized copies separately made warm program appends
         # observe a compile key without its submission.
         self._compile_submissions_by_key: dict[str, CompileSubmission] = {}
         self._compile_key_by_submit_id: dict[int, str] = {}
@@ -131,6 +131,8 @@ class BatchScheduler(BatchSchedulerResultMixin):
         self._finalization_retry_deadlines: dict[int, float] = {}
         self._host_telemetry: dict[str, HostTelemetryState] = {}
         self._telemetry_hosts_by_batch: dict[int, set[str]] = defaultdict(set)
+        self._next_callback_receipt_id = itertools.count(1)
+        self._case_id_by_callback_receipt: dict[int, int] = {}
 
     def _next_entity_ids_locked(self, count: int) -> tuple[int, ...]:
         if count < 0:
@@ -156,8 +158,8 @@ class BatchScheduler(BatchSchedulerResultMixin):
             self._latest_case_id_by_task_test.clear()
             self._batch_id_by_task.clear()
             self._batch_ids_by_run.clear()
-            self._batch_id_by_logical_run.clear()
-            self._closed_logical_run_keys.clear()
+            self._batch_id_by_verification_program.clear()
+            self._closed_program_keys.clear()
             self._closed_verification_ids.clear()
             self._script_hash_refcounts.clear()
             self._script_hashes_by_id.clear()
@@ -182,6 +184,8 @@ class BatchScheduler(BatchSchedulerResultMixin):
             self._finalization_retry_deadlines.clear()
             self._host_telemetry.clear()
             self._telemetry_hosts_by_batch.clear()
+            self._next_callback_receipt_id = itertools.count(1)
+            self._case_id_by_callback_receipt.clear()
             self._ready_generation += 1
             self._ready_condition.notify_all()
 
@@ -193,6 +197,8 @@ class BatchScheduler(BatchSchedulerResultMixin):
     def _batch_row(batch: ExecutionBatchRecord) -> ExecutionBatchRow:
         row = asdict(batch)
         row.pop("dispatch_count")
+        row.pop("program_failure_result")
+        row.pop("program_failure_diagnostic_digest")
         return row  # type: ignore[return-value]
 
     @staticmethod
@@ -204,6 +210,8 @@ class BatchScheduler(BatchSchedulerResultMixin):
         row.pop("terminal_result")
         row.pop("requeue_on_abort")
         row.pop("claim_generation")
+        row.pop("callback_receipt_count")
+        row.pop("pending_diagnostics")
         result_fields = (
             "runresult", "runtime_sec", "cpu_sec", "wall_sec", "memory_kb",
             "output_run_ref", "output_error_ref", "output_system_ref", "output_diff_ref",
@@ -421,6 +429,8 @@ class BatchScheduler(BatchSchedulerResultMixin):
                 self._leased_case_ids_by_host.pop(old_owner, None)
         case.status = status
         case.lease_owner = lease_owner
+        if lease_owner:
+            case.last_callback_hostname = lease_owner
         case.heap_generation += 1
         case.updated_at = updated_at
         if status in {"leased", "reporting"} and lease_owner:
@@ -431,7 +441,10 @@ class BatchScheduler(BatchSchedulerResultMixin):
             batch.status == "open"
             and (
                 batch.verification_id in self._closed_verification_ids
-                or (batch.verification_id, batch.logical_run_id) in self._closed_logical_run_keys
+                or (
+                    batch.verification_id,
+                    batch.verification_program_id,
+                ) in self._closed_program_keys
             )
             and counts.total > 0
             and counts.terminal == counts.total
@@ -486,6 +499,7 @@ class BatchScheduler(BatchSchedulerResultMixin):
             id=case_id,
             batch_id=batch_id,
             task_id=task_id,
+            verification_task_id=str(source.get("verification_task_id") or ""),
             run_id=run_id,
             test_name=test_name,
             ordinal=ordinal,
@@ -501,7 +515,10 @@ class BatchScheduler(BatchSchedulerResultMixin):
             lease_owner=None,
             result=None,
             debug_text="",
-            verification_published=False,
+            completion_acknowledged=False,
+            last_callback_hostname="",
+            callback_receipt_count=0,
+            pending_diagnostics=[],
             cancel_requested=False,
             terminal_result=None,
             requeue_on_abort=False,
@@ -885,8 +902,8 @@ class BatchScheduler(BatchSchedulerResultMixin):
             self._scope_sequence_by_verification.pop(token, None)
             if not self._batch_ids_by_verification.get(token):
                 self._closed_verification_ids.discard(token)
-                self._closed_logical_run_keys = {
-                    key for key in self._closed_logical_run_keys if key[0] != token
+                self._closed_program_keys = {
+                    key for key in self._closed_program_keys if key[0] != token
                 }
 
     def finish_verification_execution(self, verification_id: str, *, now_text: str) -> list[int]:
@@ -897,7 +914,9 @@ class BatchScheduler(BatchSchedulerResultMixin):
             ready: list[int] = []
             for batch_id in self._batch_ids_by_verification.get(token, ()):
                 batch = self._batches[batch_id]
-                self._closed_logical_run_keys.add((token, batch.logical_run_id))
+                self._closed_program_keys.add(
+                    (token, batch.verification_program_id)
+                )
                 counts = self._batch_counts[batch_id]
                 if (
                     batch.status == "open"
@@ -935,11 +954,17 @@ class BatchScheduler(BatchSchedulerResultMixin):
                     self._affinity_batches_by_host.pop(hostname, None)
             for batch_id in batch_ids:
                 batch = self._batches[batch_id]
-                self._closed_logical_run_keys.add((token, batch.logical_run_id))
+                self._closed_program_keys.add(
+                    (token, batch.verification_program_id)
+                )
                 for case_id in tuple(self._case_ids_by_batch.get(batch_id, ())):
                     case = self._cases[case_id]
                     task_ids.add(case.task_id)
                     if case.status in self._TERMINAL_CASE_STATUSES:
+                        continue
+                    if case.status == "staged":
+                        case.cancel_requested = True
+                        case.terminal_result = None
                         continue
                     if case.status in {"leased", "reporting", "cache-probing"}:
                         case.cancel_requested = True
@@ -965,21 +990,21 @@ class BatchScheduler(BatchSchedulerResultMixin):
                 awaiting_receipt_count=awaiting_receipt_count,
             )
 
-    def finish_logical_runs(
+    def finish_programs(
         self,
         verification_id: str,
-        logical_run_ids: Iterable[str],
+        verification_program_ids: Iterable[str],
         *,
         now_text: str,
     ) -> list[int]:
-        """Stop logical-run admission and expose terminal Batches for finalization."""
+        """Stop program admission and expose terminal Batches for finalization."""
         token = verification_id or "__direct__"
         with self._lock:
             ready: list[int] = []
-            for logical_run_id in dict.fromkeys(logical_run_ids):
-                key = (token, logical_run_id)
-                self._closed_logical_run_keys.add(key)
-                batch_id = self._batch_id_by_logical_run.get(key)
+            for program_id in dict.fromkeys(verification_program_ids):
+                key = (token, program_id)
+                self._closed_program_keys.add(key)
+                batch_id = self._batch_id_by_verification_program.get(key)
                 if batch_id is None:
                     continue
                 batch = self._batches[batch_id]
@@ -1054,7 +1079,10 @@ class BatchScheduler(BatchSchedulerResultMixin):
             if (
                 (
                     batch.verification_id in self._closed_verification_ids
-                    or (batch.verification_id, batch.logical_run_id) in self._closed_logical_run_keys
+                    or (
+                        batch.verification_id,
+                        batch.verification_program_id,
+                    ) in self._closed_program_keys
                 )
                 and counts.total > 0
                 and counts.terminal == counts.total
@@ -1171,7 +1199,7 @@ class BatchScheduler(BatchSchedulerResultMixin):
         *,
         task_id: str,
         run_id: str,
-        logical_run_id: str,
+        verification_program_id: str,
         execution_signature: str,
         task_kind: str,
         verification_id: str,
@@ -1198,8 +1226,8 @@ class BatchScheduler(BatchSchedulerResultMixin):
         self._validate_case_rows(case_rows, default_task_id=task_id, default_run_id=run_id)
         if service_class not in {"foreground", "background"}:
             raise RuntimeError("invalid judgehost service class")
-        if not logical_run_id:
-            raise RuntimeError("missing judgehost logical run id")
+        if not verification_program_id:
+            raise RuntimeError("missing judgehost verification program id")
         if task_kind not in {"compile-only", "generate-input", "main-correct", "solution-run"}:
             raise RuntimeError("invalid judgehost task kind")
         for script_hash in (compile_hash, run_hash, compare_hash):
@@ -1217,10 +1245,12 @@ class BatchScheduler(BatchSchedulerResultMixin):
             self._validate_testcase_identities_locked(case_rows)
             if verification_id in self._closed_verification_ids:
                 raise RuntimeError("judgehost verification execution is closed")
-            logical_run_key = (verification_id, logical_run_id)
-            if logical_run_key in self._closed_logical_run_keys:
-                raise RuntimeError("judgehost logical run execution is closed")
-            existing_batch_id = self._batch_id_by_logical_run.get(logical_run_key)
+            program_key = (verification_id, verification_program_id)
+            if program_key in self._closed_program_keys:
+                raise RuntimeError("judgehost verification program is closed")
+            existing_batch_id = self._batch_id_by_verification_program.get(
+                program_key
+            )
             if existing_batch_id is not None:
                 existing_batch = self._batches[existing_batch_id]
                 identity = (
@@ -1268,9 +1298,9 @@ class BatchScheduler(BatchSchedulerResultMixin):
                     self._compile_submission_identity(compile_submission),
                 )
                 if identity != requested_identity:
-                    raise RuntimeError("judgehost logical run execution identity changed")
+                    raise RuntimeError("judgehost verification program identity changed")
                 if existing_batch.status != "open":
-                    raise RuntimeError("judgehost logical run execution is closed")
+                    raise RuntimeError("judgehost verification program is closed")
                 self._append_cases_to_batch_locked(
                     batch=existing_batch,
                     case_rows=case_rows,
@@ -1300,7 +1330,7 @@ class BatchScheduler(BatchSchedulerResultMixin):
             batch_id = entity_ids[0]
             batch = ExecutionBatchRecord(
                 batch_id=batch_id,
-                logical_run_id=logical_run_id,
+                verification_program_id=verification_program_id,
                 execution_signature=str(execution_signature),
                 task_kind=task_kind,
                 verification_id=verification_id,
@@ -1329,6 +1359,8 @@ class BatchScheduler(BatchSchedulerResultMixin):
                 debug_text="",
                 failure_runresult="",
                 failure_text="",
+                program_failure_result=None,
+                program_failure_diagnostic_digest="",
                 status="open",
                 created_at=created_at,
                 updated_at=created_at,
@@ -1343,7 +1375,7 @@ class BatchScheduler(BatchSchedulerResultMixin):
             self._batch_ids_by_verification[verification_id].add(batch_id)
             self._verification_by_domjudge_job_id[protocol_job_id] = verification_id
             self._batch_counts[batch_id] = StatusCounts()
-            self._batch_id_by_logical_run[logical_run_key] = batch_id
+            self._batch_id_by_verification_program[program_key] = batch_id
             self._index_batch_scripts_locked(batch, 1)
             self._empty_batch_ids.add(batch_id)
             for case_id, case_row in zip(entity_ids[1:], case_rows, strict=True):
@@ -1404,6 +1436,7 @@ class BatchScheduler(BatchSchedulerResultMixin):
     @staticmethod
     def _case_identity(row: dict[str, object]) -> tuple[object, ...]:
         return (
+            str(row.get("verification_task_id") or ""),
             row.get("run_id"),
             row.get("test_name"),
             int(row["ordinal"]),
@@ -1468,7 +1501,7 @@ class BatchScheduler(BatchSchedulerResultMixin):
             case_task_id = str(row["task_id"])
             case_run_id = str(row["run_id"])
             test_name = str(row["test_name"])
-            self._insert_case_locked(
+            case = self._insert_case_locked(
                 case_id=case_id,
                 batch_id=batch.batch_id,
                 task_id=case_task_id,
@@ -1480,6 +1513,8 @@ class BatchScheduler(BatchSchedulerResultMixin):
                 status="staged",
                 created_at=now_text,
             )
+            if batch.program_failure_result is not None:
+                case.terminal_result = batch.program_failure_result
 
     def _validate_testcase_identities_locked(self, case_rows: list[dict[str, object]]) -> None:
         requested: dict[int, str] = {}
@@ -1503,9 +1538,21 @@ class BatchScheduler(BatchSchedulerResultMixin):
             for case_id in case_ids:
                 case = self._cases[case_id]
                 if case.status == "staged":
+                    inherited_result = case.terminal_result
+                    if case.cancel_requested:
+                        case.result = None
+                        case.terminal_result = None
+                        next_status = "cancelled"
+                    elif inherited_result is not None:
+                        case.result = inherited_result
+                        case.terminal_result = None
+                        next_status = "reported"
+                    else:
+                        next_status = "cache-pending"
+                    case.cancel_requested = False
                     self._transition_case_locked(
                         case,
-                        "cache-pending",
+                        next_status,
                         lease_owner=None,
                         updated_at=now_text,
                         refresh_batch=False,
@@ -1514,21 +1561,24 @@ class BatchScheduler(BatchSchedulerResultMixin):
             self._refresh_batches_locked(affected_batch_ids)
             return True
 
-    def cancel_staged_task_cases(self, task_id: str, *, now_text: str) -> None:
+    def discard_staged_task_cases(self, task_id: str, *, batch_id: int | None = None) -> int:
+        """Remove a task that failed before any Case became fetchable."""
+
         with self._lock:
-            affected_batch_ids: set[int] = set()
-            for case_id in tuple(self._case_ids_by_task.get(task_id, ())):
-                case = self._cases[case_id]
-                if case.status == "staged":
-                    self._transition_case_locked(
-                        case,
-                        "cancelled",
-                        lease_owner=None,
-                        updated_at=now_text,
-                        refresh_batch=False,
-                    )
-                    affected_batch_ids.add(case.batch_id)
-            self._refresh_batches_locked(affected_batch_ids)
+            case_ids = set(self._case_ids_by_task.get(task_id, ()))
+            if any(self._cases[case_id].status != "staged" for case_id in case_ids):
+                raise RuntimeError("cannot discard exposed judgehost task cases")
+            affected_batch_ids = {
+                self._cases[case_id].batch_id
+                for case_id in case_ids
+            }
+            if batch_id is not None and int(batch_id) in self._empty_batch_ids:
+                affected_batch_ids.add(int(batch_id))
+            self._remove_cases_locked(case_ids)
+            for batch_id in affected_batch_ids:
+                if batch_id in self._empty_batch_ids:
+                    self._remove_batch_locked(batch_id)
+            return len(case_ids)
 
     def lease_cases(
         self,
@@ -1557,6 +1607,7 @@ class BatchScheduler(BatchSchedulerResultMixin):
                 if case is None:
                     break
                 heapq.heappop(self._runnable_heaps_by_batch[batch.batch_id])
+                case.claim_generation += 1
                 self._transition_case_locked(
                     case,
                     "leased",

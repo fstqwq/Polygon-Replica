@@ -1,11 +1,20 @@
 from __future__ import annotations
 
-from tests.db_helpers import db_execute, db_fetch_all, db_fetch_one
+from tests.db_helpers import (
+    activate_test_verification,
+    admit_test_verification,
+    db_execute,
+    db_fetch_all,
+    db_fetch_one,
+    db_write_transaction,
+    verification_programs_for_tasks,
+)
 
 import asyncio
 import io
 import re
 import shutil
+import threading
 import zipfile
 from unittest.mock import patch
 from urllib.parse import parse_qs, urlparse
@@ -18,6 +27,14 @@ from app.config import CONFIG_REGISTRY
 from app.service.problem.test_spec import normalize_file_manual_input, normalize_manual_input
 from app.service.platform.git_process import GitCommandResult, run_git
 from app.service.repository.revision import workspace_revision_info
+from app.service.verification.execution_result import normalize_execution_result
+from app.service.verification.lifecycle import (
+    ActivationPlan,
+    PlannedTask,
+    verification_task_id,
+)
+from app.service.verification.task_completion import TaskCompletion
+from app.service.verification.task_store import VerificationTaskStore
 from app.service.statement.constant import (
     DEFAULT_OLYMP_STY,
     DEFAULT_STATEMENT_PROBLEM_TEMPLATE,
@@ -297,44 +314,42 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         verification_id = canonical_test_verification_id(
             f"delete-history:{uuid.uuid4().hex}"
         )
-        config.verification_service.begin_verification_record(
+        admission = admit_test_verification(
             verification_id=verification_id,
             problem_id=int(row_before["id"]),
             workspace_id=workspace_id,
             signature="",
+            source_commit="",
             kind="all",
-            status="failed",
         )
-        from app.service.verification.task_store import VerificationTaskStore
-
-        config.verification_task_store.replace_graph(
+        self.assertEqual(admission.outcome, "admitted")
+        task_id = verification_task_id(
             verification_id,
-            tasks=[
-                {
-                    "id": f"vt-delete-history-{uuid.uuid4().hex[:8]}",
-                    "task_kind": "solution-run",
-                    "source_path": "solutions/a.cpp",
-                    "logical_run_id": "r-delete-history",
-                    "test_name": "001.in",
-                    "expected_behavior": "accepted",
-                    "queue_index": 1,
-                    "status": VerificationTaskStore.TASK_DONE,
-                    "verdict": "OK",
-                    "run_id": "r-delete-history",
-                    "judgehost_task_id": "jt-delete-history",
-                    "runtime_sec": 0.01,
-                    "cpu_sec": 0.01,
-                    "wall_sec": 0.01,
-                    "memory_kb": 1,
-                    "compile_log": "",
-                    "diagnostics_json": "[]",
-                    "error_text": "",
-                    "feedback_text": "",
-                    "output_ref": "",
-                }
-            ],
-            edges=[],
+            "accepted",
+            "001.in",
         )
+        tasks = [
+            PlannedTask(
+                task_id=task_id,
+                predecessor_task_id=None,
+                task_kind="main-correct",
+                source_path="solutions/a.cpp",
+                program_id="accepted",
+                test_name="001.in",
+                expected_behavior="accepted",
+            )
+        ]
+        activation = activate_test_verification(
+            verification_id,
+            programs=verification_programs_for_tasks(tasks),
+            tasks=tasks,
+        )
+        self.assertEqual(activation.outcome, "activated")
+        failure = config.verification_service.fail_verification(
+            verification_id,
+            reason="delete history fixture",
+        )
+        self.assertEqual(failure.outcome, "transitioned")
         db_execute(
             """
             INSERT INTO previews(id,problem_id,workspace_id,verification_id,source_commit,source_ref,status,summary_json,created_at,finished_at)
@@ -378,6 +393,236 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         self.assertIsNone(db_fetch_one("SELECT id FROM problems WHERE slug=?", [problem]))
         self.assertFalse(ws.exists())
         self.assertFalse(bare_repo.exists())
+
+    def test_problem_delete_finds_active_job_behind_terminal_history(self) -> None:
+        problem = f"alice/delete-history-{uuid.uuid4().hex[:8]}"
+        workspace_service.ensure_problem(problem)
+        workspace = workspace_service.workspace_context(
+            problem,
+            "alice",
+            include_recent=False,
+        )
+        problem_id = int(workspace["problem"]["id"])
+        workspace_id = int(workspace["workspace"]["id"])
+        verification_id = canonical_test_verification_id(
+            f"delete-history-active:{self.test_id}"
+        )
+        admission = admit_test_verification(
+            verification_id=verification_id,
+            problem_id=problem_id,
+            workspace_id=workspace_id,
+        )
+        self.assertEqual(admission.outcome, "admitted")
+
+        def _insert_history(conn) -> None:
+            conn.executemany(
+                """
+                INSERT INTO previews(
+                    id,problem_id,workspace_id,verification_id,source_commit,
+                    source_ref,status,summary_json,created_at,finished_at
+                ) VALUES(?,?,?,?,?,?,?,?,?,?)
+                """,
+                [
+                    (
+                        f"preview-terminal-{index:03}",
+                        problem_id,
+                        workspace_id,
+                        None,
+                        "",
+                        "",
+                        "ok",
+                        "{}",
+                        f"2099-01-01T00:00:00.{index:03}Z",
+                        f"2099-01-01T00:00:01.{index:03}Z",
+                    )
+                    for index in range(65)
+                ],
+            )
+
+        db_write_transaction(_insert_history)
+
+        with self.assertRaisesRegex(ValueError, "verification jobs are active"):
+            workspace_service.delete_problem(problem)
+
+        self.assertIsNotNone(
+            db_fetch_one("SELECT id FROM problems WHERE id=?", [problem_id])
+        )
+
+    def test_problem_delete_and_activation_have_one_serial_outcome(self) -> None:
+        problem = f"alice/delete-activate-{uuid.uuid4().hex[:8]}"
+        workspace_service.ensure_problem(problem)
+        workspace = workspace_service.workspace_context(
+            problem,
+            "alice",
+            include_recent=False,
+        )
+        problem_id = int(workspace["problem"]["id"])
+        workspace_id = int(workspace["workspace"]["id"])
+        verification_id = canonical_test_verification_id(
+            f"delete-activate:{self.test_id}"
+        )
+        admission = admit_test_verification(
+            verification_id=verification_id,
+            problem_id=problem_id,
+            workspace_id=workspace_id,
+        )
+        self.assertEqual(admission.outcome, "admitted")
+        task_id = verification_task_id(
+            verification_id,
+            "accepted",
+            "001.in",
+        )
+        task = PlannedTask(
+            task_id=task_id,
+            predecessor_task_id=None,
+            task_kind="main-correct",
+            source_path="solutions/accepted.cpp",
+            program_id="accepted",
+            test_name="001.in",
+            expected_behavior="accepted",
+        )
+        plan = ActivationPlan.build(
+            verification_id,
+            detail={"mode": "pass-fail"},
+            programs=verification_programs_for_tasks((task,)),
+            tasks=(task,),
+        )
+        barrier = threading.Barrier(3)
+        outcomes: dict[str, str] = {}
+        failures: list[BaseException] = []
+
+        def _activate() -> None:
+            try:
+                barrier.wait()
+                outcomes["activate"] = (
+                    config.verification_service.activate_verification(plan).outcome
+                )
+            except BaseException as exc:  # pragma: no cover - surfaced below
+                failures.append(exc)
+
+        def _delete() -> None:
+            try:
+                barrier.wait()
+                workspace_service.delete_problem(problem)
+                outcomes["delete"] = "deleted"
+            except ValueError:
+                outcomes["delete"] = "blocked"
+            except BaseException as exc:  # pragma: no cover - surfaced below
+                failures.append(exc)
+
+        threads = (
+            threading.Thread(target=_activate),
+            threading.Thread(target=_delete),
+        )
+        for thread in threads:
+            thread.start()
+        barrier.wait()
+        for thread in threads:
+            thread.join(timeout=5)
+
+        self.assertEqual(failures, [])
+        self.assertFalse(any(thread.is_alive() for thread in threads))
+        self.assertIn(
+            (outcomes["activate"], outcomes["delete"]),
+            {("activated", "blocked"), ("missing", "deleted")},
+        )
+        current_problem_id = workspace_service.known_problem_id(problem)
+        self.assertEqual(
+            current_problem_id is None,
+            outcomes["delete"] == "deleted",
+        )
+
+    def test_problem_delete_rejects_terminal_verification_runtime(self) -> None:
+        problem = f"alice/delete-draining-{uuid.uuid4().hex[:8]}"
+        workspace_service.ensure_problem(problem)
+        workspace = workspace_service.workspace_context(
+            problem,
+            "alice",
+            include_recent=False,
+        )
+        problem_id = int(workspace["problem"]["id"])
+        workspace_id = int(workspace["workspace"]["id"])
+        verification_id = canonical_test_verification_id(
+            f"delete-draining:{self.test_id}"
+        )
+        admission = admit_test_verification(
+            verification_id=verification_id,
+            problem_id=problem_id,
+            workspace_id=workspace_id,
+        )
+        self.assertEqual(admission.outcome, "admitted")
+        task_id = verification_task_id(
+            verification_id,
+            "accepted",
+            "001.in",
+        )
+        task = PlannedTask(
+            task_id=task_id,
+            predecessor_task_id=None,
+            task_kind="main-correct",
+            source_path="solutions/accepted.cpp",
+            program_id="accepted",
+            test_name="001.in",
+            expected_behavior="accepted",
+        )
+        activation = activate_test_verification(
+            verification_id,
+            programs=verification_programs_for_tasks((task,)),
+            tasks=(task,),
+        )
+        self.assertEqual(activation.outcome, "activated")
+        self.assertTrue(
+            config.verification_task_store.bind_and_expose_judgehost_runtime(
+                task_id,
+                run_id=f"run-{self.test_id}",
+                judgehost_task_id=f"judgehost-{self.test_id}",
+                expose=lambda: None,
+            )
+        )
+        config.verification_task_store.commit_task_completions(
+            (
+                TaskCompletion(
+                    task_id=task_id,
+                    status=VerificationTaskStore.TASK_DONE,
+                    run_id=f"run-{self.test_id}",
+                    judgehost_task_id=f"judgehost-{self.test_id}",
+                    result=normalize_execution_result(verdict="OK"),
+                ),
+            )
+        )
+
+        try:
+            with self.assertRaisesRegex(ValueError, "runtime is draining"):
+                workspace_service.delete_problem(problem)
+            self.assertIsNotNone(
+                workspace_service.known_problem_id(problem)
+            )
+        finally:
+            config.verification_task_store.unbind_judgehost_runtime(
+                task_id,
+                judgehost_task_id=f"judgehost-{self.test_id}",
+            )
+
+    def test_problem_delete_commits_before_ordered_runtime_cleanup(self) -> None:
+        problem = f"alice/delete-cleanup-{uuid.uuid4().hex[:8]}"
+        workspace_service.ensure_problem(problem)
+        workspace_service.ensure_workspace(problem, "alice")
+        self.assertIsNotNone(workspace_service.known_problem_id(problem))
+
+        with patch.object(
+            config.judgehost_task_service,
+            "forget_domjudge_runs",
+            side_effect=RuntimeError("scheduler cleanup failed"),
+        ) as forget_scheduler, patch.object(
+            config.judgehost_task_service,
+            "forget_problem_tasks",
+        ) as forget_registry:
+            with self.assertRaisesRegex(RuntimeError, "scheduler cleanup failed"):
+                workspace_service.delete_problem(problem)
+
+        forget_scheduler.assert_called_once_with([])
+        forget_registry.assert_not_called()
+        self.assertIsNone(workspace_service.known_problem_id(problem))
 
     def test_problem_delete_unexpected_error_redirects_instead_of_500(self) -> None:
         username = self.random_id("pdelx")
@@ -859,19 +1104,42 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         verification_id = canonical_test_verification_id(
             f"workspace-review:{uuid.uuid4().hex}"
         )
-        config.verification_service.begin_verification_record(
+        admission = admit_test_verification(
             verification_id=verification_id,
             problem_id=problem_id,
             workspace_id=workspace_id,
             signature="",
             source_commit=str(ctx["workspace"]["head_commit"] or ""),
             kind="all",
-            status="failed",
         )
-        db_execute(
-            "UPDATE verifications SET fail_reason=? WHERE id=?",
-            ["checker exited with code 1", verification_id],
+        self.assertEqual(admission.outcome, "admitted")
+        task_id = verification_task_id(
+            verification_id,
+            "accepted",
+            "001.in",
         )
+        tasks = [
+            PlannedTask(
+                task_id=task_id,
+                predecessor_task_id=None,
+                task_kind="main-correct",
+                source_path="solutions/accepted.cpp",
+                program_id="accepted",
+                test_name="001.in",
+                expected_behavior="accepted",
+            )
+        ]
+        activation = activate_test_verification(
+            verification_id,
+            programs=verification_programs_for_tasks(tasks),
+            tasks=tasks,
+        )
+        self.assertEqual(activation.outcome, "activated")
+        failure = config.verification_service.fail_verification(
+            verification_id,
+            reason="checker exited with code 1",
+        )
+        self.assertEqual(failure.outcome, "transitioned")
 
         resp = workspace_page(_request("/problems/alice/sample/workspace"), "alice/sample", "alice")
         self.assertEqual(resp.status_code, 200)

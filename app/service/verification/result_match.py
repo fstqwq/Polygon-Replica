@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from app.service.problem.solution_metadata import normalize_expected_behavior
+from app.service.verification.execution_result import ExecutionResult
 
 
 _COMPILE_ERROR_VALUES = {"compile_error", "compile error", "ce"}
+_CANONICAL_DECISION_CODES = frozenset(("AC", "WA", "TL", "RE", "CE"))
 _EXPECTED_STATUS_RULES: dict[str, dict[str, tuple[str, ...]]] = {
     "accepted": {"required": ("AC",), "allowed": ("AC",)},
     "wrong_answer": {"required": ("WA",), "allowed": ("AC", "WA")},
@@ -109,16 +111,11 @@ def status_rule_expected_display(expected_behavior: str) -> str:
     return "/".join(display_codes)
 
 
-def _status_rule_match(
+def _status_codes_rule_match(
     expected_behavior: str,
-    run_status: str,
-    summary: dict[str, object] | None,
+    observed_codes: list[str],
 ) -> tuple[bool, str]:
     required_codes, allowed_codes = expected_status_rule(expected_behavior)
-    observed_codes = run_actual_failed_codes(run_status, summary)
-    if not observed_codes:
-        token = run_actual_short(run_status, summary)
-        observed_codes = [] if token in {"", "-", "--"} else [token]
     observed = set(observed_codes)
     required = set(required_codes)
     allowed = set(allowed_codes)
@@ -131,6 +128,18 @@ def _status_rule_match(
         f"allowed={_status_codes_display(allowed_codes)}, "
         f"got={_status_codes_display(observed_codes)}",
     )
+
+
+def _status_rule_match(
+    expected_behavior: str,
+    run_status: str,
+    summary: dict[str, object] | None,
+) -> tuple[bool, str]:
+    observed_codes = run_actual_failed_codes(run_status, summary)
+    if not observed_codes:
+        token = run_actual_short(run_status, summary)
+        observed_codes = [] if token in {"", "-", "--"} else [token]
+    return _status_codes_rule_match(expected_behavior, observed_codes)
 
 
 def _run_completed(
@@ -172,6 +181,30 @@ def verification_solution_match(
     if not completed:
         return (False, False, observed_pass, "")
     matched, reason = _status_rule_match(expected_behavior, run_status, summary)
+    if matched:
+        return (True, True, observed_pass, "")
+    return (False, True, observed_pass, reason or "verification mismatch")
+
+
+def verification_execution_result_match(
+    expected_behavior: str,
+    result: ExecutionResult,
+) -> tuple[bool, bool, bool, str]:
+    """Match a terminal solution against its canonical execution decision.
+
+    Transport and batch status do not define whether a judging decision is
+    complete. CE, RE, TL, WA, and AC are all complete decisions; FL, missing,
+    and unknown verdicts are infrastructure/incomplete outcomes.
+    """
+
+    observed_code = run_verdict_short(result.verdict.upper())
+    if observed_code not in _CANONICAL_DECISION_CODES:
+        return (False, False, False, "")
+    observed_pass = observed_code == "AC"
+    matched, reason = _status_codes_rule_match(
+        expected_behavior,
+        [observed_code],
+    )
     if matched:
         return (True, True, observed_pass, "")
     return (False, True, observed_pass, reason or "verification mismatch")

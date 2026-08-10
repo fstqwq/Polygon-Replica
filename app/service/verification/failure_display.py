@@ -59,13 +59,13 @@ def verification_task_failure_hint(
     for row in task_store.list_rows(verification_id):
         if row["task_kind"] != "solution-run":
             continue
-        logical_run_id = row["logical_run_id"]
-        if logical_run_id not in grouped:
-            grouped[logical_run_id] = []
-            order.append(logical_run_id)
-        grouped[logical_run_id].append(row)
-    for logical_run_id in order:
-        rows = grouped[logical_run_id]
+        program_id = row["program_id"]
+        if program_id not in grouped:
+            grouped[program_id] = []
+            order.append(program_id)
+        grouped[program_id].append(row)
+    for program_id in order:
+        rows = grouped[program_id]
         first = rows[0]
         summary: dict[str, object] = {
             "tests": [

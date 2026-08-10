@@ -1,6 +1,13 @@
 from __future__ import annotations
 
-from tests.db_helpers import db_execute, db_fetch_one, write_preview_summary
+from tests.db_helpers import (
+    activate_test_verification,
+    admit_test_verification,
+    db_execute,
+    db_fetch_one,
+    verification_programs_for_tasks,
+    write_preview_summary,
+)
 from tests.execution_result_helpers import execution_result
 
 import asyncio
@@ -48,7 +55,6 @@ from tests.ui_support import (
     run_export_impl,
     run_new_page,
     run_page,
-    time,
     uuid,
     verification_start,
     workspace_impl,
@@ -57,6 +63,7 @@ from tests.ui_support import (
 
 import app.impl.workspace.context_job as workspace_context_job
 import app.impl.workspace.run_view_detail as run_view_detail_module
+from app.impl.workspace.verification_dag import run_workspace_verification_dag
 import app.service.problem.readiness as problem_readiness_module
 import app.service.verification.result_match as verification_result_module
 import app.service.verification.workspace_fingerprint as workspace_fingerprint_module
@@ -65,10 +72,13 @@ from app.service.verification.execution_result import (
     CAPTURE_COMPLETE,
     CAPTURE_METADATA_ONLY,
     ExecutionPassResult,
+    ExecutionResult,
     ExecutionUsage,
     PassArtifacts,
     normalize_execution_result,
 )
+from app.service.verification.lifecycle import PlannedTask, verification_task_id
+from app.service.verification.task_completion import TaskCompletion
 from app.service.verification.task_store import VerificationTaskStore
 from app.service.verification.types import Kind
 
@@ -136,6 +146,126 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
     def _verification_id_for_run(run_id: str) -> str:
         return canonical_test_verification_id(f"run:{run_id}")
 
+    def _admit_verification_fixture(
+        self,
+        *,
+        verification_id: str,
+        problem_id: int,
+        workspace_id: int | None,
+        signature: str = "",
+        source_commit: str = "",
+        kind: str = Kind.ALL,
+        detail: dict[str, object] | None = None,
+    ) -> None:
+        admission = admit_test_verification(
+            verification_id=verification_id,
+            problem_id=problem_id,
+            workspace_id=workspace_id,
+            signature=signature,
+            source_commit=source_commit,
+            kind=str(kind),
+        )
+        self.assertEqual(admission.outcome, "admitted")
+        if detail is not None:
+            pending = getattr(self, "_pending_verification_fixture_details", {})
+            pending[verification_id] = dict(detail)
+            self._pending_verification_fixture_details = pending
+
+    def _activate_verification_fixture(
+        self,
+        verification_id: str,
+        *,
+        detail: dict[str, object] | None = None,
+        tasks: list[PlannedTask],
+        completions: list[TaskCompletion] | None = None,
+        queued: list[tuple[str, str, str]] | None = None,
+        leased: list[tuple[str, str, str]] | None = None,
+    ) -> None:
+        pending = getattr(self, "_pending_verification_fixture_details", {})
+        activation_detail = (
+            dict(pending.pop(verification_id, {}))
+            if detail is None
+            else dict(detail)
+        )
+        canonical_tasks = list(tasks)
+        canonical_completions = list(completions or [])
+        if not any(task.program_id == "accepted" for task in canonical_tasks):
+            accepted_test_name = canonical_tasks[0].test_name
+            accepted_task_id = verification_task_id(
+                verification_id,
+                "accepted",
+                accepted_test_name,
+            )
+            canonical_tasks.insert(
+                0,
+                PlannedTask(
+                    task_id=accepted_task_id,
+                    predecessor_task_id=None,
+                    task_kind="main-correct",
+                    source_path="solutions/accepted.cpp",
+                    program_id="accepted",
+                    test_name=accepted_test_name,
+                    expected_behavior="accepted",
+                ),
+            )
+            canonical_completions.insert(
+                0,
+                TaskCompletion(
+                    task_id=accepted_task_id,
+                    status=VerificationTaskStore.TASK_DONE,
+                    run_id="",
+                    judgehost_task_id="",
+                    result=execution_result("OK"),
+                ),
+            )
+        activation = activate_test_verification(
+            verification_id,
+            detail=activation_detail,
+            programs=verification_programs_for_tasks(canonical_tasks),
+            tasks=canonical_tasks,
+        )
+        self.assertEqual(activation.outcome, "activated")
+        for task_id, run_id, judgehost_task_id in [*(queued or []), *(leased or [])]:
+            self.assertTrue(
+                config.verification_task_store.bind_and_expose_judgehost_runtime(
+                    task_id,
+                    run_id=run_id,
+                    judgehost_task_id=judgehost_task_id,
+                    expose=lambda: None,
+                )
+            )
+        for task_id, _run_id, _judgehost_task_id in leased or []:
+            config.verification_task_store.set_task_leased(task_id)
+        if canonical_completions:
+            config.verification_task_store.commit_task_completions(
+                canonical_completions
+            )
+
+    @staticmethod
+    def _fixture_result(
+        summary: dict[str, object],
+        *,
+        status: str,
+    ) -> ExecutionResult:
+        tests_obj = summary.get("tests")
+        tests = tests_obj if isinstance(tests_obj, list) else []
+        test = tests[0] if tests and isinstance(tests[0], dict) else {}
+        verdict = str(test.get("verdict") or summary.get("verdict") or "")
+        if not verdict and status == "ok":
+            verdict = "OK"
+        if not verdict and status == "failed":
+            verdict = "FL"
+        return execution_result(
+            verdict,
+            runtime_sec=float(test.get("runtime_sec") or 0.0),
+            cpu_sec=float(test.get("cpu_sec") or 0.0),
+            wall_sec=float(test.get("wall_sec") or 0.0),
+            memory_kb=int(test.get("memory_kb") or 0),
+            error=str(test.get("error") or summary.get("error") or ""),
+            feedback=str(test.get("feedback") or ""),
+            output_ref=str(test.get("output_ref") or ""),
+        )
+
     def _insert_verification_row(
         self,
         *,
@@ -149,6 +279,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         finished_at: str,
         runs: list[dict[str, object]],
         summary_extra: dict[str, object] | None = None,
+        activate_tasks: bool = True,
     ) -> None:
         verification_root = config.fs_manager.prepare_verification_root(verification_id).resolve()
         verification_root.mkdir(parents=True, exist_ok=True)
@@ -234,15 +365,94 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         metadata["signature"] = signature
         final_created_at = existing_created_at or created_at
         final_finished_at = finished_at or existing_finished_at
-        config.verification_service.begin_verification_record(
+        if existing_row is not None:
+            db_execute(
+                "UPDATE verifications SET created_at=? WHERE id=?",
+                [final_created_at, verification_id],
+            )
+            return
+        self._admit_verification_fixture(
             verification_id=verification_id,
             problem_id=problem_id,
             workspace_id=workspace_id,
             signature=signature,
+            source_commit="",
             kind=kind_token,
-            status=status,
             detail=metadata,
         )
+        if activate_tasks:
+            planned: list[PlannedTask] = []
+            completions: list[TaskCompletion] = []
+            leased: list[tuple[str, str, str]] = []
+            run_items = runs or [
+                {
+                    "id": f"fixture-{verification_id}",
+                    "status": status,
+                    "source_label": (source_paths[0] if source_paths else "solutions/fixture.cpp"),
+                    "expected_behavior": "accepted",
+                    "summary": {},
+                }
+            ]
+            for slot, item in enumerate(run_items):
+                run_id = str(item.get("id") or f"fixture-{verification_id}-{slot}")
+                summary_obj = dict(item.get("summary") or {})
+                tests_obj = summary_obj.get("tests")
+                tests = tests_obj if isinstance(tests_obj, list) else []
+                first_test = tests[0] if tests and isinstance(tests[0], dict) else {}
+                test_name = str(first_test.get("test") or "001.in")
+                program_id = f"solution-{slot}"
+                task_id = verification_task_id(
+                    verification_id,
+                    program_id,
+                    test_name,
+                )
+                source_path = str(
+                    summary_obj.get("source")
+                    or item.get("source_label")
+                    or f"solutions/fixture-{slot}.cpp"
+                )
+                planned.append(
+                    PlannedTask(
+                        task_id=task_id,
+                        predecessor_task_id=None,
+                        task_kind="solution-run",
+                        source_path=source_path,
+                        program_id=program_id,
+                        test_name=test_name,
+                        expected_behavior=str(item.get("expected_behavior") or "unknown"),
+                    )
+                )
+                item_status = str(item.get("status") or status).lower()
+                if item_status == "running":
+                    leased.append((task_id, run_id, f"jt-fixture-{slot}-{verification_id}"))
+                    continue
+                fail_reason = ""
+                if status == "failed" and not completions:
+                    fail_reason = str(metadata.get("error") or "verification fixture failed")
+                completions.append(
+                    TaskCompletion(
+                        task_id=task_id,
+                        status=VerificationTaskStore.TASK_DONE,
+                        run_id=run_id,
+                        judgehost_task_id="",
+                        result=self._fixture_result(summary_obj, status=item_status),
+                        fail_reason=fail_reason,
+                    )
+                )
+            self._activate_verification_fixture(
+                verification_id,
+                detail=metadata,
+                tasks=planned,
+                completions=completions,
+                leased=leased,
+            )
+            if status == "failed":
+                record = config.verification_service.verification_record(verification_id)
+                if record is not None and str(record["status"]) == "running":
+                    config.verification_service.fail_verification(
+                        verification_id,
+                        reason=str(metadata.get("error") or "verification fixture failed"),
+                    )
         db_execute(
             "UPDATE verifications SET created_at=?, finished_at=? WHERE id=?",
             [final_created_at, final_finished_at or None, verification_id],
@@ -278,16 +488,56 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             else config.fs_manager.prepare_verification_root(verification_id).resolve()
         )
         root.mkdir(parents=True, exist_ok=True)
-        config.verification_service.begin_verification_record(
+        self._admit_verification_fixture(
             verification_id=verification_id,
             problem_id=problem_id,
             workspace_id=workspace_id,
             signature=str(signature or "").strip(),
             source_commit=str(source_commit or "").strip(),
             kind=str(kind or Kind.ALL).strip() or Kind.ALL.value,
-            status=status,
             detail=summary_obj,
         )
+        task_id = verification_task_id(
+            verification_id,
+            "solution-0",
+            "001.in",
+        )
+        task = PlannedTask(
+            task_id=task_id,
+            predecessor_task_id=None,
+            task_kind="solution-run",
+            source_path="solutions/fixture.cpp",
+            program_id="solution-0",
+            test_name="001.in",
+            expected_behavior="accepted",
+        )
+        completions: list[TaskCompletion] = []
+        leased: list[tuple[str, str, str]] = []
+        if status == "ok":
+            completions.append(
+                TaskCompletion(
+                    task_id=task_id,
+                    status=VerificationTaskStore.TASK_DONE,
+                    run_id="",
+                    judgehost_task_id="",
+                    result=execution_result("OK"),
+                )
+            )
+        elif status == "running":
+            leased.append((task_id, f"fixture-{verification_id}", f"jt-fixture-{verification_id}"))
+        self._activate_verification_fixture(
+            verification_id,
+            detail=summary_obj,
+            tasks=[task],
+            completions=completions,
+            leased=leased,
+        )
+        if status == "failed":
+            failure = config.verification_service.fail_verification(
+                verification_id,
+                reason=str(summary_obj.get("error") or "verification fixture failed"),
+            )
+            self.assertEqual(failure.outcome, "transitioned")
         db_execute(
             "UPDATE verifications SET created_at=?, finished_at=? WHERE id=?",
             [created_at, finished_at, verification_id],
@@ -967,15 +1217,34 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         problem_id = int(ctx["problem"]["id"])
         workspace_id = int(ctx["workspace"]["id"])
         db_execute("DELETE FROM verifications WHERE workspace_id=?", [workspace_id])
-        def _fake_start_verification_job(*args, **kwargs):
-            config.verification_service.begin_verification_record(
-                verification_id=str(kwargs["verification_id"]),
+        def _fake_start_verification_job(*args, **kwargs) -> bool:
+            verification_id = str(kwargs["verification_id"])
+            self._admit_verification_fixture(
+                verification_id=verification_id,
                 problem_id=problem_id,
                 workspace_id=workspace_id,
                 signature="deadbeef",
                 kind=Kind.ALL.value,
-                status="running",
+            )
+            task_id = verification_task_id(
+                verification_id,
+                "solution-0",
+                "001.in",
+            )
+            self._activate_verification_fixture(
+                verification_id,
                 detail=dict(kwargs.get("initial_summary") or {}),
+                tasks=[
+                    PlannedTask(
+                        task_id=task_id,
+                        predecessor_task_id=None,
+                        task_kind="solution-run",
+                        source_path="solutions/accepted.cpp",
+                        program_id="solution-0",
+                        test_name="001.in",
+                        expected_behavior="accepted",
+                    )
+                ],
             )
             return True
 
@@ -1007,7 +1276,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         self.assertIsInstance(metadata, dict)
         self.assertEqual(str(metadata.get("mode") or ""), "pass-fail")
 
-    def test_run_execute_uses_problem_mode_from_general_config(self) -> None:
+    def test_run_execute_records_problem_mode_from_general_config(self) -> None:
         ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
         (ws / "solutions").mkdir(parents=True, exist_ok=True)
         (ws / "solutions" / "accepted.cpp").write_text("int main(){return 0;}\n", encoding="utf-8")
@@ -1015,26 +1284,34 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         problem_cfg.parent.mkdir(parents=True, exist_ok=True)
         problem_cfg.write_text(json.dumps({"mode": "interactive", "pass_limit": 2}, indent=2) + "\n", encoding="utf-8")
 
-        resp = run_execute(
-            problem="alice/sample",
-            user="alice",
-            artifact_verification_id="",
-            solution_paths=["solutions/accepted.cpp"],
-            submission_upload=None,
-        )
+        with patch(
+            "app.impl.run_export.run.start_verification_job",
+            return_value=True,
+        ):
+            resp = run_execute(
+                problem="alice/sample",
+                user="alice",
+                artifact_verification_id="",
+                solution_paths=["solutions/accepted.cpp"],
+                submission_upload=None,
+            )
         self.assertEqual(resp.status_code, 303)
         loc = resp.headers.get("location", "")
         query = parse_qs(urlparse(loc).query)
         verification_id = (query.get("verification_id") or [""])[0]
         self.assertTrue(verification_id)
-        deadline = time.monotonic() + 8.0
-        metadata: dict[str, object] = {}
-        while time.monotonic() < deadline:
-            metadata = config.verification_service.verification_detail(verification_id)
-            if metadata:
-                break
-            time.sleep(0.05)
-        self.assertTrue(metadata)
+        audit_row = db_fetch_one(
+            """
+            SELECT details_json
+            FROM audit_log
+            WHERE action='run.execute' AND details_json LIKE ?
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            [f"%{verification_id}%"],
+        )
+        self.assertIsNotNone(audit_row)
+        metadata = json.loads(str(audit_row["details_json"]))
         self.assertEqual(str(metadata.get("mode") or ""), "interactive")
 
     def test_run_execute_records_verification_audit_before_queue_start(self) -> None:
@@ -1050,7 +1327,11 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         def _fake_start_verification_job(*args, **kwargs) -> bool:
             verification_id = str(kwargs.get("verification_id") or "")
             targets = list(kwargs.get("targets") or [])
-            verification_run_ids = [str(item.get("run_id") or "") for item in targets if str(item.get("run_id") or "")]
+            solution_program_ids = [
+                str(item.get("program_id") or "")
+                for item in targets
+                if str(item.get("program_id") or "")
+            ]
             audit_row = db_fetch_one(
                 """
                 SELECT details_json
@@ -1065,8 +1346,19 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             details = json.loads(str(audit_row["details_json"] or "{}"))
             self.assertEqual(str(details.get("status") or ""), "queued")
             self.assertEqual(str(details.get("verification_id") or ""), verification_id)
-            self.assertEqual([str(item or "") for item in (details.get("run_ids") or [])], verification_run_ids)
-            self.assertEqual(int(details.get("run_count") or 0), len(verification_run_ids))
+            self.assertEqual(
+                [
+                    str(item or "")
+                    for item in (
+                        details.get("solution_program_ids") or []
+                    )
+                ],
+                solution_program_ids,
+            )
+            self.assertEqual(
+                int(details.get("solution_program_count") or 0),
+                len(solution_program_ids),
+            )
             observed["checked"] = True
             return True
 
@@ -1195,6 +1487,65 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         payload = json.loads(str(row["details_json"]))
         self.assertEqual(payload.get("status"), "failed")
         self.assertIn("main correct solution is required", str(payload.get("error") or ""))
+
+    def test_admitted_verification_fails_when_layout_preparation_fails(self) -> None:
+        problem = f"alice/layout-failure-{uuid.uuid4().hex[:8]}"
+        user = "alice"
+        self._prepare_verification_workspace(problem)
+        context = workspace_service.workspace_context(
+            problem,
+            user,
+            include_recent=False,
+        )
+        problem_id = int(context["problem"]["id"])
+        workspace_id = int(context["workspace"]["id"])
+        verification_id = canonical_test_verification_id(
+            f"ver-layout-failure-{uuid.uuid4().hex[:8]}"
+        )
+        self._admit_verification_fixture(
+            verification_id=verification_id,
+            problem_id=problem_id,
+            workspace_id=workspace_id,
+        )
+
+        with patch.object(
+            config.fs_manager,
+            "prepare_verification_layout",
+            side_effect=RuntimeError("verification layout unavailable"),
+        ):
+            run_workspace_verification_dag(
+                problem,
+                user,
+                actor_user_id=int(context["user"]["id"]),
+                problem_id=problem_id,
+                workspace_id=workspace_id,
+                workspace_head="",
+                workspace_dirty=True,
+                targets=[],
+                verification_id=verification_id,
+            )
+
+        verification = db_fetch_one(
+            "SELECT status,fail_reason,finished_at FROM verifications WHERE id=?",
+            [verification_id],
+        )
+        open_tasks = db_fetch_one(
+            """
+            SELECT COUNT(*) AS count
+            FROM verification_tasks
+            WHERE verification_id=? AND final_status=''
+            """,
+            [verification_id],
+        )
+        self.assertIsNotNone(verification)
+        self.assertIsNotNone(open_tasks)
+        self.assertEqual(str(verification["status"]), "failed")
+        self.assertEqual(
+            str(verification["fail_reason"]),
+            "verification layout unavailable",
+        )
+        self.assertTrue(str(verification["finished_at"] or ""))
+        self.assertEqual(int(open_tasks["count"]), 0)
 
     def test_verification_sidebar_marks_stale_when_gen_chk_sol_tests_change(self) -> None:
         problem = f"alice/verify-stale-{uuid.uuid4().hex[:8]}"
@@ -1566,6 +1917,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             problem_id=problem_id,
             workspace_id=workspace_id,
             build_id=build_id,
+            activate_tasks=False,
             kind=Kind.ALL,
             status="ok",
             created_at="2026-03-03T00:00:01Z",
@@ -1587,33 +1939,54 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
                 },
             ],
         )
-        config.verification_task_store.replace_graph(
+        rerun_ok_task_id = verification_task_id(
+            verification_id,
+            "solution-0",
+            "001.in",
+        )
+        rerun_wa_task_id = verification_task_id(
+            verification_id,
+            "solution-1",
+            "001.in",
+        )
+        self._activate_verification_fixture(
             verification_id,
             tasks=[
-                {
-                    "id": f"vt-rerun-link-ok-{uuid.uuid4().hex[:8]}",
-                    "task_kind": "solution-run",
-                    "source_path": "solutions/accepted.cpp",
-                    "logical_run_id": run_ok,
-                    "test_name": "001.in",
-                    "expected_behavior": "accepted",
-                    "queue_index": 1,
-                    "status": VerificationTaskStore.TASK_DONE,
-                    "run_id": run_ok,
-                },
-                {
-                    "id": f"vt-rerun-link-wa-{uuid.uuid4().hex[:8]}",
-                    "task_kind": "solution-run",
-                    "source_path": "solutions/wa.cpp",
-                    "logical_run_id": run_wa,
-                    "test_name": "001.in",
-                    "expected_behavior": "wrong_answer",
-                    "queue_index": 2,
-                    "status": VerificationTaskStore.TASK_DONE,
-                    "run_id": run_wa,
-                },
+                PlannedTask(
+                    task_id=rerun_ok_task_id,
+                    predecessor_task_id=None,
+                    task_kind="solution-run",
+                    source_path="solutions/accepted.cpp",
+                    program_id="solution-0",
+                    test_name="001.in",
+                    expected_behavior="accepted",
+                ),
+                PlannedTask(
+                    task_id=rerun_wa_task_id,
+                    predecessor_task_id=None,
+                    task_kind="solution-run",
+                    source_path="solutions/wa.cpp",
+                    program_id="solution-1",
+                    test_name="001.in",
+                    expected_behavior="wrong_answer",
+                ),
             ],
-            edges=[],
+            completions=[
+                TaskCompletion(
+                    task_id=rerun_ok_task_id,
+                    status=VerificationTaskStore.TASK_DONE,
+                    run_id=run_ok,
+                    judgehost_task_id="",
+                    result=execution_result("OK"),
+                ),
+                TaskCompletion(
+                    task_id=rerun_wa_task_id,
+                    status=VerificationTaskStore.TASK_DONE,
+                    run_id=run_wa,
+                    judgehost_task_id="",
+                    result=execution_result("WA"),
+                ),
+            ],
         )
         list_page = run_page(_request("/problems/alice/sample/run"), "alice/sample", "alice")
         self.assertEqual(list_page.status_code, 200)
@@ -1878,6 +2251,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             problem_id=problem_id,
             workspace_id=workspace_id,
             build_id=build_id,
+            activate_tasks=False,
             kind=Kind.ALL,
             status="running",
             created_at="2026-02-23T00:00:00Z",
@@ -1890,33 +2264,39 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
                 "source_paths": ["solutions/accepted.cpp"],
             },
         )
-        config.verification_task_store.replace_graph(
+        leased_task_id = verification_task_id(
+            verification_id,
+            "solution-0",
+            "001.in",
+        )
+        pending_task_id = verification_task_id(
+            verification_id,
+            "solution-0",
+            "002.in",
+        )
+        self._activate_verification_fixture(
             verification_id,
             tasks=[
-                {
-                    "id": "vt-cancel-leased",
-                    "task_kind": "solution-run",
-                    "source_path": "solutions/accepted.cpp",
-                    "logical_run_id": run_id,
-                    "test_name": "001.in",
-                    "expected_behavior": "accepted",
-                    "queue_index": 1,
-                    "status": VerificationTaskStore.TASK_LEASED,
-                    "run_id": run_id,
-                    "judgehost_task_id": "jt-cancel-leased",
-                },
-                {
-                    "id": "vt-cancel-pending",
-                    "task_kind": "solution-run",
-                    "source_path": "solutions/accepted.cpp",
-                    "logical_run_id": run_id,
-                    "test_name": "002.in",
-                    "expected_behavior": "accepted",
-                    "queue_index": 2,
-                    "status": VerificationTaskStore.TASK_PENDING,
-                },
+                PlannedTask(
+                    task_id=leased_task_id,
+                    predecessor_task_id=None,
+                    task_kind="solution-run",
+                    source_path="solutions/accepted.cpp",
+                    program_id="solution-0",
+                    test_name="001.in",
+                    expected_behavior="accepted",
+                ),
+                PlannedTask(
+                    task_id=pending_task_id,
+                    predecessor_task_id=None,
+                    task_kind="solution-run",
+                    source_path="solutions/accepted.cpp",
+                    program_id="solution-0",
+                    test_name="002.in",
+                    expected_behavior="accepted",
+                ),
             ],
-            edges=[],
+            leased=[(leased_task_id, run_id, "jt-cancel-leased")],
         )
 
         details_before = run_details_page(
@@ -1944,8 +2324,8 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             str(row["id"]): row
             for row in config.verification_task_store.list_rows(verification_id)
         }
-        self.assertEqual(str(rows["vt-cancel-leased"]["status"] or ""), VerificationTaskStore.TASK_LEASED)
-        self.assertEqual(str(rows["vt-cancel-pending"]["status"] or ""), VerificationTaskStore.TASK_CANCELLED)
+        self.assertEqual(str(rows[leased_task_id]["status"] or ""), VerificationTaskStore.TASK_CANCELLED)
+        self.assertEqual(str(rows[pending_task_id]["status"] or ""), VerificationTaskStore.TASK_CANCELLED)
 
         details_after = run_details_page(
             _request("/problems/alice/sample/run/details", f"verification_id={verification_id}"),
@@ -1965,6 +2345,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             problem_id=problem_id,
             workspace_id=workspace_id,
             build_id=build_id,
+            activate_tasks=False,
             kind=Kind.ALL,
             status="running",
             created_at="2026-03-05T00:00:00Z",
@@ -1972,35 +2353,36 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             runs=[],
             summary_extra={"task_graph": True, "source_paths": ["solutions/accepted.cpp"]},
         )
-        config.verification_task_store.replace_graph(
+        queued_task_ids = [
+            verification_task_id(
+                verification_id,
+                "solution-0",
+                f"{index:03d}.in",
+            )
+            for index in (1, 2)
+        ]
+        queued_run_ids = [
+            f"r-cancel-pending-{index}-{uuid.uuid4().hex[:8]}"
+            for index in (1, 2)
+        ]
+        self._activate_verification_fixture(
             verification_id,
             tasks=[
-                {
-                    "id": "vt-cancel-pending-1",
-                    "task_kind": "solution-run",
-                    "source_path": "solutions/accepted.cpp",
-                    "logical_run_id": "",
-                    "test_name": "001.in",
-                    "expected_behavior": "accepted",
-                    "queue_index": 1,
-                    "status": VerificationTaskStore.TASK_QUEUED,
-                    "run_id": f"r-cancel-pending-1-{uuid.uuid4().hex[:8]}",
-                    "judgehost_task_id": "jt-cancel-pending-1",
-                },
-                {
-                    "id": "vt-cancel-pending-2",
-                    "task_kind": "solution-run",
-                    "source_path": "solutions/accepted.cpp",
-                    "logical_run_id": "",
-                    "test_name": "002.in",
-                    "expected_behavior": "accepted",
-                    "queue_index": 2,
-                    "status": VerificationTaskStore.TASK_QUEUED,
-                    "run_id": f"r-cancel-pending-2-{uuid.uuid4().hex[:8]}",
-                    "judgehost_task_id": "jt-cancel-pending-2",
-                },
+                PlannedTask(
+                    task_id=task_id,
+                    predecessor_task_id=None,
+                    task_kind="solution-run",
+                    source_path="solutions/accepted.cpp",
+                    program_id="solution-0",
+                    test_name=f"{index + 1:03d}.in",
+                    expected_behavior="accepted",
+                )
+                for index, task_id in enumerate(queued_task_ids)
             ],
-            edges=[],
+            queued=[
+                (task_id, queued_run_ids[index], f"jt-cancel-pending-{index + 1}")
+                for index, task_id in enumerate(queued_task_ids)
+            ],
         )
         cancel_resp = run_export_impl.run_cancel(problem="alice/sample", user="alice", verification_id=verification_id)
         self.assertEqual(cancel_resp.status_code, 303)
@@ -2012,8 +2394,20 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         self.assertEqual(str(verification_row["status"] or "").strip().lower(), "failed")
         rows = config.verification_task_store.list_rows(verification_id)
         self.assertEqual(
-            [str(row["status"] or "") for row in rows],
+            [
+                str(row["status"] or "")
+                for row in rows
+                if str(row["program_id"] or "") == "solution-0"
+            ],
             [VerificationTaskStore.TASK_CANCELLED, VerificationTaskStore.TASK_CANCELLED],
+        )
+        self.assertEqual(
+            [
+                str(row["status"] or "")
+                for row in rows
+                if str(row["program_id"] or "") == "accepted"
+            ],
+            [VerificationTaskStore.TASK_DONE],
         )
 
     def test_run_cancel_cancels_queued_rows_when_domjudge_has_only_pending_cases(self) -> None:
@@ -2028,6 +2422,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             problem_id=problem_id,
             workspace_id=workspace_id,
             build_id=build_id,
+            activate_tasks=False,
             kind=Kind.ALL,
             status="running",
             created_at="2026-03-05T00:00:00Z",
@@ -2035,35 +2430,32 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             runs=[],
             summary_extra={"task_graph": True, "source_paths": ["solutions/accepted.cpp"]},
         )
-        config.verification_task_store.replace_graph(
+        queued_task_ids = [
+            verification_task_id(
+                verification_id,
+                "solution-0",
+                f"{index:03d}.in",
+            )
+            for index in (1, 2)
+        ]
+        self._activate_verification_fixture(
             verification_id,
             tasks=[
-                {
-                    "id": "vt-cancel-domjudge-pending-1",
-                    "task_kind": "solution-run",
-                    "source_path": "solutions/accepted.cpp",
-                    "logical_run_id": "",
-                    "test_name": "001.in",
-                    "expected_behavior": "accepted",
-                    "queue_index": 1,
-                    "status": VerificationTaskStore.TASK_QUEUED,
-                    "run_id": run_id,
-                    "judgehost_task_id": "jt-cancel-domjudge-pending",
-                },
-                {
-                    "id": "vt-cancel-domjudge-pending-2",
-                    "task_kind": "solution-run",
-                    "source_path": "solutions/accepted.cpp",
-                    "logical_run_id": "",
-                    "test_name": "002.in",
-                    "expected_behavior": "accepted",
-                    "queue_index": 2,
-                    "status": VerificationTaskStore.TASK_QUEUED,
-                    "run_id": run_id,
-                    "judgehost_task_id": "jt-cancel-domjudge-pending",
-                },
+                PlannedTask(
+                    task_id=task_id,
+                    predecessor_task_id=None,
+                    task_kind="solution-run",
+                    source_path="solutions/accepted.cpp",
+                    program_id="solution-0",
+                    test_name=f"{index + 1:03d}.in",
+                    expected_behavior="accepted",
+                )
+                for index, task_id in enumerate(queued_task_ids)
             ],
-            edges=[],
+            queued=[
+                (task_id, run_id, "jt-cancel-domjudge-pending")
+                for task_id in queued_task_ids
+            ],
         )
         cancel_resp = run_export_impl.run_cancel(
             problem="alice/sample",
@@ -2073,8 +2465,20 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         self.assertEqual(cancel_resp.status_code, 303)
         rows = config.verification_task_store.list_rows(verification_id)
         self.assertEqual(
-            [str(row["status"] or "") for row in rows],
+            [
+                str(row["status"] or "")
+                for row in rows
+                if str(row["program_id"] or "") == "solution-0"
+            ],
             [VerificationTaskStore.TASK_CANCELLED, VerificationTaskStore.TASK_CANCELLED],
+        )
+        self.assertEqual(
+            [
+                str(row["status"] or "")
+                for row in rows
+                if str(row["program_id"] or "") == "accepted"
+            ],
+            [VerificationTaskStore.TASK_DONE],
         )
 
 
@@ -2179,6 +2583,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             problem_id=problem_id,
             workspace_id=workspace_id,
             build_id=build_id,
+            activate_tasks=False,
             kind=Kind.ALL,
             status="running",
             created_at="2026-02-23T00:00:02Z",
@@ -2211,91 +2616,85 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
                 ],
             },
         )
-        config.verification_task_store.replace_graph(
+        done_task_id = verification_task_id(
+            verification_id,
+            "generator-0",
+            "003.in",
+        )
+        generating_task_id = verification_task_id(
+            verification_id,
+            "generator-0",
+            "001.in",
+        )
+        main_task_id = verification_task_id(
+            verification_id,
+            "accepted",
+            "002.in",
+        )
+        pending_task_ids = [
+            verification_task_id(
+                verification_id,
+                "solution-0",
+                f"{index:03d}.in",
+            )
+            for index in range(4, 9)
+        ]
+        self._activate_verification_fixture(
             verification_id,
             tasks=[
-                {
-                    "id": "vt-done-1",
-                    "task_kind": "generate-input",
-                    "source_path": "solutions/accepted.cpp",
-                    "logical_run_id": "",
-                    "test_name": "003.in",
-                    "expected_behavior": "accepted",
-                    "queue_index": 1,
-                    "status": VerificationTaskStore.TASK_DONE,
-                },
-                {
-                    "id": "vt-run-1",
-                    "task_kind": "generate-input",
-                    "source_path": "solutions/accepted.cpp",
-                    "logical_run_id": "",
-                    "test_name": "001.in",
-                    "expected_behavior": "accepted",
-                    "queue_index": 2,
-                    "status": VerificationTaskStore.TASK_LEASED,
-                },
-                {
-                    "id": "vt-run-2",
-                    "task_kind": "main-correct",
-                    "source_path": "solutions/accepted.cpp",
-                    "logical_run_id": run_id,
-                    "test_name": "002.in",
-                    "expected_behavior": "accepted",
-                    "queue_index": 3,
-                    "status": VerificationTaskStore.TASK_LEASED,
-                },
-                {
-                    "id": "vt-pending-1",
-                    "task_kind": "solution-run",
-                    "source_path": "solutions/accepted.cpp",
-                    "logical_run_id": run_id,
-                    "test_name": "004.in",
-                    "expected_behavior": "accepted",
-                    "queue_index": 4,
-                    "status": VerificationTaskStore.TASK_PENDING,
-                },
-                {
-                    "id": "vt-pending-2",
-                    "task_kind": "solution-run",
-                    "source_path": "solutions/accepted.cpp",
-                    "logical_run_id": run_id,
-                    "test_name": "005.in",
-                    "expected_behavior": "accepted",
-                    "queue_index": 5,
-                    "status": VerificationTaskStore.TASK_PENDING,
-                },
-                {
-                    "id": "vt-pending-3",
-                    "task_kind": "solution-run",
-                    "source_path": "solutions/accepted.cpp",
-                    "logical_run_id": run_id,
-                    "test_name": "006.in",
-                    "expected_behavior": "accepted",
-                    "queue_index": 6,
-                    "status": VerificationTaskStore.TASK_PENDING,
-                },
-                {
-                    "id": "vt-pending-4",
-                    "task_kind": "solution-run",
-                    "source_path": "solutions/accepted.cpp",
-                    "logical_run_id": run_id,
-                    "test_name": "007.in",
-                    "expected_behavior": "accepted",
-                    "queue_index": 7,
-                    "status": VerificationTaskStore.TASK_PENDING,
-                },
-                {
-                    "id": "vt-pending-5",
-                    "task_kind": "solution-run",
-                    "source_path": "solutions/accepted.cpp",
-                    "logical_run_id": run_id,
-                    "test_name": "008.in",
-                    "expected_behavior": "accepted",
-                    "queue_index": 8,
-                    "status": VerificationTaskStore.TASK_PENDING,
-                },
+                PlannedTask(
+                    task_id=done_task_id,
+                    predecessor_task_id=None,
+                    task_kind="generate-input",
+                    source_path="solutions/accepted.cpp",
+                    program_id="generator-0",
+                    test_name="003.in",
+                    expected_behavior="accepted",
+                ),
+                PlannedTask(
+                    task_id=generating_task_id,
+                    predecessor_task_id=None,
+                    task_kind="generate-input",
+                    source_path="solutions/accepted.cpp",
+                    program_id="generator-0",
+                    test_name="001.in",
+                    expected_behavior="accepted",
+                ),
+                PlannedTask(
+                    task_id=main_task_id,
+                    predecessor_task_id=None,
+                    task_kind="main-correct",
+                    source_path="solutions/accepted.cpp",
+                    program_id="accepted",
+                    test_name="002.in",
+                    expected_behavior="accepted",
+                ),
+                *[
+                    PlannedTask(
+                        task_id=task_id,
+                        predecessor_task_id=None,
+                        task_kind="solution-run",
+                        source_path="solutions/accepted.cpp",
+                        program_id="solution-0",
+                        test_name=f"{index:03d}.in",
+                        expected_behavior="accepted",
+                    )
+                    for index, task_id in zip(range(4, 9), pending_task_ids)
+                ],
             ],
-            edges=[],
+            completions=[
+                TaskCompletion(
+                    task_id=done_task_id,
+                    status=VerificationTaskStore.TASK_DONE,
+                    run_id="",
+                    judgehost_task_id="",
+                    result=execution_result("OK"),
+                )
+            ],
+            leased=[
+                (generating_task_id, "generate-001", "jt-generate-001"),
+                (main_task_id, run_id, "jt-main-002"),
+            ],
         )
         detail_ctx = workspace_impl.build_run_detail_context(
             ctx,
@@ -2391,6 +2790,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             problem_id=problem_id,
             workspace_id=workspace_id,
             build_id=self.random_id("b-verif-task-graph"),
+            activate_tasks=False,
             kind=Kind.ALL,
             status="running",
             created_at="2026-03-22T00:00:00Z",
@@ -2460,44 +2860,63 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
                 ],
             },
         )
-        config.verification_task_store.replace_graph(
+        generate_task_id = verification_task_id(
+            verification_id,
+            "generator-0",
+            "001.in",
+        )
+        main_task_id = verification_task_id(
+            verification_id,
+            "accepted",
+            "001.in",
+        )
+        solution_task_id = verification_task_id(
+            verification_id,
+            "solution-0",
+            "001.in",
+        )
+        self._activate_verification_fixture(
             verification_id,
             tasks=[
-                {
-                    "id": "vt-generate-1",
-                    "task_kind": "generate-input",
-                    "source_path": "solutions/accepted.cpp",
-                    "logical_run_id": "",
-                    "test_name": "001.in",
-                    "expected_behavior": "accepted",
-                    "queue_index": 1,
-                    "status": VerificationTaskStore.TASK_DONE,
-                },
-                {
-                    "id": "vt-main-1",
-                    "task_kind": "main-correct",
-                    "source_path": "solutions/accepted.cpp",
-                    "logical_run_id": main_run_id,
-                    "test_name": "001.in",
-                    "expected_behavior": "accepted",
-                    "queue_index": 2,
-                    "status": VerificationTaskStore.TASK_DONE,
-                },
-                {
-                    "id": "vt-solution-1",
-                    "task_kind": "solution-run",
-                    "source_path": "solutions/wa.cpp",
-                    "logical_run_id": solution_run_id,
-                    "test_name": "001.in",
-                    "expected_behavior": "wrong_answer",
-                    "queue_index": 3,
-                    "status": VerificationTaskStore.TASK_LEASED,
-                },
+                PlannedTask(
+                    task_id=generate_task_id,
+                    predecessor_task_id=None,
+                    task_kind="generate-input",
+                    source_path="solutions/accepted.cpp",
+                    program_id="generator-0",
+                    test_name="001.in",
+                    expected_behavior="accepted",
+                ),
+                PlannedTask(
+                    task_id=main_task_id,
+                    predecessor_task_id=generate_task_id,
+                    task_kind="main-correct",
+                    source_path="solutions/accepted.cpp",
+                    program_id="accepted",
+                    test_name="001.in",
+                    expected_behavior="accepted",
+                ),
+                PlannedTask(
+                    task_id=solution_task_id,
+                    predecessor_task_id=main_task_id,
+                    task_kind="solution-run",
+                    source_path="solutions/wa.cpp",
+                    program_id="solution-0",
+                    test_name="001.in",
+                    expected_behavior="wrong_answer",
+                ),
             ],
-            edges=[
-                ("vt-generate-1", "vt-main-1"),
-                ("vt-main-1", "vt-solution-1"),
+            completions=[
+                TaskCompletion(
+                    task_id=task_id,
+                    status=VerificationTaskStore.TASK_DONE,
+                    run_id="",
+                    judgehost_task_id="",
+                    result=execution_result("OK"),
+                )
+                for task_id in (generate_task_id, main_task_id)
             ],
+            leased=[(solution_task_id, solution_run_id, "jt-solution-001")],
         )
         page = run_details_page(
             _request("/problems/alice/sample/run/details", f"verification_id={verification_id}"),
@@ -2509,7 +2928,6 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         self.assertIn("wa.cpp", html)
         self.assertIn("accepted.cpp", html)
         self.assertNotIn("data-solution-title=", html)
-        self.assertIn(f'data-run-id="{solution_run_id}"', html)
         self.assertIn('data-test-name="001.in"', html)
         self.assertIn("running", html)
 
@@ -2527,6 +2945,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             problem_id=problem_id,
             workspace_id=workspace_id,
             build_id=self.random_id("b-verif-task-stale-summary"),
+            activate_tasks=False,
             kind=Kind.ALL,
             status="running",
             created_at="2026-03-23T00:00:00Z",
@@ -2565,56 +2984,82 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
                 ],
             },
         )
-        config.verification_task_store.replace_graph(
+        generate_task_ids = {
+            test_name: verification_task_id(
+                verification_id,
+                "generator-0",
+                test_name,
+            )
+            for test_name in ("001.in", "002.in")
+        }
+        solution_task_ids = {
+            test_name: verification_task_id(
+                verification_id,
+                "solution-0",
+                test_name,
+            )
+            for test_name in ("001.in", "002.in")
+        }
+        self._activate_verification_fixture(
             verification_id,
             tasks=[
-                {
-                    "id": "vt-generate-001",
-                    "task_kind": "generate-input",
-                    "source_path": "generators/gen.cpp",
-                    "logical_run_id": "",
-                    "test_name": "001.in",
-                    "expected_behavior": "accepted",
-                    "queue_index": 1,
-                    "status": VerificationTaskStore.TASK_DONE,
-                },
-                {
-                    "id": "vt-generate-002",
-                    "task_kind": "generate-input",
-                    "source_path": "generators/gen.cpp",
-                    "logical_run_id": "",
-                    "test_name": "002.in",
-                    "expected_behavior": "accepted",
-                    "queue_index": 2,
-                    "status": VerificationTaskStore.TASK_DONE,
-                },
-                {
-                    "id": "vt-solution-001",
-                    "task_kind": "solution-run",
-                    "source_path": "solutions/accepted.cpp",
-                    "logical_run_id": solution_run_id,
-                    "test_name": "001.in",
-                    "expected_behavior": "accepted",
-                    "queue_index": 3,
-                    "status": VerificationTaskStore.TASK_DONE,
-                    "verdict": "AC",
-                    "runtime_sec": 0.001,
-                    "cpu_sec": 0.001,
-                    "wall_sec": 0.001,
-                    "memory_kb": 1024,
-                },
-                {
-                    "id": "vt-solution-002",
-                    "task_kind": "solution-run",
-                    "source_path": "solutions/accepted.cpp",
-                    "logical_run_id": solution_run_id,
-                    "test_name": "002.in",
-                    "expected_behavior": "accepted",
-                    "queue_index": 4,
-                    "status": VerificationTaskStore.TASK_QUEUED,
-                },
+                *[
+                    PlannedTask(
+                        task_id=task_id,
+                        predecessor_task_id=None,
+                        task_kind="generate-input",
+                        source_path="generators/gen.cpp",
+                        program_id="generator-0",
+                        test_name=test_name,
+                        expected_behavior="accepted",
+                    )
+                    for test_name, task_id in generate_task_ids.items()
+                ],
+                *[
+                    PlannedTask(
+                        task_id=task_id,
+                        predecessor_task_id=None,
+                        task_kind="solution-run",
+                        source_path="solutions/accepted.cpp",
+                        program_id="solution-0",
+                        test_name=test_name,
+                        expected_behavior="accepted",
+                    )
+                    for test_name, task_id in solution_task_ids.items()
+                ],
             ],
-            edges=[],
+            completions=[
+                *[
+                    TaskCompletion(
+                        task_id=task_id,
+                        status=VerificationTaskStore.TASK_DONE,
+                        run_id="",
+                        judgehost_task_id="",
+                        result=execution_result("OK"),
+                    )
+                    for task_id in generate_task_ids.values()
+                ],
+                TaskCompletion(
+                    task_id=solution_task_ids["001.in"],
+                    status=VerificationTaskStore.TASK_DONE,
+                    run_id=solution_run_id,
+                    judgehost_task_id="",
+                    result=execution_result(
+                        "AC",
+                        runtime_sec=0.001,
+                        cpu_sec=0.001,
+                        wall_sec=0.001,
+                        memory_kb=1024,
+                    ),
+                ),
+            ],
+            queued=[
+                (
+                    solution_task_ids["002.in"],
+                    solution_run_id,
+                    "jt-stale-summary-002",
+                )
+            ],
         )
         detail_ctx = workspace_impl.build_run_detail_context(
             workspace_service.workspace_context("alice/sample", "alice", include_recent=False),
@@ -2646,6 +3091,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             problem_id=problem_id,
             workspace_id=workspace_id,
             build_id=self.random_id("b-verif-task-generate"),
+            activate_tasks=False,
             kind=Kind.ALL,
             status="running",
             created_at="2026-03-22T00:00:00Z",
@@ -2681,31 +3127,39 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
                 ],
             },
         )
-        config.verification_task_store.replace_graph(
+        generate_task_id = verification_task_id(
+            verification_id,
+            "generator-0",
+            "001.in",
+        )
+        solution_task_id = verification_task_id(
+            verification_id,
+            "solution-0",
+            "001.in",
+        )
+        self._activate_verification_fixture(
             verification_id,
             tasks=[
-                {
-                    "id": "vt-generate-1",
-                    "task_kind": "generate-input",
-                    "source_path": "generators/gen.cpp",
-                    "logical_run_id": "",
-                    "test_name": "001.in",
-                    "expected_behavior": "accepted",
-                    "queue_index": 1,
-                    "status": VerificationTaskStore.TASK_LEASED,
-                },
-                {
-                    "id": "vt-solution-1",
-                    "task_kind": "solution-run",
-                    "source_path": "solutions/wa.cpp",
-                    "logical_run_id": solution_run_id,
-                    "test_name": "001.in",
-                    "expected_behavior": "wrong_answer",
-                    "queue_index": 2,
-                    "status": VerificationTaskStore.TASK_PENDING,
-                },
+                PlannedTask(
+                    task_id=generate_task_id,
+                    predecessor_task_id=None,
+                    task_kind="generate-input",
+                    source_path="generators/gen.cpp",
+                    program_id="generator-0",
+                    test_name="001.in",
+                    expected_behavior="accepted",
+                ),
+                PlannedTask(
+                    task_id=solution_task_id,
+                    predecessor_task_id=generate_task_id,
+                    task_kind="solution-run",
+                    source_path="solutions/wa.cpp",
+                    program_id="solution-0",
+                    test_name="001.in",
+                    expected_behavior="wrong_answer",
+                ),
             ],
-            edges=[("vt-generate-1", "vt-solution-1")],
+            leased=[(generate_task_id, "generate-001", "jt-generate-001")],
         )
         page = run_details_page(
             _request("/problems/alice/sample/run/details", f"verification_id={verification_id}"),
@@ -2732,6 +3186,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             problem_id=problem_id,
             workspace_id=workspace_id,
             build_id=self.random_id("b-verif-task-solution-status"),
+            activate_tasks=False,
             kind=Kind.ALL,
             status="running",
             created_at="2026-03-23T00:00:00Z",
@@ -2766,51 +3221,67 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
                 ],
             },
         )
-        config.verification_task_store.replace_graph(
+        generate_task_ids = {
+            test_name: verification_task_id(
+                verification_id,
+                "generator-0",
+                test_name,
+            )
+            for test_name in ("001.in", "002.in")
+        }
+        solution_task_ids = {
+            test_name: verification_task_id(
+                verification_id,
+                "solution-0",
+                test_name,
+            )
+            for test_name in ("001.in", "002.in")
+        }
+        self._activate_verification_fixture(
             verification_id,
             tasks=[
-                {
-                    "id": "vt-generate-001",
-                    "task_kind": "generate-input",
-                    "source_path": "generators/gen.cpp",
-                    "logical_run_id": "",
-                    "test_name": "001.in",
-                    "expected_behavior": "accepted",
-                    "queue_index": 1,
-                    "status": VerificationTaskStore.TASK_DONE,
-                },
-                {
-                    "id": "vt-generate-002",
-                    "task_kind": "generate-input",
-                    "source_path": "generators/gen.cpp",
-                    "logical_run_id": "",
-                    "test_name": "002.in",
-                    "expected_behavior": "accepted",
-                    "queue_index": 2,
-                    "status": VerificationTaskStore.TASK_DONE,
-                },
-                {
-                    "id": "vt-solution-001",
-                    "task_kind": "solution-run",
-                    "source_path": "solutions/wa.cpp",
-                    "logical_run_id": solution_run_id,
-                    "test_name": "001.in",
-                    "expected_behavior": "wrong_answer",
-                    "queue_index": 3,
-                    "status": VerificationTaskStore.TASK_LEASED,
-                },
-                {
-                    "id": "vt-solution-002",
-                    "task_kind": "solution-run",
-                    "source_path": "solutions/wa.cpp",
-                    "logical_run_id": solution_run_id,
-                    "test_name": "002.in",
-                    "expected_behavior": "wrong_answer",
-                    "queue_index": 4,
-                    "status": VerificationTaskStore.TASK_PENDING,
-                },
+                *[
+                    PlannedTask(
+                        task_id=task_id,
+                        predecessor_task_id=None,
+                        task_kind="generate-input",
+                        source_path="generators/gen.cpp",
+                        program_id="generator-0",
+                        test_name=test_name,
+                        expected_behavior="accepted",
+                    )
+                    for test_name, task_id in generate_task_ids.items()
+                ],
+                *[
+                    PlannedTask(
+                        task_id=task_id,
+                        predecessor_task_id=None,
+                        task_kind="solution-run",
+                        source_path="solutions/wa.cpp",
+                        program_id="solution-0",
+                        test_name=test_name,
+                        expected_behavior="wrong_answer",
+                    )
+                    for test_name, task_id in solution_task_ids.items()
+                ],
             ],
-            edges=[],
+            completions=[
+                TaskCompletion(
+                    task_id=task_id,
+                    status=VerificationTaskStore.TASK_DONE,
+                    run_id="",
+                    judgehost_task_id="",
+                    result=execution_result("OK"),
+                )
+                for task_id in generate_task_ids.values()
+            ],
+            leased=[
+                (
+                    solution_task_ids["001.in"],
+                    solution_run_id,
+                    "jt-solution-001",
+                )
+            ],
         )
         page = run_details_page(
             _request("/problems/alice/sample/run/details", f"verification_id={verification_id}"),
@@ -2840,6 +3311,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             problem_id=problem_id,
             workspace_id=workspace_id,
             build_id=self.random_id("b-verif-task-cancelled-column"),
+            activate_tasks=False,
             kind=Kind.ALL,
             status="failed",
             created_at="2026-03-23T00:00:00Z",
@@ -2876,71 +3348,105 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
                 ],
             },
         )
-        config.verification_task_store.replace_graph(
+        generate_task_ids = {
+            test_name: verification_task_id(
+                verification_id,
+                "generator-0",
+                test_name,
+            )
+            for test_name in ("001.in", "002.in")
+        }
+        accepted_task_ids = {
+            test_name: verification_task_id(
+                verification_id,
+                "solution-0",
+                test_name,
+            )
+            for test_name in ("001.in", "002.in")
+        }
+        cancelled_task_ids = {
+            test_name: verification_task_id(
+                verification_id,
+                "solution-1",
+                test_name,
+            )
+            for test_name in ("001.in", "002.in")
+        }
+        self._activate_verification_fixture(
             verification_id,
             tasks=[
-                {
-                    "id": "vt-generate-001",
-                    "task_kind": "generate-input",
-                    "source_path": "generators/gen.cpp",
-                    "logical_run_id": "",
-                    "test_name": "001.in",
-                    "expected_behavior": "accepted",
-                    "queue_index": 1,
-                    "status": VerificationTaskStore.TASK_DONE,
-                },
-                {
-                    "id": "vt-generate-002",
-                    "task_kind": "generate-input",
-                    "source_path": "generators/gen.cpp",
-                    "logical_run_id": "",
-                    "test_name": "002.in",
-                    "expected_behavior": "accepted",
-                    "queue_index": 2,
-                    "status": VerificationTaskStore.TASK_DONE,
-                },
-                {
-                    "id": "vt-accepted-001",
-                    "task_kind": "solution-run",
-                    "source_path": "solutions/accepted.cpp",
-                    "logical_run_id": accepted_run_id,
-                    "test_name": "001.in",
-                    "expected_behavior": "accepted",
-                    "queue_index": 3,
-                    "status": VerificationTaskStore.TASK_DONE,
-                },
-                {
-                    "id": "vt-accepted-002",
-                    "task_kind": "solution-run",
-                    "source_path": "solutions/accepted.cpp",
-                    "logical_run_id": accepted_run_id,
-                    "test_name": "002.in",
-                    "expected_behavior": "accepted",
-                    "queue_index": 4,
-                    "status": VerificationTaskStore.TASK_CANCELLED,
-                },
-                {
-                    "id": "vt-cancelled-001",
-                    "task_kind": "solution-run",
-                    "source_path": "solutions/cancelled.cpp",
-                    "logical_run_id": "",
-                    "test_name": "001.in",
-                    "expected_behavior": "wrong_answer",
-                    "queue_index": 5,
-                    "status": VerificationTaskStore.TASK_CANCELLED,
-                },
-                {
-                    "id": "vt-cancelled-002",
-                    "task_kind": "solution-run",
-                    "source_path": "solutions/cancelled.cpp",
-                    "logical_run_id": "",
-                    "test_name": "002.in",
-                    "expected_behavior": "wrong_answer",
-                    "queue_index": 6,
-                    "status": VerificationTaskStore.TASK_CANCELLED,
-                },
+                *[
+                    PlannedTask(
+                        task_id=task_id,
+                        predecessor_task_id=None,
+                        task_kind="generate-input",
+                        source_path="generators/gen.cpp",
+                        program_id="generator-0",
+                        test_name=test_name,
+                        expected_behavior="accepted",
+                    )
+                    for test_name, task_id in generate_task_ids.items()
+                ],
+                *[
+                    PlannedTask(
+                        task_id=task_id,
+                        predecessor_task_id=None,
+                        task_kind="solution-run",
+                        source_path="solutions/accepted.cpp",
+                        program_id="solution-0",
+                        test_name=test_name,
+                        expected_behavior="accepted",
+                    )
+                    for test_name, task_id in accepted_task_ids.items()
+                ],
+                *[
+                    PlannedTask(
+                        task_id=task_id,
+                        predecessor_task_id=None,
+                        task_kind="solution-run",
+                        source_path="solutions/cancelled.cpp",
+                        program_id="solution-1",
+                        test_name=test_name,
+                        expected_behavior="wrong_answer",
+                    )
+                    for test_name, task_id in cancelled_task_ids.items()
+                ],
             ],
-            edges=[],
+            completions=[
+                *[
+                    TaskCompletion(
+                        task_id=task_id,
+                        status=VerificationTaskStore.TASK_DONE,
+                        run_id="",
+                        judgehost_task_id="",
+                        result=execution_result("OK"),
+                    )
+                    for task_id in generate_task_ids.values()
+                ],
+                TaskCompletion(
+                    task_id=accepted_task_ids["001.in"],
+                    status=VerificationTaskStore.TASK_DONE,
+                    run_id=accepted_run_id,
+                    judgehost_task_id="",
+                    result=execution_result("AC"),
+                ),
+                *[
+                    TaskCompletion(
+                        task_id=task_id,
+                        status=VerificationTaskStore.TASK_CANCELLED,
+                        run_id="",
+                        judgehost_task_id="",
+                        result=normalize_execution_result(
+                            error="verification cancelled"
+                        ),
+                        fail_reason="verification cancelled",
+                    )
+                    for task_id in (
+                        accepted_task_ids["002.in"],
+                        *cancelled_task_ids.values(),
+                    )
+                ],
+            ],
         )
         page = run_details_page(
             _request("/problems/alice/sample/run/details", f"verification_id={verification_id}"),
@@ -2979,6 +3485,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             problem_id=problem_id,
             workspace_id=workspace_id,
             build_id=self.random_id("b-main-cancel"),
+            activate_tasks=False,
             kind=Kind.ALL,
             status="failed",
             created_at="2026-03-24T00:00:00Z",
@@ -2992,71 +3499,99 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
                 "error": "verification cancelled by user",
             },
         )
-        config.verification_task_store.replace_graph(
+        test_names = ("001.in", "002.in")
+        generate_task_ids = {
+            test_name: verification_task_id(
+                verification_id,
+                "generator-0",
+                test_name,
+            )
+            for test_name in test_names
+        }
+        main_task_ids = {
+            test_name: verification_task_id(
+                verification_id,
+                "accepted",
+                test_name,
+            )
+            for test_name in test_names
+        }
+        solution_task_ids = {
+            test_name: verification_task_id(
+                verification_id,
+                "solution-0",
+                test_name,
+            )
+            for test_name in test_names
+        }
+        self._activate_verification_fixture(
             verification_id,
             tasks=[
-                {
-                    "id": "vt-generate-001",
-                    "task_kind": "generate-input",
-                    "source_path": "generators/gen.cpp",
-                    "logical_run_id": "",
-                    "test_name": "001.in",
-                    "expected_behavior": "accepted",
-                    "queue_index": 1,
-                    "status": VerificationTaskStore.TASK_DONE,
-                },
-                {
-                    "id": "vt-generate-002",
-                    "task_kind": "generate-input",
-                    "source_path": "generators/gen.cpp",
-                    "logical_run_id": "",
-                    "test_name": "002.in",
-                    "expected_behavior": "accepted",
-                    "queue_index": 2,
-                    "status": VerificationTaskStore.TASK_DONE,
-                },
-                {
-                    "id": "vt-main-001",
-                    "task_kind": "main-correct",
-                    "source_path": "solutions/accepted.cpp",
-                    "logical_run_id": "",
-                    "test_name": "001.in",
-                    "expected_behavior": "accepted",
-                    "queue_index": 3,
-                    "status": VerificationTaskStore.TASK_CANCELLED,
-                },
-                {
-                    "id": "vt-main-002",
-                    "task_kind": "main-correct",
-                    "source_path": "solutions/accepted.cpp",
-                    "logical_run_id": "",
-                    "test_name": "002.in",
-                    "expected_behavior": "accepted",
-                    "queue_index": 4,
-                    "status": VerificationTaskStore.TASK_CANCELLED,
-                },
-                {
-                    "id": "vt-solution-001",
-                    "task_kind": "solution-run",
-                    "source_path": "solutions/cancelled.cpp",
-                    "logical_run_id": "",
-                    "test_name": "001.in",
-                    "expected_behavior": "wrong_answer",
-                    "queue_index": 5,
-                    "status": VerificationTaskStore.TASK_CANCELLED,
-                },
-                {
-                    "id": "vt-solution-002",
-                    "task_kind": "solution-run",
-                    "source_path": "solutions/cancelled.cpp",
-                    "logical_run_id": "",
-                    "test_name": "002.in",
-                    "expected_behavior": "wrong_answer",
-                    "queue_index": 6,
-                    "status": VerificationTaskStore.TASK_CANCELLED,
-                },
+                *[
+                    PlannedTask(
+                        task_id=task_id,
+                        predecessor_task_id=None,
+                        task_kind="generate-input",
+                        source_path="generators/gen.cpp",
+                        program_id="generator-0",
+                        test_name=test_name,
+                        expected_behavior="accepted",
+                    )
+                    for test_name, task_id in generate_task_ids.items()
+                ],
+                *[
+                    PlannedTask(
+                        task_id=task_id,
+                        predecessor_task_id=generate_task_ids[test_name],
+                        task_kind="main-correct",
+                        source_path="solutions/accepted.cpp",
+                        program_id="accepted",
+                        test_name=test_name,
+                        expected_behavior="accepted",
+                    )
+                    for test_name, task_id in main_task_ids.items()
+                ],
+                *[
+                    PlannedTask(
+                        task_id=task_id,
+                        predecessor_task_id=main_task_ids[test_name],
+                        task_kind="solution-run",
+                        source_path="solutions/cancelled.cpp",
+                        program_id="solution-0",
+                        test_name=test_name,
+                        expected_behavior="wrong_answer",
+                    )
+                    for test_name, task_id in solution_task_ids.items()
+                ],
             ],
-            edges=[],
+            completions=[
+                *[
+                    TaskCompletion(
+                        task_id=task_id,
+                        status=VerificationTaskStore.TASK_DONE,
+                        run_id="",
+                        judgehost_task_id="",
+                        result=execution_result("OK"),
+                    )
+                    for task_id in generate_task_ids.values()
+                ],
+                *[
+                    TaskCompletion(
+                        task_id=task_id,
+                        status=VerificationTaskStore.TASK_CANCELLED,
+                        run_id="",
+                        judgehost_task_id="",
+                        result=normalize_execution_result(
+                            error="verification cancelled by user"
+                        ),
+                        fail_reason="verification cancelled by user",
+                    )
+                    for task_id in (
+                        *main_task_ids.values(),
+                        *solution_task_ids.values(),
+                    )
+                ],
+            ],
         )
         detail_ctx = workspace_impl.build_run_detail_context(
             workspace_service.workspace_context("alice/sample", "alice", include_recent=False),
@@ -3153,7 +3688,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             r'class="problem-section-tab-status [^"]*">\s*running\s*</span>',
         )
 
-    def test_verification_start_shows_running_on_first_statement_render(self) -> None:
+    def test_verification_start_stays_queued_until_activation(self) -> None:
         problem = f"alice/verify-running-sidebar-{uuid.uuid4().hex[:8]}"
         self._prepare_verification_workspace(problem)
         ctx = workspace_service.workspace_context(problem, "alice", include_recent=False)
@@ -3180,13 +3715,6 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             ):
                 start_resp = verification_start(problem=problem, user="alice", page="statement")
             self.assertEqual(start_resp.status_code, 303)
-            page = general_page(_request(f"/problems/{problem}/statement"), problem, "alice")
-            self.assertEqual(page.status_code, 200)
-            html = page.body.decode("utf-8", errors="replace")
-            self.assertRegex(
-                html,
-                r'class="problem-section-tab-status [^"]*">\s*running\s*</span>',
-            )
             row = config.verification_service.list_workspace_verification_rows(
                 problem_id,
                 workspace_id,
@@ -3194,7 +3722,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             )
             self.assertIsNotNone(row)
             assert row
-            self.assertEqual(str(row[0]["status"] or ""), "running")
+            self.assertEqual(str(row[0]["status"] or ""), "queued")
         finally:
             fake_worker.stop()
             with config.verification_lock:
@@ -3792,6 +4320,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             created_at=created_at,
             finished_at="",
             runs=[],
+            activate_tasks=False,
             summary_extra={
                 "status": "running",
                 "steps": ["gen", "val", "run", "check"],
@@ -3954,83 +4483,6 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         self.assertIn("Choose a", html)
         self.assertNotIn("page-grid-wide", html)
 
-    def test_run_detail_compact_layout_only_depends_on_eleven_columns(self) -> None:
-        short_columns = [{"title": f"s{i}.py"} for i in range(9)]
-        self.assertFalse(run_export_impl._run_detail_use_compact_layout({"detail_columns": short_columns}))
-        long_columns = [{"title": ("very-long-solution-name-" + ("x" * 30))} for _ in range(9)]
-        self.assertFalse(run_export_impl._run_detail_use_compact_layout({"detail_columns": long_columns}))
-        ten_columns = [{"title": f"s{i}.py"} for i in range(10)]
-        self.assertFalse(run_export_impl._run_detail_use_compact_layout({"detail_columns": ten_columns}))
-        many_columns = [{"title": f"s{i}.py"} for i in range(11)]
-        self.assertTrue(run_export_impl._run_detail_use_compact_layout({"detail_columns": many_columns}))
-
-    def test_run_detail_render_contract_switches_at_eleven_columns(self) -> None:
-        ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
-        problem_id = int(ctx["problem"]["id"])
-        workspace_id = int(ctx["workspace"]["id"])
-
-        for column_count in (10, 11, 12):
-            with self.subTest(column_count=column_count):
-                verification_id = canonical_test_verification_id(f"ver-wide-{column_count}-{uuid.uuid4().hex[:8]}")
-                tasks: list[dict[str, object]] = []
-                for index in range(column_count):
-                    run_id = f"r-wide-{column_count}-{index}"
-                    source = f"solutions/solution-{index:02d}.cpp"
-                    tasks.append(
-                        {
-                            "id": f"vt-wide-{column_count}-{index}",
-                            "task_kind": "solution-run",
-                            "source_path": source,
-                            "logical_run_id": run_id,
-                            "test_name": "001.in",
-                            "expected_behavior": "accepted",
-                            "status": VerificationTaskStore.TASK_DONE,
-                            "verdict": "OK",
-                            "runtime_sec": (index + 1) / 1000,
-                            "cpu_sec": (index + 1) / 1000,
-                            "wall_sec": (index + 1) / 1000,
-                            "memory_kb": 1024 + index,
-                        }
-                    )
-                config.verification_service.begin_verification_record(
-                    verification_id=verification_id,
-                    problem_id=problem_id,
-                    workspace_id=workspace_id,
-                    signature="",
-                    kind=Kind.ALL,
-                    status="ok",
-                    detail={
-                        "status": "ok",
-                        "mode": "pass-fail",
-                        "tests_meta_rows": [
-                            {
-                                "test_name": "001.in",
-                                "kind": "manual",
-                                "id": "001",
-                            }
-                        ],
-                    },
-                )
-                config.verification_task_store.replace_graph(verification_id, tasks=tasks, edges=[])
-
-                page = run_details_page(
-                    _request("/problems/alice/sample/run/details", f"verification_id={verification_id}"),
-                    "alice/sample",
-                    "alice",
-                )
-                self.assertEqual(page.status_code, 200)
-                html = page.body.decode("utf-8", errors="replace")
-                if column_count >= 11:
-                    self.assertIn("verification-compact", html)
-                    self.assertIn("page-grid-wide", html)
-                    self.assertIn("verification-detail-table-compact", html)
-                    self.assertNotIn("verification-detail-table-regular", html)
-                else:
-                    self.assertNotIn("verification-compact", html)
-                    self.assertNotIn("page-grid-wide", html)
-                    self.assertIn("verification-detail-table-regular", html)
-                    self.assertNotIn("verification-detail-table-compact", html)
-
     def test_run_details_transcript_preview_shows_download_link(self) -> None:
         workspace_service.ensure_workspace("alice/sample", "alice")
         token = "blob://sha256/" + ("a" * 64)
@@ -4095,13 +4547,13 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
                     ],
                 }
             ],
-            "detail_columns": [{"id": "r-transcript", "title": "wtf.py"}],
+            "detail_columns": [{"id": "solution-0", "title": "wtf.py"}],
         }
 
         with patch(
             "app.impl.run_export.run.build_run_detail_context",
             return_value=detail_ctx,
-        ) as build_detail:
+        ):
             detail = run_details_test_fragment(
                 _request(
                     "/problems/alice/sample/run/details/test-fragment",
@@ -4110,7 +4562,6 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
                 "alice/sample",
                 "alice",
             )
-        self.assertEqual(build_detail.call_args.kwargs["detail_run_id"], "")
         self.assertEqual(detail.status_code, 200)
         detail_html = detail.body.decode("utf-8", errors="replace")
         assert_html_contract(
@@ -4131,16 +4582,16 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             label="interactive transcript fragment",
         )
 
-        with self.assertRaises(HTTPException) as empty_run_id:
+        with self.assertRaises(HTTPException) as empty_program_id:
             run_details_test_fragment(
                 _request(
                     "/problems/alice/sample/run/details/test-fragment",
-                    "verification_id=ver-r-transcript&test=001.in&run_id=",
+                    "verification_id=ver-r-transcript&test=001.in&program_id=",
                 ),
                 "alice/sample",
                 "alice",
             )
-        self.assertEqual(empty_run_id.exception.status_code, 400)
+        self.assertEqual(empty_program_id.exception.status_code, 400)
 
     def test_pass_fail_detail_renders_every_pass(self) -> None:
         workspace_service.ensure_workspace("alice/sample", "alice")
@@ -4157,14 +4608,13 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         verification_id = canonical_test_verification_id(
             f"ver-pass-fail-detail-{uuid.uuid4().hex[:8]}"
         )
-        config.verification_service.begin_verification_record(
+        self._admit_verification_fixture(
             verification_id=verification_id,
             problem_id=problem_id,
             workspace_id=workspace_id,
             signature="",
             kind=Kind.ALL,
-            status="ok",
-            detail={"status": "ok", "mode": "pass-fail", "pass_limit": 2},
+            detail={"mode": "pass-fail", "pass_limit": 2},
         )
 
         def store(role: str, payload: bytes) -> str:
@@ -4183,24 +4633,33 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         first_output_ref = store("pass-one-output", b"first pass output\n")
         second_output_ref = store("pass-two-output", b"second pass output\n")
         common_ref = store("metadata", b"metadata\n")
-        config.verification_service.update_verification_artifact_refs(
+        task_id = verification_task_id(
             verification_id,
+            "solution-0",
             "001.in",
-            {"input_ref": original_input_ref, "answer_ref": answer_ref},
         )
-
-        config.verification_task_store.replace_graph(
+        self._activate_verification_fixture(
             verification_id,
             tasks=[
-                {
-                    "id": f"vt-pass-fail-{uuid.uuid4().hex[:8]}",
-                    "task_kind": "solution-run",
-                    "source_path": "solutions/two-pass.cpp",
-                    "logical_run_id": "two-pass.cpp",
-                    "test_name": "001.in",
-                    "expected_behavior": "accepted",
-                    "status": VerificationTaskStore.TASK_DONE,
-                    "result": normalize_execution_result(
+                PlannedTask(
+                    task_id=task_id,
+                    predecessor_task_id=None,
+                    task_kind="solution-run",
+                    source_path="solutions/two-pass.cpp",
+                    program_id="solution-0",
+                    test_name="001.in",
+                    expected_behavior="accepted",
+                )
+            ],
+            completions=[
+                TaskCompletion(
+                    task_id=task_id,
+                    status=VerificationTaskStore.TASK_DONE,
+                    run_id="two-pass.cpp",
+                    judgehost_task_id="",
+                    input_ref=original_input_ref,
+                    answer_ref=answer_ref,
+                    result=normalize_execution_result(
                         passes=(
                             ExecutionPassResult(
                                 number=1,
@@ -4244,15 +4703,14 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
                             ),
                         )
                     ),
-                }
+                )
             ],
-            edges=[],
         )
 
         detail = run_details_test_fragment(
             _request(
                 "/problems/alice/sample/run/details/test-fragment",
-                f"verification_id={verification_id}&test=001.in&run_id=two-pass.cpp",
+                f"verification_id={verification_id}&test=001.in&program_id=solution-0",
             ),
             "alice/sample",
             "alice",
@@ -4303,14 +4761,13 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         verification_id = canonical_test_verification_id(
             f"ver-interactive-detail-{uuid.uuid4().hex[:8]}"
         )
-        config.verification_service.begin_verification_record(
+        self._admit_verification_fixture(
             verification_id=verification_id,
             problem_id=problem_id,
             workspace_id=workspace_id,
             signature="",
             kind=Kind.ALL,
-            status="ok",
-            detail={"status": "ok", "mode": "interactive"},
+            detail={"mode": "interactive"},
         )
 
         def store(role: str, payload: bytes) -> str:
@@ -4339,12 +4796,6 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         transcript_two_ref = store("transcript-two", transcript_two)
         other_transcript_ref = store("transcript-other", b"[  0.001s/4]>: trap\n")
         other_jury_ref = store("jury-other", b"must not be read\n")
-        config.verification_service.update_verification_artifact_refs(
-            verification_id,
-            "001.in",
-            {"input_ref": input_ref, "answer_ref": answer_ref},
-        )
-
         passes = (
             ExecutionPassResult(
                 number=1,
@@ -4425,50 +4876,57 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
                 ),
             )
         )
-        config.verification_task_store.replace_graph(
+        interactive_task_id = verification_task_id(
+            verification_id,
+            "solution-0",
+            "001.in",
+        )
+        other_task_id = verification_task_id(
+            verification_id,
+            "solution-1",
+            "001.in",
+        )
+        self._activate_verification_fixture(
             verification_id,
             tasks=[
-                {
-                    "id": f"vt-interactive-{uuid.uuid4().hex[:8]}",
-                    "task_kind": "solution-run",
-                    "source_path": "solutions/interactive.cpp",
-                    "logical_run_id": "interactive.cpp",
-                    "test_name": "001.in",
-                    "expected_behavior": "accepted",
-                    "status": VerificationTaskStore.TASK_DONE,
-                    "result": normalize_execution_result(passes=passes),
-                },
-                {
-                    "id": f"vt-interactive-other-{uuid.uuid4().hex[:8]}",
-                    "task_kind": "solution-run",
-                    "source_path": "solutions/other.cpp",
-                    "logical_run_id": "other.cpp",
-                    "test_name": "001.in",
-                    "expected_behavior": "accepted",
-                    "status": VerificationTaskStore.TASK_DONE,
-                    "result": other_result,
-                },
+                PlannedTask(
+                    task_id=interactive_task_id,
+                    predecessor_task_id=None,
+                    task_kind="solution-run",
+                    source_path="solutions/interactive.cpp",
+                    program_id="solution-0",
+                    test_name="001.in",
+                    expected_behavior="accepted",
+                ),
+                PlannedTask(
+                    task_id=other_task_id,
+                    predecessor_task_id=None,
+                    task_kind="solution-run",
+                    source_path="solutions/other.cpp",
+                    program_id="solution-1",
+                    test_name="001.in",
+                    expected_behavior="accepted",
+                ),
             ],
-            edges=[],
+            completions=[
+                TaskCompletion(
+                    task_id=interactive_task_id,
+                    status=VerificationTaskStore.TASK_DONE,
+                    run_id="interactive.cpp",
+                    judgehost_task_id="",
+                    result=normalize_execution_result(passes=passes),
+                    input_ref=input_ref,
+                    answer_ref=answer_ref,
+                ),
+                TaskCompletion(
+                    task_id=other_task_id,
+                    status=VerificationTaskStore.TASK_DONE,
+                    run_id="other.cpp",
+                    judgehost_task_id="",
+                    result=other_result,
+                ),
+            ],
         )
-
-        page = run_details_page(
-            _request(
-                "/problems/alice/sample/run/details",
-                f"verification_id={verification_id}",
-            ),
-            "alice/sample",
-            "alice",
-        )
-        page_html = page.body.decode("utf-8", errors="replace")
-        test_link = re.search(
-            r'<a [^>]*data-test-name="001\.in"[^>]*>001\.in</a>',
-            page_html,
-        )
-        self.assertIsNotNone(test_link)
-        self.assertNotIn("data-run-id", test_link.group(0))
-        self.assertIn('data-run-id="interactive.cpp"', page_html)
-        self.assertIn('data-run-id="other.cpp"', page_html)
 
         full_detail = run_details_test_fragment(
             _request(
@@ -4479,8 +4937,6 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             "alice",
         )
         full_html = full_detail.body.decode("utf-8", errors="replace")
-        self.assertIn('data-run-id="interactive.cpp"', full_html)
-        self.assertIn('data-run-id="other.cpp"', full_html)
         self.assertIn("first pass accepted", full_html)
         self.assertIn("must not be read", full_html)
         self.assertIn("trap", full_html)
@@ -4493,7 +4949,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             detail = run_details_test_fragment(
                 _request(
                     "/problems/alice/sample/run/details/test-fragment",
-                    f"verification_id={verification_id}&test=001.in&run_id=interactive.cpp",
+                    f"verification_id={verification_id}&test=001.in&program_id=solution-0",
                 ),
                 "alice/sample",
                 "alice",
@@ -4543,7 +4999,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
                 run_details_test_fragment(
                     _request(
                         "/problems/alice/sample/run/details/test-fragment",
-                        f"verification_id={verification_id}&test=001.in&run_id=unknown.cpp",
+                        f"verification_id={verification_id}&test=001.in&program_id=unknown",
                     ),
                     "alice/sample",
                     "alice",
@@ -4555,7 +5011,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         malformed = run_details_test_fragment(
             _request(
                 "/problems/alice/sample/run/details/test-fragment",
-                f"verification_id={verification_id}&test=001.in&run_id=interactive.cpp",
+                f"verification_id={verification_id}&test=001.in&program_id=solution-0",
             ),
             "alice/sample",
             "alice",
@@ -4600,6 +5056,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             problem_id=problem_id,
             workspace_id=workspace_id,
             build_id=self.random_id("b-unexpected-ac-text"),
+            activate_tasks=False,
             kind=Kind.ALL,
             status="ok",
             created_at="2026-03-24T00:00:00Z",
@@ -4636,27 +5093,39 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
                 ],
             },
         )
-        config.verification_task_store.replace_graph(
+        task_id = verification_task_id(
+            verification_id,
+            "solution-0",
+            "001.in",
+        )
+        self._activate_verification_fixture(
             verification_id,
             tasks=[
-                {
-                    "id": f"vt-unexpected-ac-text-{uuid.uuid4().hex[:8]}",
-                    "task_kind": "solution-run",
-                    "source_path": "solutions/wa.cpp",
-                    "logical_run_id": run_id,
-                    "test_name": "001.in",
-                    "expected_behavior": "wrong_answer",
-                    "queue_index": 1,
-                    "status": VerificationTaskStore.TASK_DONE,
-                    "verdict": "OK",
-                    "runtime_sec": 0.001,
-                    "cpu_sec": 0.001,
-                    "wall_sec": 0.001,
-                    "memory_kb": 0,
-                    "run_id": run_id,
-                },
+                PlannedTask(
+                    task_id=task_id,
+                    predecessor_task_id=None,
+                    task_kind="solution-run",
+                    source_path="solutions/wa.cpp",
+                    program_id="solution-0",
+                    test_name="001.in",
+                    expected_behavior="wrong_answer",
+                )
             ],
-            edges=[],
+            completions=[
+                TaskCompletion(
+                    task_id=task_id,
+                    status=VerificationTaskStore.TASK_DONE,
+                    run_id=run_id,
+                    judgehost_task_id="",
+                    result=execution_result(
+                        "OK",
+                        runtime_sec=0.001,
+                        cpu_sec=0.001,
+                        wall_sec=0.001,
+                        output_ref="blob://unexpected-ac",
+                    ),
+                )
+            ],
         )
         page = run_details_page(
             _request("/problems/alice/sample/run/details", f"verification_id={verification_id}"),
@@ -4845,14 +5314,13 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         )
 
         verification_id = canonical_test_verification_id(f"ver-runtime-detail-{uuid.uuid4().hex[:8]}")
-        config.verification_service.begin_verification_record(
+        self._admit_verification_fixture(
             verification_id=verification_id,
             problem_id=problem_id,
             workspace_id=workspace_id,
             signature="",
             kind=Kind.ALL,
-            status="ok",
-            detail={"status": "ok", "mode": "pass-fail"},
+            detail={"mode": "pass-fail"},
         )
         input_ref = config.verification_service.store_verification_blob(
             verification_id=verification_id,
@@ -4884,24 +5352,47 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             payload=b"other output\n",
             extra_tags={"run_id": "other.cpp"},
         )
-        config.verification_service.update_verification_artifact_refs(
+        task_id = verification_task_id(
             verification_id,
+            "solution-0",
             "001.in",
-            {"input_ref": input_ref, "answer_ref": answer_ref},
         )
-
-        config.verification_task_store.replace_graph(
+        other_task_id = verification_task_id(
+            verification_id,
+            "solution-1",
+            "001.in",
+        )
+        self._activate_verification_fixture(
             verification_id,
             tasks=[
-                {
-                    "id": f"vt-runtime-detail-{uuid.uuid4().hex[:8]}",
-                    "task_kind": "solution-run",
-                    "source_path": "solutions/tmp.cpp",
-                    "logical_run_id": "tmp.cpp",
-                    "test_name": "001.in",
-                    "expected_behavior": "accepted",
-                    "status": VerificationTaskStore.TASK_DONE,
-                    "result": execution_result(
+                PlannedTask(
+                    task_id=task_id,
+                    predecessor_task_id=None,
+                    task_kind="solution-run",
+                    source_path="solutions/tmp.cpp",
+                    program_id="solution-0",
+                    test_name="001.in",
+                    expected_behavior="accepted",
+                ),
+                PlannedTask(
+                    task_id=other_task_id,
+                    predecessor_task_id=None,
+                    task_kind="solution-run",
+                    source_path="solutions/other.cpp",
+                    program_id="solution-1",
+                    test_name="001.in",
+                    expected_behavior="wrong_answer",
+                ),
+            ],
+            completions=[
+                TaskCompletion(
+                    task_id=task_id,
+                    status=VerificationTaskStore.TASK_DONE,
+                    run_id="tmp.cpp",
+                    judgehost_task_id="",
+                    input_ref=input_ref,
+                    answer_ref=answer_ref,
+                    result=execution_result(
                         "OK",
                         runtime_sec=0.003,
                         cpu_sec=0.002,
@@ -4909,16 +5400,13 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
                         memory_kb=1024,
                         output_ref=output_ref,
                     ),
-                },
-                {
-                    "id": f"vt-runtime-detail-other-{uuid.uuid4().hex[:8]}",
-                    "task_kind": "solution-run",
-                    "source_path": "solutions/other.cpp",
-                    "logical_run_id": "other.cpp",
-                    "test_name": "001.in",
-                    "expected_behavior": "wrong_answer",
-                    "status": VerificationTaskStore.TASK_DONE,
-                    "result": execution_result(
+                ),
+                TaskCompletion(
+                    task_id=other_task_id,
+                    status=VerificationTaskStore.TASK_DONE,
+                    run_id="other.cpp",
+                    judgehost_task_id="",
+                    result=execution_result(
                         "WA",
                         runtime_sec=0.004,
                         cpu_sec=0.003,
@@ -4927,9 +5415,8 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
                         feedback="expected 6",
                         output_ref=other_output_ref,
                     ),
-                },
+                ),
             ],
-            edges=[],
         )
 
         full_detail = run_details_test_fragment(
@@ -4942,23 +5429,19 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         )
         self.assertEqual(full_detail.status_code, 200)
         full_html = full_detail.body.decode("utf-8", errors="replace")
-        self.assertIn('data-run-id="tmp.cpp"', full_html)
-        self.assertIn('data-run-id="other.cpp"', full_html)
         self.assertIn("other output", full_html)
         self.assertIn("expected 6", full_html)
 
         detail = run_details_test_fragment(
             _request(
                 "/problems/alice/sample/run/details/test-fragment",
-                f"verification_id={verification_id}&test=001.in&run_id=tmp.cpp",
+                f"verification_id={verification_id}&test=001.in&program_id=solution-0",
             ),
             "alice/sample",
             "alice",
         )
         self.assertEqual(detail.status_code, 200)
         detail_html = detail.body.decode("utf-8", errors="replace")
-        self.assertIn('data-run-id="tmp.cpp"', detail_html)
-        self.assertNotIn('data-run-id="other.cpp"', detail_html)
         self.assertNotIn("other output", detail_html)
         self.assertRegex(detail_html, r"(?s)<strong>Input 001\.in</strong>.*?<pre[^>]*>\s*1 2 3\s*</pre>")
         self.assertRegex(detail_html, r"(?s)<strong>Answer</strong>.*?<pre[^>]*>\s*6\s*</pre>")
@@ -4991,6 +5474,87 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         self.assertEqual(answer_download.status_code, 200)
         self.assertEqual(Path(str(answer_download.path)).read_bytes(), b"6\n")
 
+    def test_uploaded_program_is_selected_and_queryable_by_program_id(self) -> None:
+        ctx = workspace_service.workspace_context(
+            "alice/sample",
+            "alice",
+            include_recent=False,
+        )
+        verification_id = canonical_test_verification_id(
+            f"ver-uploaded-program-{uuid.uuid4().hex[:8]}"
+        )
+        self._admit_verification_fixture(
+            verification_id=verification_id,
+            problem_id=int(ctx["problem"]["id"]),
+            workspace_id=int(ctx["workspace"]["id"]),
+            kind=Kind.CUSTOM,
+            detail={"mode": "pass-fail"},
+        )
+        output_ref = config.verification_service.store_verification_blob(
+            verification_id=verification_id,
+            test_name="001.in",
+            role="output",
+            file_name="001.out",
+            payload=b"uploaded output\n",
+        )
+        task_id = verification_task_id(
+            verification_id,
+            "solution-0",
+            "001.in",
+        )
+        self._activate_verification_fixture(
+            verification_id,
+            tasks=[
+                PlannedTask(
+                    task_id=task_id,
+                    predecessor_task_id=None,
+                    task_kind="solution-run",
+                    source_path="uploads/solution-0/foo.cpp",
+                    program_id="solution-0",
+                    test_name="001.in",
+                    expected_behavior="unknown",
+                )
+            ],
+            completions=[
+                TaskCompletion(
+                    task_id=task_id,
+                    status=VerificationTaskStore.TASK_DONE,
+                    run_id="uploaded-foo",
+                    judgehost_task_id="",
+                    result=execution_result("OK", output_ref=output_ref),
+                )
+            ],
+        )
+
+        page = run_details_page(
+            _request(
+                "/problems/alice/sample/run/details",
+                f"verification_id={verification_id}",
+            ),
+            "alice/sample",
+            "alice",
+        )
+        self.assertEqual(page.status_code, 200)
+        page_html = page.body.decode("utf-8", errors="replace")
+        self.assertIn("foo.cpp", page_html)
+        self.assertNotIn("path=uploads", page_html)
+
+        detail = run_details_test_fragment(
+            _request(
+                "/problems/alice/sample/run/details/test-fragment",
+                (
+                    f"verification_id={verification_id}&test=001.in"
+                    "&program_id=solution-0"
+                ),
+            ),
+            "alice/sample",
+            "alice",
+        )
+        self.assertEqual(detail.status_code, 200)
+        detail_html = detail.body.decode("utf-8", errors="replace")
+        self.assertIn("foo.cpp", detail_html)
+        self.assertIn("uploaded output", detail_html)
+
     def test_collaborator_can_view_foreign_workspace_run_details(self) -> None:
         workspace_service.grant_repo_access("alice/sample", "bob", "owner")
         workspace_service.ensure_workspace("alice/sample", "bob")
@@ -5007,6 +5571,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             problem_id=problem_id,
             workspace_id=alice_workspace_id,
             build_id=verification_id,
+            activate_tasks=False,
             kind=Kind.ALL,
             status="ok",
             created_at="2026-05-04T00:00:00Z",
@@ -5050,50 +5615,56 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             file_name="001.out",
             payload=b"6\n",
         )
-        config.verification_service.update_verification_artifact_refs(
-            verification_id,
-            "001.in",
-            {
-                "input_ref": config.verification_service.store_verification_blob(
-                    verification_id=verification_id,
-                    test_name="001.in",
-                    role="input",
-                    file_name="001.in",
-                    payload=b"1 2 3\n",
-                ),
-                "answer_ref": config.verification_service.store_verification_blob(
-                    verification_id=verification_id,
-                    test_name="001.in",
-                    role="answer",
-                    file_name="001.ans",
-                    payload=b"6\n",
-                ),
-            },
+        input_ref = config.verification_service.store_verification_blob(
+            verification_id=verification_id,
+            test_name="001.in",
+            role="input",
+            file_name="001.in",
+            payload=b"1 2 3\n",
         )
-        config.verification_task_store.replace_graph(
+        answer_ref = config.verification_service.store_verification_blob(
+            verification_id=verification_id,
+            test_name="001.in",
+            role="answer",
+            file_name="001.ans",
+            payload=b"6\n",
+        )
+        task_id = verification_task_id(
+            verification_id,
+            "solution-0",
+            "001.in",
+        )
+        self._activate_verification_fixture(
             verification_id,
             tasks=[
-                {
-                    "id": f"vt-collab-detail-{uuid.uuid4().hex[:8]}",
-                    "task_kind": "solution-run",
-                    "source_path": "solutions/std.cpp",
-                    "logical_run_id": "std.cpp",
-                    "test_name": "001.in",
-                    "expected_behavior": "accepted",
-                    "status": VerificationTaskStore.TASK_DONE,
-                    "verdict": "OK",
-                    "runtime_sec": 0.003,
-                    "cpu_sec": 0.002,
-                    "wall_sec": 0.003,
-                    "memory_kb": 1024,
-                    "compile_log": "",
-                    "diagnostics_json": "[]",
-                    "error_text": "",
-                    "feedback_text": "",
-                    "output_ref": output_ref,
-                }
+                PlannedTask(
+                    task_id=task_id,
+                    predecessor_task_id=None,
+                    task_kind="solution-run",
+                    source_path="solutions/std.cpp",
+                    program_id="solution-0",
+                    test_name="001.in",
+                    expected_behavior="accepted",
+                )
             ],
-            edges=[],
+            completions=[
+                TaskCompletion(
+                    task_id=task_id,
+                    status=VerificationTaskStore.TASK_DONE,
+                    run_id="std.cpp",
+                    judgehost_task_id="",
+                    result=execution_result(
+                        "OK",
+                        runtime_sec=0.003,
+                        cpu_sec=0.002,
+                        wall_sec=0.003,
+                        memory_kb=1024,
+                        output_ref=output_ref,
+                    ),
+                    input_ref=input_ref,
+                    answer_ref=answer_ref,
+                )
+            ],
         )
 
         page = run_details_page(
@@ -5106,7 +5677,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         self.assertIn("std.cpp", page_html)
 
         detail = run_details_test_fragment(
-            _request("/problems/alice/sample/run/details/test-fragment", f"verification_id={verification_id}&test=001.in&run_id=std.cpp"),
+            _request("/problems/alice/sample/run/details/test-fragment", f"verification_id={verification_id}&test=001.in&program_id=solution-0"),
             "alice/sample",
             "bob",
         )
@@ -5127,15 +5698,13 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         (workspace / "generators" / "random_tree.cpp").write_text("int main(){return 0;}\n", encoding="utf-8")
 
         verification_id = canonical_test_verification_id(f"ver-generate-detail-{uuid.uuid4().hex[:8]}")
-        config.verification_service.begin_verification_record(
+        self._admit_verification_fixture(
             verification_id=verification_id,
             problem_id=problem_id,
             workspace_id=workspace_id,
             signature="",
             kind=Kind.ALL,
-            status="ok",
             detail={
-                "status": "ok",
                 "mode": "pass-fail",
                 "tests_meta_rows": [
                     {
@@ -5170,33 +5739,54 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             payload=b"6\n",
             extra_tags={"run_id": "tmp.cpp"},
         )
-        config.verification_service.update_verification_artifact_refs(
+        generate_task_id = verification_task_id(
             verification_id,
+            "generator-0",
             "001.in",
-            {"input_ref": input_ref, "answer_ref": answer_ref},
         )
-        config.verification_task_store.replace_graph(
+        solution_task_id = verification_task_id(
+            verification_id,
+            "solution-0",
+            "001.in",
+        )
+        self._activate_verification_fixture(
             verification_id,
             tasks=[
-                {
-                    "id": f"vt-generate-detail-{uuid.uuid4().hex[:8]}",
-                    "task_kind": "generate-input",
-                    "source_path": "generators/random_tree.cpp",
-                    "logical_run_id": "",
-                    "test_name": "001.in",
-                    "expected_behavior": "accepted",
-                    "status": VerificationTaskStore.TASK_DONE,
-                    "result": execution_result("AC", feedback="tree is valid"),
-                },
-                {
-                    "id": f"vt-runtime-generate-detail-{uuid.uuid4().hex[:8]}",
-                    "task_kind": "solution-run",
-                    "source_path": "solutions/tmp.cpp",
-                    "logical_run_id": "tmp.cpp",
-                    "test_name": "001.in",
-                    "expected_behavior": "accepted",
-                    "status": VerificationTaskStore.TASK_DONE,
-                    "result": execution_result(
+                PlannedTask(
+                    task_id=generate_task_id,
+                    predecessor_task_id=None,
+                    task_kind="generate-input",
+                    source_path="generators/random_tree.cpp",
+                    program_id="generator-0",
+                    test_name="001.in",
+                    expected_behavior="accepted",
+                ),
+                PlannedTask(
+                    task_id=solution_task_id,
+                    predecessor_task_id=generate_task_id,
+                    task_kind="solution-run",
+                    source_path="solutions/tmp.cpp",
+                    program_id="solution-0",
+                    test_name="001.in",
+                    expected_behavior="accepted",
+                ),
+            ],
+            completions=[
+                TaskCompletion(
+                    task_id=generate_task_id,
+                    status=VerificationTaskStore.TASK_DONE,
+                    run_id="",
+                    judgehost_task_id="",
+                    result=execution_result("AC", feedback="tree is valid"),
+                ),
+                TaskCompletion(
+                    task_id=solution_task_id,
+                    status=VerificationTaskStore.TASK_DONE,
+                    run_id="tmp.cpp",
+                    judgehost_task_id="",
+                    input_ref=input_ref,
+                    answer_ref=answer_ref,
+                    result=execution_result(
                         "OK",
                         runtime_sec=0.003,
                         cpu_sec=0.002,
@@ -5204,9 +5794,8 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
                         memory_kb=1024,
                         output_ref=output_ref,
                     ),
-                },
+                ),
             ],
-            edges=[],
         )
 
         page = run_details_page(
@@ -5220,7 +5809,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         self.assertIn('data-test-command="random_tree 10 &lt;20&gt; &amp; &#34;quoted&#34;"', page_html)
 
         detail = run_details_test_fragment(
-            _request("/problems/alice/sample/run/details/test-fragment", f"verification_id={verification_id}&test=001.in&run_id=tmp.cpp"),
+            _request("/problems/alice/sample/run/details/test-fragment", f"verification_id={verification_id}&test=001.in&program_id=solution-0"),
             "alice/sample",
             "alice",
         )
@@ -5249,15 +5838,13 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         (workspace / "generators" / "random_tree.cpp").write_text("int main(){return 0;}\n", encoding="utf-8")
 
         verification_id = canonical_test_verification_id(f"ver-generate-fail-{uuid.uuid4().hex[:8]}")
-        config.verification_service.begin_verification_record(
+        self._admit_verification_fixture(
             verification_id=verification_id,
             problem_id=problem_id,
             workspace_id=workspace_id,
             signature="",
             kind=Kind.ALL,
-            status="failed",
             detail={
-                "status": "failed",
                 "mode": "pass-fail",
                 "tests_meta_rows": [
                     {
@@ -5270,30 +5857,37 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
                 ],
             },
         )
-        config.verification_task_store.replace_graph(
+        generate_task_id = verification_task_id(
+            verification_id,
+            "generator-0",
+            "001.in",
+        )
+        self._activate_verification_fixture(
             verification_id,
             tasks=[
-                {
-                    "id": f"vt-generate-fail-{uuid.uuid4().hex[:8]}",
-                    "task_kind": "generate-input",
-                    "source_path": "generators/random_tree.cpp",
-                    "logical_run_id": "",
-                    "test_name": "001.in",
-                    "expected_behavior": "accepted",
-                    "status": VerificationTaskStore.TASK_FAILED,
-                    "verdict": "FL",
-                    "runtime_sec": 0.004,
-                    "cpu_sec": 0.004,
-                    "wall_sec": 0.004,
-                    "memory_kb": 1536,
-                    "compile_log": "",
-                    "diagnostics_json": "[]",
-                    "error_text": "validator rejected generated test",
-                    "feedback_text": "",
-                    "output_ref": "",
-                },
+                PlannedTask(
+                    task_id=generate_task_id,
+                    predecessor_task_id=None,
+                    task_kind="generate-input",
+                    source_path="generators/random_tree.cpp",
+                    program_id="generator-0",
+                    test_name="001.in",
+                    expected_behavior="accepted",
+                )
             ],
-            edges=[],
+            completions=[
+                TaskCompletion(
+                    task_id=generate_task_id,
+                    status=VerificationTaskStore.TASK_FAILED,
+                    run_id="",
+                    judgehost_task_id="",
+                    result=execution_result(
+                        "FL",
+                        error="validator rejected generated test",
+                    ),
+                    fail_reason="validator rejected generated test",
+                )
+            ],
         )
 
         page = run_details_page(_request("/problems/alice/sample/run/details", f"verification_id={verification_id}"), "alice/sample", "alice")
@@ -5304,7 +5898,6 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             page_html,
         )
         self.assertIsNotNone(test_link)
-        self.assertNotIn("data-run-id", test_link.group(1))
 
         detail = run_details_test_fragment(
             _request(
@@ -5328,15 +5921,13 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         problem_id = int(ctx["problem"]["id"])
 
         verification_id = canonical_test_verification_id(f"ver-manual-generate-{uuid.uuid4().hex[:8]}")
-        config.verification_service.begin_verification_record(
+        self._admit_verification_fixture(
             verification_id=verification_id,
             problem_id=problem_id,
             workspace_id=workspace_id,
             signature="",
             kind=Kind.ALL,
-            status="ok",
             detail={
-                "status": "ok",
                 "mode": "pass-fail",
                 "tests_meta_rows": [
                     {
@@ -5348,39 +5939,50 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
                 ],
             },
         )
-        config.verification_task_store.replace_graph(
+        generate_task_id = verification_task_id(
+            verification_id,
+            "generator-0",
+            "001.in",
+        )
+        solution_task_id = verification_task_id(
+            verification_id,
+            "solution-0",
+            "001.in",
+        )
+        self._activate_verification_fixture(
             verification_id,
             tasks=[
-                {
-                    "id": f"vt-manual-generate-{uuid.uuid4().hex[:8]}",
-                    "task_kind": "generate-input",
-                    "source_path": "manual_validate.cpp",
-                    "logical_run_id": "",
-                    "test_name": "001.in",
-                    "expected_behavior": "accepted",
-                    "status": VerificationTaskStore.TASK_DONE,
-                    "verdict": "AC",
-                    "runtime_sec": 0.001,
-                    "cpu_sec": 0.001,
-                    "wall_sec": 0.001,
-                    "memory_kb": 256,
-                    "compile_log": "",
-                    "diagnostics_json": "[]",
-                    "error_text": "",
-                    "feedback_text": "manual input valid",
-                    "output_ref": "",
-                },
-                {
-                    "id": f"vt-manual-solution-{uuid.uuid4().hex[:8]}",
-                    "task_kind": "solution-run",
-                    "source_path": "solutions/tmp.cpp",
-                    "logical_run_id": "manual-solution",
-                    "test_name": "001.in",
-                    "expected_behavior": "accepted",
-                    "status": VerificationTaskStore.TASK_PENDING,
-                }
+                PlannedTask(
+                    task_id=generate_task_id,
+                    predecessor_task_id=None,
+                    task_kind="generate-input",
+                    source_path="manual_validate.cpp",
+                    program_id="generator-0",
+                    test_name="001.in",
+                    expected_behavior="accepted",
+                ),
+                PlannedTask(
+                    task_id=solution_task_id,
+                    predecessor_task_id=generate_task_id,
+                    task_kind="solution-run",
+                    source_path="solutions/tmp.cpp",
+                    program_id="solution-0",
+                    test_name="001.in",
+                    expected_behavior="accepted",
+                ),
             ],
-            edges=[],
+            completions=[
+                TaskCompletion(
+                    task_id=generate_task_id,
+                    status=VerificationTaskStore.TASK_DONE,
+                    run_id="",
+                    judgehost_task_id="",
+                    result=execution_result(
+                        "AC",
+                        feedback="manual input valid",
+                    ),
+                )
+            ],
         )
 
         page = run_details_page(
@@ -5396,7 +5998,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         )
 
         detail = run_details_test_fragment(
-            _request("/problems/alice/sample/run/details/test-fragment", f"verification_id={verification_id}&test=001.in&run_id=manual-solution"),
+            _request("/problems/alice/sample/run/details/test-fragment", f"verification_id={verification_id}&test=001.in&program_id=solution-0"),
             "alice/sample",
             "alice",
         )
@@ -5428,18 +6030,16 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             }
             for index in range(1, 7)
         ]
-        config.verification_service.begin_verification_record(
+        self._admit_verification_fixture(
             verification_id=verification_id,
             problem_id=problem_id,
             workspace_id=workspace_id,
             signature="",
             kind=Kind.ALL,
-            status="ok",
-            detail={"status": "ok", "mode": "pass-fail", "tests_meta_rows": tests_meta_rows},
+            detail={"mode": "pass-fail", "tests_meta_rows": tests_meta_rows},
         )
 
-        def generate_task(
-            task_id: str,
+        def generation_fixture(
             test_name: str,
             *,
             status: str,
@@ -5447,94 +6047,129 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             output_ref: str = "",
             error_text: str = "",
             feedback_text: str = "",
-        ) -> dict[str, object]:
-            return {
-                "id": task_id,
-                "task_kind": "generate-input",
-                "source_path": "generators/gen.cpp",
-                "logical_run_id": "generator",
-                "test_name": test_name,
-                "expected_behavior": "accepted",
-                "status": status,
-                "result": execution_result(
-                    verdict,
-                    output_ref=output_ref,
-                    error=error_text,
-                    feedback=feedback_text,
+        ) -> tuple[PlannedTask, TaskCompletion]:
+            task_id = verification_task_id(
+                verification_id,
+                "generator-0",
+                test_name,
+            )
+            return (
+                PlannedTask(
+                    task_id=task_id,
+                    predecessor_task_id=None,
+                    task_kind="generate-input",
+                    source_path="generators/gen.cpp",
+                    program_id="generator-0",
+                    test_name=test_name,
+                    expected_behavior="accepted",
                 ),
-            }
+                TaskCompletion(
+                    task_id=task_id,
+                    status=status,
+                    run_id="generator",
+                    judgehost_task_id="",
+                    result=execution_result(
+                        verdict,
+                        output_ref=output_ref,
+                        error=error_text,
+                        feedback=feedback_text,
+                    ),
+                    fail_reason=(
+                        error_text or feedback_text
+                        if status
+                        in {
+                            VerificationTaskStore.TASK_FAILED,
+                            VerificationTaskStore.TASK_CANCELLED,
+                        }
+                        else ""
+                    ),
+                ),
+            )
 
-        tasks: list[dict[str, object]] = [
-            generate_task(
-                "vt-gen-exact-owner",
+        generation_fixtures = [
+            generation_fixture(
                 "001.in",
                 status=VerificationTaskStore.TASK_DONE,
                 verdict="AC",
                 output_ref="blob://exact",
             ),
-            generate_task(
-                "vt-gen-exact-duplicate",
+            generation_fixture(
                 "002.in",
                 status=VerificationTaskStore.TASK_DONE,
                 verdict="SK",
                 output_ref="blob://exact",
                 feedback_text="duplicate generator invocation; skipped, same as 001.in",
             ),
-            generate_task(
-                "vt-gen-content-owner",
+            generation_fixture(
                 "003.in",
                 status=VerificationTaskStore.TASK_DONE,
                 verdict="AC",
                 output_ref="blob://content",
             ),
-            generate_task(
-                "vt-gen-content-duplicate",
+            generation_fixture(
                 "004.in",
                 status=VerificationTaskStore.TASK_DONE,
                 verdict="SK",
                 output_ref="blob://content",
                 feedback_text="duplicate generated input; skipped, same as 003.in",
             ),
-            generate_task(
-                "vt-gen-unresolved",
+            generation_fixture(
                 "005.in",
                 status=VerificationTaskStore.TASK_DONE,
                 verdict="SK",
                 output_ref="blob://unresolved",
             ),
-            generate_task(
-                "vt-gen-cancelled",
+            generation_fixture(
                 "006.in",
                 status=VerificationTaskStore.TASK_CANCELLED,
                 verdict="",
                 error_text="generation cancelled by operator",
             ),
         ]
+        planned_tasks = [fixture[0] for fixture in generation_fixtures]
+        completions = [fixture[1] for fixture in generation_fixtures]
         for index in range(1, 7):
             is_duplicate = index in {2, 4, 5}
-            tasks.append(
-                {
-                    "id": f"vt-sol-{index:03d}",
-                    "task_kind": "solution-run",
-                    "source_path": "solutions/tmp.cpp",
-                    "logical_run_id": "tmp-solution",
-                    "test_name": f"{index:03d}.in",
-                    "expected_behavior": "accepted",
-                    "status": (
+            test_name = f"{index:03d}.in"
+            task_id = verification_task_id(
+                verification_id,
+                "solution-0",
+                test_name,
+            )
+            planned_tasks.append(
+                PlannedTask(
+                    task_id=task_id,
+                    predecessor_task_id=None,
+                    task_kind="solution-run",
+                    source_path="solutions/tmp.cpp",
+                    program_id="solution-0",
+                    test_name=test_name,
+                    expected_behavior="accepted",
+                )
+            )
+            completions.append(
+                TaskCompletion(
+                    task_id=task_id,
+                    status=(
                         VerificationTaskStore.TASK_CANCELLED
                         if index == 6
                         else VerificationTaskStore.TASK_DONE
                     ),
-                    "result": execution_result(
+                    run_id="tmp-solution",
+                    judgehost_task_id="",
+                    result=execution_result(
                         "SK" if is_duplicate else "OK",
                         output_ref="" if is_duplicate else f"blob://solution-{index}",
                     ),
-                }
+                    fail_reason=(
+                        "generation cancelled by operator" if index == 6 else ""
+                    ),
+                )
             )
-        config.verification_task_store.replace_graph(
+        self._activate_verification_fixture(
             verification_id,
-            tasks=tasks,
-            edges=[("vt-gen-exact-owner", "vt-gen-exact-duplicate")],
+            tasks=planned_tasks,
+            completions=completions,
         )
 
         page = run_details_page(
@@ -5544,20 +6179,6 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         )
         self.assertEqual(page.status_code, 200)
         page_html = page.body.decode("utf-8", errors="replace")
-        for test_name, owner_name in [("002.in", "001.in"), ("004.in", "003.in")]:
-            self.assertRegex(
-                page_html,
-                rf'(?s)<td class="tcell tone-warn"[^>]*>\s*<a [^>]*data-test-name="{re.escape(test_name)}"[^>]*>{re.escape(test_name)}</a>\s*</td>\s*<td class="verification-detail-duplicate-cell tone-warn" colspan="1">duplicate of {re.escape(owner_name)}</td>',
-            )
-        self.assertRegex(
-            page_html,
-            r'(?s)<td class="tcell tone-warn"[^>]*>\s*<a [^>]*data-test-name="005\.in"[^>]*>005\.in</a>\s*</td>\s*<td class="verification-detail-duplicate-cell tone-warn" colspan="1">skipped \(duplicate owner unavailable\)</td>',
-        )
-        self.assertRegex(
-            page_html,
-            r'(?s)<td class="tcell tone-neutral"[^>]*>\s*<a [^>]*data-test-name="006\.in"[^>]*>006\.in</a>',
-        )
-        self.assertEqual(page_html.count("<strong>Test generation</strong>"), 1)
         self.assertIn(
             "002.in duplicate of 001.in; 004.in duplicate of 003.in; 005.in skipped (duplicate owner unavailable)",
             page_html,
@@ -5566,14 +6187,14 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         duplicate_detail = run_details_test_fragment(
             _request(
                 "/problems/alice/sample/run/details/test-fragment",
-                f"verification_id={verification_id}&test=004.in&run_id=tmp-solution",
+                f"verification_id={verification_id}&test=004.in&program_id=solution-0",
             ),
             "alice/sample",
             "alice",
         )
         self.assertEqual(duplicate_detail.status_code, 200)
         duplicate_html = duplicate_detail.body.decode("utf-8", errors="replace")
-        self.assertIn('<p class="test-generation-alert tone-warn">duplicate of 003.in</p>', duplicate_html)
+        self.assertIn("duplicate of 003.in", duplicate_html)
         self.assertIn("Input 004.in", duplicate_html)
         self.assertIn("Answer", duplicate_html)
         self.assertNotIn('class="sol-list"', duplicate_html)
@@ -5582,17 +6203,14 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         cancelled_detail = run_details_test_fragment(
             _request(
                 "/problems/alice/sample/run/details/test-fragment",
-                f"verification_id={verification_id}&test=006.in&run_id=tmp-solution",
+                f"verification_id={verification_id}&test=006.in&program_id=solution-0",
             ),
             "alice/sample",
             "alice",
         )
         self.assertEqual(cancelled_detail.status_code, 200)
         cancelled_html = cancelled_detail.body.decode("utf-8", errors="replace")
-        self.assertIn(
-            '<p class="test-generation-alert tone-warn">generation cancelled by operator</p>',
-            cancelled_html,
-        )
+        self.assertIn("generation cancelled by operator", cancelled_html)
 
     def test_run_details_default_limit_keeps_213_solution_results_visible(self) -> None:
         workspace_service.ensure_workspace("alice/sample", "alice")
@@ -5614,49 +6232,83 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             }
             for index in range(1, 214)
         ]
-        config.verification_service.begin_verification_record(
+        self._admit_verification_fixture(
             verification_id=verification_id,
             problem_id=problem_id,
             workspace_id=workspace_id,
             signature="",
             kind=Kind.ALL,
-            status="ok",
-            detail={"status": "ok", "mode": "pass-fail", "tests_meta_rows": tests_meta_rows},
+            detail={"mode": "pass-fail", "tests_meta_rows": tests_meta_rows},
         )
-        tasks: list[dict[str, object]] = []
+        tasks: list[PlannedTask] = []
+        completions: list[TaskCompletion] = []
         for index in range(1, 214):
             test_name = f"{index:03d}.in"
+            generate_task_id = verification_task_id(
+                verification_id,
+                "generator-0",
+                test_name,
+            )
+            solution_task_id = verification_task_id(
+                verification_id,
+                "solution-0",
+                test_name,
+            )
             tasks.extend(
                 [
-                    {
-                        "id": f"vt-limit-gen-{index:03d}",
-                        "task_kind": "generate-input",
-                        "source_path": "generators/gen.cpp",
-                        "logical_run_id": "bulk-generator",
-                        "test_name": test_name,
-                        "expected_behavior": "accepted",
-                        "status": VerificationTaskStore.TASK_DONE,
-                        "verdict": "AC",
-                        "output_ref": f"blob://input-{index}",
-                    },
-                    {
-                        "id": f"vt-limit-sol-{index:03d}",
-                        "task_kind": "solution-run",
-                        "source_path": "solutions/bulk.cpp",
-                        "logical_run_id": "bulk-solution",
-                        "test_name": test_name,
-                        "expected_behavior": "accepted",
-                        "status": VerificationTaskStore.TASK_DONE,
-                        "verdict": "OK",
-                        "runtime_sec": 0.001,
-                        "cpu_sec": 0.001,
-                        "wall_sec": 0.001,
-                        "memory_kb": 256,
-                        "output_ref": f"blob://output-{index}",
-                    },
+                    PlannedTask(
+                        task_id=generate_task_id,
+                        predecessor_task_id=None,
+                        task_kind="generate-input",
+                        source_path="generators/gen.cpp",
+                        program_id="generator-0",
+                        test_name=test_name,
+                        expected_behavior="accepted",
+                    ),
+                    PlannedTask(
+                        task_id=solution_task_id,
+                        predecessor_task_id=generate_task_id,
+                        task_kind="solution-run",
+                        source_path="solutions/bulk.cpp",
+                        program_id="solution-0",
+                        test_name=test_name,
+                        expected_behavior="accepted",
+                    ),
                 ]
             )
-        config.verification_task_store.replace_graph(verification_id, tasks=tasks, edges=[])
+            completions.extend(
+                [
+                    TaskCompletion(
+                        task_id=generate_task_id,
+                        status=VerificationTaskStore.TASK_DONE,
+                        run_id="bulk-generator",
+                        judgehost_task_id="",
+                        result=execution_result(
+                            "AC",
+                            output_ref=f"blob://input-{index}",
+                        ),
+                    ),
+                    TaskCompletion(
+                        task_id=solution_task_id,
+                        status=VerificationTaskStore.TASK_DONE,
+                        run_id="bulk-solution",
+                        judgehost_task_id="",
+                        result=execution_result(
+                            "OK",
+                            runtime_sec=0.001,
+                            cpu_sec=0.001,
+                            wall_sec=0.001,
+                            memory_kb=256,
+                            output_ref=f"blob://output-{index}",
+                        ),
+                    ),
+                ]
+            )
+        self._activate_verification_fixture(
+            verification_id,
+            tasks=tasks,
+            completions=completions,
+        )
 
         page = run_details_page(
             _request("/problems/alice/sample/run/details", f"verification_id={verification_id}"),
@@ -5669,7 +6321,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         visible_rows = set(
             re.findall(
                 r'data-test-name="(20[5-9]\.in|21[0-3]\.in)" data-test-source-kind="generated" '
-                r'data-test-command="gen (20[5-9]|21[0-3])" data-run-id="bulk-solution"',
+                r'data-test-command="gen (20[5-9]|21[0-3])"',
                 page_html,
             )
         )
@@ -5697,15 +6349,13 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             "g++: internal compiler error: File size limit exceeded signal terminated program as\n"
             "Please submit a full bug report."
         )
-        config.verification_service.begin_verification_record(
+        self._admit_verification_fixture(
             verification_id=verification_id,
             problem_id=problem_id,
             workspace_id=workspace_id,
             signature="",
             kind=Kind.ALL,
-            status="failed",
             detail={
-                "status": "failed",
                 "mode": "pass-fail",
                 "tests_meta_rows": [
                     {
@@ -5716,33 +6366,41 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
                 ],
             },
         )
-        config.verification_task_store.replace_graph(
+        task_id = verification_task_id(
+            verification_id,
+            "accepted",
+            "001.in",
+        )
+        self._activate_verification_fixture(
             verification_id,
             tasks=[
-                {
-                    "id": f"vt-main-correct-diag-{uuid.uuid4().hex[:8]}",
-                    "task_kind": "main-correct",
-                    "source_path": "solutions/std.cpp",
-                    "logical_run_id": "r-main-correct-diag",
-                    "test_name": "001.in",
-                    "expected_behavior": "accepted",
-                    "status": VerificationTaskStore.TASK_FAILED,
-                    "verdict": "CE",
-                    "runtime_sec": None,
-                    "cpu_sec": None,
-                    "wall_sec": None,
-                    "memory_kb": None,
-                    "compile_log": detailed_error,
-                    "diagnostics_json": json.dumps(
-                        [{"level": "error", "message": detailed_error}],
-                        separators=(",", ":"),
-                    ),
-                    "error_text": detailed_error,
-                    "feedback_text": "",
-                    "output_ref": "",
-                }
+                PlannedTask(
+                    task_id=task_id,
+                    predecessor_task_id=None,
+                    task_kind="main-correct",
+                    source_path="solutions/std.cpp",
+                    program_id="accepted",
+                    test_name="001.in",
+                    expected_behavior="accepted",
+                )
             ],
-            edges=[],
+            completions=[
+                TaskCompletion(
+                    task_id=task_id,
+                    status=VerificationTaskStore.TASK_FAILED,
+                    run_id="r-main-correct-diag",
+                    judgehost_task_id="",
+                    result=normalize_execution_result(
+                        verdict="CE",
+                        error=detailed_error,
+                        compile_log=detailed_error,
+                        compile_diagnostics=(
+                            {"level": "error", "message": detailed_error},
+                        ),
+                    ),
+                    fail_reason=detailed_error,
+                )
+            ],
         )
 
         page = run_details_page(
@@ -5756,63 +6414,6 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         self.assertIn("File size limit exceeded", html)
         self.assertIn("Please submit a full bug report.", html)
         self.assertNotIn(">CE</pre>", html)
-
-    def test_async_run_failure_shows_fl_reason_in_test_details(self) -> None:
-        workspace_service.ensure_workspace("alice/sample", "alice")
-        ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
-        problem_id = int(ctx["problem"]["id"])
-        workspace_id = int(ctx["workspace"]["id"])
-        build_id = canonical_test_verification_id(
-            self.random_id("b-async-fail")
-        )
-        build_root = self._artifact_root(build_id)
-        build_root.mkdir(parents=True, exist_ok=True)
-        self._insert_stage_verification(
-            verification_id=build_id,
-            problem_id=problem_id,
-            workspace_id=workspace_id,
-            signature="",
-            status="failed",
-            summary=json.dumps(
-                    {
-                        "error": "accepted solution failed on 001.in",
-                        "failed_step": "solve",
-                        "failed_test": "001.in",
-                    }
-                ),
-            artifact_path=str(build_root),
-            created_at="2026-02-23T00:00:00Z",
-            finished_at="2026-02-23T00:00:01Z",
-        )
-
-        run_id = f"r-async-fail-{uuid.uuid4().hex[:8]}"
-        workspace_impl.record_async_run_failure(
-            "alice/sample",
-            "alice",
-            run_id,
-            mode="pass-fail",
-            source_label="solutions/jly.cpp",
-            error=f"build not runnable: {build_id}",
-            verification_id=self._verification_id_for_run(run_id),
-            artifact_verification_id=build_id,
-        )
-
-        verification_id = self._verification_id_for_run(run_id)
-        page = run_details_page(_request("/problems/alice/sample/run/details", f"verification_id={verification_id}"), "alice/sample", "alice")
-        self.assertEqual(page.status_code, 200)
-        html = page.body.decode("utf-8", errors="replace")
-        self.assertNotIn("No test details.", html)
-        self.assertIn("001.in", html)
-        self.assertIn('vcode">FL</span>', html)
-
-        detail = run_details_test_fragment(
-            _request("/problems/alice/sample/run/details/test-fragment", f"verification_id={verification_id}&test=001.in&run_id={run_id}"),
-            "alice/sample",
-            "alice",
-        )
-        self.assertEqual(detail.status_code, 200)
-        detail_html = detail.body.decode("utf-8", errors="replace")
-        self.assertIn("accepted solution failed on 001.in", detail_html)
 
     def test_run_details_shows_sanity_diagnostics(self) -> None:
         ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
@@ -5828,6 +6429,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             problem_id=problem_id,
             workspace_id=workspace_id,
             build_id=self.random_id("b-sanity-popup"),
+            activate_tasks=False,
             kind=Kind.ALL,
             status="failed",
             created_at="2026-04-17T00:00:00Z",
@@ -5858,26 +6460,40 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
                 "error": "validator reported mismatch",
             },
         )
-        config.verification_task_store.replace_graph(
+        task_id = verification_task_id(
+            verification_id,
+            "solution-0",
+            "003.in",
+        )
+        self._activate_verification_fixture(
             verification_id,
             tasks=[
-                {
-                    "id": f"vt-sanity-popup-{uuid.uuid4().hex[:8]}",
-                    "task_kind": "solution-run",
-                    "source_path": "solutions/accepted.cpp",
-                    "logical_run_id": run_id,
-                    "test_name": "003.in",
-                    "expected_behavior": "accepted",
-                    "queue_index": 1,
-                    "status": VerificationTaskStore.TASK_DONE,
-                    "verdict": "WA",
-                    "runtime_sec": 0.01,
-                    "cpu_sec": 0.01,
-                    "wall_sec": 0.01,
-                    "memory_kb": 1,
-                }
+                PlannedTask(
+                    task_id=task_id,
+                    predecessor_task_id=None,
+                    task_kind="solution-run",
+                    source_path="solutions/accepted.cpp",
+                    program_id="solution-0",
+                    test_name="003.in",
+                    expected_behavior="accepted",
+                )
             ],
-            edges=[],
+            completions=[
+                TaskCompletion(
+                    task_id=task_id,
+                    status=VerificationTaskStore.TASK_DONE,
+                    run_id=run_id,
+                    judgehost_task_id="",
+                    result=execution_result(
+                        "WA",
+                        runtime_sec=0.01,
+                        cpu_sec=0.01,
+                        wall_sec=0.01,
+                        memory_kb=1,
+                        output_ref="blob://sanity-popup",
+                    ),
+                )
+            ],
         )
 
         page = run_details_page(
@@ -5907,6 +6523,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             problem_id=problem_id,
             workspace_id=workspace_id,
             build_id=self.random_id("b-sanity-warning"),
+            activate_tasks=False,
             kind=Kind.ALL,
             status="ok",
             created_at="2026-04-17T00:00:00Z",
@@ -5937,26 +6554,40 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
                 "error": "Test data did not hit: n max=3",
             },
         )
-        config.verification_task_store.replace_graph(
+        task_id = verification_task_id(
+            verification_id,
+            "solution-0",
+            "001.in",
+        )
+        self._activate_verification_fixture(
             verification_id,
             tasks=[
-                {
-                    "id": f"vt-sanity-warning-{uuid.uuid4().hex[:8]}",
-                    "task_kind": "solution-run",
-                    "source_path": "solutions/accepted.cpp",
-                    "logical_run_id": run_id,
-                    "test_name": "001.in",
-                    "expected_behavior": "accepted",
-                    "queue_index": 1,
-                    "status": VerificationTaskStore.TASK_DONE,
-                    "verdict": "OK",
-                    "runtime_sec": 0.01,
-                    "cpu_sec": 0.01,
-                    "wall_sec": 0.01,
-                    "memory_kb": 1,
-                }
+                PlannedTask(
+                    task_id=task_id,
+                    predecessor_task_id=None,
+                    task_kind="solution-run",
+                    source_path="solutions/accepted.cpp",
+                    program_id="solution-0",
+                    test_name="001.in",
+                    expected_behavior="accepted",
+                )
             ],
-            edges=[],
+            completions=[
+                TaskCompletion(
+                    task_id=task_id,
+                    status=VerificationTaskStore.TASK_DONE,
+                    run_id=run_id,
+                    judgehost_task_id="",
+                    result=execution_result(
+                        "OK",
+                        runtime_sec=0.01,
+                        cpu_sec=0.01,
+                        wall_sec=0.01,
+                        memory_kb=1,
+                        output_ref="blob://sanity-warning",
+                    ),
+                )
+            ],
         )
 
         page = run_details_page(
@@ -5983,6 +6614,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             problem_id=problem_id,
             workspace_id=workspace_id,
             build_id=self.random_id("b-sanity-ok-failed"),
+            activate_tasks=False,
             kind=Kind.ALL,
             status="ok",
             created_at="2026-04-17T00:00:00Z",
@@ -6013,26 +6645,40 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
                 "error": "empty output probe was accepted",
             },
         )
-        config.verification_task_store.replace_graph(
+        task_id = verification_task_id(
+            verification_id,
+            "solution-0",
+            "001.in",
+        )
+        self._activate_verification_fixture(
             verification_id,
             tasks=[
-                {
-                    "id": f"vt-sanity-ok-failed-{uuid.uuid4().hex[:8]}",
-                    "task_kind": "solution-run",
-                    "source_path": "solutions/accepted.cpp",
-                    "logical_run_id": run_id,
-                    "test_name": "001.in",
-                    "expected_behavior": "accepted",
-                    "queue_index": 1,
-                    "status": VerificationTaskStore.TASK_DONE,
-                    "verdict": "OK",
-                    "runtime_sec": 0.01,
-                    "cpu_sec": 0.01,
-                    "wall_sec": 0.01,
-                    "memory_kb": 1,
-                }
+                PlannedTask(
+                    task_id=task_id,
+                    predecessor_task_id=None,
+                    task_kind="solution-run",
+                    source_path="solutions/accepted.cpp",
+                    program_id="solution-0",
+                    test_name="001.in",
+                    expected_behavior="accepted",
+                )
             ],
-            edges=[],
+            completions=[
+                TaskCompletion(
+                    task_id=task_id,
+                    status=VerificationTaskStore.TASK_DONE,
+                    run_id=run_id,
+                    judgehost_task_id="",
+                    result=execution_result(
+                        "OK",
+                        runtime_sec=0.01,
+                        cpu_sec=0.01,
+                        wall_sec=0.01,
+                        memory_kb=1,
+                        output_ref="blob://sanity-failed",
+                    ),
+                )
+            ],
         )
 
         page = run_details_page(
@@ -6059,6 +6705,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             problem_id=problem_id,
             workspace_id=workspace_id,
             build_id=self.random_id("b-runtime-threshold"),
+            activate_tasks=False,
             kind=Kind.ALL,
             status="ok",
             created_at="2026-04-17T00:00:00Z",
@@ -6102,101 +6749,53 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
                 "run_config_json": '{"time_limit_ms":1000,"memory_limit_mb":1024,"pass_limit":1}',
             },
         )
-        config.verification_task_store.replace_graph(
+        result_specs = [
+            ("solutions/slow.cpp", slow_run_id, 0, "001.in", "OK", 0.6),
+            ("solutions/slow.cpp", slow_run_id, 0, "002.in", "OK", 1.2),
+            ("solutions/slow.cpp", slow_run_id, 0, "003.in", "OK", 0.2),
+            ("solutions/mixed.cpp", mixed_run_id, 1, "001.in", "OK", 0.4),
+            ("solutions/mixed.cpp", mixed_run_id, 1, "002.in", "TL", 1.2),
+            ("solutions/mixed.cpp", mixed_run_id, 1, "003.in", "WA", 0.7),
+        ]
+        planned_tasks: list[PlannedTask] = []
+        completions: list[TaskCompletion] = []
+        for source_path, run_id, program_index, test_name, verdict, runtime_sec in result_specs:
+            task_id = verification_task_id(
+                verification_id,
+                f"solution-{program_index}",
+                test_name,
+            )
+            planned_tasks.append(
+                PlannedTask(
+                    task_id=task_id,
+                    predecessor_task_id=None,
+                    task_kind="solution-run",
+                    source_path=source_path,
+                    program_id=f"solution-{program_index}",
+                    test_name=test_name,
+                    expected_behavior="accepted",
+                )
+            )
+            completions.append(
+                TaskCompletion(
+                    task_id=task_id,
+                    status=VerificationTaskStore.TASK_DONE,
+                    run_id=run_id,
+                    judgehost_task_id="",
+                    result=execution_result(
+                        verdict,
+                        cpu_sec=runtime_sec,
+                        runtime_sec=runtime_sec,
+                        wall_sec=runtime_sec,
+                        memory_kb=1024,
+                        output_ref=f"blob://runtime-{program_index}-{test_name}",
+                    ),
+                )
+            )
+        self._activate_verification_fixture(
             verification_id,
-            tasks=[
-                {
-                    "id": f"vt-runtime-1-{uuid.uuid4().hex[:8]}",
-                    "task_kind": "solution-run",
-                    "source_path": "solutions/slow.cpp",
-                    "logical_run_id": slow_run_id,
-                    "test_name": "001.in",
-                    "expected_behavior": "accepted",
-                    "status": VerificationTaskStore.TASK_DONE,
-                    "verdict": "OK",
-                    "cpu_sec": 0.6,
-                    "runtime_sec": 0.6,
-                    "wall_sec": 0.6,
-                    "memory_kb": 1024,
-                    "answer_correct": True,
-                },
-                {
-                    "id": f"vt-runtime-2-{uuid.uuid4().hex[:8]}",
-                    "task_kind": "solution-run",
-                    "source_path": "solutions/slow.cpp",
-                    "logical_run_id": slow_run_id,
-                    "test_name": "002.in",
-                    "expected_behavior": "accepted",
-                    "status": VerificationTaskStore.TASK_DONE,
-                    "verdict": "OK",
-                    "cpu_sec": 1.2,
-                    "runtime_sec": 1.2,
-                    "wall_sec": 1.2,
-                    "memory_kb": 1024,
-                    "answer_correct": True,
-                },
-                {
-                    "id": f"vt-runtime-3-{uuid.uuid4().hex[:8]}",
-                    "task_kind": "solution-run",
-                    "source_path": "solutions/slow.cpp",
-                    "logical_run_id": slow_run_id,
-                    "test_name": "003.in",
-                    "expected_behavior": "accepted",
-                    "status": VerificationTaskStore.TASK_DONE,
-                    "verdict": "OK",
-                    "cpu_sec": 0.2,
-                    "runtime_sec": 0.2,
-                    "wall_sec": 0.2,
-                    "memory_kb": 1024,
-                    "answer_correct": True,
-                },
-                {
-                    "id": f"vt-runtime-4-{uuid.uuid4().hex[:8]}",
-                    "task_kind": "solution-run",
-                    "source_path": "solutions/mixed.cpp",
-                    "logical_run_id": mixed_run_id,
-                    "test_name": "001.in",
-                    "expected_behavior": "accepted",
-                    "status": VerificationTaskStore.TASK_DONE,
-                    "verdict": "OK",
-                    "cpu_sec": 0.4,
-                    "runtime_sec": 0.4,
-                    "wall_sec": 0.4,
-                    "memory_kb": 1024,
-                    "answer_correct": True,
-                },
-                {
-                    "id": f"vt-runtime-5-{uuid.uuid4().hex[:8]}",
-                    "task_kind": "solution-run",
-                    "source_path": "solutions/mixed.cpp",
-                    "logical_run_id": mixed_run_id,
-                    "test_name": "002.in",
-                    "expected_behavior": "accepted",
-                    "status": VerificationTaskStore.TASK_DONE,
-                    "verdict": "TL",
-                    "cpu_sec": 1.2,
-                    "runtime_sec": 1.2,
-                    "wall_sec": 1.2,
-                    "memory_kb": 1024,
-                    "answer_correct": False,
-                },
-                {
-                    "id": f"vt-runtime-6-{uuid.uuid4().hex[:8]}",
-                    "task_kind": "solution-run",
-                    "source_path": "solutions/mixed.cpp",
-                    "logical_run_id": mixed_run_id,
-                    "test_name": "003.in",
-                    "expected_behavior": "accepted",
-                    "status": VerificationTaskStore.TASK_DONE,
-                    "verdict": "WA",
-                    "cpu_sec": 0.7,
-                    "runtime_sec": 0.7,
-                    "wall_sec": 0.7,
-                    "memory_kb": 1024,
-                    "answer_correct": False,
-                },
-            ],
-            edges=[],
+            tasks=planned_tasks,
+            completions=completions,
         )
 
         page = run_details_page(
@@ -6448,7 +7047,6 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         self.assertIsInstance(details, dict)
         self.assertEqual(str(details.get("verification_id") or ""), verification_id)
         self.assertEqual(str(details.get("status") or ""), "running")
-        self.assertFalse(bool(details.get("task_graph")))
 
     def test_run_list_prefers_verification_row_status_over_stale_summary_status(self) -> None:
         workspace_service.ensure_workspace("alice/sample", "alice")

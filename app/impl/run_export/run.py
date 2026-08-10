@@ -7,7 +7,6 @@ from urllib.parse import quote_plus
 
 from fastapi import File, Form, HTTPException, Request, UploadFile, Depends
 
-from app.db import now_iso
 from app.impl.auth.session import require_session_user
 from app.impl.auth.shared import redirect_response, template_response
 from app.impl.contest.workspace_scope import (
@@ -18,7 +17,7 @@ from app.impl.runtime.config import config
 from app.impl.workspace.access import require_write_access
 from app.impl.workspace.context_job import start_verification_job
 from app.impl.workspace.context_ui import page_ctx
-from app.impl.workspace.context_job_helper import allocate_run_id, allocate_verification_id
+from app.impl.workspace.context_job_helper import allocate_verification_id
 from app.impl.workspace.context_operation import (
     audit,
     dedupe_preserve_order,
@@ -30,7 +29,11 @@ from app.impl.workspace.context_run_detail import (
     parse_run_test_names,
     parse_verification_detail_id,
 )
-from app.impl.workspace.context_verification import latest_workspace_verification, normalize_run_id_token
+from app.impl.workspace.context_verification import (
+    latest_workspace_verification,
+    normalize_program_id_token,
+    normalize_run_id_token,
+)
 from app.impl.workspace.problem_config import read_problem_config
 from app.impl.workspace.run_view_detail import build_run_detail_context
 from app.impl.workspace.run_view_list import run_list_rows
@@ -54,8 +57,8 @@ def _upload_filename_token(raw: str) -> str:
     return "upload.cpp"
 
 
-def _uploaded_target_path(run_id: str, upload_filename: str) -> str:
-    return f"uploads/{run_id}/{_upload_filename_token(upload_filename)}"
+def _uploaded_target_path(program_id: str, upload_filename: str) -> str:
+    return f"uploads/{program_id}/{_upload_filename_token(upload_filename)}"
 
 
 def _truthy_form_token(value: str) -> bool:
@@ -187,10 +190,10 @@ def run_details_test_fragment(request: Request, problem: str, user: Annotated[st
     test_name = normalize_run_test_name_token(request.query_params.get('test'))
     if not test_name:
         raise HTTPException(status_code=400, detail='test is required')
-    run_id_param = request.query_params.get('run_id')
-    run_id = normalize_run_id_token(run_id_param)
-    if run_id_param is not None and not run_id:
-        raise HTTPException(status_code=400, detail='run_id is invalid')
+    program_id_param = request.query_params.get('program_id')
+    program_id = normalize_program_id_token(program_id_param)
+    if program_id_param is not None and not program_id:
+        raise HTTPException(status_code=400, detail='program_id is invalid')
 
     detail_ctx = build_run_detail_context(
         ctx,
@@ -198,12 +201,12 @@ def run_details_test_fragment(request: Request, problem: str, user: Annotated[st
         requested_verification_id=requested_verification_id,
         include_row_details=True,
         detail_test_name=test_name,
-        detail_run_id=run_id,
+        detail_program_id=program_id,
     )
     detail_columns = detail_ctx['detail_columns']
-    if run_id and (
+    if program_id and (
         len(detail_columns) != 1
-        or str(detail_columns[0].get('id') or '') != run_id
+        or str(detail_columns[0].get('id') or '') != program_id
     ):
         raise HTTPException(status_code=404, detail='run detail not found')
     detail_rows = detail_ctx['detail_rows']
@@ -245,6 +248,19 @@ def run_cancel(problem: str, user: Annotated[str, Depends(require_session_user)]
     if not verification_exists:
         return redirect_response(details_url, status_code=303, message="verification not found")
     reason = "verification cancelled by user"
+    transition = config.verification_service.cancel_verification(
+        safe_verification_id,
+        reason=reason,
+    )
+    if transition.outcome == "missing":
+        return redirect_response(details_url, status_code=303, message="verification not found")
+    if transition.outcome == "closed":
+        return redirect_response(
+            details_url,
+            status_code=303,
+            message="verification already finished",
+        )
+    notify_verification_cancelled(safe_verification_id, reason)
     try:
         cancellation = config.judgehost_task_service.request_verification_cancel(
             safe_verification_id,
@@ -253,12 +269,6 @@ def run_cancel(problem: str, user: Annotated[str, Depends(require_session_user)]
     except Exception as exc:
         logger.exception("failed to cancel verification execution %s", safe_verification_id)
         raise HTTPException(status_code=500, detail="failed to cancel verification execution") from exc
-    config.verification_service.cancel_verification_if_active(
-        safe_verification_id,
-        reason=reason,
-        now_text=now_iso(),
-    )
-    notify_verification_cancelled(safe_verification_id, reason)
     cancel_details: dict[str, object] = {
         "verification_id": safe_verification_id,
         **cancellation,
@@ -288,15 +298,25 @@ def _build_dag_targets(
         str(row["path"]): str(row["expected_behavior"])
         for row in solution_options
     }
-    run_ids: list[str] = []
+    solution_program_ids: list[str] = []
     resolved_submission_paths: list[str] = []
     dag_targets: list[dict[str, object]] = []
-    target_paths = list(selected_solution_paths)
-    if accepted_solution_path not in target_paths:
-        target_paths = [accepted_solution_path, *target_paths]
+    target_paths = [
+        accepted_solution_path,
+        *(
+            path
+            for path in selected_solution_paths
+            if path != accepted_solution_path
+        ),
+    ]
+    solution_index = 0
     for target_path in target_paths:
-        run_id = allocate_run_id()
-        run_ids.append(run_id)
+        if target_path == accepted_solution_path:
+            program_id = "accepted"
+        else:
+            program_id = f"solution-{solution_index}"
+            solution_index += 1
+        solution_program_ids.append(program_id)
         expected_behavior = solution_expected_map.get(target_path, "unknown")
         if target_path == accepted_solution_path:
             expected_behavior = "accepted"
@@ -306,23 +326,23 @@ def _build_dag_targets(
             {
                 "path": target_path,
                 "expected_behavior": normalize_expected_behavior(expected_behavior),
-                "run_id": run_id,
+                "program_id": program_id,
             }
         )
         resolved_submission_paths.append(target_path)
     if uploaded:
-        uploaded_run_id = allocate_run_id()
-        run_ids.append(uploaded_run_id)
+        uploaded_program_id = f"solution-{solution_index}"
+        solution_program_ids.append(uploaded_program_id)
         dag_targets.append(
             {
-                "path": _uploaded_target_path(uploaded_run_id, upload_filename),
+                "path": _uploaded_target_path(uploaded_program_id, upload_filename),
                 "expected_behavior": normalize_expected_behavior(infer_expected_behavior_from_name(upload_filename)),
-                "run_id": uploaded_run_id,
+                "program_id": uploaded_program_id,
                 "upload_filename": _upload_filename_token(upload_filename),
                 "upload_content": upload_content,
             }
         )
-    return (run_ids, resolved_submission_paths, dag_targets)
+    return (solution_program_ids, resolved_submission_paths, dag_targets)
 
 
 def _start_run_verification(
@@ -346,7 +366,11 @@ def _start_run_verification(
         return redirect_response(f'/problems/{problem}/run/new', status_code=303, message=msg)
     solution_options, accepted_solution_path, _ = run_solution_options_context(workspace)
     verification_id = allocate_verification_id()
-    run_ids, resolved_submission_paths, dag_targets = _build_dag_targets(
+    (
+        solution_program_ids,
+        resolved_submission_paths,
+        dag_targets,
+    ) = _build_dag_targets(
         solution_options=solution_options,
         accepted_solution_path=accepted_solution_path,
         selected_solution_paths=selected_solution_paths,
@@ -354,14 +378,14 @@ def _start_run_verification(
         upload_filename=upload_filename,
         upload_content=upload_content,
     )
-    primary_run_id = run_ids[0]
+    primary_solution_program_id = solution_program_ids[0]
     workspace_head = str(ctx["workspace"].get("head_commit") or "")
     workspace_dirty = bool(ctx["workspace"].get("dirty"))
     details: dict[str, object] = {
         "verification_id": verification_id,
-        "run_id": primary_run_id,
-        "run_ids": run_ids,
-        "run_count": len(run_ids),
+        "primary_solution_program_id": primary_solution_program_id,
+        "solution_program_ids": solution_program_ids,
+        "solution_program_count": len(solution_program_ids),
         "artifact_verification_id": verification_id,
         "submission_paths": resolved_submission_paths,
         "solution_paths": selected_solution_paths,
@@ -410,7 +434,9 @@ def _start_run_verification(
     message_parts: list[str] = []
     if selected_test_names:
         message_parts.append(f'tests selected ({len(selected_test_names)})')
-    message_parts.append(f'verification running ({len(run_ids)} programs)')
+    message_parts.append(
+        f'verification running ({len(solution_program_ids)} solutions)'
+    )
     message_text = '; '.join(message_parts)
     return redirect_response(
         f'/problems/{problem}/run/details?verification_id={quote_plus(verification_id)}',

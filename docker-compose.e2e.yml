@@ -1,6 +1,6 @@
 services:
   domjudge-contract:
-    image: polygon-replica-e2e:local
+    image: ${POLYGON_REPLICA_E2E_IMAGE:?set by tests/scripts/docker-e2e.sh}
     entrypoint: ["python3", "/opt/e2e/verify_domjudge_source.py"]
     restart: "no"
     environment:
@@ -12,7 +12,7 @@ services:
       - upstream
 
   bootstrap:
-    image: polygon-replica-e2e:local
+    image: ${POLYGON_REPLICA_E2E_IMAGE:?set by tests/scripts/docker-e2e.sh}
     entrypoint: ["python3", "/opt/e2e/bootstrap.py"]
     restart: "no"
     network_mode: none
@@ -40,7 +40,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: polygon-replica-e2e:local
+    image: ${POLYGON_REPLICA_E2E_IMAGE:?set by tests/scripts/docker-e2e.sh}
     restart: "no"
     environment: *runtime-environment
     volumes:
@@ -65,7 +65,7 @@ services:
       - apparmor=unconfined
 
   mock-judgehost:
-    image: polygon-replica-e2e:local
+    image: ${POLYGON_REPLICA_E2E_IMAGE:?set by tests/scripts/docker-e2e.sh}
     entrypoint: ["python3", "/opt/e2e/mock_judgehost.py"]
     restart: "no"
     environment:
@@ -88,7 +88,7 @@ services:
       start_period: 2s
 
   runner:
-    image: polygon-replica-e2e:local
+    image: ${POLYGON_REPLICA_E2E_IMAGE:?set by tests/scripts/docker-e2e.sh}
     entrypoint: ["python3", "/opt/e2e/runner.py"]
     restart: "no"
     environment:
@@ -98,7 +98,9 @@ services:
       POLYGON_REPLICA_E2E_STATE_DIR: /var/backups/polygon-replica/e2e-state
     volumes:
       - ./tests/docker_e2e:/opt/e2e:ro
-      - var:/var/lib/polygon-replica:ro
+      # SQLite WAL readers need directory access for the shared-memory file.
+      # runner.py still opens the database with URI mode=ro.
+      - var:/var/lib/polygon-replica
       - cache:/tmp/polygon-replica:ro
       - state:/var/backups/polygon-replica:ro
     networks:

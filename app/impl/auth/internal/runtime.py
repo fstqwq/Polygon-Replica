@@ -5,7 +5,6 @@ import warnings
 
 from app.db import now_iso
 from app.impl.runtime.config import config
-from app.service.verification.types import is_cancel_reason
 
 _C = config.config_values
 
@@ -35,12 +34,11 @@ def _startup_cancel_summary_rows(table_name: str, reason: str, *, now_text: str)
         warnings.warn(message, RuntimeWarning)
 
 
-def _startup_cancel_judgehost_inflight(reason: str, *, now_text: str) -> None:
-    inflight_entries: list[dict[str, str]] = []
+def _startup_cancel_judgehost_inflight(reason: str) -> None:
     service = getattr(config, "judgehost_task_service", None)
     if service is not None:
         try:
-            inflight_entries = list(service.startup_cancel_inflight_tasks(reason=reason))
+            service.startup_cancel_inflight_tasks(reason=reason)
         except Exception as exc:
             warnings.warn(f"startup judgehost inflight scan failed: {exc}", RuntimeWarning)
     if service is not None:
@@ -48,58 +46,6 @@ def _startup_cancel_judgehost_inflight(reason: str, *, now_text: str) -> None:
             service.cancel_all_domjudge_batches()
         except Exception as exc:
             warnings.warn(f"startup judgehost job/case cancel failed: {exc}", RuntimeWarning)
-    if not inflight_entries:
-        return
-    for item in inflight_entries:
-        verification_id_raw = item.get("verification_id")
-        verification_id = verification_id_raw.strip() if isinstance(verification_id_raw, str) else ""
-        if not verification_id:
-            continue
-        verification_row_raw = config.verification_service.verification_record(verification_id)
-        verification_row = dict(verification_row_raw) if verification_row_raw is not None else None
-        if verification_row is None:
-            continue
-        status_raw = verification_row.get("status")
-        status = status_raw.strip().lower() if isinstance(status_raw, str) else ""
-        if status not in {"running", "queued", "pending"}:
-            continue
-        config.verification_service.cancel_unfinished_tasks(verification_id, reason=reason)
-        try:
-            config.verification_service.update_verification_record_status(
-                verification_id=verification_id,
-                status="failed",
-                fail_reason=reason,
-                finished=True,
-            )
-        except Exception as exc:
-            warnings.warn(
-                f"startup verification cancel failed for {verification_id}: {exc}",
-                RuntimeWarning,
-            )
-
-
-def _startup_cancel_task_graph_verifications(reason: str) -> None:
-    for verification_id in config.verification_service.verification_ids_with_unfinished_tasks():
-        config.verification_service.cancel_unfinished_tasks(verification_id, reason=reason)
-        try:
-            config.verification_service.update_verification_record_status(
-                verification_id,
-                status="failed",
-                fail_reason=reason,
-                finished=True,
-            )
-        except Exception as exc:
-            warnings.warn(f"startup task-graph verification reconciliation failed for {verification_id}: {exc}", RuntimeWarning)
-
-
-def _startup_finalize_cancelled_verifications(now_text: str) -> None:
-    try:
-        config.verification_service.finalize_cancelled_unfinished_records(
-            reason_predicate=is_cancel_reason,
-            now_text=now_text,
-        )
-    except Exception as exc:
-        warnings.warn(f"startup cancelled verification finalization failed: {exc}", RuntimeWarning)
 
 
 def _startup_clear_all_caches() -> None:
@@ -131,10 +77,8 @@ def _startup_reset_runtime_state() -> None:
     cancel_reason = "cancelled on service startup"
     _startup_cancel_summary_rows("previews", cancel_reason, now_text=now_text)
     _startup_cancel_summary_rows("contest_jobs", cancel_reason, now_text=now_text)
-    _startup_cancel_judgehost_inflight(cancel_reason, now_text=now_text)
-    _startup_cancel_summary_rows("verifications", cancel_reason, now_text=now_text)
-    _startup_cancel_task_graph_verifications(cancel_reason)
-    _startup_finalize_cancelled_verifications(now_text)
+    config.verification_service.recover_startup(reason=cancel_reason)
+    _startup_cancel_judgehost_inflight(cancel_reason)
     _startup_clear_all_caches()
 
 

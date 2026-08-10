@@ -97,21 +97,29 @@ CI execution are documented in
 
 ## Judgehost Docker E2E
 
-`tests/scripts/docker-e2e.sh` creates a new Compose project and named volumes for
-each run. Before the mock Judgehost can contact the application, a one-shot
+`tests/scripts/docker-e2e.sh` creates a new Compose project, image tag, and named
+volumes for each run. Before the mock Judgehost can contact the application, a
+one-shot
 contract container clones the official DOMjudge `9.0.1` tag, verifies its exact
 peeled commit, and checks the endpoint, HTTP method and form encoding, required
 fields and download shapes, and HTTP-success handling used by the mock against
-`judge/judgedaemon.main.php`. It then writes a scoped approval record, which the
-mock revalidates before every request.
+`judge/judgedaemon.main.php`. It also checks the official meaning of the final
+response plus debug/internal-error persistence against
+`webapp/src/Controller/API/JudgehostController.php`. It then writes both source
+digests into a scoped approval record, which the mock revalidates before every
+request. In particular, the gate proves that the daemon's array-valued debug
+upload is sent as `multipart/form-data`; the mock uses the same encoding.
 
 The mock exercises the official-shaped registration, work lease, file download,
 version report, compile report, and final-result exchange without executing
-untrusted programs or starting a real Judgehost. Application, mock, and result
-runner share an internal-only Compose network and publish no host port; only the
-one-shot source verifier has upstream network access. The runner observes the
-terminal verification, canonical task results, and generated input/answer blobs
-through persisted state.
+untrusted programs or starting a real Judgehost. Its fixture covers successful
+results, CE through `update-judging`, RE, active internal-error, idempotent final
+ACKs, and retry-deduplicated late debug/internal diagnostics. Application, mock,
+and result runner share an internal-only Compose network and publish no host
+port; only the one-shot source verifier has upstream network access. The runner
+observes the terminal verification, immutable canonical task results, generated
+input/answer blobs, and the separate late-diagnostic snapshot through persisted
+state.
 
 Run the isolated E2E from the repository root:
 

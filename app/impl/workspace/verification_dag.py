@@ -8,7 +8,6 @@ from typing import cast
 
 from app.db import now_iso
 from app.impl.runtime.config import config
-from app.service.repository.revision import workspace_verification_source
 from app.service.problem.solution_metadata import normalize_expected_behavior
 from app.service.platform.runtime_blob_store import PayloadFile, RuntimeBlobStore
 from app.service.verification.source import resolve_source
@@ -22,6 +21,17 @@ from app.service.verification.task_scheduler import (
     unregister_verification_runtime_coordinator,
 )
 from app.service.verification.execution_result import normalize_execution_result
+from app.service.verification.lifecycle import (
+    ActivationPlan,
+    PlannedTask,
+    SanityFinish,
+    TASK_GENERATE_INPUT,
+    TASK_MAIN_CORRECT,
+    TASK_SOLUTION_RUN,
+    VerificationCompileSpec,
+    VerificationProgram,
+    verification_task_id,
+)
 from app.service.verification.task_store import VerificationTaskRow, VerificationTaskStore
 from app.service.verification.test_rows import build_verification_test_row
 from app.service.verification.types import Kind, Status
@@ -29,17 +39,13 @@ from app.service.verification.signature import (
     VerificationManifest,
     verification_manifest,
 )
-from app.service.verification.types import is_cancel_reason
-from app.service.verification.runtime import normalize_pass_limit, normalize_problem_mode
 from app.service.verification.failure_display import verification_solution_failure_hint
 from app.service.verification.result_match import (
     run_actual_failed_codes,
-    verification_solution_match,
 )
 
 from app.impl.workspace.context_job_helper import allocate_run_id
 from app.impl.workspace.context_operation import audit
-from app.impl.workspace.context_run_detail import normalize_run_id_token
 from app.impl.workspace.sanity_checks import (
     SANITY_FAILED,
     SANITY_PENDING,
@@ -47,7 +53,6 @@ from app.impl.workspace.sanity_checks import (
     SANITY_RUNNING,
     SANITY_SKIPPED,
     SANITY_WARNING,
-    effective_verification_status,
     planned_sanity_checks,
     run_verification_sanity_checks,
 )
@@ -55,13 +60,9 @@ from app.impl.workspace.runtime_threshold import time_limit_ms_from_run_config_j
 from app.service.verification.plan import VerificationTestPlan
 from app.impl.workspace.verification_dag_plan import build_verification_execution_plan
 from app.impl.workspace.verification_payload import prepared_payload_for_uploaded_source
-from app.impl.workspace.problem_config import read_problem_config
 
 _C = config.constants
 
-TASK_GENERATE_INPUT = "generate-input"
-TASK_MAIN_CORRECT = "main-correct"
-TASK_SOLUTION_RUN = "solution-run"
 _ARTIFACT_READY_TIMEOUT_SEC = 2.0
 _ARTIFACT_READY_INTERVAL_SEC = 0.05
 
@@ -69,20 +70,19 @@ _COMPILE_DIAGNOSTICS_LIMIT = 64
 
 
 @dataclass(frozen=True)
-class LogicalRunSpec:
-    logical_run_id: str
-    source_path: str
-    expected_behavior: str
-    task_kind: str
-
-
-@dataclass(frozen=True)
 class VerificationGraph:
-    tasks: list[dict[str, object]]
-    edges: list[tuple[str, str]]
-    logical_runs: list[LogicalRunSpec]
+    tasks: tuple[PlannedTask, ...]
+    programs: tuple[VerificationProgram, ...]
     test_names: list[str]
     accepted_source_path: str
+
+    @property
+    def edges(self) -> list[tuple[str, str]]:
+        return [
+            (task.predecessor_task_id, task.task_id)
+            for task in self.tasks
+            if task.predecessor_task_id is not None
+        ]
 
 
 @dataclass(frozen=True)
@@ -93,38 +93,14 @@ class TaskExecutionContext:
     mode: str
     pass_limit: int
     snapshot_root: Path
-    source_file_by_path: dict[str, PayloadFile]
     artifact_file_by_test_ref: dict[tuple[str, str], PayloadFile]
-    execution_template_by_key: dict[tuple[str, str, str, bool, str], dict[str, object]]
+    program_by_id: dict[str, VerificationProgram]
+    execution_template_by_program_id: dict[str, dict[str, object]]
     test_plan_by_name: dict[str, VerificationTestPlan]
     run_verification_payload_base: dict[str, object]
     generate_verification_payload_base: dict[str, object]
     bypass_case_result_cache: bool
     task_store: VerificationTaskStore | None = None
-
-
-def _workspace_mode_and_pass_limit(problem_id: int, workspace_id: int) -> tuple[str, int]:
-    default_mode = str(_C.GENERAL_CONFIG_DEFAULTS.get("mode") or "pass-fail")
-    default_pass_limit = int(_C.GENERAL_CONFIG_DEFAULTS.get("pass_limit") or 1)
-    workspace_path_text = config.workspace_service.workspace_path(int(problem_id), int(workspace_id))
-    if not workspace_path_text:
-        return (default_mode, default_pass_limit)
-    workspace_path = Path(workspace_path_text).resolve()
-    _payload, general_cfg, _cfg_path = read_problem_config(workspace_path)
-    return (
-        normalize_problem_mode(general_cfg.get("mode"), default_mode),
-        normalize_pass_limit(general_cfg.get("pass_limit"), default_pass_limit),
-    )
-
-
-def _snapshot_mode_and_pass_limit(snapshot: Path) -> tuple[str, int]:
-    default_mode = str(_C.GENERAL_CONFIG_DEFAULTS.get("mode") or "pass-fail")
-    default_pass_limit = int(_C.GENERAL_CONFIG_DEFAULTS.get("pass_limit") or 1)
-    _payload, general_cfg, _cfg_path = read_problem_config(snapshot)
-    return (
-        normalize_problem_mode(general_cfg.get("mode"), default_mode),
-        normalize_pass_limit(general_cfg.get("pass_limit"), default_pass_limit),
-    )
 
 
 def _require_online_judgehost() -> None:
@@ -166,66 +142,134 @@ def _verification_required_file(
 
 def _build_graph(
     *,
-    task_store: VerificationTaskStore,
+    verification_id: str,
     accepted_source_path: str,
+    source_file_by_path: dict[str, PayloadFile],
     test_plan_by_name: dict[str, VerificationTestPlan],
     targets: list[dict[str, object]],
     test_names: list[str],
 ) -> VerificationGraph:
-    logical_runs: list[LogicalRunSpec] = []
-    accepted_selected_run_id = ""
+    accepted_source_file = source_file_by_path.get(accepted_source_path)
+    if accepted_source_file is None:
+        raise RuntimeError("accepted verification source is missing")
+    programs: list[VerificationProgram] = [
+        VerificationProgram(
+            program_id="accepted",
+            kind=TASK_MAIN_CORRECT,
+            source_path=accepted_source_path,
+            compile_spec=VerificationCompileSpec(
+                source_name=Path(accepted_source_path).name,
+                source_file=accepted_source_file,
+            ),
+            expected_behavior="accepted",
+        )
+    ]
+    target_slot = 0
+    accepted_target_seen = False
     for target in targets:
         source_path = str(target.get("path") or "")
         if not source_path:
             continue
         expected_behavior = normalize_expected_behavior(target.get("expected_behavior") or "unknown")
-        logical_run_id = normalize_run_id_token(target.get("run_id"))
-        if not logical_run_id:
-            logical_run_id = allocate_run_id()
-            target["run_id"] = logical_run_id
-        run_task_kind = TASK_SOLUTION_RUN
         if source_path == accepted_source_path and expected_behavior == "accepted":
-            run_task_kind = TASK_MAIN_CORRECT
-            accepted_selected_run_id = logical_run_id
-        logical_runs.append(
-            LogicalRunSpec(
-                logical_run_id=logical_run_id,
+            if str(target.get("program_id") or "") != "accepted":
+                raise RuntimeError(
+                    "accepted verification target has invalid program identity"
+                )
+            if accepted_target_seen:
+                raise RuntimeError("accepted verification target is duplicated")
+            accepted_target_seen = True
+            continue
+        expected_program_id = f"solution-{target_slot}"
+        program_id = str(target.get("program_id") or "")
+        if program_id != expected_program_id:
+            raise RuntimeError(
+                f"verification target {source_path} must use program "
+                f"{expected_program_id}"
+            )
+        target_slot += 1
+        source_file = source_file_by_path.get(source_path)
+        if source_file is None:
+            raise RuntimeError(f"verification source is missing: {source_path}")
+        programs.append(
+            VerificationProgram(
+                program_id=program_id,
+                kind=TASK_SOLUTION_RUN,
                 source_path=source_path,
+                compile_spec=VerificationCompileSpec(
+                    source_name=Path(source_path).name,
+                    source_file=source_file,
+                ),
                 expected_behavior=expected_behavior,
-                task_kind=run_task_kind,
             )
         )
-    if not accepted_selected_run_id:
-        accepted_selected_run_id = allocate_run_id()
-    tasks: list[dict[str, object]] = []
-    edges: list[tuple[str, str]] = []
-    queue_index = 1
+    tasks: list[PlannedTask] = []
     main_ids: dict[str, str] = {}
-    generator_run_ids: dict[tuple[str, str, str, str], str] = {}
+    generator_program_ids: dict[tuple[str, str], str] = {}
+    generator_compile_identity_by_program: dict[
+        str,
+        tuple[str, str, tuple[tuple[str, str], ...], bool],
+    ] = {}
     generator_owner_by_invocation: dict[tuple[object, ...], str] = {}
     generator_test_name_by_id: dict[str, str] = {}
     for test_name in test_names:
         test_plan = test_plan_by_name.get(test_name)
         if test_plan is None:
             raise RuntimeError(f"verification test plan missing for {test_name}")
-        generator_key = (
-            test_plan.source_kind,
-            test_plan.execution_source_name,
-            test_plan.execution_source_file.identity,
-            json.dumps(
-                {name: payload.identity for name, payload in test_plan.extra_source_files.items()},
-                ensure_ascii=True,
-                sort_keys=True,
-                separators=(",", ":"),
-            ),
+        generator_compile_spec = VerificationCompileSpec(
+            source_name=test_plan.execution_source_name,
+            source_file=test_plan.execution_source_file,
+            extra_source_files=tuple(sorted(test_plan.extra_source_files.items())),
+            manual_validate_only=test_plan.source_kind == "manual",
         )
-        generator_run_id = generator_run_ids.get(generator_key)
-        if generator_run_id is None:
-            generator_run_id = allocate_run_id()
-            generator_run_ids[generator_key] = generator_run_id
-        generate_id = task_store.allocate_id()
+        generator_compile_identity = (
+            generator_compile_spec.source_name,
+            generator_compile_spec.source_file.identity,
+            tuple(
+                (name, source.identity)
+                for name, source in generator_compile_spec.extra_source_files
+            ),
+            generator_compile_spec.manual_validate_only,
+        )
+        generator_program_identity = (
+            test_plan.source_kind,
+            test_plan.display_source_path,
+        )
+        generator_program_id = generator_program_ids.get(
+            generator_program_identity
+        )
+        if generator_program_id is None:
+            generator_program_id = f"generator-{len(generator_program_ids)}"
+            generator_program_ids[
+                generator_program_identity
+            ] = generator_program_id
+            generator_compile_identity_by_program[
+                generator_program_id
+            ] = generator_compile_identity
+            programs.append(
+                VerificationProgram(
+                    program_id=generator_program_id,
+                    kind=TASK_GENERATE_INPUT,
+                    source_path=test_plan.display_source_path,
+                    compile_spec=generator_compile_spec,
+                    expected_behavior="accepted",
+                )
+            )
+        elif (
+            generator_compile_identity_by_program[generator_program_id]
+            != generator_compile_identity
+        ):
+            raise RuntimeError(
+                f"verification generator program {generator_program_id} "
+                "changed compile specification"
+            )
+        generate_id = verification_task_id(
+            verification_id,
+            generator_program_id,
+            test_name,
+        )
         invocation_key: tuple[object, ...] = (
-            *generator_key,
+            generator_compile_spec,
             test_plan.execution_input_file.identity,
             test_plan.source_kind == "manual",
         )
@@ -239,61 +283,60 @@ def _build_graph(
             )
         generator_test_name_by_id[generate_id] = test_name
         tasks.append(
-            {
-                "id": generate_id,
-                "task_kind": TASK_GENERATE_INPUT,
-                "source_path": test_plan.display_source_path,
-                "logical_run_id": generator_run_id,
-                "test_name": test_name,
-                "expected_behavior": "accepted",
-                "queue_index": queue_index,
-                "status": VerificationTaskStore.TASK_PENDING,
-                "verdict": "SK" if owner_generate_id is not None else "",
-                "feedback_text": duplicate_feedback,
-            }
+            PlannedTask(
+                task_id=generate_id,
+                predecessor_task_id=owner_generate_id,
+                task_kind=TASK_GENERATE_INPUT,
+                source_path=test_plan.display_source_path,
+                program_id=generator_program_id,
+                test_name=test_name,
+                expected_behavior="accepted",
+                result=normalize_execution_result(
+                    verdict="SK" if owner_generate_id is not None else "",
+                    feedback=duplicate_feedback,
+                ),
+            )
         )
-        queue_index += 1
-        if owner_generate_id is not None:
-            edges.append((owner_generate_id, generate_id))
-        main_id = task_store.allocate_id()
+        main_id = verification_task_id(
+            verification_id,
+            "accepted",
+            test_name,
+        )
         tasks.append(
-            {
-                "id": main_id,
-                "task_kind": TASK_MAIN_CORRECT,
-                "source_path": accepted_source_path,
-                "logical_run_id": accepted_selected_run_id,
-                "test_name": test_name,
-                "expected_behavior": "accepted",
-                "queue_index": queue_index,
-                "status": VerificationTaskStore.TASK_PENDING,
-            }
+            PlannedTask(
+                task_id=main_id,
+                predecessor_task_id=generate_id,
+                task_kind=TASK_MAIN_CORRECT,
+                source_path=accepted_source_path,
+                program_id="accepted",
+                test_name=test_name,
+                expected_behavior="accepted",
+            )
         )
-        queue_index += 1
-        edges.append((generate_id, main_id))
         main_ids[test_name] = main_id
-    for logical_run in logical_runs:
-        if logical_run.task_kind == TASK_MAIN_CORRECT:
+    for program in programs:
+        if program.kind != TASK_SOLUTION_RUN:
             continue
         for test_name in test_names:
-            task_id = task_store.allocate_id()
-            tasks.append(
-                {
-                    "id": task_id,
-                    "task_kind": TASK_SOLUTION_RUN,
-                    "source_path": logical_run.source_path,
-                    "logical_run_id": logical_run.logical_run_id,
-                    "test_name": test_name,
-                    "expected_behavior": logical_run.expected_behavior,
-                    "queue_index": queue_index,
-                    "status": VerificationTaskStore.TASK_PENDING,
-                }
+            task_id = verification_task_id(
+                verification_id,
+                program.program_id,
+                test_name,
             )
-            queue_index += 1
-            edges.append((main_ids[test_name], task_id))
+            tasks.append(
+                PlannedTask(
+                    task_id=task_id,
+                    predecessor_task_id=main_ids[test_name],
+                    task_kind=TASK_SOLUTION_RUN,
+                    source_path=program.source_path,
+                    program_id=program.program_id,
+                    test_name=test_name,
+                    expected_behavior=program.expected_behavior,
+                )
+            )
     return VerificationGraph(
-        tasks=tasks,
-        edges=edges,
-        logical_runs=logical_runs,
+        tasks=tuple(tasks),
+        programs=tuple(programs),
         test_names=test_names,
         accepted_source_path=accepted_source_path,
     )
@@ -377,11 +420,23 @@ def _task_counts(rows: list[VerificationTaskRow]) -> dict[str, object]:
     return counts
 
 
-def _visible_logical_runs(logical_runs: list[LogicalRunSpec]) -> list[LogicalRunSpec]:
+def _visible_programs(
+    programs: tuple[VerificationProgram, ...],
+) -> list[VerificationProgram]:
     return [
-        logical_run
-        for logical_run in logical_runs
-        if logical_run.task_kind != TASK_MAIN_CORRECT
+        program
+        for program in programs
+        if program.kind == TASK_SOLUTION_RUN
+    ]
+
+
+def _runtime_programs(
+    programs: tuple[VerificationProgram, ...],
+) -> list[VerificationProgram]:
+    return [
+        program
+        for program in programs
+        if program.kind != TASK_GENERATE_INPUT
     ]
 
 
@@ -434,9 +489,9 @@ def _generate_feedback_by_test(rows: list[VerificationTaskRow]) -> dict[str, str
     return result
 
 
-def _logical_run_summary(
+def _program_summary(
     *,
-    logical_run: LogicalRunSpec,
+    program: VerificationProgram,
     rows: list[VerificationTaskRow],
     test_names: list[str],
     mode: str,
@@ -500,7 +555,7 @@ def _logical_run_summary(
     elif saw_queued:
         run_status = Status.QUEUED.value
     elif saw_pending:
-        run_status = Status.PENDING.value
+        run_status = "pending"
     elif saw_failed or saw_cancelled:
         run_status = Status.FAILED.value
     elif saw_done and len(tests) + skipped_test_count >= len(test_names):
@@ -508,15 +563,15 @@ def _logical_run_summary(
     elif saw_done:
         run_status = Status.RUNNING.value
     else:
-        run_status = Status.PENDING.value
+        run_status = "pending"
     summary = {
         "artifact_verification_id": artifact_verification_id,
         "mode": mode,
         "pass_limit": pass_limit,
-        "source": logical_run.source_path,
+        "source": program.source_path,
         "selected_tests": list(test_names),
         "selected_tests_count": len(test_names),
-        "task_kind": logical_run.task_kind,
+        "task_kind": program.kind,
         "tests": tests,
         "tests_total": len(test_names),
         "skipped_tests": skipped_test_count,
@@ -531,11 +586,14 @@ def _logical_run_summary(
             "memory_kb_peak": max_memory_kb,
         },
     }
-    matched, completed, observed_pass, reason = verification_solution_match(
-        logical_run.expected_behavior,
-        run_status,
-        summary,
+    completed = run_status in {Status.OK.value, Status.FAILED.value}
+    matched = completed and run_status == Status.OK.value
+    observed_pass = bool(
+        matched
+        and tests
+        and all(str(item.get("verdict") or "").upper() in {"OK", "AC"} for item in tests)
     )
+    reason = "" if matched or not completed else error_text or "program task failed"
     return (summary, run_status, bool(matched), bool(completed), bool(observed_pass), reason)
 
 
@@ -545,23 +603,23 @@ def _verification_summary_from_tasks(
     artifact_verification_id: str,
     mode: str,
     pass_limit: int,
-    logical_runs: list[LogicalRunSpec],
+    programs: tuple[VerificationProgram, ...],
     rows: list[VerificationTaskRow],
     test_names: list[str],
     fail_flag: bool,
     fail_reason: str,
 ) -> tuple[str, dict[str, object], dict[str, object]]:
-    visible_logical_runs = _visible_logical_runs(logical_runs)
-    all_logical_runs = list(logical_runs)
+    visible_programs = _visible_programs(programs)
+    all_programs = _visible_programs(programs)
     counts = _task_counts(rows)
     running_tasks = [_task_running_entry(row) for row in rows if str(row["status"]) == VerificationTaskStore.TASK_LEASED]
     first_solution_error = ""
     has_pending_or_running = bool(int(counts["pending"]) or int(counts["queued"]) or int(counts["running"]))
     all_matched = True
-    for logical_run in all_logical_runs:
-        grouped_rows = [row for row in rows if str(row["logical_run_id"] or "") == logical_run.logical_run_id]
-        run_summary, run_status, matched, completed, observed_pass, reason = _logical_run_summary(
-            logical_run=logical_run,
+    for program in all_programs:
+        grouped_rows = [row for row in rows if str(row["program_id"] or "") == program.program_id]
+        run_summary, run_status, matched, completed, observed_pass, reason = _program_summary(
+            program=program,
             rows=grouped_rows,
             test_names=test_names,
             mode=mode,
@@ -569,26 +627,21 @@ def _verification_summary_from_tasks(
             artifact_verification_id=artifact_verification_id,
             fail_flag=fail_flag,
         )
-        if logical_run.task_kind == TASK_MAIN_CORRECT:
-            continue
         reason_text = reason
         if (not matched) and completed and (not reason_text):
             reason_text = verification_solution_failure_hint(
-                logical_run.source_path,
+                program.source_path,
                 "",
                 str(run_summary.get("error") or ""),
             )
         if (not matched) and completed and (not first_solution_error):
             first_solution_error = reason_text or verification_solution_failure_hint(
-                logical_run.source_path,
+                program.source_path,
                 "",
                 str(run_summary.get("error") or ""),
             )
         all_matched = all_matched and bool(matched)
-    if fail_flag and is_cancel_reason(fail_reason):
-        verification_status = Status.FAILED.value
-        verification_error = fail_reason or "verification cancelled"
-    elif fail_flag:
+    if fail_flag:
         verification_status = Status.FAILED.value
         verification_error = fail_reason or first_solution_error or "verification failed"
     elif has_pending_or_running:
@@ -597,10 +650,10 @@ def _verification_summary_from_tasks(
     elif int(counts["cancelled"]) > 0:
         verification_status = Status.FAILED.value
         verification_error = fail_reason or "verification cancelled"
-    elif visible_logical_runs and all_matched:
+    elif visible_programs and all_matched:
         verification_status = Status.OK.value
         verification_error = ""
-    elif (not visible_logical_runs) and int(counts["total"]) > 0:
+    elif (not visible_programs) and int(counts["total"]) > 0:
         verification_status = Status.OK.value
         verification_error = ""
     else:
@@ -616,14 +669,14 @@ def _verification_summary_from_tasks(
         "running_tasks": running_tasks,
         "fail_flag": bool(fail_flag),
         "fail_reason": fail_reason,
-        "source_paths": [item.source_path for item in visible_logical_runs],
+        "source_paths": [item.source_path for item in visible_programs],
         "test_names": list(test_names),
         "mode": mode,
         "pass_limit": pass_limit,
         "updated_at": now_iso(),
         "finished_at": now_iso()
         if verification_status in {Status.OK.value, Status.FAILED.value}
-        and ((not has_pending_or_running) or (fail_flag and is_cancel_reason(fail_reason)))
+        and not has_pending_or_running
         else "",
     }
     return (verification_status, summary, counts)
@@ -634,16 +687,16 @@ def _runtime_threshold_columns_from_tasks(
     artifact_verification_id: str,
     mode: str,
     pass_limit: int,
-    logical_runs: list[LogicalRunSpec],
+    programs: tuple[VerificationProgram, ...],
     rows: list[VerificationTaskRow],
     test_names: list[str],
     fail_flag: bool,
 ) -> list[dict[str, object]]:
     columns: list[dict[str, object]] = []
-    for logical_run in logical_runs:
-        grouped_rows = [row for row in rows if str(row["logical_run_id"] or "") == logical_run.logical_run_id]
-        run_summary, run_status, _matched, _completed, _observed_pass, _reason = _logical_run_summary(
-            logical_run=logical_run,
+    for program in _runtime_programs(programs):
+        grouped_rows = [row for row in rows if str(row["program_id"] or "") == program.program_id]
+        run_summary, run_status, _matched, _completed, _observed_pass, _reason = _program_summary(
+            program=program,
             rows=grouped_rows,
             test_names=test_names,
             mode=mode,
@@ -653,7 +706,7 @@ def _runtime_threshold_columns_from_tasks(
         )
         columns.append(
             {
-                "source": logical_run.source_path,
+                "source": program.source_path,
                 "summary": run_summary,
                 "summary_has_tl": "TL" in run_actual_failed_codes(run_status, run_summary),
             }
@@ -687,55 +740,33 @@ def _sanity_plan_for_verification_kind(kind: str, test_plans: list[VerificationT
     return (checks, SANITY_PENDING if checks else "")
 
 
-def _source_file_for_path(execution: TaskExecutionContext, source_path: str) -> tuple[str, PayloadFile]:
-    source_file = execution.source_file_by_path.get(source_path)
-    if source_file is None:
-        raise RuntimeError(f"verification source is missing: {source_path}")
-    return (source_file.path.name, source_file)
-
-
 def _execution_template(
     execution: TaskExecutionContext,
     *,
-    source_label: str,
-    source_name: str,
-    source_file: PayloadFile,
-    task_kind: str,
-    expected_behavior: str,
-    verification_source: str,
-    verification_payload_base: dict[str, object],
-    extra_source_files: dict[str, PayloadFile] | None = None,
-    manual_validate_only: bool = False,
+    program: VerificationProgram,
 ) -> dict[str, object]:
-    extra_sources_key = json.dumps(
-        {name: payload.identity for name, payload in (extra_source_files or {}).items()},
-        sort_keys=True,
-        separators=(",", ":"),
-    )
-    source_hash = source_file.identity
-    key = (
-        source_label,
-        source_hash,
-        task_kind,
-        bool(manual_validate_only),
-        extra_sources_key,
-    )
-    cached = execution.execution_template_by_key.get(key)
+    cached = execution.execution_template_by_program_id.get(program.program_id)
     if cached is not None:
         return cached
+    compile_spec = program.compile_spec
+    verification_payload_base = (
+        execution.generate_verification_payload_base
+        if program.kind == TASK_GENERATE_INPUT
+        else execution.run_verification_payload_base
+    )
     prepared = config.judgehost_task_service.prepare_execution_template(
         mode=execution.mode,
-        upload_file=source_file,
-        upload_filename=source_name,
+        upload_file=compile_spec.source_file,
+        upload_filename=compile_spec.source_name,
         verification_payload=verification_payload_base,
-        expected_behavior=expected_behavior,
-        verification_source=verification_source,
-        task_kind=task_kind,
-        extra_source_files=extra_source_files,
-        manual_validate_only=manual_validate_only,
+        expected_behavior=program.expected_behavior,
+        verification_source=program.kind,
+        task_kind=program.kind,
+        extra_source_files=dict(compile_spec.extra_source_files),
+        manual_validate_only=compile_spec.manual_validate_only,
         compile_only=False,
     )
-    execution.execution_template_by_key[key] = prepared
+    execution.execution_template_by_program_id[program.program_id] = prepared
     return prepared
 
 
@@ -781,9 +812,13 @@ def _skipped_downstream_task_result(task_row: VerificationTaskRow) -> TaskPublis
 def _publish_generate_task(task_row: VerificationTaskRow, *, execution: TaskExecutionContext, test_plan: VerificationTestPlan) -> TaskPublishResult:
     task_id = str(task_row["id"])
     test_name = str(task_row["test_name"])
-    logical_run_id = str(task_row["logical_run_id"])
+    program_id = str(task_row["program_id"])
     run_id = allocate_run_id()
     try:
+        program = execution.program_by_id.get(program_id)
+        if program is None or program.kind != TASK_GENERATE_INPUT:
+            raise RuntimeError("verification generator program is unavailable")
+        compile_spec = program.compile_spec
         predecessor_task_id = str(task_row["predecessor_task_id"] or "")
         if predecessor_task_id and str(task_row["verdict"] or "").upper() == "SK":
             task_store = execution.task_store or config.verification_task_store
@@ -838,41 +873,34 @@ def _publish_generate_task(task_row: VerificationTaskRow, *, execution: TaskExec
                 ),
             )
         prepared = prepared_payload_for_uploaded_source(
-            source_label=test_plan.execution_source_name,
+            source_label=compile_spec.source_name,
             run_id=run_id,
             test_name=test_name,
             input_file=test_plan.execution_input_file,
             answer_file=config.runtime_blob_store.put_bytes(b""),
             verification_payload_base=execution.generate_verification_payload_base,
-            extra_source_files=test_plan.extra_source_files,
-            manual_validate_only=test_plan.source_kind == "manual",
+            extra_source_files=dict(compile_spec.extra_source_files),
+            manual_validate_only=compile_spec.manual_validate_only,
         )
         execution_template = _execution_template(
             execution,
-            source_label=test_plan.execution_source_name,
-            source_name=test_plan.execution_source_name,
-            source_file=test_plan.execution_source_file,
-            task_kind=TASK_GENERATE_INPUT,
-            expected_behavior="accepted",
-            verification_source=TASK_GENERATE_INPUT,
-            verification_payload_base=execution.generate_verification_payload_base,
-            extra_source_files=test_plan.extra_source_files,
-            manual_validate_only=test_plan.source_kind == "manual",
+            program=program,
         )
+        task_run_id = str(prepared.get("run_id") or run_id)
         judgehost_task_id = config.judgehost_task_service.enqueue_task(
+            verification_task_id=task_id,
             problem=execution.problem,
             username=execution.user,
             artifact_verification_id=execution.verification_id,
             mode=execution.mode,
             submission_path=None,
             upload_content=None,
-            upload_file=test_plan.execution_source_file,
-            upload_filename=test_plan.execution_source_name,
-            run_id=str(prepared.get("run_id") or run_id),
+            upload_file=compile_spec.source_file,
+            upload_filename=compile_spec.source_name,
+            run_id=task_run_id,
             selected_tests=[],
             verification_id=execution.verification_id,
-            verification_run_ids=[logical_run_id],
-            logical_run_id=logical_run_id,
+            verification_program_id=program_id,
             expected_behavior="accepted",
             verification_source=TASK_GENERATE_INPUT,
             task_kind=TASK_GENERATE_INPUT,
@@ -884,7 +912,7 @@ def _publish_generate_task(task_row: VerificationTaskRow, *, execution: TaskExec
         )
         return TaskPublishResult(
             task_id=task_id,
-            run_id=str(prepared.get("run_id") or run_id),
+            run_id=task_run_id,
             judgehost_task_id=judgehost_task_id,
         )
     except Exception as exc:
@@ -912,9 +940,17 @@ def _publish_run_task(task_row: VerificationTaskRow, *, execution: TaskExecution
     task_kind = str(task_row["task_kind"])
     source_path = str(task_row["source_path"])
     test_name = str(task_row["test_name"])
-    logical_run_id = str(task_row["logical_run_id"] or "")
+    program_id = str(task_row["program_id"] or "")
     run_id = allocate_run_id()
     try:
+        program = execution.program_by_id.get(program_id)
+        if (
+            program is None
+            or program.kind != task_kind
+            or program.source_path != source_path
+        ):
+            raise RuntimeError("verification program is unavailable")
+        compile_spec = program.compile_spec
         input_file = _verification_required_file(
             execution.verification_id,
             test_name,
@@ -936,7 +972,6 @@ def _publish_run_task(task_row: VerificationTaskRow, *, execution: TaskExecution
             )
             verification_source = TASK_SOLUTION_RUN
             expected_behavior = normalize_expected_behavior(task_row["expected_behavior"])
-        source_name, source_file = _source_file_for_path(execution, source_path)
         prepared = prepared_payload_for_uploaded_source(
             source_label=source_path,
             run_id=run_id,
@@ -947,28 +982,22 @@ def _publish_run_task(task_row: VerificationTaskRow, *, execution: TaskExecution
         )
         execution_template = _execution_template(
             execution,
-            source_label=source_path,
-            source_name=source_name,
-            source_file=source_file,
-            task_kind=task_kind,
-            expected_behavior=expected_behavior,
-            verification_source=verification_source,
-            verification_payload_base=execution.run_verification_payload_base,
+            program=program,
         )
         judgehost_task_id = config.judgehost_task_service.enqueue_task(
+            verification_task_id=task_id,
             problem=execution.problem,
             username=execution.user,
             artifact_verification_id=execution.verification_id,
             mode=execution.mode,
             submission_path=None,
             upload_content=None,
-            upload_file=source_file,
-            upload_filename=source_name,
+            upload_file=compile_spec.source_file,
+            upload_filename=compile_spec.source_name,
             run_id=run_id,
             selected_tests=[test_name],
             verification_id=execution.verification_id,
-            verification_run_ids=[logical_run_id or run_id],
-            logical_run_id=logical_run_id,
+            verification_program_id=program_id,
             expected_behavior=expected_behavior,
             verification_source=verification_source,
             task_kind=task_kind,
@@ -980,10 +1009,9 @@ def _publish_run_task(task_row: VerificationTaskRow, *, execution: TaskExecution
         )
         return TaskPublishResult(task_id=task_id, run_id=run_id, judgehost_task_id=judgehost_task_id)
     except Exception as exc:
-        fail_reason = (
-            verification_task_fail_reason(task_row, error_text=str(exc))
-            if task_kind == TASK_MAIN_CORRECT
-            else ""
+        fail_reason = verification_task_fail_reason(
+            task_row,
+            error_text=str(exc),
         )
         result = _empty_task_result(
             task_id=task_id,
@@ -1056,35 +1084,39 @@ def run_workspace_verification_dag(
     bypass_case_result_cache: bool = False,
     skip_sanity: bool = False,
 ) -> None:
-    workspace_path: Path | None = None
-    if workspace_id is not None:
-        workspace_path_text = config.workspace_service.workspace_path(int(problem_id), int(workspace_id))
-        if workspace_path_text:
-            workspace_path = Path(workspace_path_text).resolve()
-    if snapshot_root_override is None:
-        if workspace_path is None:
-            raise RuntimeError("workspace metadata missing")
-        if (not workspace_path.exists()) or (not workspace_path.is_dir()) or workspace_path.is_symlink():
-            raise RuntimeError("workspace path is unavailable")
-    record_source = str(source_commit or "").strip() or workspace_verification_source(workspace_head)
+    del signature, source_commit, kind
     task_store = config.verification_task_store
-    layout = config.fs_manager.prepare_verification_layout(verification_id)
-    snapshot_root = snapshot_root_override
-    if snapshot_root is None:
-        assert workspace_path is not None
-        snapshot_root = config.workspace_service.create_snapshot(
-            workspace_path,
-            None,
-            workspace_head=workspace_head,
-            workspace_dirty=workspace_dirty,
-        )
-    if manifest is None:
-        execution_manifest = verification_manifest(snapshot_root)
-    else:
-        execution_manifest = manifest
-    signature = execution_manifest.signature
+    snapshot_root: Path | None = snapshot_root_override
     execution_plan = None
     try:
+        workspace_path: Path | None = None
+        if workspace_id is not None:
+            workspace_path_text = config.workspace_service.workspace_path(
+                int(problem_id), int(workspace_id)
+            )
+            if workspace_path_text:
+                workspace_path = Path(workspace_path_text).resolve()
+        if snapshot_root is None:
+            if workspace_path is None:
+                raise RuntimeError("workspace metadata missing")
+            if (
+                (not workspace_path.exists())
+                or (not workspace_path.is_dir())
+                or workspace_path.is_symlink()
+            ):
+                raise RuntimeError("workspace path is unavailable")
+        layout = config.fs_manager.prepare_verification_layout(verification_id)
+        if snapshot_root is None:
+            assert workspace_path is not None
+            snapshot_root = config.workspace_service.create_snapshot(
+                workspace_path,
+                None,
+                workspace_head=workspace_head,
+                workspace_dirty=workspace_dirty,
+            )
+        execution_manifest = (
+            verification_manifest(snapshot_root) if manifest is None else manifest
+        )
         execution_plan = build_verification_execution_plan(
             snapshot_root,
             manifest=execution_manifest,
@@ -1092,33 +1124,12 @@ def run_workspace_verification_dag(
         )
         _require_online_judgehost()
     except Exception as exc:
-        verification_mode, verification_pass_limit = _snapshot_mode_and_pass_limit(snapshot_root)
-        config.verification_service.begin_verification_record(
-            verification_id=verification_id,
-            problem_id=problem_id,
-            workspace_id=workspace_id,
-            signature=signature,
-            source_commit=record_source,
-            kind=kind,
-            status=Status.FAILED.value,
-        )
-        config.verification_service.persist_verification_detail(
+        transition = config.verification_service.fail_verification(
             verification_id,
-            {
-                "mode": verification_mode,
-                "pass_limit": verification_pass_limit,
-                "source_paths": [str(item.get("path") or "") for item in targets if str(item.get("path") or "")],
-                "selected_test_names": list(selected_test_names or []),
-                "bypass_case_result_cache": bool(bypass_case_result_cache),
-                "error": str(exc),
-            },
+            reason=str(exc) or "verification planning failed",
         )
-        config.verification_service.update_verification_record_status(
-            verification_id,
-            status=Status.FAILED.value,
-            fail_reason=str(exc),
-            finished=True,
-        )
+        if transition.outcome == "missing":
+            raise RuntimeError("verification was not admitted") from exc
         audit(
             actor_user_id,
             problem_id,
@@ -1133,12 +1144,17 @@ def run_workspace_verification_dag(
         # All task rows, final detail, status, and audit data are durable before
         # the quiet-window cleanup can retire process-local judgehost records.
         config.judgehost_task_service.schedule_verification_cleanup(verification_id)
-        if snapshot_root.exists() and not retain_snapshot_override:
+        if (
+            snapshot_root is not None
+            and snapshot_root.exists()
+            and not retain_snapshot_override
+        ):
             import shutil
 
             shutil.rmtree(snapshot_root.parent, ignore_errors=True)
         return
     assert execution_plan is not None
+    assert snapshot_root is not None
     try:
         verification_mode = execution_plan.mode
         verification_pass_limit = execution_plan.pass_limit
@@ -1175,37 +1191,41 @@ def run_workspace_verification_dag(
         else:
             sanity_checks, sanity_status = _sanity_plan_for_verification_kind(effective_kind, selected_test_plans)
         graph = _build_graph(
-            task_store=task_store,
+            verification_id=verification_id,
             accepted_source_path=execution_plan.accepted_source_path,
+            source_file_by_path=source_file_by_path,
             test_plan_by_name=execution_plan.test_plan_by_name,
             targets=targets,
             test_names=test_names,
         )
-        visible_logical_runs = _visible_logical_runs(graph.logical_runs)
-        config.verification_service.begin_verification_record(
-            verification_id=verification_id,
-            problem_id=problem_id,
-            workspace_id=workspace_id,
-            signature=signature,
-            source_commit=record_source,
-            kind=effective_kind,
-            status=Status.RUNNING.value,
+        visible_programs = _visible_programs(graph.programs)
+        activation = config.verification_service.activate_verification(
+            ActivationPlan.build(
+                verification_id,
+                detail={
+                    "mode": verification_mode,
+                    "pass_limit": verification_pass_limit,
+                    "source_paths": [item.source_path for item in visible_programs],
+                    "selected_test_names": list(test_names),
+                    "bypass_case_result_cache": bool(bypass_case_result_cache),
+                    "sanity_checks": list(sanity_checks),
+                    "sanity_status": sanity_status,
+                    "run_config_json": str(
+                        execution_plan.run_verification_payload_base.get(
+                            "run_config_json"
+                        )
+                        or ""
+                    ),
+                    "tests_meta_rows": list(execution_plan.tests_meta_rows),
+                },
+                programs=graph.programs,
+                tasks=graph.tasks,
+            )
         )
-        config.verification_service.persist_verification_detail(
-            verification_id,
-            {
-                "mode": verification_mode,
-                "pass_limit": verification_pass_limit,
-                "source_paths": [item.source_path for item in visible_logical_runs],
-                "selected_test_names": list(test_names),
-                "bypass_case_result_cache": bool(bypass_case_result_cache),
-                "sanity_checks": list(sanity_checks),
-                "sanity_status": sanity_status,
-                "run_config_json": str(execution_plan.run_verification_payload_base.get("run_config_json") or ""),
-                "tests_meta_rows": list(execution_plan.tests_meta_rows),
-            },
-        )
-        task_store.replace_graph(verification_id, tasks=graph.tasks, edges=graph.edges)
+        if activation.outcome != "activated":
+            if activation.outcome == "missing":
+                raise RuntimeError("verification was not admitted")
+            return
         execution = TaskExecutionContext(
             problem=problem,
             user=user,
@@ -1213,9 +1233,12 @@ def run_workspace_verification_dag(
             mode=verification_mode,
             pass_limit=verification_pass_limit,
             snapshot_root=execution_plan.snapshot_root,
-            source_file_by_path=source_file_by_path,
             artifact_file_by_test_ref={},
-            execution_template_by_key={},
+            program_by_id={
+                program.program_id: program
+                for program in graph.programs
+            },
+            execution_template_by_program_id={},
             test_plan_by_name=execution_plan.test_plan_by_name,
             run_verification_payload_base=execution_plan.run_verification_payload_base,
             generate_verification_payload_base=execution_plan.generate_verification_payload_base,
@@ -1231,14 +1254,22 @@ def run_workspace_verification_dag(
             bool,
             str,
         ]:
-            rows = task_store.list_rows(verification_id)
-            fail_flag, fail_reason = task_store.fail_state(verification_id)
-            task_status, summary, counts = _verification_summary_from_tasks(
+            snapshot = config.verification_service.verification_snapshot(
+                verification_id
+            )
+            if snapshot is None:
+                raise RuntimeError("verification disappeared while running")
+            rows = cast(list[VerificationTaskRow], snapshot["tasks"])
+            record = snapshot["record"]
+            status = str(record["status"])
+            fail_reason = str(record["fail_reason"])
+            fail_flag = status == Status.FAILED.value
+            _task_status, summary, counts = _verification_summary_from_tasks(
                 verification_id=verification_id,
                 artifact_verification_id=verification_id,
                 mode=verification_mode,
                 pass_limit=verification_pass_limit,
-                logical_runs=graph.logical_runs,
+                programs=graph.programs,
                 rows=rows,
                 test_names=test_names,
                 fail_flag=fail_flag,
@@ -1246,22 +1277,10 @@ def run_workspace_verification_dag(
             )
             if rows and int(counts["total"]) <= 0:
                 raise RuntimeError("verification task graph has rows but computed zero task counts")
-            if fail_flag and is_cancel_reason(fail_reason):
-                status, finished = Status.FAILED.value, True
-            else:
-                status, finished = effective_verification_status(
-                    task_status=task_status,
-                    counts=counts,
-                    sanity_checks=sanity_checks,
-                    sanity_status=sanity_status,
-                )
-            config.verification_service.update_verification_record_status(
-                verification_id,
-                status=status,
-                fail_reason=str(summary.get("error") or ""),
-                finished=finished,
-            )
-            return task_status, summary, counts, rows, fail_flag, fail_reason
+            summary["status"] = status
+            if fail_reason:
+                summary["error"] = fail_reason
+            return status, summary, counts, rows, fail_flag, fail_reason
 
         def _cancel_execution(reason: str) -> None:
             config.judgehost_task_service.request_verification_cancel(
@@ -1273,14 +1292,10 @@ def run_workspace_verification_dag(
         callbacks = VerificationRuntimeCallbacks(
             publish_task=lambda row: _publish_task(row, execution=execution),
             probe_task_case_cache=config.judgehost_task_service.probe_task_case_cache,
-            resolve_case_result=lambda judgehost_task_id, test_name: config.judgehost_task_service.poll_task_case_result(
-                judgehost_task_id,
-                test_name,
-            ),
             cancel_execution=_cancel_execution,
-            close_logical_runs=lambda logical_run_ids: config.judgehost_task_service.close_logical_runs(
+            close_programs=lambda program_ids: config.judgehost_task_service.close_programs(
                 verification_id,
-                logical_run_ids,
+                program_ids,
             ),
             reconcile_expired_leases=lambda: config.judgehost_task_service.reconcile_expired_verification_leases(
                 verification_id,
@@ -1297,44 +1312,26 @@ def run_workspace_verification_dag(
         try:
             coordinator.run()
         except Exception as exc:
-            _cancel_execution(str(exc) or "verification scheduler failed")
-            task_store.set_fail_flag(verification_id, reason=str(exc) or "verification scheduler failed")
-            task_store.cancel_unfinished_tasks(verification_id, reason=str(exc) or "verification scheduler failed")
-            _refresh_state()
+            failure_reason = str(exc) or "verification scheduler failed"
+            config.verification_service.fail_verification(
+                verification_id,
+                reason=failure_reason,
+            )
+            _cancel_execution(failure_reason)
             raise
         finally:
             unregister_verification_runtime_coordinator(verification_id)
         _status, summary, _counts, rows, fail_flag, fail_reason = _refresh_state()
-        record = config.verification_service.verification_record(verification_id) or {}
-        detail = config.verification_service.verification_detail(verification_id)
-        repeatability_row = next(
-            (
-                row
-                for row in rows
-                if str(row["task_kind"] or "") == TASK_GENERATE_INPUT
-                and "generator output differs between two runs"
-                in str(row["error_text"] or row["feedback_text"] or "")
-            ),
-            None,
-        )
-        if repeatability_row is not None:
-            detail = dict(detail)
-            detail.update(
-                {
-                    "error": "generator output differs between two runs",
-                    "failed_step": "validation",
-                    "failed_check": "generator-repeatability",
-                    "failed_test": str(repeatability_row["test_name"] or ""),
-                    "validation_status": "failed",
-                    "validated_count": 0,
-                }
-            )
-            config.verification_service.persist_verification_detail(verification_id, detail)
-        if _status == Status.OK.value and sanity_checks:
-            sanity_status = SANITY_RUNNING
-            updated_detail = dict(detail)
-            updated_detail["sanity_status"] = sanity_status
-            config.verification_service.persist_verification_detail(verification_id, updated_detail)
+        snapshot = config.verification_service.verification_snapshot(verification_id)
+        if snapshot is None:
+            raise RuntimeError("verification disappeared after scheduling")
+        record = snapshot["record"]
+        detail = snapshot["detail"]
+        if (
+            _status == Status.RUNNING.value
+            and str(detail.get("sanity_status") or "") == SANITY_RUNNING
+            and sanity_checks
+        ):
             accepted_source_file = source_file_by_path.get(execution_plan.accepted_source_path)
             sanity_result = run_verification_sanity_checks(
                 problem=problem,
@@ -1352,7 +1349,7 @@ def run_workspace_verification_dag(
                     artifact_verification_id=verification_id,
                     mode=verification_mode,
                     pass_limit=verification_pass_limit,
-                    logical_runs=graph.logical_runs,
+                    programs=graph.programs,
                     rows=rows,
                     test_names=test_names,
                     fail_flag=fail_flag,
@@ -1362,10 +1359,8 @@ def run_workspace_verification_dag(
                 ),
                 bypass_case_result_cache=execution.bypass_case_result_cache,
             )
-            detail = config.verification_service.verification_detail(verification_id)
             updated_detail = dict(detail)
-            sanity_status = sanity_result.status
-            updated_detail["sanity_status"] = sanity_status
+            updated_detail["sanity_status"] = sanity_result.status
             updated_detail["sanity_checked_count"] = int(sanity_result.checked_count)
             updated_detail["validation_status"] = sanity_result.status
             updated_detail["validated_count"] = int(sanity_result.checked_count)
@@ -1400,23 +1395,21 @@ def run_workspace_verification_dag(
                 updated_detail["failed_check"] = sanity_result.check_name
                 updated_detail["failed_test"] = sanity_result.failed_test
                 updated_detail["error"] = sanity_result.error
-            config.verification_service.persist_verification_detail(verification_id, updated_detail)
-            config.verification_service.update_verification_record_status(
-                verification_id,
-                status=Status.OK.value,
-                fail_reason="",
-                finished=True,
+            finished = config.verification_service.finish_sanity(
+                SanityFinish.build(
+                    verification_id,
+                    detail=updated_detail,
+                )
             )
-            record["status"] = Status.OK.value
-            record["fail_reason"] = ""
-            summary["status"] = Status.OK.value
-            summary["error"] = ""
-        elif sanity_checks and sanity_status == SANITY_PENDING:
-            detail = config.verification_service.verification_detail(verification_id)
-            updated_detail = dict(detail)
-            updated_detail["sanity_status"] = SANITY_SKIPPED
-            config.verification_service.persist_verification_detail(verification_id, updated_detail)
-            sanity_status = SANITY_SKIPPED
+            _status, summary, _counts, rows, fail_flag, fail_reason = _refresh_state()
+            snapshot = config.verification_service.verification_snapshot(
+                verification_id
+            )
+            if snapshot is None:
+                raise RuntimeError("verification disappeared after sanity checks")
+            record = snapshot["record"]
+            if finished.outcome == "transitioned":
+                summary["error"] = ""
         audit(
             actor_user_id,
             problem_id,
@@ -1433,6 +1426,22 @@ def run_workspace_verification_dag(
         )
         # Schedule only after final detail, status, and audit writes are durable.
         config.judgehost_task_service.schedule_verification_cleanup(verification_id)
+    except Exception as exc:
+        failure_reason = str(exc) or "verification execution failed"
+        transition = config.verification_service.fail_verification(
+            verification_id,
+            reason=failure_reason,
+        )
+        if transition.outcome != "missing":
+            if transition.outcome == "transitioned" or transition.status == Status.FAILED.value:
+                config.judgehost_task_service.request_verification_cancel(
+                    verification_id,
+                    failure_reason,
+                )
+            config.judgehost_task_service.schedule_verification_cleanup(
+                verification_id
+            )
+        raise
     finally:
         if snapshot_root.exists() and not retain_snapshot_override:
             import shutil

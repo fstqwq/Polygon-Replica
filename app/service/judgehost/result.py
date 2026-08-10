@@ -29,12 +29,19 @@ from app.service.judgehost.runtime import (
     domjudge_verdict_from_runresult,
 )
 from app.service.judgehost.case_result import (
-    CaseTerminalReport,
     build_case_result,
     decode_case_test_row,
 )
+from app.service.judgehost.completion import CaseCompletionReport
 from app.service.judgehost.core import JudgehostCore
-from app.service.judgehost.batch_scheduler_models import CaseReportTelemetry, CaseResult, HostLeaseRelease
+from app.service.judgehost.batch_scheduler_models import (
+    CaseCallbackReceipt,
+    CaseClaimBusy,
+    CaseReportTelemetry,
+    CaseResult,
+    HostLeaseRelease,
+)
+from app.service.platform.error_text import aux_display_text_limit_bytes
 from app.service.judgehost.state import JudgehostState
 from app.service.judgehost.task_queue import TaskQueue
 from app.service.judgehost.toolchain_versions import ToolchainVersionCollector
@@ -51,7 +58,6 @@ from app.service.verification.execution_result import (
     ExecutionUsage,
     PassArtifacts,
     execution_result_json,
-    execution_result_with_outcome,
 )
 
 logger = logging.getLogger(__name__)
@@ -133,6 +139,16 @@ class ResultProcessor:
         task = self._s.task_registry.get(task_id)
         if task is not None:
             self._s.touch_verification_runtime(domjudge_text(task.get("verification_id")))
+
+    def _release_case_callback_receipt(
+        self,
+        receipt: CaseCallbackReceipt,
+    ) -> None:
+        self._s.batch_scheduler.release_case_callback_receipt(receipt.receipt_id)
+        # A cleanup deadline measures continuous quiet time. Releasing the
+        # receipt is the callback's linearization end, so a callback that ran
+        # near the old deadline receives a fresh full quiet interval.
+        self._s.touch_verification_runtime(receipt.verification_id)
 
     def finalize_host_lease_release(self, release: HostLeaseRelease) -> None:
         for task_id in release.terminal_task_ids:
@@ -348,64 +364,196 @@ class ResultProcessor:
         compiler: str = "",
         runner: str = "",
     ) -> dict[str, object]:
+        receipt = self._s.batch_scheduler.acquire_case_callback_receipt(
+            int(judgetask_id)
+        )
+        if receipt is None:
+            return {}
         safe_host = self._core.normalize_hostname(hostname)
         try:
-            recorded = self._toolchain_versions.record_report(
-                int(judgetask_id),
-                hostname=safe_host,
-                compiler=compiler,
-                runner=runner,
+            if receipt.status not in {
+                "leased",
+                "reporting",
+                "reported",
+                "cancelled",
+            }:
+                raise RuntimeError(
+                    "judgehost case is not in a version callback state"
+                )
+            expected_hostname = (
+                receipt.lease_owner or receipt.last_callback_hostname
             )
-        except Exception:
-            logger.exception(
-                "failed to record judgehost toolchain versions judgetask_id=%s hostname=%s",
-                judgetask_id,
-                hostname,
-            )
-            recorded = False
-        if recorded:
-            case_row = self._s.batch_scheduler.fetch_case(int(judgetask_id))
-            if case_row is not None:
+            if not expected_hostname or expected_hostname != safe_host:
+                return {}
+            try:
+                recorded = self._toolchain_versions.record_report(
+                    int(judgetask_id),
+                    hostname=safe_host,
+                    compiler=compiler,
+                    runner=runner,
+                )
+            except Exception:
+                logger.exception(
+                    "failed to record judgehost toolchain versions "
+                    "judgetask_id=%s hostname=%s",
+                    judgetask_id,
+                    hostname,
+                )
+                recorded = False
+            if recorded:
                 self._queue._record_host_event_conn(
                     hostname=safe_host,
                     action="versions",
-                    task_id=domjudge_text(case_row["task_id"]),
-                    run_id=domjudge_text(case_row["run_id"]),
+                    task_id=receipt.task_id,
+                    run_id=receipt.run_id,
                 )
-        return {}
+            return {}
+        finally:
+            self._release_case_callback_receipt(receipt)
 
-    def _domjudge_publish_reported_case(self, *, task_id: str, test_name: str) -> bool:
-        safe_task_id = domjudge_text(task_id)
-        safe_test_name = domjudge_text(test_name)
-        if (not safe_task_id) or (not safe_test_name):
-            return False
-        case_result = self._queue.poll_task_case_result(safe_task_id, safe_test_name)
-        if case_result is None:
-            return False
-        published = self._publish_verification_case_result(
-            task_id=safe_task_id,
-            test_name=safe_test_name,
-            case_result=case_result,
+    def _reported_case_completion(
+        self,
+        case_id: int,
+    ) -> CaseCompletionReport | None:
+        case = self._s.batch_scheduler.fetch_case(int(case_id))
+        if case is None:
+            return None
+        batch = self._s.batch_scheduler.fetch_batch(int(case["batch_id"]))
+        if batch is None:
+            return None
+        judgehost_task_id = domjudge_text(case["task_id"])
+        test_name = domjudge_text(case["test_name"])
+        if not judgehost_task_id or not test_name:
+            return None
+        report = self._queue.poll_task_case_result(judgehost_task_id, test_name)
+        if report is None:
+            return None
+        return CaseCompletionReport(
+            verification_task_id=domjudge_text(case["verification_task_id"]),
+            judgehost_task_id=judgehost_task_id,
+            test_name=test_name,
+            report=report,
+            verification_id=domjudge_text(batch["verification_id"]),
         )
-        if published:
-            self._s.batch_scheduler.mark_case_verification_published(
-                safe_task_id,
-                safe_test_name,
-            )
-        return published
+
+    def _domjudge_publish_reported_cases(
+        self,
+        case_ids: tuple[int, ...],
+    ) -> bool:
+        unique_case_ids = tuple(dict.fromkeys(int(case_id) for case_id in case_ids))
+        reports: list[CaseCompletionReport] = []
+        for case_id in unique_case_ids:
+            report = self._reported_case_completion(case_id)
+            if report is None:
+                return False
+            reports.append(report)
+        if not reports:
+            return True
+        if not self._s.case_completion_sink.reported_many(tuple(reports)):
+            return False
+        self._s.batch_scheduler.acknowledge_case_completions(
+            list(unique_case_ids)
+        )
+        return all(
+            (case := self._s.batch_scheduler.fetch_case(case_id)) is not None
+            and bool(case["completion_acknowledged"])
+            for case_id in unique_case_ids
+        )
 
     def _publish_verification_case_cancelled(
         self,
         *,
+        verification_task_id: str,
         task_id: str,
         test_name: str,
         reason: str = "",
     ) -> bool:
         return self._s.case_completion_sink.cancelled(
+            verification_task_id,
             task_id,
             test_name,
             reason,
         )
+
+    def _flush_pending_case_diagnostics(self, case_id: int) -> None:
+        case = self._s.batch_scheduler.fetch_case(int(case_id))
+        if case is None or not bool(case["completion_acknowledged"]):
+            return
+        verification_task_id = domjudge_text(case["verification_task_id"])
+        if not verification_task_id:
+            return
+        for diagnostic in self._s.batch_scheduler.pending_case_diagnostics(int(case_id)):
+            outcome = self._s.case_diagnostic_sink.append(
+                task_id=verification_task_id,
+                kind=diagnostic.kind,
+                hostname=diagnostic.hostname,
+                text=diagnostic.text,
+                received_at=diagnostic.received_at,
+            )
+            if outcome.outcome not in {"persisted", "duplicate"}:
+                raise RuntimeError(
+                    "verification task rejected a pending judgehost diagnostic"
+                )
+            self._s.batch_scheduler.acknowledge_case_diagnostic(
+                int(case_id),
+                diagnostic,
+            )
+
+    def _acknowledge_terminal_case(self, case_id: int, *, reason: str = "") -> bool:
+        case = self._s.batch_scheduler.fetch_case(int(case_id))
+        if case is None:
+            return True
+        status = domjudge_lower_text(case["status"])
+        if status not in {"reported", "cancelled"}:
+            return False
+        if not bool(case["completion_acknowledged"]):
+            if status == "reported":
+                accepted = self._domjudge_publish_reported_cases((int(case_id),))
+            else:
+                accepted = self._publish_verification_case_cancelled(
+                    verification_task_id=domjudge_text(case["verification_task_id"]),
+                    task_id=domjudge_text(case["task_id"]),
+                    test_name=domjudge_text(case["test_name"]),
+                    reason=reason,
+                )
+                if accepted:
+                    self._s.batch_scheduler.acknowledge_case_completion(int(case_id))
+            if not accepted:
+                raise RuntimeError("verification task completion was rejected")
+        self._flush_pending_case_diagnostics(int(case_id))
+        return True
+
+    def _complete_terminal_callback_case(
+        self,
+        case_id: int,
+        batch_id: int,
+        *,
+        reason: str = "",
+    ) -> bool:
+        """Acknowledge one retry without splitting a program-failure commit."""
+
+        case = self._s.batch_scheduler.fetch_case(int(case_id))
+        if case is None:
+            return True
+        if domjudge_lower_text(case["status"]) not in {"reported", "cancelled"}:
+            return False
+        if bool(case["completion_acknowledged"]):
+            self._flush_pending_case_diagnostics(int(case_id))
+            return True
+        batch = self._s.batch_scheduler.fetch_batch(int(batch_id))
+        if batch is not None and domjudge_text(batch["failure_runresult"]):
+            self._domjudge_finalize_batch_if_ready(
+                int(batch_id),
+                require_completion_ack=True,
+            )
+            return True
+        if not self._acknowledge_terminal_case(int(case_id), reason=reason):
+            return False
+        self._domjudge_finalize_batch_if_ready(
+            int(batch_id),
+            require_completion_ack=True,
+        )
+        return True
 
     def _case_report_telemetry(
         self,
@@ -450,42 +598,19 @@ class ResultProcessor:
         if not accepted:
             return False
         task_id = domjudge_text(row["task_id"])
-        test_name = domjudge_text(row["test_name"])
         batch_id = int(row["batch_id"])
-        try:
-            if self._publish_verification_case_cancelled(task_id=task_id, test_name=test_name):
-                self._s.batch_scheduler.mark_case_verification_published(task_id, test_name)
-            batch_row = self._s.batch_scheduler.batch_finalize_row(batch_id)
-            if batch_row is not None:
-                self._domjudge_finalize_task_if_ready(task_id, batch_row=dict(batch_row))
-        except Exception:
-            logger.exception(
-                "failed to publish cancelled DOMjudge case task_id=%s case_id=%s",
-                task_id,
-                case_id,
-            )
-        self._domjudge_finalize_batch_if_ready(batch_id)
-        return True
-
-    def _publish_verification_case_result(
-        self,
-        *,
-        task_id: str,
-        test_name: str,
-        case_result: CaseTerminalReport,
-        verification_id: str = "",
-    ) -> bool:
-        safe_verification_id = domjudge_text(verification_id)
-        if not safe_verification_id:
-            judgehost_task_row = self._s.task_registry.get(task_id)
-            if judgehost_task_row is not None:
-                safe_verification_id = domjudge_text(judgehost_task_row["verification_id"])
-        return self._s.case_completion_sink.reported(
-            task_id,
-            test_name,
-            case_result,
-            safe_verification_id,
+        self._acknowledge_terminal_case(
+            int(case_id),
+            reason="judgehost task cancelled",
         )
+        batch_row = self._s.batch_scheduler.batch_finalize_row(batch_id)
+        if batch_row is not None:
+            self._domjudge_finalize_task_if_ready(task_id, batch_row=dict(batch_row))
+        self._domjudge_finalize_batch_if_ready(
+            batch_id,
+            require_completion_ack=True,
+        )
+        return True
 
     def _domjudge_task_result_payload(
         self,
@@ -537,7 +662,14 @@ class ResultProcessor:
             if (
                 compile_success != 0
                 and (not internal_failure_error)
-                and runresult_token in {"checker-fail", "compare-error", "internal-error"}
+                and (
+                    verdict == "FL"
+                    or runresult_token in {
+                        "checker-fail",
+                        "compare-error",
+                        "internal-error",
+                    }
+                )
             ):
                 detail = domjudge_text(feedback_text)
                 if not detail:
@@ -630,7 +762,7 @@ class ResultProcessor:
         cases = [row for row, _result in case_results]
         if any(
             domjudge_lower_text(case["status"]) == "reported"
-            and not bool(case["verification_published"])
+            and not bool(case["completion_acknowledged"])
             for case in cases
         ):
             return False
@@ -652,18 +784,14 @@ class ResultProcessor:
         for case_row in cases:
             if domjudge_lower_text(case_row["status"]) != "cancelled":
                 continue
-            if bool(case_row["verification_published"]):
+            if bool(case_row["completion_acknowledged"]):
                 continue
-            published = self._publish_verification_case_cancelled(
-                task_id=safe_task_id,
-                test_name=domjudge_text(case_row["test_name"]),
+            published = self._acknowledge_terminal_case(
+                int(case_row["id"]),
                 reason=domjudge_text(payload.get("error"), default="judgehost task cancelled"),
             )
-            if published:
-                self._s.batch_scheduler.mark_case_verification_published(
-                    safe_task_id,
-                    domjudge_text(case_row["test_name"]),
-                )
+            if not published:
+                return False
         self._queue.finalize_domjudge_task(task_id=safe_task_id, payload=payload)
         return True
 
@@ -673,22 +801,45 @@ class ResultProcessor:
         batch_id: int,
         batch_row: dict[str, object],
         cases: list[dict[str, object]],
+        require_complete_batch: bool,
         force_failed: bool,
         error_text: str,
     ) -> bool:
-        for row in cases:
-            if domjudge_lower_text(row["status"]) != "reported":
-                continue
-            if bool(row["verification_published"]):
-                continue
+        if require_complete_batch and any(
+            domjudge_lower_text(row["status"]) not in {"reported", "cancelled"}
+            for row in cases
+        ):
+            return False
+        unacknowledged_reported = tuple(
+            int(row["id"])
+            for row in cases
+            if domjudge_lower_text(row["status"]) == "reported"
+            and not bool(row["completion_acknowledged"])
+        )
+        if unacknowledged_reported:
             try:
-                self._domjudge_publish_reported_case(
-                    task_id=domjudge_text(row["task_id"]),
-                    test_name=domjudge_text(row["test_name"]),
+                published = self._domjudge_publish_reported_cases(
+                    unacknowledged_reported
                 )
             except Exception:
                 logger.exception(
-                    "failed to publish terminal DOMjudge case batch_id=%s case_id=%s",
+                    "failed to publish terminal DOMjudge cases batch_id=%s case_ids=%s",
+                    int(batch_id),
+                    unacknowledged_reported,
+                )
+                return False
+            if not published:
+                return False
+
+        for row in cases:
+            if domjudge_lower_text(row["status"]) not in {"reported", "cancelled"}:
+                continue
+            try:
+                self._acknowledge_terminal_case(int(row["id"]))
+            except Exception:
+                logger.exception(
+                    "failed to acknowledge terminal DOMjudge case "
+                    "batch_id=%s case_id=%s",
                     int(batch_id),
                     int(row["id"]),
                 )
@@ -734,40 +885,9 @@ class ResultProcessor:
             error_text=feedback,
             updated_at=now_iso(),
         )
-        verdict = domjudge_verdict_from_runresult(runresult)
-        results: dict[int, CaseResult] = {}
-        for row in self._s.batch_scheduler.cases_for_batch(int(batch_id)):
-            if domjudge_lower_text(row["status"]) in {"reported", "cancelled"}:
-                continue
-            results[int(row["id"])] = build_case_result(
-                test_name=domjudge_text(row["test_name"], default=f"{int(row['ordinal']):03}.in"),
-                runresult=runresult,
-                verdict=verdict,
-                runtime_sec=0.0,
-                cpu_sec=0.0,
-                wall_sec=0.0,
-                memory_kb=0,
-                score_text="",
-                output_run_ref="",
-                output_error_ref="",
-                output_system_ref="",
-                output_diff_ref="",
-                metadata_ref="",
-                compare_metadata_ref="",
-                team_message_ref="",
-                feedback_text=feedback,
-                feedback_files=[],
-                answer_correct=False,
-            )
-        if results:
-            self._s.batch_scheduler.request_batch_case_results(
-                int(batch_id),
-                results=results,
-                updated_at=now_iso(),
-            )
 
     def _schedule_finalization_retry(self, batch_id: int, *, delay_sec: float = 0.25) -> None:
-        self._s.batch_scheduler.abort_batch_finalization(
+        self._s.batch_scheduler.schedule_batch_finalization_retry(
             int(batch_id),
             now_text=now_iso(),
             delay_sec=delay_sec,
@@ -786,6 +906,7 @@ class ResultProcessor:
         *,
         force_failed: bool = False,
         error_text: str = "",
+        require_completion_ack: bool = False,
     ) -> None:
         current = self._s.batch_scheduler.fetch_batch(int(batch_id))
         if current is None:
@@ -813,16 +934,17 @@ class ResultProcessor:
             batch_id=int(batch_id),
             batch_row=dict(current),
             cases=current_cases,
+            require_complete_batch=bool(
+                domjudge_text(current["failure_runresult"])
+            ),
             force_failed=force_failed,
             error_text=error_text,
         ):
-            retry_claim = self._s.batch_scheduler.claim_batch_finalization(
-                int(batch_id),
-                now_text=now_iso(),
-            )
-            if retry_claim is not None:
-                self._schedule_finalization_retry(int(batch_id))
+            self._schedule_finalization_retry(int(batch_id))
+            if require_completion_ack:
+                raise RuntimeError("verification task completion is not durably acknowledged")
             return
+        self._clear_finalization_retry(int(batch_id))
         claim = self._s.batch_scheduler.claim_batch_finalization(
             int(batch_id),
             now_text=now_iso(),
@@ -901,18 +1023,28 @@ class ResultProcessor:
             raise
 
     def domjudge_update_judging(self, hostname: str, judgetask_id: int, payload: dict[str, object]) -> None:
-        case_row = self._s.batch_scheduler.fetch_case(int(judgetask_id))
-        if case_row is None:
+        receipt = self._s.batch_scheduler.acquire_case_callback_receipt(int(judgetask_id))
+        if receipt is None:
             logger.info("ignoring update for unknown judging run id: %s", int(judgetask_id))
             return
-        self._touch_task_verification(domjudge_text(case_row["task_id"]))
-        self._process_domjudge_judging_update(hostname, judgetask_id, payload)
+        try:
+            self._touch_task_verification(receipt.task_id)
+            self._process_domjudge_judging_update(
+                hostname,
+                judgetask_id,
+                payload,
+                receipt_generation=receipt.claim_generation,
+            )
+        finally:
+            self._release_case_callback_receipt(receipt)
 
     def _process_domjudge_judging_update(
         self,
         hostname: str,
         judgetask_id: int,
         payload: dict[str, object],
+        *,
+        receipt_generation: int,
     ) -> None:
         safe_host = self._core.normalize_hostname(hostname)
         case_id = int(judgetask_id)
@@ -924,18 +1056,68 @@ class ResultProcessor:
             logger.info("ignoring update for unknown judging run id: %s", case_id)
             return
         batch_status = domjudge_lower_text(case_row["batch_status"])
-        if batch_status == "finalizing":
-            self._domjudge_finalize_batch_if_ready(int(case_row["batch_id"]))
+        case_status = domjudge_lower_text(case_row["case_status"])
+        lease_owner = domjudge_text(case_row["case_lease_owner"])
+        expected_hostname = lease_owner or domjudge_text(
+            case_row["last_callback_hostname"]
+        )
+        if not expected_hostname or expected_hostname != safe_host:
+            raise RuntimeError("judgehost does not own judging run")
+        batch_id = int(case_row["batch_id"])
+        compile_success = None
+        if "compile_success" in payload:
+            compile_success = (
+                1
+                if domjudge_bool(
+                    payload.get("compile_success"),
+                    default=False,
+                )
+                else 0
+            )
+
+        def _payload_blob_as_b64(value: object) -> str:
+            raw = self._toolkit.payload_blob_bytes(value)
+            if raw:
+                return base64.b64encode(
+                    truncate_stored_log_bytes(raw, self._s.constants)
+                ).decode("ascii")
+            return domjudge_text(value)
+
+        compile_output = ""
+        compile_meta = ""
+        compile_updated_at = ""
+        compile_success_recorded: bool | None = None
+        if compile_success == 1:
+            compile_output = _payload_blob_as_b64(payload.get("output_compile"))
+            compile_meta = _payload_blob_as_b64(payload.get("compile_metadata"))
+            compile_updated_at = now_iso()
+            compile_success_recorded = (
+                self._s.batch_scheduler.record_compile_success(
+                    case_id,
+                    hostname=safe_host,
+                    receipt_generation=receipt_generation,
+                    compile_output_b64=compile_output,
+                    compile_metadata_b64=compile_meta,
+                    updated_at=compile_updated_at,
+                )
+            )
+        if batch_status in {"finalize-pending", "finalizing"}:
+            self._domjudge_finalize_batch_if_ready(
+                batch_id,
+                require_completion_ack=True,
+            )
             return
         if batch_status != "open":
             logger.info("ignoring update for terminal DOMjudge batch case id: %s", case_id)
             return
-        if domjudge_lower_text(case_row["case_status"]) != "leased":
-            logger.info("ignoring update for non-leased DOMjudge case id: %s", case_id)
+        if case_status in {"reported", "cancelled"}:
+            self._complete_terminal_callback_case(
+                case_id,
+                batch_id,
+            )
             return
-        if domjudge_text(case_row["case_lease_owner"]) != safe_host:
-            logger.info("ignoring update from non-owner DOMjudge host for case id: %s", case_id)
-            return
+        if case_status not in {"leased", "reporting"}:
+            raise RuntimeError("judgehost case does not accept this update")
         safe_task_id = domjudge_text(case_row["task_id"])
         if not self._domjudge_task_accepts_case_updates(safe_task_id):
             logger.info("ignoring update for cancelled DOMjudge task case id: %s", case_id)
@@ -946,25 +1128,15 @@ class ResultProcessor:
             task_id=safe_task_id,
             run_id=domjudge_text(case_row["run_id"]),
         )
-        batch_id = int(case_row["batch_id"])
-        compile_success = None
-        if "compile_success" in payload:
-            compile_success = 1 if domjudge_bool(payload.get("compile_success"), default=False) else 0
-
-        def _payload_blob_as_b64(value: object) -> str:
-            raw = self._toolkit.payload_blob_bytes(value)
-            if raw:
-                return base64.b64encode(truncate_stored_log_bytes(raw, self._s.constants)).decode("ascii")
-            return domjudge_text(value)
-
-        compile_output = _payload_blob_as_b64(payload.get("output_compile"))
-        compile_meta = _payload_blob_as_b64(payload.get("compile_metadata"))
         if compile_success is not None:
-            updated_at = now_iso()
-            failure_text = ""
-            compile_log = ""
-            compile_diagnostics: tuple[dict[str, object], ...] = ()
+            updated_at = compile_updated_at or now_iso()
             if compile_success == 0:
+                compile_output = _payload_blob_as_b64(
+                    payload.get("output_compile")
+                )
+                compile_meta = _payload_blob_as_b64(
+                    payload.get("compile_metadata")
+                )
                 compile_blob = self._toolkit.b64_decode(compile_output)
                 compile_log = compile_blob.decode("utf-8", errors="replace").strip()
                 failure_text = (
@@ -983,51 +1155,106 @@ class ResultProcessor:
                         "can_link": False,
                     },
                 )
-            updated = self._s.batch_scheduler.record_compile_result(
-                batch_id,
-                compile_success=compile_success,
-                compile_output_b64=compile_output,
-                compile_metadata_b64=compile_meta,
-                failure_text=failure_text,
-                compile_log=compile_log,
-                compile_diagnostics=compile_diagnostics,
-                updated_at=updated_at,
-            )
-            if not updated:
-                logger.info("ignoring compile update for terminal DOMjudge batch case id: %s", case_id)
+                claim = self._s.batch_scheduler.claim_compile_failure(
+                    case_id,
+                    hostname=safe_host,
+                    receipt_generation=receipt_generation,
+                    compile_output_b64=compile_output,
+                    compile_metadata_b64=compile_meta,
+                    failure_text=failure_text,
+                    compile_log=compile_log,
+                    compile_diagnostics=compile_diagnostics,
+                    updated_at=updated_at,
+                )
+                if claim.outcome == "rejected":
+                    raise RuntimeError(
+                        "judgehost case lease changed before compile failure claim"
+                    )
+                if claim.outcome in {"late", "idempotent"}:
+                    self._complete_terminal_callback_case(
+                        case_id,
+                        claim.batch_id,
+                    )
+                    return
+                if claim.outcome == "cancelled":
+                    self._acknowledge_terminal_case(
+                        case_id,
+                        reason="judgehost task cancelled",
+                    )
+                    self._domjudge_finalize_batch_if_ready(
+                        claim.batch_id,
+                        require_completion_ack=True,
+                    )
+                    return
+                self._domjudge_finalize_batch_if_ready(
+                    claim.batch_id,
+                    require_completion_ack=True,
+                )
                 return
-            if compile_success == 0:
-                self._domjudge_finalize_batch_if_ready(batch_id)
+            if not compile_success_recorded:
+                if self._complete_terminal_callback_case(case_id, batch_id):
+                    return
+                raise RuntimeError(
+                    "judgehost batch closed before compile success update"
+                )
 
     def domjudge_add_judging_run(self, hostname: str, judgetask_id: int, payload: dict[str, object]) -> int:
-        reported_monotonic = time.monotonic()
-        reported_at = now_iso()
-        safe_host = self._core.normalize_hostname(hostname)
-        case_row = self._s.batch_scheduler.fetch_case(int(judgetask_id))
-        if case_row is None:
+        receipt = self._s.batch_scheduler.acquire_case_callback_receipt(int(judgetask_id))
+        if receipt is None:
             logger.info(
                 "ignoring add_judging_run for unknown judging run id: %s",
                 int(judgetask_id),
             )
             return 1
+        try:
+            return self._domjudge_add_judging_run_with_receipt(
+                receipt,
+                hostname,
+                judgetask_id,
+                payload,
+            )
+        finally:
+            self._release_case_callback_receipt(receipt)
+
+    def _domjudge_add_judging_run_with_receipt(
+        self,
+        receipt: CaseCallbackReceipt,
+        hostname: str,
+        judgetask_id: int,
+        payload: dict[str, object],
+    ) -> int:
+        reported_monotonic = time.monotonic()
+        reported_at = now_iso()
+        safe_host = self._core.normalize_hostname(hostname)
+        case_row = self._s.batch_scheduler.fetch_case(int(judgetask_id))
+        if case_row is None:
+            raise RuntimeError("pinned judgehost case disappeared")
         case_status = domjudge_lower_text(case_row["status"])
-        if (
-            case_status in {"leased", "reporting"}
-            and domjudge_text(case_row["lease_owner"]) != safe_host
-        ):
+        expected_hostname = domjudge_text(
+            case_row["lease_owner"]
+        ) or domjudge_text(case_row["last_callback_hostname"])
+        if not expected_hostname or expected_hostname != safe_host:
             raise RuntimeError("judgehost does not own judging run")
-        if case_status != "leased":
+        if case_status in {"reported", "cancelled"}:
+            self._complete_terminal_callback_case(
+                int(judgetask_id),
+                int(case_row["batch_id"]),
+            )
             logger.info("ignoring stale add_judging_run result for case id: %s", int(judgetask_id))
             return 1
+        if case_status == "reporting":
+            raise CaseClaimBusy("judgehost case result is already being processed")
+        if case_status != "leased":
+            raise RuntimeError("judgehost case is not leased for this result")
         self._touch_task_verification(domjudge_text(case_row["task_id"]))
         claim = self._s.batch_scheduler.claim_case_reporting(
             int(judgetask_id),
             hostname=safe_host,
+            receipt_generation=receipt.claim_generation,
             now_text=reported_at,
         )
         if claim is None:
-            logger.info("ignoring stale add_judging_run result for case id: %s", int(judgetask_id))
-            return 1
+            raise RuntimeError("judgehost case lease changed before result claim")
         self._queue._record_host_event_conn(
             hostname=safe_host,
             action="report",
@@ -1055,12 +1282,13 @@ class ResultProcessor:
             reported_monotonic=reported_monotonic,
         )
         if claim.cancel_requested:
-            self._complete_cancelled_case_receipt(
+            if not self._complete_cancelled_case_receipt(
                 case_id=claim.case_id,
                 generation=claim.generation,
                 row=dict(case_row),
                 report=report_telemetry,
-            )
+            ):
+                raise RuntimeError("judgehost cancellation receipt claim was lost")
             return 1
 
         def _abort_unfinished_claim() -> None:
@@ -1100,20 +1328,12 @@ class ResultProcessor:
         case_id = int(judgetask_id)
         row = self._s.batch_scheduler.case_execution_row(case_id)
         if row is None:
-            # Same stale-callback case as domjudge_update_judging: acknowledge
-            # gracefully to avoid hard-failing judgedaemon retries.
-            logger.info("ignoring add_judging_run for unknown judging run id: %s", case_id)
-            return 1
+            raise RuntimeError("pinned judgehost case disappeared")
         batch_status = domjudge_lower_text(row["batch_status"])
-        if batch_status == "finalizing":
-            self._domjudge_finalize_batch_if_ready(int(row["batch_id"]))
-            return 1
         if batch_status != "open":
-            logger.info("ignoring add_judging_run for terminal DOMjudge batch id: %s", case_id)
-            return 1
+            raise RuntimeError("judgehost batch closed during result processing")
         if domjudge_lower_text(row["case_status"]) != "reporting":
-            logger.info("ignoring add_judging_run for non-reporting DOMjudge case id: %s", case_id)
-            return 1
+            raise RuntimeError("judgehost case result claim changed")
         if domjudge_text(row["case_lease_owner"]) != safe_host:
             raise RuntimeError("judgehost does not own judging run")
         batch_id = int(row["batch_id"])
@@ -1392,13 +1612,17 @@ class ResultProcessor:
         # Always persist result artifacts as cache refs so product and judgehost
         # Artifact readers only depend on immutable blob references.
 
-        if not feedback_text:
-            debug_context = self._s.batch_scheduler.case_debug_context(case_id)
-            if debug_context is not None:
-                debug_text = domjudge_text(debug_context["case_debug_text"])
-                if not debug_text:
-                    debug_text = domjudge_text(debug_context["batch_debug_text"])
-                feedback_text = domjudge_feedback_text_from_text(debug_text)
+        debug_context = self._s.batch_scheduler.case_debug_context(case_id)
+        if debug_context is not None:
+            debug_text = domjudge_text(debug_context["case_debug_text"])
+            if not debug_text:
+                debug_text = domjudge_text(debug_context["batch_debug_text"])
+            debug_feedback = domjudge_feedback_text_from_text(debug_text)
+            if debug_feedback:
+                if not feedback_text:
+                    feedback_text = debug_feedback
+                elif debug_feedback not in feedback_text:
+                    feedback_text = f"{feedback_text}\n{debug_feedback}"
         def _bundled_ref(number: int, name: str) -> str:
             if (
                 pass_bundle is not None
@@ -1567,25 +1791,26 @@ class ResultProcessor:
             report_telemetry=report_telemetry,
         )
         if outcome == "cancelled":
-            if self._publish_verification_case_cancelled(
-                task_id=safe_task_id,
-                test_name=domjudge_text(row["test_name"]),
-            ):
-                self._s.batch_scheduler.mark_case_verification_published(
-                    safe_task_id,
-                    domjudge_text(row["test_name"]),
-                )
+            self._acknowledge_terminal_case(
+                case_id,
+                reason="judgehost task cancelled",
+            )
             batch_row = self._s.batch_scheduler.batch_finalize_row(batch_id)
             if batch_row is not None:
                 self._domjudge_finalize_task_if_ready(
                     safe_task_id,
                     batch_row=dict(batch_row),
                 )
-            self._domjudge_finalize_batch_if_ready(batch_id)
+            self._domjudge_finalize_batch_if_ready(
+                batch_id,
+                require_completion_ack=True,
+            )
             return 1
         if outcome != "reported":
-            logger.info("ignoring stale add_judging_run result for case id: %s", case_id)
-            return 1
+            if self._complete_terminal_callback_case(case_id, batch_id):
+                logger.info("ignoring stale add_judging_run result for case id: %s", case_id)
+                return 1
+            raise RuntimeError("judgehost case result lost its completion claim")
         logger.debug(
             "domjudge add_judging_run host=%s batch_id=%s case_id=%s runresult=%s",
             safe_host,
@@ -1593,17 +1818,22 @@ class ResultProcessor:
             case_id,
             runresult,
         )
-        try:
-            self._domjudge_publish_reported_case(
-                task_id=safe_task_id,
-                test_name=domjudge_text(row["test_name"]),
+        current_batch = self._s.batch_scheduler.fetch_batch(batch_id)
+        if (
+            current_batch is not None
+            and domjudge_text(current_batch["failure_runresult"])
+        ):
+            # A compile/internal batch failure owns every still-open Case.
+            # Do not publish the Case that happened to leave `reporting`
+            # first: finalization waits for the whole batch and sends one
+            # reported_many transaction for all affected verification tasks.
+            self._domjudge_finalize_batch_if_ready(
+                batch_id,
+                require_completion_ack=True,
             )
-        except Exception:
-            logger.exception(
-                "failed to publish verification case result task_id=%s case_id=%s",
-                safe_task_id,
-                case_id,
-            )
+            return 1
+        if not self._acknowledge_terminal_case(case_id):
+            raise RuntimeError("verification task completion was not acknowledged")
         batch_row = self._s.batch_scheduler.batch_finalize_row(batch_id)
         if batch_row is not None:
             try:
@@ -1617,13 +1847,17 @@ class ResultProcessor:
                     safe_task_id,
                     batch_id,
                 )
-        self._domjudge_finalize_batch_if_ready(batch_id)
+        self._domjudge_finalize_batch_if_ready(
+            batch_id,
+            require_completion_ack=True,
+        )
         return 1
 
     def domjudge_internal_error(
         self,
         *,
         description: str,
+        hostname: str = "",
         judgetask_id: int | None = None,
         payload: dict[str, object] | None = None,
     ) -> int:
@@ -1631,45 +1865,88 @@ class ResultProcessor:
         if judgetask_id is None:
             return 0
         case_id = int(judgetask_id)
-        row = self._s.batch_scheduler.case_debug_context(case_id)
-        if row is None:
+        receipt = self._s.batch_scheduler.acquire_case_callback_receipt(case_id)
+        if receipt is None:
             return 0
-        case_identity = self._s.batch_scheduler.fetch_case(case_id)
-        if case_identity is not None:
-            lease_owner = domjudge_text(case_identity["lease_owner"])
-            if lease_owner:
-                self._queue._record_host_event_conn(
-                    hostname=lease_owner,
-                    action="internal-error",
-                    task_id=domjudge_text(case_identity["task_id"]),
-                    run_id=domjudge_text(case_identity["run_id"]),
+        try:
+            if receipt.status not in {
+                "leased",
+                "reporting",
+                "reported",
+                "cancelled",
+            }:
+                raise RuntimeError(
+                    "judgehost case is not in a diagnostic callback state"
                 )
-        batch_id = int(row["batch_id"])
-        case_debug = domjudge_text(row["case_debug_text"])
-        batch_debug = domjudge_text(row["batch_debug_text"])
-        debug_text = case_debug
-        if batch_debug and batch_debug not in debug_text:
-            debug_text = batch_debug if not debug_text else f"{debug_text}\n{batch_debug}"
-        if case_identity is not None:
-            self._touch_task_verification(domjudge_text(case_identity["task_id"]))
-        payload_text = self._domjudge_debug_payload_text({} if payload is None else payload)
-        if payload_text:
-            debug_text = payload_text if not debug_text else f"{debug_text}\n{payload_text}"
-            if len(debug_text) > 4000:
-                debug_text = debug_text[-4000:]
-        persisted_debug_text = debug_text or safe_desc
-        if persisted_debug_text:
-            self._s.batch_scheduler.append_debug_text(
-                case_id=case_id,
-                batch_id=batch_id,
-                debug_text=persisted_debug_text,
-                now_text=now_iso(),
+            safe_host = (
+                self._core.normalize_hostname(hostname)
+                if hostname
+                else receipt.lease_owner or receipt.last_callback_hostname
             )
-        if debug_text:
-            if debug_text.lower() not in safe_desc.lower():
-                safe_desc = f"{safe_desc}\n\n{debug_text}"
-        self._domjudge_finalize_batch_if_ready(batch_id, force_failed=True, error_text=safe_desc)
-        return case_id
+            expected_hostname = (
+                receipt.lease_owner or receipt.last_callback_hostname
+            )
+            if not expected_hostname or safe_host != expected_hostname:
+                raise RuntimeError("judgehost does not own judging run")
+            self._touch_task_verification(receipt.task_id)
+            payload_text = self._domjudge_debug_payload_text(
+                {} if payload is None else payload
+            )
+            diagnostic_text = safe_desc
+            if payload_text:
+                if safe_desc.lower() in payload_text.lower():
+                    diagnostic_text = payload_text
+                elif payload_text.lower() not in safe_desc.lower():
+                    diagnostic_text = f"{safe_desc}\n\n{payload_text}"
+            failure_text = diagnostic_text
+            claim = self._s.batch_scheduler.claim_internal_error(
+                case_id,
+                hostname=safe_host,
+                failure_text=failure_text,
+                diagnostic_text=diagnostic_text,
+                receipt_generation=receipt.claim_generation,
+                diagnostic_limit_bytes=aux_display_text_limit_bytes(
+                    self._s.constants
+                ),
+                updated_at=now_iso(),
+            )
+            if claim.outcome == "rejected":
+                raise RuntimeError(
+                    "judgehost case lease changed before internal-error claim"
+                )
+            if safe_host:
+                self._queue._record_host_event_conn(
+                    hostname=safe_host,
+                    action="internal-error",
+                    task_id=receipt.task_id,
+                    run_id=receipt.run_id,
+                )
+            if claim.outcome in {"late", "idempotent"}:
+                # A reporting Case owns its canonical decision. The pending
+                # diagnostic is flushed by that completion; a terminal Case
+                # can flush it immediately.
+                self._complete_terminal_callback_case(
+                    case_id,
+                    claim.batch_id,
+                )
+                return case_id
+            if claim.outcome == "cancelled":
+                self._acknowledge_terminal_case(
+                    case_id,
+                    reason="judgehost task cancelled",
+                )
+                self._domjudge_finalize_batch_if_ready(
+                    claim.batch_id,
+                    require_completion_ack=True,
+                )
+                return case_id
+            self._domjudge_finalize_batch_if_ready(
+                claim.batch_id,
+                require_completion_ack=True,
+            )
+            return case_id
+        finally:
+            self._release_case_callback_receipt(receipt)
 
     def _domjudge_debug_payload_text(self, payload: dict[str, object]) -> str:
         if not payload:
@@ -1833,66 +2110,63 @@ class ResultProcessor:
     def domjudge_add_debug_info(self, *, hostname: str, judgetask_id: int, payload: dict[str, object] | None = None) -> None:
         safe_host = self._core.normalize_hostname(hostname)
         case_id = int(judgetask_id)
-        case_row = self._s.batch_scheduler.fetch_case(case_id)
-        safe_task_id = ""
-        safe_run_id = ""
-        target_case_id: int | None = None
-        target_batch_id: int | None = None
-        if case_row is not None:
-            safe_task_id = domjudge_text(case_row["task_id"])
-            safe_run_id = domjudge_text(case_row["run_id"])
-            target_case_id = int(case_row["id"])
-            target_batch_id = int(case_row["batch_id"])
-        self._touch_task_verification(safe_task_id)
-        debug_payload = {} if payload is None else payload
-        if debug_payload:
-            logger.debug(
-                "domjudge debug info host=%s judgetask_id=%s payload_keys=%s",
-                safe_host,
-                case_id,
-                sorted(debug_payload.keys()),
+        receipt = self._s.batch_scheduler.acquire_case_callback_receipt(case_id)
+        if receipt is None:
+            return
+        try:
+            if receipt.status not in {
+                "leased",
+                "reporting",
+                "reported",
+                "cancelled",
+            }:
+                raise RuntimeError(
+                    "judgehost case is not in a diagnostic callback state"
+                )
+            expected_hostname = (
+                receipt.lease_owner or receipt.last_callback_hostname
             )
-        debug_text = self._domjudge_debug_payload_text(debug_payload)
-        if debug_text:
-            self._s.batch_scheduler.append_debug_text(
-                case_id=target_case_id,
-                batch_id=target_batch_id,
-                debug_text=debug_text,
-                now_text=now_iso(),
+            if not expected_hostname or expected_hostname != safe_host:
+                raise RuntimeError("judgehost does not own judging run")
+            self._touch_task_verification(receipt.task_id)
+            debug_payload = {} if payload is None else payload
+            if debug_payload:
+                logger.debug(
+                    "domjudge debug info host=%s judgetask_id=%s payload_keys=%s",
+                    safe_host,
+                    case_id,
+                    sorted(debug_payload.keys()),
+                )
+            debug_text = self._domjudge_debug_payload_text(debug_payload)
+            if debug_text:
+                disposition = self._s.batch_scheduler.record_case_diagnostic(
+                    case_id,
+                    kind="debug-info",
+                    hostname=safe_host,
+                    text=debug_text,
+                    receipt_generation=receipt.claim_generation,
+                    diagnostic_limit_bytes=aux_display_text_limit_bytes(
+                        self._s.constants
+                    ),
+                    now_text=now_iso(),
+                )
+                if disposition == "rejected":
+                    raise RuntimeError(
+                        "judgehost case lease changed before diagnostic claim"
+                    )
+                if disposition == "pending":
+                    # See internal-error above: the immutable receipt protects
+                    # cleanup, while current Case state decides whether this
+                    # callback must perform the post-completion flush itself.
+                    self._complete_terminal_callback_case(
+                        case_id,
+                        receipt.batch_id,
+                    )
+            self._queue._record_host_event_conn(
+                hostname=safe_host,
+                action="debug",
+                task_id=receipt.task_id,
+                run_id=receipt.run_id,
             )
-            if case_row is not None:
-                safe_test_name = domjudge_text(case_row["test_name"])
-                if safe_task_id and safe_test_name and str(case_row["status"] or "") == "reported":
-                    case_result = self._queue.poll_task_case_result(safe_task_id, safe_test_name)
-                    if case_result is not None:
-                        case_summary = dict(case_result["summary"])
-                        test_rows = [
-                            dict(row)
-                            for row in cast(list[dict[str, object]], case_summary["tests"])
-                        ]
-                        for test_row in test_rows:
-                            if domjudge_text(test_row["test"]) == safe_test_name:
-                                test_row["message"] = debug_text
-                        case_summary["error"] = debug_text
-                        case_summary["tests"] = test_rows
-                        case_result = {
-                            **case_result,
-                            "error": debug_text,
-                            "summary": case_summary,
-                            "execution_result": execution_result_with_outcome(
-                                case_result["execution_result"],
-                                error=debug_text,
-                                feedback=debug_text,
-                            ),
-                        }
-                        self._s.case_completion_sink.amend_debug(
-                            safe_task_id,
-                            safe_test_name,
-                            cast(CaseTerminalReport, case_result),
-                        )
-        self._queue._record_host_event_conn(
-            hostname=safe_host,
-            action="debug",
-            task_id=safe_task_id,
-            run_id=safe_run_id,
-        )
+        finally:
+            self._release_case_callback_receipt(receipt)

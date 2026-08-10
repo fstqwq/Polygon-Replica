@@ -4,6 +4,7 @@ from dataclasses import dataclass
 
 from app.service.platform.hashing import canonical_json
 from app.service.verification.execution_result import ExecutionResult
+from app.service.verification.lifecycle import ParentTransition
 
 
 @dataclass(frozen=True)
@@ -72,13 +73,7 @@ class CompletionCommit:
     committed_task_ids: frozenset[str]
     already_terminal_task_ids: frozenset[str]
     skipped_task_ids: frozenset[str]
-
-
-@dataclass(frozen=True)
-class TaskCompletionAmendment:
-    task_id: str
-    error_text: str
-    feedback_text: str
-    fail_reason_origin: str = ""
-    expected_fail_reason: str = ""
-    fail_reason: str = ""
+    cancelled_task_ids: frozenset[str] = frozenset()
+    parent_transition: ParentTransition = ""
+    sanity_claimed: bool = False
+    failure_reason: str = ""

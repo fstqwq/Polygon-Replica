@@ -122,6 +122,19 @@ class RuntimeConfig:
             self.verification_workers.clear()
             self.verification_inflight.clear()
 
+    def _cleanup_problem_judgehost_runtime(self, problem_slug: str) -> None:
+        task_rows = self.judgehost_task_service.state.task_registry.snapshots()
+        run_ids = sorted(
+            {
+                str(row["run_id"])
+                for row in task_rows
+                if str(row["problem_slug"]) == problem_slug
+                and str(row["run_id"])
+            }
+        )
+        self.judgehost_task_service.forget_domjudge_runs(run_ids)
+        self.judgehost_task_service.forget_problem_tasks(problem_slug)
+
     def reload_runtime_values(self, *, include_restart_required: bool = False) -> dict[str, object]:
         runtime_overrides = self.system_config_service.refresh(
             include_restart_required=include_restart_required,
@@ -192,6 +205,7 @@ class RuntimeConfig:
             self.settings,
             self.constants,
             case_completion_sink=self.verification_task_completion_service,
+            case_diagnostic_sink=self.verification_task_completion_service,
             runtime_blob_store=self.runtime_blob_store,
             runtime_cache_index=self.runtime_cache_index,
             verification_task_store=self.verification_task_store,
@@ -256,6 +270,10 @@ class RuntimeConfig:
         )
         self.judgehost_task_service.set_admission_gate(
             self.maintenance_service.admission_gate
+        )
+        self.workspace_service.configure_problem_deletion_runtime(
+            guard=self.maintenance_service.problem_deletion_guard,
+            cleanup_problem_runtime=self._cleanup_problem_judgehost_runtime,
         )
         self.password_form_csrf_secret = self._resolve_password_form_csrf_secret()
 config = RuntimeConfig()

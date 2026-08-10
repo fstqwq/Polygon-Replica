@@ -5,10 +5,13 @@ import threading
 from unittest.mock import patch
 
 from tests.db_helpers import (
+    activate_test_verification,
+    admit_test_verification,
     db_execute,
     db_fetch_all,
     db_fetch_one,
     read_contest_job_summary,
+    verification_programs_for_tasks,
     write_contest_job_summary,
 )
 
@@ -18,6 +21,7 @@ from app.impl.contest.problem_rows import (
     contest_overview_problem_rows,
 )
 from app.service.problem.resource_limits import resource_limit_display
+from app.service.verification.lifecycle import PlannedTask, verification_task_id
 from starlette.requests import Request
 
 from tests.common import E2ETestBase
@@ -531,19 +535,42 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
         verification_id = canonical_test_verification_id(
             f"contest-review:{uuid.uuid4().hex}"
         )
-        config.verification_service.begin_verification_record(
+        admission = admit_test_verification(
             verification_id=verification_id,
             problem_id=int(ctx["problem"]["id"]),
             workspace_id=int(ctx["workspace"]["id"]),
             signature="",
             source_commit=str(ctx["workspace"]["head_commit"] or ""),
             kind="all",
-            status="failed",
         )
-        db_execute(
-            "UPDATE verifications SET fail_reason=? WHERE id=?",
-            ["private checker detail", verification_id],
+        self.assertEqual(admission.outcome, "admitted")
+        task_id = verification_task_id(
+            verification_id,
+            "accepted",
+            "001.in",
         )
+        tasks = [
+            PlannedTask(
+                task_id=task_id,
+                predecessor_task_id=None,
+                task_kind="main-correct",
+                source_path="solutions/accepted.cpp",
+                program_id="accepted",
+                test_name="001.in",
+                expected_behavior="accepted",
+            )
+        ]
+        activation = activate_test_verification(
+            verification_id,
+            programs=verification_programs_for_tasks(tasks),
+            tasks=tasks,
+        )
+        self.assertEqual(activation.outcome, "activated")
+        failure = config.verification_service.fail_verification(
+            verification_id,
+            reason="private checker detail",
+        )
+        self.assertEqual(failure.outcome, "transitioned")
 
         overview = contest_overview_page(
             _app_request(f"/contests/{contest_slug}/overview"),

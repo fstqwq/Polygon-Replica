@@ -815,34 +815,6 @@ class WorkspaceDiskStore:
             return ""
         return str(row["status"] or "")
 
-    def problem_active_job_rows(self, problem_id: int, *, limit: int) -> list[dict[str, str]]:
-        rows = self.db.fetch_all(
-            """
-            SELECT kind,id,status FROM (
-                SELECT 'verification' AS kind,id,status,created_at FROM verifications WHERE problem_id=?
-                UNION ALL
-                SELECT 'preview' AS kind,id,status,created_at FROM previews WHERE problem_id=?
-                UNION ALL
-                SELECT 'export' AS kind,id,status,created_at FROM export_jobs WHERE problem_id=?
-                UNION ALL
-                SELECT 'package-build' AS kind,id,status,created_at FROM problem_package_builds WHERE problem_id=?
-            )
-            ORDER BY created_at DESC
-            LIMIT ?
-            """,
-            [int(problem_id), int(problem_id), int(problem_id), int(problem_id), max(1, int(limit))],
-        )
-        items: list[dict[str, str]] = []
-        for row in rows:
-            items.append(
-                {
-                    "kind": str(row["kind"] or ""),
-                    "id": str(row["id"] or ""),
-                    "status": str(row["status"] or ""),
-                }
-            )
-        return items
-
     def workspace_rows_for_problem(self, problem_id: int) -> list[dict[str, object]]:
         rows = self.db.fetch_all(
             """
@@ -890,27 +862,50 @@ class WorkspaceDiskStore:
                 [None, None, action, json.dumps(details), now_iso()],
             )
 
-    def delete_problem_metadata(self, problem_id: int) -> list[str]:
-        def _tx(conn: sqlite3.Connection) -> list[str]:
-            verification_rows = conn.execute(
-                "SELECT id FROM verifications WHERE problem_id=?",
-                [int(problem_id)],
-            ).fetchall()
-            collected_run_ids: list[str] = []
-            task_store = self.verification_task_store
-            for row in verification_rows:
-                if row is None:
-                    continue
-                verification_id = str(row[0] or "").strip()
-                if not verification_id:
-                    continue
-                for task_row in task_store.list_rows(verification_id):
-                    for token in (
-                        str(task_row.get("run_id") or "").strip(),
-                        str(task_row.get("logical_run_id") or "").strip(),
-                    ):
-                        if token and token not in collected_run_ids:
-                            collected_run_ids.append(token)
+    def delete_problem_metadata(self, problem_id: int) -> None:
+        def _tx(conn: sqlite3.Connection) -> None:
+            active = conn.execute(
+                """
+                SELECT kind,id,status
+                FROM (
+                    SELECT 'verification' AS kind,id,status
+                    FROM verifications
+                    WHERE problem_id=? AND status IN ('queued','running')
+                    UNION ALL
+                    SELECT 'preview' AS kind,id,status
+                    FROM previews
+                    WHERE problem_id=? AND status IN ('queued','running')
+                    UNION ALL
+                    SELECT 'export' AS kind,id,status
+                    FROM export_jobs
+                    WHERE problem_id=? AND status IN ('queued','running')
+                    UNION ALL
+                    SELECT 'package-build' AS kind,id,status
+                    FROM problem_package_builds
+                    WHERE problem_id=? AND status IN ('queued','running')
+                    UNION ALL
+                    SELECT 'contest' AS kind,job.id,job.status
+                    FROM contest_jobs job
+                    JOIN contest_build_items item ON item.job_id=job.id
+                    WHERE item.problem_id=?
+                      AND job.status IN ('queued','running')
+                )
+                ORDER BY kind,id
+                LIMIT 1
+                """,
+                [
+                    int(problem_id),
+                    int(problem_id),
+                    int(problem_id),
+                    int(problem_id),
+                    int(problem_id),
+                ],
+            ).fetchone()
+            if active is not None:
+                kind = str(active["kind"] or "job")
+                raise ValueError(
+                    f"cannot delete problem while {kind} jobs are active"
+                )
             conn.execute("DELETE FROM contest_build_items WHERE problem_id=?", [int(problem_id)])
             conn.execute("DELETE FROM contest_problems WHERE problem_id=?", [int(problem_id)])
             conn.execute("DELETE FROM export_jobs WHERE problem_id=?", [int(problem_id)])
@@ -943,6 +938,19 @@ class WorkspaceDiskStore:
                 [int(problem_id)],
             )
             conn.execute(
+                """
+                DELETE FROM verification_task_diagnostics
+                WHERE task_id IN (
+                    SELECT task.id
+                    FROM verification_tasks task
+                    JOIN verifications verification
+                      ON verification.id=task.verification_id
+                    WHERE verification.problem_id=?
+                )
+                """,
+                [int(problem_id)],
+            )
+            conn.execute(
                 "DELETE FROM verification_tasks WHERE verification_id IN (SELECT id FROM verifications WHERE problem_id=?)",
                 [int(problem_id)],
             )
@@ -951,6 +959,8 @@ class WorkspaceDiskStore:
             conn.execute("DELETE FROM repo_acl WHERE problem_id=?", [int(problem_id)])
             conn.execute("DELETE FROM audit_log WHERE problem_id=?", [int(problem_id)])
             conn.execute("DELETE FROM problems WHERE id=?", [int(problem_id)])
-            return collected_run_ids
 
-        return list(self.db.write_transaction(_tx))
+        self.verification_task_store.run_problem_deletion(
+            problem_id,
+            delete_metadata=_tx,
+        )

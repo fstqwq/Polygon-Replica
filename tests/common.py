@@ -103,6 +103,8 @@ from app.impl.runtime.config import config  # noqa: E402
 
 
 _COMPLETION_REF_ABORT_TRIGGER = "test_abort_verification_completion_ref_insert"
+_ACTIVATION_TASK_ABORT_TRIGGER = "test_abort_verification_activation_task_insert"
+_STARTUP_RECOVERY_ABORT_TRIGGER = "test_abort_verification_startup_recovery"
 
 
 def install_completion_ref_abort_fault() -> None:
@@ -124,6 +126,51 @@ def clear_completion_ref_abort_fault() -> None:
 
     config.db.execute(
         f"DROP TRIGGER IF EXISTS {_COMPLETION_REF_ABORT_TRIGGER}"
+    )
+
+
+def install_activation_task_abort_fault() -> None:
+    """Force activation to fail while inserting its immutable task graph."""
+
+    config.db.execute(
+        f"""
+        CREATE TRIGGER {_ACTIVATION_TASK_ABORT_TRIGGER}
+        BEFORE INSERT ON verification_tasks
+        BEGIN
+            SELECT RAISE(ABORT, 'forced activation task failure');
+        END
+        """
+    )
+
+
+def clear_activation_task_abort_fault() -> None:
+    """Remove the activation fault installed by the matching test helper."""
+
+    config.db.execute(
+        f"DROP TRIGGER IF EXISTS {_ACTIVATION_TASK_ABORT_TRIGGER}"
+    )
+
+
+def install_startup_recovery_abort_fault() -> None:
+    """Force startup recovery to roll back its aggregate transition."""
+
+    config.db.execute(
+        f"""
+        CREATE TRIGGER {_STARTUP_RECOVERY_ABORT_TRIGGER}
+        BEFORE UPDATE OF status ON verifications
+        WHEN OLD.status IN ('queued','running')
+        BEGIN
+            SELECT RAISE(ABORT, 'forced startup recovery failure');
+        END
+        """
+    )
+
+
+def clear_startup_recovery_abort_fault() -> None:
+    """Remove the startup recovery fault installed by the matching helper."""
+
+    config.db.execute(
+        f"DROP TRIGGER IF EXISTS {_STARTUP_RECOVERY_ABORT_TRIGGER}"
     )
 import app.impl.auth.password_envelope as password_envelope_module  # noqa: E402
 from app.impl.auth.password_envelope import PasswordEnvelopeStore  # noqa: E402

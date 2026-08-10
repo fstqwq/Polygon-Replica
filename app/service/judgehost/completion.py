@@ -1,29 +1,50 @@
 from __future__ import annotations
 
-from typing import Protocol
+from dataclasses import dataclass
+from typing import Literal, Protocol
 
 from app.service.judgehost.case_result import CaseTerminalReport
 
 
+@dataclass(frozen=True)
+class CaseCompletionReport:
+    verification_task_id: str
+    judgehost_task_id: str
+    test_name: str
+    report: CaseTerminalReport
+    verification_id: str = ""
+
+
 class CaseCompletionSink(Protocol):
-    def reported(
+    def reported_many(
         self,
-        judgehost_task_id: str,
-        test_name: str,
-        report: CaseTerminalReport,
-        verification_id: str = "",
+        reports: tuple[CaseCompletionReport, ...],
     ) -> bool: ...
 
     def cancelled(
         self,
+        verification_task_id: str,
         judgehost_task_id: str,
         test_name: str,
         reason: str,
     ) -> bool: ...
 
-    def amend_debug(
+
+DiagnosticAppendOutcome = Literal["persisted", "duplicate", "not-applicable"]
+
+
+@dataclass(frozen=True)
+class DiagnosticAppendResult:
+    outcome: DiagnosticAppendOutcome
+
+
+class CaseDiagnosticSink(Protocol):
+    def append(
         self,
-        judgehost_task_id: str,
-        test_name: str,
-        report: CaseTerminalReport,
-    ) -> bool: ...
+        *,
+        task_id: str,
+        kind: str,
+        hostname: str,
+        text: str,
+        received_at: str,
+    ) -> DiagnosticAppendResult: ...

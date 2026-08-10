@@ -46,7 +46,6 @@ import app.impl.run_export.run as run_export_run_module
 import app.impl.tests_spec.routes as tests_spec_module
 import app.impl.tests_spec.verification as tests_spec_verification_module
 import app.impl.workspace.context_job as workspace_job_module
-import app.impl.workspace.context_job_helper as workspace_job_helper_module
 import app.impl.workspace.context_ui as workspace_ui_module
 import app.impl.workspace.run_view_detail as workspace_run_view_detail_module
 import app.impl.workspace.run_view_list as workspace_run_view_list_module
@@ -88,12 +87,6 @@ _API_MODULES = (
     root_problems_module,
 )
 
-def _verification_record_run_ids(problem_id: int, workspace_id: int, verification_id: str) -> list[str]:
-    del problem_id
-    del workspace_id
-    return list(config.verification_service.verification_run_ids(verification_id))
-
-
 run_export_impl = SimpleNamespace(
     _run_detail_use_compact_layout=run_export_query_module._run_detail_use_compact_layout,
     artifact_file=run_export_artifact_module.artifact_file,
@@ -104,10 +97,8 @@ workspace_impl = SimpleNamespace(
     _verification_solution_match=verification_solution_match,
     _verification_sources_signature=verification_sources_signature,
     build_run_detail_context=workspace_run_view_detail_module.build_run_detail_context,
-    record_async_run_failure=workspace_job_helper_module.record_async_run_failure,
     run_list_rows=workspace_run_view_list_module.run_list_rows,
     verification_detail_context=workspace_run_view_detail_module.build_run_detail_context,
-    verification_run_ids=_verification_record_run_ids,
 )
 
 def _api_attr(name: str):

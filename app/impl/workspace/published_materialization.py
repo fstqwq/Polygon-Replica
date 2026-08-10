@@ -3,7 +3,6 @@ from __future__ import annotations
 from pathlib import Path
 
 from app.impl.runtime.config import config
-from app.impl.workspace.context_job_helper import allocate_run_id
 from app.impl.workspace.context_operation import (
     run_solution_options_context,
     workspace_rel_file_exists,
@@ -12,6 +11,7 @@ from app.service.verification.workspace_fingerprint import verification_sources_
 from app.impl.workspace.verification_dag import run_workspace_verification_dag
 from app.service.problem.solution_metadata import normalize_expected_behavior
 from app.service.problem_package.service import MaterializationRow, PublishedRevision
+from app.service.verification.lifecycle import VerificationAdmission
 from app.service.verification.types import Kind, Status
 
 
@@ -49,8 +49,13 @@ def build_full_verification_targets(
             str(item["path"]),
         )
     )
+    solution_index = 0
     for target in targets:
-        target["run_id"] = allocate_run_id()
+        if target["path"] == accepted_source:
+            target["program_id"] = "accepted"
+            continue
+        target["program_id"] = f"solution-{solution_index}"
+        solution_index += 1
     return targets, accepted_source
 
 
@@ -71,6 +76,19 @@ def ensure_published_materialization(
     ) -> str:
         del revision_number
         targets, _accepted_source = build_full_verification_targets(snapshot)
+        signature = verification_sources_signature(snapshot)
+        admission = config.verification_service.admit_verification(
+            VerificationAdmission(
+                verification_id=verification_id,
+                problem_id=problem_id,
+                workspace_id=None,
+                signature=signature,
+                source_commit=commit,
+                kind=Kind.ALL.value,
+            )
+        )
+        if admission.outcome != "admitted":
+            raise RuntimeError("materialization verification id already exists")
         run_workspace_verification_dag(
             problem_slug,
             actor_username,
@@ -81,7 +99,7 @@ def ensure_published_materialization(
             workspace_dirty=False,
             targets=targets,
             verification_id=verification_id,
-            signature=verification_sources_signature(snapshot),
+            signature=signature,
             source_commit=commit,
             kind=Kind.ALL.value,
             snapshot_root_override=snapshot,

@@ -117,10 +117,24 @@ class DispatchHandler(DispatchCacheMixin):
         self._result = result
         self._toolkit = toolkit
 
+    def complete_task_exposure(
+        self,
+        *,
+        task_id: str,
+        batch_id: int,
+    ) -> None:
+        """Run post-bind work after staged Cases become externally visible."""
+
+        self._queue.compact_task_payload(task_id)
+        if not self._s.batch_scheduler.task_cases_terminal(task_id):
+            return
+        self._result._domjudge_finalize_batch_if_ready(int(batch_id))
+
     def _domjudge_case_rows(
         self,
         *,
         task_id: str,
+        verification_task_id: str,
         run_id: str,
         tests_rows: list[_DomjudgePreparedTestRow],
         scope_sequence: int,
@@ -153,6 +167,7 @@ class DispatchHandler(DispatchCacheMixin):
             case_rows.append(
                 {
                     "task_id": task_id,
+                    "verification_task_id": verification_task_id,
                     "run_id": run_id,
                     "test_name": test_name,
                     "ordinal": ordinal,
@@ -384,11 +399,14 @@ class DispatchHandler(DispatchCacheMixin):
 
         now_text = now_iso()
         verification_id = canonical_verification_id(domjudge_text(payload.get("verification_id")))
-        logical_run_id = domjudge_text(payload.get("logical_run_id"))
+        verification_program_id = domjudge_text(
+            payload.get("verification_program_id")
+        )
         task_kind = self._toolkit.task_kind(payload)
         scope_sequence = self._s.batch_scheduler.scope_sequence(verification_id)
         case_rows = self._domjudge_case_rows(
             task_id=task_id,
+            verification_task_id=domjudge_text(payload.get("verification_task_id")),
             run_id=run_id,
             tests_rows=tests_rows,
             scope_sequence=scope_sequence,
@@ -411,7 +429,7 @@ class DispatchHandler(DispatchCacheMixin):
         return self._s.batch_scheduler.create_batch_with_cases(
             task_id=task_id,
             run_id=run_id,
-            logical_run_id=logical_run_id,
+            verification_program_id=verification_program_id,
             execution_signature=execution_signature,
             task_kind=task_kind,
             verification_id=verification_id,
@@ -449,16 +467,10 @@ class DispatchHandler(DispatchCacheMixin):
         )
 
     def activate_task_cases(self, task_id: str) -> bool:
-        activated = self._s.batch_scheduler.activate_task_cases(
+        return self._s.batch_scheduler.activate_task_cases(
             task_id,
             now_text=now_iso(),
         )
-        if activated:
-            self._queue.compact_task_payload(task_id)
-            batch = self._s.batch_scheduler.batch_for_task(task_id)
-            if batch is not None:
-                self._result._domjudge_finalize_batch_if_ready(int(batch["batch_id"]))
-        return activated
 
     def _domjudge_lease_cases(self, batch_id: int, hostname: str, max_batchsize: int) -> list[dict[str, object]]:
         now_text = now_iso()
@@ -522,13 +534,15 @@ class DispatchHandler(DispatchCacheMixin):
                 )
         for row in rows:
             case_task_id = domjudge_text(row["task_id"])
+            verification_task_id = domjudge_text(
+                row["verification_task_id"]
+            )
             task_row = self._core.task_by_id(case_task_id)
             verification_id = "" if task_row is None else domjudge_text(task_row.get("verification_id"))
-            if verification_id:
+            if verification_id and verification_task_id:
                 notify_verification_case_leased(
                     verification_id,
-                    case_task_id,
-                    domjudge_text(row["test_name"]),
+                    verification_task_id,
                 )
         self._s.batch_scheduler.record_batch_leased(
             hostname,

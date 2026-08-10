@@ -2,18 +2,14 @@ from __future__ import annotations
 
 import json
 import re
-import threading
-from collections.abc import Callable
 from pathlib import Path
 from typing import cast
 
-from app.db import DB, now_iso
-from app.config import ConfigValues
-from app.main_constant import GENERAL_CONFIG_DEFAULTS
+from app.db import DB
+from app.runtime_value import RuntimeValues
 from app.service.disk.verification_store import VerificationStore
 from app.service.platform.runtime_blob_store import PayloadFile, RuntimeBlobStore
 from app.service.platform.fs.layout import FsManager
-from app.service.platform.error_text import aux_display_text_limit_bytes, bounded_display_text
 from app.service.problem.test_spec import (
     parse_gen_command_tokens,
 )
@@ -23,10 +19,24 @@ from app.service.verification.types import (
     WorkspaceVerificationKey,
     WorkspaceVerificationRow,
 )
-from app.service.verification.identity import canonical_verification_id
+from app.service.verification.identity import (
+    canonical_verification_id,
+    new_verification_id,
+)
+from app.service.verification.lifecycle import (
+    ActivationCommit,
+    ActivationPlan,
+    AdmissionCommit,
+    SanityFinish,
+    StartupRecoverySummary,
+    VerificationAdmission,
+    VerificationSnapshot,
+    VerificationSnapshotRecord,
+    VerificationTransitionCommit,
+)
 
 from app.service.verification.read_model import (
-    logical_run_ids,
+    program_ids,
     running_tasks,
     solution_source_paths,
     task_counts,
@@ -34,12 +44,9 @@ from app.service.verification.read_model import (
 from app.service.verification.runtime import load_problem_runtime_config
 from app.service.verification.signature import verification_manifest
 from app.service.verification.source import select_source
-from app.service.verification.task_metadata import normalize_diagnostics_json_text
 from app.service.verification.task_store import VerificationTaskStore
 from app.service.verification.execution_result import (
     execution_result_from_json,
-    execution_result_json,
-    normalize_execution_result,
 )
 from app.service.verification.test_spec import load_tests_spec_entries, manual_test_sources, prepare_tests_spec_runtime
 
@@ -77,7 +84,7 @@ class VerificationService:
         task_store: VerificationTaskStore,
         runtime_blob_store: RuntimeBlobStore,
         fs_manager: FsManager,
-        config_values: ConfigValues,
+        constants: RuntimeValues,
     ):
         self.db = db
         self.workspace_service = workspace_service
@@ -85,9 +92,7 @@ class VerificationService:
         self.task_store = task_store
         self.runtime_blob_store = runtime_blob_store
         self.fs_manager = fs_manager
-        self._config_values = config_values
-        self._verification_inflight_lock = threading.RLock()
-        self._applied_aux_display_text_limit_bytes: int | None = None
+        self._constants = constants
         self._verification_store = VerificationStore(db)
 
     def export_runtime_verification(self, problem_id: int, verification_id: str) -> dict[str, object] | None:
@@ -104,7 +109,7 @@ class VerificationService:
         row = self._verification_store.get_status_row(int(problem_id), verification_id)
         if row is None:
             return False
-        return row["status"] in {"queued", "pending", "running", "ok", "failed"}
+        return row["status"] in {"queued", "running", "ok", "failed"}
 
     def artifact_path_for_problem_artifact(self, problem_id: int, artifact_id: str) -> str:
         if artifact_id.startswith("p-"):
@@ -124,7 +129,7 @@ class VerificationService:
         return "" if row is None else str(self.fs_manager.resolve_verification_root(verification_id))
 
     def allocate_verification_id(self) -> str:
-        return self._verification_store.allocate_id()
+        return new_verification_id()
 
     def workspace_verification_id_for_run(self, problem_id: int, workspace_id: int, run_id: str) -> str:
         token = run_id
@@ -139,8 +144,6 @@ class VerificationService:
         ):
             verification_id = str(row["id"])
             for task_row in task_store.list_rows(verification_id):
-                if str(task_row["logical_run_id"] or "") == token:
-                    return verification_id
                 if str(task_row["run_id"] or "") == token:
                     return verification_id
         return ""
@@ -157,13 +160,19 @@ class VerificationService:
         workspace_id: int,
         verification_id: str,
     ) -> dict[str, object] | None:
-        row = self._verification_store.workspace_verification_row(int(problem_id), int(workspace_id), verification_id)
-        if row is None:
+        snapshot = self.verification_snapshot(verification_id)
+        if snapshot is None:
+            return None
+        record = snapshot["record"]
+        if (
+            int(record["problem_id"]) != int(problem_id)
+            or record["workspace_id"] != int(workspace_id)
+        ):
             return None
         return {
-            "id": str(row["id"] or ""),
-            "status": str(row["status"] or ""),
-            "details": self.verification_detail(verification_id),
+            "id": record["id"],
+            "status": record["status"],
+            "details": snapshot["detail"],
         }
 
     def latest_problem_verification_id_for_signature(self, problem_id: int, signature: str) -> str:
@@ -190,16 +199,22 @@ class VerificationService:
             return None
         return dict(row)
 
-    def _ordered_detail_tokens(self, verification_id: str, table_name: str, column_name: str) -> list[str]:
-        rows = self.db.fetch_all(
-            f"""
+    def _ordered_detail_tokens(
+        self,
+        verification_id: str,
+        table_name: str,
+        column_name: str,
+        *,
+        conn=None,
+    ) -> list[str]:
+        sql = f"""
             SELECT {column_name}
             FROM {table_name}
             WHERE verification_id=?
             ORDER BY ordinal ASC
-            """,
-            [str(verification_id or "").strip()],
-        )
+            """
+        params = [str(verification_id or "").strip()]
+        rows = self.db.fetch_all(sql, params) if conn is None else conn.execute(sql, params).fetchall()
         values: list[str] = []
         for row in rows:
             token = str(row[column_name] or "")
@@ -207,17 +222,21 @@ class VerificationService:
                 values.append(token)
         return values
 
-    def _verification_tests_meta_rows(self, verification_id: str) -> list[dict[str, object]]:
-        rows = self.db.fetch_all(
-            """
+    def _verification_tests_meta_rows(
+        self,
+        verification_id: str,
+        *,
+        conn=None,
+    ) -> list[dict[str, object]]:
+        sql = """
             SELECT ordinal,test_name,source_kind,source_id,is_sample,sample_input_custom,sample_output_custom,
                    sample_output_validate,description,source_path,command_text,payload_source_path
             FROM verification_tests_meta
             WHERE verification_id=?
             ORDER BY ordinal ASC
-            """,
-            [str(verification_id or "").strip()],
-        )
+            """
+        params = [str(verification_id or "").strip()]
+        rows = self.db.fetch_all(sql, params) if conn is None else conn.execute(sql, params).fetchall()
         values: list[dict[str, object]] = []
         for row in rows:
             item: dict[str, object] = {
@@ -241,26 +260,31 @@ class VerificationService:
             values.append(item)
         return values
 
-    def _verification_sanity_check_results(self, verification_id: str) -> list[dict[str, object]]:
+    def _verification_sanity_check_results(
+        self,
+        verification_id: str,
+        *,
+        conn=None,
+    ) -> list[dict[str, object]]:
         safe_verification_id = str(verification_id or "").strip()
-        check_rows = self.db.fetch_all(
-            """
+        check_sql = """
             SELECT ordinal,check_name,status,checked_count
             FROM verification_sanity_checks
             WHERE verification_id=?
             ORDER BY ordinal ASC
-            """,
-            [safe_verification_id],
-        )
-        message_rows = self.db.fetch_all(
             """
+        message_sql = """
             SELECT check_name,ordinal,severity,test_name,message
             FROM verification_sanity_check_messages
             WHERE verification_id=?
             ORDER BY check_name ASC, ordinal ASC
-            """,
-            [safe_verification_id],
-        )
+            """
+        if conn is None:
+            check_rows = self.db.fetch_all(check_sql, [safe_verification_id])
+            message_rows = self.db.fetch_all(message_sql, [safe_verification_id])
+        else:
+            check_rows = conn.execute(check_sql, [safe_verification_id]).fetchall()
+            message_rows = conn.execute(message_sql, [safe_verification_id]).fetchall()
         messages_by_check: dict[str, list[dict[str, object]]] = {}
         for row in message_rows:
             check_name = str(row["check_name"] or "")
@@ -288,22 +312,26 @@ class VerificationService:
             )
         return results
 
-    def verification_detail(self, verification_id: str) -> dict[str, object]:
-        safe_verification_id = str(verification_id or "").strip()
-        if not safe_verification_id:
-            return {}
-        row = self.db.fetch_one(
+    def _verification_detail_from_connection(
+        self,
+        conn,
+        verification_id: str,
+    ) -> dict[str, object]:
+        row = conn.execute(
             """
             SELECT mode,pass_limit,run_config_json,error,failed_step,failed_check,failed_test,
                    sanity_status,sanity_checked_count,validation_status,validated_count
             FROM verifications
             WHERE id=?
             """,
-            [safe_verification_id],
-        )
+            [verification_id],
+        ).fetchone()
         if row is None:
             return {}
-        sanity_check_results = self._verification_sanity_check_results(safe_verification_id)
+        sanity_check_results = self._verification_sanity_check_results(
+            verification_id,
+            conn=conn,
+        )
         return {
             "mode": str(row["mode"] or ""),
             "pass_limit": int(row["pass_limit"] or _DETAIL_SCALAR_DEFAULTS["pass_limit"]),
@@ -316,12 +344,23 @@ class VerificationService:
             "sanity_checked_count": int(row["sanity_checked_count"] or 0),
             "validation_status": str(row["validation_status"] or ""),
             "validated_count": int(row["validated_count"] or 0),
-            "selected_test_names": self._ordered_detail_tokens(safe_verification_id, "verification_selected_tests", "test_name"),
-            "source_paths": self._ordered_detail_tokens(safe_verification_id, "verification_source_paths", "source_path"),
+            "selected_test_names": self._ordered_detail_tokens(verification_id, "verification_selected_tests", "test_name", conn=conn),
+            "source_paths": self._ordered_detail_tokens(verification_id, "verification_source_paths", "source_path", conn=conn),
             "sanity_checks": [str(item.get("name") or "") for item in sanity_check_results if str(item.get("name") or "")],
             "sanity_check_results": sanity_check_results,
-            "tests_meta_rows": self._verification_tests_meta_rows(safe_verification_id),
+            "tests_meta_rows": self._verification_tests_meta_rows(verification_id, conn=conn),
         }
+
+    def verification_detail(self, verification_id: str) -> dict[str, object]:
+        safe_verification_id = str(verification_id or "").strip()
+        if not safe_verification_id:
+            return {}
+        with self.db.conn() as conn:
+            conn.execute("BEGIN")
+            return self._verification_detail_from_connection(
+                conn,
+                safe_verification_id,
+            )
 
     def _replace_ordered_detail_tokens(
         self,
@@ -331,8 +370,13 @@ class VerificationService:
         table_name: str,
         column_name: str,
         values: list[str],
+        clear_existing: bool = True,
     ) -> None:
-        conn.execute(f"DELETE FROM {table_name} WHERE verification_id=?", [verification_id])
+        if clear_existing:
+            conn.execute(
+                f"DELETE FROM {table_name} WHERE verification_id=?",
+                [verification_id],
+            )
         for ordinal, token in enumerate(values, start=1):
             conn.execute(
                 f"INSERT INTO {table_name}(verification_id,ordinal,{column_name}) VALUES(?,?,?)",
@@ -383,9 +427,17 @@ class VerificationService:
         verification_id: str,
         *,
         results: list[dict[str, object]],
+        clear_existing: bool = True,
     ) -> None:
-        conn.execute("DELETE FROM verification_sanity_check_messages WHERE verification_id=?", [verification_id])
-        conn.execute("DELETE FROM verification_sanity_checks WHERE verification_id=?", [verification_id])
+        if clear_existing:
+            conn.execute(
+                "DELETE FROM verification_sanity_check_messages WHERE verification_id=?",
+                [verification_id],
+            )
+            conn.execute(
+                "DELETE FROM verification_sanity_checks WHERE verification_id=?",
+                [verification_id],
+            )
         for ordinal, raw in enumerate(results, start=1):
             item = dict(raw)
             check_name = str(item.get("name") or "")
@@ -434,8 +486,13 @@ class VerificationService:
         *,
         selected_test_names: list[str],
         rows: list[dict[str, object]],
+        clear_existing: bool = True,
     ) -> None:
-        conn.execute("DELETE FROM verification_tests_meta WHERE verification_id=?", [verification_id])
+        if clear_existing:
+            conn.execute(
+                "DELETE FROM verification_tests_meta WHERE verification_id=?",
+                [verification_id],
+            )
         seen_test_names: set[str] = set()
         seen_ordinals: set[int] = set()
         for position, raw in enumerate(rows, start=1):
@@ -480,10 +537,14 @@ class VerificationService:
                 ],
             )
 
-    def persist_verification_detail(self, verification_id: str, detail: dict[str, object]) -> None:
-        safe_verification_id = str(verification_id or "").strip()
-        if not safe_verification_id:
-            return
+    def _write_verification_detail(
+        self,
+        conn,
+        verification_id: str,
+        detail: dict[str, object],
+        *,
+        clear_existing: bool = True,
+    ) -> None:
         payload = dict(detail)
         scalar_values = {
             "mode": str(payload.get("mode") or _DETAIL_SCALAR_DEFAULTS["mode"]),
@@ -503,56 +564,57 @@ class VerificationService:
         sanity_check_results = self._normalized_sanity_check_results(payload)
         tests_meta_rows = [dict(item) for item in cast(list[object], payload.get("tests_meta_rows") or []) if isinstance(item, dict)]
 
-        def _tx(conn) -> None:
-            conn.execute(
-                """
-                UPDATE verifications
-                SET mode=?,pass_limit=?,run_config_json=?,error=?,failed_step=?,failed_check=?,failed_test=?,
-                    sanity_status=?,sanity_checked_count=?,validation_status=?,validated_count=?
-                WHERE id=?
-                """,
-                [
-                    scalar_values["mode"],
-                    scalar_values["pass_limit"],
-                    scalar_values["run_config_json"],
-                    scalar_values["error"],
-                    scalar_values["failed_step"],
-                    scalar_values["failed_check"],
-                    scalar_values["failed_test"],
-                    scalar_values["sanity_status"],
-                    scalar_values["sanity_checked_count"],
-                    scalar_values["validation_status"],
-                    scalar_values["validated_count"],
-                    safe_verification_id,
-                ],
-            )
-            self._replace_ordered_detail_tokens(
-                conn,
-                safe_verification_id,
-                table_name="verification_selected_tests",
-                column_name="test_name",
-                values=selected_test_names,
-            )
-            self._replace_ordered_detail_tokens(
-                conn,
-                safe_verification_id,
-                table_name="verification_source_paths",
-                column_name="source_path",
-                values=source_paths,
-            )
-            self._replace_sanity_check_results(
-                conn,
-                safe_verification_id,
-                results=sanity_check_results,
-            )
-            self._replace_tests_meta_rows(
-                conn,
-                safe_verification_id,
-                selected_test_names=selected_test_names,
-                rows=tests_meta_rows,
-            )
-
-        self.db.write_transaction(_tx)
+        conn.execute(
+            """
+            UPDATE verifications
+            SET mode=?,pass_limit=?,run_config_json=?,error=?,failed_step=?,failed_check=?,failed_test=?,
+                sanity_status=?,sanity_checked_count=?,validation_status=?,validated_count=?
+            WHERE id=?
+            """,
+            [
+                scalar_values["mode"],
+                scalar_values["pass_limit"],
+                scalar_values["run_config_json"],
+                scalar_values["error"],
+                scalar_values["failed_step"],
+                scalar_values["failed_check"],
+                scalar_values["failed_test"],
+                scalar_values["sanity_status"],
+                scalar_values["sanity_checked_count"],
+                scalar_values["validation_status"],
+                scalar_values["validated_count"],
+                verification_id,
+            ],
+        )
+        self._replace_ordered_detail_tokens(
+            conn,
+            verification_id,
+            table_name="verification_selected_tests",
+            column_name="test_name",
+            values=selected_test_names,
+            clear_existing=clear_existing,
+        )
+        self._replace_ordered_detail_tokens(
+            conn,
+            verification_id,
+            table_name="verification_source_paths",
+            column_name="source_path",
+            values=source_paths,
+            clear_existing=clear_existing,
+        )
+        self._replace_sanity_check_results(
+            conn,
+            verification_id,
+            results=sanity_check_results,
+            clear_existing=clear_existing,
+        )
+        self._replace_tests_meta_rows(
+            conn,
+            verification_id,
+            selected_test_names=selected_test_names,
+            rows=tests_meta_rows,
+            clear_existing=clear_existing,
+        )
 
     def store_verification_blob(
         self,
@@ -676,63 +738,26 @@ class VerificationService:
     def artifact_descriptor(self, token: str) -> PayloadFile | None:
         return self.runtime_blob_store.descriptor(token)
 
-    def update_verification_artifact_refs(self, verification_id: str, test_name: str, refs: dict[str, str]) -> dict[str, object]:
-        safe_verification_id = str(verification_id or "").strip()
-        safe_test_name = str(test_name or "").strip()
-        if (not safe_verification_id) or (not safe_test_name):
-            return {}
-        normalized = {
-            str(key): str(value)
-            for key, value in dict(refs).items()
-            if str(key) in {"input_ref", "answer_ref"} and str(value or "")
-        }
-        if not normalized:
-            return self.verification_artifact_refs(safe_verification_id)
-        with self._verification_inflight_lock:
-            current_row = self.db.fetch_one(
-                """
-                SELECT input_ref,answer_ref
-                FROM verification_artifact_refs
-                WHERE verification_id=? AND test_name=?
-                """,
-                [safe_verification_id, safe_test_name],
-            )
-            input_ref = str((current_row["input_ref"] if current_row is not None else "") or "")
-            answer_ref = str((current_row["answer_ref"] if current_row is not None else "") or "")
-            if "input_ref" in normalized:
-                input_ref = normalized["input_ref"]
-            if "answer_ref" in normalized:
-                answer_ref = normalized["answer_ref"]
-            self.db.execute(
-                """
-                INSERT INTO verification_artifact_refs(verification_id,test_name,input_ref,answer_ref,updated_at)
-                VALUES(?,?,?,?,?)
-                ON CONFLICT(verification_id,test_name) DO UPDATE SET
-                    input_ref=excluded.input_ref,
-                    answer_ref=excluded.answer_ref,
-                    updated_at=excluded.updated_at
-                """,
-                [safe_verification_id, safe_test_name, input_ref, answer_ref, now_iso()],
-            )
-        return self.verification_artifact_refs(safe_verification_id)
-
-
-    def verification_runtime_summary(self, verification_id: str) -> dict[str, object]:
-        rows = self.task_store.list_rows_for_list(verification_id)
+    @staticmethod
+    def verification_runtime_summary_from_tasks(
+        rows: list[dict[str, object]],
+    ) -> dict[str, object]:
         counts = task_counts(rows)
         return {
             "task_graph": bool(rows),
             "task_counts": counts,
             "running_tasks": running_tasks(rows),
             "source_paths": solution_source_paths(rows),
-            "logical_run_ids": logical_run_ids(rows, include_main_correct=True),
+            "program_ids": program_ids(rows),
             "has_running": bool(int(counts["pending"]) or int(counts["queued"]) or int(counts["running"])),
             "test_names": list(dict.fromkeys(str(row["test_name"] or "") for row in rows if str(row["test_name"] or ""))),
         }
 
-    def verification_run_ids(self, verification_id: str) -> list[str]:
-        summary = self.verification_runtime_summary(verification_id)
-        return list(summary["logical_run_ids"])
+    def verification_runtime_summary(self, verification_id: str) -> dict[str, object]:
+        snapshot = self.verification_snapshot(verification_id)
+        return self.verification_runtime_summary_from_tasks(
+            [] if snapshot is None else snapshot["tasks"]
+        )
 
     def verification_source_paths(self, verification_id: str) -> list[str]:
         detail = self.verification_detail(verification_id)
@@ -814,156 +839,116 @@ class VerificationService:
             ok_only=bool(ok_only),
         )
 
-    def begin_verification_record(
+    def admit_verification(
         self,
-        *,
-        verification_id: str,
-        problem_id: int,
-        workspace_id: int | None,
-        signature: str = "",
-        source_commit: str = "",
-        kind: str,
-        status: str,
-        detail: dict[str, object] | None = None,
-    ) -> None:
-        canonical_verification_id(verification_id)
-        self._verification_store.create_or_update_record(
-            verification_id=verification_id,
-            problem_id=int(problem_id),
-            workspace_id=None if workspace_id is None else int(workspace_id),
-            signature=signature,
-            source_commit=source_commit,
-            kind=kind,
-            status=status,
-        )
-        if detail is not None:
-            self.persist_verification_detail(verification_id, detail)
+        request: VerificationAdmission,
+    ) -> AdmissionCommit:
+        canonical_verification_id(request.verification_id)
+        return self._verification_store.admit(request)
 
-    def cancel_verification_if_active(self, verification_id: str, *, reason: str, now_text: str) -> bool:
-        return self._verification_store.cancel_active_verification(
+    def activate_verification(
+        self,
+        plan: ActivationPlan,
+    ) -> ActivationCommit:
+        canonical_verification_id(plan.verification_id)
+        return self.task_store.activate_plan(
+            plan,
+            write_detail=lambda conn, verification_id, detail: (
+                self._write_verification_detail(
+                    conn,
+                    verification_id,
+                    detail,
+                    clear_existing=False,
+                )
+            ),
+        )
+
+    def fail_verification(
+        self,
+        verification_id: str,
+        *,
+        reason: str,
+    ) -> VerificationTransitionCommit:
+        canonical_verification_id(verification_id)
+        return self.task_store.transition_verification_failed(
             verification_id,
             reason=reason,
-            now_text=now_text,
         )
 
-    def cancel_unfinished_tasks(self, verification_id: str, *, reason: str) -> None:
-        self.task_store.cancel_unfinished_tasks(verification_id, reason=reason)
-
-    def verification_ids_with_unfinished_tasks(self) -> list[str]:
-        return self.task_store.verification_ids_with_unfinished_tasks()
-
-    def finalize_cancelled_unfinished_records(
-        self,
-        *,
-        reason_predicate: Callable[[str], bool],
-        now_text: str,
-    ) -> None:
-        rows = self.db.fetch_all(
-            """
-            SELECT id,fail_reason
-            FROM verifications
-            WHERE status='failed'
-              AND (finished_at IS NULL OR finished_at='')
-            """,
-        )
-        for row in rows:
-            verification_id = str(row["id"] or "")
-            fail_reason = str(row["fail_reason"] or "")
-            if (not verification_id) or (not reason_predicate(fail_reason)):
-                continue
-            self.db.execute(
-                """
-                UPDATE verifications
-                SET status='failed', fail_reason=?, finished_at=?
-                WHERE id=? AND status='failed' AND (finished_at IS NULL OR finished_at='')
-                """,
-                [fail_reason, now_text, verification_id],
-            )
-
-    def update_verification_record_status(
+    def cancel_verification(
         self,
         verification_id: str,
         *,
-        status: str,
-        fail_reason: str,
-        finished: bool,
-    ) -> None:
-        self._verification_store.update_record_status(
-            verification_id,
-            status=status,
-            fail_reason=fail_reason,
-            finished=finished,
+        reason: str,
+    ) -> VerificationTransitionCommit:
+        return self.fail_verification(verification_id, reason=reason)
+
+    def finish_sanity(
+        self,
+        finish: SanityFinish,
+    ) -> VerificationTransitionCommit:
+        canonical_verification_id(finish.verification_id)
+        return self.task_store.finish_sanity(
+            finish,
+            write_detail=self._write_verification_detail,
         )
 
-    def _normalize_stored_display_text(self, *, limit_bytes: int) -> None:
-        task_rows = self.db.fetch_all(
-            """
-            SELECT id,result_json
-            FROM verification_tasks
-            """
-        )
-        verification_rows = self.db.fetch_all(
-            "SELECT id,fail_reason FROM verifications WHERE fail_reason<>''"
-        )
-        changed = False
-        with self.db.conn() as conn:
-            for row in task_rows:
-                current_json = str(row["result_json"] or "{}")
-                result = execution_result_from_json(current_json)
-                safe_compile_log = bounded_display_text(result.compile.log, limit_bytes=limit_bytes)
-                safe_error_text = bounded_display_text(result.outcome.error, limit_bytes=limit_bytes)
-                safe_feedback_text = bounded_display_text(result.outcome.feedback, limit_bytes=limit_bytes)
-                safe_diagnostics_json = normalize_diagnostics_json_text(
-                    json.dumps(list(result.compile.diagnostics), ensure_ascii=False),
-                    message_limit=limit_bytes,
-                )
-                normalized = normalize_execution_result(
-                    passes=result.passes,
-                    verdict=result.verdict,
-                    score_text=result.score_text,
-                    answer_correct=result.answer_correct,
-                    error=safe_error_text,
-                    feedback=safe_feedback_text,
-                    compile_log=safe_compile_log,
-                    compile_diagnostics=cast(
-                        list[dict[str, object]],
-                        json.loads(safe_diagnostics_json),
-                    ),
-                    warnings=result.warnings,
-                )
-                normalized_json = execution_result_json(normalized)
-                if normalized_json == current_json:
-                    continue
-                conn.execute(
-                    """
-                    UPDATE verification_tasks
-                    SET result_json=?
-                    WHERE id=?
-                    """,
-                    [
-                        normalized_json,
-                        str(row["id"] or ""),
-                    ],
-                )
-                changed = True
-            for row in verification_rows:
-                safe_fail_reason = bounded_display_text(str(row["fail_reason"] or ""), limit_bytes=limit_bytes)
-                if safe_fail_reason == str(row["fail_reason"] or ""):
-                    continue
-                conn.execute(
-                    "UPDATE verifications SET fail_reason=? WHERE id=?",
-                    [safe_fail_reason, str(row["id"] or "")],
-                )
-                changed = True
-            if changed:
-                conn.commit()
+    def recover_startup(
+        self,
+        *,
+        reason: str = "cancelled on service startup",
+    ) -> StartupRecoverySummary:
+        return self.task_store.recover_startup(reason=reason)
 
-    def refresh_config_state(self, values: ConfigValues) -> None:
-        limit_bytes = aux_display_text_limit_bytes(values.snapshot())
-        if self._applied_aux_display_text_limit_bytes == limit_bytes:
-            return
-        self._applied_aux_display_text_limit_bytes = limit_bytes
-        self._normalize_stored_display_text(limit_bytes=limit_bytes)
+    def verification_snapshot(
+        self,
+        verification_id: str,
+    ) -> VerificationSnapshot | None:
+        try:
+            canonical_verification_id(verification_id)
+        except RuntimeError:
+            return None
+
+        def _read(conn) -> VerificationSnapshot | None:
+            row = conn.execute(
+                """
+                SELECT id,problem_id,workspace_id,signature,source_commit,kind,
+                       status,fail_reason,created_at,finished_at
+                FROM verifications
+                WHERE id=?
+                """,
+                [verification_id],
+            ).fetchone()
+            if row is None:
+                return None
+            workspace_id = row["workspace_id"]
+            record: VerificationSnapshotRecord = {
+                "id": str(row["id"] or ""),
+                "problem_id": int(row["problem_id"]),
+                "workspace_id": (
+                    None if workspace_id is None else int(workspace_id)
+                ),
+                "signature": str(row["signature"] or ""),
+                "source_commit": str(row["source_commit"] or ""),
+                "kind": str(row["kind"] or ""),
+                "status": str(row["status"] or ""),
+                "fail_reason": str(row["fail_reason"] or ""),
+                "created_at": str(row["created_at"] or ""),
+                "finished_at": str(row["finished_at"] or ""),
+            }
+            return {
+                "record": record,
+                "detail": self._verification_detail_from_connection(
+                    conn,
+                    verification_id,
+                ),
+                "tasks": self.task_store.snapshot_rows(conn, verification_id),
+            }
+
+        return self.task_store.read_lifecycle_snapshot(_read)
+
+    def apply_runtime_values(self, values: RuntimeValues) -> None:
+        self._constants = values
 
     def _select_checker_source(
         self,
@@ -1041,8 +1026,10 @@ class VerificationService:
         return cfg
 
     def _load_problem_runtime_config(self, snapshot: Path) -> dict:
-        default_cfg = cast(dict[str, object], GENERAL_CONFIG_DEFAULTS)
-        config_snapshot = self._config_values.snapshot()
+        default_cfg = cast(
+            dict[str, object],
+            self._constants.GENERAL_CONFIG_DEFAULTS,
+        )
         return load_problem_runtime_config(
             snapshot,
             default_time_limit_ms=DEFAULT_TIME_LIMIT_MS,
@@ -1051,10 +1038,10 @@ class VerificationService:
             min_time_limit_ms=TIME_LIMIT_MIN_MS,
             max_time_limit_ms=TIME_LIMIT_MAX_MS,
             min_memory_limit_mb=int(
-                config_snapshot["GENERAL_MEMORY_LIMIT_MIN_MB"]
+                self._constants.GENERAL_MEMORY_LIMIT_MIN_MB
             ),
             max_memory_limit_mb=int(
-                config_snapshot["GENERAL_MEMORY_LIMIT_MAX_MB"]
+                self._constants.GENERAL_MEMORY_LIMIT_MAX_MB
             ),
         )
 
@@ -1062,11 +1049,7 @@ class VerificationService:
         return manual_test_sources(snapshot)
 
     def _load_tests_spec(self, snapshot: Path) -> list[dict] | None:
-        limits = self._config_values.snapshot()
-        return load_tests_spec_entries(
-            snapshot,
-            max_bytes=int(limits["TEXTAREA_MAX_BYTES"]),
-        )
+        return load_tests_spec_entries(snapshot)
 
     def _prepare_tests_spec_runtime(
         self,
@@ -1118,8 +1101,22 @@ class VerificationService:
         target_verification_id = (
             canonical_verification_id(verification_id)
             if verification_id
-            else self._verification_store.allocate_id()
+            else new_verification_id()
         )
+        admission = self.admit_verification(
+            VerificationAdmission(
+                verification_id=target_verification_id,
+                problem_id=problem_id,
+                workspace_id=workspace_id,
+                signature=signature,
+                source_commit=source_commit,
+                kind=Kind.SAMPLE.value if sample_only else Kind.ALL.value,
+            )
+        )
+        if admission.outcome != "admitted":
+            raise RuntimeError(
+                f"verification already exists: {target_verification_id}"
+            )
         run_workspace_verification_dag(
             problem,
             username,

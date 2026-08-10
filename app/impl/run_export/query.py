@@ -58,14 +58,17 @@ def _verification_runtime_progress(
     }
     if (not verification_id) or (not is_canonical_artifact_id(verification_id)):
         return result
-    verification_row = config.verification_service.export_runtime_verification(int(problem_id), verification_id)
+    snapshot = config.verification_service.verification_snapshot(verification_id)
     verification_status = ""
     verification_detail: dict[str, object] = {}
-    if verification_row is not None:
-        status_value = cast(str | None, verification_row["status"])
-        if status_value is not None:
-            verification_status = status_value
-            verification_detail = dict(cast(dict[str, object], verification_row["details"]))
+    verification_rows: list[dict[str, object]] = []
+    if (
+        snapshot is not None
+        and int(snapshot["record"]["problem_id"]) == int(problem_id)
+    ):
+        verification_status = snapshot["record"]["status"]
+        verification_detail = dict(snapshot["detail"])
+        verification_rows = snapshot["tasks"]
     artifact_root = None
     if verification_id:
         try:
@@ -91,7 +94,6 @@ def _verification_runtime_progress(
     solve_log = logs_dir / "solve.log"
     compile_log = logs_dir / "compile.log"
     tests_total = _verification_tests_total(verification_detail)
-    verification_rows = config.verification_task_store.list_rows(verification_id)
     outputs_generated = len(
         [
             row
@@ -141,7 +143,7 @@ def _verification_runtime_progress(
         return result
 
     if event_status == "failed":
-        record = config.verification_service.verification_record(verification_id)
+        record = None if snapshot is None else snapshot["record"]
         detail = str((record or {}).get("fail_reason") or verification_detail.get("error") or "").strip()
         if not detail:
             failed_step = cast(str | None, verification_detail.get("failed_step"))

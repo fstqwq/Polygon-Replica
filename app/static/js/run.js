@@ -45,12 +45,12 @@ function initRunDetails() {
     content.appendChild(text);
   };
   const render = (html) => { content.innerHTML = html; };
-  const load = async (testName, runId) => {
+  const load = async (testName, programId) => {
     if (!testName) {
       loading("Run details are unavailable.");
       return;
     }
-    const key = `${testName}\u0000${runId}`;
+    const key = `${testName}\u0000${programId}`;
     activeKey = key;
     if (cache.has(key)) {
       render(cache.get(key));
@@ -58,7 +58,7 @@ function initRunDetails() {
     }
     loading("Loading details...");
     const query = new URLSearchParams({ test: testName, verification_id: verificationId });
-    if (runId) query.set("run_id", runId);
+    if (programId) query.set("program_id", programId);
     try {
       const response = await fetch(`${base}${base.includes("?") ? "&" : "?"}${query}`, {
         credentials: "same-origin",
@@ -77,7 +77,7 @@ function initRunDetails() {
     opener.addEventListener("click", () => {
       const testName = String(opener.dataset.testName || "").trim();
       renderTitle(testName, String(opener.dataset.testSourceKind || ""), String(opener.dataset.testCommand || ""));
-      load(testName, String(opener.dataset.runId || ""));
+      load(testName, String(opener.dataset.programId || ""));
     });
   });
 }

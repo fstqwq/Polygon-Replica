@@ -41,7 +41,7 @@ based on present impact, not on an imagined future architecture.
 | PLC-003 | refactor | Several HTTP implementation modules construct large read models and contain domain aggregation. | domain services |
 | PLC-004 | refactor | The canonical execution result model is nested under verification although Judgehost and custom run also consume it. | execution model |
 | PLC-005 | refactor | Verification coordination remains partly in workspace/request implementation. | verification |
-| PLC-006 | refactor | Terminal-result publication now crosses a narrow verification completion sink, but Judgehost composition and scheduling still depend directly on verification persistence, identity, result, and scheduler modules. | verification port |
+| PLC-006 | refactor | Terminal decisions and late diagnostics now cross narrow verification-owned sinks, but Judgehost composition and scheduling still depend directly on verification and verification-program identity, result, and scheduler modules. | verification port |
 | PLC-007 | refactor | `app/service/judgehost/result.py` combines callback validation, artifact handling, verdict mapping, telemetry, and publication. | Judgehost result |
 | PLC-008 | refactor | Significant contest build policy remains in `app/impl/contest/shared.py`. | contest service |
 | PLC-009 | refactor | Filesystem storage concerns are split across several service packages without one locator boundary. | disk/platform |

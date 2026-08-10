@@ -109,6 +109,22 @@ def _seed_workspace() -> tuple[Path, int, int, int, str]:
         "expected: accepted\n",
         encoding="utf-8",
     )
+    (workspace / "solutions/re.py").write_text(
+        "raise RuntimeError('intentional E2E runtime error')\n",
+        encoding="utf-8",
+    )
+    (workspace / "solutions/re.py.desc").write_text(
+        "expected: run_time_error\n",
+        encoding="utf-8",
+    )
+    (workspace / "solutions/ce.cpp").write_text(
+        "this is intentionally not valid C++\n",
+        encoding="utf-8",
+    )
+    (workspace / "solutions/ce.cpp.desc").write_text(
+        "expected: rejected\n",
+        encoding="utf-8",
+    )
     (workspace / "validators/validate.cpp").write_text(
         '#include "testlib.h"\n'
         "int main(int argc, char **argv) { registerValidation(argc, argv); "

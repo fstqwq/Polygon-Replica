@@ -218,7 +218,7 @@ class TestHostTelemetryStore(unittest.TestCase):
         batch_id = self.scheduler.create_batch_with_cases(
             task_id=task_id,
             run_id=run_id,
-            logical_run_id=run_id,
+            verification_program_id=f"solution-{self.sequence}",
             execution_signature=signature,
             task_kind="solution-run",
             verification_id="ver-1",
@@ -278,21 +278,19 @@ class TestHostTelemetryStore(unittest.TestCase):
                 now_text=_NOW,
             )
         )
-        self.scheduler.record_compile_result(
-            batch_id,
-            compile_success=1,
-            compile_output_b64="",
-            compile_metadata_b64="",
-            updated_at=_NOW,
-        )
         return batch_id
 
     def _report(self, hostname: str, case_id: int, at: float) -> None:
         row = self.scheduler.fetch_case(case_id)
         self.assertIsNotNone(row)
+        receipt = self.scheduler.acquire_case_callback_receipt(case_id)
+        self.assertIsNotNone(receipt)
+        assert receipt is not None
+        self.scheduler.release_case_callback_receipt(receipt.receipt_id)
         claim = self.scheduler.claim_case_reporting(
             case_id,
             hostname=hostname,
+            receipt_generation=receipt.claim_generation,
             now_text=_NOW,
         )
         self.assertIsNotNone(claim)

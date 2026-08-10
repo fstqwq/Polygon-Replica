@@ -1,8 +1,9 @@
-"""Protocol-faithful Judgehost mock for the isolated Docker E2E scenario.
+"""Official-shaped Judgehost mock for the isolated Docker E2E scenario.
 
 This process never compiles or executes untrusted input.  It exercises the wire
-sequence used by the pinned DOMjudge judgedaemon and returns deterministic case
-outputs for the fixture seeded by bootstrap.py.
+shapes used by the pinned DOMjudge judgedaemon plus Polygon-Replica's explicit
+idempotent-ACK and late-diagnostic extensions.  It returns deterministic case
+outcomes for the fixture seeded by bootstrap.py.
 """
 
 from __future__ import annotations
@@ -14,6 +15,7 @@ import json
 import os
 import re
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
 
@@ -34,11 +36,27 @@ from domjudge_contract import (
 
 
 HOSTNAME = "mock-domjudge-9-0-1"
-SOURCE_RESULTS = {
-    "gen.py": (b"7\n", "correct"),
-    "main.cpp": (b"49\n", "correct"),
-    "sanity_empty_output.py": (b"", "wrong-answer"),
-    "sanity_unicode_output.py": ("\u4f60\u597d\U0001f642\n".encode("utf-8"), "wrong-answer"),
+
+
+@dataclass(frozen=True)
+class MockOutcome:
+    output: bytes = b""
+    runresult: str = "correct"
+    compile_success: bool = True
+    active_internal_error: bool = False
+    late_diagnostics: bool = False
+
+
+SOURCE_OUTCOMES = {
+    "gen.py": MockOutcome(output=b"7\n"),
+    "main.cpp": MockOutcome(output=b"49\n"),
+    "re.py": MockOutcome(
+        runresult="run-error",
+        late_diagnostics=True,
+    ),
+    "ce.cpp": MockOutcome(compile_success=False),
+    "sanity_empty_output.py": MockOutcome(runresult="wrong-answer"),
+    "sanity_unicode_output.py": MockOutcome(active_internal_error=True),
 }
 
 
@@ -71,7 +89,7 @@ class JudgehostMock:
         self.ready_path = state_dir() / MOCK_READY_FILENAME
         self.state: dict[str, object] = {
             "domjudge_commit": self.approval["commit"],
-            "source_sha256": self.approval["source_sha256"],
+            "source_sha256s": self.approval["source_sha256s"],
             "hostname": HOSTNAME,
             "events": [],
             "error": "",
@@ -236,11 +254,17 @@ class JudgehostMock:
             check_path = ENDPOINTS["check_versions"].format(judgetaskid=judgetaskid)
             self._json(self._request("PUT", check_path, data=report), dict)
 
-    def _compile_report(self, judgetaskid: int) -> None:
+    def _compile_report(self, judgetaskid: int, *, success: bool) -> None:
         report = {
-            "compile_success": "1",
-            "output_compile": _b64(b"mock compile accepted\n"),
-            "compile_metadata": _b64(b"exitcode: 0\n"),
+            "compile_success": "1" if success else "0",
+            "output_compile": _b64(
+                b"mock compile accepted\n"
+                if success
+                else b"mock compiler error\n"
+            ),
+            "compile_metadata": _b64(
+                b"exitcode: 0\n" if success else b"exitcode: 1\n"
+            ),
         }
         if tuple(report) != COMPILE_REPORT_FIELDS:
             raise RuntimeError("mock compile report drifted from the declared official shape")
@@ -249,6 +273,50 @@ class JudgehostMock:
             judgetaskid=judgetaskid,
         )
         self._json(self._request("PUT", path, data=report), dict)
+
+    def _add_debug_info(self, judgetaskid: int) -> None:
+        path = ENDPOINTS["add_debug_info"].format(
+            hostname=HOSTNAME,
+            judgetaskid=judgetaskid,
+        )
+        self._json(
+            self._request(
+                "POST",
+                path,
+                files={
+                    "full_debug": (
+                        None,
+                        _b64(b"late debug-info from mock: error evidence\n"),
+                    ),
+                },
+            ),
+            dict,
+        )
+
+    def _internal_error(self, judgetaskid: int, *, late: bool) -> int:
+        description = (
+            "late internal-error from mock"
+            if late
+            else "active internal-error from mock"
+        )
+        response = self._request(
+            "POST",
+            ENDPOINTS["internal_error"],
+            data={
+                "description": description,
+                "judgehostlog": _b64(f"{description}\n".encode("utf-8")),
+                "disabled": json.dumps(
+                    {"kind": "judgehost", "hostname": HOSTNAME},
+                    separators=(",", ":"),
+                ),
+                "hostname": HOSTNAME,
+                "judgetaskid": str(judgetaskid),
+            },
+        )
+        result = self._json(response, int)
+        if type(result) is not int:
+            raise RuntimeError("internal-error acknowledgement must be a JSON integer")
+        return result
 
     def _final_report(
         self,
@@ -264,7 +332,9 @@ class JudgehostMock:
             "end_time": f"{now:.6f}",
             "runtime": "0.001",
             "output_run": _b64(output),
-            "output_error": _b64(b""),
+            "output_error": _b64(
+                b"mock runtime error\n" if runresult == "run-error" else b""
+            ),
             "output_system": _b64(b"mock system output\n"),
             "metadata": _b64(
                 b"time-used: cpu-time\n"
@@ -307,16 +377,16 @@ class JudgehostMock:
         source_path = ENDPOINTS["source"].format(submitid=row["submitid"])
         sources = self._download_files(source_path, executable=False)
         output_candidates = {
-            filename: SOURCE_RESULTS[filename]
+            filename: SOURCE_OUTCOMES[filename]
             for filename in sources
-            if filename in SOURCE_RESULTS
+            if filename in SOURCE_OUTCOMES
         }
         if len(output_candidates) != 1:
             raise RuntimeError(
                 "fixture source cannot be mapped to one deterministic mock output: "
                 f"{sorted(sources)!r}"
             )
-        source_name, (output, runresult) = next(iter(output_candidates.items()))
+        source_name, outcome = next(iter(output_candidates.items()))
 
         executable_names: dict[str, list[str]] = {}
         compile_path = ENDPOINTS["executable"].format(
@@ -330,7 +400,32 @@ class JudgehostMock:
                 expected_hash=executable_hashes["compile"],
             )
         )
-        self._compile_report(judgetaskid)
+        self._compile_report(judgetaskid, success=outcome.compile_success)
+        if not outcome.compile_success:
+            self._record(
+                {
+                    "kind": "compile-error",
+                    "judgetaskid": judgetaskid,
+                    "source": source_name,
+                    "source_files": sorted(sources),
+                    "executable_files": executable_names,
+                }
+            )
+            return
+
+        if outcome.active_internal_error:
+            internal_error_ack = self._internal_error(judgetaskid, late=False)
+            self._record(
+                {
+                    "kind": "internal-error",
+                    "judgetaskid": judgetaskid,
+                    "source": source_name,
+                    "source_files": sorted(sources),
+                    "executable_files": executable_names,
+                    "internal_error_ack": internal_error_ack,
+                }
+            )
+            return
 
         testcase_path = ENDPOINTS["testcase"].format(testcase_id=row["testcase_id"])
         testcase_files = self._download_files(testcase_path, executable=False)
@@ -353,18 +448,41 @@ class JudgehostMock:
                 )
             )
 
-        ack = self._final_report(row, output, runresult)
+        ack = self._final_report(row, outcome.output, outcome.runresult)
+        duplicate_ack = self._final_report(
+            row,
+            outcome.output,
+            outcome.runresult,
+        )
+        late_debug = False
+        late_internal_error_ack: int | None = None
+        duplicate_late_internal_error_ack: int | None = None
+        if outcome.late_diagnostics:
+            self._add_debug_info(judgetaskid)
+            self._add_debug_info(judgetaskid)
+            late_debug = True
+            late_internal_error_ack = self._internal_error(judgetaskid, late=True)
+            duplicate_late_internal_error_ack = self._internal_error(
+                judgetaskid,
+                late=True,
+            )
         self._record(
             {
                 "kind": "completed",
                 "judgetaskid": judgetaskid,
                 "source": source_name,
                 "source_files": sorted(sources),
-                "runresult": runresult,
+                "runresult": outcome.runresult,
                 "executable_files": executable_names,
                 "testcase_files": sorted(testcase_files),
-                "output_sha256": hashlib.sha256(output).hexdigest(),
+                "output_sha256": hashlib.sha256(outcome.output).hexdigest(),
                 "ack": ack,
+                "duplicate_ack": duplicate_ack,
+                "late_debug": late_debug,
+                "late_internal_error_ack": late_internal_error_ack,
+                "duplicate_late_internal_error_ack": (
+                    duplicate_late_internal_error_ack
+                ),
             }
         )
 
