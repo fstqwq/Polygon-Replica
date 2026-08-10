@@ -65,6 +65,16 @@ class JudgehostView(TypedDict):
     recent_avg_per_case_sec: float | None
 
 
+class ArtifactUsageView(TypedDict):
+    total_size_label: str
+    total_files_label: str
+    artifacts_size_label: str
+    cache_size_label: str
+    verification_count_label: str
+    removable_rows_label: str
+    audit_rows_label: str
+
+
 def _as_bool_form_value(raw: str) -> bool:
     return form_text(raw).strip().lower() in {"1", "true", "yes", "on"}
 
@@ -166,6 +176,31 @@ def _runtime_controls(
             "impact": row.get("impact"),
         }
     return controls
+
+
+def _storage_size_label(num_bytes: int) -> str:
+    size = max(0, num_bytes)
+    if size < 1024:
+        return f"{size} B"
+    value = float(size)
+    for unit in ("KiB", "MiB", "GiB", "TiB"):
+        value /= 1024.0
+        if value < 1024.0 or unit == "TiB":
+            return f"{value:.1f} {unit}"
+    raise AssertionError("unreachable storage unit")
+
+
+def _artifact_usage_view() -> ArtifactUsageView:
+    usage = config.artifact_cleanup_service.usage_snapshot()
+    return {
+        "total_size_label": _storage_size_label(usage["total_bytes"]),
+        "total_files_label": f"{usage['total_files']:,}",
+        "artifacts_size_label": _storage_size_label(usage["artifacts_bytes"]),
+        "cache_size_label": _storage_size_label(usage["cache_bytes"]),
+        "verification_count_label": f"{usage['table_rows']['verifications']:,}",
+        "removable_rows_label": f"{usage['removable_rows']:,}",
+        "audit_rows_label": f"{usage['audit_rows']:,}",
+    }
 
 
 def _duration_label(age_sec: object) -> str:
@@ -319,6 +354,7 @@ def admin_overview_page(
             ),
             "smtp": config.smtp_config_service.snapshot().__dict__,
             "maintenance_status": config.maintenance_service.snapshot(),
+            "artifact_usage": _artifact_usage_view(),
         }
     )
     return template_response(request, "admin_overview.html", page)

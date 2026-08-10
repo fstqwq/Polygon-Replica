@@ -1150,6 +1150,40 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         self.assertNotIn('/admin/worker-queue/snapshot', admin_html)
         self.assertIn('/admin/users', admin_html)
 
+    def test_admin_overview_shows_generated_artifact_usage(self) -> None:
+        db_execute("UPDATE users SET is_system_admin=0")
+        db_execute("UPDATE users SET is_system_admin=1 WHERE username=?", ["alice"])
+        workspace_service.clear_identity_caches()
+        usage = {
+            "artifacts_bytes": 1024,
+            "artifacts_files": 2,
+            "cache_bytes": 512,
+            "cache_files": 5,
+            "total_bytes": 1536,
+            "total_files": 7,
+            "artifact_rows": 37,
+            "audit_rows": 5,
+            "removable_rows": 42,
+            "table_rows": {"verifications": 3},
+        }
+
+        with patch.object(
+            config.artifact_cleanup_service,
+            "usage_snapshot",
+            return_value=usage,
+        ):
+            response = admin_overview_page(_request("/admin"), user="alice")
+
+        self.assertEqual(response.status_code, 200)
+        html = response.body.decode("utf-8", errors="replace")
+        self.assertIn("1.5 KiB", html)
+        self.assertIn("across 7 files", html)
+        self.assertIn("42 removable database rows", html)
+        self.assertIn("including 5 audit entries", html)
+        self.assertIn("Artifact files", html)
+        self.assertIn("Runtime cache", html)
+        self.assertIn("Verifications", html)
+
     def test_admin_routes_do_not_keep_settings_compatibility_paths(self) -> None:
         from app.main import app
 

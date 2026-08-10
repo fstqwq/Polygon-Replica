@@ -58,6 +58,21 @@
   {% if cleanup.get('status') == 'failed' %}
   <p class="danger">{{ cleanup.get('error', 'Unknown cleanup error') }}</p>
   {% endif %}
+  <p>
+    <span class="muted">Current estimate:</span>
+    <strong>{{ artifact_usage.total_size_label }}</strong>
+    <span class="muted">
+      across {{ artifact_usage.total_files_label }} files &middot;
+      {{ artifact_usage.removable_rows_label }} removable database rows,
+      including {{ artifact_usage.audit_rows_label }} audit entries
+    </span>
+  </p>
+  <div class="admin-metric-strip">
+    <div><span>Artifact files</span><strong>{{ artifact_usage.artifacts_size_label }}</strong></div>
+    <div><span>Runtime cache</span><strong>{{ artifact_usage.cache_size_label }}</strong></div>
+    <div><span>Verifications</span><strong>{{ artifact_usage.verification_count_label }}</strong></div>
+    <div><span>Removable rows</span><strong>{{ artifact_usage.removable_rows_label }}</strong></div>
+  </div>
   <form
     method="post"
     action="/admin/maintenance/artifacts/cleanup"

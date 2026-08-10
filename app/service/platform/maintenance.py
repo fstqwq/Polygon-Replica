@@ -10,7 +10,7 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Literal, Protocol
+from typing import Callable, Literal, Protocol, TypedDict
 
 from app.db import (
     DB,
@@ -50,6 +50,19 @@ class JudgehostMaintenancePort(Protocol):
 
 class VerificationTaskMaintenancePort(Protocol):
     def reset_runtime_state(self) -> None: ...
+
+
+class ArtifactUsageSnapshot(TypedDict):
+    artifacts_bytes: int
+    artifacts_files: int
+    cache_bytes: int
+    cache_files: int
+    total_bytes: int
+    total_files: int
+    artifact_rows: int
+    audit_rows: int
+    removable_rows: int
+    table_rows: dict[str, int]
 
 
 def _is_within(root: Path, target: Path) -> bool:
@@ -289,19 +302,62 @@ class ArtifactCleanupService:
         return self._db.write_schema_reset_transaction(transaction)
 
     @staticmethod
-    def _tree_bytes(root: Path) -> int:
+    def _tree_usage(root: Path) -> tuple[int, int]:
         total = 0
+        files = 0
         if not root.exists() or root.is_symlink():
-            return 0
+            return 0, 0
         for directory, _dirnames, filenames in os.walk(root, followlinks=False):
             for filename in filenames:
                 path = Path(directory) / filename
                 try:
                     if not path.is_symlink():
                         total += int(path.stat().st_size)
+                        files += 1
                 except OSError:
                     continue
+        return total, files
+
+    @classmethod
+    def _tree_bytes(cls, root: Path) -> int:
+        total, _files = cls._tree_usage(root)
         return total
+
+    def usage_snapshot(self) -> ArtifactUsageSnapshot:
+        artifacts_bytes, artifacts_files = self._tree_usage(
+            self._settings.artifacts_root.absolute()
+        )
+        cache_bytes, cache_files = self._tree_usage(
+            self._settings.cache_root.absolute()
+        )
+        count_expressions = [
+            f"(SELECT COUNT(*) FROM {table}) AS {table}"
+            for table in self._ARTIFACT_TABLES
+        ]
+        count_expressions.append(
+            "(SELECT COUNT(*) FROM audit_log) AS audit_log"
+        )
+        row = self._db.fetch_one("SELECT " + ", ".join(count_expressions))
+        if row is None:
+            raise RuntimeError("artifact usage query returned no row")
+        table_rows = {
+            table: int(row[table])
+            for table in self._ARTIFACT_TABLES
+        }
+        artifact_rows = sum(table_rows.values())
+        audit_rows = int(row["audit_log"])
+        return {
+            "artifacts_bytes": artifacts_bytes,
+            "artifacts_files": artifacts_files,
+            "cache_bytes": cache_bytes,
+            "cache_files": cache_files,
+            "total_bytes": artifacts_bytes + cache_bytes,
+            "total_files": artifacts_files + cache_files,
+            "artifact_rows": artifact_rows,
+            "audit_rows": audit_rows,
+            "removable_rows": artifact_rows + audit_rows,
+            "table_rows": table_rows,
+        }
 
     @staticmethod
     def _clear_root(root: Path) -> int:
