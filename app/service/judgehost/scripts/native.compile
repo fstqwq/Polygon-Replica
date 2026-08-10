@@ -1,0 +1,8 @@
+#!/bin/sh
+set -e
+
+DEST="$1" ; shift
+MEMLIMIT="$1" ; shift
+MAIN="$1"
+
+exec {{NATIVE_COMPILE_CMD}} {{NATIVE_BEFORE_SOURCE}} "$MAIN" -o "$DEST" {{NATIVE_AFTER_OUTPUT}}

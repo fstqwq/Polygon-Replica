@@ -7,6 +7,7 @@ import re
 import shlex
 from pathlib import Path
 
+from app.service.judgehost.compile_spec import compile_spec
 from app.service.judgehost.domjudge.cache import (
     domjudge_case_cache_ref,
     domjudge_set_hash_from_blobs,
@@ -305,93 +306,25 @@ class DomjudgeToolkit:
             return ("c", ["c"])
         return ("cpp", ["cpp", "cc", "cxx", "c++"])
 
-    @staticmethod
-    def shell_words(raw: object) -> str:
-        token = domjudge_text(raw)
-        if not token:
-            return ""
-        try:
-            parts = shlex.split(token)
-        except ValueError:
-            parts = token.split()
-        safe_parts = [shlex.quote(part) for part in parts if part]
-        return " ".join(safe_parts)
-
-    @staticmethod
-    def shell_tokens(raw: object) -> list[str]:
-        token = domjudge_text(raw)
-        if not token:
-            return []
-        try:
-            parts = shlex.split(token)
-        except ValueError:
-            parts = token.split()
-        out: list[str] = []
-        for part in parts:
-            if part:
-                out.append(part)
-        return out
-
     def toolchain_cmd_digest(self, source_name: str, *, manual_validate_only: bool = False) -> str:
         if manual_validate_only:
             return compile_command_digest("skip.compile", [])
         language, _exts = self.language_extensions(source_name)
-        if language == "java":
-            command = domjudge_text(getattr(self._s.constants, "TOOLCHAIN_JAVA_COMPILER", "javac"), default="javac")
-            flags = self.shell_tokens(getattr(self._s.constants, "TOOLCHAIN_JUDGEHOST_JAVA_COMPILE_FLAGS", ""))
-            return compile_command_digest(command, flags)
-        if language == "py":
-            command = "pypy3"
-            flags = self.shell_tokens(getattr(self._s.constants, "TOOLCHAIN_JUDGEHOST_PYTHON_COMPILE_FLAGS", ""))
-            return compile_command_digest(command, [*flags, "-m", "py_compile"])
-        if language == "c":
-            return compile_command_digest("gcc", ["-O2", "-std=gnu11", "-pipe", "-lm"])
-        command = domjudge_text(getattr(self._s.constants, "TOOLCHAIN_CPP_COMPILER", "g++"), default="g++")
-        flags = self.shell_tokens(
-            getattr(
-                self._s.constants,
-                "TOOLCHAIN_JUDGEHOST_CPP_COMPILE_FLAGS",
-                "-x c++ -Wall -O2 -std=gnu++20 -static -pipe -DDOMJUDGE",
-            )
-        )
-        return compile_command_digest(command, flags)
+        spec = compile_spec(self._s.constants, language)
+        return compile_command_digest(spec.command, spec.digest_arguments)
 
     def public_compile_specs(self) -> list[dict[str, object]]:
-        compiler = domjudge_text(
-            getattr(self._s.constants, "TOOLCHAIN_CPP_COMPILER", "g++"),
-            default="g++",
+        specs = (
+            compile_spec(self._s.constants, language)
+            for language in ("c", "cpp", "java", "py")
         )
-        cpp_flags = self.shell_tokens(
-            getattr(
-                self._s.constants,
-                "TOOLCHAIN_JUDGEHOST_CPP_COMPILE_FLAGS",
-                "-x c++ -Wall -O2 -std=gnu++20 -static -pipe -DDOMJUDGE",
-            )
-        )
-        java_compiler = domjudge_text(
-            getattr(self._s.constants, "TOOLCHAIN_JAVA_COMPILER", "javac"),
-            default="javac",
-        )
-        java_flags = self.shell_tokens(
-            getattr(self._s.constants, "TOOLCHAIN_JUDGEHOST_JAVA_COMPILE_FLAGS", "")
-        )
-        python_flags = self.shell_tokens(
-            getattr(self._s.constants, "TOOLCHAIN_JUDGEHOST_PYTHON_COMPILE_FLAGS", "")
-        )
-        cpp_arguments = [*cpp_flags, "-I.", "<source>", "-o", "<executable>"]
         return [
-            {"language_id": "c", "command": compiler, "arguments": list(cpp_arguments)},
-            {"language_id": "cpp", "command": compiler, "arguments": list(cpp_arguments)},
             {
-                "language_id": "java",
-                "command": java_compiler,
-                "arguments": [*java_flags, "-encoding", "UTF-8", "-sourcepath", ".", "-d", ".", "<source>"],
-            },
-            {
-                "language_id": "py",
-                "command": "pypy3",
-                "arguments": [*python_flags, "-m", "py_compile", "<source>"],
-            },
+                "language_id": spec.language_id,
+                "command": spec.command,
+                "arguments": list(spec.public_arguments),
+            }
+            for spec in specs
         ]
 
     def load_script_asset(self, name: str) -> str:
@@ -428,37 +361,28 @@ class DomjudgeToolkit:
         if manual_validate_only:
             return self.load_script_asset("skip.compile").encode("utf-8")
         language, _exts = self.language_extensions(source_name)
-        compiler = domjudge_text(getattr(self._s.constants, "TOOLCHAIN_CPP_COMPILER", "g++"), default="g++")
-        java_compiler = domjudge_text(getattr(self._s.constants, "TOOLCHAIN_JAVA_COMPILER", "javac"), default="javac")
-        cpp_compile_flags = self.shell_words(
-            getattr(
-                self._s.constants,
-                "TOOLCHAIN_JUDGEHOST_CPP_COMPILE_FLAGS",
-                "-x c++ -Wall -O2 -std=gnu++20 -static -pipe -DDOMJUDGE",
-            )
+        spec = compile_spec(self._s.constants, language)
+        command = " ".join(
+            shlex.quote(token) for token in (spec.command, *spec.command_arguments)
         )
-        java_compile_flags = self.shell_words(
-            getattr(self._s.constants, "TOOLCHAIN_JUDGEHOST_JAVA_COMPILE_FLAGS", "")
-        )
-        python_compile_flags = self.shell_words(
-            getattr(self._s.constants, "TOOLCHAIN_JUDGEHOST_PYTHON_COMPILE_FLAGS", "")
-        )
-        cpp_compile_cmd = shlex.quote(compiler)
-        if cpp_compile_flags:
-            cpp_compile_cmd += f" {cpp_compile_flags}"
-        java_compile_cmd = shlex.quote(java_compiler)
-        if java_compile_flags:
-            java_compile_cmd += f" {java_compile_flags}"
-        python_compile_flag_suffix = f" {python_compile_flags}" if python_compile_flags else ""
-        script_name = "cpp.compile-only" if compile_only else "cpp.compile"
-        values = {"CPP_COMPILE_CMD": cpp_compile_cmd}
-        if language == "java":
+        if spec.family == "native":
+            before_source = " ".join(shlex.quote(token) for token in spec.fixed_arguments)
+            after_output = " ".join(shlex.quote(token) for token in spec.trailing_arguments)
+            script_name = "native.compile-only" if compile_only else "native.compile"
+            values = {
+                "NATIVE_COMPILE_CMD": command,
+                "NATIVE_BEFORE_SOURCE": before_source,
+                "NATIVE_AFTER_OUTPUT": after_output,
+            }
+        elif spec.family == "java":
             script_name = "java.compile-only" if compile_only else "java.compile"
-            values = {"JAVA_COMPILE_CMD": java_compile_cmd}
-        elif language == "py":
+            values = {"JAVA_COMPILE_CMD": command}
+        else:
             script_name = "python.compile-only" if compile_only else "python.compile"
             values = {
-                "PYTHON_COMPILE_FLAG_SUFFIX": python_compile_flag_suffix,
+                "PYTHON_COMPILE_FLAG_SUFFIX": "".join(
+                    f" {shlex.quote(token)}" for token in spec.command_arguments
+                ),
             }
         template = self.load_script_asset(script_name)
         rendered = self.render_script_template(template, values)

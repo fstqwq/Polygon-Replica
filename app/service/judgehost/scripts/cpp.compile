@@ -1,8 +1,0 @@
-#!/bin/sh
-set -e
-
-DEST="$1" ; shift
-MEMLIMIT="$1" ; shift
-MAIN="$1"
-
-exec {{CPP_COMPILE_CMD}} -I. "$MAIN" -o "$DEST"

@@ -6,7 +6,7 @@ MEMLIMIT="$1" ; shift
 MAIN="$1"
 TMPDEST="${DEST}.compiled"
 
-{{CPP_COMPILE_CMD}} -I. "$MAIN" -o "$TMPDEST"
+{{NATIVE_COMPILE_CMD}} {{NATIVE_BEFORE_SOURCE}} "$MAIN" -o "$TMPDEST" {{NATIVE_AFTER_OUTPUT}}
 rm -f "$TMPDEST"
 cat > "$DEST" <<'EOF'
 #!/bin/sh

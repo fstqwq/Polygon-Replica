@@ -9,8 +9,9 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from app.runtime_value import build_runtime_values
-from app.service.judgehost.toolkit import DomjudgeToolkit
 from app.service.judgehost.pass_bundle import parse_pass_bundle
+from app.service.judgehost.toolkit import DomjudgeToolkit
+from app.service.platform.hashing import compile_command_digest
 
 
 config = SimpleNamespace(constants=build_runtime_values(), judgehost_task_service=None)
@@ -428,13 +429,53 @@ class TestJudgehostScripts(unittest.TestCase):
         patched["TOOLCHAIN_JUDGEHOST_PYTHON_COMPILE_FLAGS"] = "-X dev"
         config.constants.replace(patched)
 
+        c_script = service.toolkit.compile_script("submission.c").decode("utf-8")
         cpp_script = service.toolkit.compile_script("submission.cpp").decode("utf-8")
         java_script = service.toolkit.compile_script("submission.java").decode("utf-8")
         py_script = service.toolkit.compile_script("submission.py").decode("utf-8")
-        self.assertIn('exec clang++ -O3 -std=gnu++20 -DNDEBUG -I. "$MAIN" -o "$DEST"', cpp_script)
+        self.assertIn(
+            'exec gcc -O2 -std=gnu11 -pipe -I. "$MAIN" -o "$DEST" -lm',
+            c_script,
+        )
+        self.assertIn(
+            'exec clang++ -O3 -std=gnu++20 -DNDEBUG -I. "$MAIN" -o "$DEST"',
+            cpp_script,
+        )
         self.assertIn("javac-custom --release 17", java_script)
         self.assertIn('-sourcepath . -d . "$@"', java_script)
         self.assertIn('"$PY" -X dev -m py_compile "$MAIN"', py_script)
+
+        public_specs = {spec["language_id"]: spec for spec in service.toolkit.public_compile_specs()}
+        self.assertEqual(public_specs["c"]["command"], "gcc")
+        self.assertEqual(
+            public_specs["c"]["arguments"],
+            [
+                "-O2",
+                "-std=gnu11",
+                "-pipe",
+                "-I.",
+                "<source>",
+                "-o",
+                "<executable>",
+                "-lm",
+            ],
+        )
+        self.assertEqual(public_specs["cpp"]["command"], "clang++")
+
+    def test_domjudge_compile_digest_uses_the_canonical_compile_spec(self) -> None:
+        toolkit = config.judgehost_task_service.toolkit
+
+        self.assertEqual(
+            toolkit.toolchain_cmd_digest("submission.c"),
+            compile_command_digest(
+                "gcc",
+                ["-O2", "-std=gnu11", "-pipe", "-I.", "-lm"],
+            ),
+        )
+        self.assertNotEqual(
+            toolkit.toolchain_cmd_digest("submission.c"),
+            toolkit.toolchain_cmd_digest("submission.cpp"),
+        )
 
     def test_domjudge_java_compile_script_uses_detect_main_contract(self) -> None:
         service = config.judgehost_task_service
