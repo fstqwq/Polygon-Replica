@@ -9,6 +9,7 @@ Read the smallest set that owns the change.
 
 ## Protocols
 
+- [Protocol ownership index](protocol/README.md)
 - [Problem source](protocol/problem-source.md)
 - [Execution and verification](protocol/execution.md)
 - [Judgehost wire protocol](protocol/judgehost.md)

@@ -1,11 +1,18 @@
 # `app/service/contest`
 
-Owns contests, membership, problem roster, attachments, build jobs, frozen build
-items, and contest artifacts. Contest definitions and attachments are durable;
-derived build products follow artifact cleanup policy.
+Owns contest identity, membership, properties, problem roster, statement source
+and attachments, build jobs, frozen build items, and artifact records. It
+accepts canonical contest/problem identities and source payloads and returns
+access contexts, roster/build snapshots, and validated artifact download paths.
 
-Build work is asynchronous through the shared worker queue. Some build policy
-still lives in `app/impl/contest`; that placement is tracked in findings.
+Relational state lives in the `contest_*` tables. Statement source and
+attachments live below the contest source root; products live below the global
+`artifacts_root/contests` tree. Build jobs are frozen before asynchronous work
+is admitted, and cleanup may remove products without deleting the durable
+contest definition. Storage ownership is defined by the
+[storage protocol](../../../../protocol/storage.md). Some build policy remains
+in `app/impl/contest`, as recorded by
+[PLC-008](../../../../implementation/findings.md#placement-and-maintainability).
 
 New roster entries are admitted under the active `CONTEST_MAX_PROBLEMS` policy.
 The store serializes count, position allocation, and insert in one writer

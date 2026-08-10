@@ -8,13 +8,15 @@
 | SQLite database | identities, metadata, configuration, summaries, locators | durable; selected rows are maintenance-cleanable |
 | Workspace root | mutable per-user Git workspaces | durable until explicitly removed |
 | Contest source root | durable contest statement source and attachments outside problem Git | durable |
-| Artifact root | exports, `contests/` build products, temporary snapshot archives | cleanup-safe |
-| Cache root | previews, verification payloads, JudgeFS, workdirs, queue history, runtime blobs | startup/maintenance-cleared |
+| Artifact root | exports, `contests/` build products, temporary snapshot archives | survives startup; maintenance-cleanable |
+| Cache root | preview/verification payloads, runtime snapshots/blobs, JudgeFS data, workdirs, queue history, and import drafts | `artifacts/` and `runtime/` are startup-cleared; the whole root is maintenance-cleanable |
 | Backup root | operator-managed contest migration archives | permanent and never cleared by application cleanup |
 
-Configured roots MUST resolve to distinct intended locations. Archive members,
-user paths, and stored relative locators MUST remain below their owning root and
-MUST NOT escape through `..`, absolute paths, or symlink traversal.
+The six managed directory roots MUST be non-root directories, MUST NOT be
+symlinks, and MUST NOT contain or overlap one another after resolution. The
+database path MUST be a regular-file location outside all managed roots. Archive
+members, user paths, and stored relative locators MUST remain below their owning
+root and MUST NOT escape through `..`, absolute paths, or symlink traversal.
 
 There is currently no per-repository disk quota. Upload and package expansion
 limits protect individual admission operations; they are not durable workspace
@@ -22,36 +24,44 @@ or Git repository quotas.
 
 ## Locators and availability
 
-Database rows store typed relative paths or immutable runtime blob references,
-not arbitrary host paths. The owning store validates a locator before resolving
-it. A locator is not proof that its payload still exists: cleanup-safe artifacts
-are checked when read or downloaded.
+Locator shape is column-specific. `workspaces.path` stores the selected checkout
+path. Contest attachments and export/package archives use relative locators
+under their owning roots. Verification input/answer payloads and structured
+execution results use immutable `blob://sha256/...` runtime references. Services
+validate relative locators and configured paths before resolving them.
 
-Verification input and answer blobs use `verification_artifact_refs`. Other
-execution artifacts are referenced inside structured result JSON. JudgeFS
-executable blobs and indexes are runtime data. Export and contest artifact rows
-refer to files below the global artifact root. `ContestService.artifacts_base()`
-resolves contest products specifically below `artifacts_root/contests`; contest
-source paths never own derived artifacts.
+A database locator is not proof that its payload is still available. Artifact-
+root files can disappear after maintenance cleanup; cache-root payloads can also
+disappear at startup. Reads and downloads check the referenced file or blob.
+
+Verification input and answer blobs use `verification_artifact_refs`; other
+execution artifact refs live in structured task results. JudgeFS executable
+blobs and indexes are runtime data. Export and package rows carry artifact-root
+archive locators. Contest artifact paths are derived below
+`artifacts_root/contests`; the contest source root never owns derived artifacts.
 
 ## Startup cleanup
 
 Before the worker queue starts, the application:
 
-1. reconciles unfinished previews, verifications, contest jobs, exports, and
-   Judgehost work;
-2. clears the runtime cache index;
+1. fails interrupted package builds and export jobs;
+2. cancels unfinished preview, contest-job, verification, verification-task,
+   and Judgehost work;
 3. resets worker history in memory and removes its JSONL;
-4. recreates cache artifact and runtime roots.
+4. clears the process-local runtime cache index;
+5. deletes and recreates `cache_root/artifacts` and `cache_root/runtime`.
 
-The cache-root runtime tree, JudgeFS index/blobs, Judgehost workdirs, and worker
-history do not survive startup. Durable terminal summary rows can survive even
-when cleanup-safe payloads do not.
+Preview/verification cache payloads, runtime snapshots/blobs, JudgeFS data,
+Judgehost workdirs, and worker history do not survive startup. Other cache-root
+children are not part of this general startup deletion. Durable terminal summary
+rows can survive even when their cleanup-safe payloads do not.
 
 ## Maintenance cleanup
 
-Administrative cleanup closes admission, checks for active work, removes the
-configured cleanup-safe metadata and filesystem trees, resets process-local
-state, vacuums SQLite, and appends an audit event. It never removes the backup
-root. Cleanup is exclusive; worker history reset fails if queued or running jobs
-remain.
+Administrative cleanup closes admission and refuses to start while requests,
+worker jobs, or queued/leased/reporting Judgehost work is active. It recreates
+the preview, verification, package, export, and contest-build metadata tables;
+clears stale workspace verification status and earlier audit rows; empties the entire
+artifact and cache roots; resets process-local execution state; vacuums SQLite;
+and appends a terminal audit event. It does not remove problem, user, workspace,
+contest, membership, contest attachment, configuration, or backup data.

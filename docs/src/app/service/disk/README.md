@@ -1,8 +1,18 @@
 # `app/service/disk`
 
-Provides concrete filesystem-backed stores for workspaces, verification data,
-and related payloads. It validates and resolves paths below configured roots and
-translates between service locators and files.
+This package contains SQLite store adapters for authentication, workspaces,
+contests, previews, verifications, exports, runtime reconciliation, system
+configuration, and SMTP configuration. Despite its package name, it does not
+own the artifact/cache filesystem layout.
 
-It does not define domain lifecycle or publication policy. Cross-store boundary
+The stores accept canonical service identifiers and typed row values, execute
+queries or transactions through `app.db.DB`, and return typed records or decoded
+JSON projections. Filesystem locators are persisted as data for their owning
+domain service; locator validation and file lifecycle remain outside this
+package. The table and locator contracts are documented in the
+[persistence](../../../../protocol/persistence.md) and
+[storage](../../../../protocol/storage.md) protocols.
+
+Store instances are process-lived wrappers around short-lived SQLite
+connections and retain no task lifecycle of their own. Cross-store boundary
 fragmentation is recorded as PLC-009.

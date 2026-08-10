@@ -7,11 +7,11 @@ implementation modules in `app/impl`, which coordinate domain services in
 `app/service`. SQLite access, Git operations, filesystem stores, sandbox
 processes, and Judgehost state are wired by the runtime composition layer.
 
-Statement preview compilation runs synchronously in the request path.
-Verification, custom run, export, and contest build work is admitted to one
-process-local worker queue. Its JSONL file is diagnostic runtime history, not a
-durable queue: startup cancels unfinished durable summaries and clears runtime
-queue history before workers start.
+Request-path and queued work, restart reconciliation, and execution identity are
+owned by the [execution protocol](../protocol/execution.md). Filesystem cleanup
+and availability are owned by the [storage protocol](../protocol/storage.md).
+The process topology and launcher constraints are described in
+[runtime operations](../operations/runtime.md).
 
 ## Source lifecycle
 
@@ -32,7 +32,5 @@ Authorization is enforced at HTTP boundaries before domain work. Agent tokens
 cannot acquire, inherit, or present sudo authority. Sudo belongs only to the
 browser session that completed elevation and is not transferable.
 
-Judgehost is an operator-controlled trusted deployment. Authentication protects
-the wire boundary; authenticated compile, cache, runtime, and result reports are
-accepted as execution facts. Reported compiler and runner versions are recorded
-as telemetry but are not currently consistency gates or cache-key inputs.
+Judgehost trust, authentication, leases, callbacks, and version telemetry are
+owned by the [Judgehost wire protocol](../protocol/judgehost.md).

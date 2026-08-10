@@ -1,7 +1,8 @@
 # Application package map
 
-This tree mirrors the current `app/` package. It explains responsibility and
-dependency direction; protocol details remain in [docs/protocol](../protocol/README.md).
+This tree mirrors the current `app/` package. It explains responsibility,
+inputs, outputs, state, and lifecycle; exchanged and persisted shapes remain in
+the [protocol index](../protocol/README.md).
 
 - [`app/`](app/README.md): application entry points and package boundaries
 - [`app/impl`](app/impl/README.md): HTTP-facing use-case orchestration

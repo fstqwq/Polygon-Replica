@@ -1,5 +1,10 @@
 # `app/service/run`
 
-Provides custom-run request preparation and presentation helpers around the
-verification execution model. Custom runs are stored as verifications with the
-custom kind and use the same task DAG, Judgehost cases, results, and artifacts.
+Provides the custom-run test-name rule, re-exports canonical run-limit helpers
+from verification, and normalizes/truncates diagnostics for stored summaries.
+It owns no database or filesystem state and does not schedule work.
+
+Request preparation and presentation remain in `app/impl`; execution is stored
+as a verification with the custom kind and uses the same task DAG, Judgehost
+cases, results, and artifacts. That lifecycle and its persistence are owned by
+the [execution protocol](../../../../protocol/execution.md).

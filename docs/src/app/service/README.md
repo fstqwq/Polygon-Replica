@@ -1,7 +1,9 @@
 # `app/service`
 
-Services own reusable domain behavior and infrastructure adapters. They may use
-SQLite, Git, filesystem, sandbox, and process mechanisms through the current
+Services own reusable domain behavior and infrastructure adapters. Their inputs
+are canonical values prepared at HTTP/archive boundaries; their outputs are
+domain records, locators, and execution results consumed by `app/impl`. They may
+use SQLite, Git, filesystem, sandbox, and process mechanisms through the current
 composition, but do not depend on templates or route registration.
 
 Current packages:

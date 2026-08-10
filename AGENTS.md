@@ -1,8 +1,8 @@
 # AGENTS.md
 
 Polygon-Replica is a local problem-authoring and judging system. Start at
-[docs/README.md](docs/README.md), then read only the protocol and package notes
-for the area being changed.
+[docs/README.md](docs/README.md), then read only the owning protocol and package
+map pages for the area being changed.
 
 Repository rules:
 

@@ -12,7 +12,9 @@ multiple uvicorn workers or application replicas are not supported.
 
 Production places a TLS proxy in front of the loopback uvicorn listener.
 Judgehost traffic reaches the same process through authenticated `/api/v4/*`
-routes. Proxy headers are trusted only at the configured proxy boundary.
+routes. The systemd and Compose launchers bind host port `8001` to loopback and
+configure uvicorn to accept forwarded headers from any direct peer. Keeping that
+listener private is therefore part of the deployment security boundary.
 The generated Judgehost command currently uses `domjudge/judgehost:latest`;
 operators therefore control image pinning and upgrades outside the application.
 
@@ -37,8 +39,9 @@ applies durable configuration, reconciles unfinished domain work, clears
 startup-scoped caches and worker history, and then starts worker threads.
 Process-local jobs cannot resume across restart.
 
-Shutdown stops the worker queue and other runtime services. Operators should
-expect interrupted asynchronous jobs to become terminal and be requested again.
+Shutdown stops the worker queue. Operators should expect interrupted
+asynchronous jobs to become terminal during the next startup reconciliation and
+be requested again.
 
 ## Docker
 
@@ -47,10 +50,11 @@ contest source data, cleanup-safe cache/artifact data, and a separately managed
 backup root. The backup root must not be placed inside a disposable cache
 volume.
 
-Bubblewrap inside a container requires host user-namespace support. Broad
-seccomp or AppArmor relaxations change the deployment security boundary and
-require operator review. `docker-compose.e2e.yml` is test infrastructure, not a
-production retention model.
+Bubblewrap inside a container requires host user-namespace support. The checked-
+in Compose service disables seccomp and AppArmor confinement for the application
+container; this is part of its current deployment security boundary.
+`docker-compose.e2e.yml` is test infrastructure, not a production retention
+model.
 
 ## Operations
 

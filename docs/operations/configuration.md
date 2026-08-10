@@ -15,9 +15,23 @@ be read:
 | `POLYGON_REPLICA_CONTEST_SOURCE_ROOT` | contest sources and attachments | `/var/lib/polygon-replica/contest-sources` |
 | `POLYGON_REPLICA_BACKUP_ROOT` | operator archives | `/var/backups/polygon-replica` |
 
-TLS paths, encryption-key material, bind addresses, and process launch settings
-are also bootstrap concerns where used by the selected launcher. Root paths must
-obey the [storage protocol](../protocol/storage.md).
+Root paths must obey the [storage protocol](../protocol/storage.md).
+
+`POLYGON_REPLICA_ENCRYPTION_KEY` supplies the 32-byte base64url key used to
+encrypt the SMTP password stored in SQLite. It is read directly from the process
+environment, is not a `system_config` key, and must remain stable while the
+encrypted password is retained.
+
+Launcher-only variables are not application storage configuration:
+
+| Launcher | Variables and current behavior |
+| --- | --- |
+| `scripts/start_local.sh` | `POLYGON_REPLICA_HOST` (default `127.0.0.1`), `POLYGON_REPLICA_PORT` (default `8000`), `POLYGON_REPLICA_DEV_RELOAD`, `POLYGON_REPLICA_TLS_KEY_PATH`, `POLYGON_REPLICA_TLS_CERT_PATH`, `POLYGON_REPLICA_UVICORN_GRACEFUL_TIMEOUT_SEC`, `POLYGON_REPLICA_KEEPALIVE_TIMEOUT_SEC`, and `POLYGON_REPLICA_SHUTDOWN_TIMEOUT_SEC` |
+| Docker entrypoint | `POLYGON_REPLICA_HOST` (default `0.0.0.0`), `POLYGON_REPLICA_PORT` (default `8001`), and `POLYGON_REPLICA_KEEPALIVE_TIMEOUT_SEC` |
+| systemd unit | host `127.0.0.1`, port `8001`, keepalive `30` seconds, and proxy-header acceptance are fixed in the rendered unit |
+
+`POLYGON_REPLICA_RUNTIME_USER` is installer input, not application runtime
+configuration.
 
 ## Durable application settings
 
@@ -38,13 +52,12 @@ snapshot is validated. An unknown key, malformed value, invalid regular
 expression, colliding cookie name, or inconsistent min/max pair prevents
 startup and names the offending key rather than silently restoring a default.
 
-Secure-cookie behavior comes from this durable configuration path. The removed
-`POLYGON_REPLICA_AUTH_COOKIE_SECURE` environment variable was never an
-application override and MUST NOT be added to deployment manifests.
+Secure-cookie behavior comes from this durable configuration path. There is no
+bootstrap environment-variable override; deployment manifests must leave it
+under `system_config` authority.
 
 SMTP connection fields live in the singleton `smtp_config` row. Its password is
-stored encrypted; the encryption key is deployment bootstrap material and must
-remain stable while encrypted values are retained.
+stored encrypted with the deployment key above.
 
 ## Change behavior
 

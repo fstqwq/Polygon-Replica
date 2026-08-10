@@ -26,6 +26,8 @@ Important physical facts:
 - `system_config` is mutable key/value JSON, `smtp_config` is a singleton, and
   `audit_log` is append-oriented evidence rather than event-sourced state.
 
-Startup creates missing canonical objects and validates required schema shape.
-The schema still contains an inline rebuild path for an older contest-build
-column shape; this is recorded as technical debt in the findings ledger.
+Startup creates missing tables, validates the presence of every canonical table
+and required column, then creates missing named indexes. It does not validate
+column constraints or the definitions of already named indexes. The schema also
+contains an inline rebuild path that makes two older `contest_build_items`
+columns nullable; this is recorded as technical debt in the findings ledger.

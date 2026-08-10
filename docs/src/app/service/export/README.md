@@ -1,9 +1,13 @@
 # `app/service/export`
 
-Owns asynchronous export jobs and persisted export products. It consumes an
-available problem-package materialization and writes archives under the artifact
-root.
+Owns export job records, conversion-cache lookup, Native passthrough, and ICPC
+archive construction. It consumes an available, integrity-checked Native
+materialization plus export options; ICPC conversion also consumes statement
+rendering/TeX compilation. It writes export metadata to SQLite and archive bytes
+below the artifact root.
 
-Current outputs include Native products and the single hybrid ICPC ZIP described
-by the package protocol. Cached product identity does not imply deterministic
-ZIP bytes across rebuilds.
+The HTTP layer schedules conversion on the process-local worker queue. Startup
+marks interrupted job rows failed; completed rows survive, while missing or
+checksum-mismatched archive bytes are treated as unavailable and their cache
+record is discarded. Current output and cache identity are defined by the
+[package protocol](../../../../protocol/package.md).

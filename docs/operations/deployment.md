@@ -48,8 +48,17 @@ Generate and retain a stable encryption key if SMTP credentials will be stored:
 python3 -c 'import base64,secrets; print(base64.urlsafe_b64encode(secrets.token_bytes(32)).decode().rstrip("="))'
 ```
 
-Add it as `POLYGON_REPLICA_ENCRYPTION_KEY` in the protected service environment,
-then restart. Losing or changing it makes the stored SMTP password unreadable.
+Before adding the key, restrict the installer-created environment file, then add
+`POLYGON_REPLICA_ENCRYPTION_KEY=<key>` and restart:
+
+```bash
+sudo chmod 0600 /etc/polygon-replica.env
+sudoedit /etc/polygon-replica.env
+sudo systemctl restart polygon-replica.service
+```
+
+Losing or changing the key makes the stored SMTP password unreadable. Re-running
+the installer replaces this file, so preserve and restore the key afterward.
 
 ## Docker Compose installation
 
@@ -67,10 +76,12 @@ fi
 sudo sysctl --system
 ```
 
-Create the permanent backup bind and start Compose:
+Create the permanent backup bind and start Compose. The following creates a new
+private `.env`; edit an existing file instead of overwriting it:
 
 ```bash
 sudo install -d -o 1000 -g 1000 -m 0700 /var/backups/polygon-replica
+umask 077
 printf '%s\n' \
   'POLYGON_REPLICA_BACKUP_HOST_DIR=/var/backups/polygon-replica' >.env
 sudo docker compose build
@@ -79,8 +90,9 @@ sudo docker compose logs --tail=200 app
 curl -I http://127.0.0.1:8001/
 ```
 
-If SMTP is used, add the stable encryption key to `.env` and explicitly pass it
-through the Compose `environment` block. Protect `.env` from other users.
+If SMTP is used, add the stable encryption key to `.env` and explicitly pass
+`POLYGON_REPLICA_ENCRYPTION_KEY` through the Compose `environment` block. Keep
+`.env` mode `0600`.
 
 ## TLS proxy
 
@@ -114,7 +126,7 @@ server {
 Enable it and issue the certificate:
 
 ```bash
-sudo ln -s /etc/nginx/sites-available/polygon-replica \
+sudo ln -sf /etc/nginx/sites-available/polygon-replica \
   /etc/nginx/sites-enabled/polygon-replica
 sudo nginx -t
 sudo systemctl reload nginx

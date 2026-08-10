@@ -26,9 +26,21 @@ Each parsed XML, YAML, INI, or JSON document and the retained metadata set are
 bounded by the fixed 4 MiB metadata limit. Import writes canonical workspace
 source; an imported archive is not retained as source of truth after conversion.
 
-The application currently imports Native, Polygon, and ICPC packages. Their
+The application currently detects Native packages by `config/problem.json`,
+Polygon packages by `problem.xml`, and ICPC packages by `problem.yaml`. Their
 converters map accepted external files into the current workspace layout and
-report validation errors at the archive boundary.
+report validation errors at the archive boundary. Detection checks Polygon,
+then ICPC, then Native when an archive contains more than one marker.
+
+Importing as a new problem converts into an unborn workspace, commits the
+result, and pushes `main`. Importing into an existing problem converts in a
+staging directory, overwrites paths present in the converted tree, and keeps
+existing paths absent from that tree; it leaves those merged changes uncommitted.
+
+Native import copies the allowed authored workspace roots and discards packaged
+`test_data/`; its manifest payload is derived data, not authored source. ICPC
+import accepts an absent format version plus `legacy`, `legacy-icpc`, and
+`2025-09`, with `pass-fail`, `interactive`, and `multi-pass` type tokens.
 
 Agent workspace compare/apply uses the same file-backed archive admission and
 consumed-byte accounting. Its selected files are streamed into a temporary
@@ -37,10 +49,24 @@ workspace tree before comparison or replacement.
 ## Native materialization
 
 Native materialization is built from a specific published source commit and a
-successful compatible verification. It contains the canonical manifest,
-committed source, and materialized testcase data in manifest order. The durable
-row records source commit, digest, revision, verification, archive locator, SHA,
-size, and current availability.
+successful full verification of that snapshot. It contains the canonical
+manifest, committed source, and materialized testcase data in manifest order.
+The durable row records source commit, digest, revision, verification, archive
+locator, SHA, size, and current availability.
+
+The archive keeps committed source at its root and adds
+`test_data/manifest.json` plus `test_data/tests/<id>/...`. The manifest has the
+exact top-level fields `source_commit`, `revision_number`, `source_digest`,
+`mode`, `pass_limit`, `verification`, and ordered `tests`. Each test records
+`id`, `kind`, `sample`, an `input` descriptor, and optional `answer`,
+`sample_input`, and `sample_output` descriptors. A descriptor contains only
+`path`, `sha256`, and `size`. Non-interactive tests require answers; sample
+overrides are stored only when they differ from judge data.
+
+Reading a Native archive rechecks its stored size and SHA, safe member types,
+manifest identity, every declared payload, the absence of undeclared testcase
+payloads, and the committed-source digest. Failed validation marks the
+materialization unavailable and invalidates its derived exports.
 
 Readiness, Git provenance, and archive availability are separate facts:
 successful verification does not itself prove that an old archive still exists,
@@ -79,8 +105,12 @@ profiles. The archive contains:
 
 - `problem.yaml`
 - `domjudge-problem.ini`
-- the current `statement/` tree
-- the legacy `problem_statement/` mirror
+- language PDFs below `statement/`
+- the legacy `problem_statement/` PDF mirror
+- `data/sample/` and `data/secret/` testcase pairs
+- `input_validators/` and, when configured, `output_validator/`
+- categorized solutions and `submissions/submissions.yaml`
+- copied `attachments/` when present
 
 Representable pass-fail, interactive, and multi-pass problems use
 `problem_format_version: 2025-09`. Interactive multi-pass falls back to
@@ -90,6 +120,11 @@ by the 2025-09 mode field used by the exporter.
 Every rendered statement-language PDF is exported and mirrored into the legacy
 directory. English is preferred for `problem_statement/problem.pdf`; when it is
 absent, the first exported language is used.
+
+Pass-fail sample tests are written below `data/sample/`. Interactive and
+multi-pass samples are kept in `data/secret/` and omitted from rendered sample
+blocks because the legacy DOMjudge sample path cannot express their execution
+semantics.
 
 The output aims at PPF 2025-09 and best-effort legacy DOMjudge consumption.
 There is no compatibility release gate and no guarantee for every legacy
@@ -102,5 +137,5 @@ build.
 
 Polygon import accepts the supported Polygon archive layout, converts tests,
 programs, configuration, and statements into the canonical workspace, and
-preserves usable statement assets. Unsupported or ambiguous input is rejected
-rather than stored as a parallel legacy source model.
+preserves usable statement assets. Only members mapped by the supported layout
+are converted; the external package is not stored as a parallel source model.

@@ -1,9 +1,14 @@
 # `app/service/auth`
 
-Owns password/session authentication, sudo-session verification, registration,
-rate limiting, and access-policy helpers. Browser auth and sudo cookies are
-independent from agent and Judgehost credentials.
+Owns user password-verifier records, registration, durable registration rate
+limits, browser sessions, sudo sessions, and system-admin account changes. It
+accepts already-normalized identity and verifier values and returns session
+tokens or authenticated identities; cookie parsing and response handling remain
+in `app/impl/auth`.
 
-Sudo is bound to the browser session that completed elevation and is not
-transferable. Cookie security policy is loaded from durable system
-configuration.
+Users, pending registrations, rate-limit buckets, auth sessions, and sudo
+sessions are stored in SQLite. Sessions expire or are revoked when access is
+withdrawn. The [system trust boundary](../../../../design/system.md#trust-boundaries)
+owns sudo's browser-session and non-transferability invariant. Cookie names,
+lifetime, and secure behavior come from durable
+[system configuration](../../../../operations/configuration.md).

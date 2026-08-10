@@ -9,12 +9,11 @@ based on present impact, not on an imagined future architecture.
 
 | ID | Class | Finding and current impact | Suggested owner |
 | --- | --- | --- | --- |
-| STO-002 | risk | Root validation is distributed; there is no single proof that every configured root is mutually safe and disjoint before mutation. | platform storage |
 | STO-003 | refactor | Schema upgrade handling includes an inline special-case table rebuild in general startup DDL code. | database bootstrap |
 | STO-004 | risk | The repository documents storage authorities but has no single consistent multi-root backup/restore implementation. | operations |
-| STO-005 | refactor | `workspaces.recent_verification_status` remains as a stored projection beside authoritative verification rows. | workspace persistence |
+| STO-005 | refactor | `workspaces.recent_verification_status` remains in DDL and cleanup SQL even though production status reads and writes no longer use it. | workspace persistence |
 | STO-007 | risk | Exclusive cleanup has an audit result but no durable resumable operation record; a process crash can require operator inspection. | maintenance |
-| STO-008 | risk | Workspace replacement and publish span Git/filesystem/SQLite operations without a durable compare-and-swap intent record. | repository/workspace |
+| STO-008 | risk | Workspace archive application replaces allowed roots in place and keeps its rollback copy only in a temporary directory; interruption during copying can leave a partial checkout. | workspace archive |
 | STO-009 | refactor | Runtime artifact ownership is reconstructed across JSON results and reference tables rather than one queryable owner index. | execution storage |
 
 ## Problem source and execution
@@ -23,6 +22,7 @@ based on present impact, not on an imagined future architecture.
 | --- | --- | --- | --- |
 | SRCFMT-001 | refactor | Authored configuration readers accept several loose shapes, increasing normalization paths and review cost. | problem source |
 | SRCFMT-002 | refactor | Solution metadata still accepts inferred/unkeyed forms instead of one explicit canonical input shape. | problem source |
+| SRCFMT-004 | risk | When a checker, validator, or interactor is not configured and several eligible files exist, component selection silently uses the lexicographically first file. | problem build configuration |
 | EXE-001 | refactor | Some cancellation outcomes are represented as failed status plus reason text, complicating status queries. | verification |
 | EXE-002 | refactor | Admission and execution use overlapping `running` language even though queued callable state and domain lifecycle differ. | worker/runtime |
 
@@ -31,12 +31,6 @@ based on present impact, not on an imagined future architecture.
 | ID | Class | Finding and current impact | Suggested owner |
 | --- | --- | --- | --- |
 | JH-005 | refactor | Compile failure and host infrastructure failure share parts of the result path and are not uniformly classified. | result processing |
-
-## Packaging and contests
-
-| ID | Class | Finding and current impact | Suggested owner |
-| --- | --- | --- | --- |
-| PKG-002 | risk | Source digest construction depends partly on checkout filesystem representation. | package manifest |
 
 ## Placement and maintainability
 
@@ -61,6 +55,7 @@ based on present impact, not on an imagined future architecture.
 | ID | Class | Finding and current impact | Suggested owner |
 | --- | --- | --- | --- |
 | OPS-003 | risk | Docker build steps use broad failure suppression around some package/TeX setup, which can defer dependency failure until runtime. | container build |
+| OPS-004 | risk | The host installer replaces `/etc/polygon-replica.env` with mode `0644`; a rerun drops an operator-added encryption key, while adding the key without tightening permissions exposes it to local users. | host installer |
 
 ## Resolved in this rewrite
 
@@ -69,6 +64,8 @@ based on present impact, not on an imagined future architecture.
 - RUN-001: startup resets both loaded worker history and its JSONL.
 - OPS-001: the installer renders the systemd account and repository path.
 - OPS-002: the unused secure-cookie environment variable was removed.
+- PKG-003: all ZIP member names are canonicalized and duplicate, conflicting,
+  absolute, and traversing paths are rejected before importer selection.
 - PKG-004: authenticated ZIP imports preflight entry structure and stream only
   selected content under separate compressed, entry, expanded, and metadata
   budgets; Native materialization payloads are skipped.

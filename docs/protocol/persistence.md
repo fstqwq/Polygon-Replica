@@ -2,19 +2,8 @@
 
 The canonical schema is the `SCHEMA` declaration and validation manifest in
 `app/db.py`. SQLite does not store committed source files or large artifact
-payloads.
-
-## Durable groups
-
-- Identity and access: users, browser auth/sudo sessions, registration and rate
-  limit state, agent sessions/tokens/access requests, and repository ACLs.
-- Authoring: problems and workspaces.
-- Contests: contests, membership, problem membership, jobs, build items,
-  artifacts, and attachments.
-- Execution: previews, verifications, selected tests, source paths, sanity
-  checks/messages, test metadata, task DAG rows, and artifact references.
-- Packaging: materializations, builds, exports, and export jobs.
-- Operations: audit log, system configuration, and singleton SMTP configuration.
+payloads. The physical table inventory is in
+[the SQLite implementation map](../implementation/sqlite.md).
 
 Foreign keys identify domain relationships. JSON columns carry structured
 details whose owning service defines their shape; they are not interchangeable
@@ -32,7 +21,10 @@ input and answer locators are in `verification_artifact_refs`. The schema has no
 
 Preview, export, package-build, and contest-job rows survive normal restarts.
 Unfinished rows are moved to a terminal failure/cancellation state because their
-process-local work cannot resume.
+process-local work cannot resume. Administrative artifact cleanup removes the
+execution/package/export/build subset described by the
+[storage protocol](storage.md#maintenance-cleanup), while identity, authoring,
+contest source, attachment, and configuration rows remain.
 
 ## Configuration and audit
 
@@ -47,7 +39,10 @@ write service rather than blocking the audit record.
 
 ## Schema changes
 
-The application validates the expected columns and indexes on startup. A schema
-change updates the DDL, validation manifest, service queries, cleanup policy,
-and this document together. No project-owned schema version is reserved without
-an actual compatibility boundary.
+At startup the application creates missing tables, runs the current narrow
+contest-build nullability rebuild when required, validates that every canonical
+table and required column exists, and creates missing named indexes. It does not
+compare existing column constraints or existing index definitions against the
+DDL. A schema change updates the DDL, required-column manifest, service queries,
+cleanup policy, and this document together. No project-owned schema version is
+reserved without an actual compatibility boundary.
