@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import app.main_constant as _K
-
 import json
 import time
 from dataclasses import dataclass
@@ -13,10 +11,10 @@ from app.impl.runtime.config import config
 from app.service.repository.revision import workspace_verification_source
 from app.service.problem.solution_metadata import normalize_expected_behavior
 from app.service.platform.runtime_blob_store import PayloadFile, RuntimeBlobStore
-from app.service.platform.error_text import aux_display_text_limit_bytes
 from app.service.verification.source import resolve_source
+from app.service.verification.completion import verification_task_fail_reason
+from app.service.verification.task_completion import TaskCompletion
 from app.service.verification.task_scheduler import (
-    TaskExecutionResult,
     TaskPublishResult,
     VerificationRuntimeCallbacks,
     VerificationRuntimeCoordinator,
@@ -25,7 +23,6 @@ from app.service.verification.task_scheduler import (
 )
 from app.service.verification.execution_result import normalize_execution_result
 from app.service.verification.task_store import VerificationTaskRow, VerificationTaskStore
-from app.service.verification.task_result_finalize import verification_task_fail_reason
 from app.service.verification.test_rows import build_verification_test_row
 from app.service.verification.types import Kind, Status
 from app.service.verification.signature import (
@@ -60,7 +57,7 @@ from app.impl.workspace.verification_dag_plan import build_verification_executio
 from app.impl.workspace.verification_payload import prepared_payload_for_uploaded_source
 from app.impl.workspace.problem_config import read_problem_config
 
-_C = config.config_values
+_C = config.constants
 
 TASK_GENERATE_INPUT = "generate-input"
 TASK_MAIN_CORRECT = "main-correct"
@@ -107,8 +104,8 @@ class TaskExecutionContext:
 
 
 def _workspace_mode_and_pass_limit(problem_id: int, workspace_id: int) -> tuple[str, int]:
-    default_mode = str(_K.GENERAL_CONFIG_DEFAULTS.get("mode") or "pass-fail")
-    default_pass_limit = int(_K.GENERAL_CONFIG_DEFAULTS.get("pass_limit") or 1)
+    default_mode = str(_C.GENERAL_CONFIG_DEFAULTS.get("mode") or "pass-fail")
+    default_pass_limit = int(_C.GENERAL_CONFIG_DEFAULTS.get("pass_limit") or 1)
     workspace_path_text = config.workspace_service.workspace_path(int(problem_id), int(workspace_id))
     if not workspace_path_text:
         return (default_mode, default_pass_limit)
@@ -121,8 +118,8 @@ def _workspace_mode_and_pass_limit(problem_id: int, workspace_id: int) -> tuple[
 
 
 def _snapshot_mode_and_pass_limit(snapshot: Path) -> tuple[str, int]:
-    default_mode = str(_K.GENERAL_CONFIG_DEFAULTS.get("mode") or "pass-fail")
-    default_pass_limit = int(_K.GENERAL_CONFIG_DEFAULTS.get("pass_limit") or 1)
+    default_mode = str(_C.GENERAL_CONFIG_DEFAULTS.get("mode") or "pass-fail")
+    default_pass_limit = int(_C.GENERAL_CONFIG_DEFAULTS.get("pass_limit") or 1)
     _payload, general_cfg, _cfg_path = read_problem_config(snapshot)
     return (
         normalize_problem_mode(general_cfg.get("mode"), default_mode),
@@ -580,14 +577,12 @@ def _verification_summary_from_tasks(
                 logical_run.source_path,
                 "",
                 str(run_summary.get("error") or ""),
-                limit_bytes=int(_C.AUX_DISPLAY_TEXT_LIMIT_BYTES),
             )
         if (not matched) and completed and (not first_solution_error):
             first_solution_error = reason_text or verification_solution_failure_hint(
                 logical_run.source_path,
                 "",
                 str(run_summary.get("error") or ""),
-                limit_bytes=int(_C.AUX_DISPLAY_TEXT_LIMIT_BYTES),
             )
         all_matched = all_matched and bool(matched)
     if fail_flag and is_cancel_reason(fail_reason):
@@ -752,15 +747,15 @@ def _empty_task_result(
     run_id: str,
     judgehost_task_id: str,
     error_text: str,
-    fail_flag_reason: str = "",
-) -> TaskExecutionResult:
-    return TaskExecutionResult(
+    fail_reason: str = "",
+) -> TaskCompletion:
+    return TaskCompletion(
         task_id=task_id,
         status=status,
         run_id=run_id,
         judgehost_task_id=judgehost_task_id,
         result=normalize_execution_result(verdict=verdict, error=error_text),
-        fail_flag_reason=fail_flag_reason,
+        fail_reason=fail_reason,
     )
 
 
@@ -770,7 +765,7 @@ def _skipped_downstream_task_result(task_row: VerificationTaskRow) -> TaskPublis
         task_id=task_id,
         run_id="",
         judgehost_task_id="",
-        terminal_result=TaskExecutionResult(
+        terminal_result=TaskCompletion(
             task_id=task_id,
             status=VerificationTaskStore.TASK_DONE,
             run_id="",
@@ -811,11 +806,7 @@ def _publish_generate_task(task_row: VerificationTaskRow, *, execution: TaskExec
                     run_id=run_id,
                     judgehost_task_id="",
                     error_text=reason,
-                    fail_flag_reason=verification_task_fail_reason(
-                        task_row,
-                        error_text=reason,
-                        limit_bytes=int(_C.AUX_DISPLAY_TEXT_LIMIT_BYTES),
-                    ),
+                    fail_reason=verification_task_fail_reason(task_row, error_text=reason),
                 )
                 return TaskPublishResult(
                     task_id=task_id,
@@ -824,12 +815,6 @@ def _publish_generate_task(task_row: VerificationTaskRow, *, execution: TaskExec
                     terminal_result=result,
                 )
             owner_output_ref = str(owner["output_ref"] or "")
-            if owner_output_ref:
-                config.verification_service.update_verification_artifact_refs(
-                    execution.verification_id,
-                    test_name,
-                    {"input_ref": owner_output_ref},
-                )
             feedback_text = str(task_row["feedback_text"] or "")
             if not feedback_text:
                 feedback_text = (
@@ -840,7 +825,7 @@ def _publish_generate_task(task_row: VerificationTaskRow, *, execution: TaskExec
                 task_id=task_id,
                 run_id=run_id,
                 judgehost_task_id="",
-                terminal_result=TaskExecutionResult(
+                terminal_result=TaskCompletion(
                     task_id=task_id,
                     status=VerificationTaskStore.TASK_DONE,
                     run_id=run_id,
@@ -849,6 +834,7 @@ def _publish_generate_task(task_row: VerificationTaskRow, *, execution: TaskExec
                         verdict="SK",
                         feedback=feedback_text,
                     ),
+                    input_ref=owner_output_ref,
                 ),
             )
         prepared = prepared_payload_for_uploaded_source(
@@ -909,11 +895,7 @@ def _publish_generate_task(task_row: VerificationTaskRow, *, execution: TaskExec
             run_id=run_id,
             judgehost_task_id="",
             error_text=str(exc),
-            fail_flag_reason=verification_task_fail_reason(
-                task_row,
-                error_text=str(exc),
-                limit_bytes=int(_C.AUX_DISPLAY_TEXT_LIMIT_BYTES),
-            ),
+            fail_reason=verification_task_fail_reason(task_row, error_text=str(exc)),
         )
         return TaskPublishResult(
             task_id=task_id,
@@ -998,12 +980,8 @@ def _publish_run_task(task_row: VerificationTaskRow, *, execution: TaskExecution
         )
         return TaskPublishResult(task_id=task_id, run_id=run_id, judgehost_task_id=judgehost_task_id)
     except Exception as exc:
-        fail_flag_reason = (
-            verification_task_fail_reason(
-                task_row,
-                error_text=str(exc),
-                limit_bytes=int(_C.AUX_DISPLAY_TEXT_LIMIT_BYTES),
-            )
+        fail_reason = (
+            verification_task_fail_reason(task_row, error_text=str(exc))
             if task_kind == TASK_MAIN_CORRECT
             else ""
         )
@@ -1014,7 +992,7 @@ def _publish_run_task(task_row: VerificationTaskRow, *, execution: TaskExecution
             run_id=run_id,
             judgehost_task_id="",
             error_text=str(exc),
-            fail_flag_reason=fail_flag_reason,
+            fail_reason=fail_reason,
         )
         return TaskPublishResult(
             task_id=task_id,
@@ -1036,7 +1014,6 @@ def _publish_task(task_row: VerificationTaskRow, *, execution: TaskExecutionCont
         missing_reason = verification_task_fail_reason(
             task_row,
             error_text=f"verification test plan missing for {test_name}",
-            limit_bytes=int(_C.AUX_DISPLAY_TEXT_LIMIT_BYTES),
         )
         result = _empty_task_result(
             task_id=str(task_row["id"]),
@@ -1045,7 +1022,7 @@ def _publish_task(task_row: VerificationTaskRow, *, execution: TaskExecutionCont
             run_id="",
             judgehost_task_id="",
             error_text=f"verification test plan missing for {test_name}",
-            fail_flag_reason=missing_reason,
+            fail_reason=missing_reason,
         )
         return TaskPublishResult(
             task_id=str(task_row["id"]),
@@ -1312,11 +1289,9 @@ def run_workspace_verification_dag(
         coordinator = VerificationRuntimeCoordinator(
             verification_id,
             task_store=task_store,
+            completion_service=config.verification_task_completion_service,
             callbacks=callbacks,
             edges=graph.edges,
-            display_text_limit_bytes=aux_display_text_limit_bytes(
-                config.config_values.snapshot()
-            ),
         )
         register_verification_runtime_coordinator(verification_id, coordinator)
         try:

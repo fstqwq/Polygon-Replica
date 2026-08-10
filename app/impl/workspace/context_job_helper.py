@@ -6,6 +6,7 @@ from pathlib import Path
 from app.impl.runtime.config import config
 from app.service.verification.execution_result import normalize_execution_result
 from app.service.problem.solution_metadata import normalize_expected_behavior
+from app.service.verification.task_completion import TaskCompletion
 from app.service.verification.task_store import VerificationTaskStore
 from app.service.verification.types import Kind, Status
 
@@ -121,17 +122,21 @@ def record_async_run_failure(
         ],
         edges=[],
     )
-    task_store.save_task_result(
-        task_id,
-        status=VerificationTaskStore.TASK_FAILED,
-        run_id=run_id,
-        judgehost_task_id="",
-        result=normalize_execution_result(
-            verdict="FL",
-            error=detail_error,
-            feedback=detail_error,
-            compile_log=detail_error,
-        ),
+    task_store.commit_task_completions(
+        [
+            TaskCompletion(
+                task_id=task_id,
+                status=VerificationTaskStore.TASK_FAILED,
+                run_id=run_id,
+                judgehost_task_id="",
+                result=normalize_execution_result(
+                    verdict="FL",
+                    error=detail_error,
+                    feedback=detail_error,
+                    compile_log=detail_error,
+                ),
+            )
+        ]
     )
     config.verification_service.update_verification_record_status(
         resolved_verification_id,

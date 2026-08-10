@@ -13,6 +13,7 @@ from app.service.verification.task_store import VerificationTaskStore
 from app.setting import Settings
 
 from app.service.judgehost.cleanup import JudgehostTerminalCleanup
+from app.service.judgehost.completion import CaseCompletionSink
 from app.service.judgehost.core import JudgehostCore
 from app.service.judgehost.dispatch import DispatchHandler
 from app.service.judgehost.enqueue import TaskEnqueue
@@ -41,6 +42,7 @@ class Judgehost:
         settings: Settings,
         config_values: ConfigValues,
         *,
+        case_completion_sink: CaseCompletionSink,
         verification_task_store: VerificationTaskStore,
         runtime_blob_store: RuntimeBlobStore,
         runtime_cache_index: RuntimeCacheIndex,
@@ -55,6 +57,7 @@ class Judgehost:
             runtime_blob_store=runtime_blob_store,
             runtime_cache_index=runtime_cache_index,
             verification_task_store=verification_task_store,
+            case_completion_sink=case_completion_sink,
         )
         self._toolkit = DomjudgeToolkit(self._state)
         self._core = JudgehostCore(self._state)

@@ -5,12 +5,17 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from fastapi.templating import Jinja2Templates
 from app.db import DB
-from app.config import ConfigValues, build_config_values
+from app.main_util import configure_runtime_values
+from app.runtime_value import RuntimeValues, build_runtime_values
 from app.service.auth.service import AuthService
 from app.service.agent.service import AgentService
 from app.service.contest.service import ContestService
 from app.service.platform.fs.layout import FsManager
 from app.service.verification.service import VerificationService
+from app.service.verification.completion import VerificationTaskCompletionService
+from app.service.verification.task_scheduler import (
+    notify_verification_completion_committed,
+)
 from app.service.verification.task_store import VerificationTaskStore
 from app.service.export.service import ExportService
 from app.service.problem_package.service import ProblemPackageService
@@ -33,6 +38,8 @@ from app.service.workspace.mutation import WorkspaceMutationService
 from app.service.disk.auth_store import AuthStore
 from app.service.disk.runtime_state_store import RuntimeStateStore
 from app.service.runtime.state_service import RuntimeStateService
+from app.service.problem import test_spec
+from app.service.runtime import toolchain
 from app.service.platform.worker_queue import WorkerFuture, WorkerQueueService
 from app.service.platform.maintenance import (
     ArtifactCleanupService,
@@ -41,13 +48,14 @@ from app.service.platform.maintenance import (
 )
 from app.service.repository import workspace
 from app.setting import Settings, load_settings
+from app.service.platform import workspace_path
 
 @dataclass
 class RuntimeConfig:
     TEMPLATE_ROOT: Path = Path(__file__).resolve().parents[2] / "template"
     STATIC_ROOT: Path = Path(__file__).resolve().parents[2] / "static"
     settings: Settings = field(default_factory=load_settings)
-    config_values: ConfigValues = field(init=False)
+    constants: RuntimeValues = field(init=False)
     db: DB = field(init=False)
     workspace_service: workspace.WorkspaceService = field(init=False)
     auth_service: AuthService = field(init=False)
@@ -62,6 +70,9 @@ class RuntimeConfig:
     tex_compile_service: TexCompileService = field(init=False)
     verification_service: VerificationService = field(init=False)
     verification_task_store: VerificationTaskStore = field(init=False)
+    verification_task_completion_service: VerificationTaskCompletionService = field(
+        init=False
+    )
     preview_service: PreviewService = field(init=False)
     judgehost_task_service: Judgehost = field(init=False)
     export_service: ExportService = field(init=False)
@@ -93,7 +104,7 @@ class RuntimeConfig:
     password_form_csrf_secret: bytes = field(init=False)
 
     def _resolve_password_form_csrf_secret(self) -> bytes:
-        configured = str(self.config_values.PASSWORD_FORM_CSRF_SECRET or "").strip()
+        configured = str(self.constants.PASSWORD_FORM_CSRF_SECRET or "").strip()
         if configured:
             return configured.encode("utf-8")
         existing = bytes(getattr(self, "password_form_csrf_secret", b"") or b"")
@@ -111,13 +122,23 @@ class RuntimeConfig:
             self.verification_workers.clear()
             self.verification_inflight.clear()
 
-    def reload_config(self, *, include_restart_required: bool = False) -> dict[str, object]:
+    def reload_runtime_values(self, *, include_restart_required: bool = False) -> dict[str, object]:
         runtime_overrides = self.system_config_service.refresh(
             include_restart_required=include_restart_required,
         )
-        effective = build_config_values(runtime_overrides)
-        self.config_values.replace(effective.snapshot())
-        self.verification_service.refresh_config_state(self.config_values)
+        effective = build_runtime_values(runtime_overrides)
+        self.constants.replace(effective.to_dict())
+        configure_runtime_values(self.constants)
+        workspace_path.apply_runtime_values(self.constants)
+        self.db.apply_runtime_values(self.constants)
+        test_spec.apply_runtime_values(self.constants)
+        toolchain.apply_runtime_values(self.constants)
+        workspace.apply_runtime_values(self.constants)
+        self.auth_service.apply_runtime_values(self.constants)
+        self.agent_service.apply_runtime_values(self.constants)
+        self.verification_service.apply_runtime_values(self.constants)
+        self.tex_compile_service.apply_runtime_values(self.constants)
+        self.judgehost_task_service.apply_runtime_values(self.constants)
         self.password_form_csrf_secret = self._resolve_password_form_csrf_secret()
         return runtime_overrides
 
@@ -125,53 +146,52 @@ class RuntimeConfig:
         validate_runtime_startup_preconditions(self.settings)
         self.static_assets = StaticAssetManifest(self.STATIC_ROOT)
         self.templates.env.globals["static_asset_url"] = self.static_assets.url
-        self.config_values = build_config_values()
-        self.db = DB(self.settings.db_path, config_values=self.config_values)
+        self.db = DB(self.settings.db_path)
         self.verification_task_store = VerificationTaskStore(self.db)
         self.system_config_service = SystemConfigService(self.db)
         self.smtp_config_service = SmtpConfigService(self.db)
         runtime_overrides = self.system_config_service.refresh(include_restart_required=True)
-        effective = build_config_values(runtime_overrides)
-        self.config_values.replace(effective.snapshot())
-        self.auth_service = AuthService(
-            AuthStore(self.db, config_values=self.config_values),
-            config_values=self.config_values,
-        )
+        self.constants = build_runtime_values(runtime_overrides)
+        self.db.apply_runtime_values(self.constants)
+        configure_runtime_values(self.constants)
+        self.auth_service = AuthService(AuthStore(self.db, constants=self.constants), constants=self.constants)
         self.runtime_state_service = RuntimeStateService(self.db, RuntimeStateStore(self.db))
+        workspace_path.apply_runtime_values(self.constants)
+        test_spec.apply_runtime_values(self.constants)
+        toolchain.apply_runtime_values(self.constants)
+        workspace.apply_runtime_values(self.constants)
         self.workspace_service = workspace.WorkspaceService(
             self.db,
             self.settings,
             verification_task_store=self.verification_task_store,
         )
-        self.agent_service = AgentService(self.db, self.workspace_service)
-        self.contest_service = ContestService(
-            self.db,
-            self.settings,
-            config_values=self.config_values,
-        )
+        self.agent_service = AgentService(self.db, self.workspace_service, constants=self.constants)
+        self.contest_service = ContestService(self.db, self.settings)
         self.git_service = GitService()
         self.workspace_merge_service = WorkspaceMergeService(self.settings, self.workspace_service)
         self.workspace_archive_service = WorkspaceArchiveService()
-        self.workspace_file_service = WorkspaceFileService(
-            self.git_service,
-            self.workspace_service,
-            config_values=self.config_values,
-        )
+        self.workspace_file_service = WorkspaceFileService(self.git_service, self.workspace_service)
         self.workspace_mutation_service = WorkspaceMutationService(self.workspace_service)
         self.fs_manager = FsManager(self.settings.cache_root, self.settings.artifacts_root)
         self.runtime_blob_store = RuntimeBlobStore(self.fs_manager.runtime_root)
         self.runtime_cache_index = RuntimeCacheIndex(self.runtime_blob_store)
+        self.verification_task_completion_service = VerificationTaskCompletionService(
+            self.verification_task_store,
+            self.runtime_blob_store,
+            notify_verification_completion_committed,
+        )
         self.tex_sandbox_backend = TexSandboxBackend()
         self.tex_compile_service = TexCompileService(
             sandbox_backend=self.tex_sandbox_backend,
-            config_values=self.config_values,
+            constants=self.constants,
         )
         self.judgehost_task_service = Judgehost(
             self.db,
             self.workspace_service,
             self.fs_manager,
             self.settings,
-            self.config_values,
+            self.constants,
+            case_completion_sink=self.verification_task_completion_service,
             runtime_blob_store=self.runtime_blob_store,
             runtime_cache_index=self.runtime_cache_index,
             verification_task_store=self.verification_task_store,
@@ -183,7 +203,7 @@ class RuntimeConfig:
             task_store=self.verification_task_store,
             runtime_blob_store=self.runtime_blob_store,
             fs_manager=self.fs_manager,
-            config_values=self.config_values,
+            constants=self.constants,
         )
         self.preview_service = PreviewService(
             self.db,
@@ -210,12 +230,10 @@ class RuntimeConfig:
         )
         durable_log_path = self.settings.cache_root / "runtime" / "worker-queue-events.jsonl"
         self.worker_queue_service = WorkerQueueService(
-            worker_count=int(self.config_values.WORKER_QUEUE_THREADS),
-            history_limit=int(self.config_values.WORKER_QUEUE_HISTORY_LIMIT),
-            queue_capacity=int(self.config_values.WORKER_QUEUE_CAPACITY),
-            durable_history_limit=int(
-                self.config_values.WORKER_QUEUE_DURABLE_HISTORY_LIMIT
-            ),
+            worker_count=int(self.constants.WORKER_QUEUE_THREADS),
+            history_limit=int(self.constants.WORKER_QUEUE_HISTORY_LIMIT),
+            queue_capacity=int(self.constants.WORKER_QUEUE_CAPACITY),
+            durable_history_limit=int(self.constants.WORKER_QUEUE_DURABLE_HISTORY_LIMIT),
             durable_log_path=durable_log_path,
         )
         self.artifact_cleanup_service = ArtifactCleanupService(

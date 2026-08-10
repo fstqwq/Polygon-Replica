@@ -28,9 +28,11 @@ from app.service.judgehost.runtime import (
     domjudge_rewrite_untrusted_runresult,
     domjudge_verdict_from_runresult,
 )
-from app.service.verification.task_result_finalize import finalize_verification_task_result
-from app.service.verification.task_scheduler import notify_verification_case_reported
-from app.service.judgehost.case_result import build_case_result, decode_case_test_row
+from app.service.judgehost.case_result import (
+    CaseTerminalReport,
+    build_case_result,
+    decode_case_test_row,
+)
 from app.service.judgehost.core import JudgehostCore
 from app.service.judgehost.batch_scheduler_models import CaseReportTelemetry, CaseResult, HostLeaseRelease
 from app.service.judgehost.state import JudgehostState
@@ -49,7 +51,7 @@ from app.service.verification.execution_result import (
     ExecutionUsage,
     PassArtifacts,
     execution_result_json,
-    normalize_execution_result,
+    execution_result_with_outcome,
 )
 
 logger = logging.getLogger(__name__)
@@ -132,10 +134,6 @@ class ResultProcessor:
         if task is not None:
             self._s.touch_verification_runtime(domjudge_text(task.get("verification_id")))
 
-    def _display_text_limit_bytes(self) -> int:
-        snapshot = self._s.config_values.snapshot()
-        return int(snapshot["AUX_DISPLAY_TEXT_LIMIT_BYTES"])
-
     def finalize_host_lease_release(self, release: HostLeaseRelease) -> None:
         for task_id in release.terminal_task_ids:
             batch_row = self._s.batch_scheduler.batch_for_task(task_id)
@@ -173,7 +171,6 @@ class ResultProcessor:
             output_error_ref=output_error_ref,
             output_diff_ref=output_diff_ref,
             team_message_ref=team_message_ref,
-            limit_bytes=self._display_text_limit_bytes(),
         )
 
     def domjudge_get_source_files(
@@ -404,21 +401,11 @@ class ResultProcessor:
         test_name: str,
         reason: str = "",
     ) -> bool:
-        task_store = self._s.verification_task_store
-        row = task_store.find_runtime_row_by_judgehost_case(task_id, test_name)
-        if row is None:
-            return True
-        verification_id = domjudge_text(row["verification_id"])
-        _fail_flag, fail_reason = task_store.fail_state(verification_id)
-        cancel_reason = reason or fail_reason or "verification cancelled by user"
-        task_store.save_task_result(
-            domjudge_text(row["id"]),
-            status=task_store.TASK_CANCELLED,
-            run_id=domjudge_text(row["run_id"]),
-            judgehost_task_id=domjudge_text(row["judgehost_task_id"]),
-            result=normalize_execution_result(error=cancel_reason),
+        return self._s.case_completion_sink.cancelled(
+            task_id,
+            test_name,
+            reason,
         )
-        return True
 
     def _case_report_telemetry(
         self,
@@ -485,104 +472,20 @@ class ResultProcessor:
         *,
         task_id: str,
         test_name: str,
-        case_result: dict[str, object],
+        case_result: CaseTerminalReport,
         verification_id: str = "",
     ) -> bool:
-        verification_task_store = self._s.verification_task_store
         safe_verification_id = domjudge_text(verification_id)
         if not safe_verification_id:
             judgehost_task_row = self._s.task_registry.get(task_id)
             if judgehost_task_row is not None:
                 safe_verification_id = domjudge_text(judgehost_task_row["verification_id"])
-        if safe_verification_id and notify_verification_case_reported(
-            safe_verification_id,
+        return self._s.case_completion_sink.reported(
             task_id,
             test_name,
             case_result,
-        ):
-            return True
-        verification_task_row = verification_task_store.find_runtime_row_by_judgehost_case(
-            task_id,
-            test_name,
+            safe_verification_id,
         )
-        if verification_task_row is None:
-            return True
-        final_result = finalize_verification_task_result(
-            verification_task_row,
-            result=case_result,
-            limit_bytes=verification_task_store.display_text_limit_bytes(),
-        )
-        verification_task_store.save_task_result(
-            final_result.task_id,
-            status=final_result.status,
-            run_id=final_result.run_id,
-            judgehost_task_id=final_result.judgehost_task_id,
-            result=final_result.result,
-        )
-        if final_result.fail_flag_reason:
-            verification_task_store.set_fail_flag(
-                str(verification_task_row["verification_id"] or ""),
-                reason=final_result.fail_flag_reason,
-            )
-        return True
-
-    def _domjudge_case_result_from_test_row(
-        self,
-        *,
-        task_id: str,
-        task_row: dict[str, object],
-        test_row: dict[str, object],
-    ) -> dict[str, object]:
-        safe_task_id = domjudge_text(task_id)
-        payload = cast(dict[str, object], task_row["payload"])
-        task_kind = domjudge_text(payload.get("task_kind"))
-        summary = dict(cast(dict[str, object], task_row.get("summary") or {}))
-        runresult = domjudge_text(test_row.get("runresult"))
-        verdict = domjudge_text(test_row.get("verdict"), default="FL")
-        feedback_text = domjudge_text(test_row.get("message"))
-        summary_error = domjudge_text(summary.get("error"))
-        if (
-            not summary_error
-            and feedback_text
-            and runresult in {"checker-fail", "compare-error", "internal-error"}
-        ):
-            summary_error = feedback_text
-        if (
-            not summary_error
-            and feedback_text
-            and task_kind == self._TASK_KIND_MAIN_CORRECT
-            and verdict != "OK"
-        ):
-            summary_error = feedback_text
-        case_summary = {
-            "source": summary.get("source") or "",
-            "compile_diagnostics": list(
-                cast(list[object], summary.get("compile_diagnostics") or [])
-            ),
-            "error": summary_error,
-            "tests": [dict(test_row)],
-        }
-        if task_kind == self._TASK_KIND_MAIN_CORRECT:
-            run_status = "ok" if verdict == "OK" else "failed"
-        elif runresult in {
-            "compiler-error",
-            "checker-fail",
-            "compare-error",
-            "internal-error",
-        }:
-            run_status = "failed"
-        else:
-            run_status = "ok"
-        return {
-            "task_id": safe_task_id,
-            "verification_id": domjudge_text(task_row["verification_id"]),
-            "run_id": domjudge_text(task_row["run_id"]),
-            "artifact_path": "",
-            "status": run_status,
-            "task_status": task_row["status"],
-            "error": summary_error,
-            "summary": case_summary,
-        }
 
     def _domjudge_task_result_payload(
         self,
@@ -662,10 +565,7 @@ class ResultProcessor:
             if compile_text.strip():
                 message = compile_text.strip()
             compile_error_summary = message
-            compile_error_task = domjudge_feedback_text_from_text(
-                message,
-                limit_bytes=self._display_text_limit_bytes(),
-            ) or "compilation failed"
+            compile_error_task = domjudge_feedback_text_from_text(message) or "compilation failed"
             compile_diag.append(
                 {
                     "level": "error",
@@ -824,8 +724,7 @@ class ResultProcessor:
         if runresult == "compiler-error" and not feedback:
             compile_blob = self._toolkit.b64_decode(batch_row["compile_output_b64"])
             feedback = domjudge_feedback_text_from_text(
-                compile_blob.decode("utf-8", errors="replace"),
-                limit_bytes=self._display_text_limit_bytes(),
+                compile_blob.decode("utf-8", errors="replace")
             ) or "compilation failed"
         if not feedback:
             feedback = runresult.replace("-", " ")
@@ -1015,7 +914,6 @@ class ResultProcessor:
         judgetask_id: int,
         payload: dict[str, object],
     ) -> None:
-        config_snapshot = self._s.config_values.snapshot()
         safe_host = self._core.normalize_hostname(hostname)
         case_id = int(judgetask_id)
         case_row = self._s.batch_scheduler.case_execution_row(case_id)
@@ -1056,9 +954,7 @@ class ResultProcessor:
         def _payload_blob_as_b64(value: object) -> str:
             raw = self._toolkit.payload_blob_bytes(value)
             if raw:
-                return base64.b64encode(
-                    truncate_stored_log_bytes(raw, config_snapshot)
-                ).decode("ascii")
+                return base64.b64encode(truncate_stored_log_bytes(raw, self._s.constants)).decode("ascii")
             return domjudge_text(value)
 
         compile_output = _payload_blob_as_b64(payload.get("output_compile"))
@@ -1066,14 +962,26 @@ class ResultProcessor:
         if compile_success is not None:
             updated_at = now_iso()
             failure_text = ""
+            compile_log = ""
+            compile_diagnostics: tuple[dict[str, object], ...] = ()
             if compile_success == 0:
                 compile_blob = self._toolkit.b64_decode(compile_output)
+                compile_log = compile_blob.decode("utf-8", errors="replace").strip()
                 failure_text = (
                     domjudge_feedback_text_from_text(
-                        compile_blob.decode("utf-8", errors="replace"),
-                        limit_bytes=self._display_text_limit_bytes(),
+                        compile_log
                     )
                     or "compilation failed"
+                )
+                compile_diagnostics = (
+                    {
+                        "level": "error",
+                        "message": compile_log or failure_text,
+                        "file": "",
+                        "line": 0,
+                        "column": 0,
+                        "can_link": False,
+                    },
                 )
             updated = self._s.batch_scheduler.record_compile_result(
                 batch_id,
@@ -1081,6 +989,8 @@ class ResultProcessor:
                 compile_output_b64=compile_output,
                 compile_metadata_b64=compile_meta,
                 failure_text=failure_text,
+                compile_log=compile_log,
+                compile_diagnostics=compile_diagnostics,
                 updated_at=updated_at,
             )
             if not updated:
@@ -1186,7 +1096,6 @@ class ResultProcessor:
         claim_generation: int,
         report_telemetry: CaseReportTelemetry,
     ) -> int:
-        config_snapshot = self._s.config_values.snapshot()
         safe_host = self._core.normalize_hostname(hostname)
         case_id = int(judgetask_id)
         row = self._s.batch_scheduler.case_execution_row(case_id)
@@ -1276,7 +1185,7 @@ class ResultProcessor:
         )
         bundle_limit_bytes = min(
             8 * 1024 * 1024,
-            max(1024, int(run_output_kb(config_snapshot) * 1024 * 3 // 4)),
+            max(1024, int(run_output_kb(self._s.constants) * 1024 * 3 // 4)),
         )
         callback_pass = max(0, domjudge_parse_int(payload.get("pass"), 0))
         pass_bundle: PassBundle | None = None
@@ -1489,10 +1398,7 @@ class ResultProcessor:
                 debug_text = domjudge_text(debug_context["case_debug_text"])
                 if not debug_text:
                     debug_text = domjudge_text(debug_context["batch_debug_text"])
-                feedback_text = domjudge_feedback_text_from_text(
-                    debug_text,
-                    limit_bytes=self._display_text_limit_bytes(),
-                )
+                feedback_text = domjudge_feedback_text_from_text(debug_text)
         def _bundled_ref(number: int, name: str) -> str:
             if (
                 pass_bundle is not None
@@ -1973,31 +1879,17 @@ class ResultProcessor:
                             **case_result,
                             "error": debug_text,
                             "summary": case_summary,
+                            "execution_result": execution_result_with_outcome(
+                                case_result["execution_result"],
+                                error=debug_text,
+                                feedback=debug_text,
+                            ),
                         }
-                        verification_task_store = self._s.verification_task_store
-                        verification_task_row = verification_task_store.find_runtime_row_by_judgehost_case(
+                        self._s.case_completion_sink.amend_debug(
                             safe_task_id,
                             safe_test_name,
+                            cast(CaseTerminalReport, case_result),
                         )
-                        if verification_task_row is not None:
-                            final_result = finalize_verification_task_result(
-                                verification_task_row,
-                                result=case_result,
-                                limit_bytes=verification_task_store.display_text_limit_bytes(),
-                            )
-                            verification_task_store.overwrite_task_result(
-                                final_result.task_id,
-                                status=final_result.status,
-                                run_id=final_result.run_id,
-                                judgehost_task_id=final_result.judgehost_task_id,
-                                result=final_result.result,
-                            )
-                            verification_id = str(verification_task_row["verification_id"] or "")
-                            if verification_id and final_result.fail_flag_reason:
-                                verification_task_store.overwrite_fail_reason(
-                                    verification_id,
-                                    reason=final_result.fail_flag_reason,
-                                )
         self._queue._record_host_event_conn(
             hostname=safe_host,
             action="debug",

@@ -1,40 +1,116 @@
 services:
-  app:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    image: polygon-replica-ui-e2e:local
-    container_name: polygon-replica-ui-e2e
-    restart: unless-stopped
-    ports:
-      - "127.0.0.1:18001:8001"
-    volumes:
-      - srv:/srv/polygon-replica
-      - var:/var/lib/polygon-replica
-      - cache:/tmp/polygon-replica
+  domjudge-contract:
+    image: polygon-replica-e2e:local
+    entrypoint: ["python3", "/opt/e2e/verify_domjudge_source.py"]
+    restart: "no"
     environment:
+      POLYGON_REPLICA_E2E_STATE_DIR: /var/backups/polygon-replica/e2e-state
+    volumes:
+      - ./tests/docker_e2e:/opt/e2e:ro
+      - state:/var/backups/polygon-replica
+    networks:
+      - upstream
+
+  bootstrap:
+    image: polygon-replica-e2e:local
+    entrypoint: ["python3", "/opt/e2e/bootstrap.py"]
+    restart: "no"
+    network_mode: none
+    environment: &runtime-environment
       POLYGON_REPLICA_DB: /var/lib/polygon-replica/metadata.db
       POLYGON_REPLICA_BARE_ROOT: /srv/polygon-replica/git
       POLYGON_REPLICA_WORKSPACE_ROOT: /srv/polygon-replica/workspaces
       POLYGON_REPLICA_ARTIFACTS_ROOT: /srv/polygon-replica/export
       POLYGON_REPLICA_CACHE_ROOT: /tmp/polygon-replica
+      POLYGON_REPLICA_CONTEST_SOURCE_ROOT: /var/lib/polygon-replica/contest-sources
+      POLYGON_REPLICA_BACKUP_ROOT: /var/backups/polygon-replica
+      POLYGON_REPLICA_E2E_STATE_DIR: /var/backups/polygon-replica/e2e-state
+      POLYGON_REPLICA_E2E_JUDGEHOST_TOKEN: ${POLYGON_REPLICA_E2E_JUDGEHOST_TOKEN:?set by tests/scripts/docker-e2e.sh}
+    volumes:
+      - ./tests/docker_e2e:/opt/e2e:ro
+      - srv:/srv/polygon-replica
+      - var:/var/lib/polygon-replica
+      - cache:/tmp/polygon-replica
+      - state:/var/backups/polygon-replica
+    security_opt:
+      - seccomp=unconfined
+      - apparmor=unconfined
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: polygon-replica-e2e:local
+    restart: "no"
+    environment: *runtime-environment
+    volumes:
+      - srv:/srv/polygon-replica
+      - var:/var/lib/polygon-replica
+      - cache:/tmp/polygon-replica
+      - state:/var/backups/polygon-replica
+    networks:
+      - e2e
     healthcheck:
       test:
         - CMD
         - python3
         - -c
         - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/login', timeout=2)"
-      interval: 5s
+      interval: 2s
       timeout: 3s
-      retries: 24
+      retries: 45
       start_period: 10s
     security_opt:
       - seccomp=unconfined
       - apparmor=unconfined
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+
+  mock-judgehost:
+    image: polygon-replica-e2e:local
+    entrypoint: ["python3", "/opt/e2e/mock_judgehost.py"]
+    restart: "no"
+    environment:
+      POLYGON_REPLICA_E2E_APP_URL: http://app:8001/api/v4
+      POLYGON_REPLICA_E2E_STATE_DIR: /var/backups/polygon-replica/e2e-state
+      POLYGON_REPLICA_E2E_JUDGEHOST_TOKEN: ${POLYGON_REPLICA_E2E_JUDGEHOST_TOKEN:?set by tests/scripts/docker-e2e.sh}
+    volumes:
+      - ./tests/docker_e2e:/opt/e2e:ro
+      - state:/var/backups/polygon-replica
+    networks:
+      - e2e
+    depends_on:
+      app:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /var/backups/polygon-replica/e2e-state/mock-ready"]
+      interval: 1s
+      timeout: 1s
+      retries: 45
+      start_period: 2s
+
+  runner:
+    image: polygon-replica-e2e:local
+    entrypoint: ["python3", "/opt/e2e/runner.py"]
+    restart: "no"
+    environment:
+      POLYGON_REPLICA_E2E_APP_ORIGIN: http://app:8001
+      POLYGON_REPLICA_E2E_DB: /var/lib/polygon-replica/metadata.db
+      POLYGON_REPLICA_E2E_CACHE_ROOT: /tmp/polygon-replica
+      POLYGON_REPLICA_E2E_STATE_DIR: /var/backups/polygon-replica/e2e-state
+    volumes:
+      - ./tests/docker_e2e:/opt/e2e:ro
+      - var:/var/lib/polygon-replica:ro
+      - cache:/tmp/polygon-replica:ro
+      - state:/var/backups/polygon-replica:ro
+    networks:
+      - e2e
+
+networks:
+  upstream:
+  e2e:
+    internal: true
 
 volumes:
   srv:
   var:
   cache:
+  state:

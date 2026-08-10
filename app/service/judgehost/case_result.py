@@ -1,17 +1,110 @@
 from __future__ import annotations
 
+from dataclasses import replace
+from typing import TypedDict, cast
+
 from app.service.verification.test_rows import (
     build_verification_test_pass_row,
     build_verification_test_row,
 )
 from app.service.verification.execution_result import (
     CAPTURE_COMPLETE,
+    CompileResult,
     ExecutionPassResult,
     ExecutionResult,
     ExecutionUsage,
     PassArtifacts,
     normalize_execution_result,
 )
+
+
+class CaseTerminalReport(TypedDict):
+    task_id: str
+    verification_id: str
+    run_id: str
+    artifact_path: str
+    status: str
+    task_status: str
+    error: str
+    summary: dict[str, object]
+    missing_case_result: bool
+    execution_result: ExecutionResult
+
+
+def execution_result_with_terminal_context(
+    result: ExecutionResult,
+    *,
+    summary: dict[str, object],
+    error_text: str,
+) -> ExecutionResult:
+    """Attach task-level compile/error context without rebuilding pass evidence."""
+    summary_diagnostics = cast(
+        list[dict[str, object]],
+        summary.get("compile_diagnostics") or [],
+    )
+    diagnostics = (
+        result.compile.diagnostics
+        if result.compile.diagnostics
+        else tuple(dict(item) for item in summary_diagnostics)
+    )
+    summary_error = str(summary.get("error") or "")
+    compile_log = result.compile.log
+    if not compile_log and diagnostics:
+        compile_log = str(summary.get("compile_log") or summary_error or error_text)
+    resolved_error = result.outcome.error or error_text or summary_error
+    return replace(
+        result,
+        outcome=replace(result.outcome, error=resolved_error),
+        compile=CompileResult(log=compile_log, diagnostics=diagnostics),
+    )
+
+
+def build_missing_case_result(
+    *,
+    summary: dict[str, object],
+    error_text: str,
+) -> ExecutionResult:
+    diagnostics = cast(
+        list[dict[str, object]],
+        summary.get("compile_diagnostics") or [],
+    )
+    return normalize_execution_result(
+        verdict="CE" if diagnostics else "FL",
+        error=error_text,
+        compile_log=(
+            str(summary.get("compile_log") or summary.get("error") or error_text)
+            if diagnostics
+            else ""
+        ),
+        compile_diagnostics=diagnostics,
+        warnings=cast(list[str], summary.get("warnings") or []),
+    )
+
+
+def build_case_terminal_report(
+    *,
+    task_id: str,
+    verification_id: str,
+    run_id: str,
+    status: str,
+    task_status: str,
+    error_text: str,
+    summary: dict[str, object],
+    missing_case_result: bool,
+    execution_result: ExecutionResult,
+) -> CaseTerminalReport:
+    return {
+        "task_id": task_id,
+        "verification_id": verification_id,
+        "run_id": run_id,
+        "artifact_path": "",
+        "status": status,
+        "task_status": task_status,
+        "error": error_text,
+        "summary": summary,
+        "missing_case_result": missing_case_result,
+        "execution_result": execution_result,
+    }
 
 
 def build_case_result(
@@ -40,6 +133,8 @@ def build_case_result(
     historical_passes: tuple[ExecutionPassResult, ...] = (),
     warnings: tuple[str, ...] = (),
     usage: ExecutionUsage | None = None,
+    compile_log: str = "",
+    compile_diagnostics: tuple[dict[str, object], ...] = (),
 ) -> ExecutionResult:
     resolved_usage = usage or ExecutionUsage(
         runtime_sec=max(0.0, float(runtime_sec)),
@@ -62,6 +157,8 @@ def build_case_result(
             score_text=score_text,
             answer_correct=answer_correct,
             feedback=feedback_text,
+            compile_log=compile_log,
+            compile_diagnostics=compile_diagnostics,
             warnings=warnings,
         )
     final_pass = ExecutionPassResult(
@@ -92,6 +189,8 @@ def build_case_result(
         score_text=score_text,
         answer_correct=answer_correct,
         feedback=feedback_text,
+        compile_log=compile_log,
+        compile_diagnostics=compile_diagnostics,
         warnings=warnings,
     )
 

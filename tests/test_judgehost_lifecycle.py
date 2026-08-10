@@ -20,6 +20,7 @@ from app.service.judgehost.batch_scheduler_models import (
 from app.service.judgehost.identity import domjudge_submit_id
 from app.service.platform.runtime_blob_store import PayloadFile
 from app.service.platform.rwlock import WriterPriorityRWLock
+from app.service.verification.completion import VerificationTaskCompletionService
 
 from tests.db_fixture import DBTestBase
 
@@ -470,23 +471,25 @@ class TestWriterPriorityRWLock(unittest.TestCase):
 
 class TestJudgehostLifecycle(DBTestBase):
     def _service(self) -> Judgehost:
-        values = dict(self.config_values.snapshot())
-        values.update(
-            JUDGEHOST_ENABLE=True,
-            JUDGEHOST_API_TOKEN="test-token",
-            JUDGEHOST_API_USERNAME="judgehost",
+        completion_service = VerificationTaskCompletionService(
+            self.verification_task_store,
+            self.runtime_blob_store,
+            lambda _verification_id, _commit: False,
         )
-        self.config_values.replace(values)
         service = Judgehost(
             self.db,
             self.workspace_service,
             self.fs_manager,
             self.settings,
-            self.config_values,
+            self.constants,
             verification_task_store=self.verification_task_store,
             runtime_blob_store=self.runtime_blob_store,
             runtime_cache_index=self.runtime_cache_index,
+            case_completion_sink=completion_service,
         )
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
         return service
 
     @staticmethod

@@ -41,8 +41,11 @@ Generator-backed tests execute their generator payload, including parameters.
 The configured validator is the generator task's checker. There is no additional
 validator task kind between generation and solution execution.
 
-The DAG scheduler publishes runnable tasks in bounded batches, polls Judgehost
-case-cache misses, and advances dependants when predecessor events arrive.
+The DAG scheduler publishes runnable tasks in bounded batches and polls
+Judgehost case-cache misses. Judgehost terminal reports, cache hits, and
+terminal reconciliation all pass through the same completion service. The
+coordinator receives the effective persisted completions and advances
+dependants from that state; it does not receive an uncommitted Judgehost result.
 Predecessor failure or cancellation skips or cancels dependants. Compile-only,
 pass-fail, interactive, and multi-pass execution are mapped to Judgehost batches
 and case results by the verification and Judgehost services.
@@ -73,11 +76,31 @@ availability is checked separately from durable verification status.
 
 ## Results and artifacts
 
+The Judgehost terminal boundary produces the canonical `ExecutionResult` for
+every terminal report. Successful cases carry the complete result assembled by
+the batch scheduler; compile failures and missing cases use the same result
+normalization helpers. Verification preserves that result instead of rebuilding
+compile data, passes, warnings, or artifact evidence from summary fields.
+
 Task results are serialized in `verification_tasks.result_json`. The canonical
 shape has `outcome`, `compile`, ordered `passes`, and `warnings`. Each pass
 records its number, capture status, run result, verdict, score, answer flag,
 resource usage, feedback, and artifact locators. Pass numbers are contiguous
 from one; an output locator and transcript locator are mutually exclusive.
+
+Verification converts a terminal report into one `TaskCompletion`. Generator
+success requires an available, untruncated output blob and carries that locator
+as `input_ref`; `main-correct` success requires an available output blob and
+carries it as `answer_ref`. Task terminal state, result, the applicable locator,
+and the verification's first failure reason are committed together as described
+by the [SQLite persistence contract](persistence.md#execution-rows).
+
+Only a task without a terminal status accepts its first completion. A repeated
+or conflicting completion yields the already-persisted result and locators and
+does not amend them. Generator content deduplication and the resulting skipped
+dependants are part of the same commit. The process-local coordinator consumes
+the returned `CompletionCommit`; SQLite remains authoritative when no
+coordinator exists or a notification is repeated.
 
 Per-test generated input and answer locators are stored in
 `verification_artifact_refs.input_ref` and `answer_ref`. Output, transcript,

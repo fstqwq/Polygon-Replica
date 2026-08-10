@@ -7,7 +7,13 @@ from app.db import now_iso
 from app.service.judgehost.runtime import parse_iso_utc
 from app.service.verification.task_scheduler import notify_verification_task_terminal
 
-from app.service.judgehost.case_result import decode_case_test_row
+from app.service.judgehost.case_result import (
+    CaseTerminalReport,
+    build_case_terminal_report,
+    build_missing_case_result,
+    decode_case_test_row,
+    execution_result_with_terminal_context,
+)
 from app.service.judgehost.core import JudgehostCore
 from app.service.judgehost.batch_scheduler_models import HostLeaseRelease
 from app.service.judgehost.payload_retention import compact_payload_for_retention
@@ -327,7 +333,12 @@ class TaskQueue:
             "summary": dict(row.get("summary") or {}),
         }
 
-    def wait_for_task_case_result(self, task_id: str, test_name: str, timeout_sec: float | None = None) -> dict[str, object]:
+    def wait_for_task_case_result(
+        self,
+        task_id: str,
+        test_name: str,
+        timeout_sec: float | None = None,
+    ) -> CaseTerminalReport:
         if not task_id:
             raise RuntimeError("judgehost task id is required")
         if not test_name:
@@ -345,7 +356,11 @@ class TaskQueue:
                 raise RuntimeError(f"judgehost task timed out after {int(timeout)}s")
             generation = self._s.task_registry.wait_for_change(generation, remaining)
 
-    def poll_task_case_result(self, task_id: str, test_name: str) -> dict[str, object] | None:
+    def poll_task_case_result(
+        self,
+        task_id: str,
+        test_name: str,
+    ) -> CaseTerminalReport | None:
         if not task_id:
             raise RuntimeError("judgehost task id is required")
         if not test_name:
@@ -374,31 +389,48 @@ class TaskQueue:
                 "internal-error",
             }:
                 summary_error = recovered_error
-            if (not summary_error) and recovered_error and task_kind == self._TASK_KIND_MAIN_CORRECT and verdict != "OK":
+            if (
+                (not summary_error)
+                and recovered_error
+                and task_kind == self._TASK_KIND_MAIN_CORRECT
+                and verdict != "OK"
+            ):
                 summary_error = recovered_error
             case_summary = {
                 "source": summary.get("source") or "",
+                "compile_log": summary.get("compile_log") or "",
                 "compile_diagnostics": list(summary.get("compile_diagnostics") or []),
                 "error": summary_error,
                 "tests": [selected_test_row],
             }
             if task_kind == self._TASK_KIND_MAIN_CORRECT:
                 run_status = "ok" if verdict == "OK" else "failed"
-            elif runresult in {"compiler-error", "checker-fail", "compare-error", "internal-error"}:
+            elif verdict == "CE" or runresult in {
+                "compiler-error",
+                "checker-fail",
+                "compare-error",
+                "internal-error",
+            }:
                 run_status = "failed"
             else:
                 run_status = "ok"
-            return {
-                "task_id": task_id,
-                "verification_id": str(row["verification_id"] or ""),
-                "run_id": str(row["run_id"] or ""),
-                "artifact_path": "",
-                "status": run_status,
-                "task_status": row["status"],
-                "error": str(case_summary.get("error") or ""),
-                "summary": case_summary,
-                "execution_result": case_result,
-            }
+            terminal_error = str(case_summary.get("error") or "")
+            terminal_result = execution_result_with_terminal_context(
+                case_result,
+                summary=case_summary,
+                error_text=terminal_error,
+            )
+            return build_case_terminal_report(
+                task_id=task_id,
+                verification_id=str(row["verification_id"] or ""),
+                run_id=str(row["run_id"] or ""),
+                status=run_status,
+                task_status=str(row["status"] or ""),
+                error_text=terminal_error,
+                summary=case_summary,
+                missing_case_result=False,
+                execution_result=terminal_result,
+            )
         task_status = str(row["status"] or "")
         if task_status in {self.STATUS_FAILED, self.STATUS_COMPLETED}:
             verification_id = str(row["verification_id"] or "")
@@ -413,22 +445,27 @@ class TaskQueue:
             detail = str(task_summary.get("error") or row.get("error_text") or "")
             if not detail:
                 detail = f"judgehost case result missing for {test_name}"
-            return {
-                "task_id": task_id,
-                "verification_id": verification_id,
-                "run_id": run_id,
-                "artifact_path": "",
-                "status": "failed",
-                "task_status": task_status,
-                "missing_case_result": True,
+            case_summary: dict[str, object] = {
+                "source": source_label,
+                "compile_log": str(task_summary.get("compile_log") or ""),
+                "compile_diagnostics": compile_diagnostics,
                 "error": detail,
-                "summary": {
-                    "source": source_label,
-                    "compile_diagnostics": compile_diagnostics,
-                    "error": detail,
-                    "tests": [],
-                },
+                "tests": [],
             }
+            return build_case_terminal_report(
+                task_id=task_id,
+                verification_id=verification_id,
+                run_id=run_id,
+                status="failed",
+                task_status=task_status,
+                error_text=detail,
+                summary=case_summary,
+                missing_case_result=True,
+                execution_result=build_missing_case_result(
+                    summary=case_summary,
+                    error_text=detail,
+                ),
+            )
         return None
 
     def wait_for_task(self, task_id: str, timeout_sec: float | None = None) -> str:

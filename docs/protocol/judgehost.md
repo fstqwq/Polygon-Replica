@@ -50,11 +50,18 @@ callback for an actively leased or reporting case from a different hostname is
 invalid and receives non-2xx. A case result is claimed while it is processed so
 concurrent final callbacks do not both publish state.
 
-`add-judging-run` returns the JSON integer `1` when a final result is accepted.
-It also returns `1` for an idempotent retry whose case is already terminal,
-cancelled, or absent after runtime cleanup. Invalid hostnames and active
-lease-owner mismatches return HTTP 400; a concurrent claim returns 503. The
-numeric task id is not a callback receipt.
+DOMjudge 9.0.1 uses the integer returned by `add-judging-run` as a continuation
+signal named `hasFinalResult`, not as a receipt or task identity. Polygon-Replica
+returns the JSON integer `1` when a final result is accepted. As a project
+extension, it also returns `1` for an idempotent retry whose case is already
+terminal, cancelled, or absent after runtime cleanup. Invalid hostnames and
+active lease-owner mismatches return HTTP 400; a concurrent claim returns 503.
+
+An accepted terminal case is published through the verification completion
+sink only after its canonical `ExecutionResult` is available and its completion
+transaction succeeds. The case is marked as published afterward. The owning
+result and transaction semantics are in the
+[execution protocol](execution.md#results-and-artifacts).
 
 ## Interactive and multi-pass evidence
 

@@ -19,6 +19,25 @@ limit, run configuration, status, failure fields, and timestamps.
 input and answer locators are in `verification_artifact_refs`. The schema has no
 `verification_tasks.output_ref` column.
 
+Task completion uses one `BEGIN IMMEDIATE` transaction under the verification
+runtime write lock. For each task whose `final_status` is empty, that transaction
+writes the terminal status, bounded canonical result, finish time, non-empty
+input or answer locator, and the verification's first non-empty failure reason.
+Generator content deduplication, skipped-generator results, and pending
+descendant skips are included in the transaction. Any failure rolls back all of
+those writes; process-local failure and task indexes are synchronized only after
+the transaction commits.
+
+An already-terminal task is not rewritten. Completion returns its persisted
+result and locators as the effective state, so duplicate or conflicting
+callbacks cannot attach a new locator or failure reason. Late Judgehost debug
+information uses a separate amendment transaction for an existing terminal
+task. It always leaves task status and input/answer locators unchanged. If no
+first failure is stored, the amendment may set it; otherwise it replaces the
+first failure in the same transaction only when the stored reason is the
+expected reason owned by that task. A first failure owned by another task is
+preserved while the canonical result evidence is amended.
+
 Preview, export, package-build, and contest-job rows survive normal restarts.
 Unfinished rows are moved to a terminal failure/cancellation state because their
 process-local work cannot resume. Administrative artifact cleanup removes the

@@ -127,6 +127,7 @@ class TestJudgehostService(E2ETestBase):
             verification_task_store=config.verification_task_store,
             runtime_blob_store=config.runtime_blob_store,
             runtime_cache_index=config.runtime_cache_index,
+            case_completion_sink=config.verification_task_completion_service,
         )
         override_config_values(
             self,
@@ -341,6 +342,7 @@ class TestJudgehostService(E2ETestBase):
         coordinator = VerificationRuntimeCoordinator(
             verification_id,
             task_store=task_store,
+            completion_service=config.verification_task_completion_service,
             callbacks=callbacks,
             edges=[],
             display_text_limit_bytes=int(
@@ -3220,6 +3222,21 @@ class TestJudgehostService(E2ETestBase):
             case_id,
             {"compile_success": "0", "output_compile": base64.b64encode(b"compile failed detail").decode("ascii"), "compile_metadata": ""},
         )
+        case_row = judgehost_fetch_case(service, case_id)
+        self.assertIsNotNone(case_row)
+        assert case_row is not None
+        case_report = service.poll_task_case_result(
+            task_id,
+            str(case_row["test_name"]),
+        )
+        self.assertIsNotNone(case_report)
+        assert case_report is not None
+        canonical_result = case_report["execution_result"]
+        self.assertIn("compile failed detail", canonical_result.compile.log)
+        self.assertIn(
+            "compile failed detail",
+            str(canonical_result.compile.diagnostics[0]["message"]),
+        )
         with self.assertRaises(RuntimeError) as ctx:
             service.wait_for_task(task_id, timeout_sec=2.0)
         self.assertIn("compile failed detail", str(ctx.exception))
@@ -5602,6 +5619,11 @@ class TestJudgehostService(E2ETestBase):
             row for row in task_store.list_rows(verification_id)
             if str(row["task_kind"]) == "main-correct" and str(row["test_name"]) == "016.in"
         )
+        self.assertEqual(str(after["status"]), str(before["status"]))
+        self.assertEqual(str(after["verdict"]), str(before["verdict"]))
+        self.assertEqual(after["result"].passes, before["result"].passes)
+        self.assertEqual(after["result"].compile, before["result"].compile)
+        self.assertEqual(after["result"].warnings, before["result"].warnings)
         self.assertEqual(str(after["error_text"] or ""), feedback_text)
         self.assertEqual(str(after["feedback_text"] or ""), feedback_text)
         verification_row = db_fetch_one(

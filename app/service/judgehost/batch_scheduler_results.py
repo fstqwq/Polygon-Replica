@@ -132,6 +132,8 @@ class BatchSchedulerResultMixin:
         compile_output_b64: str,
         compile_metadata_b64: str,
         failure_text: str = "",
+        compile_log: str = "",
+        compile_diagnostics: tuple[dict[str, object], ...] = (),
         updated_at: str,
     ) -> bool:
         with self._lock:
@@ -180,6 +182,8 @@ class BatchSchedulerResultMixin:
                         feedback_text=feedback,
                         feedback_files=(),
                         answer_correct=False,
+                        compile_log=compile_log,
+                        compile_diagnostics=compile_diagnostics,
                     )
                     if case.status in {"reporting", "cache-probing"}:
                         if not case.cancel_requested:
