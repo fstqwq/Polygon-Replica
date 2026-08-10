@@ -6,9 +6,11 @@ import shutil
 import unittest
 import uuid
 from pathlib import Path
+from unittest.mock import patch
 
 from app.db import DB
-from app.config import build_config_values
+from app.main_constant import AUX_DISPLAY_TEXT_LIMIT_BYTES
+from app.runtime_value import build_runtime_values
 from app.service.platform.fs.layout import FsManager
 from app.service.platform.runtime_blob_store import RuntimeBlobStore
 from app.service.platform.runtime_cache_index import RuntimeCacheIndex
@@ -46,7 +48,7 @@ def _remove_database_sidecars() -> None:
 
 def _create_template() -> None:
     _PROCESS_ROOT.mkdir(parents=True, exist_ok=True)
-    database = DB(_DB_PATH, config_values=build_config_values())
+    database = DB(_DB_PATH)
     database.init()
     with database.conn() as connection:
         connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
@@ -75,10 +77,22 @@ class DBTestBase(unittest.TestCase):
     """SQLite and small local files without global config, Git, or workers."""
 
     def setUp(self) -> None:
+        for target in (
+            "app.service.platform.error_text.aux_display_text_limit_bytes",
+            "app.service.verification.task_store.aux_display_text_limit_bytes",
+            "app.service.judgehost.result.aux_display_text_limit_bytes",
+        ):
+            display_limit_patch = patch(
+                target,
+                return_value=int(AUX_DISPLAY_TEXT_LIMIT_BYTES),
+            )
+            display_limit_patch.start()
+            self.addCleanup(display_limit_patch.stop)
         _restore_template()
         self.settings = _settings()
-        self.config_values = build_config_values()
-        self.db = DB(_DB_PATH, config_values=self.config_values)
+        self.db = DB(_DB_PATH)
+        self.constants = build_runtime_values()
+        self.db.apply_runtime_values(self.constants)
         self.verification_task_store = VerificationTaskStore(self.db)
         self.workspace_service = WorkspaceService(
             self.db,

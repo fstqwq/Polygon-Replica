@@ -26,7 +26,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        group: [unit, db, workspace, executor, large-fixture, e2e]
+        group: [unit, service, executor, e2e]
     steps:
     - uses: actions/checkout@v6
     - name: Set up Python 3.12
@@ -35,7 +35,7 @@ jobs:
         python-version: "3.12"
         cache: pip
     - name: Install sandbox dependency
-      if: matrix.group == 'workspace' || matrix.group == 'executor' || matrix.group == 'e2e'
+      if: matrix.group == 'service' || matrix.group == 'executor' || matrix.group == 'e2e'
       run: |
         sudo apt-get update
         sudo apt-get install -y bubblewrap

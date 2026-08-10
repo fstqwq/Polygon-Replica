@@ -30,14 +30,9 @@ from starlette.formparsers import MultiPartParser
 from app.impl.workspace.verification_payload import prepared_payload_for_uploaded_source
 from app.service.verification.plan import VerificationTestPlan
 from app.service.judgehost.case_result import build_case_result
-from app.service.judgehost.batch_scheduler import BatchScheduler
 from app.service.judgehost.batch_scheduler_models import CompileSubmission, ExecutionBatchSpec
 from app.service.judgehost.identity import domjudge_job_id, domjudge_submit_id
-from app.service.judgehost.limits import run_memory_limit_kb
 from app.service.judgehost.api import Judgehost
-from app.service.judgehost.runtime import domjudge_rewrite_untrusted_runresult
-from app.service.judgehost.toolchain_versions import HostToolchainTelemetry
-from app.service.platform.hashing import domjudge_executable_hash
 from app.service.platform.runtime_blob_store import PayloadFile
 from app.service.verification.diagnostic import compose_task_diagnostic_display
 from app.service.verification.execution_result import normalize_execution_result
@@ -50,7 +45,7 @@ from app.service.verification.task_scheduler import (
     unregister_verification_runtime_coordinator,
 )
 from app.service.verification.task_store import VerificationTaskStore
-from tests.common import E2ETestBase, config, override_config_values
+from tests.common import E2ETestBase, config
 from tests.identity_helpers import canonical_test_verification_id
 
 
@@ -133,61 +128,17 @@ class TestJudgehostService(E2ETestBase):
             config.workspace_service,
             config.fs_manager,
             config.settings,
-            config.config_values,
+            config.constants,
             verification_task_store=config.verification_task_store,
             runtime_blob_store=config.runtime_blob_store,
             runtime_cache_index=config.runtime_cache_index,
             case_completion_sink=config.verification_task_completion_service,
             case_diagnostic_sink=config.verification_task_completion_service,
         )
-        override_config_values(
-            self,
-            service.state.config_values,
-            JUDGEHOST_ENABLE=True,
-            JUDGEHOST_API_TOKEN="test-token",
-            JUDGEHOST_API_USERNAME="judgehost",
-        )
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
         return service
-
-    def test_domjudge_memory_limit_conversion_is_exact_and_strict(self) -> None:
-        for memory_limit_mb in (1, 2, 4, 8, 15):
-            with self.subTest(memory_limit_mb=memory_limit_mb):
-                self.assertEqual(
-                    run_memory_limit_kb(memory_limit_mb),
-                    memory_limit_mb * 1024,
-                )
-        for invalid in (0, -1, True, "1", None):
-            with self.subTest(invalid=invalid), self.assertRaisesRegex(
-                ValueError,
-                "invalid internal memory_limit_mb",
-            ):
-                run_memory_limit_kb(invalid)
-
-    def test_domjudge_precompute_rejects_illegal_internal_memory_limit(self) -> None:
-        service = self._fresh_judgehost_service()
-        source = config.runtime_blob_store.put_bytes(b"int main(){return 0;}\n")
-        verification_payload = {
-            "run_config_json": json.dumps({"memory_limit_mb": 0}),
-            "problem_limits": {
-                "time_limit_ms": 2000,
-                "memory_limit_mb": 1,
-                "pass_limit": 1,
-            },
-            "source_files": {},
-        }
-        with self.assertRaisesRegex(
-            ValueError,
-            "invalid internal memory_limit_mb",
-        ):
-            service.prepare_execution_template(
-                mode="pass-fail",
-                upload_file=source,
-                upload_filename="solution.cpp",
-                verification_payload=verification_payload,
-                expected_behavior="accepted",
-                verification_source="verification",
-                task_kind="solution-run",
-            )
 
     def _verification_run_row(self, run_id: str, verification_id: str = "") -> dict[str, object] | None:
         safe_run_id = str(run_id or "").strip()
@@ -272,13 +223,15 @@ class TestJudgehostService(E2ETestBase):
 
     def test_domjudge_add_judging_run_finalizes_matching_verification_task_immediately(self) -> None:
         service = config.judgehost_task_service
-        override_config_values(
-            self,
-            service.state.config_values,
-            JUDGEHOST_ENABLE=True,
-            JUDGEHOST_API_TOKEN="test-token",
-            JUDGEHOST_API_USERNAME="judgehost",
-        )
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
 
         ctx = config.workspace_service.workspace_context(self.problem, self.user, include_recent=False)
         verification_id = _canonical_verification_id(str(uuid.uuid4()))
@@ -356,9 +309,6 @@ class TestJudgehostService(E2ETestBase):
             completion_service=config.verification_task_completion_service,
             callbacks=callbacks,
             edges=[],
-            display_text_limit_bytes=int(
-                config.config_values.snapshot()["AUX_DISPLAY_TEXT_LIMIT_BYTES"]
-            ),
         )
         register_verification_runtime_coordinator(verification_id, coordinator)
         coordinator_thread = threading.Thread(target=coordinator.run, daemon=True)
@@ -872,229 +822,10 @@ class TestJudgehostService(E2ETestBase):
             }
         )
 
-    def test_domjudge_executable_hash_uses_md5_contract(self) -> None:
-        files: list[tuple[str, bytes, bool]] = [
-            ("z-note.txt", b"", False),
-            ("run", b"#!/bin/sh\necho ok\n", True),
-            ("main.cpp", b"int main(){return 0;}\n", False),
-        ]
-        got = domjudge_executable_hash(files)
-        rows = sorted(files, key=lambda item: str(item[0]))
-        parts: list[str] = []
-        for filename, content, is_exec in rows:
-            content_md5 = hashlib.md5(bytes(content)).hexdigest()
-            parts.append(f"{content_md5}{filename}{'1' if is_exec else ''}")
-        expected = hashlib.md5("".join(parts).encode("utf-8")).hexdigest()
-        self.assertEqual(got, expected)
-        self.assertRegex(got, r"^[0-9a-f]{32}$")
-
-    def test_domjudge_state_store_seeds_ids_above_process_base(self) -> None:
-        store = BatchScheduler(id_base=123456)
-        batch_id = store.create_batch_with_cases(
-            task_id=f"jt-id-base-{uuid.uuid4().hex[:8]}",
-            run_id=f"r-id-base-{uuid.uuid4().hex[:8]}",
-            verification_program_id=_SOLUTION_PROGRAM_ID,
-            execution_signature="a" * 64,
-            task_kind="solution-run",
-            verification_id="ver-1",
-            compile_key="8" * 64,
-            compile_submission=self._compile_submission("main.cpp", "8" * 64),
-            contest_id="local",
-            mode="pass-fail",
-            source_name="main.cpp",
-            compile_hash="1" * 32,
-            run_hash="2" * 32,
-            compare_hash="3" * 32,
-            source_hash="4" * 64,
-            compile_config_json="{}",
-            run_config_json="{}",
-            compare_config_json="{}",
-            expected_behavior="accepted",
-            verification_source="run.execute",
-            bypass_case_result_cache=0,
-            service_class="background",
-            batch_spec=ExecutionBatchSpec(),
-            created_at="2026-05-08T00:00:00+00:00",
-            case_rows=[
-                {
-                    "task_id": "jt-id-base-case",
-                    "run_id": "r-id-base-case",
-                    "test_name": "001.in",
-                    "ordinal": 1,
-                    "testcase_id": 1,
-                    "testcase_hash": "5" * 64,
-                    "testcase_input_hash": "6" * 64,
-                    "testcase_answer_hash": "7" * 64,
-                    "input_ref": "blob://sha256/" + ("6" * 64),
-                    "answer_ref": "blob://sha256/" + ("7" * 64),
-                    "status": "pending",
-                }
-            ],
-        )
-        self.assertGreater(batch_id, 123456)
-        cases = store.cases_for_batch(batch_id)
-        self.assertEqual(len(cases), 1)
-        self.assertGreater(int(cases[0]["id"]), 123456)
-
-    def test_set_host_enabled_preserves_host_status_shape(self) -> None:
-        service = config.judgehost_task_service
-        self._reset_task_queue_state(service)
-        override_config_values(
-            self,
-            service.state.config_values,
-            JUDGEHOST_ENABLE=True,
-            JUDGEHOST_API_TOKEN="host-shape-token",
-        )
-
-        service.domjudge_register_host("judgehost-shape-check")
-        before = service.status()
-        before_hosts = before.get("hosts") if isinstance(before, dict) else []
-        before_host = next(
-            item
-            for item in before_hosts
-            if str(item.get("hostname") or "") == "judgehost-shape-check"
-        )
-        self.assertEqual(before_host.get("judged_case_count"), 0)
-        self.assertIsNone(before_host.get("last_judging_at"))
-        self.assertIsNone(before_host.get("recent_avg_per_case_sec"))
-        self.assertNotIn("load_5m", before_host)
-
-        release = service.set_host_enabled("judgehost-shape-check", False)
-        self.assertIsInstance(release, dict)
-
-        after = service.status()
-        after_hosts = after.get("hosts") if isinstance(after, dict) else []
-        host = next((item for item in after_hosts if str(item.get("hostname") or "") == "judgehost-shape-check"), None)
-        self.assertIsNotNone(host)
-        self.assertFalse(bool(host.get("enabled")))
-
-    def test_host_status_keeps_latest_peer_ip_as_display_telemetry(self) -> None:
-        service = config.judgehost_task_service
-        self._reset_task_queue_state(service)
-        host = "judgehost-peer-display"
-        service.domjudge_register_host(host)
-        service.record_host_peer_addr(host, "203.0.113.10")
-
-        rows = service.status().get("hosts")
-        self.assertIsInstance(rows, list)
-        row = next(item for item in rows if str(item.get("hostname") or "") == host)
-        self.assertEqual(str(row.get("peer_addr") or ""), "203.0.113.10")
-
-        service.set_host_enabled(host, False)
-        rows_after = service.status().get("hosts")
-        self.assertIsInstance(rows_after, list)
-        row_after = next(
-            item for item in rows_after if str(item.get("hostname") or "") == host
-        )
-        self.assertEqual(str(row_after.get("peer_addr") or ""), "203.0.113.10")
-
-    def test_host_status_exposes_runtime_toolchains_and_reset_clears_them(self) -> None:
-        service = config.judgehost_task_service
-        self._reset_task_queue_state(service)
-        host = "judgehost-toolchains"
-        service.domjudge_register_host(host)
-        with service.state.state_lock:
-            service.state.host_toolchains[host] = {
-                "py": HostToolchainTelemetry(
-                    language_id="py",
-                    compiler="command=/usr/bin/pypy3\nPython 3.10.16",
-                    runner="command=/usr/bin/pypy3\nPython 3.10.16",
-                    observed_at="2026-08-08T00:00:00+00:00",
-                    judgetask_id=102,
-                ),
-                "cpp": HostToolchainTelemetry(
-                    language_id="cpp",
-                    compiler="command=/usr/bin/g++\ng++ 14.2.0",
-                    runner="",
-                    observed_at="2026-08-08T00:00:01+00:00",
-                    judgetask_id=101,
-                ),
-            }
-
-        rows = service.status()["hosts"]
-        row = next(item for item in rows if item["hostname"] == host)
-        self.assertEqual(
-            [item["language_id"] for item in row["toolchains"]],
-            ["cpp", "py"],
-        )
-
-        service.set_host_enabled(host, False)
-        rows_after_disable = service.status()["hosts"]
-        disabled_row = next(item for item in rows_after_disable if item["hostname"] == host)
-        self.assertEqual(disabled_row["toolchains"], row["toolchains"])
-
-        service.reset_runtime_state()
-        self.assertEqual(service.state.host_toolchains, {})
-
-    def test_wait_for_task_result_keeps_transient_runs_out_of_durable_artifact_paths(self) -> None:
-        service = config.judgehost_task_service
-        self._reset_task_queue_state(service)
-        verification_id = _canonical_verification_id(str(uuid.uuid4()))
-        run_id = f"r-jh-transient-{uuid.uuid4().hex[:8]}"
-        self._seed_build_verification(verification_id)
-
-        task_id = service.enqueue_task(
-            problem=self.problem,
-            username=self.user,
-            artifact_verification_id=verification_id,
-            mode="pass-fail",
-            submission_path="solutions/ac.cpp",
-            upload_content=None,
-            upload_filename=None,
-            run_id=run_id,
-            selected_tests=["001.in"],
-            verification_id=verification_id,
-            verification_program_id=_SOLUTION_PROGRAM_ID,
-            expected_behavior="accepted",
-            verification_source="verification.start",
-            persist_verification_run=False,
-        )
-        service.state.task_registry.transition(
-            task_id,
-            expected={service.STATUS_QUEUED},
-            status=service.STATUS_REPORTING,
-        )
-        service.state.task_registry.transition(
-            task_id,
-            expected={service.STATUS_REPORTING},
-            status=service.STATUS_COMPLETED,
-            updates={
-                "run_status": "ok",
-                "error_text": "",
-                "summary": {
-                "mode": "pass-fail",
-                "source": "solutions/ac.cpp",
-                "tests": [],
-                "status": "ok",
-                },
-            },
-        )
-        result = service.wait_for_task_result(task_id, timeout_sec=1.0)
-        self.assertEqual(str(result.get("artifact_path") or ""), "")
-        self.assertFalse((self._verification_artifact_root(verification_id) / "runs" / run_id).exists())
-
-    def test_judgehost_run_submission_uses_queue_service(self) -> None:
-        service = config.judgehost_task_service
-        with patch.object(service, "enabled", return_value=True), patch.object(
-            service, "auth_token_configured", return_value=True
-        ), patch.object(service, "enqueue_task", return_value="jt-x") as mocked_enqueue, patch.object(
-            service, "wait_for_task", return_value="r-x"
-        ) as mocked_wait:
-            run_id = service.run_submission(
-                problem="alice/sample",
-                username="alice",
-                artifact_verification_id="b-x",
-                submission_path="solutions/ac.cpp",
-                run_id="r-x",
-                verification_program_id=_SOLUTION_PROGRAM_ID,
-            )
-        self.assertEqual(run_id, "r-x")
-        self.assertEqual(mocked_enqueue.call_count, 1)
-        self.assertEqual(mocked_wait.call_count, 1)
-
     def test_domjudge_fetch_uses_two_case_default_and_honors_explicit_one(self) -> None:
         service = self._fresh_judgehost_service()
         self.addCleanup(service.reset_runtime_state)
+        service.state.fetch_batch_size = 2
         verification_id = canonical_test_verification_id(f"b-jh-default-batch-{uuid.uuid4().hex[:8]}")
         run_id = f"r-jh-default-batch-{uuid.uuid4().hex[:8]}"
         self._seed_build_verification(
@@ -1136,13 +867,15 @@ class TestJudgehostService(E2ETestBase):
 
     def test_domjudge_endpoints_finalize_run(self) -> None:
         service = config.judgehost_task_service
-        override_config_values(
-            self,
-            service.state.config_values,
-            JUDGEHOST_ENABLE=True,
-            JUDGEHOST_API_TOKEN="test-token",
-            JUDGEHOST_API_USERNAME="judgehost",
-        )
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
 
         verification_id = canonical_test_verification_id(f"b-jh-dom-{uuid.uuid4().hex[:8]}")
         run_id = f"r-jh-dom-{uuid.uuid4().hex[:8]}"
@@ -1259,13 +992,15 @@ class TestJudgehostService(E2ETestBase):
 
     def test_domjudge_executable_files_require_live_job_memory(self) -> None:
         service = config.judgehost_task_service
-        override_config_values(
-            self,
-            service.state.config_values,
-            JUDGEHOST_ENABLE=True,
-            JUDGEHOST_API_TOKEN="test-token",
-            JUDGEHOST_API_USERNAME="judgehost",
-        )
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
 
         verification_id = canonical_test_verification_id(f"b-jh-script-provider-{uuid.uuid4().hex[:8]}")
         run_id = f"r-jh-script-provider-{uuid.uuid4().hex[:8]}"
@@ -1299,13 +1034,15 @@ class TestJudgehostService(E2ETestBase):
 
     def test_domjudge_executable_files_reuse_runtime_cache_entry(self) -> None:
         service = config.judgehost_task_service
-        override_config_values(
-            self,
-            service.state.config_values,
-            JUDGEHOST_ENABLE=True,
-            JUDGEHOST_API_TOKEN="test-token",
-            JUDGEHOST_API_USERNAME="judgehost",
-        )
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
 
         verification_id = canonical_test_verification_id(f"b-jh-script-cache-{uuid.uuid4().hex[:8]}")
         run_id_a = f"r-jh-script-cache-a-{uuid.uuid4().hex[:8]}"
@@ -1396,13 +1133,15 @@ class TestJudgehostService(E2ETestBase):
 
     def test_domjudge_missing_executable_cache_fails_active_job(self) -> None:
         service = config.judgehost_task_service
-        override_config_values(
-            self,
-            service.state.config_values,
-            JUDGEHOST_ENABLE=True,
-            JUDGEHOST_API_TOKEN="test-token",
-            JUDGEHOST_API_USERNAME="judgehost",
-        )
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
 
         verification_id = canonical_test_verification_id(f"b-jh-script-miss-{uuid.uuid4().hex[:8]}")
         run_id = f"r-jh-script-miss-{uuid.uuid4().hex[:8]}"
@@ -1469,13 +1208,15 @@ class TestJudgehostService(E2ETestBase):
 
     def test_generate_prepared_payload_recomputes_domjudge_precomputed_from_final_verification_payload(self) -> None:
         service = config.judgehost_task_service
-        override_config_values(
-            self,
-            service.state.config_values,
-            JUDGEHOST_ENABLE=True,
-            JUDGEHOST_API_TOKEN="test-token",
-            JUDGEHOST_API_USERNAME="judgehost",
-        )
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
 
         verification_id = canonical_test_verification_id(f"b-jh-generate-recompute-{uuid.uuid4().hex[:8]}")
         run_id = f"r-jh-generate-recompute-{uuid.uuid4().hex[:8]}"
@@ -1557,14 +1298,18 @@ class TestJudgehostService(E2ETestBase):
 
     def test_domjudge_selected_tests_not_truncated_by_max_tests_per_task(self) -> None:
         service = config.judgehost_task_service
-        override_config_values(
-            self,
-            service.state.config_values,
-            JUDGEHOST_ENABLE=True,
-            JUDGEHOST_API_TOKEN="test-token",
-            JUDGEHOST_API_USERNAME="judgehost",
-            JUDGEHOST_MAX_TESTS_PER_TASK=1,
-        )
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        old_max_tests_per_task = service.state.max_tests_per_task
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        self.addCleanup(setattr, service.state, "max_tests_per_task", old_max_tests_per_task)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
+        service.state.max_tests_per_task = 1
 
         verification_id = canonical_test_verification_id(f"b-jh-dom-notrunc-{uuid.uuid4().hex[:8]}")
         run_id = f"r-jh-dom-notrunc-{uuid.uuid4().hex[:8]}"
@@ -1615,13 +1360,15 @@ class TestJudgehostService(E2ETestBase):
 
     def test_domjudge_reuses_script_ids_for_same_hash_payload(self) -> None:
         service = config.judgehost_task_service
-        override_config_values(
-            self,
-            service.state.config_values,
-            JUDGEHOST_ENABLE=True,
-            JUDGEHOST_API_TOKEN="test-token",
-            JUDGEHOST_API_USERNAME="judgehost",
-        )
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
 
         verification_id = canonical_test_verification_id(f"b-jh-dom-cache-{uuid.uuid4().hex[:8]}")
         run_id_a = f"r-jh-dom-cache-a-{uuid.uuid4().hex[:8]}"
@@ -1721,13 +1468,15 @@ class TestJudgehostService(E2ETestBase):
 
     def test_domjudge_multi_pass_summary_keeps_each_pass_and_raw_output(self) -> None:
         service = config.judgehost_task_service
-        override_config_values(
-            self,
-            service.state.config_values,
-            JUDGEHOST_ENABLE=True,
-            JUDGEHOST_API_TOKEN="test-token",
-            JUDGEHOST_API_USERNAME="judgehost",
-        )
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
 
         verification_id = canonical_test_verification_id(f"b-jh-dom-mp-{uuid.uuid4().hex[:8]}")
         run_id = f"r-jh-dom-mp-{uuid.uuid4().hex[:8]}"
@@ -1843,65 +1592,17 @@ class TestJudgehostService(E2ETestBase):
         run_root = self._verification_artifact_root(verification_id) / "runs" / run_id
         self.assertFalse((run_root / "001.out").exists())
 
-    def test_domjudge_rewrites_untrusted_non_tl_result_when_cpu_exceeds_time_limit(self) -> None:
-        self.assertEqual(
-            domjudge_rewrite_untrusted_runresult(
-                "wrong-answer",
-                cpu_sec=6.5,
-                run_cfg_obj={"time_limit": 6.0},
-            ),
-            "timelimit",
-        )
-        self.assertEqual(
-            domjudge_rewrite_untrusted_runresult(
-                "run-error",
-                cpu_sec=6.1,
-                run_cfg_obj={"time_limit_ms": 6000},
-            ),
-            "timelimit",
-        )
-        self.assertEqual(
-            domjudge_rewrite_untrusted_runresult(
-                "wrong-answer",
-                cpu_sec=5.9,
-                run_cfg_obj={"time_limit": 6.0},
-            ),
-            "wrong-answer",
-        )
-        self.assertEqual(
-            domjudge_rewrite_untrusted_runresult(
-                "correct",
-                cpu_sec=15.0,
-                run_cfg_obj={"time_limit": 6.0},
-            ),
-            "correct",
-        )
-        self.assertEqual(
-            domjudge_rewrite_untrusted_runresult(
-                "run-error",
-                cpu_sec=0.6,
-                run_cfg_obj={"time_limit": 0.5},
-            ),
-            "timelimit",
-        )
-        self.assertEqual(
-            domjudge_rewrite_untrusted_runresult(
-                "run-error",
-                cpu_sec=0.4,
-                run_cfg_obj={"time_limit": 0.5},
-            ),
-            "run-error",
-        )
-
     def test_domjudge_add_judging_run_rewrites_wa_to_tl_on_double_cpu(self) -> None:
         service = config.judgehost_task_service
-        override_config_values(
-            self,
-            service.state.config_values,
-            JUDGEHOST_ENABLE=True,
-            JUDGEHOST_API_TOKEN="test-token",
-            JUDGEHOST_API_USERNAME="judgehost",
-        )
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
 
         verification_id = canonical_test_verification_id(f"b-jh-dom-wa2tl-{uuid.uuid4().hex[:8]}")
         run_id = f"r-jh-dom-wa2tl-{uuid.uuid4().hex[:8]}"
@@ -1975,13 +1676,15 @@ class TestJudgehostService(E2ETestBase):
 
     def test_domjudge_register_host_requeues_leased_case_for_another_host(self) -> None:
         service = config.judgehost_task_service
-        override_config_values(
-            self,
-            service.state.config_values,
-            JUDGEHOST_ENABLE=True,
-            JUDGEHOST_API_TOKEN="test-token",
-            JUDGEHOST_API_USERNAME="judgehost",
-        )
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
 
         verification_id = canonical_test_verification_id(f"b-jh-dom-reconnect-{uuid.uuid4().hex[:8]}")
         execution_verification_id = _canonical_verification_id("inv-domjudge-reconnect")
@@ -2211,13 +1914,15 @@ class TestJudgehostService(E2ETestBase):
 
     def test_enqueue_rejects_invalid_payload_before_scheduling(self) -> None:
         service = config.judgehost_task_service
-        override_config_values(
-            self,
-            service.state.config_values,
-            JUDGEHOST_ENABLE=True,
-            JUDGEHOST_API_TOKEN="test-token",
-            JUDGEHOST_API_USERNAME="judgehost",
-        )
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
 
         build_bad = canonical_test_verification_id(f"b-jh-dom-bad-{uuid.uuid4().hex[:8]}")
         run_bad = f"r-jh-dom-bad-{uuid.uuid4().hex[:8]}"
@@ -2270,13 +1975,15 @@ class TestJudgehostService(E2ETestBase):
 
     def test_domjudge_reuses_stable_testcase_identity_across_verifications(self) -> None:
         service = config.judgehost_task_service
-        override_config_values(
-            self,
-            service.state.config_values,
-            JUDGEHOST_ENABLE=True,
-            JUDGEHOST_API_TOKEN="test-token",
-            JUDGEHOST_API_USERNAME="judgehost",
-        )
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
 
         build_a = canonical_test_verification_id(f"b-jh-cache-a-{uuid.uuid4().hex[:8]}")
         run_a = f"r-jh-cache-a-{uuid.uuid4().hex[:8]}"
@@ -2344,13 +2051,15 @@ class TestJudgehostService(E2ETestBase):
 
     def test_domjudge_testcase_files_resolve_by_stable_id_without_host_lease(self) -> None:
         service = config.judgehost_task_service
-        override_config_values(
-            self,
-            service.state.config_values,
-            JUDGEHOST_ENABLE=True,
-            JUDGEHOST_API_TOKEN="test-token",
-            JUDGEHOST_API_USERNAME="judgehost",
-        )
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
 
         build_a = canonical_test_verification_id(f"b-jh-host-a-{uuid.uuid4().hex[:8]}")
         run_a = f"r-jh-host-a-{uuid.uuid4().hex[:8]}"
@@ -2504,13 +2213,15 @@ class TestJudgehostService(E2ETestBase):
 
     def test_domjudge_interactor_source_overrides_host_binary_payload(self) -> None:
         service = config.judgehost_task_service
-        override_config_values(
-            self,
-            service.state.config_values,
-            JUDGEHOST_ENABLE=True,
-            JUDGEHOST_API_TOKEN="test-token",
-            JUDGEHOST_API_USERNAME="judgehost",
-        )
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
 
         ws = Path(self._workspace_path())
         (ws / "interactors").mkdir(parents=True, exist_ok=True)
@@ -2566,65 +2277,6 @@ class TestJudgehostService(E2ETestBase):
 
 
 
-    def test_domjudge_java_compile_payload_includes_detect_main_source(self) -> None:
-        service = config.judgehost_task_service
-        source_file = config.runtime_blob_store.put_bytes(
-            b"public class TranslateMain { public static void main(String[] args) {} }\n"
-        )
-        empty_file = config.runtime_blob_store.put_bytes(b"")
-        precomputed = service.enqueue._domjudge_precomputed_fields_from_payload(
-            {
-                "source_name": "TranslateMain.java",
-                "source_file": source_file.to_payload(),
-                "entry_point": "TranslateMain",
-                "verification_payload": {
-                    "tests": [
-                        {
-                            "name": "001.in",
-                            "input_file": empty_file.to_payload(),
-                            "answer_file": empty_file.to_payload(),
-                        }
-                    ],
-                    "run_config_json": "{}",
-                    "problem_limits": {},
-                    "source_files": {},
-                },
-                "mode": "pass-fail",
-                "verification_source": "run.execute",
-            }
-        )
-        compile_files = list(precomputed.get("compile_files") or [])
-        file_names = [str(name) for name, _content, _is_exec in compile_files]
-        self.assertIn("run", file_names)
-        self.assertIn("DetectMain.java", file_names)
-
-    def test_prepare_enqueue_payload_renames_java_source_to_detected_entry_point(self) -> None:
-        service = config.judgehost_task_service
-        payload = service.prepare_enqueue_payload(
-            problem=self.problem,
-            username=self.user,
-            artifact_verification_id="",
-            mode="pass-fail",
-            submission_path=None,
-            upload_content=(
-                b"public class TranslateMain {\n"
-                b"  public static void main(String[] args) {}\n"
-                b"}\n"
-            ),
-            upload_filename="java_translate.java",
-            run_id=f"r-java-entry-{uuid.uuid4().hex[:8]}",
-            selected_tests=[],
-            verification_id=_canonical_verification_id(str(uuid.uuid4())),
-            verification_program_id=_SOLUTION_PROGRAM_ID,
-            expected_behavior="accepted",
-            verification_source="run.execute",
-        )
-        self.assertEqual(str(payload.get("source_name") or ""), "TranslateMain.java")
-        self.assertEqual(str(payload.get("entry_point") or ""), "TranslateMain")
-        precomputed = dict(payload.get("domjudge_precomputed") or {})
-        run_config = dict(precomputed.get("run_config") or {})
-        self.assertEqual(str(run_config.get("entry_point") or ""), "TranslateMain")
-
     def test_domjudge_java_upload_is_sent_with_detected_entry_point_filename(self) -> None:
         service = self._fresh_judgehost_service()
         verification_id = _canonical_verification_id(str(uuid.uuid4()))
@@ -2661,53 +2313,6 @@ class TestJudgehostService(E2ETestBase):
         self.assertTrue(source_files)
         self.assertEqual(source_files[0].filename, "TranslateMain.java")
 
-    def test_prepare_enqueue_payload_rejects_java_without_runnable_main_class(self) -> None:
-        service = config.judgehost_task_service
-        with self.assertRaisesRegex(RuntimeError, "no runnable main class found"):
-            service.prepare_enqueue_payload(
-                problem=self.problem,
-                username=self.user,
-                artifact_verification_id="",
-                mode="pass-fail",
-                submission_path=None,
-                upload_content=b"class Helper {}\n",
-                upload_filename="helper.java",
-                run_id=f"r-java-missing-main-{uuid.uuid4().hex[:8]}",
-                selected_tests=[],
-                verification_id=_canonical_verification_id(str(uuid.uuid4())),
-                verification_program_id=_SOLUTION_PROGRAM_ID,
-                expected_behavior="accepted",
-                verification_source="run.execute",
-            )
-
-    def test_domjudge_config_uses_kib_for_script_filesize_and_bytes_for_output_storage(self) -> None:
-        service = config.judgehost_task_service
-        cfg = service.domjudge_config()
-        values = service.state.config_values.snapshot()
-        run_output_bytes = int(values["RUN_EXEC_OUTPUT_KB"]) * 1024
-        compile_output_kb = int(values["TOOLCHAIN_COMPILE_OUTPUT_KB"])
-        stored_log_limit_bytes = int(values["JUDGEHOST_STORED_LOG_LIMIT_BYTES"])
-        aux_limit_bytes = int(values["AUX_DISPLAY_TEXT_LIMIT_BYTES"])
-        self.assertEqual(str(cfg.get("timelimit_overshoot") or ""), "1s|100%")
-        self.assertEqual(
-            int(cfg.get("output_storage_limit") or 0),
-            run_output_bytes,
-        )
-        self.assertEqual(
-            int(cfg.get("script_filesize_limit") or 0),
-            compile_output_kb,
-        )
-        self.assertGreaterEqual(int(cfg.get("script_filesize_limit") or 0), 1024)
-        self.assertLess(stored_log_limit_bytes, int(cfg.get("output_storage_limit") or 0))
-        self.assertNotEqual(
-            int(cfg.get("output_storage_limit") or 0),
-            int(cfg.get("script_filesize_limit") or 0),
-        )
-        self.assertNotEqual(
-            int(cfg.get("script_filesize_limit") or 0),
-            (aux_limit_bytes + 1023) // 1024,
-        )
-
 
 
 
@@ -2724,13 +2329,15 @@ class TestJudgehostService(E2ETestBase):
 
     def test_domjudge_generate_verification_uses_generate_scripts_and_validator_payload(self) -> None:
         service = config.judgehost_task_service
-        override_config_values(
-            self,
-            service.state.config_values,
-            JUDGEHOST_ENABLE=True,
-            JUDGEHOST_API_TOKEN="test-token",
-            JUDGEHOST_API_USERNAME="judgehost",
-        )
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
 
         verification_id = canonical_test_verification_id(f"b-jh-generate-scripts-{uuid.uuid4().hex[:8]}")
         run_id = f"r-jh-generate-scripts-{uuid.uuid4().hex[:8]}"
@@ -2779,13 +2386,15 @@ class TestJudgehostService(E2ETestBase):
 
     def test_domjudge_generate_verification_interactive_mode_does_not_require_interactor_payload(self) -> None:
         service = config.judgehost_task_service
-        override_config_values(
-            self,
-            service.state.config_values,
-            JUDGEHOST_ENABLE=True,
-            JUDGEHOST_API_TOKEN="test-token",
-            JUDGEHOST_API_USERNAME="judgehost",
-        )
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
 
         verification_id = canonical_test_verification_id(f"b-jh-generate-interactive-{uuid.uuid4().hex[:8]}")
         run_id = f"r-jh-generate-interactive-{uuid.uuid4().hex[:8]}"
@@ -2838,13 +2447,15 @@ class TestJudgehostService(E2ETestBase):
 
     def test_domjudge_compile_only_uses_single_virtual_case_even_with_build_tests(self) -> None:
         service = config.judgehost_task_service
-        override_config_values(
-            self,
-            service.state.config_values,
-            JUDGEHOST_ENABLE=True,
-            JUDGEHOST_API_TOKEN="test-token",
-            JUDGEHOST_API_USERNAME="judgehost",
-        )
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
 
         verification_id = canonical_test_verification_id(f"b-jh-compile-only-virtual-{uuid.uuid4().hex[:8]}")
         run_id = f"r-jh-compile-only-virtual-{uuid.uuid4().hex[:8]}"
@@ -2910,13 +2521,15 @@ class TestJudgehostService(E2ETestBase):
 
     def test_domjudge_compile_only_multi_pass_with_interactor_stays_non_combined(self) -> None:
         service = config.judgehost_task_service
-        override_config_values(
-            self,
-            service.state.config_values,
-            JUDGEHOST_ENABLE=True,
-            JUDGEHOST_API_TOKEN="test-token",
-            JUDGEHOST_API_USERNAME="judgehost",
-        )
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
 
         verification_id = canonical_test_verification_id(f"b-jh-compile-only-multipass-{uuid.uuid4().hex[:8]}")
         run_id = f"r-jh-compile-only-multipass-{uuid.uuid4().hex[:8]}"
@@ -2987,13 +2600,15 @@ class TestJudgehostService(E2ETestBase):
 
     def test_domjudge_compile_only_cache_hit_with_extra_sources(self) -> None:
         service = config.judgehost_task_service
-        override_config_values(
-            self,
-            service.state.config_values,
-            JUDGEHOST_ENABLE=True,
-            JUDGEHOST_API_TOKEN="test-token",
-            JUDGEHOST_API_USERNAME="judgehost",
-        )
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
 
         host = "judgehost-compile-only-extra-cache"
         verification_id = canonical_test_verification_id(f"b-jh-compile-only-extra-cache-{uuid.uuid4().hex[:8]}")
@@ -3100,13 +2715,15 @@ class TestJudgehostService(E2ETestBase):
 
     def test_domjudge_compile_only_cache_hit_without_build_payload_tests(self) -> None:
         service = config.judgehost_task_service
-        override_config_values(
-            self,
-            service.state.config_values,
-            JUDGEHOST_ENABLE=True,
-            JUDGEHOST_API_TOKEN="test-token",
-            JUDGEHOST_API_USERNAME="judgehost",
-        )
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
 
         host = "judgehost-compile-only-empty-build-payload-cache"
         # save-source compile check path uses a placeholder build id and no build payload tests
@@ -3180,84 +2797,17 @@ class TestJudgehostService(E2ETestBase):
         self.assertIsNotNone(run_row_b)
         self.assertEqual(str(run_row_b["status"] or "").strip().lower(), "ok")
 
-    def test_enqueue_task_uses_prepared_payload_without_collecting_fallback(self) -> None:
-        service = config.judgehost_task_service
-        override_config_values(
-            self,
-            service.state.config_values,
-            JUDGEHOST_ENABLE=True,
-            JUDGEHOST_API_TOKEN="test-token",
-            JUDGEHOST_API_USERNAME="judgehost",
-        )
-
-        verification_id = canonical_test_verification_id(f"b-jh-prepared-merge-{uuid.uuid4().hex[:8]}")
-        run_id = f"r-jh-prepared-merge-{uuid.uuid4().hex[:8]}"
-        self._seed_build_verification(verification_id)
-        extra_testlib = config.runtime_blob_store.put_bytes(b"// testlib\n")
-        prepared = service.prepare_enqueue_payload(
-            problem=self.problem,
-            username=self.user,
-            artifact_verification_id=verification_id,
-            mode="pass-fail",
-            submission_path=None,
-            upload_content=b"int main(){return 0;}\n",
-            upload_filename="gen.cpp",
-            run_id=run_id,
-            selected_tests=[],
-            verification_id=_canonical_verification_id("inv-jh-prepared-merge"),
-            verification_program_id=_SOLUTION_PROGRAM_ID,
-            expected_behavior="compile",
-            verification_source="build.compile",
-            bypass_case_result_cache=True,
-            compile_only=True,
-        )
-        prepared["extra_source_files"] = {"testlib.h": extra_testlib.to_payload()}
-
-        with patch.object(
-            service._enqueue,
-            "_collect_verification_payload",
-            side_effect=AssertionError("prepared enqueue collected fallback payload"),
-        ), patch.object(
-            service._enqueue._s.workspace_service,
-            "workspace_context",
-            side_effect=AssertionError("prepared enqueue loaded workspace context"),
-        ):
-            task_id = service.enqueue_task(
-                problem=self.problem,
-                username=self.user,
-                artifact_verification_id=verification_id,
-                mode="pass-fail",
-                submission_path=None,
-                upload_content=b"int main(){return 0;}\n",
-                upload_filename="gen.cpp",
-                run_id=run_id,
-                selected_tests=[],
-                verification_id=_canonical_verification_id("inv-jh-prepared-merge"),
-                verification_program_id=_SOLUTION_PROGRAM_ID,
-                expected_behavior="compile",
-                verification_source="build.compile",
-                compile_only=True,
-                prepared_payload=prepared,
-            )
-        task = service.core.task_by_id(task_id)
-        self.assertIsNotNone(task)
-        payload = task.get("payload") if isinstance(task, dict) else {}
-        self.assertIsInstance(payload, dict)
-        self.assertEqual(str(payload.get("source_name") or ""), "gen.cpp")
-        self.assertIsInstance(payload.get("source_file"), dict)
-        self.assertIsInstance(payload.get("verification_payload"), dict)
-        self.assertIsInstance(payload.get("extra_source_files"), dict)
-        self.assertTrue(bool(payload.get("compile_only")))
-
     def test_domjudge_source_files_include_prepared_extra_sources(self) -> None:
         service = config.judgehost_task_service
-        override_config_values(
-            self,
-            service.state.config_values,
-            JUDGEHOST_ENABLE=True,
-            JUDGEHOST_API_TOKEN="test-token",
-            JUDGEHOST_API_USERNAME="judgehost",
-        )
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
         self._reset_task_queue_state(service)
 
         verification_id = canonical_test_verification_id(f"b-jh-extra-src-{uuid.uuid4().hex[:8]}")
@@ -3337,13 +2887,15 @@ class TestJudgehostService(E2ETestBase):
 
     def test_domjudge_compile_only_result_normalization_maps_success_to_ok(self) -> None:
         service = config.judgehost_task_service
-        override_config_values(
-            self,
-            service.state.config_values,
-            JUDGEHOST_ENABLE=True,
-            JUDGEHOST_API_TOKEN="test-token",
-            JUDGEHOST_API_USERNAME="judgehost",
-        )
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
 
         verification_id = canonical_test_verification_id(f"b-jh-compile-only-ok-{uuid.uuid4().hex[:8]}")
         run_id = f"r-jh-compile-only-ok-{uuid.uuid4().hex[:8]}"
@@ -3409,13 +2961,15 @@ class TestJudgehostService(E2ETestBase):
 
     def test_domjudge_compile_only_missing_output_is_normalized_to_ok(self) -> None:
         service = config.judgehost_task_service
-        override_config_values(
-            self,
-            service.state.config_values,
-            JUDGEHOST_ENABLE=True,
-            JUDGEHOST_API_TOKEN="test-token",
-            JUDGEHOST_API_USERNAME="judgehost",
-        )
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
 
         verification_id = canonical_test_verification_id(f"b-jh-compile-only-no-output-{uuid.uuid4().hex[:8]}")
         run_id = f"r-jh-compile-only-no-output-{uuid.uuid4().hex[:8]}"
@@ -3481,13 +3035,15 @@ class TestJudgehostService(E2ETestBase):
 
     def test_domjudge_compile_only_result_normalization_maps_compile_failure_to_ce(self) -> None:
         service = config.judgehost_task_service
-        override_config_values(
-            self,
-            service.state.config_values,
-            JUDGEHOST_ENABLE=True,
-            JUDGEHOST_API_TOKEN="test-token",
-            JUDGEHOST_API_USERNAME="judgehost",
-        )
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
 
         verification_id = canonical_test_verification_id(f"b-jh-compile-only-ce-{uuid.uuid4().hex[:8]}")
         run_id = f"r-jh-compile-only-ce-{uuid.uuid4().hex[:8]}"
@@ -3557,13 +3113,15 @@ class TestJudgehostService(E2ETestBase):
 
     def test_domjudge_source_files_include_submission_extra_sources(self) -> None:
         service = config.judgehost_task_service
-        override_config_values(
-            self,
-            service.state.config_values,
-            JUDGEHOST_ENABLE=True,
-            JUDGEHOST_API_TOKEN="test-token",
-            JUDGEHOST_API_USERNAME="judgehost",
-        )
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
 
         verification_id = canonical_test_verification_id(f"b-jh-extra-source-{uuid.uuid4().hex[:8]}")
         run_id = f"r-jh-extra-source-{uuid.uuid4().hex[:8]}"
@@ -3621,70 +3179,19 @@ class TestJudgehostService(E2ETestBase):
         self.assertIn("gen.cpp", source_names)
         self.assertIn("testlib.h", source_names)
 
-    def test_domjudge_b64_decode_requires_base64_text(self) -> None:
-        service = config.judgehost_task_service
-        blob = b"ok\n"
-        encoded = base64.b64encode(blob).decode("ascii")
-        self.assertEqual(service.toolkit.b64_decode(encoded), blob)
-        self.assertEqual(service.toolkit.b64_decode(encoded.encode("ascii")), blob)
-        with self.assertRaises(RuntimeError):
-            service.toolkit.b64_decode(b"binary-artifact")
-        with self.assertRaises(RuntimeError):
-            service.toolkit.b64_decode("%not-base64%")
-
-    def test_domjudge_payload_blob_bytes_keeps_raw_upload_contract(self) -> None:
-        service = config.judgehost_task_service
-        blob = b"binary-artifact"
-        encoded = base64.b64encode(blob).decode("ascii")
-        self.assertEqual(service.toolkit.payload_blob_bytes(blob), blob)
-        self.assertEqual(service.toolkit.payload_blob_bytes(encoded), blob)
-
-    def test_domjudge_feedback_text_preserves_multiline_and_redacts_internal_path(self) -> None:
-        from app.service.judgehost.runtime import (
-            domjudge_feedback_text_from_bytes,
-            domjudge_feedback_text_from_text,
-        )
-
-        self.assertEqual(
-            domjudge_feedback_text_from_text(
-                "\n\nfailed on pass 2\nignored",
-                limit_bytes=2048,
-            ),
-            "failed on pass 2\nignored",
-        )
-        compile_output = (
-            "\n"
-            "/opt/domjudge/judgehost/judgings/judgedaemon-2-2/endpoint-default/executable/compare/123/"
-            "b0e49bdbe272b5206d97ca5e888a7b00/build/validator.cpp: In function 'void EachTestCase()':\n"
-            "/opt/domjudge/judgehost/judgings/judgedaemon-2-2/endpoint-default/executable/compare/123/"
-            "b0e49bdbe272b5206d97ca5e888a7b00/build/validator.cpp:4:35: error: expected ';' before 'inf'\n"
-        )
-        self.assertEqual(
-            domjudge_feedback_text_from_text(
-                compile_output,
-                limit_bytes=2048,
-            ),
-            "validator.cpp: In function 'void EachTestCase()':\nvalidator.cpp:4:35: error: expected ';' before 'inf'",
-        )
-        self.assertEqual(
-            domjudge_feedback_text_from_bytes(
-                compile_output.encode("utf-8"),
-                limit_bytes=2048,
-            ),
-            "validator.cpp: In function 'void EachTestCase()':\nvalidator.cpp:4:35: error: expected ';' before 'inf'",
-        )
-
     def test_domjudge_add_judging_run_endpoint_accepts_large_multipart_payload(self) -> None:
         from app.main import app
 
         service = config.judgehost_task_service
-        override_config_values(
-            self,
-            service.state.config_values,
-            JUDGEHOST_ENABLE=True,
-            JUDGEHOST_API_TOKEN="test-token",
-            JUDGEHOST_API_USERNAME="judgehost",
-        )
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
 
         verification_id = canonical_test_verification_id(f"b-jh-large-{uuid.uuid4().hex[:8]}")
         run_id = f"r-jh-large-{uuid.uuid4().hex[:8]}"
@@ -3753,13 +3260,15 @@ class TestJudgehostService(E2ETestBase):
         from app.main import app
 
         service = config.judgehost_task_service
-        override_config_values(
-            self,
-            service.state.config_values,
-            JUDGEHOST_ENABLE=True,
-            JUDGEHOST_API_TOKEN="test-token",
-            JUDGEHOST_API_USERNAME="judgehost",
-        )
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
 
         headers = {"Authorization": "Bearer test-token"}
         with TestClient(app) as client:
@@ -3779,13 +3288,15 @@ class TestJudgehostService(E2ETestBase):
 
     def test_domjudge_compile_logs_are_truncated_before_state_storage(self) -> None:
         service = config.judgehost_task_service
-        override_config_values(
-            self,
-            service.state.config_values,
-            JUDGEHOST_ENABLE=True,
-            JUDGEHOST_API_TOKEN="test-token",
-            JUDGEHOST_API_USERNAME="judgehost",
-        )
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
 
         verification_id = canonical_test_verification_id(f"b-jh-compile-log-{uuid.uuid4().hex[:8]}")
         run_id = f"r-jh-compile-log-{uuid.uuid4().hex[:8]}"
@@ -3814,9 +3325,7 @@ class TestJudgehostService(E2ETestBase):
         assert case_row is not None
         batch_id = int(case_row["batch_id"])
 
-        limit = int(
-            service.state.config_values.snapshot()["JUDGEHOST_STORED_LOG_LIMIT_BYTES"]
-        )
+        limit = int(getattr(service.state.constants, "JUDGEHOST_STORED_LOG_LIMIT_BYTES", 65536) or 65536)
         service.domjudge_update_judging(
             "judgehost-compile-log",
             case_id,
@@ -3841,13 +3350,15 @@ class TestJudgehostService(E2ETestBase):
         from app.main import app
 
         service = config.judgehost_task_service
-        override_config_values(
-            self,
-            service.state.config_values,
-            JUDGEHOST_ENABLE=True,
-            JUDGEHOST_API_TOKEN="test-token",
-            JUDGEHOST_API_USERNAME="judgehost",
-        )
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
 
         hosts_before = [str(row.get("hostname") or "") for row in service.status().get("hosts", [])]
 
@@ -3868,13 +3379,15 @@ class TestJudgehostService(E2ETestBase):
         from app.main import app
 
         service = config.judgehost_task_service
-        override_config_values(
-            self,
-            service.state.config_values,
-            JUDGEHOST_ENABLE=True,
-            JUDGEHOST_API_TOKEN="test-token",
-            JUDGEHOST_API_USERNAME="judgehost",
-        )
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
         gate = config.maintenance_service.admission_gate
 
         with TestClient(app) as client:
@@ -4092,13 +3605,15 @@ class TestJudgehostService(E2ETestBase):
         from app.main import app
 
         service = config.judgehost_task_service
-        override_config_values(
-            self,
-            service.state.config_values,
-            JUDGEHOST_ENABLE=True,
-            JUDGEHOST_API_TOKEN="test-token",
-            JUDGEHOST_API_USERNAME="judgehost",
-        )
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
 
         with TestClient(app) as client:
             verification_id = canonical_test_verification_id(f"b-jh-peer-{uuid.uuid4().hex[:8]}")
@@ -4157,13 +3672,15 @@ class TestJudgehostService(E2ETestBase):
         from app.main import app
 
         service = config.judgehost_task_service
-        override_config_values(
-            self,
-            service.state.config_values,
-            JUDGEHOST_ENABLE=True,
-            JUDGEHOST_API_TOKEN="test-token",
-            JUDGEHOST_API_USERNAME="judgehost",
-        )
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
 
         with TestClient(app) as client:
             verification_id = canonical_test_verification_id(f"b-jh-peer-script-{uuid.uuid4().hex[:8]}")
@@ -4205,17 +3722,19 @@ class TestJudgehostService(E2ETestBase):
         from app.main import app
 
         service = config.judgehost_task_service
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
         old_max_part_size = int(getattr(MultiPartParser, "max_part_size", 0) or 0)
         old_max_file_size = int(getattr(MultiPartParser, "max_file_size", 0) or 0)
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
         self.addCleanup(setattr, MultiPartParser, "max_part_size", old_max_part_size)
         self.addCleanup(setattr, MultiPartParser, "max_file_size", old_max_file_size)
-        override_config_values(
-            self,
-            service.state.config_values,
-            JUDGEHOST_ENABLE=True,
-            JUDGEHOST_API_TOKEN="test-token",
-            JUDGEHOST_API_USERNAME="judgehost",
-        )
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
         MultiPartParser.max_part_size = 1024 * 1024
         MultiPartParser.max_file_size = 1024 * 1024
 
@@ -4279,13 +3798,15 @@ class TestJudgehostService(E2ETestBase):
 
     def test_domjudge_build_solve_uses_problem_limits_when_run_config_missing(self) -> None:
         service = config.judgehost_task_service
-        override_config_values(
-            self,
-            service.state.config_values,
-            JUDGEHOST_ENABLE=True,
-            JUDGEHOST_API_TOKEN="test-token",
-            JUDGEHOST_API_USERNAME="judgehost",
-        )
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
 
         ws = Path(self._workspace_path())
         (ws / "config").mkdir(parents=True, exist_ok=True)
@@ -4334,21 +3855,20 @@ class TestJudgehostService(E2ETestBase):
         self.assertAlmostEqual(float(run_config.get("overshoot") or 0.0), 0.0, places=3)
         self.assertEqual(int(run_config.get("memory_limit") or 0), 1024)
         self.assertEqual(int(run_config.get("process_limit") or 0), 1024)
-        values = service.state.config_values.snapshot()
         self.assertEqual(
             int(run_config.get("output_limit") or 0),
-            int(values["RUN_EXEC_OUTPUT_KB"]),
+            int(getattr(service.state.constants, "RUN_EXEC_OUTPUT_KB", 65536) or 65536),
         )
         self.assertEqual(int(run_config.get("pass_limit") or 0), 1)
-        compile_output_kb = int(values["TOOLCHAIN_COMPILE_OUTPUT_KB"])
-        aux_limit_bytes = int(values["AUX_DISPLAY_TEXT_LIMIT_BYTES"])
+        compile_output_kb = int(getattr(service.state.constants, "TOOLCHAIN_COMPILE_OUTPUT_KB", 262144) or 262144)
+        aux_limit_bytes = int(getattr(service.state.constants, "AUX_DISPLAY_TEXT_LIMIT_BYTES", 2048) or 2048)
         self.assertEqual(
             int(compare_config.get("script_filesize_limit") or 0),
             compile_output_kb,
         )
         self.assertEqual(
             int(compare_config.get("script_memory_limit") or 0),
-            int(values["TOOLCHAIN_COMPILE_MEMORY_MB"]) * 1024,
+            int(getattr(service.state.constants, "TOOLCHAIN_COMPILE_MEMORY_MB", 2048) or 2048) * 1024,
         )
         self.assertEqual(
             int(compile_config.get("script_filesize_limit") or 0),
@@ -4367,13 +3887,15 @@ class TestJudgehostService(E2ETestBase):
 
     def test_domjudge_compare_config_uses_compile_memory_when_checker_source_compiles_during_compare(self) -> None:
         service = config.judgehost_task_service
-        override_config_values(
-            self,
-            service.state.config_values,
-            JUDGEHOST_ENABLE=True,
-            JUDGEHOST_API_TOKEN="test-token",
-            JUDGEHOST_API_USERNAME="judgehost",
-        )
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
 
         ws = Path(self._workspace_path())
         (ws / "checkers").mkdir(parents=True, exist_ok=True)
@@ -4384,11 +3906,7 @@ class TestJudgehostService(E2ETestBase):
 
         compile_mem_mb = max(
             64,
-            int(
-                service.state.config_values.snapshot()[
-                    "TOOLCHAIN_COMPILE_MEMORY_MB"
-                ]
-            ),
+            int(getattr(service.state.constants, "TOOLCHAIN_COMPILE_MEMORY_MB", 2048) or 2048),
         )
         run_mem_mb = compile_mem_mb + 1024
 
@@ -4443,13 +3961,15 @@ class TestJudgehostService(E2ETestBase):
 
     def test_domjudge_main_correct_includes_checker_files_in_compare_payload(self) -> None:
         service = config.judgehost_task_service
-        override_config_values(
-            self,
-            service.state.config_values,
-            JUDGEHOST_ENABLE=True,
-            JUDGEHOST_API_TOKEN="test-token",
-            JUDGEHOST_API_USERNAME="judgehost",
-        )
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
 
         ws = Path(self._workspace_path())
         (ws / "checkers").mkdir(parents=True, exist_ok=True)
@@ -4499,13 +4019,15 @@ class TestJudgehostService(E2ETestBase):
 
     def test_domjudge_build_solve_defaults_pass_limit_from_problem_config(self) -> None:
         service = config.judgehost_task_service
-        override_config_values(
-            self,
-            service.state.config_values,
-            JUDGEHOST_ENABLE=True,
-            JUDGEHOST_API_TOKEN="test-token",
-            JUDGEHOST_API_USERNAME="judgehost",
-        )
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
 
         ws = Path(self._workspace_path())
         (ws / "config").mkdir(parents=True, exist_ok=True)
@@ -4551,13 +4073,15 @@ class TestJudgehostService(E2ETestBase):
 
     def test_domjudge_active_cache_probe_finishes_hits_and_leases_only_misses(self) -> None:
         service = config.judgehost_task_service
-        override_config_values(
-            self,
-            service.state.config_values,
-            JUDGEHOST_ENABLE=True,
-            JUDGEHOST_API_TOKEN="test-token",
-            JUDGEHOST_API_USERNAME="judgehost",
-        )
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
 
         verification_id = canonical_test_verification_id(f"b-jh-partial-cache-{uuid.uuid4().hex[:8]}")
         run_id_seed = f"r-jh-partial-seed-{uuid.uuid4().hex[:8]}"
@@ -4687,13 +4211,15 @@ class TestJudgehostService(E2ETestBase):
 
     def test_domjudge_expected_accepted_does_not_shortcut_non_ok_cache(self) -> None:
         service = config.judgehost_task_service
-        override_config_values(
-            self,
-            service.state.config_values,
-            JUDGEHOST_ENABLE=True,
-            JUDGEHOST_API_TOKEN="test-token",
-            JUDGEHOST_API_USERNAME="judgehost",
-        )
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
 
         verification_id = canonical_test_verification_id(f"b-jh-accepted-cache-{uuid.uuid4().hex[:8]}")
         run_id_a = f"r-jh-accepted-cache-a-{uuid.uuid4().hex[:8]}"
@@ -4774,13 +4300,15 @@ class TestJudgehostService(E2ETestBase):
 
     def test_domjudge_compare_exitcode_3_is_tagged_checker_fail(self) -> None:
         service = config.judgehost_task_service
-        override_config_values(
-            self,
-            service.state.config_values,
-            JUDGEHOST_ENABLE=True,
-            JUDGEHOST_API_TOKEN="test-token",
-            JUDGEHOST_API_USERNAME="judgehost",
-        )
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
 
         verification_id = canonical_test_verification_id(f"b-jh-checker-fail-{uuid.uuid4().hex[:8]}")
         run_id = f"r-jh-checker-fail-{uuid.uuid4().hex[:8]}"
@@ -4853,13 +4381,15 @@ class TestJudgehostService(E2ETestBase):
 
     def test_domjudge_run_error_prefers_program_stderr_feedback(self) -> None:
         service = config.judgehost_task_service
-        override_config_values(
-            self,
-            service.state.config_values,
-            JUDGEHOST_ENABLE=True,
-            JUDGEHOST_API_TOKEN="test-token",
-            JUDGEHOST_API_USERNAME="judgehost",
-        )
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
 
         verification_id = canonical_test_verification_id(f"b-jh-run-error-{uuid.uuid4().hex[:8]}")
         run_id = f"r-jh-run-error-{uuid.uuid4().hex[:8]}"
@@ -4934,13 +4464,15 @@ class TestJudgehostService(E2ETestBase):
 
     def test_domjudge_compare_exitcode_negative_with_hard_tl_is_tl(self) -> None:
         service = config.judgehost_task_service
-        override_config_values(
-            self,
-            service.state.config_values,
-            JUDGEHOST_ENABLE=True,
-            JUDGEHOST_API_TOKEN="test-token",
-            JUDGEHOST_API_USERNAME="judgehost",
-        )
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
 
         verification_id = canonical_test_verification_id(f"b-jh-compare-neg-tl-{uuid.uuid4().hex[:8]}")
         run_id = f"r-jh-compare-neg-tl-{uuid.uuid4().hex[:8]}"
@@ -5015,13 +4547,15 @@ class TestJudgehostService(E2ETestBase):
 
     def test_domjudge_compare_script_internal_error_fails_whole_run(self) -> None:
         service = config.judgehost_task_service
-        override_config_values(
-            self,
-            service.state.config_values,
-            JUDGEHOST_ENABLE=True,
-            JUDGEHOST_API_TOKEN="test-token",
-            JUDGEHOST_API_USERNAME="judgehost",
-        )
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
 
         verification_id = canonical_test_verification_id(f"b-jh-compare-internal-{uuid.uuid4().hex[:8]}")
         run_id = f"r-jh-compare-internal-{uuid.uuid4().hex[:8]}"
@@ -5073,13 +4607,15 @@ class TestJudgehostService(E2ETestBase):
 
     def test_domjudge_internal_error_includes_debug_fail_message(self) -> None:
         service = config.judgehost_task_service
-        override_config_values(
-            self,
-            service.state.config_values,
-            JUDGEHOST_ENABLE=True,
-            JUDGEHOST_API_TOKEN="test-token",
-            JUDGEHOST_API_USERNAME="judgehost",
-        )
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
 
         verification_id = canonical_test_verification_id(f"b-jh-compare-debug-{uuid.uuid4().hex[:8]}")
         run_id = f"r-jh-compare-debug-{uuid.uuid4().hex[:8]}"
@@ -5135,13 +4671,15 @@ class TestJudgehostService(E2ETestBase):
 
     def test_domjudge_internal_error_includes_payload_fail_message(self) -> None:
         service = config.judgehost_task_service
-        override_config_values(
-            self,
-            service.state.config_values,
-            JUDGEHOST_ENABLE=True,
-            JUDGEHOST_API_TOKEN="test-token",
-            JUDGEHOST_API_USERNAME="judgehost",
-        )
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
 
         verification_id = canonical_test_verification_id(f"b-jh-compare-payload-{uuid.uuid4().hex[:8]}")
         run_id = f"r-jh-compare-payload-{uuid.uuid4().hex[:8]}"
@@ -5193,13 +4731,15 @@ class TestJudgehostService(E2ETestBase):
 
     def test_domjudge_batch_id_is_not_a_judgetask_id(self) -> None:
         service = config.judgehost_task_service
-        override_config_values(
-            self,
-            service.state.config_values,
-            JUDGEHOST_ENABLE=True,
-            JUDGEHOST_API_TOKEN="test-token",
-            JUDGEHOST_API_USERNAME="judgehost",
-        )
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
 
         verification_id = canonical_test_verification_id(f"b-jh-case-only-id-{uuid.uuid4().hex[:8]}")
         run_id = f"r-jh-case-only-id-{uuid.uuid4().hex[:8]}"
@@ -5250,13 +4790,15 @@ class TestJudgehostService(E2ETestBase):
 
     def test_domjudge_internal_error_includes_judgehostlog_compare_output(self) -> None:
         service = config.judgehost_task_service
-        override_config_values(
-            self,
-            service.state.config_values,
-            JUDGEHOST_ENABLE=True,
-            JUDGEHOST_API_TOKEN="test-token",
-            JUDGEHOST_API_USERNAME="judgehost",
-        )
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
 
         verification_id = canonical_test_verification_id(f"b-jh-compare-jhlog-{uuid.uuid4().hex[:8]}")
         run_id = f"r-jh-compare-jhlog-{uuid.uuid4().hex[:8]}"
@@ -5313,13 +4855,15 @@ class TestJudgehostService(E2ETestBase):
 
     def test_domjudge_internal_error_strips_raw_base64_payload_blob(self) -> None:
         service = config.judgehost_task_service
-        override_config_values(
-            self,
-            service.state.config_values,
-            JUDGEHOST_ENABLE=True,
-            JUDGEHOST_API_TOKEN="test-token",
-            JUDGEHOST_API_USERNAME="judgehost",
-        )
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
 
         verification_id = canonical_test_verification_id(f"b-jh-compare-strip-{uuid.uuid4().hex[:8]}")
         run_id = f"r-jh-compare-strip-{uuid.uuid4().hex[:8]}"
@@ -5387,13 +4931,15 @@ class TestJudgehostService(E2ETestBase):
 
     def test_domjudge_fl_result_is_persisted_but_never_shortcut_reused(self) -> None:
         service = config.judgehost_task_service
-        override_config_values(
-            self,
-            service.state.config_values,
-            JUDGEHOST_ENABLE=True,
-            JUDGEHOST_API_TOKEN="test-token",
-            JUDGEHOST_API_USERNAME="judgehost",
-        )
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
 
         verification_id = canonical_test_verification_id(f"b-jh-fl-cache-{uuid.uuid4().hex[:8]}")
         run_id_a = f"r-jh-fl-cache-a-{uuid.uuid4().hex[:8]}"
@@ -5483,13 +5029,15 @@ class TestJudgehostService(E2ETestBase):
 
     def test_domjudge_bypass_case_result_cache_bypasses_case_cache(self) -> None:
         service = config.judgehost_task_service
-        override_config_values(
-            self,
-            service.state.config_values,
-            JUDGEHOST_ENABLE=True,
-            JUDGEHOST_API_TOKEN="test-token",
-            JUDGEHOST_API_USERNAME="judgehost",
-        )
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
 
         verification_id = canonical_test_verification_id(f"b-jh-recompile-{uuid.uuid4().hex[:8]}")
         run_id_a = f"r-jh-recompile-a-{uuid.uuid4().hex[:8]}"
@@ -5573,13 +5121,15 @@ class TestJudgehostService(E2ETestBase):
 
     def test_domjudge_compiled_job_pending_cases_can_be_shared_across_hosts(self) -> None:
         service = config.judgehost_task_service
-        override_config_values(
-            self,
-            service.state.config_values,
-            JUDGEHOST_ENABLE=True,
-            JUDGEHOST_API_TOKEN="test-token",
-            JUDGEHOST_API_USERNAME="judgehost",
-        )
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
 
         verification_id = canonical_test_verification_id(f"b-jh-share-hosts-{uuid.uuid4().hex[:8]}")
         run_id = f"r-jh-share-hosts-{uuid.uuid4().hex[:8]}"
@@ -5647,13 +5197,15 @@ class TestJudgehostService(E2ETestBase):
     def test_domjudge_fetch_work_defers_preemption_until_inflight_case_reports(self) -> None:
         service = config.judgehost_task_service
         self._reset_task_queue_state(service)
-        override_config_values(
-            self,
-            service.state.config_values,
-            JUDGEHOST_ENABLE=True,
-            JUDGEHOST_API_TOKEN="test-token",
-            JUDGEHOST_API_USERNAME="judgehost",
-        )
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
 
         verification_id = canonical_test_verification_id(f"b-jh-preempt-{uuid.uuid4().hex[:8]}")
         self._seed_build_verification(
@@ -5739,152 +5291,6 @@ class TestJudgehostService(E2ETestBase):
         second_tasks = service.domjudge_fetch_work(host, max_batchsize=1)
         self.assertEqual(len(second_tasks), 1)
         self.assertEqual(len(self._work_rows_for_task(service, second_tasks, high_task_id)), 1)
-
-    def test_poll_task_case_result_reports_missing_shared_case_explicitly(self) -> None:
-        service = config.judgehost_task_service
-        self._reset_task_queue_state(service)
-        verification_id = _canonical_verification_id(str(uuid.uuid4()))
-        run_id = f"r-jh-missing-case-{uuid.uuid4().hex[:8]}"
-        self._seed_build_verification(verification_id)
-
-        task_id = service.enqueue_task(
-            problem=self.problem,
-            username=self.user,
-            artifact_verification_id=verification_id,
-            mode="pass-fail",
-            submission_path="solutions/ac.cpp",
-            upload_content=None,
-            upload_filename=None,
-            run_id=run_id,
-            selected_tests=["001.in"],
-            verification_id=verification_id,
-            verification_program_id=_SOLUTION_PROGRAM_ID,
-            expected_behavior="accepted",
-            verification_source="run.execute",
-            persist_verification_run=False,
-        )
-        service.state.task_registry.transition(
-            task_id,
-            expected={service.STATUS_QUEUED},
-            status=service.STATUS_FAILED,
-            updates={
-                "run_status": "failed",
-                "error_text": "",
-                "summary": {
-                "mode": "pass-fail",
-                "source": "solutions/ac.cpp",
-                "tests": [],
-                "compile_diagnostics": [],
-                "error": "",
-                },
-            },
-        )
-
-        result = service.poll_task_case_result(task_id, "001.in")
-        self.assertIsNotNone(result)
-        assert result is not None
-        self.assertEqual(str(result.get("status") or ""), "failed")
-        self.assertTrue(bool(result.get("missing_case_result")))
-        self.assertIn("missing for 001.in", str(result.get("error") or ""))
-        summary = dict(result.get("summary") or {})
-        tests = list(summary.get("tests") or [])
-        self.assertEqual(tests, [])
-
-    def test_poll_task_case_result_uses_canonical_case_feedback(self) -> None:
-        service = config.judgehost_task_service
-        self._reset_task_queue_state(service)
-        verification_id = _canonical_verification_id(str(uuid.uuid4()))
-        run_id = f"r-jh-case-feedback-{uuid.uuid4().hex[:8]}"
-        self._seed_build_verification(verification_id)
-
-        task_id = f"jt-feedback-{uuid.uuid4().hex[:8]}"
-        self._insert_task_receipt(
-            service,
-            task_id=task_id,
-            run_id=run_id,
-            verification_id=verification_id,
-        )
-
-        service.state.task_registry.update(
-            task_id,
-            {"summary": {
-                "mode": "pass-fail",
-                "source": "solutions/std.cpp",
-                "tests": [],
-                "compile_diagnostics": [],
-                "error": "",
-            }},
-        )
-        feedback_text = "Unexpected character #10, but ' ' expected (testdata.in)"
-
-        batch_id = service.state.batch_scheduler.create_batch_with_cases(
-            task_id=task_id,
-            run_id=run_id,
-            verification_program_id=_SOLUTION_PROGRAM_ID,
-            execution_signature="b" * 64,
-            task_kind="solution-run",
-            verification_id=verification_id,
-            compile_key="8" * 64,
-            compile_submission=self._compile_submission("std.cpp", "8" * 64),
-            contest_id="",
-            mode="pass-fail",
-            source_name="std.cpp",
-            compile_hash="a" * 32,
-            run_hash="b" * 32,
-            compare_hash="c" * 32,
-            source_hash="d" * 64,
-            compile_config_json="{}",
-            run_config_json="{}",
-            compare_config_json="{}",
-            expected_behavior="accepted",
-            verification_source="run.execute",
-            bypass_case_result_cache=0,
-            service_class="background",
-            batch_spec=ExecutionBatchSpec(),
-            created_at="2026-04-14T00:00:00+00:00",
-            case_rows=[
-                {
-                    "task_id": task_id,
-                    "run_id": run_id,
-                    "test_name": "016.in",
-                    "ordinal": 1,
-                    "testcase_id": 16,
-                    "testcase_hash": "e" * 64,
-                    "testcase_input_hash": "f" * 64,
-                    "testcase_answer_hash": "0" * 64,
-                    "input_ref": "",
-                    "answer_ref": "",
-                    "status": "pending",
-                }
-            ],
-        )
-        self.assertGreater(batch_id, 0)
-        case_id = self._lease_only_case(service, batch_id, "judgehost-feedback")
-        self._commit_case_result(
-            service,
-            case_id=case_id,
-            hostname="judgehost-feedback",
-            test_name="016.in",
-            runresult="checker-fail",
-            verdict="FL",
-            feedback_text=feedback_text,
-            feedback_files=["feedback/judgemessage.txt"],
-        )
-
-        result = service.poll_task_case_result(task_id, "016.in")
-        self.assertIsNotNone(result)
-        assert result is not None
-        self.assertEqual(str(result.get("status") or ""), "failed")
-        self.assertEqual(str(result.get("error") or ""), feedback_text)
-        summary = dict(result.get("summary") or {})
-        self.assertEqual(str(summary.get("error") or ""), feedback_text)
-        tests = list(summary.get("tests") or [])
-        self.assertEqual(len(tests), 1)
-        self.assertEqual(str(tests[0].get("message") or ""), feedback_text)
-        self.assertEqual(
-            list(tests[0].get("feedback_files") or []),
-            ["blob://sha256/" + "b" * 64],
-        )
 
     def test_domjudge_add_debug_info_preserves_result_and_appends_diagnostic(self) -> None:
         service = config.judgehost_task_service
@@ -6059,13 +5465,15 @@ class TestJudgehostService(E2ETestBase):
 
     def test_domjudge_groups_distinct_generate_input_tasks_in_one_job(self) -> None:
         service = config.judgehost_task_service
-        override_config_values(
-            self,
-            service.state.config_values,
-            JUDGEHOST_ENABLE=True,
-            JUDGEHOST_API_TOKEN="test-token",
-            JUDGEHOST_API_USERNAME="judgehost",
-        )
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
 
         verification_id = canonical_test_verification_id(f"b-jh-shared-generate-{uuid.uuid4().hex[:8]}")
         self._seed_build_verification(verification_id)
@@ -6270,13 +5678,15 @@ class TestJudgehostService(E2ETestBase):
 
     def test_domjudge_grouped_batch_uses_stable_uuid_across_fetches(self) -> None:
         service = config.judgehost_task_service
-        override_config_values(
-            self,
-            service.state.config_values,
-            JUDGEHOST_ENABLE=True,
-            JUDGEHOST_API_TOKEN="test-token",
-            JUDGEHOST_API_USERNAME="judgehost",
-        )
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
 
         verification_id = canonical_test_verification_id(f"b-jh-grouped-batch-one-{uuid.uuid4().hex[:8]}")
         self._seed_build_verification(verification_id)

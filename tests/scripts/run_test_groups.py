@@ -11,12 +11,13 @@ import sys
 import time
 import unittest
 from pathlib import Path
+from typing import Callable, ClassVar
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[2]
 TEST_ROOT = ROOT / "tests"
 MANIFEST_PATH = TEST_ROOT / "resource_groups.json"
-GROUP_ORDER = ("unit", "db", "workspace", "executor", "large-fixture", "e2e")
+GROUP_ORDER = ("unit", "service", "executor", "e2e")
 
 
 def load_manifest() -> dict[str, list[str]]:
@@ -62,23 +63,43 @@ def validate_resource_contracts(groups: dict[str, list[str]]) -> None:
         "tests.common",
         "tests.db_fixture",
     }
-    db_forbidden = {"subprocess", "tests.common"}
+    service_forbidden = {
+        "app.impl.runtime.config",
+        "app.main",
+        "fastapi.testclient",
+        "tests.common",
+        "tests.ui_support",
+    }
+    executor_forbidden = {
+        "app.impl.runtime.config",
+        "app.main",
+        "fastapi.testclient",
+        "tests.common",
+        "tests.ui_support",
+    }
     violations: list[str] = []
     for filename in groups["unit"]:
         imports = _direct_imports(TEST_ROOT / filename)
         matched = sorted(imports & unit_forbidden)
         if matched:
             violations.append(f"unit/{filename}: {', '.join(matched)}")
-    for filename in groups["db"]:
+    for filename in groups["service"]:
         imports = _direct_imports(TEST_ROOT / filename)
-        matched = sorted(imports & db_forbidden)
+        matched = sorted(imports & service_forbidden)
         if matched:
-            violations.append(f"db/{filename}: {', '.join(matched)}")
+            violations.append(f"service/{filename}: {', '.join(matched)}")
+    for filename in groups["executor"]:
+        imports = _direct_imports(TEST_ROOT / filename)
+        matched = sorted(imports & executor_forbidden)
+        if matched:
+            violations.append(f"executor/{filename}: {', '.join(matched)}")
     if violations:
         raise RuntimeError("test resource contract violations: " + "; ".join(violations))
 
 
 class TimingResult(unittest.TextTestResult):
+    resource_guard: ClassVar[Callable[[], None] | None] = None
+
     def __init__(self, *args: object, **kwargs: object) -> None:
         super().__init__(*args, **kwargs)
         self._started_at = 0.0
@@ -91,6 +112,9 @@ class TimingResult(unittest.TextTestResult):
     def stopTest(self, test: unittest.case.TestCase) -> None:
         self.durations.append((time.perf_counter() - self._started_at, test.id()))
         super().stopTest(test)
+        guard = type(self).resource_guard
+        if guard is not None:
+            guard()
 
 
 def _module_name(filename: str) -> str:
@@ -127,13 +151,30 @@ def run_group(group: str, filenames: list[str]) -> bool:
 
     loader = unittest.defaultTestLoader
     suite = loader.loadTestsFromNames([_module_name(name) for name in filenames])
-    if group == "unit" and "app.impl.runtime.config" in sys.modules:
-        raise RuntimeError("unit tests imported app.impl.runtime.config")
+    def _assert_no_full_runtime_loaded() -> None:
+        loaded_runtime_modules = sorted(
+            module_name
+            for module_name in ("app.impl.runtime.config", "app.main")
+            if module_name in sys.modules
+        )
+        if loaded_runtime_modules:
+            raise RuntimeError(
+                f"{group} tests loaded full runtime modules: "
+                + ", ".join(loaded_runtime_modules)
+            )
+
+    if group in {"unit", "service", "executor"}:
+        _assert_no_full_runtime_loaded()
     print(f"Running {group}: {suite.countTestCases()} tests from {len(filenames)} modules")
     started = time.perf_counter()
     runner = unittest.TextTestRunner(verbosity=2, resultclass=TimingResult)
+    TimingResult.resource_guard = (
+        _assert_no_full_runtime_loaded
+        if group in {"unit", "service", "executor"}
+        else None
+    )
     with contextlib.ExitStack() as guards:
-        if group in {"unit", "db"}:
+        if group == "unit":
             guards.enter_context(
                 patch.object(
                     subprocess,
@@ -155,7 +196,6 @@ def run_group(group: str, filenames: list[str]) -> bool:
                     side_effect=AssertionError(f"{group} tests may not start subprocesses"),
                 )
             )
-        if group == "unit":
             guards.enter_context(
                 patch.object(
                     sqlite3,
@@ -163,7 +203,12 @@ def run_group(group: str, filenames: list[str]) -> bool:
                     side_effect=AssertionError("unit tests may not open SQLite"),
                 )
             )
-        result = runner.run(suite)
+        try:
+            result = runner.run(suite)
+        finally:
+            TimingResult.resource_guard = None
+    if group in {"unit", "service", "executor"}:
+        _assert_no_full_runtime_loaded()
     elapsed = time.perf_counter() - started
     _write_timing(group, elapsed, result)
     return result.wasSuccessful()
