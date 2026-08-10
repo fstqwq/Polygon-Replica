@@ -20,7 +20,6 @@
         <div><dt>Active tasks</dt><dd>{{ host.active_tasks }}</dd></div>
         <div><dt>Judged cases</dt><dd>{{ host.judged_cases }}</dd></div>
         <div><dt>Recent average</dt><dd>{{ host.recent_average }}</dd></div>
-        {% if host.toolchain_profile %}<div><dt>Toolchain</dt><dd>Profile {{ host.toolchain_profile }}</dd></div>{% endif %}
       </dl>
     </article>
     {% endfor %}
@@ -50,26 +49,21 @@
 
 <section class="judgehost-status-section">
   <h3>Installed toolchains</h3>
-  {% if judgehost.toolchain_warning %}
-  <p class="judgehost-status-warning">{{ judgehost.toolchain_warning }}</p>
-  {% endif %}
-  {% if judgehost.toolchain_profiles %}
-  <div class="judgehost-status-profiles">
-    {% for profile in judgehost.toolchain_profiles %}
-    <article class="judgehost-status-profile">
-      <h4>Profile {{ profile.label }} <span class="muted">· {{ profile.host_count }} {{ 'host' if profile.host_count == 1 else 'hosts' }}</span></h4>
-      {% if profile.toolchains %}
-      <dl>
-        {% for toolchain in profile.toolchains %}
-        <div>
-          <dt>{{ toolchain.language_label }}</dt>
-          <dd>{{ toolchain.compiler }}{% if toolchain.runner and toolchain.runner != toolchain.compiler %}<span class="muted"> · {{ toolchain.runner }}</span>{% endif %}</dd>
-        </div>
-        {% endfor %}
-      </dl>
-      {% else %}
-      <p class="muted">No versions reported.</p>
-      {% endif %}
+  {% if judgehost.toolchains %}
+  <div class="judgehost-status-toolchains">
+    {% for toolchain in judgehost.toolchains %}
+    <article class="judgehost-status-toolchain{% if not toolchain.agrees %} judgehost-status-toolchain-warning{% endif %}">
+      <div class="judgehost-status-toolchain-head">
+        <h4>{{ toolchain.language_label }}</h4>
+        {% if not toolchain.agrees %}<strong>Versions differ</strong>{% endif %}
+      </div>
+      {% for version in toolchain.versions %}
+      <p>
+        {{ version.compiler }}
+        {% if version.runner and version.runner != version.compiler %}<span class="muted">· {{ version.runner }}</span>{% endif %}
+        {% if not toolchain.agrees %}<span class="muted">· {{ version.host_count }} {{ 'host' if version.host_count == 1 else 'hosts' }}</span>{% endif %}
+      </p>
+      {% endfor %}
     </article>
     {% endfor %}
   </div>

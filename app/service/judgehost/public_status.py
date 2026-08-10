@@ -17,17 +17,17 @@ class PublicCompileSpec(TypedDict):
     arguments: list[str]
 
 
-class PublicToolchainEntry(TypedDict):
-    language_id: str
-    language_label: str
+class PublicToolchainVersion(TypedDict):
     compiler: str
     runner: str
-
-
-class PublicToolchainProfile(TypedDict):
-    label: str
-    toolchains: list[PublicToolchainEntry]
     host_count: int
+
+
+class PublicToolchainSummary(TypedDict):
+    language_id: str
+    language_label: str
+    versions: list[PublicToolchainVersion]
+    agrees: bool
 
 
 class PublicJudgehostView(TypedDict):
@@ -38,7 +38,6 @@ class PublicJudgehostView(TypedDict):
     active_tasks: int
     judged_cases: int
     recent_average: str
-    toolchain_profile: str
 
 
 class PublicJudgehostStatus(TypedDict):
@@ -51,8 +50,8 @@ class PublicJudgehostStatus(TypedDict):
     tone: str
     hosts: list[PublicJudgehostView]
     compile_specs: list[PublicCompileSpec]
-    toolchain_profiles: list[PublicToolchainProfile]
-    toolchain_warning: str
+    toolchains: list[PublicToolchainSummary]
+    toolchain_mismatch: bool
 
 
 def _duration_label(age_sec: object) -> str:
@@ -92,8 +91,8 @@ def _safe_version_lines(raw: object) -> tuple[str, str]:
     return lines[0], "\n".join(lines)
 
 
-def _toolchain_key(raw_toolchains: object) -> tuple[tuple[str, str, str], ...]:
-    entries: list[tuple[str, str, str]] = []
+def _reported_toolchains(raw_toolchains: object) -> dict[str, tuple[str, str]]:
+    entries: dict[str, tuple[str, str]] = {}
     if isinstance(raw_toolchains, list):
         for raw in raw_toolchains:
             if not isinstance(raw, dict):
@@ -103,77 +102,45 @@ def _toolchain_key(raw_toolchains: object) -> tuple[tuple[str, str, str], ...]:
                 continue
             _compiler_display, compiler_key = _safe_version_lines(raw.get("compiler"))
             _runner_display, runner_key = _safe_version_lines(raw.get("runner"))
-            entries.append((language_id, compiler_key, runner_key))
-    return tuple(sorted(entries))
-
-
-def _toolchain_entries(key: tuple[tuple[str, str, str], ...]) -> list[PublicToolchainEntry]:
-    entries: list[PublicToolchainEntry] = []
-    for language_id, compiler_raw, runner_raw in key:
-        compiler = compiler_raw.splitlines()[0] if compiler_raw else "not reported"
-        runner = runner_raw.splitlines()[0] if runner_raw else ""
-        entries.append(
-            {
-                "language_id": language_id,
-                "language_label": _LANGUAGE_LABELS[language_id],
-                "compiler": compiler,
-                "runner": runner,
-            }
-        )
+            if compiler_key or runner_key:
+                entries[language_id] = (compiler_key, runner_key)
     return entries
 
 
-def _profile_label(index: int) -> str:
-    number = max(0, index)
-    label = ""
-    while True:
-        number, remainder = divmod(number, 26)
-        label = chr(ord("A") + remainder) + label
-        if number == 0:
-            return label
-        number -= 1
-
-
-def _toolchain_profiles(
+def _toolchain_summaries(
     online_hosts: list[dict[str, object]],
-) -> tuple[
-    dict[tuple[tuple[str, str, str], ...], str],
-    list[PublicToolchainProfile],
-    str,
-]:
-    profile_counts: dict[tuple[tuple[str, str, str], ...], int] = {}
+) -> list[PublicToolchainSummary]:
+    version_counts: dict[str, dict[tuple[str, str], int]] = {}
     for raw in online_hosts:
-        key = _toolchain_key(raw.get("toolchains"))
-        profile_counts[key] = profile_counts.get(key, 0) + 1
-    profile_keys = sorted(profile_counts, key=repr)
-    labels_by_key = {key: _profile_label(index) for index, key in enumerate(profile_keys)}
-
-    expected_languages = set(_LANGUAGE_LABELS)
-    incomplete = any({item[0] for item in key} != expected_languages for key in profile_keys)
-    versions_by_language: dict[str, set[tuple[str, str]]] = {}
-    for key in profile_keys:
-        for language_id, compiler, runner in key:
-            versions_by_language.setdefault(language_id, set()).add((compiler, runner))
-    inconsistent = any(len(versions) > 1 for versions in versions_by_language.values())
-    warning = ""
-    if online_hosts and inconsistent:
-        warning = "Online judgehosts report different toolchains."
-    elif online_hosts and incomplete:
-        warning = "Toolchain reports are incomplete."
-    profiles = [
-        {
-            "label": labels_by_key[key],
-            "toolchains": _toolchain_entries(key),
-            "host_count": profile_counts[key],
-        }
-        for key in profile_keys
-    ]
-    return labels_by_key, profiles, warning
+        for language_id, version in _reported_toolchains(raw.get("toolchains")).items():
+            counts = version_counts.setdefault(language_id, {})
+            counts[version] = counts.get(version, 0) + 1
+    summaries: list[PublicToolchainSummary] = []
+    for language_id, language_label in _LANGUAGE_LABELS.items():
+        counts = version_counts.get(language_id)
+        if not counts:
+            continue
+        versions = [
+            {
+                "compiler": compiler_raw.splitlines()[0] if compiler_raw else "not reported",
+                "runner": runner_raw.splitlines()[0] if runner_raw else "",
+                "host_count": host_count,
+            }
+            for (compiler_raw, runner_raw), host_count in sorted(counts.items())
+        ]
+        summaries.append(
+            {
+                "language_id": language_id,
+                "language_label": language_label,
+                "versions": versions,
+                "agrees": len(versions) == 1,
+            }
+        )
+    return summaries
 
 
 def _public_hosts(
     hosts_source: list[dict[str, object]],
-    labels_by_key: dict[tuple[tuple[str, str, str], ...], str],
 ) -> list[PublicJudgehostView]:
     hosts: list[PublicJudgehostView] = []
     for index, raw in enumerate(hosts_source, start=1):
@@ -186,7 +153,6 @@ def _public_hosts(
             if isinstance(recent_raw, (int, float))
             else "not available"
         )
-        profile = labels_by_key.get(_toolchain_key(raw.get("toolchains")), "") if enabled and online else ""
         hosts.append(
             {
                 "label": f"Judgehost {index}",
@@ -196,7 +162,6 @@ def _public_hosts(
                 "active_tasks": max(0, int(raw.get("active_leases") or 0)),
                 "judged_cases": max(0, int(raw.get("judged_case_count") or 0)),
                 "recent_average": recent_average,
-                "toolchain_profile": profile,
             }
         )
     return hosts
@@ -217,7 +182,11 @@ def _compile_specs(raw_compile_specs: list[dict[str, object]]) -> list[PublicCom
     for raw in raw_compile_specs:
         language_id = str(raw.get("language_id") or "")
         arguments_raw = raw.get("arguments")
-        arguments = [_safe_argument(value) for value in arguments_raw] if isinstance(arguments_raw, list) else []
+        arguments = (
+            [_safe_argument(value) for value in arguments_raw]
+            if isinstance(arguments_raw, list)
+            else []
+        )
         specs.append(
             {
                 "language_id": language_id,
@@ -234,10 +203,18 @@ def project_public_status(
     raw_compile_specs: list[dict[str, object]],
 ) -> PublicJudgehostStatus:
     raw_hosts = raw_status.get("hosts")
-    hosts_source = [raw for raw in raw_hosts if isinstance(raw, dict)] if isinstance(raw_hosts, list) else []
-    online_hosts = [raw for raw in hosts_source if bool(raw.get("enabled")) and bool(raw.get("online"))]
-    labels_by_key, profiles, warning = _toolchain_profiles(online_hosts)
-    public_hosts = _public_hosts(hosts_source, labels_by_key)
+    hosts_source = (
+        [raw for raw in raw_hosts if isinstance(raw, dict)]
+        if isinstance(raw_hosts, list)
+        else []
+    )
+    online_hosts = [
+        raw
+        for raw in hosts_source
+        if bool(raw.get("enabled")) and bool(raw.get("online"))
+    ]
+    toolchains = _toolchain_summaries(online_hosts)
+    public_hosts = _public_hosts(hosts_source)
 
     enabled = bool(raw_status.get("enabled"))
     hosts_online = max(0, int(raw_status.get("hosts_online") or 0))
@@ -256,8 +233,8 @@ def project_public_status(
         "tone": tone,
         "hosts": public_hosts,
         "compile_specs": _compile_specs(raw_compile_specs),
-        "toolchain_profiles": profiles,
-        "toolchain_warning": warning,
+        "toolchains": toolchains,
+        "toolchain_mismatch": any(not toolchain["agrees"] for toolchain in toolchains),
     }
 
 
@@ -287,8 +264,8 @@ class PublicJudgehostStatusCache:
             **self._cached,
             "hosts": [dict(host) for host in self._cached["hosts"]],
             "compile_specs": [dict(spec) for spec in self._cached["compile_specs"]],
-            "toolchain_profiles": [
-                {**profile, "toolchains": [dict(item) for item in profile["toolchains"]]}
-                for profile in self._cached["toolchain_profiles"]
+            "toolchains": [
+                {**toolchain, "versions": [dict(item) for item in toolchain["versions"]]}
+                for toolchain in self._cached["toolchains"]
             ],
         }

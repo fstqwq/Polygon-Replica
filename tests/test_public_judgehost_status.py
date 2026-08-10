@@ -81,7 +81,7 @@ class PublicJudgehostStatusTests(unittest.TestCase):
                 projected = project_public_status({**raw, "hosts": [], "queue": {}}, [])
                 self.assertEqual((projected["summary"], projected["tone"]), expected)
 
-    def test_online_toolchain_mismatch_warns_and_groups_profiles(self) -> None:
+    def test_online_toolchain_mismatch_marks_reported_versions(self) -> None:
         raw = {
             "enabled": True,
             "hosts_online": 2,
@@ -94,12 +94,16 @@ class PublicJudgehostStatusTests(unittest.TestCase):
             "queue": {},
         }
         projected = project_public_status(raw, [])
-        self.assertEqual(projected["toolchain_warning"], "Online judgehosts report different toolchains.")
-        self.assertEqual(len(projected["toolchain_profiles"]), 2)
-        self.assertEqual(projected["hosts"][2]["toolchain_profile"], "")
+        self.assertTrue(projected["toolchain_mismatch"])
+        self.assertEqual(len(projected["toolchains"]), 1)
+        toolchain = projected["toolchains"][0]
+        self.assertEqual(toolchain["language_label"], "C++")
+        self.assertFalse(toolchain["agrees"])
+        self.assertEqual(len(toolchain["versions"]), 2)
+        self.assertNotIn("toolchain_profile", projected["hosts"][0])
         self.assertNotIn("g++ 9.5.0", repr(projected))
 
-    def test_missing_online_reports_warn_without_false_mismatch(self) -> None:
+    def test_missing_online_reports_do_not_create_mismatch(self) -> None:
         raw = {
             "enabled": True,
             "hosts_online": 2,
@@ -108,7 +112,47 @@ class PublicJudgehostStatusTests(unittest.TestCase):
             "queue": {},
         }
         projected = project_public_status(raw, [])
-        self.assertEqual(projected["toolchain_warning"], "Toolchain reports are incomplete.")
+        self.assertFalse(projected["toolchain_mismatch"])
+        self.assertEqual(len(projected["toolchains"]), 1)
+        self.assertTrue(projected["toolchains"][0]["agrees"])
+        self.assertEqual(projected["toolchains"][0]["versions"][0]["host_count"], 1)
+
+    def test_partial_reports_merge_into_one_agreed_summary(self) -> None:
+        hosts = [_host(f"full-{index}") for index in range(2)]
+        for host in hosts:
+            toolchains = host["toolchains"]
+            self.assertIsInstance(toolchains, list)
+            toolchains.append(
+                {
+                    "language_id": "py",
+                    "compiler": "command=/usr/bin/python3\nPython 3.9.16",
+                    "runner": "",
+                }
+            )
+        hosts.extend(_host(f"cpp-{index}") for index in range(3))
+        hosts.extend({**_host(f"missing-{index}"), "toolchains": []} for index in range(3))
+
+        projected = project_public_status(
+            {
+                "enabled": True,
+                "hosts_online": 8,
+                "hosts_total": 8,
+                "hosts": hosts,
+                "queue": {},
+            },
+            [],
+        )
+
+        self.assertFalse(projected["toolchain_mismatch"])
+        self.assertEqual(
+            [toolchain["language_label"] for toolchain in projected["toolchains"]],
+            ["C++", "Python"],
+        )
+        self.assertEqual(
+            [toolchain["versions"][0]["host_count"] for toolchain in projected["toolchains"]],
+            [5, 2],
+        )
+        self.assertTrue(all(toolchain["agrees"] for toolchain in projected["toolchains"]))
 
 
 if __name__ == "__main__":

@@ -305,8 +305,8 @@ def template_response(request: Request, template_name: str, context: dict | None
                 "tone": "danger",
                 "hosts": [],
                 "compile_specs": [],
-                "toolchain_profiles": [],
-                "toolchain_warning": "",
+                "toolchains": [],
+                "toolchain_mismatch": False,
             }
     backend_render_ms: int | None = None
     started = getattr(request.state, "request_started_at", None)

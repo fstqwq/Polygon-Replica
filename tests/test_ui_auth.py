@@ -1497,7 +1497,6 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
                     "active_tasks": 0,
                     "judged_cases": 42,
                     "recent_average": "0.125s per case",
-                    "toolchain_profile": "A",
                 }
             ],
             "compile_specs": [
@@ -1508,21 +1507,21 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
                     "arguments": ["-O2", "-std=gnu++20"],
                 }
             ],
-            "toolchain_profiles": [
+            "toolchains": [
                 {
-                    "label": "A",
-                    "host_count": 1,
-                    "toolchains": [
+                    "language_id": "cpp",
+                    "language_label": "C++",
+                    "agrees": True,
+                    "versions": [
                         {
-                            "language_id": "cpp",
-                            "language_label": "C++",
                             "compiler": "g++ 14.2.0",
                             "runner": "",
+                            "host_count": 1,
                         }
                     ],
                 }
             ],
-            "toolchain_warning": "",
+            "toolchain_mismatch": False,
         }
         with patch.object(config.judgehost_task_service, "public_status", return_value=public_status):
             resp = register_page(_request("/register"))
@@ -1537,6 +1536,29 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         self.assertNotIn('class="page-profile-judgehost" href=', html)
         self.assertNotIn("private-hostname", html)
         self.assertNotIn("203.0.113.10", html)
+        self.assertNotIn("Profile A", html)
+        self.assertNotIn("<dt>Toolchain</dt>", html)
+        self.assertNotIn("judgehost-status-toolchain-warning", html)
+
+        public_status["toolchains"][0]["agrees"] = False
+        public_status["toolchains"][0]["versions"].append(
+            {
+                "compiler": "g++ 13.3.0",
+                "runner": "",
+                "host_count": 1,
+            }
+        )
+        public_status["toolchain_mismatch"] = True
+        with patch.object(
+            config.judgehost_task_service,
+            "public_status",
+            return_value=public_status,
+        ):
+            mismatch_resp = register_page(_request("/register"))
+        mismatch_html = mismatch_resp.body.decode("utf-8", errors="replace")
+        self.assertIn("judgehost-status-toolchain-warning", mismatch_html)
+        self.assertIn("Versions differ", mismatch_html)
+        self.assertIn("g++ 13.3.0", mismatch_html)
 
     def test_settings_config_category_update_requires_system_admin(self) -> None:
         with self.assertRaises(HTTPException) as blocked:
