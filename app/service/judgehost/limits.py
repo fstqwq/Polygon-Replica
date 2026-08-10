@@ -20,6 +20,16 @@ def compile_output_kb(constants: object) -> int:
     return _constant_int(constants, "TOOLCHAIN_COMPILE_OUTPUT_KB", default=262144, minimum=1024)
 
 
+def run_memory_limit_kb(memory_limit_mb: object) -> int:
+    if (
+        isinstance(memory_limit_mb, bool)
+        or not isinstance(memory_limit_mb, int)
+        or memory_limit_mb < 1
+    ):
+        raise ValueError("invalid internal memory_limit_mb: expected an integer >= 1")
+    return memory_limit_mb * 1024
+
+
 def stored_log_limit_bytes(constants: object) -> int:
     return _constant_int(constants, "JUDGEHOST_STORED_LOG_LIMIT_BYTES", default=65536, minimum=1024)
 

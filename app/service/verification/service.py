@@ -76,7 +76,7 @@ class VerificationService:
         task_store: VerificationTaskStore,
         runtime_blob_store: RuntimeBlobStore,
         fs_manager: FsManager,
-        constants: RuntimeValues | None = None,
+        constants: RuntimeValues,
     ):
         self.db = db
         self.workspace_service = workspace_service
@@ -84,6 +84,7 @@ class VerificationService:
         self.task_store = task_store
         self.runtime_blob_store = runtime_blob_store
         self.fs_manager = fs_manager
+        self._constants = constants
         self._verification_inflight_lock = threading.RLock()
         self._applied_aux_display_text_limit_bytes: int | None = None
         self._verification_store = VerificationStore(db)
@@ -1039,12 +1040,23 @@ class VerificationService:
         return cfg
 
     def _load_problem_runtime_config(self, snapshot: Path) -> dict:
+        default_cfg = cast(
+            dict[str, object],
+            self._constants.GENERAL_CONFIG_DEFAULTS,
+        )
         return load_problem_runtime_config(
             snapshot,
             default_time_limit_ms=DEFAULT_TIME_LIMIT_MS,
+            default_memory_limit_mb=int(default_cfg["memory_limit_mb"]),
             default_mode="pass-fail",
             min_time_limit_ms=TIME_LIMIT_MIN_MS,
             max_time_limit_ms=TIME_LIMIT_MAX_MS,
+            min_memory_limit_mb=int(
+                self._constants.GENERAL_MEMORY_LIMIT_MIN_MB
+            ),
+            max_memory_limit_mb=int(
+                self._constants.GENERAL_MEMORY_LIMIT_MAX_MB
+            ),
         )
 
     def _manual_test_sources(self, snapshot: Path) -> list[Path]:

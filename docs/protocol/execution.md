@@ -29,6 +29,12 @@ state. Compile-only, pass-fail, interactive, and multi-pass execution are mapped
 to Judgehost batches and case results by the verification and Judgehost
 services.
 
+Verification planning preserves the canonical authored memory limit. Judgehost
+dispatch converts it exactly from MiB to KiB by multiplying by 1024; it does not
+apply a separate execution minimum. An internal dispatch payload containing a
+non-integer memory limit or a value below 1 is invalid and fails before work is
+sent to a host.
+
 ## Identity and cache
 
 Execution identity includes canonical source and configuration inputs needed to

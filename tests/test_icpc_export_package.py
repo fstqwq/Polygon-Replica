@@ -44,7 +44,7 @@ class TestICPCExportPackage(unittest.TestCase):
             mode="pass-fail",
             pass_limit=1,
             time_limit_ms=2250,
-            memory_limit_mb=512,
+            memory_limit_mb=1,
         )
         metadata = yaml.safe_load(text)
         self.assertEqual(metadata["problem_format_version"], "2025-09")
@@ -56,7 +56,7 @@ class TestICPCExportPackage(unittest.TestCase):
         )
         self.assertEqual(problem_uuid(slug), metadata["uuid"])
         self.assertEqual(metadata["version"], "a" * 40)
-        self.assertEqual(metadata["limits"], {"time_limit": 2.25, "memory": 512})
+        self.assertEqual(metadata["limits"], {"time_limit": 2.25, "memory": 1})
 
     def test_problem_yaml_types_and_combined_legacy_fallback(self) -> None:
         cases = (

@@ -30,6 +30,7 @@ from app.service.judgehost.case_result import build_case_result
 from app.service.judgehost.batch_scheduler import BatchScheduler
 from app.service.judgehost.batch_scheduler_models import CompileSubmission, ExecutionBatchSpec
 from app.service.judgehost.identity import domjudge_job_id, domjudge_submit_id
+from app.service.judgehost.limits import run_memory_limit_kb
 from app.service.judgehost.api import Judgehost
 from app.service.judgehost.runtime import domjudge_rewrite_untrusted_runresult
 from app.service.judgehost.toolchain_versions import HostToolchainTelemetry
@@ -131,6 +132,46 @@ class TestJudgehostService(E2ETestBase):
         service.state.api_token = "test-token"
         service.state.api_username = "judgehost"
         return service
+
+    def test_domjudge_memory_limit_conversion_is_exact_and_strict(self) -> None:
+        for memory_limit_mb in (1, 2, 4, 8, 15):
+            with self.subTest(memory_limit_mb=memory_limit_mb):
+                self.assertEqual(
+                    run_memory_limit_kb(memory_limit_mb),
+                    memory_limit_mb * 1024,
+                )
+        for invalid in (0, -1, True, "1", None):
+            with self.subTest(invalid=invalid), self.assertRaisesRegex(
+                ValueError,
+                "invalid internal memory_limit_mb",
+            ):
+                run_memory_limit_kb(invalid)
+
+    def test_domjudge_precompute_rejects_illegal_internal_memory_limit(self) -> None:
+        service = self._fresh_judgehost_service()
+        source = config.runtime_blob_store.put_bytes(b"int main(){return 0;}\n")
+        verification_payload = {
+            "run_config_json": json.dumps({"memory_limit_mb": 0}),
+            "problem_limits": {
+                "time_limit_ms": 2000,
+                "memory_limit_mb": 1,
+                "pass_limit": 1,
+            },
+            "source_files": {},
+        }
+        with self.assertRaisesRegex(
+            ValueError,
+            "invalid internal memory_limit_mb",
+        ):
+            service.prepare_execution_template(
+                mode="pass-fail",
+                upload_file=source,
+                upload_filename="solution.cpp",
+                verification_payload=verification_payload,
+                expected_behavior="accepted",
+                verification_source="verification",
+                task_kind="solution-run",
+            )
 
     def _verification_run_row(self, run_id: str, verification_id: str = "") -> dict[str, object] | None:
         safe_run_id = str(run_id or "").strip()
@@ -3905,7 +3946,7 @@ class TestJudgehostService(E2ETestBase):
         (ws / "config").mkdir(parents=True, exist_ok=True)
         (ws / "interactors").mkdir(parents=True, exist_ok=True)
         (ws / "config" / "problem.json").write_text(
-            json.dumps({"time_limit_ms": 6000, "memory_limit_mb": 1024, "mode": "interactive"}, indent=2) + "\n",
+            json.dumps({"time_limit_ms": 6000, "memory_limit_mb": 1, "mode": "interactive"}, indent=2) + "\n",
             encoding="utf-8",
         )
         (ws / "interactors" / "interactor.cpp").write_text(
@@ -3946,7 +3987,7 @@ class TestJudgehostService(E2ETestBase):
         compile_config = json.loads(compile_config_raw)
         self.assertAlmostEqual(float(run_config.get("time_limit") or 0.0), 6.0, places=3)
         self.assertAlmostEqual(float(run_config.get("overshoot") or 0.0), 0.0, places=3)
-        self.assertEqual(int(run_config.get("memory_limit") or 0), 1024 * 1024)
+        self.assertEqual(int(run_config.get("memory_limit") or 0), 1024)
         self.assertEqual(int(run_config.get("process_limit") or 0), 1024)
         self.assertEqual(
             int(run_config.get("output_limit") or 0),

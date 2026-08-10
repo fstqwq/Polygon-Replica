@@ -21,6 +21,7 @@ from app.impl.workspace.context_ui import page_ctx
 from app.service.statement.context import normalize_statement_language, statement_languages
 from app.service.verification.runtime import (
     coerce_int,
+    normalize_memory_limit_mb,
     normalize_pass_limit,
     normalize_problem_mode,
 )
@@ -80,11 +81,11 @@ def general_save(
             _C.GENERAL_TIME_LIMIT_MIN_MS,
             _C.GENERAL_TIME_LIMIT_MAX_MS,
         )
-        safe_memory = coerce_int(
+        safe_memory = normalize_memory_limit_mb(
             memory_limit_mb,
-            int(_C.GENERAL_CONFIG_DEFAULTS['memory_limit_mb']),
-            _C.GENERAL_MEMORY_LIMIT_MIN_MB,
-            _C.GENERAL_MEMORY_LIMIT_MAX_MB,
+            default_mb=int(_C.GENERAL_CONFIG_DEFAULTS['memory_limit_mb']),
+            min_mb=_C.GENERAL_MEMORY_LIMIT_MIN_MB,
+            max_mb=_C.GENERAL_MEMORY_LIMIT_MAX_MB,
         )
         safe_mode = normalize_problem_mode(mode, str(_C.GENERAL_CONFIG_DEFAULTS['mode']))
         safe_pass_limit = normalize_pass_limit(

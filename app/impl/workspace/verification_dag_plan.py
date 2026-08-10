@@ -20,13 +20,10 @@ def _problem_limits(runtime_cfg: dict[str, object], *, pass_limit: int) -> dict[
         time_limit_ms = int(runtime_cfg.get("time_limit_ms", DEFAULT_TIME_LIMIT_MS))
     except Exception:
         time_limit_ms = DEFAULT_TIME_LIMIT_MS
-    try:
-        memory_limit_mb = int(runtime_cfg.get("memory_limit_mb", 1024))
-    except Exception:
-        memory_limit_mb = 1024
+    memory_limit_mb = int(runtime_cfg["memory_limit_mb"])
     return {
         "time_limit_ms": max(100, time_limit_ms),
-        "memory_limit_mb": max(16, memory_limit_mb),
+        "memory_limit_mb": memory_limit_mb,
         "pass_limit": max(1, int(pass_limit)),
     }
 

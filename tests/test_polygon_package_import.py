@@ -33,7 +33,7 @@ class TestPolygonPackageImport(unittest.TestCase):
   <judging run-count="1">
     <testset>
       <time-limit>1000</time-limit>
-      <memory-limit>268435456</memory-limit>
+      <memory-limit>1048576</memory-limit>
       <tests>
         <test method="generated" cmd="gen.py 7"/>
       </tests>
@@ -60,6 +60,8 @@ class TestPolygonPackageImport(unittest.TestCase):
         build_cfg = json.loads((ws / "config" / "build.json").read_text(encoding="utf-8"))
         self.assertEqual(list(build_cfg.get("generator_sources") or []), ["generators/gen.py"])
         self.assertEqual((ws / "generators" / "gen.py").read_text(encoding="utf-8"), "print(7)\n")
+        problem_cfg = json.loads((ws / "config" / "problem.json").read_text(encoding="utf-8"))
+        self.assertEqual(problem_cfg["memory_limit_mb"], 1)
 
     def test_import_multipass_property_without_explicit_pass_limit_fails(self) -> None:
         ws = self._workspace_path()

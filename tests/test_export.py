@@ -599,7 +599,10 @@ class TestPublishedRevisionExport(E2ETestBase):
         with tempfile.TemporaryDirectory(prefix="native-source-only-") as temp:
             archive = Path(temp) / "source-only.zip"
             with zipfile.ZipFile(archive, "w") as package:
-                package.writestr("sample-snapshot/config/problem.json", "{}\n")
+                package.writestr(
+                    "sample-snapshot/config/problem.json",
+                    '{"memory_limit_mb": 1}\n',
+                )
                 package.writestr("sample-snapshot/solutions/backup.cpp", "// restored\n")
             workspace = Path(temp) / "workspace"
             workspace.mkdir()
@@ -610,6 +613,10 @@ class TestPublishedRevisionExport(E2ETestBase):
                 archive.read_bytes(),
             )
             self.assertTrue((workspace / "config" / "problem.json").is_file())
+            problem_config = json.loads(
+                (workspace / "config" / "problem.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(problem_config["memory_limit_mb"], 1)
             self.assertEqual(
                 (workspace / "solutions" / "backup.cpp").read_text(encoding="utf-8"),
                 "// restored\n",

@@ -10,6 +10,14 @@ the committed file contents.
 Paths supplied through HTTP or package archives MUST be relative, normalized,
 remain inside the workspace, and not traverse symlinks outside it.
 
+## Runtime configuration
+
+`config/problem.json` stores the authored runtime limits. The memory limit is an
+integer from 1 through 2048 MiB and defaults to 1024 MiB when it is absent or
+cannot be parsed. Authoring clamps values below 1 to 1 and values above 2048 to
+2048. UI saves, manually edited source, and imported source all enter execution
+through this same normalization.
+
 ## Test specification
 
 `tests/spec.json` is the ordered testcase definition. Entries are manual or

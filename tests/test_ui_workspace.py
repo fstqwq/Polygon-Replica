@@ -487,6 +487,23 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         self.assertEqual(payload.get("time_limit_ms"), 100)
         self.assertEqual(payload.get("memory_limit_mb"), 2048)
 
+    def test_general_memory_limit_preserves_one_and_clamps_zero_to_one(self) -> None:
+        ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
+        for requested in ("1", "0"):
+            with self.subTest(requested=requested):
+                response = general_save(
+                    problem="alice/sample",
+                    user="alice",
+                    time_limit_ms="2000",
+                    memory_limit_mb=requested,
+                    mode="pass-fail",
+                )
+                self.assertEqual(response.status_code, 303)
+                payload = json.loads(
+                    (ws / "config" / "problem.json").read_text(encoding="utf-8")
+                )
+                self.assertEqual(payload.get("memory_limit_mb"), 1)
+
     def test_general_save_persists_pass_limit(self) -> None:
         resp = general_save(
             problem="alice/sample",

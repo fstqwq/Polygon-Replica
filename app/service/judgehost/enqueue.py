@@ -8,13 +8,18 @@ from pathlib import Path
 
 from app.db import now_iso
 from app.service.judgehost.domjudge.cache import domjudge_source_hash
-from app.service.judgehost.limits import compile_output_kb, run_output_kb
+from app.service.judgehost.limits import (
+    compile_output_kb,
+    run_memory_limit_kb,
+    run_output_kb,
+)
 from app.service.judgehost.identity import compile_key
 from app.service.judgehost.shared import _RUN_ID_RE, domjudge_lower_text, domjudge_path_name, domjudge_text
 from app.service.judgehost.runtime import domjudge_bool, domjudge_parse_int
 from app.service.platform.hashing import domjudge_executable_hash, sha256_hex_json
 from app.service.platform.runtime_blob_store import PayloadFile, RuntimeBlobStore
 from app.service.verification.identity import canonical_verification_id
+from app.service.verification.runtime import normalize_memory_limit_mb
 from app.service.run.runtime import RUN_TEST_NAME_RE
 from app.service.platform.testlib_source import workspace_testlib_header
 
@@ -426,14 +431,18 @@ class TaskEnqueue:
             problem_time_limit_ms = int(problem_cfg_obj.get("time_limit_ms", 0))
         except Exception:
             problem_time_limit_ms = 0
-        try:
-            problem_memory_limit_mb = int(problem_cfg_obj.get("memory_limit_mb", 0))
-        except Exception:
-            problem_memory_limit_mb = 0
+        default_cfg = cast(
+            dict[str, object],
+            self._s.constants.GENERAL_CONFIG_DEFAULTS,
+        )
+        problem_memory_limit_mb = normalize_memory_limit_mb(
+            problem_cfg_obj.get("memory_limit_mb"),
+            default_mb=int(default_cfg["memory_limit_mb"]),
+            min_mb=int(self._s.constants.GENERAL_MEMORY_LIMIT_MIN_MB),
+            max_mb=int(self._s.constants.GENERAL_MEMORY_LIMIT_MAX_MB),
+        )
         if problem_time_limit_ms < 0:
             problem_time_limit_ms = 0
-        if problem_memory_limit_mb < 0:
-            problem_memory_limit_mb = 0
 
         interactive_mode = TaskEnqueue._normalize_status(mode) == "interactive"
         checker_source: Path | None = None
@@ -725,18 +734,15 @@ class TaskEnqueue:
                 domjudge_parse_int(default_cfg.get("time_limit_ms", 2000), 2000),
             ),
         )
-        run_mem_mb = domjudge_parse_int(
-            run_cfg_obj.get("memory_limit_mb"),
-            domjudge_parse_int(
-                problem_limits_obj.get("memory_limit_mb"),
-                domjudge_parse_int(default_cfg.get("memory_limit_mb", 1024), 1024),
-            ),
-        )
+        run_mem_value = run_cfg_obj.get("memory_limit_mb")
+        if run_mem_value is None:
+            run_mem_value = problem_limits_obj.get("memory_limit_mb")
+        if run_mem_value is None:
+            run_mem_value = default_cfg.get("memory_limit_mb", 1024)
+        run_mem_kb = run_memory_limit_kb(run_mem_value)
         run_tl_ms = max(100, run_tl_ms)
-        run_mem_mb = max(16, run_mem_mb)
         run_tl_sec = max(0.1, float(run_tl_ms) / 1000.0)
         run_overshoot_sec = 0.0
-        run_mem_kb = max(16 * 1024, int(run_mem_mb * 1024))
         sources_files = verification_payload.get("source_files")
         sources_obj = cast(dict[str, object] | None, sources_files)
         if sources_obj is None:

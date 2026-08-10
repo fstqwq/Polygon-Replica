@@ -6,7 +6,12 @@ from typing import cast
 
 from app.impl.runtime.config import config
 from app.main_util import safe_workspace_path
-from app.service.verification.runtime import coerce_int, normalize_pass_limit, normalize_problem_mode
+from app.service.verification.runtime import (
+    coerce_int,
+    normalize_memory_limit_mb,
+    normalize_pass_limit,
+    normalize_problem_mode,
+)
 
 _C = config.constants
 
@@ -34,11 +39,11 @@ def read_problem_config(workspace: Path) -> tuple[dict[str, object], dict[str, o
             _C.GENERAL_TIME_LIMIT_MIN_MS,
             _C.GENERAL_TIME_LIMIT_MAX_MS,
         ),
-        "memory_limit_mb": coerce_int(
+        "memory_limit_mb": normalize_memory_limit_mb(
             payload.get("memory_limit_mb"),
-            int(_C.GENERAL_CONFIG_DEFAULTS["memory_limit_mb"]),
-            _C.GENERAL_MEMORY_LIMIT_MIN_MB,
-            _C.GENERAL_MEMORY_LIMIT_MAX_MB,
+            default_mb=int(_C.GENERAL_CONFIG_DEFAULTS["memory_limit_mb"]),
+            min_mb=_C.GENERAL_MEMORY_LIMIT_MIN_MB,
+            max_mb=_C.GENERAL_MEMORY_LIMIT_MAX_MB,
         ),
         "mode": mode,
         "pass_limit": normalize_pass_limit(
@@ -49,7 +54,6 @@ def read_problem_config(workspace: Path) -> tuple[dict[str, object], dict[str, o
         ),
     }
     return (payload, ui_cfg, cfg_path)
-
 
 
 

@@ -126,7 +126,7 @@ name:
 type: [interactive, multi-pass]
 limits:
   time_limit: 2.25
-  memory: 768
+  memory: 1
   validation_passes: 3
 """
         )
@@ -135,7 +135,7 @@ limits:
         self.assertEqual(metadata["mode"], "interactive")
         self.assertEqual(metadata["pass_limit"], 3)
         self.assertEqual(metadata["time_limit_ms"], 2250)
-        self.assertEqual(metadata["memory_limit_mb"], 768)
+        self.assertEqual(metadata["memory_limit_mb"], 1)
 
     def test_problem_yaml_legacy_type_and_validation_remain_supported(self) -> None:
         service = ICPCPackageImportService()
@@ -179,6 +179,8 @@ limits:
                         "problem_format_version: 2025-09",
                         "name: Roundtrip ICPC",
                         "validation: custom",
+                        "limits:",
+                        "  memory: 1",
                     ]
                 )
                 + "\n",
@@ -224,7 +226,7 @@ limits:
         self.assertEqual(str(problem_cfg.get("mode") or ""), "pass-fail")
         self.assertEqual(int(problem_cfg.get("pass_limit") or 0), 1)
         self.assertEqual(int(problem_cfg.get("time_limit_ms") or 0), 2000)
-        self.assertEqual(int(problem_cfg.get("memory_limit_mb") or 0), 1024)
+        self.assertEqual(int(problem_cfg.get("memory_limit_mb") or 0), 1)
 
         build_cfg = json.loads((ws / "config" / "build.json").read_text(encoding="utf-8"))
         self.assertTrue(str(build_cfg.get("accepted_solution_source") or "").startswith("solutions/"))

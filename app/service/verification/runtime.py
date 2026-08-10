@@ -56,6 +56,16 @@ def normalize_time_limit_ms(raw: object, *, default_ms: int, min_ms: int, max_ms
     return max(int(min_ms), min(int(max_ms), value))
 
 
+def normalize_memory_limit_mb(
+    raw: object,
+    *,
+    default_mb: int,
+    min_mb: int,
+    max_mb: int,
+) -> int:
+    return coerce_int(raw, int(default_mb), int(min_mb), int(max_mb))
+
+
 def wall_time_slack_sec_for_mode(
     mode: object,
     *,
@@ -99,15 +109,19 @@ def load_problem_runtime_config(
     snapshot: object,
     *,
     default_time_limit_ms: int,
+    default_memory_limit_mb: int,
     default_mode: str,
     min_time_limit_ms: int,
     max_time_limit_ms: int,
+    min_memory_limit_mb: int,
+    max_memory_limit_mb: int,
 ) -> dict:
     from pathlib import Path
     import json
 
     cfg = {
         "time_limit_ms": int(default_time_limit_ms),
+        "memory_limit_mb": int(default_memory_limit_mb),
         "mode": str(default_mode or "pass-fail"),
         "pass_limit": 1,
     }
@@ -123,6 +137,12 @@ def load_problem_runtime_config(
         default_ms=default_time_limit_ms,
         min_ms=min_time_limit_ms,
         max_ms=max_time_limit_ms,
+    )
+    cfg["memory_limit_mb"] = normalize_memory_limit_mb(
+        cfg.get("memory_limit_mb"),
+        default_mb=default_memory_limit_mb,
+        min_mb=min_memory_limit_mb,
+        max_mb=max_memory_limit_mb,
     )
     cfg["mode"] = normalize_problem_mode(cfg.get("mode"), default_mode)
     cfg["pass_limit"] = normalize_pass_limit(cfg.get("pass_limit"), 1)
