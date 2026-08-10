@@ -685,11 +685,6 @@ body.verification-compact .run-details-page-compact .verification-detail-wrap {
   word-break: break-word;
 }
 
-.sol-output {
-  display: grid;
-  gap: var(--space-1);
-}
-
 .transcript {
   border: 1px solid var(--line);
   background: var(--surface);
@@ -825,12 +820,15 @@ body.verification-compact .run-details-page-compact .verification-detail-wrap {
   font-size: var(--font-size-ui-xs);
 }
 
-.test-grid {
+.preview-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
   gap: var(--space-3);
-  margin-bottom: var(--space-3);
   min-width: 0;
+}
+
+.test-data-grid {
+  margin-bottom: var(--space-3);
 }
 
 .test-generation-alert {

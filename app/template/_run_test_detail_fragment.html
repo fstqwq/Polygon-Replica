@@ -20,8 +20,10 @@
 <p class="test-generation-alert {{ 'tone-fail' if row.generation_alert.alert_severity == 'error' else 'tone-warn' }}">{{ row.generation_alert.alert_message }}</p>
 {% endif %}
 {% if not row.is_interactive %}
-<div class="test-grid">
+<div class="preview-grid test-data-grid">
+  {% if not row.is_multi_pass %}
   {{ artifact_preview_card('Input ' + row.test_name, row.input_preview) }}
+  {% endif %}
   {{ artifact_preview_card('Answer', row.answer_preview) }}
 </div>
 {% endif %}
@@ -138,9 +140,6 @@
     {% for pass_row in cell.detail.pass_rows %}
     {% set feedback_text = pass_row.feedback_display or '-' %}
     <section class="execution-pass">
-    {% if cell.detail.is_multi_pass and pass_row.pass_number > 1 %}
-      {{ artifact_preview_card(pass_row.pass_label + ' Input', pass_row.input_preview) }}
-    {% endif %}
     <table class="table-base table-compact sol-metrics">
       <colgroup>
         <col class="status-col" />
@@ -166,22 +165,14 @@
         </tr>
       </tbody>
     </table>
-    <div class="sol-output">
-      <div class="content-heading-row">
-        <strong>{{ pass_row.pass_label + ' Output' if cell.detail.is_multi_pass else 'Output' }}</strong>
-        {% if pass_row.output_preview and pass_row.output_preview.available and pass_row.output_preview.download_verification_id %}
-        <a class="content-heading-action" href="{{ problem_href('artifact_file', verification_id=pass_row.output_preview.download_verification_id, rel_path=pass_row.output_preview.download_rel_path) }}">download</a>
-        {% endif %}
-      </div>
-      {% if pass_row.output_preview and pass_row.output_preview.available and pass_row.output_preview.text != '(empty)' %}
-      <pre class="preview-content">{{ pass_row.output_preview.text }}</pre>
-      {% if pass_row.output_preview.truncated %}
-      <div class="muted">Showing first {{ pass_row.output_preview.limit }} bytes.</div>
-      {% endif %}
-      {% elif not has_diagnostics %}
-      <p class="muted empty-text">(output missing)</p>
-      {% endif %}
+    {% if cell.detail.is_multi_pass %}
+    <div class="preview-grid execution-pass-artifacts">
+      {{ artifact_preview_card(pass_row.pass_label + ' Input', pass_row.input_preview) }}
+      {{ artifact_preview_card(pass_row.pass_label + ' Output', pass_row.output_preview) }}
     </div>
+    {% else %}
+    {{ artifact_preview_card('Output', pass_row.output_preview) }}
+    {% endif %}
     </section>
     {% endfor %}
     {% else %}
