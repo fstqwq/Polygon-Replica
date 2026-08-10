@@ -823,6 +823,8 @@ class TaskEnqueue:
                     True,
                 )
             )
+            if pass_limit > 1 and not (compile_only or generate_mode):
+                run_files.append(("pass-capture", pass_capture_script, True))
             if compile_only:
                 compare_files.append(("run", self._toolkit.compare_script(main_correct=False), True))
             elif generate_mode:

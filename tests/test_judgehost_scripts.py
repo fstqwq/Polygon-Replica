@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -72,7 +73,29 @@ class TestJudgehostScripts(unittest.TestCase):
         return pass_dir
 
     @staticmethod
+    def _run_capture_action(
+        capture: Path,
+        action: str,
+        pass_dir: Path,
+        *,
+        exit_status: int = 0,
+        env: dict[str, str] | None = None,
+        cwd: Path | None = None,
+    ) -> subprocess.CompletedProcess[bytes]:
+        args = [str(capture), action, str(pass_dir / "testdata.in")]
+        if action == "finish":
+            args.extend([str(pass_dir / "feedback"), str(exit_status)])
+        return subprocess.run(
+            args,
+            cwd=cwd or pass_dir,
+            env=env,
+            capture_output=True,
+            check=False,
+        )
+
+    @classmethod
     def _run_pass_capture(
+        cls,
         capture: Path,
         pass_dir: Path,
         exit_status: int,
@@ -80,20 +103,30 @@ class TestJudgehostScripts(unittest.TestCase):
         env: dict[str, str] | None = None,
         cwd: Path | None = None,
     ) -> subprocess.CompletedProcess[bytes]:
-        return subprocess.run(
-            [
-                str(capture),
-                str(pass_dir / "testdata.in"),
-                str(pass_dir / "feedback"),
-                str(exit_status),
-            ],
-            cwd=cwd or pass_dir,
+        cls._run_capture_action(
+            capture,
+            "prepare",
+            pass_dir,
             env=env,
-            capture_output=True,
-            check=False,
+            cwd=cwd,
+        )
+        cls._run_capture_action(
+            capture,
+            "expose",
+            pass_dir,
+            env=env,
+            cwd=cwd,
+        )
+        return cls._run_capture_action(
+            capture,
+            "finish",
+            pass_dir,
+            exit_status=exit_status,
+            env=env,
+            cwd=cwd,
         )
 
-    def test_pass_capture_uses_feedback_path_when_called_from_judging_root(self) -> None:
+    def test_pass_capture_keeps_pass_one_input_by_hard_link(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             capture = self._write_pass_capture(root, max_bytes=1024 * 1024)
@@ -101,17 +134,18 @@ class TestJudgehostScripts(unittest.TestCase):
             testcase = endpoint / "submission" / "judging" / "testcase123"
             cached_input = endpoint / "testcase" / "123" / "source-hash.in"
             cached_input.parent.mkdir(parents=True)
-            cached_input.write_bytes(b"first input\n")
+            cached_input.write_bytes(b"cache input\n")
 
             first = self._write_domjudge_pass(
                 testcase,
                 "1",
-                overrides={"feedback/judgemessage.txt": b"first pass\n"},
-                omitted=frozenset({"feedback/teammessage.txt"}),
+                overrides={
+                    "testdata.in": b"first input\n",
+                    "feedback/judgemessage.txt": b"first pass\n",
+                },
             )
             first_input = first / "testdata.in"
-            first_input.unlink()
-            first_input.symlink_to(cached_input)
+            first_inode = first_input.stat().st_ino
             (first / "feedback/nextpass.in").write_bytes(b"second input\n")
             first_result = self._run_pass_capture(
                 capture,
@@ -120,16 +154,23 @@ class TestJudgehostScripts(unittest.TestCase):
                 cwd=endpoint,
             )
             self.assertEqual(first_result.returncode, 0, first_result.stderr)
-            self.assertFalse((first / "feedback/teammessage.txt").exists())
+            saved_input = testcase / ".polygon-pass-1-input"
+            self.assertEqual(saved_input.stat().st_ino, first_inode)
+            self.assertEqual(saved_input.stat().st_mode & 0o777, 0o444)
+
+            first_input.unlink()
+            first_input.symlink_to(cached_input)
+            os.chmod(first / "feedback", 0o700)
+            os.chmod(first, 0o700)
 
             second = self._write_domjudge_pass(
                 testcase,
                 "2",
-                overrides={"feedback/judgemessage.txt": b"first pass\nsecond pass\n"},
+                overrides={
+                    "testdata.in": b"second input\n",
+                    "feedback/judgemessage.txt": b"first pass\nsecond pass\n",
+                },
             )
-            second_input = second / "testdata.in"
-            second_input.unlink()
-            second_input.symlink_to(first / "feedback/nextpass.in")
             final_result = self._run_pass_capture(
                 capture,
                 second,
@@ -151,10 +192,7 @@ class TestJudgehostScripts(unittest.TestCase):
                 bundle.pass_files(1)["judgemessage.txt"],
                 b"first pass\n",
             )
-            self.assertEqual(
-                bundle.pass_files(2)["judgemessage.txt"],
-                b"second pass\n",
-            )
+            self.assertNotIn("judgemessage.txt", bundle.pass_files(2))
 
     def test_domjudge_compare_script_shifts_framework_args_before_checker(self) -> None:
         service = config.judgehost_task_service
@@ -510,20 +548,19 @@ class TestJudgehostScripts(unittest.TestCase):
                     "program.meta": first_program_meta,
                     "compare.meta": first_compare_meta,
                 },
-                omitted=frozenset({"feedback/teammessage.txt"}),
             )
             first_team = first / "feedback/teammessage.txt"
             (first / "feedback/nextpass.in").write_bytes(b"next input\n")
             continuation = self._run_pass_capture(capture, first, 42)
             self.assertEqual(continuation.returncode, 0, continuation.stderr)
-            self.assertFalse(first_team.exists())
+            self.assertEqual(first_team.read_bytes(), b"team 1\n")
             self.assertFalse(any(".polygon-pass" in path.name for path in first.rglob("*")))
 
             second = self._write_domjudge_pass(
                 testcase,
                 "2",
                 overrides={
-                    "testdata.in": b"actual second input\n",
+                    "testdata.in": b"next input\n",
                     "feedback/teammessage.txt": b"second team message\n",
                 },
             )
@@ -538,7 +575,7 @@ class TestJudgehostScripts(unittest.TestCase):
                 testcase,
                 "3",
                 overrides={
-                    "testdata.in": b"actual third input\n",
+                    "testdata.in": b"third input\n",
                     "feedback/teammessage.txt": b"genuine final team message\n",
                 },
             )
@@ -555,17 +592,24 @@ class TestJudgehostScripts(unittest.TestCase):
             self.assertEqual(bundle.pass_files(1)["program.out"], b"actual first output\n")
             self.assertEqual(bundle.pass_files(1)["program.meta"], first_program_meta)
             self.assertEqual(bundle.pass_files(1)["compare.meta"], first_compare_meta)
-            self.assertEqual(bundle.pass_files(1)["teammessage.txt"], b"")
-            self.assertEqual(bundle.pass_files(2)["input"], b"actual second input\n")
+            self.assertEqual(bundle.pass_files(1)["teammessage.txt"], b"team 1\n")
+            self.assertEqual(bundle.pass_files(2)["input"], b"next input\n")
             self.assertEqual(bundle.pass_files(2)["teammessage.txt"], b"second team message\n")
-            self.assertEqual(bundle.pass_files(3)["input"], b"actual third input\n")
+            self.assertEqual(bundle.pass_files(3)["input"], b"third input\n")
             self.assertEqual(
                 bundle.pass_files(3)["teammessage.txt"],
                 b"genuine final team message\n",
             )
-            self.assertFalse(any(".polygon-pass" in path.name for path in testcase.rglob("*")))
+            self.assertEqual(
+                sorted(
+                    path.name
+                    for path in testcase.rglob("*")
+                    if ".polygon-pass" in path.name
+                ),
+                [".polygon-pass-1-input"],
+            )
 
-    def test_pass_capture_splits_cumulative_judge_messages_by_pass(self) -> None:
+    def test_pass_capture_preserves_cumulative_feedback_snapshots(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             capture = self._write_pass_capture(root, max_bytes=1024 * 1024)
@@ -588,10 +632,24 @@ class TestJudgehostScripts(unittest.TestCase):
                     "feedback/judgemessage.txt": b"First pass OKSecond pass OK",
                 },
             )
-            final = self._run_pass_capture(capture, second, 43)
+            (second / "feedback/nextpass.in").write_bytes(b"third input\n")
+            continuation = self._run_pass_capture(capture, second, 42)
+            self.assertEqual(continuation.returncode, 0, continuation.stderr)
+
+            third = self._write_domjudge_pass(
+                testcase,
+                "3",
+                overrides={
+                    "testdata.in": b"third input\n",
+                    "feedback/judgemessage.txt": (
+                        b"First pass OKSecond pass OKThird pass WA"
+                    ),
+                },
+            )
+            final = self._run_pass_capture(capture, third, 43)
             self.assertEqual(final.returncode, 0, final.stderr)
             bundle = parse_pass_bundle(
-                (second / "feedback/teammessage.txt").read_bytes(),
+                (third / "feedback/teammessage.txt").read_bytes(),
                 max_bundle_bytes=1024 * 1024,
                 max_member_bytes=1024 * 1024,
             )
@@ -602,68 +660,83 @@ class TestJudgehostScripts(unittest.TestCase):
             )
             self.assertEqual(
                 bundle.pass_files(2)["judgemessage.txt"],
-                b"Second pass OK",
+                b"First pass OKSecond pass OK",
             )
 
-    def test_pass_capture_resolves_domjudge_pass_input_symlinks(self) -> None:
+    def test_pass_capture_has_no_history_copy_or_content_identity_layer(self) -> None:
+        script = config.judgehost_task_service.toolkit.pass_capture_script(
+            max_bytes=1024 * 1024,
+        ).decode("utf-8")
+        self.assertNotRegex(script, r"\bcp\b")
+        self.assertNotIn("sha256", script.lower())
+        self.assertNotIn("manifest", script.lower())
+        self.assertNotIn(".polygon-capture", script)
+        self.assertIn('ln -- "$CURRENT_INPUT" "$PASS_ONE_FILE"', script)
+        self.assertNotIn("metadata-input-only", script)
+
+    def test_normal_run_relocks_history_then_exposes_only_capture_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            capture = self._write_pass_capture(root, max_bytes=1024 * 1024)
-            endpoint = root / "endpoint-default"
-            testcase = endpoint / "submission" / "judging" / "testcase123"
-            cached_input = endpoint / "testcase" / "123" / "source-hash.in"
-            cached_input.parent.mkdir(parents=True)
-            cached_input.write_bytes(b"initial interactive input\n")
-
+            testcase = root / "testcase"
             first = self._write_domjudge_pass(testcase, "1")
-            first_input = first / "testdata.in"
-            first_input.unlink()
-            first_input.symlink_to(cached_input)
-            next_input = first / "feedback" / "nextpass.in"
-            next_input.write_bytes(b"second pass input\n")
+            (first / "feedback/nextpass.in").write_bytes(b"second input\n")
+            capture = self._write_pass_capture(root, max_bytes=1024 * 1024)
+            self._run_pass_capture(capture, first, 42)
+            os.chmod(first / "feedback", 0o700)
+            os.chmod(first, 0o700)
+            execdir = first / "execdir"
+            execdir.mkdir()
+            os.chmod(execdir, 0o700)
 
             second = self._write_domjudge_pass(testcase, "2")
-            second_input = second / "testdata.in"
-            second_input.unlink()
-            second_input.symlink_to(next_input)
-            result = self._run_pass_capture(capture, second, 43)
-            self.assertEqual(result.returncode, 0, result.stderr)
-
-            bundle = parse_pass_bundle(
-                (second / "feedback/teammessage.txt").read_bytes(),
-                max_bundle_bytes=1024 * 1024,
-                max_member_bytes=1024 * 1024,
+            executable = root / "executable"
+            executable.mkdir()
+            wrapper = executable / "run"
+            wrapper.write_text(
+                config.judgehost_task_service.toolkit.load_script_asset("normal.run"),
+                encoding="utf-8",
             )
-            assert bundle is not None
-            self.assertEqual(bundle.passes[0].capture_status, "complete")
-            self.assertEqual(bundle.pass_files(1)["input"], b"initial interactive input\n")
-            self.assertEqual(bundle.pass_files(2)["input"], b"second pass input\n")
-
-    def test_pass_capture_does_not_follow_pass_input_outside_domjudge_layout(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            capture = self._write_pass_capture(root, max_bytes=1024 * 1024)
-            endpoint = root / "endpoint-default"
-            testcase = endpoint / "submission" / "judging" / "testcase123"
-            outside_input = root / "outside.in"
-            outside_input.write_bytes(b"must not be captured\n")
-
-            first = self._write_domjudge_pass(testcase, "1")
-            first_input = first / "testdata.in"
-            first_input.unlink()
-            first_input.symlink_to(outside_input)
-            second = self._write_domjudge_pass(testcase, "2")
-            result = self._run_pass_capture(capture, second, 43)
-            self.assertEqual(result.returncode, 0, result.stderr)
-
-            bundle = parse_pass_bundle(
-                (second / "feedback/teammessage.txt").read_bytes(),
-                max_bundle_bytes=1024 * 1024,
-                max_member_bytes=1024 * 1024,
+            (executable / "pass-capture").write_bytes(capture.read_bytes())
+            runner = executable / "runner"
+            runner.write_text(
+                "#!/bin/sh\n"
+                'stat -c %a -- "$HISTORY_PASS" >"$MODE_LOG"\n'
+                'stat -c %a -- "$PASS_ONE_INPUT" >>"$MODE_LOG"\n'
+                "exit 17\n",
+                encoding="utf-8",
             )
-            assert bundle is not None
-            self.assertEqual(bundle.passes[0].capture_status, "metadata-only")
-            self.assertNotIn("input", bundle.pass_files(1))
+            for path in (wrapper, executable / "pass-capture", runner):
+                os.chmod(path, 0o755)
+            mode_log = root / "mode.log"
+            env = {
+                **os.environ,
+                "HISTORY_PASS": str(first),
+                "PASS_ONE_INPUT": str(testcase / ".polygon-pass-1-input"),
+                "MODE_LOG": str(mode_log),
+            }
+            result = subprocess.run(
+                [
+                    str(wrapper),
+                    str(second / "testdata.in"),
+                    str(second / "program.out"),
+                    str(runner),
+                ],
+                cwd=second,
+                env=env,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 17, result.stderr)
+            self.assertEqual(mode_log.read_text(encoding="utf-8").splitlines(), ["700", "600"])
+            self.assertEqual(first.stat().st_mode & 0o777, 0o711)
+            self.assertEqual((first / "feedback").stat().st_mode & 0o777, 0o711)
+            self.assertEqual(execdir.stat().st_mode & 0o777, 0o700)
+            self.assertEqual((first / "program.out").stat().st_mode & 0o777, 0o444)
+            self.assertEqual(
+                (testcase / ".polygon-pass-1-input").stat().st_mode & 0o777,
+                0o444,
+            )
 
     def test_pass_capture_final_pass_one_has_empty_history(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -683,75 +756,98 @@ class TestJudgehostScripts(unittest.TestCase):
             self.assertEqual(bundle.pass_files(1)["input"], b"input 1\n")
             self.assertEqual(bundle.pass_files(1)["teammessage.txt"], b"team 1\n")
 
-    def test_pass_capture_budget_reduces_all_historical_passes_together(self) -> None:
-        profiles = (
-            (
-                {"program.out": b"x" * 40_000},
-                "metadata-input-only",
-            ),
-            (
-                {"program.out": b"x" * 40_000, "testdata.in": b"y" * 40_000},
-                "metadata-only",
-            ),
-        )
-        for overrides, expected_status in profiles:
-            with self.subTest(expected_status=expected_status), tempfile.TemporaryDirectory() as tmp:
-                root = Path(tmp)
-                capture = self._write_pass_capture(root, max_bytes=20_000)
-                testcase = root / "testcase"
-                self._write_domjudge_pass(testcase, "1", overrides=overrides)
-                final = self._write_domjudge_pass(testcase, "2")
-                result = self._run_pass_capture(capture, final, 43)
-                self.assertEqual(result.returncode, 0, result.stderr)
-                bundle = parse_pass_bundle(
-                    (final / "feedback/teammessage.txt").read_bytes(),
-                    max_bundle_bytes=20_000,
-                    max_member_bytes=100_000,
-                )
-                assert bundle is not None
-                self.assertEqual(bundle.passes[0].capture_status, expected_status)
+    def test_pass_capture_preselects_metadata_only_and_runs_tar_once(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            capture = self._write_pass_capture(root, max_bytes=20_000)
+            testcase = root / "testcase"
+            first = self._write_domjudge_pass(
+                testcase,
+                "1",
+                overrides={"program.out": b"x" * 40_000},
+            )
+            (first / "feedback/nextpass.in").write_bytes(b"second input\n")
+            self._run_pass_capture(capture, first, 42)
+            final = self._write_domjudge_pass(
+                testcase,
+                "2",
+                overrides={"testdata.in": b"second input\n"},
+            )
 
-    def test_pass_capture_missing_full_file_downgrades_history(self) -> None:
+            real_tar = shutil.which("tar")
+            assert real_tar is not None
+            fake_bin = root / "fake-bin"
+            fake_bin.mkdir()
+            tar_log = root / "tar.log"
+            fake_tar = fake_bin / "tar"
+            fake_tar.write_text(
+                "#!/bin/sh\n"
+                'printf "tar\\n" >>"$TAR_LOG"\n'
+                f'exec "{real_tar}" "$@"\n',
+                encoding="utf-8",
+            )
+            os.chmod(fake_tar, 0o755)
+            env = {
+                **os.environ,
+                "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}",
+                "TAR_LOG": str(tar_log),
+            }
+            result = self._run_pass_capture(capture, final, 43, env=env)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(tar_log.read_text(encoding="utf-8"), "tar\n")
+            bundle = parse_pass_bundle(
+                (final / "feedback/teammessage.txt").read_bytes(),
+                max_bundle_bytes=20_000,
+                max_member_bytes=100_000,
+            )
+            assert bundle is not None
+            self.assertEqual(bundle.passes[0].capture_status, "metadata-only")
+            self.assertEqual(
+                bundle.historical_feedback_bytes,
+                len((first / "feedback/judgemessage.txt").read_bytes()),
+            )
+
+    def test_pass_capture_missing_fixed_file_preserves_team_message(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             capture = self._write_pass_capture(root, max_bytes=1024 * 1024)
             testcase = root / "testcase"
-            self._write_domjudge_pass(
+            first = self._write_domjudge_pass(
                 testcase,
                 "1",
                 omitted=frozenset({"program.err"}),
             )
-            final = self._write_domjudge_pass(testcase, "2")
+            (first / "feedback/nextpass.in").write_bytes(b"second input\n")
+            self._run_pass_capture(capture, first, 42)
+            final = self._write_domjudge_pass(
+                testcase,
+                "2",
+                overrides={"feedback/teammessage.txt": b"genuine team\n"},
+            )
             result = self._run_pass_capture(capture, final, 43)
             self.assertEqual(result.returncode, 0, result.stderr)
-            bundle = parse_pass_bundle(
+            self.assertEqual(
                 (final / "feedback/teammessage.txt").read_bytes(),
-                max_bundle_bytes=1024 * 1024,
-                max_member_bytes=1024 * 1024,
+                b"genuine team\n",
             )
-            assert bundle is not None
-            self.assertEqual(bundle.passes[0].capture_status, "metadata-input-only")
 
-    def test_pass_capture_unreadable_full_file_downgrades_history(self) -> None:
+    def test_pass_capture_hard_link_failure_does_not_fall_back_to_copy(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             capture = self._write_pass_capture(root, max_bytes=1024 * 1024)
             testcase = root / "testcase"
-            first = self._write_domjudge_pass(testcase, "1")
-            unreadable = first / "program.out"
-            os.chmod(unreadable, 0)
-            if os.access(unreadable, os.R_OK):
-                self.skipTest("the test user can read mode-000 files")
-            final = self._write_domjudge_pass(testcase, "2")
+            final = self._write_domjudge_pass(
+                testcase,
+                "1",
+                overrides={"feedback/teammessage.txt": b"genuine team\n"},
+            )
+            (testcase / ".polygon-pass-1-input").symlink_to(final / "testdata.in")
             result = self._run_pass_capture(capture, final, 43)
             self.assertEqual(result.returncode, 0, result.stderr)
-            bundle = parse_pass_bundle(
+            self.assertEqual(
                 (final / "feedback/teammessage.txt").read_bytes(),
-                max_bundle_bytes=1024 * 1024,
-                max_member_bytes=1024 * 1024,
+                b"genuine team\n",
             )
-            assert bundle is not None
-            self.assertEqual(bundle.passes[0].capture_status, "metadata-input-only")
 
     def test_pass_capture_missing_metadata_preserves_genuine_team_message(self) -> None:
         for missing_metadata in ("program.meta", "compare.meta"):
@@ -759,11 +855,13 @@ class TestJudgehostScripts(unittest.TestCase):
                 root = Path(tmp)
                 capture = self._write_pass_capture(root, max_bytes=1024 * 1024)
                 testcase = root / "testcase"
-                self._write_domjudge_pass(
+                first = self._write_domjudge_pass(
                     testcase,
                     "1",
                     omitted=frozenset({missing_metadata}),
                 )
+                (first / "feedback/nextpass.in").write_bytes(b"second input\n")
+                self._run_pass_capture(capture, first, 42)
                 final = self._write_domjudge_pass(
                     testcase,
                     "2",
@@ -808,6 +906,7 @@ class TestJudgehostScripts(unittest.TestCase):
             result = subprocess.run(
                 [
                     str(capture),
+                    "finish",
                     str(final / "testdata.in"),
                     str(outside),
                     "43",
@@ -843,7 +942,13 @@ class TestJudgehostScripts(unittest.TestCase):
                     (final / "feedback/teammessage.txt").read_bytes(),
                     b"genuine team\n",
                 )
-                self.assertFalse(any(".polygon-pass" in path.name for path in final.rglob("*")))
+                self.assertFalse(
+                    any(
+                        path.name.startswith(".polygon-pass-control")
+                        or path.name.startswith(".polygon-pass-bundle.")
+                        for path in final.rglob("*")
+                    )
+                )
 
     def test_compare_and_interactive_wrappers_preserve_real_exit_status(self) -> None:
         toolkit = config.judgehost_task_service.toolkit
@@ -880,6 +985,92 @@ class TestJudgehostScripts(unittest.TestCase):
                     check=False,
                 )
                 self.assertEqual(result.returncode, 43, result.stderr)
+
+    def test_interactive_capture_reads_history_without_opening_pass_directories(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            testcase = root / "testcase"
+            executable = root / "executable"
+            executable.mkdir()
+            toolkit = config.judgehost_task_service.toolkit
+            wrapper = executable / "run"
+            wrapper.write_text(
+                toolkit.load_script_asset("interactive.runjury"),
+                encoding="utf-8",
+            )
+            capture = executable / "pass-capture"
+            capture.write_bytes(toolkit.pass_capture_script(max_bytes=1024 * 1024))
+            interactor = executable / "interactor"
+            interactor.write_text(
+                "#!/bin/sh\n"
+                'printf "second input\\n" >"$3/nextpass.in"\n'
+                "exit 42\n",
+                encoding="utf-8",
+            )
+            for path in (wrapper, capture, interactor):
+                os.chmod(path, 0o755)
+
+            first = self._write_domjudge_pass(testcase, "1")
+            first_output = first / "testdata.out"
+            first_output.write_bytes(b"answer\n")
+            continuation = subprocess.run(
+                [
+                    str(wrapper),
+                    str(first / "testdata.in"),
+                    str(first_output),
+                    str(first / "feedback"),
+                ],
+                cwd=first,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(continuation.returncode, 42, continuation.stderr)
+            os.chmod(first / "feedback", 0o700)
+            os.chmod(first, 0o700)
+
+            mode_log = root / "interactive-mode.log"
+            interactor.write_text(
+                "#!/bin/sh\n"
+                'stat -c %a -- "$HISTORY_PASS" >"$MODE_LOG"\n'
+                "exit 43\n",
+                encoding="utf-8",
+            )
+            second = self._write_domjudge_pass(
+                testcase,
+                "2",
+                overrides={"testdata.in": b"second input\n"},
+            )
+            second_output = second / "testdata.out"
+            second_output.write_bytes(b"answer\n")
+            result = subprocess.run(
+                [
+                    str(wrapper),
+                    str(second / "testdata.in"),
+                    str(second_output),
+                    str(second / "feedback"),
+                ],
+                cwd=second,
+                env={
+                    **os.environ,
+                    "HISTORY_PASS": str(first),
+                    "MODE_LOG": str(mode_log),
+                },
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 43, result.stderr)
+            self.assertEqual(mode_log.read_text(encoding="utf-8"), "700\n")
+            self.assertEqual(first.stat().st_mode & 0o777, 0o700)
+            self.assertEqual((first / "feedback").stat().st_mode & 0o777, 0o700)
+            bundle = parse_pass_bundle(
+                (second / "feedback/teammessage.txt").read_bytes(),
+                max_bundle_bytes=1024 * 1024,
+                max_member_bytes=1024 * 1024,
+            )
+            assert bundle is not None
+            self.assertEqual(bundle.final_pass_number, 2)
+            self.assertEqual(bundle.pass_files(1)["input"], b"input 1\n")
 
     def test_domjudge_generate_run_script_executes_submission_runner_with_payload_args(self) -> None:
         service = config.judgehost_task_service

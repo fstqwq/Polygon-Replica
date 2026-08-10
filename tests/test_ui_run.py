@@ -63,7 +63,7 @@ import app.service.verification.workspace_fingerprint as workspace_fingerprint_m
 from app.service.problem.readiness import WorkspaceReadinessSubject
 from app.service.verification.execution_result import (
     CAPTURE_COMPLETE,
-    CAPTURE_METADATA_INPUT_ONLY,
+    CAPTURE_METADATA_ONLY,
     ExecutionPassResult,
     ExecutionUsage,
     PassArtifacts,
@@ -4182,7 +4182,6 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         answer_ref = store("answer", b"accepted\n")
         input_one_ref = store("pass-one-input", b"first pass input\n")
         input_two_ref = store("pass-two-input", b"second pass input\n")
-        input_three_ref = store("pass-three-input", b"third pass input\n")
         common_ref = store("metadata", b"metadata\n")
         jury_one_ref = store("jury-one", b"first pass accepted\n")
         jury_two_ref = store("jury-two", b"second pass accepted\n")
@@ -4245,7 +4244,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             ),
             ExecutionPassResult(
                 number=3,
-                capture_status=CAPTURE_METADATA_INPUT_ONLY,
+                capture_status=CAPTURE_METADATA_ONLY,
                 runresult="correct",
                 verdict="OK",
                 score_text="",
@@ -4253,7 +4252,6 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
                 usage=ExecutionUsage(0.034, 0.029, 0.034, 1536),
                 feedback="",
                 artifacts=PassArtifacts(
-                    input_ref=input_three_ref,
                     metadata_ref=common_ref,
                     compare_metadata_ref=common_ref,
                 ),
@@ -4371,7 +4369,6 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
                 "<strong>Pass 3 Transcript</strong>",
                 "first pass input",
                 "second pass input",
-                "third pass input",
                 "first pass accepted",
                 "second pass accepted",
                 "Showing 3/3 events.",
@@ -4383,6 +4380,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
                 "Input 001.in",
                 "<strong>Answer</strong>",
                 "testcase seed",
+                "third pass input",
             ),
             label="multipass interactive detail",
         )

@@ -1,5 +1,4 @@
 #!/bin/sh
-set -e
 TESTIN="$1"
 PROGOUT="$2"
 shift 2
@@ -7,4 +6,13 @@ if [ "$#" -eq 0 ]; then
   echo "missing submission command" >&2
   exit 43
 fi
-exec "$@" <"$TESTIN" >"$PROGOUT"
+HERE="$(CDPATH= cd -- "$(dirname "$0")" && pwd)"
+if [ -x "$HERE/pass-capture" ]; then
+  "$HERE/pass-capture" prepare "$TESTIN" >/dev/null 2>&1 || true
+fi
+"$@" <"$TESTIN" >"$PROGOUT"
+RC=$?
+if [ -x "$HERE/pass-capture" ]; then
+  "$HERE/pass-capture" expose "$TESTIN" >/dev/null 2>&1 || true
+fi
+exit "$RC"

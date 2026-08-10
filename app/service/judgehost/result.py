@@ -41,6 +41,7 @@ from app.service.judgehost.pass_bundle import (
     InvalidPassBundle,
     PassBundle,
     parse_pass_bundle,
+    split_pass_feedback,
 )
 from app.service.verification.execution_result import (
     CAPTURE_COMPLETE,
@@ -117,6 +118,7 @@ class ResultProcessor:
     CASE_CACHE_KIND = DomjudgeToolkit.CASE_CACHE_KIND
     _TASK_KIND_COMPILE_ONLY = "compile-only"
     _TASK_KIND_MAIN_CORRECT = "main-correct"
+    _TASK_KIND_SOLUTION_RUN = "solution-run"
 
     def __init__(self, state: JudgehostState, core: JudgehostCore, queue: TaskQueue, toolkit: DomjudgeToolkit) -> None:
         self._s = state
@@ -1247,7 +1249,13 @@ class ResultProcessor:
         interactive = domjudge_lower_text(row["mode"]) == "interactive"
         run_cfg_for_capture = _load_json_object(row["run_config_json"])
         pass_limit = max(1, domjudge_parse_int(run_cfg_for_capture.get("pass_limit"), 1))
-        capture_expected = interactive or pass_limit > 1
+        capture_expected = (
+            task_kind in {
+                self._TASK_KIND_MAIN_CORRECT,
+                self._TASK_KIND_SOLUTION_RUN,
+            }
+            and (interactive or pass_limit > 1)
+        )
         bundle_limit_bytes = min(
             8 * 1024 * 1024,
             max(1024, int(run_output_kb(self._s.constants) * 1024 * 3 // 4)),
@@ -1256,24 +1264,27 @@ class ResultProcessor:
         pass_bundle: PassBundle | None = None
         capture_warning = ""
         rejected_bundle = False
-        try:
-            pass_bundle = parse_pass_bundle(
-                team_message_blob,
-                max_bundle_bytes=bundle_limit_bytes,
-                max_member_bytes=bundle_limit_bytes,
-            )
-            if (
-                pass_bundle is not None
-                and callback_pass > 0
-                and callback_pass != pass_bundle.final_pass_number
-            ):
-                raise InvalidPassBundle(
-                    "callback pass does not match final-pass-number"
+        if capture_expected:
+            try:
+                pass_bundle = parse_pass_bundle(
+                    team_message_blob,
+                    max_bundle_bytes=bundle_limit_bytes,
+                    max_member_bytes=bundle_limit_bytes,
                 )
-        except InvalidPassBundle as exc:
-            pass_bundle = None
-            rejected_bundle = True
-            capture_warning = f"historical pass artifact capture was incomplete: {exc}"
+                if (
+                    pass_bundle is not None
+                    and callback_pass > 0
+                    and callback_pass != pass_bundle.final_pass_number
+                ):
+                    raise InvalidPassBundle(
+                        "callback pass does not match final-pass-number"
+                    )
+            except InvalidPassBundle as exc:
+                pass_bundle = None
+                rejected_bundle = True
+                capture_warning = (
+                    "historical pass artifact capture was incomplete: " + str(exc)
+                )
         if pass_bundle is None:
             payload_files["teammessage.txt"] = (
                 b"" if rejected_bundle else team_message_blob
@@ -1281,12 +1292,28 @@ class ResultProcessor:
             if capture_expected and not capture_warning:
                 capture_warning = "historical pass artifact capture was incomplete: bundle missing"
         else:
+            historical_feedback: dict[int, bytes] = {}
+            final_feedback = payload_files["judgemessage.txt"]
+            try:
+                historical_feedback, final_feedback = split_pass_feedback(
+                    pass_bundle,
+                    final_feedback,
+                )
+            except InvalidPassBundle as exc:
+                capture_warning = (
+                    "historical pass artifact capture was incomplete: " + str(exc)
+                )
             for bundled_pass in pass_bundle.passes:
                 for name, content in bundled_pass.files.items():
+                    stored_content = historical_feedback.get(
+                        bundled_pass.number,
+                        content,
+                    ) if name == "judgemessage.txt" else content
                     cache_name = _pass_cache_file_name(bundled_pass.number, name)
-                    payload_files[cache_name] = content
+                    payload_files[cache_name] = stored_content
             final_files = pass_bundle.pass_files(pass_bundle.final_pass_number)
             payload_files["teammessage.txt"] = final_files["teammessage.txt"]
+            payload_files["judgemessage.txt"] = final_feedback
             reduced: dict[str, list[int]] = {}
             for bundled_pass in pass_bundle.passes[:-1]:
                 if bundled_pass.capture_status != CAPTURE_COMPLETE:
@@ -1298,8 +1325,13 @@ class ResultProcessor:
                     f"passes {', '.join(str(number) for number in numbers)} {status}"
                     for status, numbers in reduced.items()
                 ]
-                capture_warning = (
+                reduced_warning = (
                     "historical pass artifacts were reduced: " + "; ".join(groups)
+                )
+                capture_warning = (
+                    f"{capture_warning}; {reduced_warning}"
+                    if capture_warning
+                    else reduced_warning
                 )
 
         runtime_sec = domjudge_parse_float(payload.get("runtime"), 0.0)
@@ -1555,12 +1587,6 @@ class ResultProcessor:
                 else "historical pass artifact capture was incomplete: "
                 + metadata_warning
             )
-        final_judge_message_ref = output_diff_token
-        if pass_bundle is not None:
-            final_judge_message_ref = _bundled_ref(
-                final_pass_number,
-                "judgemessage.txt",
-            )
         case_result = build_case_result(
             test_name=domjudge_text(row["test_name"]),
             runresult=runresult,
@@ -1573,7 +1599,7 @@ class ResultProcessor:
             output_run_ref=output_run_token,
             output_error_ref=output_err_token,
             output_system_ref=output_sys_token,
-            output_diff_ref=final_judge_message_ref,
+            output_diff_ref=output_diff_token,
             metadata_ref=metadata_token,
             compare_metadata_ref=compare_meta_token,
             team_message_ref=team_message_token,

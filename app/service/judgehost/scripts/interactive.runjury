@@ -4,8 +4,9 @@ TESTOUT="$2"
 FEEDBACK="$3"
 shift 3
 HERE="$(CDPATH= cd -- "$(dirname "$0")" && pwd)"
+"$HERE/pass-capture" prepare "$TESTIN" >/dev/null 2>&1 || true
 set +e
 "$HERE/interactor" "$TESTIN" "$TESTOUT" "$FEEDBACK" "$@"
 RC=$?
-"$HERE/pass-capture" "$TESTIN" "$FEEDBACK" "$RC" >/dev/null 2>&1 || true
+"$HERE/pass-capture" finish "$TESTIN" "$FEEDBACK" "$RC" >/dev/null 2>&1 || true
 exit "$RC"

@@ -45,6 +45,20 @@ Interactive and multi-pass reports retain per-pass evidence in the serialized
 execution result. The final verification view is derived from the accepted
 Judgehost case report rather than from a separate evidence protocol.
 
+Multi-pass capture reads DOMjudge's pass directories directly. Pass 1 input is
+kept by the testcase-local `.polygon-pass-1-input` hard link before DOMjudge
+replaces `1/testdata.in` with its cache symlink. For pass-fail work, the run
+wrapper locks history before the contestant starts and exposes traversal plus a
+fixed read-only file set only after it exits. Interactive jury code runs as the
+trusted `domjudge` user and leaves historical pass directories at mode `0700`.
+
+A terminal callback carries one tar assembled directly from those files. It is
+either a complete historical capture or metadata-only history with the byte
+offset needed to separate final cumulative feedback. Capture does not copy a
+historical tree, hash content, or alter contestant/checker exit status. A pass
+that exceeds DOMjudge's native pass limit ends through `internal-error`; there
+is no final artifact callback for that pass.
+
 ## Files, cache, and versions
 
 Source and input files are served by opaque DOMjudge-compatible identifiers.

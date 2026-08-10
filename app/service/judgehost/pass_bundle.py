@@ -8,6 +8,7 @@ from dataclasses import dataclass
 
 MARKER_NAME = ".polygon-pass-bundle"
 FINAL_PASS_NAME = "final-pass-number"
+HISTORICAL_FEEDBACK_BYTES_NAME = "historical-feedback-bytes"
 PASS_FILE_NAMES = frozenset(
     {
         "input",
@@ -22,12 +23,10 @@ PASS_FILE_NAMES = frozenset(
 )
 _PASS_PATH_RE = re.compile(r"^passes/([1-9][0-9]*)/([^/]+)$")
 _CANONICAL_NUMBER_RE = re.compile(rb"^[1-9][0-9]*$")
+_CANONICAL_BYTE_COUNT_RE = re.compile(rb"^(0|[1-9][0-9]*)$")
 _FULL_FILES = frozenset(PASS_FILE_NAMES)
-_METADATA_INPUT_FILES = frozenset({"input", "program.meta", "compare.meta"})
 _METADATA_FILES = frozenset({"program.meta", "compare.meta"})
-_FINAL_SUPPLEMENT_FILES = frozenset(
-    {"input", "judgemessage.txt", "teammessage.txt"}
-)
+_FINAL_SUPPLEMENT_FILES = frozenset({"input", "teammessage.txt"})
 
 
 class InvalidPassBundle(ValueError):
@@ -45,12 +44,46 @@ class BundledPass:
 class PassBundle:
     final_pass_number: int
     passes: tuple[BundledPass, ...]
+    historical_feedback_bytes: int | None
 
     def pass_files(self, number: int) -> dict[str, bytes]:
         for item in self.passes:
             if item.number == number:
                 return item.files
         raise KeyError(number)
+
+
+def split_pass_feedback(
+    bundle: PassBundle,
+    final_snapshot: bytes,
+) -> tuple[dict[int, bytes], bytes]:
+    """Split DOMjudge's cumulative feedback without introducing content identity."""
+
+    previous_snapshot = b""
+    feedback_by_pass: dict[int, bytes] = {}
+    for item in bundle.passes[:-1]:
+        current_snapshot = item.files.get("judgemessage.txt")
+        if current_snapshot is None:
+            continue
+        feedback_by_pass[item.number] = (
+            current_snapshot[len(previous_snapshot) :]
+            if current_snapshot.startswith(previous_snapshot)
+            else current_snapshot
+        )
+        previous_snapshot = current_snapshot
+    if previous_snapshot:
+        final_feedback = (
+            final_snapshot[len(previous_snapshot) :]
+            if final_snapshot.startswith(previous_snapshot)
+            else final_snapshot
+        )
+        return feedback_by_pass, final_feedback
+    if bundle.historical_feedback_bytes is None:
+        return feedback_by_pass, final_snapshot
+    offset = bundle.historical_feedback_bytes
+    if offset > len(final_snapshot):
+        raise InvalidPassBundle("feedback byte count exceeds the callback payload")
+    return feedback_by_pass, final_snapshot[offset:]
 
 
 def _looks_like_bundle(payload: bytes) -> bool:
@@ -91,8 +124,6 @@ def _capture_status(
         return "complete"
     if names == _FULL_FILES:
         return "complete"
-    if names == _METADATA_INPUT_FILES:
-        return "metadata-input-only"
     if names == _METADATA_FILES:
         return "metadata-only"
     raise InvalidPassBundle("historical pass capture has an invalid file set")
@@ -139,7 +170,11 @@ def parse_pass_bundle(
             name = member.name
             if name.startswith("/") or "\\" in name or ".." in name.split("/"):
                 raise InvalidPassBundle("pass bundle contains an unsafe path")
-            if name not in {MARKER_NAME, FINAL_PASS_NAME}:
+            if name not in {
+                MARKER_NAME,
+                FINAL_PASS_NAME,
+                HISTORICAL_FEEDBACK_BYTES_NAME,
+            }:
                 match = _PASS_PATH_RE.fullmatch(name)
                 if match is None or match.group(2) not in PASS_FILE_NAMES:
                     raise InvalidPassBundle("pass bundle contains an unknown entry")
@@ -159,6 +194,13 @@ def parse_pass_bundle(
     if _CANONICAL_NUMBER_RE.fullmatch(final_number_raw) is None:
         raise InvalidPassBundle("final pass number is not canonical")
     final_pass_number = int(final_number_raw)
+    feedback_bytes_raw = payload_by_name.get(HISTORICAL_FEEDBACK_BYTES_NAME)
+    historical_feedback_bytes: int | None = None
+    if feedback_bytes_raw is not None:
+        feedback_bytes_text = feedback_bytes_raw.strip()
+        if _CANONICAL_BYTE_COUNT_RE.fullmatch(feedback_bytes_text) is None:
+            raise InvalidPassBundle("historical feedback byte count is not canonical")
+        historical_feedback_bytes = int(feedback_bytes_text)
     pass_files: dict[int, dict[str, bytes]] = {}
     for path, item in payload_by_name.items():
         match = _PASS_PATH_RE.fullmatch(path)
@@ -184,4 +226,18 @@ def parse_pass_bundle(
         )
         for number in expected_numbers
     )
-    return PassBundle(final_pass_number=final_pass_number, passes=passes)
+    historical_statuses = {
+        item.capture_status for item in passes[:-1]
+    }
+    if len(historical_statuses) > 1:
+        raise InvalidPassBundle("historical passes use mixed capture profiles")
+    metadata_only = historical_statuses == {"metadata-only"}
+    if metadata_only != (historical_feedback_bytes is not None):
+        raise InvalidPassBundle(
+            "metadata-only capture requires the historical feedback byte count"
+        )
+    return PassBundle(
+        final_pass_number=final_pass_number,
+        passes=passes,
+        historical_feedback_bytes=historical_feedback_bytes,
+    )

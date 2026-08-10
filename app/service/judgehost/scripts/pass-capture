@@ -1,259 +1,280 @@
 #!/bin/sh
-# Best-effort multi-pass artifact capture. A failure here must never alter the
-# validator/interactor exit status.
+# Best-effort multi-pass artifact capture. Every action deliberately exits
+# successfully so capture cannot change the contestant or comparator result.
 
 BUNDLE_MAX_BYTES={{BUNDLE_MAX_BYTES}}
+PASS_ONE_INPUT=.polygon-pass-1-input
+MARKER_NAME=.polygon-pass-bundle
+FINAL_PASS_NAME=final-pass-number
+FEEDBACK_BYTES_NAME=historical-feedback-bytes
 
-is_regular_file() {
-  [ -f "$1" ] && [ ! -L "$1" ] && [ -r "$1" ]
-}
+BUNDLE_TEMP=
+CONTROL_DIR=
 
-copy_required() {
-  SOURCE_FILE="$1"
-  TARGET_FILE="$2"
-  is_regular_file "$SOURCE_FILE" || return 1
-  mkdir -p "$(dirname "$TARGET_FILE")" 2>/dev/null || return 1
-  cp "$SOURCE_FILE" "$TARGET_FILE" 2>/dev/null
-}
-
-copy_pass_input() {
-  INPUT_PASS_NUMBER="$1"
-  INPUT_SOURCE_FILE="$2"
-  INPUT_TARGET_FILE="$3"
-
-  if is_regular_file "$INPUT_SOURCE_FILE"; then
-    copy_required "$INPUT_SOURCE_FILE" "$INPUT_TARGET_FILE"
-    return $?
+cleanup_capture() {
+  if [ -n "$BUNDLE_TEMP" ]; then
+    rm -f -- "$BUNDLE_TEMP" 2>/dev/null || true
   fi
-  [ -L "$INPUT_SOURCE_FILE" ] || return 1
-  RESOLVED_INPUT_SOURCE=$(readlink -f -- "$INPUT_SOURCE_FILE" 2>/dev/null) || return 1
-  is_regular_file "$RESOLVED_INPUT_SOURCE" || return 1
-
-  if [ "$INPUT_PASS_NUMBER" -eq 1 ]; then
-    JUDGING_DIR=${TESTCASE_DIR%/*}
-    SUBMISSION_DIR=${JUDGING_DIR%/*}
-    ENDPOINT_DIR=${SUBMISSION_DIR%/*}
-    TESTCASE_CACHE_DIR="$ENDPOINT_DIR/testcase"
-    RESOLVED_TESTCASE_CACHE_DIR=$(CDPATH= cd -- "$TESTCASE_CACHE_DIR" 2>/dev/null && pwd -P) || return 1
-    [ "$RESOLVED_TESTCASE_CACHE_DIR" = "$TESTCASE_CACHE_DIR" ] || return 1
-    case "$RESOLVED_INPUT_SOURCE" in
-      "$RESOLVED_TESTCASE_CACHE_DIR"/*/*.in) ;;
-      *) return 1 ;;
-    esac
-  else
-    PREVIOUS_PASS_NUMBER=$((INPUT_PASS_NUMBER - 1))
-    EXPECTED_INPUT_SOURCE="$TESTCASE_DIR/$PREVIOUS_PASS_NUMBER/feedback/nextpass.in"
-    is_regular_file "$EXPECTED_INPUT_SOURCE" || return 1
-    RESOLVED_EXPECTED_INPUT=$(readlink -f -- "$EXPECTED_INPUT_SOURCE" 2>/dev/null) || return 1
-    [ "$RESOLVED_INPUT_SOURCE" = "$RESOLVED_EXPECTED_INPUT" ] || return 1
-  fi
-
-  copy_required "$RESOLVED_INPUT_SOURCE" "$INPUT_TARGET_FILE"
-}
-
-copy_optional_empty() {
-  SOURCE_FILE="$1"
-  TARGET_FILE="$2"
-  mkdir -p "$(dirname "$TARGET_FILE")" 2>/dev/null || return 1
-  if [ -e "$SOURCE_FILE" ] || [ -L "$SOURCE_FILE" ]; then
-    copy_required "$SOURCE_FILE" "$TARGET_FILE"
-  else
-    : >"$TARGET_FILE"
+  if [ -n "$CONTROL_DIR" ]; then
+    rm -rf -- "$CONTROL_DIR" 2>/dev/null || true
   fi
 }
+trap cleanup_capture EXIT HUP INT TERM
 
-copy_pass_judge_message() {
-  MESSAGE_PASS_NUMBER="$1"
-  MESSAGE_SOURCE_FILE="$2"
-  MESSAGE_TARGET_FILE="$3"
-  is_regular_file "$MESSAGE_SOURCE_FILE" || return 1
-  mkdir -p "$(dirname "$MESSAGE_TARGET_FILE")" 2>/dev/null || return 1
-
-  if [ "$MESSAGE_PASS_NUMBER" -le 1 ]; then
-    copy_required "$MESSAGE_SOURCE_FILE" "$MESSAGE_TARGET_FILE"
-    return $?
-  fi
-
-  PREVIOUS_MESSAGE_FILE="$TESTCASE_DIR/$((MESSAGE_PASS_NUMBER - 1))/feedback/judgemessage.txt"
-  if ! is_regular_file "$PREVIOUS_MESSAGE_FILE"; then
-    copy_required "$MESSAGE_SOURCE_FILE" "$MESSAGE_TARGET_FILE"
-    return $?
-  fi
-
-  PREVIOUS_MESSAGE_BYTES=$(wc -c <"$PREVIOUS_MESSAGE_FILE" 2>/dev/null | tr -d '[:space:]') || return 1
-  CURRENT_MESSAGE_BYTES=$(wc -c <"$MESSAGE_SOURCE_FILE" 2>/dev/null | tr -d '[:space:]') || return 1
-  case "$PREVIOUS_MESSAGE_BYTES:$CURRENT_MESSAGE_BYTES" in
-    *[!0-9:]*) return 1 ;;
+canonical_pass_number() {
+  case "$1" in
+    ''|0*|*[!0-9]*) return 1 ;;
+    *) return 0 ;;
   esac
-  if [ "$PREVIOUS_MESSAGE_BYTES" -gt "$CURRENT_MESSAGE_BYTES" ]; then
-    copy_required "$MESSAGE_SOURCE_FILE" "$MESSAGE_TARGET_FILE"
-    return $?
-  fi
-  if [ "$PREVIOUS_MESSAGE_BYTES" -gt 0 ] \
-    && ! cmp -s -n "$PREVIOUS_MESSAGE_BYTES" "$PREVIOUS_MESSAGE_FILE" "$MESSAGE_SOURCE_FILE"; then
-    copy_required "$MESSAGE_SOURCE_FILE" "$MESSAGE_TARGET_FILE"
-    return $?
-  fi
-
-  tail -c "+$((PREVIOUS_MESSAGE_BYTES + 1))" "$MESSAGE_SOURCE_FILE" >"$MESSAGE_TARGET_FILE" 2>/dev/null
 }
 
-validate_pass_layout() {
-  FINAL_NUMBER=${CURRENT_DIR##*/}
-  case "$FINAL_NUMBER" in
-    [1-9]|[1-9][0-9]*) ;;
-    *) return 1 ;;
-  esac
+load_testcase_layout() {
+  INPUT_ARG="$1"
+  INPUT_PARENT=$(dirname -- "$INPUT_ARG") || return 1
+  CURRENT_DIR=$(CDPATH= cd -- "$INPUT_PARENT" 2>/dev/null && pwd -P) || return 1
+  CURRENT_PASS=${CURRENT_DIR##*/}
+  canonical_pass_number "$CURRENT_PASS" || return 1
   TESTCASE_DIR=${CURRENT_DIR%/*}
   [ "$TESTCASE_DIR" != "$CURRENT_DIR" ] || return 1
-
-  PASS_NUMBER=1
-  while [ "$PASS_NUMBER" -lt "$FINAL_NUMBER" ]; do
-    PASS_DIR="$TESTCASE_DIR/$PASS_NUMBER"
-    [ -d "$PASS_DIR" ] && [ ! -L "$PASS_DIR" ] || return 1
-    RESOLVED_PASS_DIR=$(CDPATH= cd -- "$PASS_DIR" 2>/dev/null && pwd -P) || return 1
-    [ "$RESOLVED_PASS_DIR" = "$PASS_DIR" ] || return 1
-    PASS_NUMBER=$((PASS_NUMBER + 1))
-  done
+  CURRENT_INPUT="$CURRENT_DIR/testdata.in"
+  [ -f "$CURRENT_INPUT" ] && [ ! -L "$CURRENT_INPUT" ] || return 1
 }
 
-validate_historical_metadata() {
-  PASS_NUMBER=1
-  while [ "$PASS_NUMBER" -lt "$FINAL_NUMBER" ]; do
-    PASS_DIR="$TESTCASE_DIR/$PASS_NUMBER"
-    is_regular_file "$PASS_DIR/program.meta" || return 1
-    is_regular_file "$PASS_DIR/compare.meta" || return 1
-    PASS_NUMBER=$((PASS_NUMBER + 1))
-  done
-}
-
-populate_historical_passes() {
-  BUILD_DIR="$1"
-  PROFILE="$2"
-  PASS_NUMBER=1
-  while [ "$PASS_NUMBER" -lt "$FINAL_NUMBER" ]; do
-    PASS_DIR="$TESTCASE_DIR/$PASS_NUMBER"
-    TARGET_DIR="$BUILD_DIR/passes/$PASS_NUMBER"
-    mkdir -p "$TARGET_DIR" 2>/dev/null || return 1
-    if [ "$PROFILE" = complete ]; then
-      copy_pass_input "$PASS_NUMBER" "$PASS_DIR/testdata.in" "$TARGET_DIR/input" || return 1
-      copy_required "$PASS_DIR/program.out" "$TARGET_DIR/program.out" || return 1
-      copy_required "$PASS_DIR/program.err" "$TARGET_DIR/program.err" || return 1
-      copy_required "$PASS_DIR/system.out" "$TARGET_DIR/system.out" || return 1
-      copy_required "$PASS_DIR/program.meta" "$TARGET_DIR/program.meta" || return 1
-      copy_required "$PASS_DIR/compare.meta" "$TARGET_DIR/compare.meta" || return 1
-      copy_pass_judge_message "$PASS_NUMBER" "$PASS_DIR/feedback/judgemessage.txt" "$TARGET_DIR/judgemessage.txt" || return 1
-      copy_optional_empty "$PASS_DIR/feedback/teammessage.txt" "$TARGET_DIR/teammessage.txt" || return 1
-    elif [ "$PROFILE" = metadata-input-only ]; then
-      copy_pass_input "$PASS_NUMBER" "$PASS_DIR/testdata.in" "$TARGET_DIR/input" || return 1
-      copy_required "$PASS_DIR/program.meta" "$TARGET_DIR/program.meta" || return 1
-      copy_required "$PASS_DIR/compare.meta" "$TARGET_DIR/compare.meta" || return 1
-    else
-      copy_required "$PASS_DIR/program.meta" "$TARGET_DIR/program.meta" || return 1
-      copy_required "$PASS_DIR/compare.meta" "$TARGET_DIR/compare.meta" || return 1
-    fi
-    PASS_NUMBER=$((PASS_NUMBER + 1))
-  done
-}
-
-populate_final_supplement() {
-  BUILD_DIR="$1"
-  TARGET_DIR="$BUILD_DIR/passes/$FINAL_NUMBER"
-  mkdir -p "$TARGET_DIR" 2>/dev/null || return 1
-  copy_pass_input "$FINAL_NUMBER" "$CURRENT_DIR/testdata.in" "$TARGET_DIR/input" || return 1
-  copy_pass_judge_message "$FINAL_NUMBER" "$FEEDBACK_DIR/judgemessage.txt" "$TARGET_DIR/judgemessage.txt" || return 1
-  copy_optional_empty "$FEEDBACK_DIR/teammessage.txt" "$TARGET_DIR/teammessage.txt"
-}
-
-create_bundle() {
-  BUILD_DIR="$1"
-  BUNDLE_FILE="$2"
-  PROFILE="$3"
-  set -- .polygon-pass-bundle final-pass-number
-  PASS_NUMBER=1
-  while [ "$PASS_NUMBER" -le "$FINAL_NUMBER" ]; do
-    if [ "$PASS_NUMBER" -eq "$FINAL_NUMBER" ]; then
-      set -- "$@" "passes/$PASS_NUMBER/input" \
-        "passes/$PASS_NUMBER/judgemessage.txt" "passes/$PASS_NUMBER/teammessage.txt"
-    elif [ "$PROFILE" = complete ]; then
-      set -- "$@" \
-        "passes/$PASS_NUMBER/input" "passes/$PASS_NUMBER/program.out" \
-        "passes/$PASS_NUMBER/program.err" "passes/$PASS_NUMBER/system.out" \
-        "passes/$PASS_NUMBER/program.meta" "passes/$PASS_NUMBER/compare.meta" \
-        "passes/$PASS_NUMBER/judgemessage.txt" "passes/$PASS_NUMBER/teammessage.txt"
-    elif [ "$PROFILE" = metadata-input-only ]; then
-      set -- "$@" "passes/$PASS_NUMBER/input" \
-        "passes/$PASS_NUMBER/program.meta" "passes/$PASS_NUMBER/compare.meta"
-    else
-      set -- "$@" "passes/$PASS_NUMBER/program.meta" "passes/$PASS_NUMBER/compare.meta"
-    fi
-    PASS_NUMBER=$((PASS_NUMBER + 1))
-  done
-  tar -cf "$BUNDLE_FILE" -C "$BUILD_DIR" "$@" 2>/dev/null
-}
-
-write_bundle() {
-  validate_pass_layout || return 1
-  validate_historical_metadata || return 1
-
-  PROFILE=complete
-  while :; do
-    BUILD_DIR="$FEEDBACK_DIR/.polygon-pass-build.$$.$PROFILE"
-    BUNDLE_FILE="$FEEDBACK_DIR/.polygon-pass-bundle.$$.$PROFILE"
-    rm -rf "$BUILD_DIR" 2>/dev/null || true
-    rm -f "$BUNDLE_FILE" 2>/dev/null || true
-    mkdir -p "$BUILD_DIR" 2>/dev/null || return 1
-    if ! : >"$BUILD_DIR/.polygon-pass-bundle" \
-      || ! printf '%s\n' "$FINAL_NUMBER" >"$BUILD_DIR/final-pass-number"; then
-      rm -rf "$BUILD_DIR" 2>/dev/null || true
-      return 1
-    fi
-
-    if populate_historical_passes "$BUILD_DIR" "$PROFILE" \
-      && populate_final_supplement "$BUILD_DIR" \
-      && create_bundle "$BUILD_DIR" "$BUNDLE_FILE" "$PROFILE"; then
-      BUNDLE_SIZE=$(wc -c <"$BUNDLE_FILE" 2>/dev/null | tr -d '[:space:]') || BUNDLE_SIZE=0
-      case "$BUNDLE_SIZE" in
-        *[!0-9]*) BUNDLE_SIZE=0 ;;
-      esac
-      if [ "$BUNDLE_SIZE" -gt 0 ] && [ "$BUNDLE_SIZE" -le "$BUNDLE_MAX_BYTES" ]; then
-        if mv -f "$BUNDLE_FILE" "$FEEDBACK_DIR/teammessage.txt" 2>/dev/null; then
-          rm -rf "$BUILD_DIR" 2>/dev/null || true
-          return 0
-        fi
-        rm -f "$BUNDLE_FILE" 2>/dev/null || true
-        rm -rf "$BUILD_DIR" 2>/dev/null || true
-        return 1
-      fi
-    fi
-    rm -f "$BUNDLE_FILE" 2>/dev/null || true
-    rm -rf "$BUILD_DIR" 2>/dev/null || true
-
-    if [ "$PROFILE" = complete ]; then
-      PROFILE=metadata-input-only
-    elif [ "$PROFILE" = metadata-input-only ]; then
-      PROFILE=metadata-only
-    else
-      return 1
-    fi
-  done
-}
-
-polygon_capture_pass() {
+load_feedback_layout() {
+  INPUT_ARG="$1"
   FEEDBACK_ARG="$2"
-  EXIT_STATUS="$3"
-  FEEDBACK_DIR=$(CDPATH= cd -- "$FEEDBACK_ARG" 2>/dev/null && pwd -P) || return 0
-  CURRENT_DIR=$(CDPATH= cd -- "$FEEDBACK_DIR/.." 2>/dev/null && pwd -P) || return 0
-  EXPECTED_FEEDBACK_DIR="$CURRENT_DIR/feedback"
-  [ -d "$EXPECTED_FEEDBACK_DIR" ] && [ ! -L "$EXPECTED_FEEDBACK_DIR" ] || return 0
-  [ "$FEEDBACK_DIR" = "$EXPECTED_FEEDBACK_DIR" ] || return 0
+  FEEDBACK_DIR=$(CDPATH= cd -- "$FEEDBACK_ARG" 2>/dev/null && pwd -P) || return 1
+  CURRENT_DIR=$(CDPATH= cd -- "$FEEDBACK_DIR/.." 2>/dev/null && pwd -P) || return 1
+  [ "$FEEDBACK_DIR" = "$CURRENT_DIR/feedback" ] || return 1
+  CURRENT_PASS=${CURRENT_DIR##*/}
+  canonical_pass_number "$CURRENT_PASS" || return 1
+  TESTCASE_DIR=${CURRENT_DIR%/*}
+  [ "$TESTCASE_DIR" != "$CURRENT_DIR" ] || return 1
+  INPUT_PARENT=$(dirname -- "$INPUT_ARG") || return 1
+  RESOLVED_INPUT_PARENT=$(CDPATH= cd -- "$INPUT_PARENT" 2>/dev/null && pwd -P) || return 1
+  [ "$RESOLVED_INPUT_PARENT" = "$CURRENT_DIR" ] || return 1
+  CURRENT_INPUT="$CURRENT_DIR/testdata.in"
+  [ -f "$CURRENT_INPUT" ] && [ ! -L "$CURRENT_INPUT" ] || return 1
+}
 
-  if [ "$EXIT_STATUS" -eq 42 ] && [ -f "$FEEDBACK_DIR/nextpass.in" ]; then
+prepare_capture() {
+  load_testcase_layout "$1" || return 1
+  PASS_ONE_FILE="$TESTCASE_DIR/$PASS_ONE_INPUT"
+  if [ "$CURRENT_PASS" -eq 1 ]; then
+    [ ! -e "$PASS_ONE_FILE" ] && [ ! -L "$PASS_ONE_FILE" ] || return 1
+    ln -- "$CURRENT_INPUT" "$PASS_ONE_FILE" 2>/dev/null || return 1
+  fi
+  [ -f "$PASS_ONE_FILE" ] && [ ! -L "$PASS_ONE_FILE" ] || return 1
+  chmod 0600 "$PASS_ONE_FILE" 2>/dev/null || return 1
+
+  PASS_NUMBER=1
+  while [ "$PASS_NUMBER" -lt "$CURRENT_PASS" ]; do
+    PASS_DIR="$TESTCASE_DIR/$PASS_NUMBER"
+    HISTORY_FEEDBACK="$PASS_DIR/feedback"
+    [ -d "$PASS_DIR" ] && [ ! -L "$PASS_DIR" ] || return 1
+    [ -d "$HISTORY_FEEDBACK" ] && [ ! -L "$HISTORY_FEEDBACK" ] || return 1
+    chmod 0700 "$HISTORY_FEEDBACK" "$PASS_DIR" 2>/dev/null || return 1
+    PASS_NUMBER=$((PASS_NUMBER + 1))
+  done
+}
+
+make_read_only() {
+  [ -f "$1" ] && [ ! -L "$1" ] || return 1
+  chmod 0444 "$1" 2>/dev/null
+}
+
+expose_capture() {
+  load_testcase_layout "$1" || return 1
+  PASS_ONE_FILE="$TESTCASE_DIR/$PASS_ONE_INPUT"
+  make_read_only "$PASS_ONE_FILE" || return 1
+
+  PASS_NUMBER=1
+  while [ "$PASS_NUMBER" -lt "$CURRENT_PASS" ]; do
+    PASS_DIR="$TESTCASE_DIR/$PASS_NUMBER"
+    HISTORY_FEEDBACK="$PASS_DIR/feedback"
+    [ -d "$PASS_DIR" ] && [ ! -L "$PASS_DIR" ] || return 1
+    [ -d "$HISTORY_FEEDBACK" ] && [ ! -L "$HISTORY_FEEDBACK" ] || return 1
+    chmod 0711 "$PASS_DIR" "$HISTORY_FEEDBACK" 2>/dev/null || return 1
+    make_read_only "$PASS_DIR/program.out" || return 1
+    make_read_only "$PASS_DIR/program.err" || return 1
+    make_read_only "$PASS_DIR/system.out" || return 1
+    make_read_only "$PASS_DIR/program.meta" || return 1
+    make_read_only "$PASS_DIR/compare.meta" || return 1
+    make_read_only "$HISTORY_FEEDBACK/judgemessage.txt" || return 1
+    make_read_only "$HISTORY_FEEDBACK/teammessage.txt" || return 1
+    make_read_only "$HISTORY_FEEDBACK/nextpass.in" || return 1
+    PASS_NUMBER=$((PASS_NUMBER + 1))
+  done
+}
+
+regular_readable_size() {
+  SOURCE_FILE="$1"
+  [ -f "$SOURCE_FILE" ] && [ ! -L "$SOURCE_FILE" ] && [ -r "$SOURCE_FILE" ] || return 1
+  FILE_SIZE=$(stat -c %s -- "$SOURCE_FILE" 2>/dev/null) || return 1
+  case "$FILE_SIZE" in
+    ''|*[!0-9]*) return 1 ;;
+  esac
+  printf '%s\n' "$FILE_SIZE"
+}
+
+estimate_member() {
+  MEMBER_SIZE="$1"
+  ESTIMATED_BYTES=$((
+    ESTIMATED_BYTES + 512 + ((MEMBER_SIZE + 511) / 512) * 512
+  ))
+}
+
+add_source_member() {
+  SOURCE_REL="$1"
+  TARGET_PATH="$2"
+  SOURCE_SIZE=$(regular_readable_size "$TESTCASE_DIR/$SOURCE_REL") || return 1
+  printf '%s\n' "$SOURCE_REL" >>"$SOURCE_LIST" || return 1
+  printf '%s|%s\n' "$SOURCE_REL" "$TARGET_PATH" >>"$MAPPING_LIST" || return 1
+  estimate_member "$SOURCE_SIZE"
+}
+
+add_pass_input() {
+  INPUT_PASS="$1"
+  if [ "$INPUT_PASS" -eq 1 ]; then
+    add_source_member "$PASS_ONE_INPUT" "passes/1/input"
+    return $?
+  fi
+  PREVIOUS_PASS=$((INPUT_PASS - 1))
+  add_source_member \
+    "$PREVIOUS_PASS/feedback/nextpass.in" \
+    "passes/$INPUT_PASS/input"
+}
+
+add_complete_history() {
+  PASS_NUMBER=1
+  while [ "$PASS_NUMBER" -lt "$CURRENT_PASS" ]; do
+    add_pass_input "$PASS_NUMBER" || return 1
+    add_source_member "$PASS_NUMBER/program.out" "passes/$PASS_NUMBER/program.out" || return 1
+    add_source_member "$PASS_NUMBER/program.err" "passes/$PASS_NUMBER/program.err" || return 1
+    add_source_member "$PASS_NUMBER/system.out" "passes/$PASS_NUMBER/system.out" || return 1
+    add_source_member "$PASS_NUMBER/program.meta" "passes/$PASS_NUMBER/program.meta" || return 1
+    add_source_member "$PASS_NUMBER/compare.meta" "passes/$PASS_NUMBER/compare.meta" || return 1
+    add_source_member \
+      "$PASS_NUMBER/feedback/judgemessage.txt" \
+      "passes/$PASS_NUMBER/judgemessage.txt" || return 1
+    add_source_member \
+      "$PASS_NUMBER/feedback/teammessage.txt" \
+      "passes/$PASS_NUMBER/teammessage.txt" || return 1
+    PASS_NUMBER=$((PASS_NUMBER + 1))
+  done
+}
+
+add_metadata_history() {
+  PASS_NUMBER=1
+  while [ "$PASS_NUMBER" -lt "$CURRENT_PASS" ]; do
+    add_source_member "$PASS_NUMBER/program.meta" "passes/$PASS_NUMBER/program.meta" || return 1
+    add_source_member "$PASS_NUMBER/compare.meta" "passes/$PASS_NUMBER/compare.meta" || return 1
+    PASS_NUMBER=$((PASS_NUMBER + 1))
+  done
+}
+
+add_final_supplement() {
+  if [ "$CURRENT_PASS" -eq 1 ]; then
+    add_pass_input 1 || return 1
+  else
+    add_source_member "$CURRENT_PASS/testdata.in" "passes/$CURRENT_PASS/input" || return 1
+  fi
+  add_source_member \
+    "$CURRENT_PASS/feedback/teammessage.txt" \
+    "passes/$CURRENT_PASS/teammessage.txt"
+}
+
+initialize_control_files() {
+  CONTROL_DIR="$FEEDBACK_DIR/.polygon-pass-control.$$"
+  mkdir -- "$CONTROL_DIR" 2>/dev/null || return 1
+  SOURCE_LIST="$CONTROL_DIR/source-list"
+  MAPPING_LIST="$CONTROL_DIR/path-mappings"
+  : >"$SOURCE_LIST" || return 1
+  : >"$MAPPING_LIST" || return 1
+  : >"$CONTROL_DIR/$MARKER_NAME" || return 1
+  printf '%s\n' "$CURRENT_PASS" >"$CONTROL_DIR/$FINAL_PASS_NAME" || return 1
+
+  ESTIMATED_BYTES=1024
+  estimate_member 0
+  FINAL_NUMBER_SIZE=$(regular_readable_size "$CONTROL_DIR/$FINAL_PASS_NAME") || return 1
+  estimate_member "$FINAL_NUMBER_SIZE"
+}
+
+select_bundle_profile() {
+  initialize_control_files || return 1
+  add_complete_history || return 1
+  add_final_supplement || return 1
+  if [ "$ESTIMATED_BYTES" -le "$BUNDLE_MAX_BYTES" ]; then
+    PROFILE=complete
     return 0
   fi
-  write_bundle || true
-  return 0
+
+  : >"$SOURCE_LIST" || return 1
+  : >"$MAPPING_LIST" || return 1
+  ESTIMATED_BYTES=1024
+  estimate_member 0
+  estimate_member "$FINAL_NUMBER_SIZE"
+  add_metadata_history || return 1
+  add_final_supplement || return 1
+  PROFILE=metadata-only
+
+  if [ "$CURRENT_PASS" -gt 1 ]; then
+    LAST_HISTORY=$((CURRENT_PASS - 1))
+    HISTORY_MESSAGE="$TESTCASE_DIR/$LAST_HISTORY/feedback/judgemessage.txt"
+    HISTORY_BYTES=$(regular_readable_size "$HISTORY_MESSAGE") || return 1
+    printf '%s\n' "$HISTORY_BYTES" >"$CONTROL_DIR/$FEEDBACK_BYTES_NAME" || return 1
+    FEEDBACK_BYTES_SIZE=$(regular_readable_size "$CONTROL_DIR/$FEEDBACK_BYTES_NAME") || return 1
+    estimate_member "$FEEDBACK_BYTES_SIZE"
+  fi
+  [ "$ESTIMATED_BYTES" -le "$BUNDLE_MAX_BYTES" ]
 }
 
-polygon_capture_pass "$@"
+create_selected_bundle() {
+  BUNDLE_TEMP="$FEEDBACK_DIR/.polygon-pass-bundle.$$"
+  rm -f -- "$BUNDLE_TEMP" 2>/dev/null || true
+
+  set -- tar --format=ustar -b 1 -cf "$BUNDLE_TEMP"
+  while IFS='|' read -r SOURCE_REL TARGET_PATH; do
+    [ -n "$SOURCE_REL" ] && [ -n "$TARGET_PATH" ] || return 1
+    set -- "$@" "--transform=s|^${SOURCE_REL}\$|${TARGET_PATH}|"
+  done <"$MAPPING_LIST"
+  set -- "$@" -C "$CONTROL_DIR" "$MARKER_NAME" "$FINAL_PASS_NAME"
+  if [ "$PROFILE" = metadata-only ] && [ "$CURRENT_PASS" -gt 1 ]; then
+    set -- "$@" "$FEEDBACK_BYTES_NAME"
+  fi
+  set -- "$@" -C "$TESTCASE_DIR" -T "$SOURCE_LIST"
+  "$@" 2>/dev/null || return 1
+
+  BUNDLE_SIZE=$(regular_readable_size "$BUNDLE_TEMP") || return 1
+  [ "$BUNDLE_SIZE" -le "$BUNDLE_MAX_BYTES" ] || return 1
+  mv -f -- "$BUNDLE_TEMP" "$FEEDBACK_DIR/teammessage.txt" 2>/dev/null || return 1
+  BUNDLE_TEMP=
+}
+
+finish_capture() {
+  load_feedback_layout "$1" "$2" || return 1
+  EXIT_STATUS="$3"
+  case "$EXIT_STATUS" in
+    42)
+      if [ -f "$FEEDBACK_DIR/nextpass.in" ]; then
+        return 0
+      fi
+      ;;
+  esac
+  select_bundle_profile || return 1
+  create_selected_bundle
+}
+
+ACTION=${1:-}
+case "$ACTION" in
+  prepare)
+    [ "$#" -eq 2 ] && prepare_capture "$2" || true
+    ;;
+  expose)
+    [ "$#" -eq 2 ] && expose_capture "$2" || true
+    ;;
+  finish)
+    [ "$#" -eq 4 ] && finish_capture "$2" "$3" "$4" || true
+    ;;
+esac
 exit 0

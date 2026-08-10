@@ -54,7 +54,6 @@ def _pass_bundle_bytes(
     final_pass_number: int,
     historical_files: dict[int, dict[str, bytes]],
     final_input: bytes,
-    final_judge_message: bytes,
     final_team_message: bytes,
 ) -> bytes:
     entries: list[tuple[str, bytes]] = [
@@ -69,10 +68,6 @@ def _pass_bundle_bytes(
     entries.extend(
         [
             (f"passes/{final_pass_number}/input", final_input),
-            (
-                f"passes/{final_pass_number}/judgemessage.txt",
-                final_judge_message,
-            ),
             (
                 f"passes/{final_pass_number}/teammessage.txt",
                 final_team_message,
@@ -1495,7 +1490,6 @@ class TestJudgehostService(E2ETestBase):
                 }
             },
             final_input=b"second input\n",
-            final_judge_message=b"second ok\n",
             final_team_message=b"final team\n",
         )
         service.domjudge_add_judging_run(
@@ -1505,7 +1499,9 @@ class TestJudgehostService(E2ETestBase):
                 "runresult": "correct",
                 "runtime": "0.004",
                 "output_run": base64.b64encode(noisy_output).decode("ascii"),
-                "output_diff": base64.b64encode(b"ok\n").decode("ascii"),
+                "output_diff": base64.b64encode(
+                    b"first ok\nsecond ok\n"
+                ).decode("ascii"),
                 "output_error": "",
                 "output_system": "",
                 "metadata": base64.b64encode(meta_text.encode("utf-8")).decode("ascii"),
@@ -2147,6 +2143,8 @@ class TestJudgehostService(E2ETestBase):
         run_cfg = precomputed.get("run_config") if isinstance(precomputed, dict) else {}
         self.assertIsInstance(run_cfg, dict)
         self.assertEqual(int(run_cfg.get("pass_limit") or 0), 7)
+        run_files = precomputed.get("run_files") if isinstance(precomputed, dict) else []
+        self.assertIn("pass-capture", {item[0] for item in run_files})
 
     def test_domjudge_pass_fail_multi_pass_uses_configured_pass_limit(self) -> None:
         service = config.judgehost_task_service
@@ -2177,6 +2175,12 @@ class TestJudgehostService(E2ETestBase):
         run_cfg = precomputed.get("run_config") if isinstance(precomputed, dict) else {}
         self.assertIsInstance(run_cfg, dict)
         self.assertEqual(int(run_cfg.get("pass_limit") or 0), 7)
+        run_files = precomputed.get("run_files") if isinstance(precomputed, dict) else []
+        compare_files = (
+            precomputed.get("compare_files") if isinstance(precomputed, dict) else []
+        )
+        self.assertIn("pass-capture", {item[0] for item in run_files})
+        self.assertIn("pass-capture", {item[0] for item in compare_files})
 
     def test_domjudge_interactor_source_overrides_host_binary_payload(self) -> None:
         service = config.judgehost_task_service

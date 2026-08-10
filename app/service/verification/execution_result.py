@@ -8,12 +8,10 @@ from app.service.platform.hashing import canonical_json
 
 
 CAPTURE_COMPLETE = "complete"
-CAPTURE_METADATA_INPUT_ONLY = "metadata-input-only"
 CAPTURE_METADATA_ONLY = "metadata-only"
 CAPTURE_STATUSES = frozenset(
     {
         CAPTURE_COMPLETE,
-        CAPTURE_METADATA_INPUT_ONLY,
         CAPTURE_METADATA_ONLY,
     }
 )
@@ -258,20 +256,6 @@ def normalize_execution_result(
                     and artifacts.team_message_ref
                 ):
                     raise ValueError("complete pass capture is missing an artifact")
-            elif pass_result.capture_status == CAPTURE_METADATA_INPUT_ONLY:
-                if not common_metadata or not artifacts.input_ref:
-                    raise ValueError("metadata-input-only pass capture is incomplete")
-                if any(
-                    (
-                        artifacts.output_ref,
-                        artifacts.transcript_ref,
-                        artifacts.stderr_ref,
-                        artifacts.system_ref,
-                        artifacts.judge_message_ref,
-                        artifacts.team_message_ref,
-                    )
-                ):
-                    raise ValueError("metadata-input-only pass contains extra artifacts")
             elif not common_metadata or any(
                 (
                     artifacts.input_ref,

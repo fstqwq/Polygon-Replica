@@ -5,10 +5,14 @@ import tarfile
 import unittest
 
 from app.service.judgehost.case_result import decode_case_test_row
-from app.service.judgehost.pass_bundle import InvalidPassBundle, parse_pass_bundle
+from app.service.judgehost.pass_bundle import (
+    InvalidPassBundle,
+    parse_pass_bundle,
+    split_pass_feedback,
+)
 from app.service.verification.execution_result import (
     CAPTURE_COMPLETE,
-    CAPTURE_METADATA_INPUT_ONLY,
+    CAPTURE_METADATA_ONLY,
     ExecutionPassResult,
     ExecutionUsage,
     PassArtifacts,
@@ -199,7 +203,6 @@ class TestPassBundle(unittest.TestCase):
                 ("final-pass-number", b"2\n"),
                 *_complete_pass_entries(1),
                 ("passes/2/input", b"next input"),
-                ("passes/2/judgemessage.txt", b"final judge message"),
                 ("passes/2/teammessage.txt", b"final team message"),
             ]
         )
@@ -214,16 +217,15 @@ class TestPassBundle(unittest.TestCase):
         self.assertEqual(bundle.passes[0].capture_status, CAPTURE_COMPLETE)
         self.assertEqual(bundle.pass_files(2)["teammessage.txt"], b"final team message")
 
-    def test_reduced_history_is_inferred_from_exact_file_set(self) -> None:
+    def test_metadata_only_history_requires_feedback_byte_count(self) -> None:
         raw = _tar(
             [
                 (".polygon-pass-bundle", b""),
                 ("final-pass-number", b"2"),
-                ("passes/1/input", b"input"),
+                ("historical-feedback-bytes", b"17\n"),
                 ("passes/1/program.meta", b"cpu-time: 1"),
                 ("passes/1/compare.meta", b"exitcode: 42"),
                 ("passes/2/input", b"next"),
-                ("passes/2/judgemessage.txt", b""),
                 ("passes/2/teammessage.txt", b""),
             ]
         )
@@ -235,8 +237,62 @@ class TestPassBundle(unittest.TestCase):
         assert bundle is not None
         self.assertEqual(
             bundle.passes[0].capture_status,
-            CAPTURE_METADATA_INPUT_ONLY,
+            CAPTURE_METADATA_ONLY,
         )
+        self.assertEqual(bundle.historical_feedback_bytes, 17)
+
+    def test_feedback_snapshots_and_metadata_offset_split_final_feedback(self) -> None:
+        first_entries = [
+            (name, b"first" if name.endswith("/judgemessage.txt") else payload)
+            for name, payload in _complete_pass_entries(1)
+        ]
+        second_entries = [
+            (
+                name,
+                b"firstsecond" if name.endswith("/judgemessage.txt") else payload,
+            )
+            for name, payload in _complete_pass_entries(2)
+        ]
+        complete_raw = _tar(
+            [
+                (".polygon-pass-bundle", b""),
+                ("final-pass-number", b"3"),
+                *first_entries,
+                *second_entries,
+                ("passes/3/input", b"third"),
+                ("passes/3/teammessage.txt", b""),
+            ]
+        )
+        complete = parse_pass_bundle(
+            complete_raw,
+            max_bundle_bytes=len(complete_raw),
+            max_member_bytes=1024,
+        )
+        assert complete is not None
+        history, final = split_pass_feedback(complete, b"firstsecondthird")
+        self.assertEqual(history, {1: b"first", 2: b"second"})
+        self.assertEqual(final, b"third")
+
+        metadata_raw = _tar(
+            [
+                (".polygon-pass-bundle", b""),
+                ("final-pass-number", b"2"),
+                ("historical-feedback-bytes", b"5"),
+                ("passes/1/program.meta", b"cpu-time: 1"),
+                ("passes/1/compare.meta", b"exitcode: 42"),
+                ("passes/2/input", b"next"),
+                ("passes/2/teammessage.txt", b""),
+            ]
+        )
+        metadata = parse_pass_bundle(
+            metadata_raw,
+            max_bundle_bytes=len(metadata_raw),
+            max_member_bytes=1024,
+        )
+        assert metadata is not None
+        history, final = split_pass_feedback(metadata, b"firstsecond")
+        self.assertEqual(history, {})
+        self.assertEqual(final, b"second")
 
     def test_plain_team_message_is_not_an_envelope(self) -> None:
         self.assertIsNone(
