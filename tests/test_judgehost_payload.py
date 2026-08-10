@@ -4,19 +4,257 @@ import base64
 import hashlib
 import unittest
 
-from app.runtime_value import build_runtime_values
+from app.config import build_config_values
 from app.service.judgehost.limits import run_memory_limit_kb
+from app.service.judgehost.pass_bundle import BundledPass, PassBundle
+from app.service.judgehost.result_normalizer import (
+    CapturedCaseArtifact,
+    CapturedJudgehostCase,
+    normalize_captured_case,
+    pass_cache_file_name,
+)
 from app.service.judgehost.runtime import (
     domjudge_feedback_text_from_bytes,
     domjudge_feedback_text_from_text,
     domjudge_rewrite_untrusted_runresult,
 )
-from app.service.judgehost.shared import domjudge_config_from_constants
+from app.service.judgehost.shared import domjudge_config_from_snapshot
 from app.service.judgehost.toolkit import DomjudgeToolkit
 from app.service.platform.hashing import domjudge_executable_hash
 
 
 class TestJudgehostPayload(unittest.TestCase):
+    @staticmethod
+    def _captured_artifacts(
+        overrides: dict[str, bytes] | None = None,
+    ) -> dict[str, CapturedCaseArtifact]:
+        payloads = {
+            "program.out": b"answer\n",
+            "program.err": b"",
+            "system.out": b"",
+            "program.meta": (
+                b"cpu-time: 0.004\nwall-time: 0.005\n"
+                b"memory-bytes: 4096\n"
+            ),
+            "compare.meta": b"exitcode: 42\n",
+            "judgemessage.txt": b"",
+            "teammessage.txt": b"",
+        }
+        payloads.update(overrides or {})
+        return {
+            name: CapturedCaseArtifact(
+                content=content,
+                blob_ref=f"blob-{name}",
+            )
+            for name, content in payloads.items()
+        }
+
+    def test_case_normalizer_uses_compare_exit_for_checker_failure(self) -> None:
+        normalized = normalize_captured_case(
+            CapturedJudgehostCase(
+                test_name="001.in",
+                input_ref="blob-input",
+                interactive=False,
+                raw_runresult="compare-error",
+                runtime_fallback_sec=0.001,
+                score_text="0",
+                run_config={"time_limit": 1.0},
+                artifacts=self._captured_artifacts(
+                    {
+                        "compare.meta": b"exitcode: 3\n",
+                        "judgemessage.txt": b"checker crashed\n",
+                    }
+                ),
+                pass_bundle=None,
+            )
+        )
+        self.assertEqual(normalized.runresult, "checker-fail")
+        self.assertEqual(normalized.verdict, "FL")
+        self.assertEqual(normalized.memory_kb, 4)
+        self.assertEqual(normalized.result.outcome.feedback, "checker crashed")
+
+    def test_case_normalizer_classifies_runtime_terminal_results(self) -> None:
+        cases = (
+            ("run-error", "run-error", "RE"),
+            ("internal-error", "internal-error", "FL"),
+            ("wrong-answer", "wrong-answer", "WA"),
+            ("correct", "correct", "OK"),
+        )
+        for raw_runresult, expected_runresult, expected_verdict in cases:
+            with self.subTest(runresult=raw_runresult):
+                normalized = normalize_captured_case(
+                    CapturedJudgehostCase(
+                        test_name="001.in",
+                        input_ref="blob-input",
+                        interactive=False,
+                        raw_runresult=raw_runresult,
+                        runtime_fallback_sec=0.001,
+                        score_text="",
+                        run_config={"time_limit": 1.0},
+                        artifacts=self._captured_artifacts(),
+                        pass_bundle=None,
+                        debug_text="runtime diagnostic",
+                    )
+                )
+
+                self.assertEqual(normalized.runresult, expected_runresult)
+                self.assertEqual(normalized.verdict, expected_verdict)
+                self.assertIn(
+                    "runtime diagnostic",
+                    normalized.result.outcome.feedback,
+                )
+
+    def test_case_normalizer_detects_output_limit_without_compare_metadata(
+        self,
+    ) -> None:
+        artifacts = self._captured_artifacts(
+            {
+                "program.meta": (
+                    b"cpu-time: 0.004\nwall-time: 0.005\n"
+                    b"memory-bytes: 4096\nstdout-bytes: 2048\n"
+                    b"output-truncated: true\n"
+                ),
+            }
+        )
+        artifacts.pop("compare.meta")
+
+        normalized = normalize_captured_case(
+            CapturedJudgehostCase(
+                test_name="001.in",
+                input_ref="blob-input",
+                interactive=False,
+                raw_runresult="run-error",
+                runtime_fallback_sec=0.001,
+                score_text="0",
+                run_config={"time_limit": 1.0, "output_limit": 2},
+                artifacts=artifacts,
+                pass_bundle=None,
+            )
+        )
+
+        self.assertEqual(normalized.runresult, "output-limit")
+        self.assertEqual(normalized.verdict, "FL")
+        self.assertEqual(normalized.result.passes, ())
+
+    def test_case_normalizer_preserves_warning_when_artifacts_are_incomplete(
+        self,
+    ) -> None:
+        normalized = normalize_captured_case(
+            CapturedJudgehostCase(
+                test_name="001.in",
+                input_ref="blob-input",
+                interactive=False,
+                raw_runresult="run-error",
+                runtime_fallback_sec=0.125,
+                score_text="0",
+                run_config={"time_limit": 1.0},
+                artifacts={
+                    "program.out": CapturedCaseArtifact(
+                        content=b"partial\n",
+                        blob_ref="blob-program-out",
+                    ),
+                },
+                pass_bundle=None,
+                capture_warning="final artifact metadata is incomplete",
+            )
+        )
+
+        self.assertEqual(normalized.verdict, "RE")
+        self.assertEqual(normalized.runtime_sec, 0.125)
+        self.assertEqual(
+            normalized.result.warnings,
+            ("final artifact metadata is incomplete",),
+        )
+        self.assertEqual(normalized.result.passes, ())
+
+    def test_case_normalizer_uses_transcript_for_interactive_output(self) -> None:
+        normalized = normalize_captured_case(
+            CapturedJudgehostCase(
+                test_name="001.in",
+                input_ref="blob-input",
+                interactive=True,
+                raw_runresult="correct",
+                runtime_fallback_sec=0.001,
+                score_text="1",
+                run_config={"time_limit": 1.0},
+                artifacts=self._captured_artifacts(),
+                pass_bundle=None,
+            )
+        )
+
+        final_pass = normalized.result.final_pass
+        assert final_pass is not None
+        self.assertEqual(final_pass.artifacts.output_ref, "")
+        self.assertEqual(
+            final_pass.artifacts.transcript_ref,
+            "blob-program.out",
+        )
+        self.assertEqual(
+            normalized.result.output_run_ref,
+            "blob-program.out",
+        )
+
+    def test_case_normalizer_preserves_multi_pass_evidence(self) -> None:
+        pass_files = {
+            "input": b"1\n",
+            "program.out": b"first\n",
+            "program.err": b"",
+            "system.out": b"",
+            "program.meta": (
+                b"time-used: cpu-time\ncpu-time: 0.002\n"
+                b"wall-time: 0.003\nmemory-bytes: 2048\n"
+            ),
+            "compare.meta": b"exitcode: 42\n",
+            "judgemessage.txt": b"",
+            "teammessage.txt": b"",
+        }
+        bundle = PassBundle(
+            final_pass_number=2,
+            passes=(
+                BundledPass(
+                    number=1,
+                    capture_status="complete",
+                    files=pass_files,
+                ),
+                BundledPass(
+                    number=2,
+                    capture_status="complete",
+                    files={**pass_files, "input": b"2\n"},
+                ),
+            ),
+            historical_feedback_bytes=None,
+        )
+        artifacts = self._captured_artifacts()
+        for number in (1, 2):
+            for name, content in bundle.pass_files(number).items():
+                cache_name = pass_cache_file_name(number, name)
+                artifacts[cache_name] = CapturedCaseArtifact(
+                    content=content,
+                    blob_ref=f"blob-{cache_name}",
+                )
+        normalized = normalize_captured_case(
+            CapturedJudgehostCase(
+                test_name="001.in",
+                input_ref="unused-final-input",
+                interactive=False,
+                raw_runresult="correct",
+                runtime_fallback_sec=0.004,
+                score_text="1",
+                run_config={"time_limit": 1.0},
+                artifacts=artifacts,
+                pass_bundle=bundle,
+            )
+        )
+        self.assertEqual(len(normalized.result.passes), 2)
+        self.assertEqual(
+            normalized.result.passes[0].artifacts.output_ref,
+            "blob-pass-1-program-out",
+        )
+        self.assertEqual(
+            normalized.result.passes[1].artifacts.input_ref,
+            "blob-pass-2-input",
+        )
+
     def test_memory_limit_conversion_is_exact_and_strict(self) -> None:
         for memory_limit_mb in (1, 2, 4, 8, 15):
             with self.subTest(memory_limit_mb=memory_limit_mb):
@@ -108,12 +346,12 @@ class TestJudgehostPayload(unittest.TestCase):
         )
 
     def test_config_uses_kib_for_scripts_and_bytes_for_output_storage(self) -> None:
-        constants = build_runtime_values()
-        config = domjudge_config_from_constants(constants)
-        run_output_bytes = int(constants.RUN_EXEC_OUTPUT_KB) * 1024
-        compile_output_kb = int(constants.TOOLCHAIN_COMPILE_OUTPUT_KB)
-        stored_log_limit_bytes = int(constants.JUDGEHOST_STORED_LOG_LIMIT_BYTES)
-        aux_limit_bytes = int(constants.AUX_DISPLAY_TEXT_LIMIT_BYTES)
+        snapshot = build_config_values().snapshot()
+        config = domjudge_config_from_snapshot(snapshot)
+        run_output_bytes = int(snapshot["RUN_EXEC_OUTPUT_KB"]) * 1024
+        compile_output_kb = int(snapshot["TOOLCHAIN_COMPILE_OUTPUT_KB"])
+        stored_log_limit_bytes = int(snapshot["JUDGEHOST_STORED_LOG_LIMIT_BYTES"])
+        aux_limit_bytes = int(snapshot["AUX_DISPLAY_TEXT_LIMIT_BYTES"])
         self.assertEqual(config["timelimit_overshoot"], "1s|100%")
         self.assertEqual(config["output_storage_limit"], run_output_bytes)
         self.assertEqual(config["script_filesize_limit"], compile_output_kb)

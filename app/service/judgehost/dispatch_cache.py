@@ -178,7 +178,7 @@ class DispatchCacheMixin:
                 error_text="judgehost batch specification disappeared",
                 now_text=now_iso(),
             )
-            self._result._domjudge_finalize_batch_if_ready(
+            self._batch_finalizer.finalize_batch_if_ready(
                 int(batch_id),
                 force_failed=True,
                 error_text="judgehost batch specification disappeared",
@@ -222,7 +222,7 @@ class DispatchCacheMixin:
                 error_text=f"judgehost materialization failed: {exc}",
                 now_text=now_iso(),
             )
-            self._result._domjudge_finalize_batch_if_ready(
+            self._batch_finalizer.finalize_batch_if_ready(
                 int(batch_id),
                 force_failed=True,
                 error_text=f"judgehost materialization failed: {exc}",
@@ -301,7 +301,7 @@ class DispatchCacheMixin:
                 unprocessed,
                 updated_at=now_iso(),
             )
-        self._result._domjudge_finalize_batch_if_ready(
+        self._batch_finalizer.finalize_batch_if_ready(
             batch_id,
             require_completion_ack=True,
         )

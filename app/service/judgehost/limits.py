@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
+from app.service.platform.truncation import STORED_LOG_TRUNCATED_MARKER
 
-STORED_LOG_TRUNCATED_MARKER = b"\n...[truncated]\n"
+VERIFICATION_CASE_DISPATCH_BATCH_SIZE = 256
 
 
 def run_output_kb(values: Mapping[str, object]) -> int:

@@ -3,7 +3,6 @@ from __future__ import annotations
 import secrets
 from pathlib import Path
 
-from app.runtime_value import RuntimeValues
 from app.service.judgehost.shared import _HOSTNAME_RE, _SCHEDULING_TOKEN_RE
 
 from app.service.judgehost.state import JudgehostState
@@ -29,42 +28,21 @@ class JudgehostCore:
     def __init__(self, state: JudgehostState) -> None:
         self._s = state
 
-    def apply_runtime_values(self, constants: RuntimeValues) -> None:
-        with self._s.lock:
-            self._s.constants = constants
-            self._s.enabled = bool(constants.JUDGEHOST_ENABLE)
-            self._s.api_token = str(constants.JUDGEHOST_API_TOKEN or "").strip()
-            self._s.api_username = str(getattr(constants, "JUDGEHOST_API_USERNAME", "judgehost") or "judgehost").strip()
-            self._s.fetch_batch_size = max(1, min(128, int(constants.JUDGEHOST_FETCH_BATCH_SIZE)))
-            self._s.wait_timeout_sec = max(5, min(86400, int(constants.JUDGEHOST_WAIT_TIMEOUT_SEC)))
-            self._s.wait_poll_sec = max(0.05, min(30.0, float(constants.JUDGEHOST_WAIT_POLL_SEC)))
-            self._s.online_window_sec = max(5, min(86400, int(constants.JUDGEHOST_ONLINE_WINDOW_SEC)))
-            self._s.max_submission_source_bytes = max(
-                1024,
-                min(16 * 1024 * 1024, int(constants.JUDGEHOST_MAX_SUBMISSION_SOURCE_BYTES)),
-            )
-            self._s.max_tests_per_task = max(1, min(10000, int(constants.JUDGEHOST_MAX_TESTS_PER_TASK)))
-            self._s.max_component_source_bytes = max(
-                1024,
-                min(128 * 1024 * 1024, int(constants.JUDGEHOST_MAX_COMPONENT_SOURCE_BYTES)),
-            )
-
     def enabled(self) -> bool:
-        return bool(self._s.enabled)
+        return self._s.config_policy().enabled
 
     def auth_token_configured(self) -> bool:
-        return bool(self._s.api_token)
+        return bool(self._s.config_policy().api_token)
 
     def check_api_token(self, token: str) -> bool:
-        expected = str(self._s.api_token or "").strip()
+        expected = self._s.config_policy().api_token
         provided = str(token or "").strip()
         if not expected or not provided:
             return False
         return secrets.compare_digest(expected, provided)
 
     def api_username(self) -> str:
-        token = str(self._s.api_username or "").strip()
-        return token or "judgehost"
+        return self._s.config_policy().api_username or "judgehost"
 
     def check_api_basic(self, username: str, password: str) -> bool:
         expected_user = self.api_username()

@@ -152,7 +152,7 @@ def start_verification_job(
                 signature,
             )
     except Exception as exc:
-        config.verification_service.fail_verification(
+        config.verification_execution_service.fail_verification(
             verification_id,
             reason=str(exc) or "verification admission failed",
         )
@@ -163,29 +163,22 @@ def start_verification_job(
 
     def _runner() -> None:
         try:
-            try:
-                _run_verification_start_worker(
-                    problem,
-                    user,
-                    actor_user_id=actor_user_id,
-                    problem_id=problem_id,
-                    workspace_id=workspace_id,
-                    workspace_head=workspace_head,
-                    workspace_dirty=workspace_dirty,
-                    targets=targets,
-                    verification_id=verification_id,
-                    signature=signature,
-                    source_commit=source_commit,
-                    kind=kind,
-                    selected_test_names=selected_test_names or [],
-                    bypass_case_result_cache=bypass_case_result_cache,
-                )
-            except Exception as exc:
-                config.verification_service.fail_verification(
-                    verification_id,
-                    reason=str(exc) or "verification worker failed",
-                )
-                raise
+            _run_verification_start_worker(
+                problem,
+                user,
+                actor_user_id=actor_user_id,
+                problem_id=problem_id,
+                workspace_id=workspace_id,
+                workspace_head=workspace_head,
+                workspace_dirty=workspace_dirty,
+                targets=targets,
+                verification_id=verification_id,
+                signature=signature,
+                source_commit=source_commit,
+                kind=kind,
+                selected_test_names=selected_test_names or [],
+                bypass_case_result_cache=bypass_case_result_cache,
+            )
         finally:
             worker = worker_ref[0]
             if worker is not None:
@@ -203,13 +196,13 @@ def start_verification_job(
         )
         worker_ref[0] = worker
         if not queued:
-            config.verification_service.fail_verification(
-                verification_id,
-                reason=f"verification queue rejected ({submit_reason})",
-            )
             with config.verification_lock:
                 config.verification_inflight.discard(key)
             if submit_reason == 'dedupe_inflight':
+                config.verification_execution_service.fail_verification(
+                    verification_id,
+                    reason=f"verification queue rejected ({submit_reason})",
+                )
                 return False
             raise RuntimeError(f'verification queue rejected ({submit_reason})')
         with config.verification_lock:
@@ -218,7 +211,7 @@ def start_verification_job(
                 config.verification_workers.discard(worker)
                 config.verification_inflight.discard(key)
     except Exception as exc:
-        config.verification_service.fail_verification(
+        config.verification_execution_service.fail_verification(
             verification_id,
             reason=str(exc) or "verification queue submission failed",
         )

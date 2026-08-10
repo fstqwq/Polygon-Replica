@@ -2,7 +2,13 @@ from __future__ import annotations
 
 import sqlite3
 import threading
+from collections.abc import Callable
 
+from app.service.verification.execution import (
+    VerificationCoordinatorFailure,
+    VerificationExecutionCallbacks,
+    VerificationExecutionService,
+)
 from app.service.verification.execution_result import normalize_execution_result
 from app.service.verification.lifecycle import (
     ActivationPlan,
@@ -10,7 +16,12 @@ from app.service.verification.lifecycle import (
     SanityFinish,
     verification_task_id,
 )
-from app.service.verification.task_completion import TaskCompletion
+from app.service.verification.task_completion import CompletionCommit, TaskCompletion
+from app.service.verification.task_scheduler import TaskPublishResult
+from app.service.verification.runtime_registry import (
+    VerificationRuntimeHandle,
+    VerificationRuntimeRegistry,
+)
 from app.service.verification.task_store import VerificationTaskStore
 
 from tests.identity_helpers import canonical_test_verification_id
@@ -20,6 +31,45 @@ from tests.verification_service_fixture import (
     make_execution_result,
     terminal_report,
 )
+
+
+class _RecordingDrainer:
+    def __init__(self, before_record: Callable[[], None] | None = None) -> None:
+        self.calls: list[tuple[str, str]] = []
+        self._before_record = before_record
+
+    def request_verification_cancel(
+        self,
+        verification_id: str,
+        reason: str,
+    ) -> dict[str, int]:
+        if self._before_record is not None:
+            self._before_record()
+        self.calls.append((verification_id, reason))
+        return {
+            "cancelled_cases": 1,
+            "awaiting_receipts": 2,
+            "affected_tasks": 3,
+            "affected_batches": 4,
+        }
+
+
+class _CancellationHandle(VerificationRuntimeHandle):
+    def __init__(self, on_cancel: Callable[[str], None]) -> None:
+        self._on_cancel = on_cancel
+        self.closed = False
+
+    def enqueue_case_leased(self, verification_task_id: str) -> None:
+        del verification_task_id
+
+    def enqueue_completion_committed(self, commit: CompletionCommit) -> None:
+        del commit
+
+    def enqueue_cancel(self, reason: str) -> None:
+        self._on_cancel(reason)
+
+    def enqueue_closed(self) -> None:
+        self.closed = True
 
 
 class TestVerificationLifecycleService(VerificationServiceTestBase):
@@ -954,3 +1004,406 @@ class TestVerificationLifecycleService(VerificationServiceTestBase):
             str(row["fail_reason"]),
             "generate-input / generators/gen.cpp / 001.in: validator failed",
         )
+
+    def test_execution_cancel_persists_before_event_and_drain(self) -> None:
+        verification_id = canonical_test_verification_id(
+            f"execution-cancel:{self.test_id}"
+        )
+        task_id = self._activate_verification(
+            verification_id=verification_id,
+            problem_id=self.problem_id,
+            workspace_id=self.workspace_id,
+        )
+        registry = VerificationRuntimeRegistry()
+        event_order: list[str] = []
+
+        def _assert_terminal(stage: str) -> None:
+            snapshot = self.verification_service.verification_snapshot(
+                verification_id
+            )
+            assert snapshot is not None
+            self.assertEqual(snapshot["record"]["status"], "failed")
+            rows = {str(row["id"]): row for row in snapshot["tasks"]}
+            self.assertEqual(
+                str(rows[task_id]["status"]),
+                VerificationTaskStore.TASK_CANCELLED,
+            )
+            event_order.append(stage)
+
+        handle = _CancellationHandle(lambda _reason: _assert_terminal("event"))
+        registry.register(verification_id, handle)
+        drainer = _RecordingDrainer(lambda: _assert_terminal("drain"))
+        execution_service = VerificationExecutionService(
+            self.verification_service,
+            self.verification_task_store,
+            self.verification_task_completion_service,
+            registry,
+            drainer,
+        )
+
+        result = execution_service.cancel_verification(
+            verification_id,
+            reason="cancelled in test",
+        )
+
+        self.assertEqual(result.transition.outcome, "transitioned")
+        self.assertEqual(event_order, ["event", "drain"])
+        self.assertEqual(
+            drainer.calls,
+            [(verification_id, "cancelled in test")],
+        )
+        self.assertEqual(result.drain["awaiting_receipts"], 2)
+        self.assertTrue(registry.unregister(verification_id, handle))
+
+    def test_execution_cancel_falls_back_to_closed_event_and_drains(self) -> None:
+        verification_id = canonical_test_verification_id(
+            f"execution-cancel-event-failure:{self.test_id}"
+        )
+        self._activate_verification(
+            verification_id=verification_id,
+            problem_id=self.problem_id,
+            workspace_id=self.workspace_id,
+        )
+
+        class FailingHandle(_CancellationHandle):
+            def enqueue_cancel(self, reason: str) -> None:
+                del reason
+                raise RuntimeError("runtime event queue unavailable")
+
+        registry = VerificationRuntimeRegistry()
+        handle = FailingHandle(lambda _reason: None)
+        registry.register(verification_id, handle)
+        drainer = _RecordingDrainer()
+        execution_service = VerificationExecutionService(
+            self.verification_service,
+            self.verification_task_store,
+            self.verification_task_completion_service,
+            registry,
+            drainer,
+        )
+
+        result = execution_service.cancel_verification(
+            verification_id,
+            reason="cancelled in test",
+        )
+
+        self.assertEqual(result.transition.outcome, "transitioned")
+        self.assertTrue(handle.closed)
+        self.assertEqual(
+            drainer.calls,
+            [(verification_id, "cancelled in test")],
+        )
+        self.assertTrue(registry.unregister(verification_id, handle))
+
+    def test_execution_cancel_stops_real_coordinator_when_cancel_event_fails(
+        self,
+    ) -> None:
+        verification_id = canonical_test_verification_id(
+            f"execution-real-event-failure:{self.test_id}"
+        )
+        self._activate_verification(
+            verification_id=verification_id,
+            problem_id=self.problem_id,
+            workspace_id=self.workspace_id,
+        )
+
+        class FailingCancelRegistry(VerificationRuntimeRegistry):
+            def cancelled(
+                self,
+                runtime_verification_id: str,
+                reason: str,
+            ) -> bool:
+                del runtime_verification_id, reason
+                raise RuntimeError("runtime cancel event unavailable")
+
+        registry = FailingCancelRegistry()
+        drainer = _RecordingDrainer()
+        execution_service = VerificationExecutionService(
+            self.verification_service,
+            self.verification_task_store,
+            self.verification_task_completion_service,
+            registry,
+            drainer,
+        )
+        published = threading.Event()
+        run_errors: list[Exception] = []
+
+        def _publish(row: dict[str, object]) -> TaskPublishResult:
+            published.set()
+            task_id = str(row["id"])
+            return TaskPublishResult(
+                task_id,
+                f"run-{task_id}",
+                f"judgehost-{task_id}",
+            )
+
+        def _run() -> None:
+            try:
+                execution_service.run(
+                    verification_id,
+                    callbacks=VerificationExecutionCallbacks(
+                        publish_task=_publish,
+                        probe_task_case_cache=lambda _task_ids: set(),
+                        close_programs=lambda _program_ids: None,
+                    ),
+                    edges=[],
+                )
+            except Exception as exc:  # surfaced below in the test thread
+                run_errors.append(exc)
+
+        thread = threading.Thread(target=_run, daemon=True)
+        thread.start()
+        self.assertTrue(published.wait(timeout=2.0))
+
+        result = execution_service.cancel_verification(
+            verification_id,
+            reason="cancelled in test",
+        )
+        thread.join(timeout=2.0)
+
+        self.assertEqual(result.transition.outcome, "transitioned")
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(run_errors, [])
+        self.assertEqual(
+            drainer.calls,
+            [(verification_id, "cancelled in test")],
+        )
+
+    def test_execution_cancel_retries_drain_after_closed_transition(self) -> None:
+        verification_id = canonical_test_verification_id(
+            f"execution-closed-drain-retry:{self.test_id}"
+        )
+        self._activate_verification(
+            verification_id=verification_id,
+            problem_id=self.problem_id,
+            workspace_id=self.workspace_id,
+        )
+        drain_calls: list[tuple[str, str]] = []
+
+        class RetryDrainer:
+            def request_verification_cancel(
+                self,
+                runtime_verification_id: str,
+                reason: str,
+            ) -> dict[str, int]:
+                drain_calls.append((runtime_verification_id, reason))
+                if len(drain_calls) <= 2:
+                    raise RuntimeError("Judgehost drain unavailable")
+                return {
+                    "cancelled_cases": 1,
+                    "awaiting_receipts": 0,
+                    "affected_tasks": 1,
+                    "affected_batches": 1,
+                }
+
+        execution_service = VerificationExecutionService(
+            self.verification_service,
+            self.verification_task_store,
+            self.verification_task_completion_service,
+            VerificationRuntimeRegistry(),
+            RetryDrainer(),
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "drain unavailable"):
+            execution_service.cancel_verification(
+                verification_id,
+                reason="cancelled in test",
+            )
+        retry = execution_service.cancel_verification(
+            verification_id,
+            reason="cancelled in test",
+        )
+
+        self.assertEqual(retry.transition.outcome, "closed")
+        self.assertEqual(retry.drain["cancelled_cases"], 1)
+        self.assertEqual(
+            drain_calls,
+            [
+                (verification_id, "cancelled in test"),
+                (verification_id, "cancelled in test"),
+                (verification_id, "cancelled in test"),
+            ],
+        )
+
+    def test_execution_reconciles_cancellation_during_registration(self) -> None:
+        verification_id = canonical_test_verification_id(
+            f"execution-register-cancel:{self.test_id}"
+        )
+        self._activate_verification(
+            verification_id=verification_id,
+            problem_id=self.problem_id,
+            workspace_id=self.workspace_id,
+        )
+
+        lifecycle = self.verification_service
+
+        class CancellingRegistry(VerificationRuntimeRegistry):
+            def register(
+                self,
+                runtime_verification_id: str,
+                handle: VerificationRuntimeHandle,
+            ) -> None:
+                super().register(runtime_verification_id, handle)
+                lifecycle.cancel_verification(
+                    runtime_verification_id,
+                    reason="cancelled during registration",
+                )
+
+        published: list[str] = []
+        execution_service = VerificationExecutionService(
+            self.verification_service,
+            self.verification_task_store,
+            self.verification_task_completion_service,
+            CancellingRegistry(),
+            _RecordingDrainer(),
+        )
+        execution_service.run(
+            verification_id,
+            callbacks=VerificationExecutionCallbacks(
+                publish_task=lambda row: (
+                    published.append(str(row["id"]))
+                    or TaskPublishResult(str(row["id"]), "run", "judgehost")
+                ),
+                probe_task_case_cache=lambda _task_ids: set(),
+                close_programs=lambda _program_ids: None,
+            ),
+            edges=[],
+        )
+
+        self.assertEqual(published, [])
+        snapshot = self.verification_service.verification_snapshot(
+            verification_id
+        )
+        assert snapshot is not None
+        self.assertEqual(snapshot["record"]["status"], "failed")
+
+    def test_scheduler_failure_persists_before_judgehost_drain(self) -> None:
+        verification_id = canonical_test_verification_id(
+            f"execution-scheduler-failure:{self.test_id}"
+        )
+        task_id = self._activate_verification(
+            verification_id=verification_id,
+            problem_id=self.problem_id,
+            workspace_id=self.workspace_id,
+        )
+
+        def _assert_failed_before_drain() -> None:
+            snapshot = self.verification_service.verification_snapshot(
+                verification_id
+            )
+            assert snapshot is not None
+            self.assertEqual(snapshot["record"]["status"], "failed")
+            rows = {str(row["id"]): row for row in snapshot["tasks"]}
+            self.assertEqual(
+                str(rows[task_id]["status"]),
+                VerificationTaskStore.TASK_CANCELLED,
+            )
+
+        drainer = _RecordingDrainer(_assert_failed_before_drain)
+        execution_service = VerificationExecutionService(
+            self.verification_service,
+            self.verification_task_store,
+            self.verification_task_completion_service,
+            VerificationRuntimeRegistry(),
+            drainer,
+        )
+
+        def _fail_publish(_row: dict[str, object]) -> TaskPublishResult:
+            raise RuntimeError("publisher failed")
+
+        with self.assertRaisesRegex(
+            VerificationCoordinatorFailure,
+            "publisher failed",
+        ):
+            execution_service.run(
+                verification_id,
+                callbacks=VerificationExecutionCallbacks(
+                    publish_task=_fail_publish,
+                    probe_task_case_cache=lambda _task_ids: set(),
+                    close_programs=lambda _program_ids: None,
+                ),
+                edges=[],
+            )
+
+        self.assertEqual(drainer.calls, [(verification_id, "publisher failed")])
+
+    def test_scheduler_failure_retries_drain_after_parent_is_terminal(self) -> None:
+        verification_id = canonical_test_verification_id(
+            f"execution-drain-retry:{self.test_id}"
+        )
+        task_id = self._activate_verification(
+            verification_id=verification_id,
+            problem_id=self.problem_id,
+            workspace_id=self.workspace_id,
+        )
+        drain_calls: list[tuple[str, str]] = []
+
+        class FlakyDrainer:
+            def request_verification_cancel(
+                self,
+                runtime_verification_id: str,
+                reason: str,
+            ) -> dict[str, int]:
+                drain_calls.append((runtime_verification_id, reason))
+                if len(drain_calls) == 1:
+                    raise RuntimeError("temporary drain failure")
+                return {
+                    "cancelled_cases": 1,
+                    "awaiting_receipts": 0,
+                    "affected_tasks": 1,
+                    "affected_batches": 1,
+                }
+
+        execution_service = VerificationExecutionService(
+            self.verification_service,
+            self.verification_task_store,
+            self.verification_task_completion_service,
+            VerificationRuntimeRegistry(),
+            FlakyDrainer(),
+        )
+
+        def _terminal_failure(row: dict[str, object]) -> TaskPublishResult:
+            self.assertEqual(str(row["id"]), task_id)
+            return TaskPublishResult(
+                task_id=task_id,
+                run_id="run-failed",
+                judgehost_task_id="judgehost-failed",
+                terminal_result=TaskCompletion(
+                    task_id=task_id,
+                    status=VerificationTaskStore.TASK_FAILED,
+                    run_id="run-failed",
+                    judgehost_task_id="judgehost-failed",
+                    result=make_execution_result(
+                        verdict="FL",
+                        error="source payload is unavailable",
+                    ),
+                    fail_reason="source payload is unavailable",
+                ),
+            )
+
+        with self.assertRaisesRegex(
+            VerificationCoordinatorFailure,
+            "source payload is unavailable",
+        ):
+            execution_service.run(
+                verification_id,
+                callbacks=VerificationExecutionCallbacks(
+                    publish_task=_terminal_failure,
+                    probe_task_case_cache=lambda _task_ids: set(),
+                    close_programs=lambda _program_ids: None,
+                ),
+                edges=[],
+            )
+
+        self.assertEqual(
+            drain_calls,
+            [
+                (verification_id, "source payload is unavailable"),
+                (verification_id, "source payload is unavailable"),
+            ],
+        )
+        snapshot = self.verification_service.verification_snapshot(
+            verification_id
+        )
+        assert snapshot is not None
+        self.assertEqual(snapshot["record"]["status"], "failed")

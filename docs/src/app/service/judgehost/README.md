@@ -24,5 +24,16 @@ batch scheduler. Host state, leases, toolchain reports, executable/result cache
 indexes, and batch state do not persist across process startup; terminal
 verification summaries and accepted late-diagnostic snapshots are persisted by
 the verification service. Callback admission and per-case receipts linearize
-maintenance and quiet cleanup. Result processing remains multi-responsibility;
-PLC-006/007 track that refactor.
+maintenance and quiet cleanup.
+
+The Judgehost composition root constructs one diagnostic publisher, completion
+publisher, and batch finalizer, then injects those boundaries into callback and
+dispatch orchestration. Final `add-judging-run` artifacts are converted by the
+dependency-light case normalizer. Scheduler/task-queue canonical helpers build
+compile-failure and missing-case results because those paths have no final run
+callback; the batch finalizer publishes and aggregates them. `result.py`
+retains transport validation, artifact capture, version
+telemetry, and debug-payload parsing; PLC-007 records that residual density.
+Lease publication uses an injected `CaseLeaseSink`; this package no longer
+imports verification's runtime coordinator registry or scheduler. PLC-006
+records the verification models and stores that remain direct dependencies.

@@ -288,7 +288,7 @@ class TestVerificationCompletionService(VerificationServiceTestBase):
             if str(row["id"]) == task_id
         )
         self.assertTrue(bool(row["answer_correct"]))
-        limit = int(getattr(self.constants, "AUX_DISPLAY_TEXT_LIMIT_BYTES", 2048) or 2048)
+        limit = int(self.config_values.AUX_DISPLAY_TEXT_LIMIT_BYTES)
         for key in ("compile_log", "error_text", "feedback_text"):
             value = str(row[key] or "")
             self.assertLessEqual(len(value.encode("utf-8")), limit)

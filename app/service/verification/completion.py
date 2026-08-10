@@ -7,9 +7,9 @@ from app.service.judgehost.completion import (
     CaseCompletionReport,
     DiagnosticAppendResult,
 )
-from app.service.judgehost.limits import STORED_LOG_TRUNCATED_MARKER
 from app.service.platform.error_text import normalize_display_text
 from app.service.platform.runtime_blob_store import RuntimeBlobStore
+from app.service.platform.truncation import STORED_LOG_TRUNCATED_MARKER
 from app.service.verification.execution_result import (
     ExecutionResult,
     execution_result_with_outcome,

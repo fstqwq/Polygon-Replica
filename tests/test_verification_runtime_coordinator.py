@@ -3,6 +3,7 @@ from __future__ import annotations
 import threading
 import time
 import unittest
+from unittest.mock import patch
 
 from app.service.verification.execution_result import (
     CAPTURE_COMPLETE,
@@ -18,7 +19,28 @@ from app.service.verification.task_scheduler import (
     VerificationRuntimeCallbacks,
     VerificationRuntimeCoordinator,
 )
+from app.service.verification.runtime_registry import VerificationRuntimeRegistry
 from app.service.verification.task_store import VerificationTaskStore
+
+
+class _RegistryHandle:
+    def __init__(self) -> None:
+        self.events: list[tuple[str, object]] = []
+
+    def enqueue_case_leased(self, verification_task_id: str) -> None:
+        self.events.append(("leased", verification_task_id))
+
+    def enqueue_completion_committed(self, commit: CompletionCommit) -> None:
+        self.events.append(("completion", commit))
+
+    def enqueue_completion_reconciliation(self, commit: CompletionCommit) -> None:
+        self.events.append(("reconcile", commit))
+
+    def enqueue_cancel(self, reason: str) -> None:
+        self.events.append(("cancel", reason))
+
+    def enqueue_closed(self) -> None:
+        self.events.append(("closed", ""))
 
 
 def _execution_result(
@@ -192,6 +214,7 @@ class _InMemoryTaskStore:
         committed_task_ids: set[str] = set()
         already_terminal_task_ids: set[str] = set()
         skipped_task_ids: set[str] = set()
+        cancelled_task_ids: set[str] = set()
         failure_reason = ""
         terminal_statuses = {
             VerificationTaskStore.TASK_DONE,
@@ -251,12 +274,23 @@ class _InMemoryTaskStore:
                             child["feedback_text"] = skipped.outcome.feedback
                             child["result"] = skipped
                             skipped_task_ids.add(child_id)
+            if failure_reason:
+                for row in self._rows:
+                    if str(row["status"]) not in {
+                        VerificationTaskStore.TASK_PENDING,
+                        VerificationTaskStore.TASK_QUEUED,
+                    }:
+                        continue
+                    row["status"] = VerificationTaskStore.TASK_CANCELLED
+                    row["cancel_reason"] = failure_reason
+                    cancelled_task_ids.add(str(row["id"]))
         return CompletionCommit(
             verification_id=self._verification_id,
             effective_completions=tuple(effective),
             committed_task_ids=frozenset(committed_task_ids),
             already_terminal_task_ids=frozenset(already_terminal_task_ids),
             skipped_task_ids=frozenset(skipped_task_ids),
+            cancelled_task_ids=frozenset(cancelled_task_ids),
             parent_transition="failed" if failure_reason else "",
             failure_reason=failure_reason,
         )
@@ -383,6 +417,242 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
             coordinator.enqueue_cancel("test shutdown")
             thread.join(timeout=2.0)
             self.assertFalse(thread.is_alive())
+
+    def test_runtime_coordinator_reconciles_persisted_completion_after_event_failure(
+        self,
+    ) -> None:
+        verification_id = "ver-completion-reconciliation"
+        store = _InMemoryTaskStore(
+            rows=[
+                {
+                    **_task_row(
+                        "vt-parent",
+                        task_kind="generate-input",
+                        status=VerificationTaskStore.TASK_PENDING,
+                        queue_index=1,
+                    ),
+                    "verification_id": verification_id,
+                },
+                {
+                    **_task_row(
+                        "vt-child",
+                        task_kind="main-correct",
+                        status=VerificationTaskStore.TASK_PENDING,
+                        queue_index=2,
+                    ),
+                    "verification_id": verification_id,
+                },
+            ],
+            edges=[("vt-parent", "vt-child")],
+        )
+        published: list[str] = []
+
+        def _publish(row: dict[str, object]) -> TaskPublishResult:
+            task_id = str(row["id"])
+            published.append(task_id)
+            store.set_task_queued(
+                task_id,
+                run_id=f"run-{task_id}",
+                judgehost_task_id=f"judgehost-{task_id}",
+            )
+            return TaskPublishResult(
+                task_id,
+                f"run-{task_id}",
+                f"judgehost-{task_id}",
+            )
+
+        coordinator = VerificationRuntimeCoordinator(
+            verification_id,
+            task_store=store,
+            completion_service=_FakeCompletionService(store),
+            callbacks=VerificationRuntimeCallbacks(
+                publish_task=_publish,
+                probe_task_case_cache=lambda _task_ids: set(),
+                cancel_execution=lambda _reason: None,
+                close_programs=lambda _program_ids: None,
+            ),
+            edges=[("vt-parent", "vt-child")],
+        )
+        registry = VerificationRuntimeRegistry()
+
+        class FailingCompletionHandle(_RegistryHandle):
+            def enqueue_completion_committed(self, commit: CompletionCommit) -> None:
+                del commit
+                raise RuntimeError("completion event unavailable")
+
+            def enqueue_completion_reconciliation(
+                self,
+                commit: CompletionCommit,
+            ) -> None:
+                coordinator.enqueue_completion_reconciliation(commit)
+
+        handle = FailingCompletionHandle()
+        registry.register(verification_id, handle)
+        thread = threading.Thread(target=coordinator.run, daemon=True)
+        thread.start()
+        try:
+            self._wait_until(
+                lambda: published == ["vt-parent"],
+                timeout=2.0,
+                interval=0.01,
+                message="parent task was not published",
+            )
+            commit = store.commit_task_completions(
+                [
+                    TaskCompletion(
+                        task_id="vt-parent",
+                        status=VerificationTaskStore.TASK_DONE,
+                        run_id="run-vt-parent",
+                        judgehost_task_id="judgehost-vt-parent",
+                        result=_execution_result("OK"),
+                    )
+                ]
+            )
+            self.assertTrue(registry.completion_committed(verification_id, commit))
+            self._wait_until(
+                lambda: published == ["vt-parent", "vt-child"],
+                timeout=2.0,
+                interval=0.01,
+                message="durable completion reconciliation did not publish successor",
+            )
+        finally:
+            coordinator.enqueue_cancel("test shutdown")
+            thread.join(timeout=2.0)
+            self.assertFalse(thread.is_alive())
+            self.assertTrue(registry.unregister(verification_id, handle))
+
+    def test_terminal_idle_reconciliation_drains_when_event_delivery_fails(
+        self,
+    ) -> None:
+        verification_id = "ver-terminal-delivery-failure"
+        store = _InMemoryTaskStore(
+            rows=[
+                {
+                    **_task_row(
+                        "vt-parent",
+                        task_kind="generate-input",
+                        status=VerificationTaskStore.TASK_PENDING,
+                        queue_index=1,
+                    ),
+                    "verification_id": verification_id,
+                },
+                {
+                    **_task_row(
+                        "vt-child",
+                        task_kind="main-correct",
+                        status=VerificationTaskStore.TASK_PENDING,
+                        queue_index=2,
+                    ),
+                    "verification_id": verification_id,
+                },
+            ],
+            edges=[("vt-parent", "vt-child")],
+        )
+        published = threading.Event()
+        drained = threading.Event()
+        drain_reasons: list[str] = []
+
+        def _publish(row: dict[str, object]) -> TaskPublishResult:
+            task_id = str(row["id"])
+            store.set_task_queued(
+                task_id,
+                run_id=f"run-{task_id}",
+                judgehost_task_id=f"judgehost-{task_id}",
+            )
+            published.set()
+            return TaskPublishResult(
+                task_id,
+                f"run-{task_id}",
+                f"judgehost-{task_id}",
+            )
+
+        def _drain(reason: str) -> None:
+            drain_reasons.append(reason)
+            drained.set()
+
+        coordinator = VerificationRuntimeCoordinator(
+            verification_id,
+            task_store=store,
+            completion_service=_FakeCompletionService(store),
+            callbacks=VerificationRuntimeCallbacks(
+                publish_task=_publish,
+                probe_task_case_cache=lambda _task_ids: set(),
+                cancel_execution=_drain,
+                close_programs=lambda _program_ids: None,
+            ),
+            edges=[("vt-parent", "vt-child")],
+        )
+        registry = VerificationRuntimeRegistry()
+
+        class FailedDeliveryHandle(_RegistryHandle):
+            def enqueue_completion_committed(self, commit: CompletionCommit) -> None:
+                del commit
+                raise RuntimeError("completion event unavailable")
+
+            def enqueue_completion_reconciliation(
+                self,
+                commit: CompletionCommit,
+            ) -> None:
+                del commit
+                raise RuntimeError("durable reconciliation unavailable")
+
+        handle = FailedDeliveryHandle()
+        registry.register(verification_id, handle)
+        with patch(
+            "app.service.verification.task_scheduler._IDLE_RECONCILIATION_SEC",
+            0.05,
+        ):
+            thread = threading.Thread(target=coordinator.run, daemon=True)
+            thread.start()
+            try:
+                self.assertTrue(published.wait(timeout=2.0))
+                coordinator.enqueue_case_leased("vt-parent")
+                self._wait_until(
+                    lambda: str(store.list_rows(verification_id)[0]["status"])
+                    == VerificationTaskStore.TASK_LEASED,
+                    timeout=2.0,
+                    interval=0.01,
+                    message="parent task was not leased before terminal failure",
+                )
+                commit = store.commit_task_completions(
+                    [
+                        TaskCompletion(
+                            task_id="vt-parent",
+                            status=VerificationTaskStore.TASK_FAILED,
+                            run_id="run-vt-parent",
+                            judgehost_task_id="judgehost-vt-parent",
+                            result=_execution_result(
+                                "FL",
+                                error="generator infrastructure failure",
+                            ),
+                            fail_reason="generator infrastructure failure",
+                        )
+                    ]
+                )
+                with self.assertRaisesRegex(
+                    RuntimeError,
+                    "completion event unavailable; durable reconciliation unavailable",
+                ) as raised:
+                    registry.completion_committed(verification_id, commit)
+                self.assertEqual(
+                    str(raised.exception.__cause__),
+                    "completion event unavailable",
+                )
+                self.assertTrue(
+                    drained.wait(timeout=2.0),
+                    "terminal durable state did not drain Judgehost execution",
+                )
+                thread.join(timeout=2.0)
+                self.assertFalse(thread.is_alive())
+                self.assertEqual(
+                    drain_reasons,
+                    ["verification is no longer running"],
+                )
+            finally:
+                if thread.is_alive():
+                    coordinator.enqueue_cancel("test shutdown")
+                    thread.join(timeout=2.0)
+        self.assertTrue(registry.unregister(verification_id, handle))
 
     def test_runtime_coordinator_skips_entire_downstream_subtree_after_generate_skip(self) -> None:
         store = _InMemoryTaskStore(
@@ -719,6 +989,77 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
             thread.join(timeout=2.0)
             self.assertFalse(thread.is_alive())
 
+    def test_synchronous_failure_stops_independent_root_publication(self) -> None:
+        verification_id = "ver-synchronous-failure"
+        store = _InMemoryTaskStore(
+            rows=[
+                {
+                    **_task_row(
+                        task_id,
+                        task_kind="solution-run",
+                        status=VerificationTaskStore.TASK_PENDING,
+                        queue_index=index,
+                        program_id=f"solution-{index}",
+                        test_name="001.in",
+                    ),
+                    "verification_id": verification_id,
+                }
+                for index, task_id in enumerate(
+                    ("vt-first", "vt-independent"),
+                    start=1,
+                )
+            ],
+            edges=[],
+        )
+        publish_order: list[str] = []
+        drain_reasons: list[str] = []
+
+        def _publish(row: dict[str, object]) -> TaskPublishResult:
+            task_id = str(row["id"])
+            publish_order.append(task_id)
+            return TaskPublishResult(
+                task_id=task_id,
+                run_id=f"run-{task_id}",
+                judgehost_task_id=f"judgehost-{task_id}",
+                terminal_result=TaskCompletion(
+                    task_id=task_id,
+                    status=VerificationTaskStore.TASK_FAILED,
+                    run_id=f"run-{task_id}",
+                    judgehost_task_id=f"judgehost-{task_id}",
+                    result=_execution_result(
+                        "FL",
+                        error="source payload is unavailable",
+                    ),
+                    fail_reason="source payload is unavailable",
+                ),
+            )
+
+        coordinator = VerificationRuntimeCoordinator(
+            verification_id,
+            task_store=store,
+            completion_service=_FakeCompletionService(store),
+            callbacks=VerificationRuntimeCallbacks(
+                publish_task=_publish,
+                probe_task_case_cache=lambda _task_ids: set(),
+                cancel_execution=drain_reasons.append,
+                close_programs=lambda _program_ids: None,
+            ),
+            edges=[],
+        )
+
+        coordinator.run()
+
+        rows = {
+            str(row["id"]): row
+            for row in store.list_rows(verification_id)
+        }
+        self.assertEqual(publish_order, ["vt-first"])
+        self.assertEqual(drain_reasons, ["source payload is unavailable"])
+        self.assertEqual(
+            str(rows["vt-independent"]["status"]),
+            VerificationTaskStore.TASK_CANCELLED,
+        )
+
     def test_runtime_coordinator_cancel_releases_worker_without_finalizing_leased_rows(self) -> None:
         store = _InMemoryTaskStore(
             rows=[
@@ -948,3 +1289,140 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
             VerificationTaskStore.TASK_DONE,
         )
         self.assertEqual(published, ["vt-child"])
+
+
+class TestVerificationRuntimeRegistry(unittest.TestCase):
+    @staticmethod
+    def _commit(verification_id: str) -> CompletionCommit:
+        return CompletionCommit(
+            verification_id=verification_id,
+            effective_completions=(),
+            committed_task_ids=frozenset(),
+            already_terminal_task_ids=frozenset(),
+            skipped_task_ids=frozenset(),
+        )
+
+    def test_registration_is_insert_only_and_unregistration_matches_identity(
+        self,
+    ) -> None:
+        registry = VerificationRuntimeRegistry()
+        first = _RegistryHandle()
+        second = _RegistryHandle()
+        registry.register("ver-runtime", first)
+
+        with self.assertRaisesRegex(RuntimeError, "already registered"):
+            registry.register("ver-runtime", second)
+        self.assertFalse(registry.unregister("ver-runtime", second))
+        self.assertTrue(registry.case_leased("ver-runtime", "task-first"))
+        self.assertEqual(first.events, [("leased", "task-first")])
+
+        self.assertTrue(registry.unregister("ver-runtime", first))
+        registry.register("ver-runtime", second)
+        self.assertFalse(registry.unregister("ver-runtime", first))
+        self.assertTrue(registry.cancelled("ver-runtime", "stop"))
+        self.assertEqual(second.events, [("cancel", "stop")])
+
+    def test_notifications_preserve_order_and_missing_runtime_is_noop(self) -> None:
+        registry = VerificationRuntimeRegistry()
+        handle = _RegistryHandle()
+        commit = self._commit("ver-events")
+        self.assertFalse(registry.case_leased("missing", "task"))
+        self.assertFalse(registry.completion_committed("missing", commit))
+        self.assertFalse(registry.cancelled("missing", "stop"))
+
+        registry.register("ver-events", handle)
+        self.assertTrue(registry.case_leased("ver-events", "task"))
+        self.assertTrue(registry.completion_committed("ver-events", commit))
+        self.assertTrue(registry.cancelled("ver-events", "stop"))
+        self.assertTrue(registry.closed("ver-events"))
+        self.assertEqual(
+            handle.events,
+            [
+                ("leased", "task"),
+                ("completion", commit),
+                ("cancel", "stop"),
+                ("closed", ""),
+            ],
+        )
+
+    def test_completion_notification_falls_back_to_durable_reconciliation(
+        self,
+    ) -> None:
+        registry = VerificationRuntimeRegistry()
+        commit = self._commit("ver-reconcile")
+
+        class FailingCompletionHandle(_RegistryHandle):
+            def enqueue_completion_committed(self, candidate: CompletionCommit) -> None:
+                del candidate
+                raise RuntimeError("completion event unavailable")
+
+        handle = FailingCompletionHandle()
+        registry.register("ver-reconcile", handle)
+
+        self.assertTrue(registry.completion_committed("ver-reconcile", commit))
+        self.assertEqual(handle.events, [("reconcile", commit)])
+
+    def test_case_lease_notification_retries_current_runtime_once(self) -> None:
+        registry = VerificationRuntimeRegistry()
+
+        class RetryLeaseHandle(_RegistryHandle):
+            def __init__(self) -> None:
+                super().__init__()
+                self.attempts = 0
+
+            def enqueue_case_leased(self, verification_task_id: str) -> None:
+                self.attempts += 1
+                if self.attempts == 1:
+                    raise RuntimeError("lease event unavailable")
+                super().enqueue_case_leased(verification_task_id)
+
+        handle = RetryLeaseHandle()
+        registry.register("ver-lease-retry", handle)
+
+        self.assertTrue(registry.case_leased("ver-lease-retry", "vt-leased"))
+        self.assertEqual(handle.attempts, 2)
+        self.assertEqual(handle.events, [("leased", "vt-leased")])
+
+        class FailedLeaseHandle(_RegistryHandle):
+            def enqueue_case_leased(self, verification_task_id: str) -> None:
+                del verification_task_id
+                raise RuntimeError("lease event unavailable")
+
+        failed = FailedLeaseHandle()
+        registry.register("ver-lease-failure", failed)
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "lease event unavailable; lease event unavailable",
+        ) as raised:
+            registry.case_leased("ver-lease-failure", "vt-leased")
+        self.assertEqual(str(raised.exception.__cause__), "lease event unavailable")
+
+    def test_notification_does_not_hold_registry_lock(self) -> None:
+        registry = VerificationRuntimeRegistry()
+        callback_entered = threading.Event()
+        release_callback = threading.Event()
+
+        class BlockingHandle(_RegistryHandle):
+            def enqueue_case_leased(self, verification_task_id: str) -> None:
+                callback_entered.set()
+                if not release_callback.wait(timeout=2.0):
+                    raise RuntimeError("test callback release timed out")
+                super().enqueue_case_leased(verification_task_id)
+
+        handle = BlockingHandle()
+        registry.register("ver-lock", handle)
+        notifier = threading.Thread(
+            target=lambda: registry.case_leased("ver-lock", "task"),
+            daemon=True,
+        )
+        notifier.start()
+        self.assertTrue(callback_entered.wait(timeout=2.0))
+        self.assertTrue(registry.unregister("ver-lock", handle))
+        replacement = _RegistryHandle()
+        registry.register("ver-lock", replacement)
+        release_callback.set()
+        notifier.join(timeout=2.0)
+        self.assertFalse(notifier.is_alive())
+        self.assertEqual(handle.events, [("leased", "task")])
+        self.assertTrue(registry.cancelled("ver-lock", "replacement"))
+        self.assertEqual(replacement.events, [("cancel", "replacement")])

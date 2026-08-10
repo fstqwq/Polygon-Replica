@@ -11,19 +11,17 @@ from typing import TypedDict
 from app.db import now_iso
 from app.service.judgehost.domjudge.cache import domjudge_hash_of_hashes
 from app.service.judgehost.domjudge.client import domjudge_script_id
+from app.service.judgehost.completion import CaseLeaseSink
 from app.service.judgehost.identity import domjudge_submit_id
 from app.service.judgehost.shared import domjudge_lower_text, domjudge_path_name, domjudge_text
 from app.service.judgehost.runtime import (
     domjudge_bool,
 )
+from app.service.judgehost.limits import VERIFICATION_CASE_DISPATCH_BATCH_SIZE
 from app.service.verification.identity import canonical_verification_id
 from app.service.platform.runtime_blob_store import PayloadFile
 from app.service.platform.admission import MaintenanceAdmissionGate
 from app.service.run.runtime import RUN_TEST_NAME_RE
-from app.service.verification.task_scheduler import (
-    COORDINATOR_BATCH_SIZE,
-    notify_verification_case_leased,
-)
 
 from app.service.judgehost.core import JudgehostCore
 from app.service.judgehost.dispatch_cache import (
@@ -31,7 +29,7 @@ from app.service.judgehost.dispatch_cache import (
     _DomjudgeCacheEntry,
 )
 from app.service.judgehost.batch_scheduler_models import CompileSubmission, ExecutionBatchSpec
-from app.service.judgehost.result import ResultProcessor
+from app.service.judgehost.finalization import BatchFinalizationPort
 from app.service.judgehost.state import JudgehostState
 from app.service.judgehost.task_queue import TaskQueue
 from app.service.judgehost.toolkit import DomjudgeToolkit
@@ -110,12 +108,21 @@ class DispatchHandler(DispatchCacheMixin):
     _CACHE_PROBE_BUDGET_SEC = 0.25
     _COORDINATOR_CACHE_OWNER = "verification-coordinator-cache"
 
-    def __init__(self, state: JudgehostState, core: JudgehostCore, queue: TaskQueue, result: ResultProcessor, toolkit: DomjudgeToolkit) -> None:
+    def __init__(
+        self,
+        state: JudgehostState,
+        core: JudgehostCore,
+        queue: TaskQueue,
+        batch_finalizer: BatchFinalizationPort,
+        toolkit: DomjudgeToolkit,
+        case_lease_sink: CaseLeaseSink,
+    ) -> None:
         self._s = state
         self._core = core
         self._queue = queue
-        self._result = result
+        self._batch_finalizer = batch_finalizer
         self._toolkit = toolkit
+        self._case_lease_sink = case_lease_sink
 
     def complete_task_exposure(
         self,
@@ -128,7 +135,7 @@ class DispatchHandler(DispatchCacheMixin):
         self._queue.compact_task_payload(task_id)
         if not self._s.batch_scheduler.task_cases_terminal(task_id):
             return
-        self._result._domjudge_finalize_batch_if_ready(int(batch_id))
+        self._batch_finalizer.finalize_batch_if_ready(int(batch_id))
 
     def _domjudge_case_rows(
         self,
@@ -190,7 +197,7 @@ class DispatchHandler(DispatchCacheMixin):
             safe_host,
             now_text=now_iso(),
         )
-        self._result.finalize_host_lease_release(release)
+        self._batch_finalizer.finalize_host_lease_release(release)
         return [
             {"jobid": job_id, "submitid": str(submit_id)}
             for job_id, submit_id in release.workdirs
@@ -460,7 +467,7 @@ class DispatchHandler(DispatchCacheMixin):
         return self._domjudge_stage_task(task, execution_signature=execution_signature)
 
     def finalize_batch_if_ready(self, batch_id: int, *, error_text: str = "") -> None:
-        self._result._domjudge_finalize_batch_if_ready(
+        self._batch_finalizer.finalize_batch_if_ready(
             int(batch_id),
             force_failed=bool(error_text),
             error_text=error_text,
@@ -540,7 +547,7 @@ class DispatchHandler(DispatchCacheMixin):
             task_row = self._core.task_by_id(case_task_id)
             verification_id = "" if task_row is None else domjudge_text(task_row.get("verification_id"))
             if verification_id and verification_task_id:
-                notify_verification_case_leased(
+                self._case_lease_sink.case_leased(
                     verification_id,
                     verification_task_id,
                 )
@@ -601,14 +608,14 @@ class DispatchHandler(DispatchCacheMixin):
                             action="disabled",
                         )
                         return []
-                    self._result.retry_due_finalizations(limit=1)
+                    self._batch_finalizer.retry_due_finalizations(limit=1)
                 batch_row = self._s.batch_scheduler.select_ready_batch(safe_host)
                 if batch_row is not None:
                     batch_id = int(batch_row["batch_id"])
                     processed = self._domjudge_apply_cache_shortcuts_for_batch(
                         batch_id,
                         hostname=safe_host,
-                        limit=COORDINATOR_BATCH_SIZE,
+                        limit=VERIFICATION_CASE_DISPATCH_BATCH_SIZE,
                         deadline=deadline,
                     )
                     refreshed = self._s.batch_scheduler.fetch_batch(batch_id)
@@ -638,7 +645,7 @@ class DispatchHandler(DispatchCacheMixin):
                     )
                     if leased_cases:
                         return leased_cases
-                    self._result._domjudge_finalize_batch_if_ready(batch_id)
+                    self._batch_finalizer.finalize_batch_if_ready(batch_id)
                     if processed == 0:
                         return []
                     continue
@@ -673,7 +680,7 @@ class DispatchHandler(DispatchCacheMixin):
         return []
 
     def probe_task_case_cache(self, task_ids: list[str]) -> set[str]:
-        remaining = COORDINATOR_BATCH_SIZE
+        remaining = VERIFICATION_CASE_DISPATCH_BATCH_SIZE
         ordered_task_ids = list(dict.fromkeys(task_ids))
         batch_ids: dict[int, None] = {}
         for task_id in ordered_task_ids:

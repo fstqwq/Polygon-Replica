@@ -118,6 +118,34 @@ Predecessor failure or cancellation skips or cancels dependants. Compile-only,
 pass-fail, interactive, and multi-pass execution are mapped to Judgehost batches
 and case results by the verification and Judgehost services.
 
+One process-owned `VerificationRuntimeRegistry` maps an active verification to
+its coordinator. Registration is insert-only and unregistration must present
+the same coordinator object, so a stale worker cannot remove another session.
+The registry lock protects only the object map; it is released before an event
+is enqueued. Completion notification and Judgehost lease notification use this
+injected registry rather than module-global scheduler functions. A missing
+runtime notification is a no-op because the task transaction remains durable.
+If direct completion-event delivery fails while a runtime is registered, the
+registry requests a durable task-snapshot reconciliation. The coordinator also
+performs that reconciliation after an idle interval before advancing ready
+successors. If both event paths fail, the caller receives an error preserving
+both causes. When the idle check instead discovers that the durable parent is
+already terminal, the coordinator drains Judgehost execution before retiring.
+Lease notification performs one current-owner retry; if both attempts fail,
+the fetch request fails so the process-local lease can expire and be requested
+again instead of silently losing coordinator state.
+
+`VerificationExecutionService` owns coordinator construction, registration,
+durable-state reconciliation, execution, exact unregistration, scheduler
+failure, and user cancellation. Workspace code supplies the frozen snapshot,
+plan, task publisher, and sanity callbacks without owning the runtime session.
+The coordinator is constructed from the immutable durable graph, then
+registered before execution starts. The execution service rereads the parent
+snapshot after registration. If it is already closed, the coordinator consumes
+a closed event and reloads terminal task state instead of publishing work. A
+cancellation that committed before registration is therefore observed from
+SQLite, while a later cancellation reaches the registered coordinator.
+
 Completion evaluates each `solution-run` against its authored expected behavior
 using the canonical `ExecutionResult`, not the batch transport status or summary.
 AC, WA, TL, RE, and CE are complete decisions, so an expected CE remains a
@@ -131,10 +159,19 @@ parent and cancel all remaining open tasks immediately in the same transaction.
 Cancellation atomically changes the parent to `failed` and every open task to
 `cancelled`. Already leased or reporting cases then drain in process-local
 Judgehost state, but their late ordinary results cannot change the durable
-decision. A runtime verification moves through dormant, active, draining, and
-retired phases independently of the parent status. Draining state is retained
-for the current process until all work and callback receipts are terminal and
-the verification has been quiet for 60 seconds.
+decision. Cancellation and scheduler failure always order their side effects as
+the SQLite parent/task transition, then the coordinator event, then Judgehost
+drain. Drain is attempted even when the in-memory cancellation notification
+fails; a failed cancel notification falls back to a closed event, and idle
+coordinators reconcile task rows and compare the durable parent state. Drain
+has one immediate
+retry, and a later cancel/fail request retries it even when the parent is already
+closed. A synchronous hard failure stops the current publish slice before
+another independent ready task can be exposed. A runtime
+verification moves through dormant, active, draining, and retired phases
+independently of the parent status. Draining state is retained for the current
+process until all work and callback receipts are terminal and the verification
+has been quiet for 60 seconds.
 
 Verification planning preserves the canonical authored memory limit. Judgehost
 dispatch converts it exactly from MiB to KiB by multiplying by 1024; it does not
@@ -162,11 +199,15 @@ availability is checked separately from durable verification status.
 
 ## Results and artifacts
 
-The Judgehost terminal boundary produces the canonical `ExecutionResult` for
-every terminal report. Successful cases carry the complete result assembled by
-the batch scheduler; compile failures and missing cases use the same result
-normalization helpers. Verification preserves that result instead of rebuilding
-compile data, passes, warnings, or artifact evidence from summary fields.
+For a final `add-judging-run` callback, Judgehost first captures artifact bytes
+and refs, then a dependency-light normalizer produces the canonical case
+`ExecutionResult`. Compile failure arrives through `update-judging`, and a
+missing case has no complete final callback. Canonical scheduler and task-queue
+helpers construct those failure results from stored compile/case evidence; the
+batch finalizer publishes and aggregates terminal case results into the task
+report. Verification preserves
+that report instead of rebuilding compile data, passes, warnings, or artifact
+evidence from summary fields.
 
 Task results are serialized in `verification_tasks.result_json`. The canonical
 shape has `outcome`, `compile`, ordered `passes`, and `warnings`. Each pass

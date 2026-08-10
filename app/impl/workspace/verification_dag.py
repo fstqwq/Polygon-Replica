@@ -13,12 +13,10 @@ from app.service.platform.runtime_blob_store import PayloadFile, RuntimeBlobStor
 from app.service.verification.source import resolve_source
 from app.service.verification.completion import verification_task_fail_reason
 from app.service.verification.task_completion import TaskCompletion
-from app.service.verification.task_scheduler import (
-    TaskPublishResult,
-    VerificationRuntimeCallbacks,
-    VerificationRuntimeCoordinator,
-    register_verification_runtime_coordinator,
-    unregister_verification_runtime_coordinator,
+from app.service.verification.task_scheduler import TaskPublishResult
+from app.service.verification.execution import (
+    VerificationCoordinatorFailure,
+    VerificationExecutionCallbacks,
 )
 from app.service.verification.execution_result import normalize_execution_result
 from app.service.verification.lifecycle import (
@@ -61,7 +59,7 @@ from app.service.verification.plan import VerificationTestPlan
 from app.impl.workspace.verification_dag_plan import build_verification_execution_plan
 from app.impl.workspace.verification_payload import prepared_payload_for_uploaded_source
 
-_C = config.constants
+_C = config.config_values
 
 _ARTIFACT_READY_TIMEOUT_SEC = 2.0
 _ARTIFACT_READY_INTERVAL_SEC = 0.05
@@ -1124,10 +1122,10 @@ def run_workspace_verification_dag(
         )
         _require_online_judgehost()
     except Exception as exc:
-        transition = config.verification_service.fail_verification(
+        transition = config.verification_execution_service.fail_verification(
             verification_id,
             reason=str(exc) or "verification planning failed",
-        )
+        ).transition
         if transition.outcome == "missing":
             raise RuntimeError("verification was not admitted") from exc
         audit(
@@ -1282,17 +1280,10 @@ def run_workspace_verification_dag(
                 summary["error"] = fail_reason
             return status, summary, counts, rows, fail_flag, fail_reason
 
-        def _cancel_execution(reason: str) -> None:
-            config.judgehost_task_service.request_verification_cancel(
-                verification_id,
-                reason,
-            )
-
         _refresh_state()
-        callbacks = VerificationRuntimeCallbacks(
+        callbacks = VerificationExecutionCallbacks(
             publish_task=lambda row: _publish_task(row, execution=execution),
             probe_task_case_cache=config.judgehost_task_service.probe_task_case_cache,
-            cancel_execution=_cancel_execution,
             close_programs=lambda program_ids: config.judgehost_task_service.close_programs(
                 verification_id,
                 program_ids,
@@ -1301,26 +1292,11 @@ def run_workspace_verification_dag(
                 verification_id,
             ),
         )
-        coordinator = VerificationRuntimeCoordinator(
+        config.verification_execution_service.run(
             verification_id,
-            task_store=task_store,
-            completion_service=config.verification_task_completion_service,
             callbacks=callbacks,
             edges=graph.edges,
         )
-        register_verification_runtime_coordinator(verification_id, coordinator)
-        try:
-            coordinator.run()
-        except Exception as exc:
-            failure_reason = str(exc) or "verification scheduler failed"
-            config.verification_service.fail_verification(
-                verification_id,
-                reason=failure_reason,
-            )
-            _cancel_execution(failure_reason)
-            raise
-        finally:
-            unregister_verification_runtime_coordinator(verification_id)
         _status, summary, _counts, rows, fail_flag, fail_reason = _refresh_state()
         snapshot = config.verification_service.verification_snapshot(verification_id)
         if snapshot is None:
@@ -1426,18 +1402,18 @@ def run_workspace_verification_dag(
         )
         # Schedule only after final detail, status, and audit writes are durable.
         config.judgehost_task_service.schedule_verification_cleanup(verification_id)
+    except VerificationCoordinatorFailure:
+        config.judgehost_task_service.schedule_verification_cleanup(
+            verification_id
+        )
+        raise
     except Exception as exc:
         failure_reason = str(exc) or "verification execution failed"
-        transition = config.verification_service.fail_verification(
+        transition = config.verification_execution_service.fail_verification(
             verification_id,
             reason=failure_reason,
-        )
+        ).transition
         if transition.outcome != "missing":
-            if transition.outcome == "transitioned" or transition.status == Status.FAILED.value:
-                config.judgehost_task_service.request_verification_cancel(
-                    verification_id,
-                    failure_reason,
-                )
             config.judgehost_task_service.schedule_verification_cleanup(
                 verification_id
             )

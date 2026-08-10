@@ -163,7 +163,7 @@ def main() -> None:
             "problem_id": problem_id,
             "workspace_id": workspace_id,
             "workspace": str(workspace),
-            "session_cookie_name": str(config.constants.AUTH_COOKIE_NAME),
+            "session_cookie_name": str(config.config_values.AUTH_COOKIE_NAME),
             "session_token": session_token,
             "domjudge_commit": approval["commit"],
         },

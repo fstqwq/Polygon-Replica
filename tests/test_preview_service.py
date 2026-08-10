@@ -214,7 +214,7 @@ class TestPreviewService(DBTestBase):
         self.sandbox = _FakeTexSandbox()
         compiler = TexCompileService(
             sandbox_backend=self.sandbox,
-            constants=self.constants,
+            config_values=self.config_values,
         )
         self.service = PreviewService(
             self.db,

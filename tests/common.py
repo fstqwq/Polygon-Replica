@@ -173,6 +173,7 @@ def clear_startup_recovery_abort_fault() -> None:
         f"DROP TRIGGER IF EXISTS {_STARTUP_RECOVERY_ABORT_TRIGGER}"
     )
 import app.impl.auth.password_envelope as password_envelope_module  # noqa: E402
+from app.config import ConfigValues  # noqa: E402
 from app.impl.auth.password_envelope import PasswordEnvelopeStore  # noqa: E402
 from app.service.platform.testlib_source import maintained_testlib_header  # noqa: E402
 from cryptography.hazmat.primitives.asymmetric import rsa  # noqa: E402
@@ -201,9 +202,23 @@ _TEST_PASSWORD_KEY = rsa.generate_private_key(public_exponent=65537, key_size=20
 password_envelope_module.password_envelope_store = PasswordEnvelopeStore(
     key_factory=lambda: _TEST_PASSWORD_KEY
 )
-_test_runtime_values = config.constants.to_dict()
-_test_runtime_values["PASSWORD_HASH_ITERS"] = 10_000
-config.constants.replace(_test_runtime_values)
+_test_config_values = dict(config.config_values.snapshot())
+_test_config_values["PASSWORD_HASH_ITERS"] = 10_000
+config.config_values.replace(_test_config_values)
+
+
+def override_config_values(
+    test_case: unittest.TestCase,
+    values: ConfigValues,
+    **updates: object,
+) -> None:
+    """Apply one validated test snapshot and restore it during cleanup."""
+
+    previous = dict(values.snapshot())
+    candidate = dict(previous)
+    candidate.update(updates)
+    values.replace(candidate)
+    test_case.addCleanup(values.replace, previous)
 
 
 def _wait_for_worker_group(lock_attr: str, workers_attr: str, timeout_sec: float = 300.0) -> None:

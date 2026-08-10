@@ -24,6 +24,7 @@ from app.service.judgehost.result import ResultProcessor
 from app.service.platform.runtime_blob_store import PayloadFile
 from app.service.platform.rwlock import WriterPriorityRWLock
 from app.service.verification.completion import VerificationTaskCompletionService
+from app.service.verification.runtime_registry import VerificationRuntimeRegistry
 
 from tests.db_fixture import DBTestBase
 
@@ -771,12 +772,13 @@ class TestJudgehostLifecycle(DBTestBase):
             self.workspace_service,
             self.fs_manager,
             self.settings,
-            self.constants,
+            self.config_values,
             verification_task_store=self.verification_task_store,
             runtime_blob_store=self.runtime_blob_store,
             runtime_cache_index=self.runtime_cache_index,
             case_completion_sink=completion_service,
             case_diagnostic_sink=completion_service,
+            case_lease_sink=VerificationRuntimeRegistry(),
         )
         service.state.enabled = True
         service.state.api_token = "test-token"
@@ -868,12 +870,12 @@ class TestJudgehostLifecycle(DBTestBase):
         )
 
         self.assertTrue(self._report_case(store, int(cases[0]["id"]), "host-a"))
-        service.result._domjudge_finalize_batch_if_ready(batch_id)
+        service.batch_finalizer.finalize_batch_if_ready(batch_id)
         self.assertEqual(self._task(service, task_id)["status"], service.STATUS_LEASED)
         self.assertEqual(store.fetch_batch(batch_id)["status"], "open")
 
         self.assertTrue(self._report_case(store, int(cases[1]["id"]), "host-a"))
-        service.result._domjudge_finalize_batch_if_ready(batch_id)
+        service.batch_finalizer.finalize_batch_if_ready(batch_id)
         self.assertEqual(self._task(service, task_id)["status"], service.STATUS_COMPLETED)
         self.assertEqual(store.fetch_batch(batch_id)["status"], "open")
 
@@ -937,8 +939,8 @@ class TestJudgehostLifecycle(DBTestBase):
         self.assertEqual(store.fetch_case(case_id)["status"], "leased")
 
         with patch.object(
-            service.result,
-            "_publish_verification_case_cancelled",
+            service.state.case_completion_sink,
+            "cancelled",
             side_effect=RuntimeError("transient cancellation publication failure"),
         ), self.assertRaisesRegex(
             RuntimeError,
@@ -1097,13 +1099,13 @@ class TestJudgehostLifecycle(DBTestBase):
 
         self.assertFalse(self._report_case(store, int(first_case["id"]), "host-b"))
         self.assertTrue(self._report_case(store, int(first_case["id"]), "host-a"))
-        service.result._domjudge_finalize_batch_if_ready(batch_id)
+        service.batch_finalizer.finalize_batch_if_ready(batch_id)
         self.assertEqual(self._task(service, first_task)["status"], service.STATUS_COMPLETED)
         self.assertEqual(self._task(service, second_task)["status"], service.STATUS_LEASED)
         self.assertIsNotNone(service.state.task_registry.get(first_task))
 
         self.assertTrue(self._report_case(store, int(second_case["id"]), "host-b"))
-        service.result._domjudge_finalize_batch_if_ready(batch_id)
+        service.batch_finalizer.finalize_batch_if_ready(batch_id)
 
         service.schedule_verification_cleanup("ver-1")
 
@@ -1137,7 +1139,7 @@ class TestJudgehostLifecycle(DBTestBase):
             "reported_many",
             side_effect=RuntimeError("transient publish failure"),
         ), patch("app.service.judgehost.result.logger.exception"):
-            service.result._domjudge_finalize_batch_if_ready(batch_id)
+            service.batch_finalizer.finalize_batch_if_ready(batch_id)
 
         self.assertEqual(store.fetch_batch(batch_id)["status"], "finalize-pending")
         self.assertEqual(self._task(service, task_id)["status"], service.STATUS_LEASED)
@@ -1149,12 +1151,12 @@ class TestJudgehostLifecycle(DBTestBase):
         ), patch("app.service.judgehost.result.logger.exception"), patch(
             "app.service.judgehost.result.logger.error"
         ):
-            service.result._domjudge_finalize_batch_if_ready(batch_id)
+            service.batch_finalizer.finalize_batch_if_ready(batch_id)
 
         self.assertEqual(store.fetch_batch(batch_id)["status"], "finalize-pending")
         self.assertEqual(self._task(service, task_id)["status"], service.STATUS_LEASED)
 
-        service.result._domjudge_finalize_batch_if_ready(batch_id)
+        service.batch_finalizer.finalize_batch_if_ready(batch_id)
 
         self.assertEqual(store.fetch_batch(batch_id)["status"], "completed")
         self.assertEqual(self._task(service, task_id)["status"], service.STATUS_COMPLETED)
@@ -1241,9 +1243,9 @@ class TestJudgehostLifecycle(DBTestBase):
                     self.assertEqual(len(leased), 1)
 
                 with patch.object(
-                    service.result,
-                    "_publish_verification_case_cancelled",
-                    wraps=service.result._publish_verification_case_cancelled,
+                    service.state.case_completion_sink,
+                    "cancelled",
+                    wraps=service.state.case_completion_sink.cancelled,
                 ) as publish_case:
                     if scenario == "cancel":
                         cancellation = service.request_verification_cancel(
@@ -1288,9 +1290,9 @@ class TestJudgehostLifecycle(DBTestBase):
                                 ),
                             )
                         )
-                        service.result._domjudge_finalize_batch_if_ready(batch_id)
+                        service.batch_finalizer.finalize_batch_if_ready(batch_id)
                     else:
-                        service.result._domjudge_finalize_batch_if_ready(batch_id)
+                        service.batch_finalizer.finalize_batch_if_ready(batch_id)
                 service.schedule_verification_cleanup("ver-1")
                 expected = service.STATUS_COMPLETED if scenario == "cache" else service.STATUS_FAILED
                 self.assertEqual(self._task(service, task_id)["status"], expected)

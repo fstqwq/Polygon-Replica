@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import queue
-import threading
 from collections import deque
 from dataclasses import dataclass
 from typing import Callable, cast
@@ -9,6 +8,10 @@ from typing import Callable, cast
 from app.service.verification.completion import VerificationTaskCompletionService
 from app.service.verification.task_completion import CompletionCommit, TaskCompletion
 from app.service.verification.task_store import VerificationTaskRow, VerificationTaskStore
+
+
+_PUBLISH_SLICE_SIZE = 256
+_IDLE_RECONCILIATION_SEC = 10.0
 
 
 @dataclass(frozen=True)
@@ -36,9 +39,6 @@ class _VerificationEvent:
     reason: str = ""
 
 
-_COORDINATOR_LOCK = threading.Lock()
-_COORDINATORS_BY_VERIFICATION_ID: dict[str, "VerificationRuntimeCoordinator"] = {}
-COORDINATOR_BATCH_SIZE = 256
 _TERMINAL_TASK_STATUSES = frozenset(
     {
         VerificationTaskStore.TASK_DONE,
@@ -230,15 +230,40 @@ class VerificationRuntimeCoordinator:
             )
         )
 
+    def enqueue_completion_reconciliation(self, commit: CompletionCommit) -> None:
+        if commit.verification_id != self.verification_id:
+            raise RuntimeError("completion commit verification does not match coordinator")
+        self._events.put(
+            _VerificationEvent(
+                kind="completion_reconciliation",
+                completion_commit=commit,
+            )
+        )
+
     def enqueue_cancel(self, reason: str) -> None:
         self._events.put(_VerificationEvent(kind="cancel", reason=reason))
+
+    def enqueue_closed(self) -> None:
+        self._events.put(_VerificationEvent(kind="closed"))
 
     def run(self) -> None:
         self.enqueue_bootstrap()
         while True:
             try:
-                event = self._events.get(timeout=10.0)
+                event = self._events.get(timeout=_IDLE_RECONCILIATION_SEC)
             except queue.Empty:
+                if not self._task_store.verification_is_running(
+                    self.verification_id
+                ):
+                    self._handle_event(_VerificationEvent(kind="closed"))
+                    self._close_completed_programs()
+                    self._callbacks.cancel_execution(
+                        "verification is no longer running"
+                    )
+                    return
+                changed = self._reconcile_persisted_tasks()
+                if changed:
+                    self._publish_ready_rows()
                 self._reconcile_expired_leases()
                 self._close_completed_programs()
                 if self._is_terminal():
@@ -270,6 +295,29 @@ class VerificationRuntimeCoordinator:
         program_ids = self._dag.take_completed_programs()
         if program_ids:
             self._callbacks.close_programs(program_ids)
+
+    def _reconcile_persisted_tasks(self) -> bool:
+        changed = False
+        for row in self._task_store.list_rows(self.verification_id):
+            task_id = str(row["id"])
+            status = str(row["status"])
+            if (
+                task_id not in self._dag.rows_by_id
+                or status not in _TERMINAL_TASK_STATUSES
+            ):
+                continue
+            self._dag.set_runtime_identity(
+                task_id,
+                run_id=str(row["run_id"]),
+                judgehost_task_id=str(row["judgehost_task_id"]),
+            )
+            self._dag.set_result_metadata(
+                task_id,
+                verdict=str(row["verdict"]),
+                feedback_text=str(row["feedback_text"]),
+            )
+            changed = self._dag.transition(task_id, status) or changed
+        return changed
 
     def _apply_completion_commit(self, commit: CompletionCommit) -> bool:
         if commit.verification_id != self.verification_id:
@@ -340,16 +388,33 @@ class VerificationRuntimeCoordinator:
                 self.verification_id
             ):
                 self._publish_ready_rows()
-        elif event.kind == "cancel":
+        elif event.kind == "completion_reconciliation":
+            commit = event.completion_commit
+            changed = self._reconcile_persisted_tasks()
+            if commit is not None and commit.parent_transition == "failed":
+                self._callbacks.cancel_execution(
+                    commit.failure_reason or "verification failed"
+                )
+            if changed and self._task_store.verification_is_running(
+                self.verification_id
+            ):
+                self._publish_ready_rows()
+        elif event.kind in {"cancel", "closed"}:
             rows_by_id = {
                 str(row["id"]): row
                 for row in self._task_store.list_rows(self.verification_id)
             }
             for task_id, row in rows_by_id.items():
-                if str(row["status"]) == VerificationTaskStore.TASK_CANCELLED:
+                status = str(row["status"])
+                if status in _TERMINAL_TASK_STATUSES:
+                    self._dag.set_result_metadata(
+                        task_id,
+                        verdict=str(row["verdict"]),
+                        feedback_text=str(row["feedback_text"]),
+                    )
                     self._dag.transition(
                         task_id,
-                        VerificationTaskStore.TASK_CANCELLED,
+                        status,
                     )
             return True
         if self._is_terminal():
@@ -365,8 +430,9 @@ class VerificationRuntimeCoordinator:
         changed = False
         published_count = 0
         while (
-            published_count < COORDINATOR_BATCH_SIZE
-            and len(self._cache_probe_task_ids) < COORDINATOR_BATCH_SIZE
+            published_count < _PUBLISH_SLICE_SIZE
+            and len(self._cache_probe_task_ids)
+            < _PUBLISH_SLICE_SIZE
         ):
             row = self._dag.pop_ready()
             if row is None:
@@ -392,12 +458,16 @@ class VerificationRuntimeCoordinator:
                     judgehost_task_id=published.terminal_result.judgehost_task_id,
                 )
                 self._apply_completion_commit(commit)
+                if commit.parent_transition == "failed":
+                    return changed
             published_count += 1
             changed = True
             if not self._events.empty():
                 return changed
         if self._cache_probe_task_ids:
-            selected = list(self._cache_probe_task_ids)[:COORDINATOR_BATCH_SIZE]
+            selected = list(self._cache_probe_task_ids)[
+                :_PUBLISH_SLICE_SIZE
+            ]
             pending = self._callbacks.probe_task_case_cache(selected)
             for judgehost_task_id in selected:
                 if judgehost_task_id not in pending:
@@ -408,7 +478,10 @@ class VerificationRuntimeCoordinator:
                 # Yield to queued result events between slices instead of publishing an
                 # unbounded ready graph in one coordinator turn.
                 self.enqueue_bootstrap()
-        if published_count == COORDINATOR_BATCH_SIZE and self._events.empty():
+        if (
+            published_count == _PUBLISH_SLICE_SIZE
+            and self._events.empty()
+        ):
             self.enqueue_bootstrap()
         return changed
 
@@ -425,48 +498,3 @@ class VerificationRuntimeCoordinator:
             VerificationTaskStore.TASK_LEASED,
         )
         return True
-
-def register_verification_runtime_coordinator(
-    verification_id: str,
-    coordinator: VerificationRuntimeCoordinator,
-) -> None:
-    with _COORDINATOR_LOCK:
-        _COORDINATORS_BY_VERIFICATION_ID[verification_id] = coordinator
-
-
-def unregister_verification_runtime_coordinator(verification_id: str) -> None:
-    with _COORDINATOR_LOCK:
-        _COORDINATORS_BY_VERIFICATION_ID.pop(verification_id, None)
-
-
-def _runtime_coordinator(verification_id: str) -> VerificationRuntimeCoordinator | None:
-    with _COORDINATOR_LOCK:
-        return _COORDINATORS_BY_VERIFICATION_ID.get(verification_id)
-
-
-def notify_verification_case_leased(
-    verification_id: str,
-    verification_task_id: str,
-) -> None:
-    coordinator = _runtime_coordinator(verification_id)
-    if coordinator is None:
-        return
-    coordinator.enqueue_case_leased(verification_task_id)
-
-
-def notify_verification_completion_committed(
-    verification_id: str,
-    commit: CompletionCommit,
-) -> bool:
-    coordinator = _runtime_coordinator(verification_id)
-    if coordinator is None:
-        return False
-    coordinator.enqueue_completion_committed(commit)
-    return True
-
-
-def notify_verification_cancelled(verification_id: str, reason: str) -> None:
-    coordinator = _runtime_coordinator(verification_id)
-    if coordinator is None:
-        return
-    coordinator.enqueue_cancel(reason)

@@ -43,7 +43,6 @@ from app.impl.run_export.query import (
     _rerun_solution_paths_from_verification,
     _run_detail_use_compact_layout,
 )
-from app.service.verification.task_scheduler import notify_verification_cancelled
 from app.service.verification.types import ACTIVE, Status
 
 _C = config.config_values
@@ -258,10 +257,23 @@ def run_cancel(problem: str, user: Annotated[str, Depends(require_session_user)]
             message="cancel unavailable: you are not the owner of this verification",
         )
     reason = "verification cancelled by user"
-    transition = config.verification_service.cancel_verification(
-        safe_verification_id,
-        reason=reason,
-    )
+    try:
+        cancellation_result = (
+            config.verification_execution_service.cancel_verification(
+                safe_verification_id,
+                reason=reason,
+            )
+        )
+    except Exception as exc:
+        logger.exception(
+            "failed to cancel verification execution %s",
+            safe_verification_id,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail="failed to cancel verification execution",
+        ) from exc
+    transition = cancellation_result.transition
     if transition.outcome == "missing":
         return redirect_response(details_url, status_code=303, message="verification not found")
     if transition.outcome == "closed":
@@ -270,15 +282,7 @@ def run_cancel(problem: str, user: Annotated[str, Depends(require_session_user)]
             status_code=303,
             message="verification already finished",
         )
-    notify_verification_cancelled(safe_verification_id, reason)
-    try:
-        cancellation = config.judgehost_task_service.request_verification_cancel(
-            safe_verification_id,
-            reason,
-        )
-    except Exception as exc:
-        logger.exception("failed to cancel verification execution %s", safe_verification_id)
-        raise HTTPException(status_code=500, detail="failed to cancel verification execution") from exc
+    cancellation = cancellation_result.drain
     cancel_details: dict[str, object] = {
         "verification_id": safe_verification_id,
         **cancellation,

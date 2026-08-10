@@ -57,6 +57,13 @@ An already-terminal task is not rewritten. Completion returns its persisted
 result and locators as the effective state, so duplicate or conflicting
 callbacks cannot attach a new locator or failure reason.
 
+The Judgehost completion publisher marks an in-memory case acknowledged only
+after this transaction succeeds or reports the task already terminal. A failed
+transaction leaves the case unacknowledged so the callback receives non-2xx and
+can be retried. Custom-run cases have no verification task identity; their
+terminal result is retained by the process-local Judgehost scheduler and does
+not enter this verification transaction.
+
 `verification_task_diagnostics` stores at most one late-diagnostic snapshot per
 task. Its columns are `task_id`, `snapshot_json`, and `updated_at`. A diagnostic
 append uses one `BEGIN IMMEDIATE` read/merge/upsert transaction. A content digest

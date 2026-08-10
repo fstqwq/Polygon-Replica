@@ -20,28 +20,27 @@ from app.service.judgehost.file_stream import DomjudgeDownloadFile
 from app.service.platform.runtime_blob_store import PayloadFile
 from app.service.judgehost.runtime import (
     domjudge_bool,
-    domjudge_feedback_text_and_files,
     domjudge_feedback_text_from_text,
     domjudge_parse_float,
     domjudge_parse_int,
-    domjudge_parse_meta_text,
-    domjudge_rewrite_untrusted_runresult,
-    domjudge_verdict_from_runresult,
 )
-from app.service.judgehost.case_result import (
-    build_case_result,
-    decode_case_test_row,
-)
-from app.service.judgehost.completion import CaseCompletionReport
 from app.service.judgehost.core import JudgehostCore
 from app.service.judgehost.batch_scheduler_models import (
     CaseCallbackReceipt,
     CaseClaimBusy,
     CaseReportTelemetry,
-    CaseResult,
-    HostLeaseRelease,
 )
-from app.service.platform.error_text import aux_display_text_limit_bytes
+from app.service.judgehost.finalization import BatchFinalizationPort
+from app.service.judgehost.publication import (
+    JudgehostCaseCompletionPublisher,
+    JudgehostCaseDiagnosticPublisher,
+)
+from app.service.judgehost.result_normalizer import (
+    CapturedCaseArtifact,
+    CapturedJudgehostCase,
+    normalize_captured_case,
+    pass_cache_file_name,
+)
 from app.service.judgehost.state import JudgehostState
 from app.service.judgehost.task_queue import TaskQueue
 from app.service.judgehost.toolchain_versions import ToolchainVersionCollector
@@ -54,66 +53,12 @@ from app.service.judgehost.pass_bundle import (
 )
 from app.service.verification.execution_result import (
     CAPTURE_COMPLETE,
-    ExecutionPassResult,
-    ExecutionUsage,
-    PassArtifacts,
     execution_result_json,
 )
 
 logger = logging.getLogger(__name__)
 
 _diag_logger = logging.getLogger("uvicorn.error")
-
-
-def _answer_correct_from_compare_exit_code(compare_exit_code: int) -> bool:
-    return int(compare_exit_code) == 42
-
-
-_PASS_CACHE_FILE_NAMES = {
-    "input": "input",
-    "program.out": "program-out",
-    "program.err": "program-err",
-    "system.out": "system-out",
-    "program.meta": "program-meta",
-    "compare.meta": "compare-meta",
-    "judgemessage.txt": "judgemessage",
-    "teammessage.txt": "teammessage",
-}
-
-
-def _pass_cache_file_name(number: int, name: str) -> str:
-    return f"pass-{number}-{_PASS_CACHE_FILE_NAMES[name]}"
-
-
-def _optional_meta_float(meta: dict[str, str], key: str) -> float | None:
-    raw = meta.get(key)
-    if raw is None:
-        return None
-    try:
-        return max(0.0, float(raw))
-    except (TypeError, ValueError):
-        return None
-
-
-def _program_meta_usage(payload: bytes) -> ExecutionUsage:
-    meta = domjudge_parse_meta_text(payload.decode("utf-8", errors="replace"))
-    time_used_key = meta.get("time-used")
-    runtime_sec = _optional_meta_float(meta, "time-used")
-    if runtime_sec is None and time_used_key in meta:
-        runtime_sec = _optional_meta_float(meta, time_used_key)
-    memory_raw = meta.get("memory-bytes")
-    memory_kb: int | None = None
-    if memory_raw is not None:
-        try:
-            memory_kb = max(0, int(memory_raw) // 1024)
-        except (TypeError, ValueError):
-            memory_kb = None
-    return ExecutionUsage(
-        runtime_sec=runtime_sec,
-        cpu_sec=_optional_meta_float(meta, "cpu-time"),
-        wall_sec=_optional_meta_float(meta, "wall-time"),
-        memory_kb=memory_kb,
-    )
 
 
 class ResultProcessor:
@@ -128,12 +73,25 @@ class ResultProcessor:
     _TASK_KIND_MAIN_CORRECT = "main-correct"
     _TASK_KIND_SOLUTION_RUN = "solution-run"
 
-    def __init__(self, state: JudgehostState, core: JudgehostCore, queue: TaskQueue, toolkit: DomjudgeToolkit) -> None:
+    def __init__(
+        self,
+        state: JudgehostState,
+        core: JudgehostCore,
+        queue: TaskQueue,
+        toolkit: DomjudgeToolkit,
+        *,
+        diagnostic_publisher: JudgehostCaseDiagnosticPublisher,
+        completion_publisher: JudgehostCaseCompletionPublisher,
+        batch_finalizer: BatchFinalizationPort,
+    ) -> None:
         self._s = state
         self._core = core
         self._queue = queue
         self._toolkit = toolkit
         self._toolchain_versions = ToolchainVersionCollector(state)
+        self._diagnostic_publisher = diagnostic_publisher
+        self._completion_publisher = completion_publisher
+        self._batch_finalizer = batch_finalizer
 
     def _touch_task_verification(self, task_id: str) -> None:
         task = self._s.task_registry.get(task_id)
@@ -150,17 +108,6 @@ class ResultProcessor:
         # near the old deadline receives a fresh full quiet interval.
         self._s.touch_verification_runtime(receipt.verification_id)
 
-    def finalize_host_lease_release(self, release: HostLeaseRelease) -> None:
-        for task_id in release.terminal_task_ids:
-            batch_row = self._s.batch_scheduler.batch_for_task(task_id)
-            if batch_row is not None:
-                self._domjudge_finalize_task_if_ready(
-                    task_id,
-                    batch_row=dict(batch_row),
-                )
-        for batch_id in release.terminal_batch_ids:
-            self._domjudge_finalize_batch_if_ready(batch_id)
-
     def _domjudge_task_accepts_case_updates(self, task_id: str) -> bool:
         task_row = self._core.task_by_id(task_id)
         if task_row is None:
@@ -172,22 +119,6 @@ class ResultProcessor:
             self.STATUS_LEASED,
             self.STATUS_REPORTING,
         }
-
-    def _domjudge_feedback_text_and_files(
-        self,
-        *,
-        runresult: str,
-        output_error_ref: str,
-        output_diff_ref: str,
-        team_message_ref: str,
-    ) -> tuple[str, list[str]]:
-        return domjudge_feedback_text_and_files(
-            read_blob=lambda token: self._toolkit.read_blob_ref(token, max_bytes=16 * 1024 * 1024),
-            runresult=runresult,
-            output_error_ref=output_error_ref,
-            output_diff_ref=output_diff_ref,
-            team_message_ref=team_message_ref,
-        )
 
     def domjudge_get_source_files(
         self,
@@ -316,7 +247,11 @@ class ResultProcessor:
             debug_text=safe_error,
             now_text=now_text,
         )
-        self._domjudge_finalize_batch_if_ready(int(batch_id), force_failed=True, error_text=safe_error)
+        self._batch_finalizer.finalize_batch_if_ready(
+            int(batch_id),
+            force_failed=True,
+            error_text=safe_error,
+        )
 
     def domjudge_get_executable_files(
         self,
@@ -411,118 +346,6 @@ class ResultProcessor:
         finally:
             self._release_case_callback_receipt(receipt)
 
-    def _reported_case_completion(
-        self,
-        case_id: int,
-    ) -> CaseCompletionReport | None:
-        case = self._s.batch_scheduler.fetch_case(int(case_id))
-        if case is None:
-            return None
-        batch = self._s.batch_scheduler.fetch_batch(int(case["batch_id"]))
-        if batch is None:
-            return None
-        judgehost_task_id = domjudge_text(case["task_id"])
-        test_name = domjudge_text(case["test_name"])
-        if not judgehost_task_id or not test_name:
-            return None
-        report = self._queue.poll_task_case_result(judgehost_task_id, test_name)
-        if report is None:
-            return None
-        return CaseCompletionReport(
-            verification_task_id=domjudge_text(case["verification_task_id"]),
-            judgehost_task_id=judgehost_task_id,
-            test_name=test_name,
-            report=report,
-            verification_id=domjudge_text(batch["verification_id"]),
-        )
-
-    def _domjudge_publish_reported_cases(
-        self,
-        case_ids: tuple[int, ...],
-    ) -> bool:
-        unique_case_ids = tuple(dict.fromkeys(int(case_id) for case_id in case_ids))
-        reports: list[CaseCompletionReport] = []
-        for case_id in unique_case_ids:
-            report = self._reported_case_completion(case_id)
-            if report is None:
-                return False
-            reports.append(report)
-        if not reports:
-            return True
-        if not self._s.case_completion_sink.reported_many(tuple(reports)):
-            return False
-        self._s.batch_scheduler.acknowledge_case_completions(
-            list(unique_case_ids)
-        )
-        return all(
-            (case := self._s.batch_scheduler.fetch_case(case_id)) is not None
-            and bool(case["completion_acknowledged"])
-            for case_id in unique_case_ids
-        )
-
-    def _publish_verification_case_cancelled(
-        self,
-        *,
-        verification_task_id: str,
-        task_id: str,
-        test_name: str,
-        reason: str = "",
-    ) -> bool:
-        return self._s.case_completion_sink.cancelled(
-            verification_task_id,
-            task_id,
-            test_name,
-            reason,
-        )
-
-    def _flush_pending_case_diagnostics(self, case_id: int) -> None:
-        case = self._s.batch_scheduler.fetch_case(int(case_id))
-        if case is None or not bool(case["completion_acknowledged"]):
-            return
-        verification_task_id = domjudge_text(case["verification_task_id"])
-        if not verification_task_id:
-            return
-        for diagnostic in self._s.batch_scheduler.pending_case_diagnostics(int(case_id)):
-            outcome = self._s.case_diagnostic_sink.append(
-                task_id=verification_task_id,
-                kind=diagnostic.kind,
-                hostname=diagnostic.hostname,
-                text=diagnostic.text,
-                received_at=diagnostic.received_at,
-            )
-            if outcome.outcome not in {"persisted", "duplicate"}:
-                raise RuntimeError(
-                    "verification task rejected a pending judgehost diagnostic"
-                )
-            self._s.batch_scheduler.acknowledge_case_diagnostic(
-                int(case_id),
-                diagnostic,
-            )
-
-    def _acknowledge_terminal_case(self, case_id: int, *, reason: str = "") -> bool:
-        case = self._s.batch_scheduler.fetch_case(int(case_id))
-        if case is None:
-            return True
-        status = domjudge_lower_text(case["status"])
-        if status not in {"reported", "cancelled"}:
-            return False
-        if not bool(case["completion_acknowledged"]):
-            if status == "reported":
-                accepted = self._domjudge_publish_reported_cases((int(case_id),))
-            else:
-                accepted = self._publish_verification_case_cancelled(
-                    verification_task_id=domjudge_text(case["verification_task_id"]),
-                    task_id=domjudge_text(case["task_id"]),
-                    test_name=domjudge_text(case["test_name"]),
-                    reason=reason,
-                )
-                if accepted:
-                    self._s.batch_scheduler.acknowledge_case_completion(int(case_id))
-            if not accepted:
-                raise RuntimeError("verification task completion was rejected")
-        self._flush_pending_case_diagnostics(int(case_id))
-        return True
-
     def _complete_terminal_callback_case(
         self,
         case_id: int,
@@ -538,18 +361,21 @@ class ResultProcessor:
         if domjudge_lower_text(case["status"]) not in {"reported", "cancelled"}:
             return False
         if bool(case["completion_acknowledged"]):
-            self._flush_pending_case_diagnostics(int(case_id))
+            self._diagnostic_publisher.flush_pending(int(case_id))
             return True
         batch = self._s.batch_scheduler.fetch_batch(int(batch_id))
         if batch is not None and domjudge_text(batch["failure_runresult"]):
-            self._domjudge_finalize_batch_if_ready(
+            self._batch_finalizer.finalize_batch_if_ready(
                 int(batch_id),
                 require_completion_ack=True,
             )
             return True
-        if not self._acknowledge_terminal_case(int(case_id), reason=reason):
+        if not self._completion_publisher.acknowledge_terminal_case(
+            int(case_id),
+            reason=reason,
+        ):
             return False
-        self._domjudge_finalize_batch_if_ready(
+        self._batch_finalizer.finalize_batch_if_ready(
             int(batch_id),
             require_completion_ack=True,
         )
@@ -599,428 +425,21 @@ class ResultProcessor:
             return False
         task_id = domjudge_text(row["task_id"])
         batch_id = int(row["batch_id"])
-        self._acknowledge_terminal_case(
+        self._completion_publisher.acknowledge_terminal_case(
             int(case_id),
             reason="judgehost task cancelled",
         )
         batch_row = self._s.batch_scheduler.batch_finalize_row(batch_id)
         if batch_row is not None:
-            self._domjudge_finalize_task_if_ready(task_id, batch_row=dict(batch_row))
-        self._domjudge_finalize_batch_if_ready(
+            self._batch_finalizer.finalize_task_if_ready(
+                task_id,
+                batch_row=dict(batch_row),
+            )
+        self._batch_finalizer.finalize_batch_if_ready(
             batch_id,
             require_completion_ack=True,
         )
         return True
-
-    def _domjudge_task_result_payload(
-        self,
-        *,
-        task_id: str,
-        batch_row: dict[str, object],
-        case_results: list[tuple[dict[str, object], CaseResult | None]],
-        force_failed: bool,
-        error_text: str,
-    ) -> dict[str, object]:
-        task_row = self._core.task_by_id(task_id)
-        if task_row is None:
-            raise RuntimeError("judgehost task not found")
-        task_payload = self._core.task_payload(task_id)
-        task_kind = self._toolkit.task_kind(task_payload)
-        compile_only = task_kind == self._TASK_KIND_COMPILE_ONLY
-        compile_success_raw = batch_row["compile_success"]
-        compile_success = None if compile_success_raw is None else int(compile_success_raw)
-        tests: list[dict[str, object]] = []
-        internal_failure_error = ""
-        cancelled_cases = 0
-        usage_time_user = 0
-        usage_time_wall = 0
-        usage_mem_peak = 0
-
-        for row, case_result in case_results:
-            if domjudge_lower_text(row["status"]) == "cancelled":
-                cancelled_cases += 1
-                continue
-            test_name = domjudge_text(row["test_name"], default=f"{int(row['ordinal']):03}.in")
-            if case_result is None:
-                internal_failure_error = (
-                    internal_failure_error
-                    or f"{test_name}: judgehost case result missing"
-                )
-                continue
-            test_row = decode_case_test_row(case_result, test_name=test_name)
-            runresult = case_result.runresult
-            verdict = case_result.verdict
-            cpu_ms = max(0, int(round((case_result.cpu_sec or 0.0) * 1000.0)))
-            wall_ms = max(0, int(round((case_result.wall_sec or 0.0) * 1000.0)))
-            memory_kb = case_result.memory_kb or 0
-            feedback_text = case_result.feedback_text
-            runresult_token = domjudge_lower_text(runresult)
-            usage_time_user += cpu_ms
-            usage_time_wall += wall_ms
-            usage_mem_peak = max(usage_mem_peak, memory_kb)
-            tests.append(test_row)
-            if (
-                compile_success != 0
-                and (not internal_failure_error)
-                and (
-                    verdict == "FL"
-                    or runresult_token in {
-                        "checker-fail",
-                        "compare-error",
-                        "internal-error",
-                    }
-                )
-            ):
-                detail = domjudge_text(feedback_text)
-                if not detail:
-                    detail = runresult_token.replace("-", " ")
-                internal_failure_error = f"{test_name}: {detail}" if test_name else detail
-            if (
-                compile_success != 0
-                and (not internal_failure_error)
-                and task_kind == "main-correct"
-                and verdict != "OK"
-            ):
-                detail = domjudge_text(feedback_text) or f"main correct failed on {test_name}"
-                internal_failure_error = detail
-        if cancelled_cases > 0 and (not internal_failure_error):
-            internal_failure_error = "judgehost task cancelled"
-
-        compile_log = ""
-        compile_diag: list[dict[str, object]] = []
-        compile_text = self._toolkit.b64_decode(batch_row["compile_output_b64"]).decode("utf-8", errors="replace")
-        compile_error_summary = ""
-        compile_error_task = ""
-        if compile_success == 0:
-            compile_log = "compile.log"
-            message = "compilation failed"
-            if compile_text.strip():
-                message = compile_text.strip()
-            compile_error_summary = message
-            compile_error_task = domjudge_feedback_text_from_text(message) or "compilation failed"
-            compile_diag.append(
-                {
-                    "level": "error",
-                    "message": message,
-                    "file": "",
-                    "line": 0,
-                    "column": 0,
-                    "can_link": False,
-                }
-            )
-
-        run_status = "failed" if (force_failed or compile_success == 0 or cancelled_cases) else "ok"
-        if (not force_failed) and internal_failure_error:
-            run_status = "failed"
-        summary = self._queue.load_run_summary(domjudge_text(task_row["run_id"]))
-        summary["tests"] = tests
-        summary["compile_log"] = compile_log
-        summary["compile_diagnostics"] = compile_diag
-        if compile_only:
-            summary["compile_only"] = True
-        summary["usage"] = {
-            "tests": len(tests),
-            "time_ms_total": usage_time_user,
-            "time_user_ms_total": usage_time_user,
-            "time_wall_ms_total": usage_time_wall,
-            "memory_kb_peak": usage_mem_peak,
-        }
-        summary["judgehost"] = {
-            "script_hashes": {
-                "compile": domjudge_lower_text(batch_row["compile_hash"]),
-                "run": domjudge_lower_text(batch_row["run_hash"]),
-                "compare": domjudge_lower_text(batch_row["compare_hash"]),
-            }
-        }
-        if force_failed and error_text:
-            summary["error"] = error_text
-        elif compile_error_summary:
-            summary["error"] = compile_error_summary
-        elif internal_failure_error:
-            summary["error"] = internal_failure_error
-        result_payload: dict[str, object] = {"run_status": run_status, "summary": summary}
-        if force_failed and error_text:
-            result_payload["error"] = error_text
-        elif compile_error_task:
-            result_payload["error"] = compile_error_task
-        elif internal_failure_error:
-            result_payload["error"] = internal_failure_error
-        return result_payload
-
-    def _domjudge_finalize_task_if_ready(
-        self,
-        task_id: str,
-        *,
-        batch_row: dict[str, object],
-        force_failed: bool = False,
-        error_text: str = "",
-    ) -> bool:
-        safe_task_id = domjudge_text(task_id)
-        if not self._s.batch_scheduler.task_cases_terminal(safe_task_id):
-            return False
-        case_results = self._s.batch_scheduler.task_case_results(safe_task_id)
-        cases = [row for row, _result in case_results]
-        if any(
-            domjudge_lower_text(case["status"]) == "reported"
-            and not bool(case["completion_acknowledged"])
-            for case in cases
-        ):
-            return False
-        task_row = self._s.task_registry.get(safe_task_id)
-        if task_row is None:
-            return False
-        task_status = domjudge_lower_text(task_row["status"])
-        if task_status in {"completed", "failed"}:
-            return True
-        if task_status not in {self.STATUS_QUEUED, self.STATUS_LEASED}:
-            return False
-        payload = self._domjudge_task_result_payload(
-            task_id=safe_task_id,
-            batch_row=batch_row,
-            case_results=case_results,
-            force_failed=force_failed,
-            error_text=error_text,
-        )
-        for case_row in cases:
-            if domjudge_lower_text(case_row["status"]) != "cancelled":
-                continue
-            if bool(case_row["completion_acknowledged"]):
-                continue
-            published = self._acknowledge_terminal_case(
-                int(case_row["id"]),
-                reason=domjudge_text(payload.get("error"), default="judgehost task cancelled"),
-            )
-            if not published:
-                return False
-        self._queue.finalize_domjudge_task(task_id=safe_task_id, payload=payload)
-        return True
-
-    def _domjudge_publish_and_finalize_ready_tasks(
-        self,
-        *,
-        batch_id: int,
-        batch_row: dict[str, object],
-        cases: list[dict[str, object]],
-        require_complete_batch: bool,
-        force_failed: bool,
-        error_text: str,
-    ) -> bool:
-        if require_complete_batch and any(
-            domjudge_lower_text(row["status"]) not in {"reported", "cancelled"}
-            for row in cases
-        ):
-            return False
-        unacknowledged_reported = tuple(
-            int(row["id"])
-            for row in cases
-            if domjudge_lower_text(row["status"]) == "reported"
-            and not bool(row["completion_acknowledged"])
-        )
-        if unacknowledged_reported:
-            try:
-                published = self._domjudge_publish_reported_cases(
-                    unacknowledged_reported
-                )
-            except Exception:
-                logger.exception(
-                    "failed to publish terminal DOMjudge cases batch_id=%s case_ids=%s",
-                    int(batch_id),
-                    unacknowledged_reported,
-                )
-                return False
-            if not published:
-                return False
-
-        for row in cases:
-            if domjudge_lower_text(row["status"]) not in {"reported", "cancelled"}:
-                continue
-            try:
-                self._acknowledge_terminal_case(int(row["id"]))
-            except Exception:
-                logger.exception(
-                    "failed to acknowledge terminal DOMjudge case "
-                    "batch_id=%s case_id=%s",
-                    int(batch_id),
-                    int(row["id"]),
-                )
-                return False
-
-        task_ids = list(dict.fromkeys(
-            task_id
-            for row in cases
-            if (task_id := domjudge_text(row["task_id"]))
-        ))
-        for task_id in task_ids:
-            try:
-                self._domjudge_finalize_task_if_ready(
-                    task_id,
-                    batch_row=batch_row,
-                    force_failed=force_failed,
-                    error_text=error_text,
-                )
-            except Exception:
-                logger.exception(
-                    "failed to finalize DOMjudge task task_id=%s batch_id=%s",
-                    task_id,
-                    int(batch_id),
-                )
-                return False
-        return True
-
-    def _request_batch_failure(self, batch_id: int, *, runresult: str, error_text: str) -> None:
-        batch_row = self._s.batch_scheduler.fetch_batch(int(batch_id))
-        if batch_row is None:
-            return
-        feedback = domjudge_text(error_text)
-        if runresult == "compiler-error" and not feedback:
-            compile_blob = self._toolkit.b64_decode(batch_row["compile_output_b64"])
-            feedback = domjudge_feedback_text_from_text(
-                compile_blob.decode("utf-8", errors="replace")
-            ) or "compilation failed"
-        if not feedback:
-            feedback = runresult.replace("-", " ")
-        self._s.batch_scheduler.record_batch_failure(
-            int(batch_id),
-            runresult=runresult,
-            error_text=feedback,
-            updated_at=now_iso(),
-        )
-
-    def _schedule_finalization_retry(self, batch_id: int, *, delay_sec: float = 0.25) -> None:
-        self._s.batch_scheduler.schedule_batch_finalization_retry(
-            int(batch_id),
-            now_text=now_iso(),
-            delay_sec=delay_sec,
-        )
-
-    def retry_due_finalizations(self, *, limit: int = 1) -> None:
-        for batch_id in self._s.batch_scheduler.due_batch_finalizations(limit=limit):
-            self._domjudge_finalize_batch_if_ready(batch_id)
-
-    def _clear_finalization_retry(self, batch_id: int) -> None:
-        self._s.batch_scheduler.clear_batch_finalization_retry(int(batch_id))
-
-    def _domjudge_finalize_batch_if_ready(
-        self,
-        batch_id: int,
-        *,
-        force_failed: bool = False,
-        error_text: str = "",
-        require_completion_ack: bool = False,
-    ) -> None:
-        current = self._s.batch_scheduler.fetch_batch(int(batch_id))
-        if current is None:
-            return
-        if force_failed:
-            self._request_batch_failure(
-                int(batch_id),
-                runresult="internal-error",
-                error_text=error_text,
-            )
-        elif domjudge_text(current["failure_runresult"]):
-            self._request_batch_failure(
-                int(batch_id),
-                runresult=domjudge_text(current["failure_runresult"]),
-                error_text=domjudge_text(current["failure_text"]),
-            )
-        current = self._s.batch_scheduler.fetch_batch(int(batch_id))
-        if current is None:
-            return
-        current_cases = [
-            dict(row)
-            for row in self._s.batch_scheduler.cases_for_batch(int(batch_id))
-        ]
-        if not self._domjudge_publish_and_finalize_ready_tasks(
-            batch_id=int(batch_id),
-            batch_row=dict(current),
-            cases=current_cases,
-            require_complete_batch=bool(
-                domjudge_text(current["failure_runresult"])
-            ),
-            force_failed=force_failed,
-            error_text=error_text,
-        ):
-            self._schedule_finalization_retry(int(batch_id))
-            if require_completion_ack:
-                raise RuntimeError("verification task completion is not durably acknowledged")
-            return
-        self._clear_finalization_retry(int(batch_id))
-        claim = self._s.batch_scheduler.claim_batch_finalization(
-            int(batch_id),
-            now_text=now_iso(),
-        )
-        if claim is None:
-            return
-        try:
-            batch_row = dict(claim["batch"])
-            cases = [dict(row) for row in claim["cases"]]
-            task_ids = list(dict.fromkeys(
-                task_id
-                for row in cases
-                if (task_id := domjudge_text(row["task_id"]))
-            ))
-            task_rows = {task_id: self._s.task_registry.get(task_id) for task_id in task_ids}
-            unfinished_task_ids = [
-                task_id
-                for task_id, task_row in task_rows.items()
-                if task_row is None
-                or domjudge_lower_text(task_row["status"]) not in {"completed", "failed"}
-            ]
-            if unfinished_task_ids:
-                unfinished_statuses = {
-                    task_id: (
-                        "<missing>"
-                        if task_rows[task_id] is None
-                        else domjudge_lower_text(
-                            cast(dict[str, object], task_rows[task_id])["status"]
-                        )
-                    )
-                    for task_id in unfinished_task_ids
-                }
-                transient_statuses = set(unfinished_statuses.values()) <= {
-                    self.STATUS_ENQUEUING,
-                    self.STATUS_REPORTING,
-                }
-                log = logger.debug if transient_statuses else logger.error
-                log(
-                    "DOMjudge batch remains finalizing because tasks are not terminal "
-                    "batch_id=%s task_statuses=%s",
-                    int(batch_id),
-                    unfinished_statuses,
-                )
-                self._schedule_finalization_retry(int(batch_id))
-                return
-            compile_success = batch_row["compile_success"]
-            compile_failed = compile_success is not None and int(compile_success) == 0
-            has_cancelled_cases = any(
-                domjudge_lower_text(row["status"]) == "cancelled"
-                for row in cases
-            )
-            has_failed_tasks = any(
-                domjudge_lower_text(cast(dict[str, object], task_rows[task_id])["status"])
-                == self.STATUS_FAILED
-                for task_id in task_ids
-            )
-            finished_at = now_iso()
-            terminal_status = (
-                "failed"
-                if force_failed or compile_failed or has_cancelled_cases or has_failed_tasks
-                else "completed"
-            )
-            updated = self._s.batch_scheduler.set_batch_terminal_status(
-                int(batch_id),
-                status=terminal_status,
-                completed_at=finished_at,
-                updated_at=finished_at,
-            )
-            if not updated:
-                logger.error("DOMjudge batch finalization claim disappeared batch_id=%s", int(batch_id))
-                self._schedule_finalization_retry(int(batch_id))
-                return
-            self._clear_finalization_retry(int(batch_id))
-        except Exception:
-            self._schedule_finalization_retry(int(batch_id))
-            raise
 
     def domjudge_update_judging(self, hostname: str, judgetask_id: int, payload: dict[str, object]) -> None:
         receipt = self._s.batch_scheduler.acquire_case_callback_receipt(int(judgetask_id))
@@ -1079,7 +498,10 @@ class ResultProcessor:
             raw = self._toolkit.payload_blob_bytes(value)
             if raw:
                 return base64.b64encode(
-                    truncate_stored_log_bytes(raw, self._s.constants)
+                    truncate_stored_log_bytes(
+                        raw,
+                        self._s.config_values.snapshot(),
+                    )
                 ).decode("ascii")
             return domjudge_text(value)
 
@@ -1102,7 +524,7 @@ class ResultProcessor:
                 )
             )
         if batch_status in {"finalize-pending", "finalizing"}:
-            self._domjudge_finalize_batch_if_ready(
+            self._batch_finalizer.finalize_batch_if_ready(
                 batch_id,
                 require_completion_ack=True,
             )
@@ -1177,16 +599,16 @@ class ResultProcessor:
                     )
                     return
                 if claim.outcome == "cancelled":
-                    self._acknowledge_terminal_case(
+                    self._completion_publisher.acknowledge_terminal_case(
                         case_id,
                         reason="judgehost task cancelled",
                     )
-                    self._domjudge_finalize_batch_if_ready(
+                    self._batch_finalizer.finalize_batch_if_ready(
                         claim.batch_id,
                         require_completion_ack=True,
                     )
                     return
-                self._domjudge_finalize_batch_if_ready(
+                self._batch_finalizer.finalize_batch_if_ready(
                     claim.batch_id,
                     require_completion_ack=True,
                 )
@@ -1297,7 +719,7 @@ class ResultProcessor:
                 generation=claim.generation,
                 updated_at=now_iso(),
             ):
-                self._domjudge_finalize_batch_if_ready(claim.batch_id)
+                self._batch_finalizer.finalize_batch_if_ready(claim.batch_id)
 
         try:
             result_id = self._process_domjudge_judging_run(
@@ -1381,12 +803,12 @@ class ResultProcessor:
         _capture_payload_file("program.err", payload.get("output_error"), allow_empty=True)
         _capture_payload_file("system.out", payload.get("output_system"), allow_empty=True)
         _capture_payload_file("judgemessage.txt", payload.get("output_diff"), allow_empty=True)
-        metadata_blob = _capture_payload_file(
+        _capture_payload_file(
             "program.meta",
             payload.get("metadata"),
             allow_empty=True,
         )
-        compare_meta_blob = _capture_payload_file(
+        _capture_payload_file(
             "compare.meta",
             payload.get("compare_metadata"),
             allow_empty=True,
@@ -1405,7 +827,15 @@ class ResultProcessor:
         )
         bundle_limit_bytes = min(
             8 * 1024 * 1024,
-            max(1024, int(run_output_kb(self._s.constants) * 1024 * 3 // 4)),
+            max(
+                1024,
+                int(
+                    run_output_kb(self._s.config_values.snapshot())
+                    * 1024
+                    * 3
+                    // 4
+                ),
+            ),
         )
         callback_pass = max(0, domjudge_parse_int(payload.get("pass"), 0))
         pass_bundle: PassBundle | None = None
@@ -1456,7 +886,7 @@ class ResultProcessor:
                         bundled_pass.number,
                         content,
                     ) if name == "judgemessage.txt" else content
-                    cache_name = _pass_cache_file_name(bundled_pass.number, name)
+                    cache_name = pass_cache_file_name(bundled_pass.number, name)
                     payload_files[cache_name] = stored_content
             final_files = pass_bundle.pass_files(pass_bundle.final_pass_number)
             payload_files["teammessage.txt"] = final_files["teammessage.txt"]
@@ -1481,33 +911,6 @@ class ResultProcessor:
                     else reduced_warning
                 )
 
-        runtime_sec = domjudge_parse_float(payload.get("runtime"), 0.0)
-        cpu_sec = runtime_sec
-        wall_sec = runtime_sec
-        memory_kb = 0
-        compare_exit_code = -1
-        program_meta: dict[str, str] = {}
-        if metadata_blob:
-            program_meta = domjudge_parse_meta_text(metadata_blob.decode("utf-8", errors="replace"))
-            cpu_total_sec = domjudge_parse_float(program_meta.get("cpu-time"), runtime_sec)
-            wall_sec = domjudge_parse_float(program_meta.get("wall-time"), cpu_total_sec)
-            runtime_sec = cpu_sec = cpu_total_sec
-            mem_bytes = domjudge_parse_int(program_meta.get("memory-bytes"), 0)
-            memory_kb = max(0, int(mem_bytes // 1024))
-        if compare_meta_blob:
-            compare_meta = domjudge_parse_meta_text(
-                compare_meta_blob.decode("utf-8", errors="replace")
-            )
-            compare_exit_code = domjudge_parse_int(compare_meta.get("exitcode"), -1)
-        answer_correct = _answer_correct_from_compare_exit_code(compare_exit_code)
-        final_usage = (
-            _program_meta_usage(metadata_blob)
-            if metadata_blob
-            else ExecutionUsage()
-        )
-
-        score_text = domjudge_text(payload.get("score"))
-
         source_name = domjudge_text(row["source_name"])
         source_hash = domjudge_lower_text(row["source_hash"])
         if re.fullmatch(r"[0-9a-f]{64}", source_hash) is None:
@@ -1529,40 +932,74 @@ class ResultProcessor:
         compile_cfg = _load_json_object(row["compile_config_json"])
         run_cfg = run_cfg_for_capture
         compare_cfg = _load_json_object(row["compare_config_json"])
-        runresult = domjudge_lower_text(payload.get("runresult"), default="internal-error")
-        runresult = domjudge_rewrite_untrusted_runresult(
-            runresult,
-            cpu_sec=cpu_sec,
-            run_cfg_obj=run_cfg,
-        )
-        if runresult in {"compare-error", "run-error", "internal-error"} and compare_exit_code < 0:
-            time_result = domjudge_lower_text(program_meta.get("time-result"))
-            signal_num = domjudge_parse_int(program_meta.get("signal"), 0)
-            output_limit_kb = domjudge_parse_int(run_cfg.get("output_limit"), 0)
-            output_limit_bytes = max(0, int(output_limit_kb) * 1024)
-            stdout_bytes = domjudge_parse_int(program_meta.get("stdout-bytes"), 0)
-            output_truncated = domjudge_lower_text(program_meta.get("output-truncated"))
-            timed_out = ("timelimit" in time_result) or signal_num == 14
-            output_limited = False
-            if output_limit_bytes > 0 and stdout_bytes >= output_limit_bytes:
-                output_limited = True
-            elif output_truncated in {"1", "true", "yes", "on"} and stdout_bytes > 0:
-                output_limited = True
-            if timed_out:
-                runresult = "timelimit"
-            elif output_limited:
-                runresult = "output-limit"
-        if runresult in {"compare-error", "run-error"} and compare_exit_code == 3:
-            runresult = "checker-fail"
-        verdict = domjudge_verdict_from_runresult(runresult)
         compile_config_hash = domjudge_json_hash(compile_cfg)
         run_config_hash = domjudge_json_hash(run_cfg)
         compare_config_hash = domjudge_json_hash(compare_cfg)
-        toolchain_cmd_digest = domjudge_lower_text(compile_cfg.get("toolchain_cmd_digest"))
+        toolchain_cmd_digest = domjudge_lower_text(
+            compile_cfg.get("toolchain_cmd_digest")
+        )
         if re.fullmatch(r"[0-9a-f]{64}", toolchain_cmd_digest) is None:
-            toolchain_cmd_digest = self._toolkit.toolchain_cmd_digest(source_name)
+            toolchain_cmd_digest = self._toolkit.toolchain_cmd_digest(
+                source_name
+            )
+
+        current_case = self._s.batch_scheduler.fetch_case(case_id)
+        if current_case is not None and bool(current_case["cancel_requested"]):
+            self._complete_cancelled_case_receipt(
+                case_id=case_id,
+                generation=claim_generation,
+                row=dict(row),
+                report=report_telemetry,
+            )
+            return 1
 
         cache_files: dict[str, bytes] = dict(payload_files)
+        cached_payloads = {
+            name: self._s.runtime_blob_store.put_bytes(content)
+            for name, content in cache_files.items()
+        }
+        captured_artifacts = {
+            name: CapturedCaseArtifact(
+                content=cache_files[name],
+                blob_ref=payload_file.blob_ref or "",
+            )
+            for name, payload_file in cached_payloads.items()
+        }
+        debug_context = self._s.batch_scheduler.case_debug_context(case_id)
+        debug_text = ""
+        if debug_context is not None:
+            debug_text = domjudge_text(debug_context["case_debug_text"])
+            if not debug_text:
+                debug_text = domjudge_text(debug_context["batch_debug_text"])
+        normalized = normalize_captured_case(
+            CapturedJudgehostCase(
+                test_name=domjudge_text(row["test_name"]),
+                input_ref=domjudge_text(row["input_ref"]),
+                interactive=interactive,
+                raw_runresult=domjudge_text(
+                    payload.get("runresult"),
+                    default="internal-error",
+                ),
+                runtime_fallback_sec=domjudge_parse_float(
+                    payload.get("runtime"),
+                    0.0,
+                ),
+                score_text=domjudge_text(payload.get("score")),
+                run_config=run_cfg,
+                artifacts=captured_artifacts,
+                pass_bundle=pass_bundle,
+                capture_warning=capture_warning,
+                debug_text=debug_text,
+            )
+        )
+        case_result = normalized.result
+        runresult = normalized.runresult
+        verdict = normalized.verdict
+        runtime_sec = normalized.runtime_sec
+        cpu_sec = normalized.cpu_sec
+        wall_sec = normalized.wall_sec
+        memory_kb = normalized.memory_kb
+        score_text = normalized.score_text
 
         case_key_hash, case_signature = self._toolkit.case_cache_ref(
             source_hash=source_hash,
@@ -1578,192 +1015,7 @@ class ResultProcessor:
         shortcut_eligible = verdict != "FL"
         if compile_only and verdict != "OK":
             shortcut_eligible = False
-        current_case = self._s.batch_scheduler.fetch_case(case_id)
-        if current_case is not None and bool(current_case["cancel_requested"]):
-            self._complete_cancelled_case_receipt(
-                case_id=case_id,
-                generation=claim_generation,
-                row=dict(row),
-                report=report_telemetry,
-            )
-            return 1
-        cached_payloads = {
-            name: self._s.runtime_blob_store.put_bytes(content)
-            for name, content in cache_files.items()
-        }
 
-        def _case_blob_token(blob_name: str) -> str:
-            payload = cached_payloads.get(blob_name)
-            return "" if payload is None else payload.blob_ref or ""
-
-        output_run_token = _case_blob_token("program.out")
-        output_err_token = _case_blob_token("program.err")
-        output_sys_token = _case_blob_token("system.out")
-        output_diff_token = _case_blob_token("judgemessage.txt")
-        metadata_token = _case_blob_token("program.meta")
-        compare_meta_token = _case_blob_token("compare.meta")
-        team_message_token = _case_blob_token("teammessage.txt")
-        feedback_text, feedback_files = self._domjudge_feedback_text_and_files(
-            runresult=runresult,
-            output_error_ref=output_err_token,
-            output_diff_ref=output_diff_token,
-            team_message_ref=team_message_token,
-        )
-        # Always persist result artifacts as cache refs so product and judgehost
-        # Artifact readers only depend on immutable blob references.
-
-        debug_context = self._s.batch_scheduler.case_debug_context(case_id)
-        if debug_context is not None:
-            debug_text = domjudge_text(debug_context["case_debug_text"])
-            if not debug_text:
-                debug_text = domjudge_text(debug_context["batch_debug_text"])
-            debug_feedback = domjudge_feedback_text_from_text(debug_text)
-            if debug_feedback:
-                if not feedback_text:
-                    feedback_text = debug_feedback
-                elif debug_feedback not in feedback_text:
-                    feedback_text = f"{feedback_text}\n{debug_feedback}"
-        def _bundled_ref(number: int, name: str) -> str:
-            if (
-                pass_bundle is not None
-                and number == pass_bundle.final_pass_number
-                and name == "teammessage.txt"
-            ):
-                return team_message_token
-            return _case_blob_token(_pass_cache_file_name(number, name))
-
-        historical_passes: list[ExecutionPassResult] = []
-        incomplete_metadata_passes: list[int] = []
-        final_pass_number = 1
-        final_input_ref = domjudge_text(row["input_ref"])
-        if pass_bundle is not None:
-            final_pass_number = pass_bundle.final_pass_number
-            final_input_ref = _bundled_ref(final_pass_number, "input")
-            for bundled_pass in pass_bundle.passes[:-1]:
-                files = bundled_pass.files
-                usage = _program_meta_usage(files["program.meta"])
-                compare_meta = domjudge_parse_meta_text(
-                    files["compare.meta"].decode("utf-8", errors="replace")
-                )
-                historical_compare_exit = domjudge_parse_int(
-                    compare_meta.get("exitcode"),
-                    -1,
-                )
-                if (
-                    None in (
-                        usage.runtime_sec,
-                        usage.cpu_sec,
-                        usage.wall_sec,
-                        usage.memory_kb,
-                    )
-                    or historical_compare_exit < 0
-                ):
-                    incomplete_metadata_passes.append(bundled_pass.number)
-                historical_judge_ref = _bundled_ref(
-                    bundled_pass.number,
-                    "judgemessage.txt",
-                )
-                historical_team_ref = _bundled_ref(
-                    bundled_pass.number,
-                    "teammessage.txt",
-                )
-                historical_error_ref = _bundled_ref(
-                    bundled_pass.number,
-                    "program.err",
-                )
-                historical_feedback, _historical_feedback_files = (
-                    self._domjudge_feedback_text_and_files(
-                        runresult="correct",
-                        output_error_ref=historical_error_ref,
-                        output_diff_ref=historical_judge_ref,
-                        team_message_ref=historical_team_ref,
-                    )
-                )
-                historical_passes.append(
-                    ExecutionPassResult(
-                        number=bundled_pass.number,
-                        capture_status=bundled_pass.capture_status,
-                        runresult="correct",
-                        verdict="OK",
-                        score_text="",
-                        answer_correct=_answer_correct_from_compare_exit_code(
-                            historical_compare_exit
-                        ),
-                        usage=usage,
-                        feedback=historical_feedback,
-                        artifacts=PassArtifacts(
-                            input_ref=_bundled_ref(bundled_pass.number, "input"),
-                            output_ref=(
-                                ""
-                                if interactive
-                                else _bundled_ref(
-                                    bundled_pass.number,
-                                    "program.out",
-                                )
-                            ),
-                            transcript_ref=(
-                                _bundled_ref(
-                                    bundled_pass.number,
-                                    "program.out",
-                                )
-                                if interactive
-                                else ""
-                            ),
-                            stderr_ref=historical_error_ref,
-                            system_ref=_bundled_ref(
-                                bundled_pass.number,
-                                "system.out",
-                            ),
-                            judge_message_ref=historical_judge_ref,
-                            team_message_ref=historical_team_ref,
-                            metadata_ref=_bundled_ref(
-                                bundled_pass.number,
-                                "program.meta",
-                            ),
-                            compare_metadata_ref=_bundled_ref(
-                                bundled_pass.number,
-                                "compare.meta",
-                            ),
-                        ),
-                    )
-                )
-        if incomplete_metadata_passes:
-            metadata_warning = (
-                "pass metadata missing for passes "
-                + ", ".join(str(number) for number in incomplete_metadata_passes)
-            )
-            capture_warning = (
-                f"{capture_warning}; {metadata_warning}"
-                if capture_warning
-                else "historical pass artifact capture was incomplete: "
-                + metadata_warning
-            )
-        case_result = build_case_result(
-            test_name=domjudge_text(row["test_name"]),
-            runresult=runresult,
-            verdict=verdict,
-            runtime_sec=runtime_sec,
-            cpu_sec=cpu_sec,
-            wall_sec=wall_sec,
-            memory_kb=memory_kb,
-            score_text=score_text,
-            output_run_ref=output_run_token,
-            output_error_ref=output_err_token,
-            output_system_ref=output_sys_token,
-            output_diff_ref=output_diff_token,
-            metadata_ref=metadata_token,
-            compare_metadata_ref=compare_meta_token,
-            team_message_ref=team_message_token,
-            feedback_text=feedback_text,
-            feedback_files=feedback_files,
-            answer_correct=answer_correct,
-            input_ref=final_input_ref,
-            interactive=interactive,
-            pass_number=final_pass_number,
-            historical_passes=tuple(historical_passes),
-            warnings=() if not capture_warning else (capture_warning,),
-            usage=final_usage,
-        )
         self._toolkit.store_case_cache(
             key_parts={"key_hash": case_key_hash, "signature": case_signature},
             tags={
@@ -1791,17 +1043,17 @@ class ResultProcessor:
             report_telemetry=report_telemetry,
         )
         if outcome == "cancelled":
-            self._acknowledge_terminal_case(
+            self._completion_publisher.acknowledge_terminal_case(
                 case_id,
                 reason="judgehost task cancelled",
             )
             batch_row = self._s.batch_scheduler.batch_finalize_row(batch_id)
             if batch_row is not None:
-                self._domjudge_finalize_task_if_ready(
+                self._batch_finalizer.finalize_task_if_ready(
                     safe_task_id,
                     batch_row=dict(batch_row),
                 )
-            self._domjudge_finalize_batch_if_ready(
+            self._batch_finalizer.finalize_batch_if_ready(
                 batch_id,
                 require_completion_ack=True,
             )
@@ -1827,17 +1079,17 @@ class ResultProcessor:
             # Do not publish the Case that happened to leave `reporting`
             # first: finalization waits for the whole batch and sends one
             # reported_many transaction for all affected verification tasks.
-            self._domjudge_finalize_batch_if_ready(
+            self._batch_finalizer.finalize_batch_if_ready(
                 batch_id,
                 require_completion_ack=True,
             )
             return 1
-        if not self._acknowledge_terminal_case(case_id):
+        if not self._completion_publisher.acknowledge_terminal_case(case_id):
             raise RuntimeError("verification task completion was not acknowledged")
         batch_row = self._s.batch_scheduler.batch_finalize_row(batch_id)
         if batch_row is not None:
             try:
-                self._domjudge_finalize_task_if_ready(
+                self._batch_finalizer.finalize_task_if_ready(
                     safe_task_id,
                     batch_row=dict(batch_row),
                 )
@@ -1847,7 +1099,7 @@ class ResultProcessor:
                     safe_task_id,
                     batch_id,
                 )
-        self._domjudge_finalize_batch_if_ready(
+        self._batch_finalizer.finalize_batch_if_ready(
             batch_id,
             require_completion_ack=True,
         )
@@ -1899,16 +1151,12 @@ class ResultProcessor:
                 elif payload_text.lower() not in safe_desc.lower():
                     diagnostic_text = f"{safe_desc}\n\n{payload_text}"
             failure_text = diagnostic_text
-            claim = self._s.batch_scheduler.claim_internal_error(
+            claim = self._diagnostic_publisher.claim_internal_error(
                 case_id,
                 hostname=safe_host,
                 failure_text=failure_text,
                 diagnostic_text=diagnostic_text,
                 receipt_generation=receipt.claim_generation,
-                diagnostic_limit_bytes=aux_display_text_limit_bytes(
-                    self._s.constants
-                ),
-                updated_at=now_iso(),
             )
             if claim.outcome == "rejected":
                 raise RuntimeError(
@@ -1931,16 +1179,16 @@ class ResultProcessor:
                 )
                 return case_id
             if claim.outcome == "cancelled":
-                self._acknowledge_terminal_case(
+                self._completion_publisher.acknowledge_terminal_case(
                     case_id,
                     reason="judgehost task cancelled",
                 )
-                self._domjudge_finalize_batch_if_ready(
+                self._batch_finalizer.finalize_batch_if_ready(
                     claim.batch_id,
                     require_completion_ack=True,
                 )
                 return case_id
-            self._domjudge_finalize_batch_if_ready(
+            self._batch_finalizer.finalize_batch_if_ready(
                 claim.batch_id,
                 require_completion_ack=True,
             )
@@ -2139,16 +1387,11 @@ class ResultProcessor:
                 )
             debug_text = self._domjudge_debug_payload_text(debug_payload)
             if debug_text:
-                disposition = self._s.batch_scheduler.record_case_diagnostic(
+                disposition = self._diagnostic_publisher.record_debug_info(
                     case_id,
-                    kind="debug-info",
                     hostname=safe_host,
                     text=debug_text,
                     receipt_generation=receipt.claim_generation,
-                    diagnostic_limit_bytes=aux_display_text_limit_bytes(
-                        self._s.constants
-                    ),
-                    now_text=now_iso(),
                 )
                 if disposition == "rejected":
                     raise RuntimeError(

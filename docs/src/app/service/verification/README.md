@@ -42,10 +42,22 @@ mutate the source record: an
 authorized viewer may use its reusable solution paths to create a new
 verification owned by the viewer's current workspace.
 
-The process-local coordinator exists only after activation and while a
-verification is active. It consumes lifecycle commits after SQLite commit and
-is not a durable fact source. SQLite rows survive restart and startup
-reconciliation terminalizes interrupted work. Artifact bytes remain
-cleanup-safe. See the
+The process-local coordinator is constructed only after activation. It normally
+exists while a verification is active; a post-registration snapshot may instead
+make it consume one closed-state reconciliation and unregister immediately. It
+consumes lifecycle commits after SQLite commit and is not a durable fact source.
+Failed completion-event delivery falls back to a durable task-snapshot
+reconciliation; idle coordinators repeat that reconciliation before advancing
+successors. An idle coordinator that discovers a terminal durable parent drains
+Judgehost execution before it retires.
+SQLite rows survive restart and startup reconciliation terminalizes interrupted
+work. Artifact bytes remain cleanup-safe. See the
 [execution protocol](../../../../protocol/execution.md) for graph, identity,
 result, and availability semantics.
+
+An instance-owned runtime registry admits one coordinator per verification and
+requires object-identical unregistration. `VerificationExecutionService` owns
+coordinator construction, registration, post-registration durable-state
+reconciliation, execution, scheduler failure, cancellation, and Judgehost drain
+ordering. Workspace adapters provide plans, publishers, and sanity callbacks;
+completion and Judgehost lease events enter through injected narrow methods.

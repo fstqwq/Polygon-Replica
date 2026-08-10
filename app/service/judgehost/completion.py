@@ -30,6 +30,14 @@ class CaseCompletionSink(Protocol):
     ) -> bool: ...
 
 
+class CaseLeaseSink(Protocol):
+    def case_leased(
+        self,
+        verification_id: str,
+        verification_task_id: str,
+    ) -> bool: ...
+
+
 DiagnosticAppendOutcome = Literal["persisted", "duplicate", "not-applicable"]
 
 

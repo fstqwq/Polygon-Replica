@@ -65,20 +65,29 @@ before the Docker mock runs.
 
 Polygon-Replica deliberately defines a narrower project ACK: successful and
 idempotent `add-judging-run` responses are the JSON integer `1`. A newly accepted
-result receives `1` only after the canonical `ExecutionResult` and verification
-completion transaction are durable. Persistence failure returns non-2xx so the
-daemon retries. The in-memory case is then marked `completion_acknowledged`.
+result bound to a verification task receives `1` only after the canonical
+`ExecutionResult` and verification completion transaction are durable.
+Persistence failure returns non-2xx so the daemon retries. The in-memory case is
+then marked `completion_acknowledged`. A custom-run case has no
+`verification_task_id`; its ACK follows scheduler decision capture and does not
+invoke the verification completion sink.
 A retry whose durable task is already terminal, or whose cancelled/retired case
 can no longer affect state, also receives `1`. Invalid hostnames and active
 lease-owner mismatches receive non-2xx; invalid hostnames are HTTP 400 and a
 concurrent claim is HTTP 503.
 
-A case is staged as non-fetchable, bound to its durable verification task and
-active coordinator, and only then exposed to fetch-work. Callback processing
-therefore carries that task identity directly and does not depend on installing
-a reverse `(judgetask_id, test_name)` mapping after work is visible. The owning
-result and transaction semantics are in the
-[execution protocol](execution.md#results-and-artifacts).
+A verification case is staged as non-fetchable, bound to its durable task and
+active coordinator, and only then exposed to fetch-work. Its callback therefore
+carries that task identity directly and does not depend on installing a reverse
+`(judgetask_id, test_name)` mapping after work is visible. A custom-run case has
+no verification task or coordinator binding and is exposed through its
+process-local Judgehost task. The owning result and transaction semantics are
+in the [execution protocol](execution.md#results-and-artifacts).
+
+After a batch is leased, dispatch reports its durable verification task through
+an injected `CaseLeaseSink`. Judgehost does not import or locate the
+verification coordinator. A missing process-local runtime is tolerated because
+lease state is an overlay and the durable task decision remains authoritative.
 
 The internal verification-to-Judgehost boundary names the task's program
 identity `verification_program_id`; verification code uses the shorter

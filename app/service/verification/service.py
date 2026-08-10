@@ -5,8 +5,9 @@ import re
 from pathlib import Path
 from typing import cast
 
+from app.config import ConfigValues
 from app.db import DB
-from app.runtime_value import RuntimeValues
+from app.main_constant import GENERAL_CONFIG_DEFAULTS
 from app.service.disk.verification_store import VerificationStore
 from app.service.platform.runtime_blob_store import PayloadFile, RuntimeBlobStore
 from app.service.platform.fs.layout import FsManager
@@ -84,7 +85,7 @@ class VerificationService:
         task_store: VerificationTaskStore,
         runtime_blob_store: RuntimeBlobStore,
         fs_manager: FsManager,
-        constants: RuntimeValues,
+        config_values: ConfigValues,
     ):
         self.db = db
         self.workspace_service = workspace_service
@@ -92,7 +93,7 @@ class VerificationService:
         self.task_store = task_store
         self.runtime_blob_store = runtime_blob_store
         self.fs_manager = fs_manager
-        self._constants = constants
+        self._config_values = config_values
         self._verification_store = VerificationStore(db)
 
     def export_runtime_verification(self, problem_id: int, verification_id: str) -> dict[str, object] | None:
@@ -975,9 +976,6 @@ class VerificationService:
 
         return self.task_store.read_lifecycle_snapshot(_read)
 
-    def apply_runtime_values(self, values: RuntimeValues) -> None:
-        self._constants = values
-
     def _select_checker_source(
         self,
         snapshot: Path,
@@ -1056,8 +1054,9 @@ class VerificationService:
     def _load_problem_runtime_config(self, snapshot: Path) -> dict:
         default_cfg = cast(
             dict[str, object],
-            self._constants.GENERAL_CONFIG_DEFAULTS,
+            GENERAL_CONFIG_DEFAULTS,
         )
+        config_snapshot = self._config_values.snapshot()
         return load_problem_runtime_config(
             snapshot,
             default_time_limit_ms=DEFAULT_TIME_LIMIT_MS,
@@ -1066,10 +1065,10 @@ class VerificationService:
             min_time_limit_ms=TIME_LIMIT_MIN_MS,
             max_time_limit_ms=TIME_LIMIT_MAX_MS,
             min_memory_limit_mb=int(
-                self._constants.GENERAL_MEMORY_LIMIT_MIN_MB
+                config_snapshot["GENERAL_MEMORY_LIMIT_MIN_MB"]
             ),
             max_memory_limit_mb=int(
-                self._constants.GENERAL_MEMORY_LIMIT_MAX_MB
+                config_snapshot["GENERAL_MEMORY_LIMIT_MAX_MB"]
             ),
         )
 
@@ -1077,7 +1076,11 @@ class VerificationService:
         return manual_test_sources(snapshot)
 
     def _load_tests_spec(self, snapshot: Path) -> list[dict] | None:
-        return load_tests_spec_entries(snapshot)
+        limits = self._config_values.snapshot()
+        return load_tests_spec_entries(
+            snapshot,
+            max_bytes=int(limits["TEXTAREA_MAX_BYTES"]),
+        )
 
     def _prepare_tests_spec_runtime(
         self,

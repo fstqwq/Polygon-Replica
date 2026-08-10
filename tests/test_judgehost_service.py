@@ -41,8 +41,6 @@ from app.service.verification.task_completion import TaskCompletion
 from app.service.verification.task_scheduler import (
     VerificationRuntimeCallbacks,
     VerificationRuntimeCoordinator,
-    register_verification_runtime_coordinator,
-    unregister_verification_runtime_coordinator,
 )
 from app.service.verification.task_store import VerificationTaskStore
 from tests.common import E2ETestBase, config
@@ -128,12 +126,13 @@ class TestJudgehostService(E2ETestBase):
             config.workspace_service,
             config.fs_manager,
             config.settings,
-            config.constants,
+            config.config_values,
             verification_task_store=config.verification_task_store,
             runtime_blob_store=config.runtime_blob_store,
             runtime_cache_index=config.runtime_cache_index,
             case_completion_sink=config.verification_task_completion_service,
             case_diagnostic_sink=config.verification_task_completion_service,
+            case_lease_sink=config.verification_runtime_registry,
         )
         service.state.enabled = True
         service.state.api_token = "test-token"
@@ -310,7 +309,7 @@ class TestJudgehostService(E2ETestBase):
             callbacks=callbacks,
             edges=[],
         )
-        register_verification_runtime_coordinator(verification_id, coordinator)
+        config.verification_runtime_registry.register(verification_id, coordinator)
         coordinator_thread = threading.Thread(target=coordinator.run, daemon=True)
         coordinator_thread.start()
         try:
@@ -331,7 +330,7 @@ class TestJudgehostService(E2ETestBase):
                     "compile_metadata": "",
                 },
             )
-            with patch.object(service.result, "_domjudge_finalize_batch_if_ready", return_value=None):
+            with patch.object(service.batch_finalizer, "finalize_batch_if_ready", return_value=None):
                 service.domjudge_add_judging_run(
                     "judgehost-immediate-finalize",
                     case_id,
@@ -374,7 +373,10 @@ class TestJudgehostService(E2ETestBase):
                 },
             )
         finally:
-            unregister_verification_runtime_coordinator(verification_id)
+            config.verification_runtime_registry.unregister(
+                verification_id,
+                coordinator,
+            )
             coordinator.enqueue_cancel("test shutdown")
             coordinator_thread.join(timeout=2.0)
             self.assertFalse(coordinator_thread.is_alive())
@@ -3325,7 +3327,7 @@ class TestJudgehostService(E2ETestBase):
         assert case_row is not None
         batch_id = int(case_row["batch_id"])
 
-        limit = int(getattr(service.state.constants, "JUDGEHOST_STORED_LOG_LIMIT_BYTES", 65536) or 65536)
+        limit = int(service.state.config_values.JUDGEHOST_STORED_LOG_LIMIT_BYTES)
         service.domjudge_update_judging(
             "judgehost-compile-log",
             case_id,
@@ -3857,18 +3859,18 @@ class TestJudgehostService(E2ETestBase):
         self.assertEqual(int(run_config.get("process_limit") or 0), 1024)
         self.assertEqual(
             int(run_config.get("output_limit") or 0),
-            int(getattr(service.state.constants, "RUN_EXEC_OUTPUT_KB", 65536) or 65536),
+            int(service.state.config_values.RUN_EXEC_OUTPUT_KB),
         )
         self.assertEqual(int(run_config.get("pass_limit") or 0), 1)
-        compile_output_kb = int(getattr(service.state.constants, "TOOLCHAIN_COMPILE_OUTPUT_KB", 262144) or 262144)
-        aux_limit_bytes = int(getattr(service.state.constants, "AUX_DISPLAY_TEXT_LIMIT_BYTES", 2048) or 2048)
+        compile_output_kb = int(service.state.config_values.TOOLCHAIN_COMPILE_OUTPUT_KB)
+        aux_limit_bytes = int(service.state.config_values.AUX_DISPLAY_TEXT_LIMIT_BYTES)
         self.assertEqual(
             int(compare_config.get("script_filesize_limit") or 0),
             compile_output_kb,
         )
         self.assertEqual(
             int(compare_config.get("script_memory_limit") or 0),
-            int(getattr(service.state.constants, "TOOLCHAIN_COMPILE_MEMORY_MB", 2048) or 2048) * 1024,
+            int(service.state.config_values.TOOLCHAIN_COMPILE_MEMORY_MB) * 1024,
         )
         self.assertEqual(
             int(compile_config.get("script_filesize_limit") or 0),
@@ -3906,7 +3908,7 @@ class TestJudgehostService(E2ETestBase):
 
         compile_mem_mb = max(
             64,
-            int(getattr(service.state.constants, "TOOLCHAIN_COMPILE_MEMORY_MB", 2048) or 2048),
+            int(service.state.config_values.TOOLCHAIN_COMPILE_MEMORY_MB),
         )
         run_mem_mb = compile_mem_mb + 1024
 
@@ -5415,7 +5417,7 @@ class TestJudgehostService(E2ETestBase):
             verdict="FL",
         )
 
-        service.result._domjudge_finalize_batch_if_ready(batch_id)
+        service.batch_finalizer.finalize_batch_if_ready(batch_id)
         before = next(
             row for row in task_store.list_rows(verification_id)
             if str(row["task_kind"]) == "main-correct" and str(row["test_name"]) == "016.in"

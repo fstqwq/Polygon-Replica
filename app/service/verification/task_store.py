@@ -174,13 +174,11 @@ class VerificationTaskStore:
         self._runtime_by_task_id: dict[str, _RuntimeTaskState] = {}
         self._test_name_by_task_id: dict[str, str] = {}
 
-    @staticmethod
-    def _limit_bytes() -> int:
-        return aux_display_text_limit_bytes()
+    def _limit_bytes(self) -> int:
+        return aux_display_text_limit_bytes(self.db.config_values.snapshot())
 
-    @classmethod
-    def _normalize_display_text(cls, value: str) -> str:
-        return bounded_display_text(value, limit_bytes=cls._limit_bytes())
+    def _normalize_display_text(self, value: str) -> str:
+        return bounded_display_text(value, limit_bytes=self._limit_bytes())
 
     def run_problem_deletion(
         self,

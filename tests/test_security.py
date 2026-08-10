@@ -53,7 +53,7 @@ from tests.ui_support import _register_with_password_envelope
 db = config.db
 workspace_service = config.workspace_service
 
-FLASH_COOKIE_NAME = config.constants.FLASH_COOKIE_NAME
+FLASH_COOKIE_NAME = config.config_values.FLASH_COOKIE_NAME
 
 
 def _request(

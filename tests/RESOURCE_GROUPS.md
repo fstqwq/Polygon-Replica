@@ -50,5 +50,5 @@ PYTHONPATH="$PWD" python -m pylint app
 ```
 
 Each group writes `.test-results/<group>.json` with its total duration and
-per-test timings. GitHub Actions runs static checks once and executes all six
+per-test timings. GitHub Actions runs static checks once and executes all four
 groups as parallel matrix jobs.

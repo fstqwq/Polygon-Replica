@@ -183,7 +183,7 @@ class VerificationServiceTestBase(DBTestBase):
             self.verification_task_store,
             self.runtime_blob_store,
             self.fs_manager,
-            self.constants,
+            self.config_values,
         )
         self.verification_task_completion_service = (
             VerificationTaskCompletionService(

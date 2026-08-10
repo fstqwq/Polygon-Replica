@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 import threading
 
 from app.db import DB, now_iso
-from app.runtime_value import RuntimeValues
+from app.config import ConfigValues
 from app.service.platform.admission import MaintenanceAdmissionGate
 from app.service.platform.fs.layout import FsManager
 from app.service.platform.runtime_blob_store import RuntimeBlobStore
@@ -14,10 +14,19 @@ from app.service.verification.task_store import VerificationTaskStore
 from app.setting import Settings
 
 from app.service.judgehost.cleanup import JudgehostTerminalCleanup
-from app.service.judgehost.completion import CaseCompletionSink, CaseDiagnosticSink
+from app.service.judgehost.completion import (
+    CaseCompletionSink,
+    CaseDiagnosticSink,
+    CaseLeaseSink,
+)
 from app.service.judgehost.core import JudgehostCore
 from app.service.judgehost.dispatch import DispatchHandler
 from app.service.judgehost.enqueue import TaskEnqueue
+from app.service.judgehost.finalization import JudgehostBatchFinalizer
+from app.service.judgehost.publication import (
+    JudgehostCaseCompletionPublisher,
+    JudgehostCaseDiagnosticPublisher,
+)
 from app.service.judgehost.public_status import PublicJudgehostStatus, PublicJudgehostStatusCache
 from app.service.judgehost.result import ResultProcessor
 from app.service.judgehost.runtime import parse_iso_utc
@@ -41,10 +50,11 @@ class Judgehost:
         workspace_service: WorkspaceService,
         fs_manager: FsManager,
         settings: Settings,
-        constants: RuntimeValues,
+        config_values: ConfigValues,
         *,
         case_completion_sink: CaseCompletionSink,
         case_diagnostic_sink: CaseDiagnosticSink,
+        case_lease_sink: CaseLeaseSink,
         verification_task_store: VerificationTaskStore,
         runtime_blob_store: RuntimeBlobStore,
         runtime_cache_index: RuntimeCacheIndex,
@@ -55,7 +65,7 @@ class Judgehost:
             db=db,
             workspace_service=workspace_service,
             fs_manager=fs_manager,
-            constants=constants,
+            config_values=config_values,
             runtime_blob_store=runtime_blob_store,
             runtime_cache_index=runtime_cache_index,
             verification_task_store=verification_task_store,
@@ -65,8 +75,36 @@ class Judgehost:
         self._toolkit = DomjudgeToolkit(self._state)
         self._core = JudgehostCore(self._state)
         self._queue = TaskQueue(self._state, self._core)
-        self._result = ResultProcessor(self._state, self._core, self._queue, self._toolkit)
-        self._dispatch = DispatchHandler(self._state, self._core, self._queue, self._result, self._toolkit)
+        diagnostic_publisher = JudgehostCaseDiagnosticPublisher(self._state)
+        completion_publisher = JudgehostCaseCompletionPublisher(
+            self._state,
+            self._queue,
+            diagnostic_publisher,
+        )
+        self._batch_finalizer = JudgehostBatchFinalizer(
+            self._state,
+            self._core,
+            self._queue,
+            self._toolkit,
+            completion_publisher,
+        )
+        self._result = ResultProcessor(
+            self._state,
+            self._core,
+            self._queue,
+            self._toolkit,
+            diagnostic_publisher=diagnostic_publisher,
+            completion_publisher=completion_publisher,
+            batch_finalizer=self._batch_finalizer,
+        )
+        self._dispatch = DispatchHandler(
+            self._state,
+            self._core,
+            self._queue,
+            self._batch_finalizer,
+            self._toolkit,
+            case_lease_sink,
+        )
         self._enqueue = TaskEnqueue(self._state, self._core, self._dispatch, self._toolkit)
         self._terminal_cleanup = JudgehostTerminalCleanup(
             self._state.task_registry,
@@ -81,7 +119,6 @@ class Judgehost:
         self._admission_gate: MaintenanceAdmissionGate | None = None
         self._callback_count_lock = threading.Lock()
         self._active_callbacks = 0
-        self.apply_runtime_values(constants)
 
     @property
     def state(self) -> JudgehostState:
@@ -104,6 +141,10 @@ class Judgehost:
         return self._result
 
     @property
+    def batch_finalizer(self) -> JudgehostBatchFinalizer:
+        return self._batch_finalizer
+
+    @property
     def dispatch(self) -> DispatchHandler:
         return self._dispatch
 
@@ -112,9 +153,6 @@ class Judgehost:
         return self._enqueue
 
     # Public API delegation.
-    def apply_runtime_values(self, constants: RuntimeValues) -> None:
-        return self._core.apply_runtime_values(constants)
-
     def enabled(self) -> bool:
         return self._core.enabled()
 
@@ -221,7 +259,7 @@ class Judgehost:
 
     def set_host_enabled(self, hostname: str, enabled: bool) -> dict[str, int]:
         release = self._queue.set_host_enabled(hostname, enabled)
-        self._result.finalize_host_lease_release(release)
+        self._batch_finalizer.finalize_host_lease_release(release)
         return {
             "released_tasks": len(release.terminal_task_ids),
             "released_batches": release.affinity_count,
@@ -250,12 +288,12 @@ class Judgehost:
         for task_id in cancellation.task_ids:
             batch_row = self._state.batch_scheduler.batch_for_task(task_id)
             if batch_row is not None:
-                self._result._domjudge_finalize_task_if_ready(
+                self._batch_finalizer.finalize_task_if_ready(
                     task_id,
                     batch_row=dict(batch_row),
                 )
         for batch_id in cancellation.batch_ids:
-            self._result._domjudge_finalize_batch_if_ready(batch_id)
+            self._batch_finalizer.finalize_batch_if_ready(batch_id)
         return {
             "cancelled_cases": cancellation.cancelled_case_count,
             "awaiting_receipts": cancellation.awaiting_receipt_count,
@@ -272,7 +310,7 @@ class Judgehost:
     def cancel_all_domjudge_batches(self) -> int:
         batch_ids = self._queue.cancel_all_domjudge_batches()
         for batch_id in batch_ids:
-            self._result._domjudge_finalize_batch_if_ready(batch_id)
+            self._batch_finalizer.finalize_batch_if_ready(batch_id)
         return len(batch_ids)
 
     def forget_domjudge_runs(self, *args, **kwargs):
@@ -284,7 +322,7 @@ class Judgehost:
             now_text=now_iso(),
         )
         for batch_id in ready_batch_ids:
-            self._result._domjudge_finalize_batch_if_ready(batch_id)
+            self._batch_finalizer.finalize_batch_if_ready(batch_id)
         self._terminal_cleanup.schedule(verification_id)
 
     def close_programs(
@@ -298,7 +336,7 @@ class Judgehost:
             now_text=now_iso(),
         )
         for batch_id in ready_batch_ids:
-            self._result._domjudge_finalize_batch_if_ready(batch_id)
+            self._batch_finalizer.finalize_batch_if_ready(batch_id)
 
     def reconcile_expired_verification_leases(self, verification_id: str) -> list[str]:
         if not verification_id:
@@ -332,7 +370,7 @@ class Judgehost:
                 now_text=now_text,
                 verification_id=verification_id,
             )
-            self._result.finalize_host_lease_release(release)
+            self._batch_finalizer.finalize_host_lease_release(release)
             released_task_ids.update(selected_task_ids)
         return sorted(released_task_ids)
 
