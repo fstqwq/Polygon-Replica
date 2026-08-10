@@ -8,7 +8,8 @@
       <span>Estimated network overhead: <strong id="profile-network-estimate">n/a</strong></span>
     </div>
     <div class="page-profile-row page-profile-row-tertiary">
-      <span>Judgehost: <strong id="profile-judgehost-health-summary" class="page-profile-detail{% if runtime_judgehost_health_danger == '1' %} danger{% endif %}" title="{{ runtime_judgehost_health_summary }}">{{ runtime_judgehost_health_summary }}</strong></span>
+      <span class="page-profile-judgehost">Judgehost: <strong id="profile-judgehost-health-summary" class="page-profile-detail {{ runtime_judgehost_health_tone }}">{{ runtime_judgehost_health_summary }}</strong></span>
+      <a class="linkish" href="#judgehost-status-popup" data-popup-open="judgehost-status-popup">Details</a>
     </div>
     <div class="page-profile-row page-profile-row-terms">
       {{ terms_of_use_link() }}
@@ -16,5 +17,8 @@
   </div>
   {% call ui_popup('terms-of-use-popup', 'Terms of Use', dialog_class='terms-of-use-popup') %}
     {{ terms_of_use_body() }}
+  {% endcall %}
+  {% call ui_popup('judgehost-status-popup', 'Judgehosts', dialog_class='judgehost-status-popup') %}
+    {% include "_judgehost_status.html" %}
   {% endcall %}
 </footer>

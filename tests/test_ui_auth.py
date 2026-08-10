@@ -1479,6 +1479,65 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         self.assertIn("g++ 14.2.0", html)
         self.assertIn("Reported for judging task 123", html)
 
+    def test_footer_judgehost_popup_contains_public_status(self) -> None:
+        public_status = {
+            "enabled": True,
+            "hosts_online": 1,
+            "hosts_total": 1,
+            "queued": 0,
+            "active": 0,
+            "summary": "1 online",
+            "tone": "ok",
+            "hosts": [
+                {
+                    "label": "Judgehost 1",
+                    "state": "online",
+                    "tone": "ok",
+                    "last_contact": "just now",
+                    "active_tasks": 0,
+                    "judged_cases": 42,
+                    "recent_average": "0.125s per case",
+                    "toolchain_profile": "A",
+                }
+            ],
+            "compile_specs": [
+                {
+                    "language_id": "cpp",
+                    "language_label": "C++",
+                    "command": "g++",
+                    "arguments": ["-O2", "-std=gnu++20"],
+                }
+            ],
+            "toolchain_profiles": [
+                {
+                    "label": "A",
+                    "host_count": 1,
+                    "toolchains": [
+                        {
+                            "language_id": "cpp",
+                            "language_label": "C++",
+                            "compiler": "g++ 14.2.0",
+                            "runner": "",
+                        }
+                    ],
+                }
+            ],
+            "toolchain_warning": "",
+        }
+        with patch.object(config.judgehost_task_service, "public_status", return_value=public_status):
+            resp = register_page(_request("/register"))
+        self.assertEqual(resp.status_code, 200)
+        html = resp.body.decode("utf-8", errors="replace")
+        self.assertIn("Judgehost 1", html)
+        self.assertIn("g++ 14.2.0", html)
+        self.assertIn("Judgehost: <strong", html)
+        self.assertIn(">Details</a>", html)
+        self.assertIn('data-popup-open="judgehost-status-popup"', html)
+        self.assertIn('id="judgehost-status-popup"', html)
+        self.assertNotIn('class="page-profile-judgehost" href=', html)
+        self.assertNotIn("private-hostname", html)
+        self.assertNotIn("203.0.113.10", html)
+
     def test_settings_config_category_update_requires_system_admin(self) -> None:
         with self.assertRaises(HTTPException) as blocked:
             asyncio.run(

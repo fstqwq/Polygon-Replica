@@ -356,6 +356,44 @@ class DomjudgeToolkit:
         )
         return compile_command_digest(command, flags)
 
+    def public_compile_specs(self) -> list[dict[str, object]]:
+        compiler = domjudge_text(
+            getattr(self._s.constants, "TOOLCHAIN_CPP_COMPILER", "g++"),
+            default="g++",
+        )
+        cpp_flags = self.shell_tokens(
+            getattr(
+                self._s.constants,
+                "TOOLCHAIN_JUDGEHOST_CPP_COMPILE_FLAGS",
+                "-x c++ -Wall -O2 -std=gnu++20 -static -pipe -DDOMJUDGE",
+            )
+        )
+        java_compiler = domjudge_text(
+            getattr(self._s.constants, "TOOLCHAIN_JAVA_COMPILER", "javac"),
+            default="javac",
+        )
+        java_flags = self.shell_tokens(
+            getattr(self._s.constants, "TOOLCHAIN_JUDGEHOST_JAVA_COMPILE_FLAGS", "")
+        )
+        python_flags = self.shell_tokens(
+            getattr(self._s.constants, "TOOLCHAIN_JUDGEHOST_PYTHON_COMPILE_FLAGS", "")
+        )
+        cpp_arguments = [*cpp_flags, "-I.", "<source>", "-o", "<executable>"]
+        return [
+            {"language_id": "c", "command": compiler, "arguments": list(cpp_arguments)},
+            {"language_id": "cpp", "command": compiler, "arguments": list(cpp_arguments)},
+            {
+                "language_id": "java",
+                "command": java_compiler,
+                "arguments": [*java_flags, "-encoding", "UTF-8", "-sourcepath", ".", "-d", ".", "<source>"],
+            },
+            {
+                "language_id": "py",
+                "command": "pypy3",
+                "arguments": [*python_flags, "-m", "py_compile", "<source>"],
+            },
+        ]
+
     def load_script_asset(self, name: str) -> str:
         root = (Path(__file__).resolve().parent / "scripts").resolve()
         safe_name = domjudge_path_name(name)

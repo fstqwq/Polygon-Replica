@@ -1,0 +1,79 @@
+{% set judgehost = runtime_judgehost_status %}
+<div class="judgehost-status-summary">
+  <div><span>Service</span><strong class="{{ judgehost.tone }}">{{ judgehost.summary }}</strong></div>
+  <div><span>Queued</span><strong>{{ judgehost.queued }}</strong></div>
+  <div><span>Active</span><strong>{{ judgehost.active }}</strong></div>
+</div>
+
+<section class="judgehost-status-section">
+  <h3>Hosts</h3>
+  {% if judgehost.hosts %}
+  <div class="judgehost-status-grid">
+    {% for host in judgehost.hosts %}
+    <article class="judgehost-status-card">
+      <div class="judgehost-status-card-head">
+        <strong>{{ host.label }}</strong>
+        <strong class="{{ host.tone }}">{{ host.state }}</strong>
+      </div>
+      <dl>
+        <div><dt>Last contact</dt><dd>{{ host.last_contact }}</dd></div>
+        <div><dt>Active tasks</dt><dd>{{ host.active_tasks }}</dd></div>
+        <div><dt>Judged cases</dt><dd>{{ host.judged_cases }}</dd></div>
+        <div><dt>Recent average</dt><dd>{{ host.recent_average }}</dd></div>
+        {% if host.toolchain_profile %}<div><dt>Toolchain</dt><dd>Profile {{ host.toolchain_profile }}</dd></div>{% endif %}
+      </dl>
+    </article>
+    {% endfor %}
+  </div>
+  {% else %}
+  <p class="muted">No Judgehost has reported yet.</p>
+  {% endif %}
+</section>
+
+<section class="judgehost-status-section">
+  <h3>Compilation</h3>
+  <div class="table-scroll">
+    <table class="table-base judgehost-status-compile-table">
+      <thead><tr><th>Language</th><th>Command</th><th>Arguments</th></tr></thead>
+      <tbody>
+        {% for spec in judgehost.compile_specs %}
+        <tr>
+          <td>{{ spec.language_label }}</td>
+          <td><code>{{ spec.command }}</code></td>
+          <td><code>{{ spec.arguments | join(' ') }}</code></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="judgehost-status-section">
+  <h3>Installed toolchains</h3>
+  {% if judgehost.toolchain_warning %}
+  <p class="judgehost-status-warning">{{ judgehost.toolchain_warning }}</p>
+  {% endif %}
+  {% if judgehost.toolchain_profiles %}
+  <div class="judgehost-status-profiles">
+    {% for profile in judgehost.toolchain_profiles %}
+    <article class="judgehost-status-profile">
+      <h4>Profile {{ profile.label }} <span class="muted">· {{ profile.host_count }} {{ 'host' if profile.host_count == 1 else 'hosts' }}</span></h4>
+      {% if profile.toolchains %}
+      <dl>
+        {% for toolchain in profile.toolchains %}
+        <div>
+          <dt>{{ toolchain.language_label }}</dt>
+          <dd>{{ toolchain.compiler }}{% if toolchain.runner and toolchain.runner != toolchain.compiler %}<span class="muted"> · {{ toolchain.runner }}</span>{% endif %}</dd>
+        </div>
+        {% endfor %}
+      </dl>
+      {% else %}
+      <p class="muted">No versions reported.</p>
+      {% endif %}
+    </article>
+    {% endfor %}
+  </div>
+  {% else %}
+  <p class="muted">No online Judgehost has reported compiler versions yet.</p>
+  {% endif %}
+</section>

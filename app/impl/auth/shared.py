@@ -19,30 +19,8 @@ from app.service.platform.hashing import hmac_sha256_hex, sha256_hex_bytes
 
 _C = config.constants
 
-_RUNTIME_JUDGEHOST_HEALTH_CACHE: dict[str, str] | None = None
-_RUNTIME_JUDGEHOST_HEALTH_CACHE_TS = 0.0
-
-
 def _runtime_judgehost_health_profile() -> dict[str, str]:
-    global _RUNTIME_JUDGEHOST_HEALTH_CACHE, _RUNTIME_JUDGEHOST_HEALTH_CACHE_TS
-    runtime._RUNTIME_JUDGEHOST_HEALTH_CACHE = (
-        dict(_RUNTIME_JUDGEHOST_HEALTH_CACHE) if isinstance(_RUNTIME_JUDGEHOST_HEALTH_CACHE, dict) else None
-    )
-    try:
-        runtime._RUNTIME_JUDGEHOST_HEALTH_CACHE_TS = float(_RUNTIME_JUDGEHOST_HEALTH_CACHE_TS)
-    except Exception:
-        runtime._RUNTIME_JUDGEHOST_HEALTH_CACHE_TS = 0.0
-    profile = runtime._runtime_judgehost_health_profile()
-    _RUNTIME_JUDGEHOST_HEALTH_CACHE = (
-        dict(runtime._RUNTIME_JUDGEHOST_HEALTH_CACHE)
-        if isinstance(runtime._RUNTIME_JUDGEHOST_HEALTH_CACHE, dict)
-        else None
-    )
-    try:
-        _RUNTIME_JUDGEHOST_HEALTH_CACHE_TS = float(runtime._RUNTIME_JUDGEHOST_HEALTH_CACHE_TS)
-    except Exception:
-        _RUNTIME_JUDGEHOST_HEALTH_CACHE_TS = 0.0
-    return dict(profile)
+    return runtime._runtime_judgehost_health_profile()
 
 def parse_iso_utc(raw: str) -> datetime | None:
     text = str(raw or "").strip()
@@ -302,10 +280,10 @@ def template_response(request: Request, template_name: str, context: dict | None
             "runtime_judgehost_health_summary",
             "disabled",
         )
-    if "runtime_judgehost_health_danger" not in payload:
-        payload["runtime_judgehost_health_danger"] = runtime_judgehost.get(
-            "runtime_judgehost_health_danger",
-            "1",
+    if "runtime_judgehost_health_tone" not in payload:
+        payload["runtime_judgehost_health_tone"] = runtime_judgehost.get(
+            "runtime_judgehost_health_tone",
+            "danger",
         )
     if "runtime_judgehost_enabled" not in payload:
         payload["runtime_judgehost_enabled"] = runtime_judgehost.get("runtime_judgehost_enabled", "0")
@@ -313,6 +291,23 @@ def template_response(request: Request, template_name: str, context: dict | None
         payload["runtime_judgehost_hosts_online"] = runtime_judgehost.get("runtime_judgehost_hosts_online", "0")
     if "runtime_judgehost_hosts_total" not in payload:
         payload["runtime_judgehost_hosts_total"] = runtime_judgehost.get("runtime_judgehost_hosts_total", "0")
+    if "runtime_judgehost_status" not in payload:
+        try:
+            payload["runtime_judgehost_status"] = config.judgehost_task_service.public_status()
+        except Exception:
+            payload["runtime_judgehost_status"] = {
+                "enabled": False,
+                "hosts_online": 0,
+                "hosts_total": 0,
+                "queued": 0,
+                "active": 0,
+                "summary": "offline",
+                "tone": "danger",
+                "hosts": [],
+                "compile_specs": [],
+                "toolchain_profiles": [],
+                "toolchain_warning": "",
+            }
     backend_render_ms: int | None = None
     started = getattr(request.state, "request_started_at", None)
     if isinstance(started, (int, float)):

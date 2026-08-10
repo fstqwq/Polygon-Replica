@@ -12,14 +12,15 @@ from app.service.repository.workspace import WorkspaceService
 from app.service.verification.task_store import VerificationTaskStore
 from app.setting import Settings
 
-from app.service.judgehost.core import JudgehostCore
 from app.service.judgehost.cleanup import JudgehostTerminalCleanup
+from app.service.judgehost.core import JudgehostCore
 from app.service.judgehost.dispatch import DispatchHandler
 from app.service.judgehost.enqueue import TaskEnqueue
+from app.service.judgehost.public_status import PublicJudgehostStatus, PublicJudgehostStatusCache
 from app.service.judgehost.result import ResultProcessor
+from app.service.judgehost.runtime import parse_iso_utc
 from app.service.judgehost.state import JudgehostState
 from app.service.judgehost.task_queue import TaskQueue
-from app.service.judgehost.runtime import parse_iso_utc
 from app.service.judgehost.toolkit import DomjudgeToolkit
 
 
@@ -64,6 +65,10 @@ class Judgehost:
         self._terminal_cleanup = JudgehostTerminalCleanup(
             self._state.task_registry,
             self._state.batch_scheduler,
+        )
+        self._public_status = PublicJudgehostStatusCache(
+            lambda: self.status(),
+            self._toolkit.public_compile_specs,
         )
         self._state.touch_verification_runtime = self._terminal_cleanup.touch
         self._admission_gate: MaintenanceAdmissionGate | None = None
@@ -186,6 +191,9 @@ class Judgehost:
 
     def status(self, *args, **kwargs):
         return self._queue.status(*args, **kwargs)
+
+    def public_status(self) -> PublicJudgehostStatus:
+        return self._public_status.snapshot()
 
     def request_verification_cancel(self, verification_id: str, reason: str) -> dict[str, int]:
         if not verification_id:

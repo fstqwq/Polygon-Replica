@@ -209,3 +209,116 @@ body.confirm-open {
   white-space: nowrap;
 }
 
+.page-profile-judgehost {
+  color: var(--text-secondary);
+}
+
+.ui-popup-dialog.judgehost-status-popup {
+  width: min(980px, calc(100vw - 32px));
+}
+
+.judgehost-status-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  border: 1px solid var(--line);
+}
+
+.judgehost-status-summary > div {
+  display: grid;
+  gap: var(--space-1);
+  padding: var(--space-3) var(--space-4);
+  border-right: 1px solid var(--line);
+}
+
+.judgehost-status-summary > div:last-child {
+  border-right: 0;
+}
+
+.judgehost-status-summary span,
+.judgehost-status-card dt {
+  color: var(--muted);
+  font-size: var(--font-size-ui-sm);
+}
+
+.judgehost-status-section {
+  margin-top: var(--space-6);
+}
+
+.judgehost-status-section > h3 {
+  margin-bottom: var(--space-3);
+}
+
+.judgehost-status-grid,
+.judgehost-status-profiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: var(--space-3);
+}
+
+.judgehost-status-card,
+.judgehost-status-profile {
+  border: 1px solid var(--line);
+  background: var(--surface-alt);
+  padding: var(--space-4);
+}
+
+.judgehost-status-card-head {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding-bottom: var(--space-2);
+  margin-bottom: var(--space-2);
+  border-bottom: 1px solid var(--line);
+}
+
+.judgehost-status-card dl,
+.judgehost-status-profile dl {
+  display: grid;
+  gap: var(--space-1);
+  margin: 0;
+}
+
+.judgehost-status-card dl > div,
+.judgehost-status-profile dl > div {
+  display: grid;
+  grid-template-columns: minmax(100px, auto) minmax(0, 1fr);
+  gap: var(--space-3);
+}
+
+.judgehost-status-card dd,
+.judgehost-status-profile dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.judgehost-status-profile h4 {
+  margin: 0 0 var(--space-2);
+}
+
+.judgehost-status-compile-table code {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.judgehost-status-warning {
+  margin: 0 0 var(--space-3);
+  border: 1px solid var(--warn-line);
+  background: var(--warn-bg);
+  color: var(--warn-text);
+  padding: var(--space-3) var(--space-4);
+}
+
+@media (max-width: 640px) {
+  .judgehost-status-summary {
+    grid-template-columns: 1fr;
+  }
+
+  .judgehost-status-summary > div {
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .judgehost-status-summary > div:last-child {
+    border-bottom: 0;
+  }
+}
