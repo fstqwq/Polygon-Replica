@@ -175,6 +175,9 @@ class TestPreviewRoutes(BackendE2ETestBase):
                             tests_spec_max_bytes=int(
                                 config.config_values.TEXTAREA_MAX_BYTES
                             ),
+                            statement_sample_max_bytes=int(
+                                config.config_values.STATEMENT_SAMPLE_MAX_BYTES
+                            ),
                         ),
                     }
                 ),
@@ -221,6 +224,9 @@ class TestPreviewRoutes(BackendE2ETestBase):
                             tests_spec_max_bytes=int(
                                 config.config_values.TEXTAREA_MAX_BYTES
                             ),
+                            statement_sample_max_bytes=int(
+                                config.config_values.STATEMENT_SAMPLE_MAX_BYTES
+                            ),
                         ),
                     }
                 ),
@@ -266,6 +272,9 @@ class TestPreviewRoutes(BackendE2ETestBase):
                             tests_spec_max_bytes=int(
                                 config.config_values.TEXTAREA_MAX_BYTES
                             ),
+                            statement_sample_max_bytes=int(
+                                config.config_values.STATEMENT_SAMPLE_MAX_BYTES
+                            ),
                         ),
                     }
                 ),
@@ -303,6 +312,9 @@ class TestPreviewRoutes(BackendE2ETestBase):
                             problem_title=self._statement_title(ws),
                             tests_spec_max_bytes=int(
                                 config.config_values.TEXTAREA_MAX_BYTES
+                            ),
+                            statement_sample_max_bytes=int(
+                                config.config_values.STATEMENT_SAMPLE_MAX_BYTES
                             ),
                         ),
                     }

@@ -172,6 +172,7 @@ def validate_manifest_files(
     manifest: NativeManifest,
     *,
     tests_spec_max_bytes: int,
+    statement_sample_max_bytes: int,
 ) -> None:
     """Verify every declared payload and reject undeclared materialized files."""
 
@@ -179,7 +180,8 @@ def validate_manifest_files(
     test_ids: set[str] = set()
     spec = load_tests_spec(
         package_root / "tests" / "spec.json",
-        max_bytes=tests_spec_max_bytes,
+        document_max_bytes=tests_spec_max_bytes,
+        sample_max_bytes=statement_sample_max_bytes,
     )
     manifest_shape: list[tuple[str, str, bool]] = []
     allowed_test_keys = {

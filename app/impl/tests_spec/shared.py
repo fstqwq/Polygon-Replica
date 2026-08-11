@@ -25,11 +25,13 @@ _C = config.config_values
 
 
 def tests_spec_gen_script_context(workspace: Path) -> dict[str, object]:
+    limits = _C.snapshot()
     lines: list[str] = []
     with config.workspace_service.workspace_lock(workspace):
         entries, _spec_path = read_tests_spec(
             workspace,
-            max_bytes=int(_C.TEXTAREA_MAX_BYTES),
+            document_max_bytes=int(limits["TEXTAREA_MAX_BYTES"]),
+            sample_max_bytes=int(limits["STATEMENT_SAMPLE_MAX_BYTES"]),
         )
         for entry in entries:
             kind = kind.strip().lower() if isinstance(kind := entry.get("kind"), str) else ""
@@ -57,7 +59,7 @@ def tests_spec_sample_input_value(raw: object | None, fallback: object = "") -> 
     value = fallback if raw is None else tests_spec_form_text(raw)
     return normalize_sample_input(
         value,
-        max_bytes=int(_C.TEXTAREA_MAX_BYTES),
+        max_bytes=int(_C.STATEMENT_SAMPLE_MAX_BYTES),
     )
 
 
@@ -65,7 +67,7 @@ def tests_spec_sample_output_value(raw: object | None, fallback: object = "") ->
     value = fallback if raw is None else tests_spec_form_text(raw)
     return normalize_sample_output(
         value,
-        max_bytes=int(_C.TEXTAREA_MAX_BYTES),
+        max_bytes=int(_C.STATEMENT_SAMPLE_MAX_BYTES),
     )
 
 
@@ -105,7 +107,7 @@ def tests_spec_row(
     return normalize_tests_spec_entry(
         payload,
         index=index,
-        max_bytes=int(_C.TEXTAREA_MAX_BYTES),
+        sample_max_bytes=int(_C.STATEMENT_SAMPLE_MAX_BYTES),
     )
 
 
@@ -120,9 +122,11 @@ def tests_spec_add_single_entry(
     sample_output: str,
     sample_output_validate: bool,
 ) -> tuple[int, str]:
+    limits = _C.snapshot()
     entries, spec_path = read_tests_spec(
         workspace,
-        max_bytes=int(_C.TEXTAREA_MAX_BYTES),
+        document_max_bytes=int(limits["TEXTAREA_MAX_BYTES"]),
+        sample_max_bytes=int(limits["STATEMENT_SAMPLE_MAX_BYTES"]),
     )
     safe_test_id = normalize_test_id(requested_id) if requested_id else next_test_id(entries)
     if any((row.get("id") == safe_test_id for row in entries)):
@@ -141,7 +145,8 @@ def tests_spec_add_single_entry(
     write_tests_spec(
         spec_path,
         entries,
-        max_bytes=int(_C.TEXTAREA_MAX_BYTES),
+        document_max_bytes=int(limits["TEXTAREA_MAX_BYTES"]),
+        sample_max_bytes=int(limits["STATEMENT_SAMPLE_MAX_BYTES"]),
     )
     tests_spec_write_payload(workspace, safe_test_id, kind, payload)
     return len(entries), safe_test_id

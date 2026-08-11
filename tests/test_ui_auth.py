@@ -1766,10 +1766,14 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
 
     def test_config_registry_is_complete_and_not_duplicated_in_main_constants(self) -> None:
         definitions = CONFIG_REGISTRY.definitions
-        self.assertEqual(len(definitions), 94)
-        self.assertEqual(len({definition.key for definition in definitions}), 94)
+        self.assertEqual(len(definitions), 95)
+        self.assertEqual(len({definition.key for definition in definitions}), 95)
         self.assertIn("PROBLEM_ZIP_MAX_EXPANDED_BYTES", CONFIG_REGISTRY.by_key)
         self.assertIn("CONTEST_MAX_PROBLEMS", CONFIG_REGISTRY.by_key)
+        self.assertEqual(
+            CONFIG_REGISTRY.defaults()["STATEMENT_SAMPLE_MAX_BYTES"],
+            32 * 1024,
+        )
         for definition in definitions:
             with self.subTest(key=definition.key):
                 self.assertTrue(definition.category)
@@ -1793,6 +1797,16 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
             CONFIG_REGISTRY.normalize("CONTEST_MAX_PROBLEMS", 65)
         with self.assertRaisesRegex(ValueError, "valid regular expression"):
             service.validate_patch({"AUTH_EMAIL_ALLOW_REGEX": "["})
+        with self.assertRaisesRegex(
+            ValueError,
+            "STATEMENT_SAMPLE_MAX_BYTES must be <= TEXTAREA_MAX_BYTES",
+        ):
+            service.validate_patch(
+                {
+                    "TEXTAREA_MAX_BYTES": 1024,
+                    "STATEMENT_SAMPLE_MAX_BYTES": 2048,
+                }
+            )
         for minimum_key, maximum_key in (
             ("GENERAL_TIME_LIMIT_MIN_MS", "GENERAL_TIME_LIMIT_MAX_MS"),
             ("GENERAL_MEMORY_LIMIT_MIN_MB", "GENERAL_MEMORY_LIMIT_MAX_MB"),

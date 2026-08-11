@@ -121,6 +121,7 @@ def _resolve_generator_source_from_token_for_nav(token: str, source_paths: list[
     return ''
 
 def _generator_reference_counts(workspace: Path, source_paths: list[str]) -> dict[str, int]:
+    limits = _C.snapshot()
     source_catalog = dedupe_preserve_order(
         [path.strip().replace('\\', '/') for path in source_paths if path.strip()]
     )
@@ -130,7 +131,8 @@ def _generator_reference_counts(workspace: Path, source_paths: list[str]) -> dic
     try:
         entries, _ = read_tests_spec(
             workspace,
-            max_bytes=int(_C.TEXTAREA_MAX_BYTES),
+            document_max_bytes=int(limits["TEXTAREA_MAX_BYTES"]),
+            sample_max_bytes=int(limits["STATEMENT_SAMPLE_MAX_BYTES"]),
         )
     except Exception:
         return counts

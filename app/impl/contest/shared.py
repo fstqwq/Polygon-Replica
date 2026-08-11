@@ -585,6 +585,7 @@ def _prepare_contest_pdf_problem(
     materialization_id: str,
     archive_sha256: str,
 ) -> dict[str, object]:
+    config_snapshot = _C.snapshot()
     item: dict[str, object] = {
         "idx": idx,
         "problem_id": int(problem_id),
@@ -604,7 +605,10 @@ def _prepare_contest_pdf_problem(
         ) as native:
             hydrate_native_statement_samples(
                 native,
-                tests_spec_max_bytes=int(_C.TEXTAREA_MAX_BYTES),
+                tests_spec_max_bytes=int(config_snapshot["TEXTAREA_MAX_BYTES"]),
+                statement_sample_max_bytes=int(
+                    config_snapshot["STATEMENT_SAMPLE_MAX_BYTES"]
+                ),
             )
             target_dir = _contest_compile_target(
                 compile_root,
@@ -622,7 +626,10 @@ def _prepare_contest_pdf_problem(
                     fallback_title=problem_slug_leaf(problem_slug),
                     language=language,
                 ),
-                tests_spec_max_bytes=int(_C.TEXTAREA_MAX_BYTES),
+                tests_spec_max_bytes=int(config_snapshot["TEXTAREA_MAX_BYTES"]),
+                statement_sample_max_bytes=int(
+                    config_snapshot["STATEMENT_SAMPLE_MAX_BYTES"]
+                ),
             )
             item["preamble_lines"] = _extract_latex_color_definition_lines(native.root / "statement" / "olymp.sty")
             item["source_commit"] = native.manifest["source_commit"]

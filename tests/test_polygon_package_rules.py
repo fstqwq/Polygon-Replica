@@ -287,6 +287,7 @@ class TestPolygonPackageRules(unittest.TestCase):
                     "native.zip",
                     archive,
                     text_limit_bytes=256 * 1024,
+                    statement_sample_max_bytes=32 * 1024,
                 )
             self.assertFalse((workspace / "test_data").exists())
 
@@ -312,6 +313,7 @@ class TestPolygonPackageRules(unittest.TestCase):
                         "native.zip",
                         archive,
                         text_limit_bytes=256 * 1024,
+                        statement_sample_max_bytes=32 * 1024,
                     )
             self.assertEqual(
                 list(workspace.parent.glob(".native-import-*")),

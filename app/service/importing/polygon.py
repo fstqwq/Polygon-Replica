@@ -607,6 +607,7 @@ class PolygonPackageImportService:
         statement_language: str,
         normalize_test_data_newlines: bool = False,
         text_limit_bytes: int,
+        statement_sample_max_bytes: int,
     ) -> TestsImportSummary:
         tests = meta["tests"]
 
@@ -687,7 +688,11 @@ class PolygonPackageImportService:
         self._write_text(
             workspace,
             Path("tests/spec.json"),
-            dumps_tests_spec(spec_entries, max_bytes=text_limit_bytes),
+            dumps_tests_spec(
+                spec_entries,
+                document_max_bytes=text_limit_bytes,
+                sample_max_bytes=statement_sample_max_bytes,
+            ),
         )
         return {
             "manual": manual_count,
@@ -920,6 +925,7 @@ class PolygonPackageImportService:
         *,
         normalize_test_data_newlines: bool = False,
         text_limit_bytes: int,
+        statement_sample_max_bytes: int,
     ) -> dict[str, object]:
         rooted = package.rooted_at("problem.xml")
         zf = rooted.zip_file
@@ -943,6 +949,7 @@ class PolygonPackageImportService:
             statement_language=statement_summary["language"],
             normalize_test_data_newlines=normalize_test_data_newlines,
             text_limit_bytes=text_limit_bytes,
+            statement_sample_max_bytes=statement_sample_max_bytes,
         )
         component_summary = self._import_components(zf, entry_map, workspace, meta)
         solutions_summary = self._import_solutions(zf, entry_map, workspace, meta)

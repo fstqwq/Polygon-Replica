@@ -147,11 +147,34 @@ def normalize_sample_output(raw: object, *, max_bytes: int) -> str:
     )
 
 
+def read_statement_sample_text(path: Path, *, max_bytes: int) -> str:
+    """Read one generated sample payload without exceeding its remaining budget."""
+
+    cap = int(max_bytes)
+    if cap < 0:
+        raise ValueError("statement sample exceeds byte limit")
+    if path.is_symlink() or not path.is_file():
+        raise ValueError("statement sample payload is not a regular file")
+    try:
+        if path.stat().st_size > cap:
+            raise ValueError("statement sample exceeds byte limit")
+        with path.open("rb") as source:
+            payload = source.read(cap + 1)
+    except OSError as exc:
+        raise ValueError("statement sample payload is unavailable") from exc
+    if len(payload) > cap:
+        raise ValueError("statement sample exceeds byte limit")
+    text = payload.decode("utf-8", errors="replace")
+    if len(text.encode("utf-8")) > cap:
+        raise ValueError("statement sample exceeds byte limit")
+    return text
+
+
 def normalize_tests_spec_entry(
     raw: object,
     *,
     index: int = 0,
-    max_bytes: int,
+    sample_max_bytes: int,
 ) -> dict:
     if not isinstance(raw, dict):
         raise ValueError(f"tests[{index}] must be an object")
@@ -164,12 +187,18 @@ def normalize_tests_spec_entry(
     sample = _normalize_sample_flag(raw.get("sample", False))
     sample_input = normalize_sample_input(
         raw.get("sample_input", ""),
-        max_bytes=max_bytes,
+        max_bytes=sample_max_bytes,
     )
     sample_output = normalize_sample_output(
         raw.get("sample_output", ""),
-        max_bytes=max_bytes,
+        max_bytes=sample_max_bytes,
     )
+    if len(sample_input.encode("utf-8")) + len(
+        sample_output.encode("utf-8")
+    ) > max(1, int(sample_max_bytes)):
+        raise ValueError(
+            f"tests[{index}] sample input and output exceed statement sample byte limit"
+        )
     sample_output_validate = _normalize_sample_output_validate_flag(
         raw.get("sample_output_validate", True)
     )
@@ -188,7 +217,11 @@ def normalize_tests_spec_entry(
     }
 
 
-def normalize_tests_spec_entries(raw: object, *, max_bytes: int) -> list[dict]:
+def normalize_tests_spec_entries(
+    raw: object,
+    *,
+    sample_max_bytes: int,
+) -> list[dict]:
     if raw is None:
         return []
     if not isinstance(raw, list):
@@ -199,7 +232,7 @@ def normalize_tests_spec_entries(raw: object, *, max_bytes: int) -> list[dict]:
         row = normalize_tests_spec_entry(
             item,
             index=idx,
-            max_bytes=max_bytes,
+            sample_max_bytes=sample_max_bytes,
         )
         row_id = row["id"]
         if row_id in seen_ids:
@@ -211,8 +244,18 @@ def normalize_tests_spec_entries(raw: object, *, max_bytes: int) -> list[dict]:
     return entries
 
 
-def loads_tests_spec(text: str, *, max_bytes: int) -> list[dict]:
-    raw_text = str(text or "").strip()
+def loads_tests_spec(
+    text: str,
+    *,
+    document_max_bytes: int,
+    sample_max_bytes: int,
+) -> list[dict]:
+    bounded_text = enforce_textarea_max_bytes(
+        str(text or ""),
+        label="tests/spec.json",
+        max_bytes=document_max_bytes,
+    )
+    raw_text = bounded_text.strip()
     if not raw_text:
         return []
     try:
@@ -220,29 +263,62 @@ def loads_tests_spec(text: str, *, max_bytes: int) -> list[dict]:
     except json.JSONDecodeError as exc:
         raise ValueError(f"invalid JSON: {exc}") from exc
     if isinstance(payload, list):
-        return normalize_tests_spec_entries(payload, max_bytes=max_bytes)
+        return normalize_tests_spec_entries(
+            payload,
+            sample_max_bytes=sample_max_bytes,
+        )
     if not isinstance(payload, dict):
         raise ValueError("tests/spec.json must be an object")
     tests = payload.get("tests")
     if tests is None:
         return []
-    return normalize_tests_spec_entries(tests, max_bytes=max_bytes)
+    return normalize_tests_spec_entries(
+        tests,
+        sample_max_bytes=sample_max_bytes,
+    )
 
 
-def load_tests_spec(path: Path, *, max_bytes: int) -> list[dict]:
+def load_tests_spec(
+    path: Path,
+    *,
+    document_max_bytes: int,
+    sample_max_bytes: int,
+) -> list[dict]:
     if not path.exists():
         return []
     if path.is_symlink() or not path.is_file():
         raise ValueError("tests/spec.json is invalid")
+    cap = max(1, int(document_max_bytes))
     try:
-        text = path.read_text(encoding="utf-8")
+        if path.stat().st_size > cap:
+            raise ValueError("tests/spec.json is too long")
+        with path.open("rb") as source:
+            payload = source.read(cap + 1)
     except OSError as exc:
         raise ValueError(f"cannot read tests/spec.json: {exc}") from exc
-    return loads_tests_spec(text, max_bytes=max_bytes)
+    if len(payload) > cap:
+        raise ValueError("tests/spec.json is too long")
+    try:
+        text = payload.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError("tests/spec.json must be UTF-8") from exc
+    return loads_tests_spec(
+        text,
+        document_max_bytes=document_max_bytes,
+        sample_max_bytes=sample_max_bytes,
+    )
 
 
-def dumps_tests_spec(entries: list[dict], *, max_bytes: int) -> str:
-    normalized = normalize_tests_spec_entries(entries, max_bytes=max_bytes)
+def dumps_tests_spec(
+    entries: list[dict],
+    *,
+    document_max_bytes: int,
+    sample_max_bytes: int,
+) -> str:
+    normalized = normalize_tests_spec_entries(
+        entries,
+        sample_max_bytes=sample_max_bytes,
+    )
     dumped_tests: list[dict] = []
     for idx, row in enumerate(normalized, start=1):
         row_payload: dict[str, object] = {
@@ -252,11 +328,11 @@ def dumps_tests_spec(entries: list[dict], *, max_bytes: int) -> str:
         }
         sample_input = normalize_sample_input(
             row.get("sample_input", ""),
-            max_bytes=max_bytes,
+            max_bytes=sample_max_bytes,
         )
         sample_output = normalize_sample_output(
             row.get("sample_output", ""),
-            max_bytes=max_bytes,
+            max_bytes=sample_max_bytes,
         )
         sample_output_validate = _normalize_sample_output_validate_flag(
             row.get("sample_output_validate", True)
@@ -270,7 +346,7 @@ def dumps_tests_spec(entries: list[dict], *, max_bytes: int) -> str:
         normalized_row = normalize_tests_spec_entry(
             row_payload,
             index=idx,
-            max_bytes=max_bytes,
+            sample_max_bytes=sample_max_bytes,
         )
         dumped_row: dict[str, object] = {
             "id": normalized_row["id"],
@@ -290,7 +366,11 @@ def dumps_tests_spec(entries: list[dict], *, max_bytes: int) -> str:
             dumped_row["sample_output_validate"] = False
         dumped_tests.append(dumped_row)
     payload = {"tests": dumped_tests}
-    return json.dumps(payload, indent=2, ensure_ascii=False) + "\n"
+    return enforce_textarea_max_bytes(
+        json.dumps(payload, indent=2, ensure_ascii=False) + "\n",
+        label="tests/spec.json",
+        max_bytes=document_max_bytes,
+    )
 
 
 def summarize_tests_spec(entries: list[dict]) -> dict:

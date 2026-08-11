@@ -298,6 +298,7 @@ def extract_latex_failure_summary(log_text: str, summary_obj: dict[str, object] 
 
 
 def preview_page(request: Request, problem: str, user: Annotated[str, Depends(require_session_user)]):
+    config_snapshot = _C.snapshot()
     ctx = page_ctx(
         problem,
         user,
@@ -316,7 +317,10 @@ def preview_page(request: Request, problem: str, user: Annotated[str, Depends(re
     current_statement_signature = statement_sources_signature(
         workspace,
         problem_title=problem_title,
-        tests_spec_max_bytes=int(_C.TEXTAREA_MAX_BYTES),
+        tests_spec_max_bytes=int(config_snapshot["TEXTAREA_MAX_BYTES"]),
+        statement_sample_max_bytes=int(
+            config_snapshot["STATEMENT_SAMPLE_MAX_BYTES"]
+        ),
     )
     workspace_head = str(ctx["workspace"].get("head_commit") or "")
     requested_preview_id = request.query_params.get("preview_id", "")
@@ -575,6 +579,7 @@ def preview_run(
     return redirect_response(redirect_url, status_code=303, message=msg)
 
 def preview_status(problem: str, user: Annotated[str, Depends(require_session_user)], language: str = ""):
+    config_snapshot = _C.snapshot()
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
     problem_id = int(ctx['problem']['id'])
     workspace_id = int(ctx['workspace']['id'])
@@ -591,7 +596,10 @@ def preview_status(problem: str, user: Annotated[str, Depends(require_session_us
     current_statement_signature = statement_sources_signature(
         workspace,
         problem_title=problem_title,
-        tests_spec_max_bytes=int(_C.TEXTAREA_MAX_BYTES),
+        tests_spec_max_bytes=int(config_snapshot["TEXTAREA_MAX_BYTES"]),
+        statement_sample_max_bytes=int(
+            config_snapshot["STATEMENT_SAMPLE_MAX_BYTES"]
+        ),
     )
     workspace_head = str(ctx['workspace'].get('head_commit') or "")
     workspace_key = f'{problem_id}:{workspace_id}'
@@ -626,6 +634,7 @@ def preview_status(problem: str, user: Annotated[str, Depends(require_session_us
 
 
 def statement_tex_source(problem: str, user: Annotated[str, Depends(require_session_user)], language: str = ""):
+    config_snapshot = _C.snapshot()
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
     workspace = Path(ctx['workspace']['path'])
     try:
@@ -641,7 +650,10 @@ def statement_tex_source(problem: str, user: Annotated[str, Depends(require_sess
                     current_language,
                     fallback_title=problem_slug_leaf(problem),
                 ),
-                tests_spec_max_bytes=int(_C.TEXTAREA_MAX_BYTES),
+                tests_spec_max_bytes=int(config_snapshot["TEXTAREA_MAX_BYTES"]),
+                statement_sample_max_bytes=int(
+                    config_snapshot["STATEMENT_SAMPLE_MAX_BYTES"]
+                ),
             )
             tex_text = tex_path.read_text(encoding='utf-8')
     except ValueError as exc:

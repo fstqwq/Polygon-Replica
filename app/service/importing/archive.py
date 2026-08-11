@@ -40,15 +40,18 @@ class ProblemImportPolicy:
 
     archive: ArchivePolicy
     text_limit_bytes: int
+    statement_sample_max_bytes: int
 
 
 def problem_import_policy(
     max_expanded_bytes: int,
     text_limit_bytes: int,
+    statement_sample_max_bytes: int,
 ) -> ProblemImportPolicy:
     return ProblemImportPolicy(
         archive=problem_archive_policy(max_expanded_bytes),
         text_limit_bytes=max(1, int(text_limit_bytes)),
+        statement_sample_max_bytes=max(1, int(statement_sample_max_bytes)),
     )
 
 

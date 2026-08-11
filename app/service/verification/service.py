@@ -1079,7 +1079,8 @@ class VerificationService:
         limits = self._config_values.snapshot()
         return load_tests_spec_entries(
             snapshot,
-            max_bytes=int(limits["TEXTAREA_MAX_BYTES"]),
+            document_max_bytes=int(limits["TEXTAREA_MAX_BYTES"]),
+            sample_max_bytes=int(limits["STATEMENT_SAMPLE_MAX_BYTES"]),
         )
 
     def _prepare_tests_spec_runtime(

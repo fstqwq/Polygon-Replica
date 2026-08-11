@@ -25,6 +25,7 @@ if TYPE_CHECKING:
 
 _HEAD = "a" * 40
 _TESTS_SPEC_MAX_BYTES = 256 * 1024
+_STATEMENT_SAMPLE_MAX_BYTES = 32 * 1024
 
 
 class _LocalWorkspaceService:
@@ -437,7 +438,8 @@ class TestPreviewService(DBTestBase):
                         "sample_input": "custom-sample-input\n",
                     },
                 ],
-                max_bytes=_TESTS_SPEC_MAX_BYTES,
+                document_max_bytes=_TESTS_SPEC_MAX_BYTES,
+                sample_max_bytes=_STATEMENT_SAMPLE_MAX_BYTES,
             ),
             encoding="utf-8",
         )
@@ -485,7 +487,8 @@ class TestPreviewService(DBTestBase):
 
         spec = load_tests_spec(
             self.workspace / "tests" / "spec.json",
-            max_bytes=_TESTS_SPEC_MAX_BYTES,
+            document_max_bytes=_TESTS_SPEC_MAX_BYTES,
+            sample_max_bytes=_STATEMENT_SAMPLE_MAX_BYTES,
         )
         self.assertEqual(verification.calls, [(self.problem, self.user, True)])
         self.assertEqual(summary["copied"], 3)
@@ -521,7 +524,8 @@ class TestPreviewService(DBTestBase):
                         "sample_output": "take\n",
                     }
                 ],
-                max_bytes=_TESTS_SPEC_MAX_BYTES,
+                document_max_bytes=_TESTS_SPEC_MAX_BYTES,
+                sample_max_bytes=_STATEMENT_SAMPLE_MAX_BYTES,
             ),
             encoding="utf-8",
         )

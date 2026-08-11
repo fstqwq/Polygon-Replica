@@ -59,6 +59,15 @@ Each entry has:
 - optional `sample_input` and `sample_output` strings
 - optional `sample_output_validate`, which defaults to `true`
 
+The serialized file is bounded by `TEXTAREA_MAX_BYTES` (256 KiB by default).
+For each sample entry, the combined UTF-8 bytes of `sample_input` and
+`sample_output` are independently bounded by `STATEMENT_SAMPLE_MAX_BYTES`
+(32 KiB by default). The same per-sample limit applies when import, preview, or
+package rendering fills missing display data from materialized test input and
+answer files. Oversized samples are rejected rather than truncated. Different
+sample entries do not share another aggregate budget; the serialized-file
+limit remains their common envelope.
+
 The payload is not embedded in the entry. A manual test reads
 `tests/manual/<id>.in`. A generated test reads
 `tests/generator/<id>.in` as a shell-word command: its first token resolves a

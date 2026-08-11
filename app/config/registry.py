@@ -91,6 +91,12 @@ class ConfigRegistry:
         ):
             if int(normalized[minimum_key]) > int(normalized[maximum_key]):
                 raise ValueError(f"{minimum_key} must be <= {maximum_key}")
+        if int(normalized["STATEMENT_SAMPLE_MAX_BYTES"]) > int(
+            normalized["TEXTAREA_MAX_BYTES"]
+        ):
+            raise ValueError(
+                "STATEMENT_SAMPLE_MAX_BYTES must be <= TEXTAREA_MAX_BYTES"
+            )
         return normalized
 
     def validate_snapshot(self, values: Mapping[str, object]) -> None:

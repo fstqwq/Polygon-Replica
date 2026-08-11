@@ -61,6 +61,7 @@ def _contest_archive_policies() -> tuple[ArchivePolicy, ProblemImportPolicy, int
     problem_policy = problem_import_policy(
         problem_expanded,
         int(snapshot["TEXTAREA_MAX_BYTES"]),
+        int(snapshot["STATEMENT_SAMPLE_MAX_BYTES"]),
     )
     contest_policy = contest_archive_policy(max_problems, problem_expanded)
     return contest_policy, problem_policy, max_problems

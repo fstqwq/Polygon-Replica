@@ -24,6 +24,7 @@ from app.service.problem.test_spec import (
     dumps_tests_spec,
     load_tests_spec,
     payload_rel_path_for_test,
+    read_statement_sample_text,
 )
 from app.service.platform.git_process import run_git
 from app.service.platform.process import is_canonical_artifact_id
@@ -111,13 +112,18 @@ class PreviewService:
         self,
         workspace: Path,
         *,
-        max_bytes: int,
+        document_max_bytes: int,
+        sample_max_bytes: int,
     ) -> list[_SampleVerificationRow]:
         if self._problem_mode(workspace) == "interactive":
             return []
         spec_path = workspace / TESTS_SPEC_REL
         try:
-            entries = load_tests_spec(spec_path, max_bytes=max_bytes)
+            entries = load_tests_spec(
+                spec_path,
+                document_max_bytes=document_max_bytes,
+                sample_max_bytes=sample_max_bytes,
+            )
         except Exception as exc:
             raise RuntimeError(f"invalid tests/spec.json: {exc}") from exc
         rows: list[PreviewService._SampleVerificationRow] = []
@@ -171,11 +177,15 @@ class PreviewService:
     def _copy_sample_payloads_from_verification(self, problem: str, username: str, snapshot: Path) -> dict[str, object]:
         config_snapshot = self.db.config_values.snapshot()
         tests_spec_max_bytes = int(config_snapshot["TEXTAREA_MAX_BYTES"])
+        statement_sample_max_bytes = int(
+            config_snapshot["STATEMENT_SAMPLE_MAX_BYTES"]
+        )
         if self._problem_mode(snapshot) == "interactive":
             return {"sample_count": 0, "copied": 0, "verification_id": "", "skipped": "interactive"}
         rows = self._sample_verification_rows_from_spec(
             snapshot,
-            max_bytes=tests_spec_max_bytes,
+            document_max_bytes=tests_spec_max_bytes,
+            sample_max_bytes=statement_sample_max_bytes,
         )
         if not rows:
             return {"sample_count": 0, "copied": 0, "verification_id": ""}
@@ -200,7 +210,8 @@ class PreviewService:
         snapshot_root = snapshot.resolve()
         spec_entries = load_tests_spec(
             snapshot / TESTS_SPEC_REL,
-            max_bytes=tests_spec_max_bytes,
+            document_max_bytes=tests_spec_max_bytes,
+            sample_max_bytes=statement_sample_max_bytes,
         )
         spec_changed = False
         for row in rows:
@@ -228,9 +239,22 @@ class PreviewService:
                     raise RuntimeError(f"sample answer missing from verification for test id {test_id} (row {index})")
                 if index < 1 or index > len(spec_entries):
                     raise RuntimeError(f"invalid tests/spec.json row for sample id {test_id}")
-                spec_entries[index - 1]["sample_output"] = answer_file.path.read_text(
-                    encoding="utf-8",
-                    errors="replace",
+                sample_input_text = str(
+                    spec_entries[index - 1].get("sample_input") or ""
+                )
+                if not sample_input_text:
+                    sample_input_text = read_statement_sample_text(
+                        input_target,
+                        max_bytes=statement_sample_max_bytes,
+                    )
+                spec_entries[index - 1]["sample_output"] = (
+                    read_statement_sample_text(
+                        answer_file.path,
+                        max_bytes=(
+                            statement_sample_max_bytes
+                            - len(sample_input_text.encode("utf-8"))
+                        ),
+                    )
                 )
                 spec_changed = True
                 copied_row = True
@@ -238,7 +262,11 @@ class PreviewService:
                 copied += 1
         if spec_changed:
             (snapshot / TESTS_SPEC_REL).write_text(
-                dumps_tests_spec(spec_entries, max_bytes=tests_spec_max_bytes),
+                dumps_tests_spec(
+                    spec_entries,
+                    document_max_bytes=tests_spec_max_bytes,
+                    sample_max_bytes=statement_sample_max_bytes,
+                ),
                 encoding="utf-8",
             )
         return {"sample_count": len(rows), "copied": copied, "verification_id": verification_id}
@@ -495,6 +523,9 @@ class PreviewService:
     def compile_preview(self, problem: str, username: str, language: str) -> str:
         config_snapshot = self.db.config_values.snapshot()
         tests_spec_max_bytes = int(config_snapshot["TEXTAREA_MAX_BYTES"])
+        statement_sample_max_bytes = int(
+            config_snapshot["STATEMENT_SAMPLE_MAX_BYTES"]
+        )
         ctx = self.workspace_service.workspace_context(problem, username, include_recent=False)
         workspace = Path(ctx["workspace"]["path"])
         safe_language = normalize_statement_language(language)
@@ -530,11 +561,13 @@ class PreviewService:
                 workspace,
                 problem_title=problem_title,
                 tests_spec_max_bytes=tests_spec_max_bytes,
+                statement_sample_max_bytes=statement_sample_max_bytes,
             )
             dynamic_samples = bool(
                 self._sample_verification_rows_from_spec(
                     workspace,
-                    max_bytes=tests_spec_max_bytes,
+                    document_max_bytes=tests_spec_max_bytes,
+                    sample_max_bytes=statement_sample_max_bytes,
                 )
             )
             if not head:
@@ -622,6 +655,7 @@ class PreviewService:
                 problem_title=problem_title,
                 language=safe_language,
                 tests_spec_max_bytes=tests_spec_max_bytes,
+                statement_sample_max_bytes=statement_sample_max_bytes,
             )
 
             try:

@@ -20,7 +20,7 @@ from tests.archive_support import import_problem_package
 
 
 class TestExportService(unittest.TestCase):
-    def test_statement_sample_hydration_uses_one_aggregate_budget(self) -> None:
+    def test_statement_sample_hydration_limits_each_input_output_pair(self) -> None:
         with tempfile.TemporaryDirectory(prefix="statement-sample-budget-") as temp:
             package_root = Path(temp) / "native"
             spec_path = package_root / "tests" / "spec.json"
@@ -29,8 +29,9 @@ class TestExportService(unittest.TestCase):
                 "tests": [{"id": "001", "kind": "manual", "sample": True}]
             }
             sample_limit = 1024
+            document_limit = 2048
             original_spec = json.dumps(spec_payload, indent=2) + "\n"
-            self.assertLess(len(original_spec.encode("utf-8")), sample_limit)
+            self.assertLess(len(original_spec.encode("utf-8")), document_limit)
             spec_path.write_text(original_spec, encoding="utf-8")
 
             test_data = package_root / "test_data" / "tests" / "001"
@@ -85,11 +86,12 @@ class TestExportService(unittest.TestCase):
 
             with self.assertRaisesRegex(
                 ValueError,
-                "generated statement samples exceed display byte limit",
+                "statement sample exceeds byte limit",
             ):
                 hydrate_native_statement_samples(
                     native,
-                    tests_spec_max_bytes=sample_limit,
+                    tests_spec_max_bytes=document_limit,
+                    statement_sample_max_bytes=sample_limit,
                 )
             self.assertEqual(spec_path.read_text(encoding="utf-8"), original_spec)
 
@@ -100,7 +102,8 @@ class TestExportService(unittest.TestCase):
             manifest_test["answer"] = describe_file(answer_path, root=package_root)
             hydrate_native_statement_samples(
                 native,
-                tests_spec_max_bytes=sample_limit,
+                tests_spec_max_bytes=document_limit,
+                statement_sample_max_bytes=sample_limit,
             )
             hydrated = json.loads(spec_path.read_text(encoding="utf-8"))["tests"][0]
             self.assertEqual(

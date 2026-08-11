@@ -6,7 +6,12 @@ import shutil
 from pathlib import Path
 
 from app.main_util import problem_slug_leaf
-from app.service.problem.test_spec import TESTS_SPEC_REL, load_tests_spec, payload_rel_path_for_test
+from app.service.problem.test_spec import (
+    TESTS_SPEC_REL,
+    load_tests_spec,
+    payload_rel_path_for_test,
+    read_statement_sample_text,
+)
 from app.service.statement.constant import (
     DEFAULT_OLYMP_STY,
     DEFAULT_PROBLEM_TITLE,
@@ -86,10 +91,15 @@ def _collect_sample_tests(
     rendered_lang_root: Path,
     *,
     tests_spec_max_bytes: int,
+    statement_sample_max_bytes: int,
 ) -> list[dict[str, str]]:
     spec_path = workspace / TESTS_SPEC_REL
     try:
-        entries = load_tests_spec(spec_path, max_bytes=tests_spec_max_bytes)
+        entries = load_tests_spec(
+            spec_path,
+            document_max_bytes=tests_spec_max_bytes,
+            sample_max_bytes=statement_sample_max_bytes,
+        )
     except Exception as exc:
         raise RuntimeError(f"invalid tests/spec.json: {exc}") from exc
     rows: list[dict[str, str]] = []
@@ -111,15 +121,25 @@ def _collect_sample_tests(
             continue
         if not sample_output_text:
             continue
+        if input_source is not None:
+            try:
+                sample_input_text = read_statement_sample_text(
+                    input_source,
+                    max_bytes=(
+                        statement_sample_max_bytes
+                        - len(sample_output_text.encode("utf-8"))
+                    ),
+                )
+            except ValueError as exc:
+                raise RuntimeError(
+                    f"invalid statement sample at tests/spec.json entry {index}: {exc}"
+                ) from exc
         input_name = f"sample.{test_id}.in"
         output_name = f"sample.{test_id}.ans"
         input_target = rendered_lang_root / input_name
         output_target = rendered_lang_root / output_name
         try:
-            if sample_input_text:
-                input_target.write_text(sample_input_text, encoding="utf-8")
-            else:
-                shutil.copy2(input_source, input_target)
+            input_target.write_text(sample_input_text, encoding="utf-8")
             if sample_output_text:
                 output_target.write_text(sample_output_text, encoding="utf-8")
         except OSError:
@@ -257,6 +277,7 @@ def _render_polygon_statement(
     language: str,
     include_sample_tests: bool = True,
     tests_spec_max_bytes: int,
+    statement_sample_max_bytes: int,
 ) -> Path:
     template_text = _read_required_text(
         workspace / STATEMENT_TEMPLATE_REL,
@@ -278,6 +299,7 @@ def _render_polygon_statement(
             workspace,
             rendered_lang_root,
             tests_spec_max_bytes=tests_spec_max_bytes,
+            statement_sample_max_bytes=statement_sample_max_bytes,
         )
         if include_sample_tests
         else []
@@ -325,6 +347,7 @@ def render_statement_problem_assets_for_language(
     *,
     problem_title: str | None = None,
     tests_spec_max_bytes: int,
+    statement_sample_max_bytes: int,
 ) -> Path:
     template_text = _safe_read_text(workspace / STATEMENT_PROBLEM_REL, DEFAULT_STATEMENT_PROBLEM_TEMPLATE)
     _read_required_text(
@@ -339,6 +362,7 @@ def render_statement_problem_assets_for_language(
         workspace,
         target_dir,
         tests_spec_max_bytes=tests_spec_max_bytes,
+        statement_sample_max_bytes=statement_sample_max_bytes,
     )
     problem_ctx = _problem_context_for_language(
         workspace,
@@ -373,6 +397,7 @@ def render_statement_main(
     language: str,
     include_sample_tests: bool = True,
     tests_spec_max_bytes: int,
+    statement_sample_max_bytes: int,
 ) -> Path:
     workspace = statement_root.parent
     return _render_polygon_statement(
@@ -382,4 +407,5 @@ def render_statement_main(
         language=language,
         include_sample_tests=include_sample_tests,
         tests_spec_max_bytes=tests_spec_max_bytes,
+        statement_sample_max_bytes=statement_sample_max_bytes,
     )

@@ -26,6 +26,7 @@ class TestLargePackageImport(unittest.TestCase):
                     package.name,
                     archive,
                     text_limit_bytes=256 * 1024,
+                    statement_sample_max_bytes=32 * 1024,
                 )
 
             problem = json.loads((workspace / "config/problem.json").read_text(encoding="utf-8"))
@@ -47,6 +48,7 @@ class TestLargePackageImport(unittest.TestCase):
                     package.name,
                     archive,
                     text_limit_bytes=256 * 1024,
+                    statement_sample_max_bytes=32 * 1024,
                 )
 
             problem = json.loads((workspace / "config/problem.json").read_text(encoding="utf-8"))

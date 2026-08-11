@@ -593,6 +593,9 @@ class ExportService:
         compiled_any = False
         limits = self.db.config_values.snapshot()
         tests_spec_max_bytes = int(limits["TEXTAREA_MAX_BYTES"])
+        statement_sample_max_bytes = int(
+            limits["STATEMENT_SAMPLE_MAX_BYTES"]
+        )
         for language in self._statement_export_languages(snapshot):
             try:
                 rendered = render_statement_main(
@@ -601,6 +604,7 @@ class ExportService:
                     language=language,
                     include_sample_tests=include_sample_tests,
                     tests_spec_max_bytes=tests_spec_max_bytes,
+                    statement_sample_max_bytes=statement_sample_max_bytes,
                 )
             except Exception as exc:
                 raise ValueError(f"failed to render {language} statement: {exc}") from exc
@@ -726,6 +730,9 @@ class ExportService:
         hydrate_native_statement_samples(
             native,
             tests_spec_max_bytes=int(limits["TEXTAREA_MAX_BYTES"]),
+            statement_sample_max_bytes=int(
+                limits["STATEMENT_SAMPLE_MAX_BYTES"]
+            ),
         )
 
         statement_languages_to_export = self._statement_export_languages(snapshot)

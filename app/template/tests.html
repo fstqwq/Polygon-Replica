@@ -105,7 +105,7 @@
           <option value="gen" {{ "selected" if row.kind == "gen" else "" }}>gen</option>
         </select>
         <label><input type="checkbox" name="sample" value="1" data-sample-toggle="1" {{ "checked" if row.sample else "" }} /> sample</label>
-        <p class="muted">Leave sample input/output blank to generate them.</p>
+        <p class="muted">Sample input and output share a {{ statement_sample_max_bytes }}-byte UTF-8 limit. Leave either blank to generate it.</p>
         <label for="edit-test-sample-input-{{ row.index }}">Sample Input (optional)</label>
         <textarea id="edit-test-sample-input-{{ row.index }}" class="textarea-sm" name="sample_input" placeholder="Leave blank for generated input">{{ row.sample_input }}</textarea>
         <label for="edit-test-sample-output-{{ row.index }}">Sample Output (optional)</label>
@@ -138,7 +138,7 @@
         <label for="add-manual-id-popup">ID (optional, auto = next)</label>
         <input id="add-manual-id-popup" type="text" name="test_id" />
         <label><input type="checkbox" name="sample" value="1" data-sample-toggle="1" /> sample</label>
-        <p class="muted">Leave sample input/output blank to generate them.</p>
+        <p class="muted">Sample input and output share a {{ statement_sample_max_bytes }}-byte UTF-8 limit. Leave either blank to generate it.</p>
         <label for="add-manual-sample-input-popup">Sample Input (optional)</label>
         <textarea id="add-manual-sample-input-popup" class="textarea-sm" name="sample_input" placeholder="Leave blank for generated input"></textarea>
         <label for="add-manual-sample-output-popup">Sample Output (optional)</label>
@@ -157,7 +157,7 @@
         <label for="add-manual-upload-id-popup">ID (optional, auto = next)</label>
         <input id="add-manual-upload-id-popup" type="text" name="test_id" />
         <label><input type="checkbox" name="sample" value="1" data-sample-toggle="1" /> sample</label>
-        <p class="muted">Leave sample input/output blank to generate them.</p>
+        <p class="muted">Sample input and output share a {{ statement_sample_max_bytes }}-byte UTF-8 limit. Leave either blank to generate it.</p>
         <label for="add-manual-upload-sample-input-popup">Sample Input (optional)</label>
         <textarea id="add-manual-upload-sample-input-popup" class="textarea-sm" name="sample_input" placeholder="Leave blank for generated input"></textarea>
         <label for="add-manual-upload-sample-output-popup">Sample Output (optional)</label>

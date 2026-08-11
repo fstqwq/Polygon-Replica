@@ -45,9 +45,10 @@ would turn the record into a multiline continuation.
 Admin-managed settings are stored as JSON values in SQLite `system_config`.
 The typed registry under `app/config/` is the only authority for every key's
 type, default, range, category, description, and restart behavior. It currently
-contains the 92 existing settings plus `PROBLEM_ZIP_MAX_EXPANDED_BYTES` and
-`CONTEST_MAX_PROBLEMS`. SQLite stores only values that differ from registry
-defaults; there is no second legacy schema or environment-variable fallback.
+contains 95 settings, including `PROBLEM_ZIP_MAX_EXPANDED_BYTES`,
+`CONTEST_MAX_PROBLEMS`, and `STATEMENT_SAMPLE_MAX_BYTES`. SQLite stores only
+values that differ from registry defaults; there is no second legacy schema or
+environment-variable fallback.
 
 `app/main_constant.py` contains fixed protocol, path, regular-expression,
 template, and enumeration values. It does not contain admin-editable defaults.
@@ -58,6 +59,8 @@ At startup, every persisted override is normalized and the complete resulting
 snapshot is validated. An unknown key, malformed value, invalid regular
 expression, colliding cookie name, or inconsistent min/max pair prevents
 startup and names the offending key rather than silently restoring a default.
+The statement sample limit cannot exceed the whole `tests/spec.json` textarea
+limit.
 
 Secure-cookie behavior comes from this durable configuration path. There is no
 bootstrap environment-variable override; deployment manifests must leave it

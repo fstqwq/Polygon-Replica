@@ -831,6 +831,9 @@ class TestPublishedRevisionExport(E2ETestBase):
                     tests_spec_max_bytes=int(
                         config.config_values.TEXTAREA_MAX_BYTES
                     ),
+                    statement_sample_max_bytes=int(
+                        config.config_values.STATEMENT_SAMPLE_MAX_BYTES
+                    ),
                 )
         stored = config.problem_package_service.store.materialization(materialization["id"])
         self.assertIsNotNone(stored)

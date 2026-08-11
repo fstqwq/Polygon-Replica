@@ -87,6 +87,7 @@ class NativePackageImportService:
         *,
         normalize_test_data_newlines: bool = False,
         text_limit_bytes: int,
+        statement_sample_max_bytes: int,
     ) -> dict[str, object]:
         del normalize_test_data_newlines
         rooted = package.rooted_at(NATIVE_PACKAGE_ANCHOR)
@@ -113,7 +114,8 @@ class NativePackageImportService:
                             tests_spec_info,
                             label="tests/spec.json",
                         ).decode("utf-8"),
-                        max_bytes=text_limit_bytes,
+                        document_max_bytes=text_limit_bytes,
+                        sample_max_bytes=statement_sample_max_bytes,
                     )
                 )
             except (UnicodeDecodeError, ValueError):

@@ -205,6 +205,7 @@ def history_import(
             policy = problem_import_policy(
                 int(snapshot["PROBLEM_ZIP_MAX_EXPANDED_BYTES"]),
                 int(snapshot["TEXTAREA_MAX_BYTES"]),
+                int(snapshot["STATEMENT_SAMPLE_MAX_BYTES"]),
             )
             with ArchiveView(package_path, policy.archive) as package:
                 imported = import_package_into_workspace(

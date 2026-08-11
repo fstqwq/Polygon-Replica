@@ -489,6 +489,7 @@ class ICPCPackageImportService:
         *,
         normalize_test_data_newlines: bool = False,
         text_limit_bytes: int,
+        statement_sample_max_bytes: int,
     ) -> TestsSummary:
         manual_dir = workspace / "tests" / "manual"
         gen_dir = workspace / "tests" / "generator"
@@ -571,7 +572,11 @@ class ICPCPackageImportService:
         self._write_text(
             workspace,
             Path("tests/spec.json"),
-            dumps_tests_spec(spec_entries, max_bytes=text_limit_bytes),
+            dumps_tests_spec(
+                spec_entries,
+                document_max_bytes=text_limit_bytes,
+                sample_max_bytes=statement_sample_max_bytes,
+            ),
         )
         return {
             "total": len(spec_entries),
@@ -849,6 +854,7 @@ class ICPCPackageImportService:
         *,
         normalize_test_data_newlines: bool = False,
         text_limit_bytes: int,
+        statement_sample_max_bytes: int,
     ) -> dict[str, object]:
         package_name = package_name.strip()
         rooted = package.rooted_at("problem.yaml")
@@ -894,6 +900,7 @@ class ICPCPackageImportService:
             workspace,
             normalize_test_data_newlines=normalize_test_data_newlines,
             text_limit_bytes=text_limit_bytes,
+            statement_sample_max_bytes=statement_sample_max_bytes,
         )
         solutions_summary = self._import_solutions(zf, entry_map, workspace)
         components_summary = self._import_components(zf, entry_map, workspace, meta)

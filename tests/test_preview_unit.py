@@ -22,6 +22,7 @@ from app.service.verification.signature import (
 )
 
 _TESTS_SPEC_MAX_BYTES = 256 * 1024
+_STATEMENT_SAMPLE_MAX_BYTES = 32 * 1024
 
 
 class TestPreviewUnit(unittest.TestCase):
@@ -73,6 +74,7 @@ class TestPreviewUnit(unittest.TestCase):
             problem_title="Fallback Title",
             language="english",
             tests_spec_max_bytes=_TESTS_SPEC_MAX_BYTES,
+            statement_sample_max_bytes=_STATEMENT_SAMPLE_MAX_BYTES,
         )
 
         rendered = output.read_text(encoding="utf-8")
@@ -93,6 +95,7 @@ class TestPreviewUnit(unittest.TestCase):
                 problem_title="Title",
                 language="english",
                 tests_spec_max_bytes=_TESTS_SPEC_MAX_BYTES,
+                statement_sample_max_bytes=_STATEMENT_SAMPLE_MAX_BYTES,
             )
 
         seed_statement_sources(self.workspace)
@@ -103,6 +106,7 @@ class TestPreviewUnit(unittest.TestCase):
                 problem_title="Title",
                 language="english",
                 tests_spec_max_bytes=_TESTS_SPEC_MAX_BYTES,
+                statement_sample_max_bytes=_STATEMENT_SAMPLE_MAX_BYTES,
             )
 
     def test_statement_render_copies_shared_assets_only(self) -> None:
@@ -117,6 +121,7 @@ class TestPreviewUnit(unittest.TestCase):
             problem_title="Title",
             language="english",
             tests_spec_max_bytes=_TESTS_SPEC_MAX_BYTES,
+            statement_sample_max_bytes=_STATEMENT_SAMPLE_MAX_BYTES,
         )
 
         rendered = self.workspace / "statement" / "rendered" / "english"
@@ -152,7 +157,8 @@ class TestPreviewUnit(unittest.TestCase):
                         "sample_output": "generated output\n",
                     },
                 ],
-                max_bytes=_TESTS_SPEC_MAX_BYTES,
+                document_max_bytes=_TESTS_SPEC_MAX_BYTES,
+                sample_max_bytes=_STATEMENT_SAMPLE_MAX_BYTES,
             ),
             encoding="utf-8",
         )
@@ -162,6 +168,7 @@ class TestPreviewUnit(unittest.TestCase):
             problem_title="Title",
             language="english",
             tests_spec_max_bytes=_TESTS_SPEC_MAX_BYTES,
+            statement_sample_max_bytes=_STATEMENT_SAMPLE_MAX_BYTES,
         )
 
         rendered = self.workspace / "statement/rendered/english"
@@ -194,7 +201,8 @@ class TestPreviewUnit(unittest.TestCase):
                         "sample_output": "display output\n",
                     }
                 ],
-                max_bytes=_TESTS_SPEC_MAX_BYTES,
+                document_max_bytes=_TESTS_SPEC_MAX_BYTES,
+                sample_max_bytes=_STATEMENT_SAMPLE_MAX_BYTES,
             ),
             encoding="utf-8",
         )
@@ -204,6 +212,7 @@ class TestPreviewUnit(unittest.TestCase):
             problem_title="Title",
             language="english",
             tests_spec_max_bytes=_TESTS_SPEC_MAX_BYTES,
+            statement_sample_max_bytes=_STATEMENT_SAMPLE_MAX_BYTES,
         )
 
         rendered = self.workspace / "statement/rendered/english"
@@ -215,6 +224,58 @@ class TestPreviewUnit(unittest.TestCase):
             (rendered / "sample.001.ans").read_text(encoding="utf-8"),
             "display output\n",
         )
+
+    def test_statement_sample_and_spec_budgets_are_independent(self) -> None:
+        sample_limit = 1024
+        document_limit = 4096
+        dumps_tests_spec(
+            [
+                {
+                    "id": "001",
+                    "kind": "manual",
+                    "sample": True,
+                    "sample_input": "a" * 400,
+                    "sample_output": "b" * 400,
+                },
+                {
+                    "id": "002",
+                    "kind": "manual",
+                    "sample": True,
+                    "sample_input": "c" * 400,
+                    "sample_output": "d" * 400,
+                },
+            ],
+            document_max_bytes=document_limit,
+            sample_max_bytes=sample_limit,
+        )
+        with self.assertRaisesRegex(ValueError, "statement sample byte limit"):
+            dumps_tests_spec(
+                [
+                    {
+                        "id": "001",
+                        "kind": "manual",
+                        "sample": True,
+                        "sample_input": "a" * 600,
+                        "sample_output": "b" * 500,
+                    }
+                ],
+                document_max_bytes=document_limit,
+                sample_max_bytes=sample_limit,
+            )
+        with self.assertRaisesRegex(ValueError, "tests/spec.json is too long"):
+            dumps_tests_spec(
+                [
+                    {
+                        "id": f"{index:03d}",
+                        "kind": "manual",
+                        "sample": True,
+                        "sample_input": "x" * 300,
+                    }
+                    for index in range(1, 5)
+                ],
+                document_max_bytes=sample_limit,
+                sample_max_bytes=sample_limit,
+            )
 
     def test_sample_selection_identifies_only_missing_or_validated_payloads(self) -> None:
         (self.workspace / "tests/manual/001.in").write_text(
@@ -244,7 +305,8 @@ class TestPreviewUnit(unittest.TestCase):
                         "sample_output_validate": False,
                     },
                 ],
-                max_bytes=_TESTS_SPEC_MAX_BYTES,
+                document_max_bytes=_TESTS_SPEC_MAX_BYTES,
+                sample_max_bytes=_STATEMENT_SAMPLE_MAX_BYTES,
             ),
             encoding="utf-8",
         )
@@ -255,7 +317,8 @@ class TestPreviewUnit(unittest.TestCase):
 
         rows = self.preview._sample_verification_rows_from_spec(
             self.workspace,
-            max_bytes=_TESTS_SPEC_MAX_BYTES,
+            document_max_bytes=_TESTS_SPEC_MAX_BYTES,
+            sample_max_bytes=_STATEMENT_SAMPLE_MAX_BYTES,
         )
 
         self.assertEqual([row.test_id for row in rows], ["001", "002"])
@@ -268,14 +331,16 @@ class TestPreviewUnit(unittest.TestCase):
         (self.workspace / "tests/spec.json").write_text(
             dumps_tests_spec(
                 [{"id": "001", "kind": "gen", "sample": True}],
-                max_bytes=_TESTS_SPEC_MAX_BYTES,
+                document_max_bytes=_TESTS_SPEC_MAX_BYTES,
+                sample_max_bytes=_STATEMENT_SAMPLE_MAX_BYTES,
             ),
             encoding="utf-8",
         )
         self.assertEqual(
             self.preview._sample_verification_rows_from_spec(
                 self.workspace,
-                max_bytes=_TESTS_SPEC_MAX_BYTES,
+                document_max_bytes=_TESTS_SPEC_MAX_BYTES,
+                sample_max_bytes=_STATEMENT_SAMPLE_MAX_BYTES,
             ),
             [],
         )
@@ -288,7 +353,8 @@ class TestPreviewUnit(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "invalid tests/spec.json"):
             self.preview._sample_verification_rows_from_spec(
                 self.workspace,
-                max_bytes=_TESTS_SPEC_MAX_BYTES,
+                document_max_bytes=_TESTS_SPEC_MAX_BYTES,
+                sample_max_bytes=_STATEMENT_SAMPLE_MAX_BYTES,
             )
 
     def test_verification_signature_tracks_content_but_not_mtime(self) -> None:
@@ -334,7 +400,8 @@ class TestPreviewUnit(unittest.TestCase):
                         "sample_output": "answer\n",
                     }
                 ],
-                max_bytes=_TESTS_SPEC_MAX_BYTES,
+                document_max_bytes=_TESTS_SPEC_MAX_BYTES,
+                sample_max_bytes=_STATEMENT_SAMPLE_MAX_BYTES,
             ),
             encoding="utf-8",
         )
@@ -342,6 +409,7 @@ class TestPreviewUnit(unittest.TestCase):
             self.workspace,
             problem_title="T",
             tests_spec_max_bytes=_TESTS_SPEC_MAX_BYTES,
+            statement_sample_max_bytes=_STATEMENT_SAMPLE_MAX_BYTES,
         )
         payload.write_text("second\n", encoding="utf-8")
         self.assertNotEqual(
@@ -350,6 +418,7 @@ class TestPreviewUnit(unittest.TestCase):
                 self.workspace,
                 problem_title="T",
                 tests_spec_max_bytes=_TESTS_SPEC_MAX_BYTES,
+                statement_sample_max_bytes=_STATEMENT_SAMPLE_MAX_BYTES,
             ),
         )
 

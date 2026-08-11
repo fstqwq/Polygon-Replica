@@ -306,6 +306,7 @@ def import_package_into_workspace(
                     archive,
                     normalize_test_data_newlines=bool(normalize_test_data_newlines),
                     text_limit_bytes=policy.text_limit_bytes,
+                    statement_sample_max_bytes=policy.statement_sample_max_bytes,
                 ),
             )
             with config.workspace_service.workspace_lock(target_workspace):
@@ -383,6 +384,7 @@ def import_package_as_new_problem(
                         archive,
                         normalize_test_data_newlines=bool(normalize_test_data_newlines),
                         text_limit_bytes=policy.text_limit_bytes,
+                        statement_sample_max_bytes=policy.statement_sample_max_bytes,
                     ),
                 )
             with config.workspace_service.workspace_lock(target_workspace):

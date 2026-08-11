@@ -17,6 +17,7 @@ class ProblemImporter(Protocol):
         *,
         normalize_test_data_newlines: bool = False,
         text_limit_bytes: int,
+        statement_sample_max_bytes: int,
     ) -> dict[str, object]: ...
 
 
@@ -53,6 +54,7 @@ def import_problem_package(
     *,
     max_expanded_bytes: int = 256 * 1024 * 1024,
     text_limit_bytes: int = 256 * 1024,
+    statement_sample_max_bytes: int = 32 * 1024,
 ) -> dict[str, object]:
     """Invoke one problem importer through its canonical ArchiveView input."""
 
@@ -66,4 +68,5 @@ def import_problem_package(
             archive,
             normalize_test_data_newlines=normalize_test_data_newlines,
             text_limit_bytes=text_limit_bytes,
+            statement_sample_max_bytes=statement_sample_max_bytes,
         )

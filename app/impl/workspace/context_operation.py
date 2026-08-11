@@ -426,9 +426,11 @@ def _file_head_text(path: Path, max_bytes: int) -> tuple[str, bool]:
     return (text, clipped)
 
 def tests_spec_editor_context(workspace: Path, limit: int) -> dict:
+    limits = _C.snapshot()
     entries, path = read_tests_spec(
         workspace,
-        max_bytes=int(_C.TEXTAREA_MAX_BYTES),
+        document_max_bytes=int(limits["TEXTAREA_MAX_BYTES"]),
+        sample_max_bytes=int(limits["STATEMENT_SAMPLE_MAX_BYTES"]),
     )
     summary = summarize_tests_spec(entries)
     rows: list[dict] = []
@@ -509,10 +511,12 @@ def tests_spec_editor_context(workspace: Path, limit: int) -> dict:
     return {'path': TESTS_SPEC_REL.as_posix(), 'exists': bool(path.exists() and path.is_file() and (not path.is_symlink())), 'entries': entries, 'rows': rows, 'summary': summary, 'total': len(entries), 'shown': len(rows), 'truncated': truncated}
 
 def _tests_spec_status_context(workspace: Path) -> dict:
+    limits = _C.snapshot()
     try:
         entries, _path = read_tests_spec(
             workspace,
-            max_bytes=int(_C.TEXTAREA_MAX_BYTES),
+            document_max_bytes=int(limits["TEXTAREA_MAX_BYTES"]),
+            sample_max_bytes=int(limits["STATEMENT_SAMPLE_MAX_BYTES"]),
         )
     except ValueError:
         return {'mode': 'invalid', 'display': 'invalid', 'total': 0, 'manual': 0, 'gen': 0, 'sample': 0}
@@ -718,11 +722,13 @@ def _run_test_options_from_verification(problem: str, verification_id: str, limi
     return (options, truncated)
 
 def _run_test_options_from_spec(workspace: Path, limit: int) -> tuple[list[dict], bool]:
+    limits = _C.snapshot()
     options: list[dict] = []
     try:
         entries, _ = read_tests_spec(
             workspace,
-            max_bytes=int(_C.TEXTAREA_MAX_BYTES),
+            document_max_bytes=int(limits["TEXTAREA_MAX_BYTES"]),
+            sample_max_bytes=int(limits["STATEMENT_SAMPLE_MAX_BYTES"]),
         )
     except Exception:
         return (options, False)

@@ -36,6 +36,7 @@ def statement_sources_signature(
     problem_title: str | None = None,
     *,
     tests_spec_max_bytes: int,
+    statement_sample_max_bytes: int,
 ) -> str:
     """Stable signature of statement sources (excluding derived statement/main.tex)."""
     statement_root = workspace / STATEMENT_DIR
@@ -106,7 +107,8 @@ def statement_sources_signature(
     try:
         spec_rows = load_tests_spec(
             spec_path,
-            max_bytes=tests_spec_max_bytes,
+            document_max_bytes=tests_spec_max_bytes,
+            sample_max_bytes=statement_sample_max_bytes,
         )
     except Exception as exc:
         raise RuntimeError(f"invalid tests/spec.json: {exc}") from exc

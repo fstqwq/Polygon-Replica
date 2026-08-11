@@ -85,6 +85,9 @@ from app.service.verification.task_store import VerificationTaskStore
 from app.service.verification.types import Kind
 
 TEXTAREA_MAX_BYTES = int(CONFIG_REGISTRY.defaults()["TEXTAREA_MAX_BYTES"])
+STATEMENT_SAMPLE_MAX_BYTES = int(
+    CONFIG_REGISTRY.defaults()["STATEMENT_SAMPLE_MAX_BYTES"]
+)
 
 
 class TestUIRun(UIHelpersMixin, E2ETestBase):
@@ -7032,6 +7035,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
                 fallback_title=Path(str(ctx["problem"]["slug"])).name,
             ),
             tests_spec_max_bytes=TEXTAREA_MAX_BYTES,
+            statement_sample_max_bytes=STATEMENT_SAMPLE_MAX_BYTES,
         )
 
         preview_id = f"ui-previewctx-{uuid.uuid4().hex[:8]}"

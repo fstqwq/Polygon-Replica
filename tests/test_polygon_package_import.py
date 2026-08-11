@@ -400,7 +400,8 @@ class TestPolygonPackageImport(unittest.TestCase):
 
         tests = load_tests_spec(
             ws / "tests" / "spec.json",
-            max_bytes=256 * 1024,
+            document_max_bytes=256 * 1024,
+            sample_max_bytes=32 * 1024,
         )
         self.assertEqual(len(tests), 3)
         self.assertEqual(str(tests[0].get("sample_input") or ""), "example input 1\n")
@@ -457,7 +458,8 @@ class TestPolygonPackageImport(unittest.TestCase):
         problem = json.loads((workspace / "config/problem.json").read_text(encoding="utf-8"))
         tests = load_tests_spec(
             workspace / "tests/spec.json",
-            max_bytes=256 * 1024,
+            document_max_bytes=256 * 1024,
+            sample_max_bytes=32 * 1024,
         )
         self.assertEqual(problem["mode"], "interactive")
         self.assertEqual(problem["pass_limit"], 1)

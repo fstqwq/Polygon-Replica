@@ -52,17 +52,21 @@ _C = config.config_values
 
 
 def _read_tests_spec(workspace: Path) -> tuple[list[dict[str, str]], Path]:
+    limits = _C.snapshot()
     return read_tests_spec(
         workspace,
-        max_bytes=int(_C.TEXTAREA_MAX_BYTES),
+        document_max_bytes=int(limits["TEXTAREA_MAX_BYTES"]),
+        sample_max_bytes=int(limits["STATEMENT_SAMPLE_MAX_BYTES"]),
     )
 
 
 def _write_tests_spec(path: Path, entries: list[dict[str, str]]) -> None:
+    limits = _C.snapshot()
     write_tests_spec(
         path,
         entries,
-        max_bytes=int(_C.TEXTAREA_MAX_BYTES),
+        document_max_bytes=int(limits["TEXTAREA_MAX_BYTES"]),
+        sample_max_bytes=int(limits["STATEMENT_SAMPLE_MAX_BYTES"]),
     )
 
 
@@ -70,7 +74,7 @@ def _normalize_tests_spec_entry(raw: object, *, index: int) -> dict:
     return normalize_tests_spec_entry(
         raw,
         index=index,
-        max_bytes=int(_C.TEXTAREA_MAX_BYTES),
+        sample_max_bytes=int(_C.STATEMENT_SAMPLE_MAX_BYTES),
     )
 
 
@@ -105,6 +109,7 @@ def render_tests_page(request: Request, problem: str, user: Annotated[str, Depen
         'tests_gen_script': tests_gen_script,
         'tests_gen_script_configured': tests_gen_script_configured,
         'tests_gen_script_edit': request.query_params.get('edit') == 'gen-script',
+        'statement_sample_max_bytes': int(_C.STATEMENT_SAMPLE_MAX_BYTES),
     }
     if tests_editor_error:
         template_context['message'] = tests_editor_error

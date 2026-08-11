@@ -472,10 +472,12 @@ class ProblemPackageService:
         verification_id: str,
         mode: str,
         tests_spec_max_bytes: int,
+        statement_sample_max_bytes: int,
     ) -> list[NativeTestEntry]:
         tests = load_tests_spec(
             snapshot / "tests" / "spec.json",
-            max_bytes=tests_spec_max_bytes,
+            document_max_bytes=tests_spec_max_bytes,
+            sample_max_bytes=statement_sample_max_bytes,
         )
         if not tests:
             raise ValueError("Native materialization requires tests/spec.json entries")
@@ -554,6 +556,9 @@ class ProblemPackageService:
     ) -> MaterializationRow:
         config_snapshot = self.db.config_values.snapshot()
         tests_spec_max_bytes = int(config_snapshot["TEXTAREA_MAX_BYTES"])
+        statement_sample_max_bytes = int(
+            config_snapshot["STATEMENT_SAMPLE_MAX_BYTES"]
+        )
         self.store.mark_build_phase(build_id, "native")
         existing = self.store.materialization_for_revision(
             int(revision.problem["id"]), revision.source_commit
@@ -582,6 +587,7 @@ class ProblemPackageService:
                 verification_id=verification_id,
                 mode=mode,
                 tests_spec_max_bytes=tests_spec_max_bytes,
+                statement_sample_max_bytes=statement_sample_max_bytes,
             )
             manifest: NativeManifest = {
                 "source_commit": revision.source_commit,
@@ -599,6 +605,7 @@ class ProblemPackageService:
                 package_root,
                 manifest,
                 tests_spec_max_bytes=tests_spec_max_bytes,
+                statement_sample_max_bytes=statement_sample_max_bytes,
             )
             self._write_archive(package_root, archive_partial)
             now = now_iso()
@@ -808,11 +815,13 @@ class ProblemPackageService:
                 raise ValueError(
                     "Native manifest verification does not match materialization"
                 )
+            config_snapshot = self.db.config_values.snapshot()
             validate_manifest_files(
                 extraction,
                 manifest,
-                tests_spec_max_bytes=int(
-                    self.db.config_values.snapshot()["TEXTAREA_MAX_BYTES"]
+                tests_spec_max_bytes=int(config_snapshot["TEXTAREA_MAX_BYTES"]),
+                statement_sample_max_bytes=int(
+                    config_snapshot["STATEMENT_SAMPLE_MAX_BYTES"]
                 ),
             )
             yield NativePackageReader(

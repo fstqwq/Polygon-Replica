@@ -119,6 +119,13 @@ UI_AND_LIMIT_DEFINITIONS = (
         _bounds(1024, 16777216),
     ),
     _int(
+        "STATEMENT_SAMPLE_MAX_BYTES",
+        32768,
+        "Limits",
+        "Max combined UTF-8 bytes for one statement sample input and output.",
+        _bounds(1024, 262144),
+    ),
+    _int(
         "UPLOAD_MAX_BYTES",
         256 * 1024 * 1024,
         "Misc",

@@ -95,11 +95,16 @@ def tests_spec_resolve_index(raw_index: str, total: int) -> int:
 def read_tests_spec(
     workspace: Path,
     *,
-    max_bytes: int,
+    document_max_bytes: int,
+    sample_max_bytes: int,
 ) -> tuple[list[dict[str, str]], Path]:
     path = tests_spec_workspace_path(workspace)
     try:
-        entries = load_tests_spec(path, max_bytes=max_bytes)
+        entries = load_tests_spec(
+            path,
+            document_max_bytes=document_max_bytes,
+            sample_max_bytes=sample_max_bytes,
+        )
     except ValueError as exc:
         raise ValueError(f"invalid tests/spec.json: {exc}") from exc
     return (entries, path)
@@ -109,10 +114,15 @@ def write_tests_spec(
     path: Path,
     entries: list[dict[str, str]],
     *,
-    max_bytes: int,
+    document_max_bytes: int,
+    sample_max_bytes: int,
 ) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
-        dumps_tests_spec(entries, max_bytes=max_bytes),
+        dumps_tests_spec(
+            entries,
+            document_max_bytes=document_max_bytes,
+            sample_max_bytes=sample_max_bytes,
+        ),
         encoding="utf-8",
     )

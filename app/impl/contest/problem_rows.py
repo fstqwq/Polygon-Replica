@@ -107,6 +107,7 @@ def _contest_problem_rows(
     *,
     include_review: bool,
 ) -> list[ContestProblemDisplayRow]:
+    config_snapshot = _C.snapshot()
     rows = config.contest_service.contest_problems(contest_id)
     access_by_problem = config.workspace_service.access_contexts(
         [row["problem_id"] for row in rows],
@@ -300,7 +301,12 @@ def _contest_problem_rows(
                 test_count = len(
                     read_tests_spec(
                         workspace,
-                        max_bytes=int(_C.TEXTAREA_MAX_BYTES),
+                        document_max_bytes=int(
+                            config_snapshot["TEXTAREA_MAX_BYTES"]
+                        ),
+                        sample_max_bytes=int(
+                            config_snapshot["STATEMENT_SAMPLE_MAX_BYTES"]
+                        ),
                     )[0]
                 )
                 solution_sources, solutions_truncated = list_solution_sources(
