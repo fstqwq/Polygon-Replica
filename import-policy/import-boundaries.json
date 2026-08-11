@@ -24,11 +24,11 @@
       ],
       "allow": [
         "app.impl",
+        "app.config",
         "app.service",
         "app.db",
         "app.main_constant",
         "app.main_util",
-        "app.runtime_value",
         "app.setting"
       ]
     },
@@ -39,10 +39,10 @@
       ],
       "allow": [
         "app.service",
+        "app.config",
         "app.db",
         "app.main_constant",
         "app.main_util",
-        "app.runtime_value",
         "app.setting",
         "app.impl.runtime.config",
         "app.impl.workspace.verification_dag"

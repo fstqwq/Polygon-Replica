@@ -25,20 +25,30 @@ class ConfigRegistry:
         self.validate_snapshot(defaults)
 
     @classmethod
-    def from_definitions(cls, definitions: Iterable[ConfigDefinition]) -> ConfigRegistry:
+    def from_definitions(
+        cls, definitions: Iterable[ConfigDefinition]
+    ) -> ConfigRegistry:
+        """Build and validate a registry while preserving definition order."""
+
         return cls(tuple(definitions))
 
     @property
     def by_key(self) -> Mapping[str, ConfigDefinition]:
+        """Return definitions indexed by their durable configuration key."""
+
         return {definition.key: definition for definition in self.definitions}
 
     def defaults(self) -> dict[str, object]:
+        """Return the normalized default snapshot."""
+
         return {
             definition.key: definition.normalize(definition.default)
             for definition in self.definitions
         }
 
     def normalize(self, key: str, raw_value: object) -> object:
+        """Normalize one external value using its registered definition."""
+
         definition = self.by_key.get(key)
         if definition is None:
             raise ValueError(f"unknown system config key: {key}")
@@ -48,13 +58,19 @@ class ConfigRegistry:
         self,
         values: Mapping[str, object],
     ) -> dict[str, object]:
+        """Normalize and cross-validate one complete configuration snapshot."""
+
         expected = set(self.by_key)
         missing = expected - set(values)
         if missing:
-            raise ValueError(f"system config values missing: {', '.join(sorted(missing))}")
+            raise ValueError(
+                f"system config values missing: {', '.join(sorted(missing))}"
+            )
         extra = set(values) - expected
         if extra:
-            raise ValueError(f"unknown system config values: {', '.join(sorted(extra))}")
+            raise ValueError(
+                f"unknown system config values: {', '.join(sorted(extra))}"
+            )
         normalized = {
             definition.key: definition.normalize(values[definition.key])
             for definition in self.definitions
@@ -78,10 +94,14 @@ class ConfigRegistry:
         return normalized
 
     def validate_snapshot(self, values: Mapping[str, object]) -> None:
+        """Raise when a complete configuration snapshot is invalid."""
+
         self.normalize_snapshot(values)
 
     @staticmethod
     def display_value(kind: ConfigKind, value: object) -> str:
+        """Render a canonical scalar for the admin configuration form."""
+
         if kind is ConfigKind.BOOL:
             return "true" if value else "false"
         if kind is ConfigKind.FLOAT:

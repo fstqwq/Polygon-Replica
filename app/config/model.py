@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 import math
 import re
@@ -37,6 +37,17 @@ _COOKIE_NAME_RE = re.compile(r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$")
 
 
 @dataclass(frozen=True)
+class ConfigPolicy:
+    """Validation and activation policy for one configuration value."""
+
+    minimum: int | float | None = None
+    maximum: int | float | None = None
+    choices: tuple[object, ...] = ()
+    text_policy: TextPolicy | None = None
+    restart_required: bool = False
+
+
+@dataclass(frozen=True)
 class ConfigDefinition:
     """One authoritative admin-editable configuration definition."""
 
@@ -45,14 +56,42 @@ class ConfigDefinition:
     default: object
     category: str
     description: str
-    minimum: int | float | None = None
-    maximum: int | float | None = None
-    choices: tuple[object, ...] = ()
-    text_policy: TextPolicy | None = None
-    restart_required: bool = False
+    policy: ConfigPolicy = field(default_factory=ConfigPolicy)
+
+    @property
+    def minimum(self) -> int | float | None:
+        """Return the inclusive lower bound, when one is configured."""
+
+        return self.policy.minimum
+
+    @property
+    def maximum(self) -> int | float | None:
+        """Return the inclusive upper bound, when one is configured."""
+
+        return self.policy.maximum
+
+    @property
+    def choices(self) -> tuple[object, ...]:
+        """Return the accepted values for an enumerated definition."""
+
+        return self.policy.choices
+
+    @property
+    def text_policy(self) -> TextPolicy | None:
+        """Return the configured text validation policy."""
+
+        return self.policy.text_policy
+
+    @property
+    def restart_required(self) -> bool:
+        """Return whether a new process is needed to activate a change."""
+
+        return self.policy.restart_required
 
     @property
     def impact(self) -> str:
+        """Return the UI activation label for this definition."""
+
         return "restart" if self.restart_required else "runtime"
 
     def normalize(self, raw_value: object) -> object:
@@ -121,7 +160,9 @@ class ConfigDefinition:
             try:
                 re.compile(value)
             except re.error as exc:
-                raise ValueError(f"{self.key} must be a valid regular expression") from exc
+                raise ValueError(
+                    f"{self.key} must be a valid regular expression"
+                ) from exc
         return value
 
     def _validate_ascii(self, value: str, minimum: int, hint: str) -> None:
@@ -165,15 +206,21 @@ class ConfigValues:
         self._values: Mapping[str, object] = MappingProxyType(candidate)
 
     def replace(self, values: Mapping[str, object]) -> None:
+        """Atomically replace the active snapshot after validation."""
+
         candidate = dict(self._normalizer(values))
         with self._lock:
             self._values = MappingProxyType(candidate)
 
     def snapshot(self) -> Mapping[str, object]:
+        """Return the current immutable snapshot."""
+
         with self._lock:
             return self._values
 
     def get(self, key: str, default: object | None = None) -> object:
+        """Read one value from the current snapshot."""
+
         with self._lock:
             return self._values.get(key, default)
 

@@ -68,8 +68,10 @@ CI also runs pyflakes over `app/`, `tests/`, and `scripts/`, and pylint over
 The repository wrapper loads `import-policy/import-boundaries.json`. Its layer
 allowlists apply to all route, implementation, and service modules. They
 enforce the normal `route` to `impl` to `service` direction and prevent those
-layers from importing templates or static assets. The service layer has two
-bounded placement exceptions:
+layers from importing templates or static assets. The dependency-light
+`app.config` package owns typed configuration definitions and immutable active
+snapshots; implementation and service modules may depend on that foundation.
+The service layer has two bounded placement exceptions:
 `app.impl.runtime.config` and `app.impl.workspace.verification_dag`. They are
 current debt, not permission to add other service-to-implementation imports.
 

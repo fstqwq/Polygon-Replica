@@ -17,9 +17,7 @@ jobs:
         python -m pip install --upgrade pip
         pip install -r requirements.txt pylint
     - name: Run static checks
-      run: |
-        PYTHONPATH="$GITHUB_WORKSPACE" python -m pylint app
-        PYTHONPATH="$GITHUB_WORKSPACE" bash tests/scripts/check.sh
+      run: PYTHONPATH="$GITHUB_WORKSPACE" bash tests/scripts/check.sh
 
   tests:
     runs-on: ubuntu-latest
