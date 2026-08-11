@@ -17,7 +17,8 @@ cleanup() {
   trap - EXIT
   if (( status != 0 )); then
     "${compose[@]}" ps --all >&2 || true
-    "${compose[@]}" logs --no-color app mock-judgehost runner >&2 || true
+    "${compose[@]}" logs --no-color \
+      tex-smoke domjudge-contract bootstrap app mock-judgehost runner >&2 || true
   fi
   "${compose[@]}" down --volumes --remove-orphans >/dev/null 2>&1 || true
   docker image rm --force "$POLYGON_REPLICA_E2E_IMAGE" >/dev/null 2>&1 || true
@@ -29,6 +30,11 @@ cd -- "$REPO_ROOT"
 docker compose version >/dev/null
 
 "${compose[@]}" build app
+
+# Compile a real PDF through the production TeX sandbox before starting the
+# application. The one-shot container is networkless; the smoke verifies the
+# image's TeX formats and bwrap root switch rather than only package presence.
+"${compose[@]}" run --rm --no-deps tex-smoke
 
 # The mock is not allowed to start until this one-shot verifier has cloned the
 # official tag, checked its exact peeled commit, and approved the declared wire

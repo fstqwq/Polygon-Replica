@@ -4,6 +4,8 @@ Owns statement language discovery, section and template interpretation, source
 signatures, FreeMarker-subset rendering, TeX compilation, and preview records.
 It consumes workspace statement source, problem limits, and testcase sample
 metadata; it produces regenerated TeX trees, PDFs/logs, and preview read models.
+The canonical template selects XeLaTeX and uses TeX Gyre Latin fonts plus Noto
+CJK fonts; both host and Docker deployment install and probe those dependencies.
 
 Authored inputs remain Git source. SQLite stores preview metadata, while preview
 PDFs and logs are cleanup-safe cache artifacts. Preview compilation runs

@@ -1055,6 +1055,93 @@ class TestVerificationLifecycleService(VerificationServiceTestBase):
         self.assertEqual(result.drain["awaiting_receipts"], 2)
         self.assertTrue(registry.unregister(verification_id, handle))
 
+    def test_execution_observes_cancellation_before_runtime_registration(
+        self,
+    ) -> None:
+        verification_id = canonical_test_verification_id(
+            f"execution-cancel-before-register:{self.test_id}"
+        )
+        self._activate_verification(
+            verification_id=verification_id,
+            problem_id=self.problem_id,
+            workspace_id=self.workspace_id,
+        )
+        registry = VerificationRuntimeRegistry()
+        drainer = _RecordingDrainer()
+        execution_service = VerificationExecutionService(
+            self.verification_service,
+            self.verification_task_store,
+            self.verification_task_completion_service,
+            registry,
+            drainer,
+        )
+
+        cancellation = execution_service.cancel_verification(
+            verification_id,
+            reason="cancelled before registration",
+        )
+        published: list[str] = []
+        execution_service.run(
+            verification_id,
+            callbacks=VerificationExecutionCallbacks(
+                publish_task=lambda row: (
+                    published.append(str(row["id"]))
+                    or TaskPublishResult(str(row["id"]), "run", "judgehost")
+                ),
+                probe_task_case_cache=lambda _task_ids: set(),
+                close_programs=lambda _program_ids: None,
+            ),
+            edges=[],
+        )
+
+        self.assertEqual(cancellation.transition.outcome, "transitioned")
+        self.assertEqual(published, [])
+        self.assertEqual(
+            drainer.calls,
+            [(verification_id, "cancelled before registration")],
+        )
+
+    def test_execution_does_not_drain_when_sqlite_transition_fails(self) -> None:
+        verification_id = canonical_test_verification_id(
+            f"execution-cancel-sqlite-failure:{self.test_id}"
+        )
+        self._activate_verification(
+            verification_id=verification_id,
+            problem_id=self.problem_id,
+            workspace_id=self.workspace_id,
+        )
+        drainer = _RecordingDrainer()
+        execution_service = VerificationExecutionService(
+            self.verification_service,
+            self.verification_task_store,
+            self.verification_task_completion_service,
+            VerificationRuntimeRegistry(),
+            drainer,
+        )
+
+        self._install_verification_cancel_abort(verification_id)
+        try:
+            with self.assertRaisesRegex(
+                sqlite3.IntegrityError,
+                "forced cancellation failure",
+            ):
+                execution_service.cancel_verification(
+                    verification_id,
+                    reason="cancelled in test",
+                )
+        finally:
+            self._clear_verification_cancel_abort()
+
+        self.assertEqual(drainer.calls, [])
+        record = self.verification_service.verification_record(verification_id)
+        assert record is not None
+        self.assertEqual(str(record["status"]), "running")
+        task_rows = self.verification_task_store.list_rows(verification_id)
+        self.assertEqual(
+            [str(row["status"]) for row in task_rows],
+            [VerificationTaskStore.TASK_PENDING],
+        )
+
     def test_execution_cancel_falls_back_to_closed_event_and_drains(self) -> None:
         verification_id = canonical_test_verification_id(
             f"execution-cancel-event-failure:{self.test_id}"

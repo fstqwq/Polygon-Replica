@@ -32,6 +32,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         texlive-lang-chinese \
         texlive-lang-cyrillic \
         texlive-fonts-recommended \
+        fonts-texgyre \
         fonts-noto-cjk \
         cm-super \
         util-linux \

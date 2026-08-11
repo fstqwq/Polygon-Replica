@@ -36,6 +36,7 @@ from tests.db_fixture import DBTestBase
 
 _ACTIVATION_TASK_ABORT_TRIGGER = "test_abort_verification_activation_task_insert"
 _COMPLETION_REF_ABORT_TRIGGER = "test_abort_verification_completion_ref_insert"
+_VERIFICATION_CANCEL_ABORT_TRIGGER = "test_abort_verification_cancel"
 
 
 def make_execution_result(
@@ -436,6 +437,23 @@ class VerificationServiceTestBase(DBTestBase):
     def _clear_completion_ref_abort(self) -> None:
         self.db.execute(
             f"DROP TRIGGER IF EXISTS {_COMPLETION_REF_ABORT_TRIGGER}"
+        )
+
+    def _install_verification_cancel_abort(self, verification_id: str) -> None:
+        self.db.execute(
+            f"""
+            CREATE TRIGGER {_VERIFICATION_CANCEL_ABORT_TRIGGER}
+            BEFORE UPDATE OF status ON verifications
+            WHEN NEW.id='{verification_id}' AND NEW.status='failed'
+            BEGIN
+                SELECT RAISE(ABORT, 'forced cancellation failure');
+            END
+            """
+        )
+
+    def _clear_verification_cancel_abort(self) -> None:
+        self.db.execute(
+            f"DROP TRIGGER IF EXISTS {_VERIFICATION_CANCEL_ABORT_TRIGGER}"
         )
 
     def _verification_rows(self) -> list[sqlite3.Row]:

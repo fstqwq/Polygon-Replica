@@ -160,7 +160,8 @@ SOURCE_REQUIREMENTS: dict[Path, dict[str, tuple[str, ...]]] = {
             "'compile_success=' . $compile_success",
             "'&output_compile=' . urlencode(rest_encode_file($workdir . '/compile.out', $output_storage_limit))",
             "'&compile_metadata=' . urlencode(rest_encode_file($workdir . '/compile.meta', false))",
-            "'judgehosts/update-judging/%s/%s'",
+            "$url = sprintf('judgehosts/update-judging/%s/%s', urlencode($myhost), urlencode((string)$judgeTask['judgetaskid']));\n"
+            "    request($url, 'PUT', $args);",
             "if (! $compile_success)",
             "return false;",
         ),
@@ -177,7 +178,16 @@ SOURCE_REQUIREMENTS: dict[Path, dict[str, tuple[str, ...]]] = {
             "'hostname' => $myhost",
             "'testcasedir' => $testcasedir",
             "'compare_metadata' => rest_encode_file($passdir . '/compare.meta', false)",
-            "'judgehosts/add-judging-run/%s/%s'",
+            "sprintf('judgehosts/add-judging-run/%s/%s', urlencode($myhost),\n"
+            "                urlencode((string)$judgeTask['judgetaskid'])),\n"
+            "            'POST',\n"
+            "            $new_judging_run,\n"
+            "            false",
+            "sprintf('judgehosts/add-judging-run/%s/%s', $new_judging_run['hostname'],\n"
+            "                urlencode((string)$judgeTaskId)),\n"
+            "            'POST',\n"
+            "            $new_judging_run,\n"
+            "            false",
         ),
         "async-final-needs-http-success": (
             "$response = request(",

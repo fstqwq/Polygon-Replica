@@ -7,9 +7,13 @@ import os
 import sys
 from pathlib import Path
 
-sys.path.insert(0, "/opt/polygon-replica")
+sys.path.insert(
+    0,
+    os.environ.get("POLYGON_REPLICA_E2E_REPO_ROOT", "/opt/polygon-replica"),
+)
 
 from app.db import DB, now_iso  # noqa: E402
+from app.service.statement.render import seed_statement_sources  # noqa: E402
 
 from domjudge_contract import BOOTSTRAP_FILENAME, require_approval, state_dir  # noqa: E402
 
@@ -67,6 +71,7 @@ def _seed_workspace() -> tuple[Path, int, int, int, str]:
         "tests/generator",
     ):
         (workspace / relative).mkdir(parents=True, exist_ok=True)
+    seed_statement_sources(workspace)
 
     _write_json(
         workspace / "config/problem.json",
@@ -90,7 +95,7 @@ def _seed_workspace() -> tuple[Path, int, int, int, str]:
     )
     _write_json(
         workspace / "tests/spec.json",
-        {"tests": [{"id": "001", "kind": "gen", "sample": False}]},
+        {"tests": [{"id": "001", "kind": "gen", "sample": True}]},
     )
     (workspace / "tests/generator/001.in").write_text("gen.py 7\n", encoding="utf-8")
     (workspace / "generators/gen.py").write_text(

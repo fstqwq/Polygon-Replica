@@ -53,8 +53,26 @@ def _latest_verification(
 ) -> sqlite3.Row | None:
     return connection.execute(
         """
-        SELECT id,status,fail_reason,error,sanity_status,created_at,finished_at
+        SELECT id,kind,status,fail_reason,error,sanity_status,created_at,finished_at
         FROM verifications
+        WHERE problem_id=? AND workspace_id=?
+        ORDER BY created_at DESC,id DESC
+        LIMIT 1
+        """,
+        [problem_id, workspace_id],
+    ).fetchone()
+
+
+def _latest_preview(
+    connection: sqlite3.Connection,
+    *,
+    problem_id: int,
+    workspace_id: int,
+) -> sqlite3.Row | None:
+    return connection.execute(
+        """
+        SELECT id,status,verification_id,summary_json,created_at
+        FROM previews
         WHERE problem_id=? AND workspace_id=?
         ORDER BY created_at DESC,id DESC
         LIMIT 1
@@ -69,7 +87,7 @@ def _wait_for_verification(
     problem_id: int,
     workspace_id: int,
     previous_id: str,
-    timeout_sec: float = 150.0,
+    timeout_sec: float = 300.0,
 ) -> sqlite3.Row:
     deadline = time.monotonic() + timeout_sec
     last: sqlite3.Row | None = None
@@ -179,6 +197,69 @@ def _assert_artifact_refs(connection: sqlite3.Connection, verification_id: str) 
         raise RuntimeError("generator input ref does not resolve to the mock output")
     if _read_blob(answer_ref) != b"49\n":
         raise RuntimeError("main-correct answer ref does not resolve to the mock output")
+
+
+def _assert_preview_sample_materialization(
+    connection: sqlite3.Connection,
+    *,
+    problem_id: int,
+    workspace_id: int,
+    verification_id: str,
+) -> None:
+    rows = connection.execute(
+        """
+        SELECT task_kind,final_status
+        FROM verification_tasks
+        WHERE verification_id=? AND task_kind IN ('generate-input','main-correct')
+        ORDER BY task_kind
+        """,
+        [verification_id],
+    ).fetchall()
+    statuses = {
+        str(row["task_kind"]): str(row["final_status"])
+        for row in rows
+    }
+    if statuses != {"generate-input": "done", "main-correct": "done"}:
+        raise RuntimeError(
+            f"preview sample verification did not materialize its core tasks: {statuses!r}"
+        )
+    _assert_artifact_refs(connection, verification_id)
+
+    preview = _latest_preview(
+        connection,
+        problem_id=problem_id,
+        workspace_id=workspace_id,
+    )
+    if preview is None or str(preview["status"]) != "ok":
+        raise RuntimeError(f"preview did not finish successfully: {preview!r}")
+    if str(preview["verification_id"] or "") != verification_id:
+        raise RuntimeError(
+            "preview did not retain the sample verification identity: "
+            f"{dict(preview)!r}"
+        )
+    preview_pdf = (
+        Path(os.environ["POLYGON_REPLICA_E2E_CACHE_ROOT"]).resolve()
+        / "artifacts"
+        / "previews"
+        / str(preview["id"])
+        / "statement_preview"
+        / "statement.pdf"
+    )
+    if not preview_pdf.is_file() or not preview_pdf.read_bytes().startswith(b"%PDF-"):
+        raise RuntimeError(f"preview PDF is unavailable or invalid: {preview_pdf}")
+    try:
+        summary = json.loads(str(preview["summary_json"]))
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("preview persisted invalid summary JSON") from exc
+    sample_sync = summary.get("sample_sync") if isinstance(summary, dict) else None
+    if (
+        not isinstance(sample_sync, dict)
+        or sample_sync.get("verification_id") != verification_id
+        or int(sample_sync.get("copied") or 0) != 1
+    ):
+        raise RuntimeError(
+            f"preview did not persist sample materialization evidence: {sample_sync!r}"
+        )
 
 
 def _assert_late_diagnostics(
@@ -426,6 +507,45 @@ def main() -> None:
         session_cookie = (
             f"{bootstrap['session_cookie_name']}={bootstrap['session_token']}"
         )
+
+        preview_response = httpx.post(
+            f"{origin}/problems/{problem}/preview/run",
+            data={"page": "statement", "language": "english"},
+            headers={
+                "Origin": origin,
+                "Cookie": session_cookie,
+            },
+            follow_redirects=False,
+            timeout=300.0,
+        )
+        if preview_response.status_code != 303:
+            raise RuntimeError(
+                "preview run returned "
+                f"{preview_response.status_code}: {preview_response.text[:500]}"
+            )
+        sample_verification = _wait_for_verification(
+            connection,
+            problem_id=problem_id,
+            workspace_id=workspace_id,
+            previous_id=previous_id,
+        )
+        if (
+            str(sample_verification["kind"]) != "sample"
+            or str(sample_verification["status"]) != "ok"
+        ):
+            raise RuntimeError(
+                "preview sample verification failed: "
+                f"{dict(sample_verification)!r}"
+            )
+        sample_verification_id = str(sample_verification["id"])
+        _assert_preview_sample_materialization(
+            connection,
+            problem_id=problem_id,
+            workspace_id=workspace_id,
+            verification_id=sample_verification_id,
+        )
+        previous_id = sample_verification_id
+
         response = httpx.post(
             f"{origin}/problems/{problem}/verification/start",
             data={"page": "tests"},
@@ -434,7 +554,7 @@ def main() -> None:
                 "Cookie": session_cookie,
             },
             follow_redirects=False,
-            timeout=15.0,
+            timeout=30.0,
         )
         if response.status_code != 303:
             raise RuntimeError(

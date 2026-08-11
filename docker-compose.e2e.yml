@@ -1,4 +1,15 @@
 services:
+  tex-smoke:
+    image: ${POLYGON_REPLICA_E2E_IMAGE:?set by tests/scripts/docker-e2e.sh}
+    entrypoint: ["python3", "/opt/e2e/tex_smoke.py"]
+    restart: "no"
+    network_mode: none
+    volumes:
+      - ./tests/docker_e2e:/opt/e2e:ro
+    security_opt:
+      - seccomp=unconfined
+      - apparmor=unconfined
+
   domjudge-contract:
     image: ${POLYGON_REPLICA_E2E_IMAGE:?set by tests/scripts/docker-e2e.sh}
     entrypoint: ["python3", "/opt/e2e/verify_domjudge_source.py"]

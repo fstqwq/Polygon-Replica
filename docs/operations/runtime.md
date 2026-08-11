@@ -24,15 +24,18 @@ operators therefore control image pinning and upgrades outside the application.
 dependencies, configures user namespaces, creates storage roots, probes
 bubblewrap and TeX as the runtime account, creates `.venv`, writes the bootstrap
 environment file, and installs the systemd unit. Required TeX initialization is
-fail-closed. The environment file is atomically replaced as `root:root` mode
-`0600`; installer-managed paths are refreshed while other valid assignments are
-preserved as systemd `NAME=VALUE` records without executing the old file. An
-optional shell `export` prefix in an existing assignment is accepted only as
-migration input and is removed from the rendered file. Both `#` and `;` comment
-lines are preserved.
+fail-closed. TeX Gyre and Noto CJK fonts used by the canonical statement template
+are explicit installer dependencies, and the XeLaTeX probe resolves both font
+families as the runtime account. The environment file is atomically replaced as
+`root:root` mode `0600`; installer-managed paths are refreshed while other valid
+assignments are preserved as systemd `NAME=VALUE` records without executing the
+old file. An optional shell `export` prefix in an existing assignment is accepted
+only as migration input and is removed from the rendered file. Both `#` and `;`
+comment lines are preserved.
 
-The invocation account is normally the service account. A root invocation MUST
-set `POLYGON_REPLICA_RUNTIME_USER` to an existing non-root account; the installer
+The invocation account is normally the service account. An invocation through
+`sudo` uses the original `SUDO_USER`; a direct root invocation MUST set
+`POLYGON_REPLICA_RUNTIME_USER` to an existing non-root account. The installer
 refuses a root runtime. It validates the account and group, runs probes and
 Python installation as that account, owns writable roots with it, renders quoted
 systemd paths, and verifies the unit before installation. Application runtime
@@ -60,8 +63,9 @@ volume.
 
 Bubblewrap inside a container requires host user-namespace support. The checked-
 in Compose service disables seccomp and AppArmor confinement for the application
-container; this is part of its current deployment security boundary. Required
-TeX database, format, and font-map initialization failures stop the image build.
+container; this is part of its current deployment security boundary. The image
+installs the same TeX Gyre and Noto CJK template fonts explicitly. Required TeX
+database, format, and font-map initialization failures stop the image build.
 `docker-compose.e2e.yml` is test infrastructure, not a production retention
 model.
 

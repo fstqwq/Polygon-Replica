@@ -64,6 +64,7 @@ echo "[1/6] Installing system dependencies..."
   texlive-lang-chinese \
   texlive-lang-cyrillic \
   texlive-fonts-recommended \
+  fonts-texgyre \
   fonts-noto-cjk \
   cm-super \
   util-linux \
@@ -193,7 +194,7 @@ EOF
 xelatex -interaction=nonstopmode -halt-on-error -output-directory "$tmpd" "$tmpd/main.tex" >/dev/null 2>&1
 '; then
     echo "xelatex runtime probe failed for user: $RUNTIME_USER." >&2
-    echo "Install: texlive-xetex texlive-lang-chinese fonts-noto-cjk" >&2
+    echo "Install: texlive-xetex texlive-lang-chinese fonts-texgyre fonts-noto-cjk" >&2
     exit 1
   fi
 else
@@ -212,7 +213,7 @@ EOF
 xelatex -interaction=nonstopmode -halt-on-error -output-directory "$tmpd" "$tmpd/main.tex" >/dev/null 2>&1
 '; then
     echo "xelatex runtime probe failed." >&2
-    echo "Install: texlive-xetex texlive-lang-chinese fonts-noto-cjk" >&2
+    echo "Install: texlive-xetex texlive-lang-chinese fonts-texgyre fonts-noto-cjk" >&2
     exit 1
   fi
 fi

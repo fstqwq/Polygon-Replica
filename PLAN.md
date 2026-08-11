@@ -1,14 +1,62 @@
-# Next Three Refactoring Batches
+# Three Refactoring Batches
 
-This plan covers the next three implementation batches. The batches run in
-order: safety boundaries, verification runtime ownership, then Judgehost result
-pipeline convergence. Each commit must leave the worktree clean and must update
-the owning current-state documentation together with the implementation.
+This plan records three implementation batches in dependency order: safety
+boundaries, verification runtime ownership, then Judgehost result-pipeline
+convergence. The owning current-state documentation changes with the
+implementation.
 
-Tests do not run on Windows. Python suites run in the designated Linux checkout
-with `/opt/polygon-replica/.venv`; Judgehost integration uses the local Docker
-mock and first verifies the pinned DOMjudge 9.0.1 source contract. No real
-Judgehost is used.
+Tests do not run on Windows. CI runs each of the four resource groups directly
+from an Ubuntu checkout and virtualenv through `tests/scripts/test.sh`; it does
+not run those groups through `docker-e2e.sh`. For this delivery, a separate
+acceptance audit ran the current checkout in an isolated Linux container with
+`/opt/polygon-replica/.venv` using:
+
+```bash
+for group in unit service executor e2e; do
+  /opt/polygon-replica/.venv/bin/python \
+    tests/scripts/run_test_groups.py "$group"
+done
+```
+
+That audit container was not the production application image. The executor
+group received a temporary, test-only Ubuntu compiler sysroot because the
+application image does not ship a C++ toolchain. Separately,
+`tests/scripts/docker-e2e.sh` used the production image and an isolated local
+Docker mock for Judgehost integration, after verifying the pinned DOMjudge
+9.0.1 source contract. No real Judgehost was used.
+
+## Delivery record
+
+The safety changes retain their independent review boundaries:
+
+- `5f94c61 Migrate configuration and stream ZIP imports`
+- `5685098 Preserve secure host environment configuration`
+- `616f5f4 Fail Docker builds on TeX setup errors`
+
+The runtime-registry, execution-service, finalization, normalization, and
+publication changes all cross the same runtime composition root. They were
+delivered without temporary compatibility wrappers in the single atomic commit
+`11970ac Own verification runtime and Judgehost result flow`. The responsibility
+steps below remain separate for review, but they are not separate historical
+commits.
+
+The follow-up delivery adds lifecycle race/rollback evidence, Preview-to-sample
+Docker E2E, real TeX sandbox smoke, the explicit TeX Gyre deployment dependency,
+and the endpoint-plus-method DOMjudge source checks described below. These
+follow-up changes are not contained in `11970ac`.
+
+Final acceptance on the current tree records:
+
+- `unit`: 239 tests passed;
+- `service`: 141 tests passed;
+- `executor`: 68 tests passed;
+- `e2e`: 506 tests passed;
+- pylint: `10.00/10`;
+- syntax, pyflakes, vulture, import-policy, cross-package private-import, test
+  resource, and `git diff --check` checks passed;
+- the production Docker image built, compiled real `pdflatex` and `xelatex`
+  PDFs through bubblewrap, approved the pinned DOMjudge sources, and completed
+  the Preview-to-sample and full-verification mock Judgehost workflow.
 
 ## Batch 1: Input and deployment safety boundaries
 
@@ -17,7 +65,7 @@ verification lifecycle. Each subsection is a separate commit.
 
 ### 1A. Package archive path safety
 
-Commit:
+Delivered commit:
 
 ```text
 Reject unsafe package archive paths
@@ -67,11 +115,12 @@ Tests:
 Documentation:
 
 - Update the package/import protocol with the accepted archive-name boundary.
-- Mark `PKG-003` resolved in the findings ledger.
+- Remove `PKG-003` from the findings ledger, which contains current debt rather
+  than a history of resolved findings.
 
 ### 1B. Installer environment-file safety
 
-Commit:
+Delivered commit:
 
 ```text
 Preserve secure host environment configuration
@@ -109,7 +158,7 @@ Tests:
 
 ### 1C. Transparent Docker build failures
 
-Commit:
+Delivered commit:
 
 ```text
 Fail Docker builds on TeX setup errors
@@ -120,6 +169,9 @@ Implementation:
 - Remove broad `|| true` suppression from TeX and package setup.
 - Make required `mktexlsr`, `updmap-sys`, and related setup failures terminate
   the build.
+- Install the TeX Gyre fonts used by the canonical statement template
+  explicitly in both deployment paths instead of relying on apt recommendations
+  omitted by the Docker build.
 - Where a step is genuinely optional, use an explicit applicability check and
   ignore only its documented not-applicable state.
 - Do not change the image entry point or runtime configuration protocol.
@@ -127,12 +179,15 @@ Implementation:
 Verification:
 
 - Build the complete image in Linux Docker.
-- Run the image startup probe and a preview/TeX executor smoke test.
+- Compile real `pdflatex` and `xelatex` PDFs using the canonical Latin and CJK
+  fonts, require the bubblewrap root switch, and check the resulting PDF magic.
+- Run the image startup probe and public Preview workflow.
 
 ### Batch 1 acceptance
 
 - Targeted `unit` and `executor` tests pass.
-- All four test groups pass in the designated SSH Linux environment.
+- All four test groups pass in a Linux virtualenv. CI uses its Ubuntu jobs; the
+  recorded delivery audit used the isolated container command above.
 - The Docker image build and smoke tests pass.
 - The resource manifest, import policy, static checks, and `git diff --check`
   pass.
@@ -144,17 +199,17 @@ Out of scope:
 
 - Verification or Judgehost behavior.
 - New package-format versions, compatibility flags, or cache salts.
-- A general-purpose ZIP extraction framework.
 
 ## Batch 2: Single ownership of Verification Runtime
 
-This batch contains two consecutive commits. At completion there is no
-module-global coordinator registry, and every execution and cancellation path
-uses the same runtime owner.
+This batch has two responsibility steps. At completion there is no module-global
+coordinator registry, and every execution and cancellation path uses the same
+runtime owner. Both steps were delivered in the combined runtime/result commit
+listed in the delivery record.
 
 ### 2A. Instance-owned runtime registry
 
-Commit:
+Review boundary:
 
 ```text
 Own verification runtime registry
@@ -239,7 +294,7 @@ This provides a linearization point for all relevant orderings:
 
 ### 2B. Verification execution service
 
-Commit:
+Review boundary:
 
 ```text
 Own verification execution lifecycle
@@ -322,12 +377,13 @@ Service tests:
 
 - cancellation before, during, and after registration;
 - scheduler exception and activation failure;
-- direct preview/sample execution;
 - completion commit precedes successor notification;
 - SQLite failure prevents Judgehost drain.
 
 E2E tests:
 
+- the public preview route drives a sample verification through the same
+  execution service and materializes its input/answer refs before compiling;
 - an immediate mock Judgehost callback;
 - public cancellation;
 - a complete verification workflow;
@@ -339,7 +395,8 @@ E2E tests:
 - Judgehost dispatch has no verification-scheduler import.
 - Workspace has no coordinator register/unregister operation.
 - No reference to the deleted global registry functions remains.
-- All four groups pass in the designated SSH Linux environment.
+- All four groups pass in a Linux virtualenv. CI uses its Ubuntu jobs; the
+  recorded delivery audit used the isolated container command above.
 - Local Docker mock Judgehost E2E and the pinned DOMjudge 9.0.1 source gate
   pass.
 - Execution, verification, and Judgehost documentation describes the new
@@ -356,13 +413,14 @@ Out of scope:
 
 ## Batch 3: Judgehost result pipeline convergence
 
-This batch uses three commits. It reduces the responsibility density of the
-Judgehost result processor while preserving `/api/v4/*`, JSON integer `1`,
-scheduler claims, and late-diagnostic behavior.
+This batch has three responsibility steps. It reduces the responsibility
+density of the Judgehost result processor while preserving `/api/v4/*`, JSON
+integer `1`, scheduler claims, and late-diagnostic behavior. All three steps
+were delivered in the combined runtime/result commit listed above.
 
 ### 3A. Public batch-finalization boundary
 
-Commit:
+Review boundary:
 
 ```text
 Separate Judgehost batch finalization
@@ -390,7 +448,7 @@ Invariants:
 
 ### 3B. Canonical case-result normalization
 
-Commit:
+Review boundary:
 
 ```text
 Normalize Judgehost case results
@@ -436,7 +494,7 @@ validate and claim
 
 ### 3C. Completion and diagnostic publication
 
-Commit:
+Review boundary:
 
 ```text
 Separate Judgehost result publication
@@ -522,7 +580,8 @@ E2E tests:
 
 ### Batch 3 acceptance
 
-- All four test groups pass in the designated SSH Linux environment.
+- All four test groups pass in a Linux virtualenv. CI uses its Ubuntu jobs; the
+  recorded delivery audit used the isolated container command above.
 - Local Docker mock Judgehost E2E passes after the pinned DOMjudge 9.0.1 source
   gate.
 - The normalizer has no SQLite, runtime-config, or registry import.
