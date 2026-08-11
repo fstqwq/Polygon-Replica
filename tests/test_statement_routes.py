@@ -15,10 +15,8 @@ from app.impl.preview.preview import (
     statement_tex_source,
 )
 from app.impl.runtime.config import config
-from app.impl.workspace.context_ui import page_ctx
 from app.config import CONFIG_REGISTRY
 from app.service.statement.render import (
-    default_statement_title_for_workspace,
     ensure_statement_language_sources,
 )
 from tests.backend_e2e_fixture import BackendE2ETestBase
@@ -50,7 +48,6 @@ class TestStatementRoutes(BackendE2ETestBase):
         html = resp.body.decode("utf-8", errors="replace")
         self.assertIn("Chinese legend body.", html)
         self.assertIn('name="language" value="chinese"', html)
-        self.assertIn('<option value="chinese" selected>', html)
 
     def test_statement_language_add_creates_seed_files_and_redirects_to_language(self) -> None:
         ws = Path(config.workspace_service.workspace_context(self.problem, self.user, include_recent=False)["workspace"]["path"])
@@ -97,12 +94,10 @@ class TestStatementRoutes(BackendE2ETestBase):
         self.assertFalse((ws / "statement-sections" / "japanese").exists())
 
         page = preview_page(_request(f"/problems/{self.problem}/statement"), self.problem, self.user)
+        self.assertEqual(page.status_code, 200)
         html = page.body.decode("utf-8", errors="replace")
-        self.assertIn("Add a language to start.", html)
-        self.assertNotIn("Statement language missing.", html)
-        self.assertIn("Add language", html)
-        self.assertNotIn("Delete current language", html)
-        self.assertNotIn("Compile Statement", html)
+        self.assertIn("/statement/languages/add", html)
+        self.assertNotIn("/statement/languages/delete", html)
 
     def test_preview_page_shows_missing_state_until_language_is_added(self) -> None:
         ws = Path(config.workspace_service.workspace_context(self.problem, self.user, include_recent=False)["workspace"]["path"])
@@ -112,28 +107,14 @@ class TestStatementRoutes(BackendE2ETestBase):
 
         self.assertEqual(resp.status_code, 200)
         html = resp.body.decode("utf-8", errors="replace")
-        self.assertIn("Language</strong>: missing", html)
-        self.assertIn("Add a language to start.", html)
-        self.assertNotIn("Statement language missing.", html)
-        self.assertIn("Add language", html)
-        self.assertNotIn('id="statement-language-select"', html)
-        self.assertNotIn("Delete Current", html)
-        self.assertNotIn("Save Statement", html)
-        self.assertNotIn("Compile Statement", html)
+        self.assertIn("/statement/languages/add", html)
 
     def test_preview_page_shows_delete_current_when_language_exists(self) -> None:
         resp = preview_page(_request(f"/problems/{self.problem}/statement"), self.problem, self.user)
 
         self.assertEqual(resp.status_code, 200)
         html = resp.body.decode("utf-8", errors="replace")
-        self.assertIn("Delete current language", html)
         self.assertIn("/statement/languages/delete", html)
-        self.assertNotIn("Switch to interactive mode", html)
-        self.assertIn('class="form-submit-row statement-save-actions"', html)
-        self.assertIn(
-            'class="btn primary-action" type="submit">Save Statement</button>',
-            html,
-        )
 
     def test_preview_page_lists_compile_assets_and_contestant_attachments_separately(self) -> None:
         ws = Path(config.workspace_service.workspace_context(self.problem, self.user, include_recent=False)["workspace"]["path"])
@@ -155,48 +136,6 @@ class TestStatementRoutes(BackendE2ETestBase):
         self.assertIn("/statement/attachments/upload", html)
         self.assertIn("/statement/assets/upload", html)
         self.assertIn("/statement/assets/delete", html)
-
-    def test_statement_nav_lists_language_names_when_statement_has_content(self) -> None:
-        initial_page = page_ctx(self.problem, self.user)
-        initial_nav = dict(initial_page["nav_status"]["statement_languages"])
-        self.assertEqual(str(initial_nav.get("text") or ""), "english")
-
-        ws = Path(config.workspace_service.workspace_context(self.problem, self.user, include_recent=False)["workspace"]["path"])
-        ensure_statement_language_sources(ws, "chinese")
-        updated_page = page_ctx(self.problem, self.user)
-        updated_nav = dict(updated_page["nav_status"]["statement_languages"])
-        self.assertEqual(str(updated_nav.get("text") or ""), "english, chinese")
-
-    def test_statement_nav_ignores_legacy_scoring_section_file(self) -> None:
-        ws = Path(config.workspace_service.workspace_context(self.problem, self.user, include_recent=False)["workspace"]["path"])
-        section_root = ws / "statement-sections" / "english"
-        shutil.rmtree(section_root, ignore_errors=True)
-        section_root.mkdir(parents=True, exist_ok=True)
-        for rel, content in {
-            "name.tex": default_statement_title_for_workspace(ws) + "\n",
-            "legend.tex": "",
-            "input.tex": "",
-            "output.tex": "",
-            "interaction.tex": "",
-            "notes.tex": "",
-        }.items():
-            (section_root / rel).write_text(content, encoding="utf-8")
-        scoring_path = section_root / "scoring.tex"
-        scoring_path.write_text("", encoding="utf-8")
-
-        page = page_ctx(self.problem, self.user)
-        statement_nav = dict(page["nav_status"]["statement_languages"])
-        self.assertEqual(str(statement_nav.get("text") or ""), "empty")
-
-    def test_statement_nav_shows_none_warn_when_language_directories_are_missing(self) -> None:
-        ws = Path(config.workspace_service.workspace_context(self.problem, self.user, include_recent=False)["workspace"]["path"])
-        shutil.rmtree(ws / "statement-sections", ignore_errors=True)
-
-        page = page_ctx(self.problem, self.user)
-        statement_nav = dict(page["nav_status"]["statement_languages"])
-        self.assertEqual(str(statement_nav.get("text") or ""), "none")
-        self.assertTrue(bool(statement_nav.get("warn")))
-        self.assertFalse(bool(statement_nav.get("danger")))
 
     def test_statement_compile_asset_upload_stores_file_under_shared_root(self) -> None:
         ws = Path(config.workspace_service.workspace_context(self.problem, self.user, include_recent=False)["workspace"]["path"])
@@ -293,7 +232,7 @@ class TestStatementRoutes(BackendE2ETestBase):
         self.assertEqual(resp.status_code, 303)
         self.assertFalse(attachment.exists())
 
-    def test_statement_tex_source_opens_rendered_problem_tex(self) -> None:
+    def test_statement_tex_source_returns_problem_tex(self) -> None:
         ctx = config.workspace_service.workspace_context(self.problem, self.user, include_recent=False)
         ws = Path(str(ctx["workspace"]["path"]))
         ensure_statement_language_sources(ws, "english")

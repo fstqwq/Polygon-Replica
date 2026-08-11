@@ -34,9 +34,3 @@ based on present impact, not on an imagined future architecture.
 | PLC-010 | refactor | Maintenance mechanics and domain deletion policy are implemented together. | platform maintenance |
 | PLC-012 | refactor | Cross-resource authorization policy has no single service owner. | auth/access |
 | PLC-014 | refactor | Audit write policy is coupled to workspace and maintenance services. | audit service |
-
-## Testing and CI
-
-| ID | Class | Finding and current impact | Suggested owner |
-| --- | --- | --- | --- |
-| TST-001 | refactor | UI and public-contract tests frequently pin template text, CSS classes, DOM fragments, and internal read-model details, so presentation changes accumulate assertions without adding equivalent behavioral protection. | test suite |

@@ -40,19 +40,26 @@ def _exports_need_rebuild(connection: sqlite3.Connection) -> bool:
     columns = _table_columns(connection, "exports")
     if "options_hash" not in columns:
         return False
-    expected_old_columns = {
+    identity_columns = {
         "id",
         "problem_id",
         "materialization_id",
         "export_type",
         "options_hash",
+    }
+    artifact_columns = {
         "filename",
         "archive_rel_path",
         "sha256",
         "size_bytes",
+    }
+    provenance_columns = {
         "source_commit",
         "created_at",
     }
+    expected_old_columns = (
+        identity_columns | artifact_columns | provenance_columns
+    )
     if not expected_old_columns.issubset(columns):
         raise IncompatibleSchemaError(
             "exports options-hash table is missing required columns"

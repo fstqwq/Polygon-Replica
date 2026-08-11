@@ -118,9 +118,7 @@ class TestPreviewRoutes(BackendE2ETestBase):
         )
         self.assertEqual(resp.status_code, 200)
         html = resp.body.decode("utf-8", errors="replace")
-        self.assertIn("Sample verification failed.", html)
         self.assertIn("sample verification failed (ver-sample-123): main correct solution RE on 001.in: judge verdict RE", html)
-        self.assertNotIn("Open full latex.log", html)
         self.assertNotIn("sample verification failed (ver-old): validator failed on tests/spec.json entry 1", html)
 
     def test_preview_artifact_file_serves_statement_pdf_from_preview_root(self) -> None:
@@ -148,55 +146,6 @@ class TestPreviewRoutes(BackendE2ETestBase):
         )
         response = artifact_file(self.problem, self.user, preview_id, "statement_preview/statement.pdf")
         self.assertEqual(Path(response.path).resolve(), pdf_path.resolve())
-
-    def test_preview_page_projects_missing_when_ok_preview_artifacts_expire(self) -> None:
-        ctx = config.workspace_service.workspace_context(self.problem, self.user, include_recent=False)
-        ws = Path(str(ctx["workspace"]["path"]))
-        preview_id = self.random_id("p-preview-expired")
-        db_execute(
-            (
-                "INSERT INTO previews("
-                "id,problem_id,workspace_id,status,source_commit,source_ref,summary_json,created_at,finished_at"
-                ") VALUES(?,?,?,?,?,?,?,datetime('now'),datetime('now'))"
-            ),
-            [
-                preview_id,
-                int(ctx["problem"]["id"]),
-                int(ctx["workspace"]["id"]),
-                "ok",
-                str(ctx["workspace"].get("head_commit") or ""),
-                "main",
-                json.dumps(
-                    {
-                        "pdf": "statement_preview/statement.pdf",
-                        "statement_signature": statement_sources_signature(
-                            ws,
-                            problem_title=self._statement_title(ws),
-                            tests_spec_max_bytes=int(
-                                config.config_values.TEXTAREA_MAX_BYTES
-                            ),
-                            statement_sample_max_bytes=int(
-                                config.config_values.STATEMENT_SAMPLE_MAX_BYTES
-                            ),
-                        ),
-                    }
-                ),
-            ],
-        )
-
-        resp = preview_page(
-            _request(
-                f"/problems/{self.problem}/preview",
-                f"preview_id={preview_id}",
-            ),
-            self.problem,
-            self.user,
-        )
-        html = resp.body.decode("utf-8", errors="replace")
-        self.assertIn("Recompile to restore the preview.", html)
-        self.assertNotIn("PDF is ready.", html)
-        self.assertNotIn("Open in a new tab", html)
-        self.assertNotIn('class="pdf-preview"', html)
 
     def test_preview_status_projects_missing_when_ok_preview_pdf_is_gone(self) -> None:
         ctx = config.workspace_service.workspace_context(self.problem, self.user, include_recent=False)

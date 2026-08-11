@@ -27,9 +27,6 @@ class TestStatementDefaultRestore(WorkspaceTestBase):
                 html = self._files_html(rel, user=self.user, directory="statement")
                 self.assertIn(f'action="{action}"', html)
                 self.assertIn(f'name="path" value="{rel}"', html)
-                self.assertIn('name="dir" value="statement"', html)
-                self.assertIn("Current file contents will be overwritten.", html)
-                self.assertIn("data-confirm-message=", html)
 
         for rel in ("statement/olymp.sty.bak", "notes/olymp.sty"):
             with self.subTest(path=rel):
@@ -142,7 +139,7 @@ class TestStatementDefaultRestore(WorkspaceTestBase):
         reader_target.parent.mkdir(parents=True, exist_ok=True)
         reader_target.write_text("reader custom\n", encoding="utf-8")
         html = self._files_html("statement/olymp.sty", user=reader)
-        self.assertIn('type="submit" disabled title="read-only access"', html)
+        self.assertRegex(html, r'type="submit"[^>]*disabled')
 
         with self.assertRaises(HTTPException) as denied:
             files_restore_default(

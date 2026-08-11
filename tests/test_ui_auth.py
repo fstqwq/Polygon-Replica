@@ -1123,34 +1123,15 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         resp = settings_page(_request("/settings"), user="alice")
         self.assertEqual(resp.status_code, 200)
         html = resp.body.decode("utf-8", errors="replace")
-        self.assertIn("settings-account-panel", html)
-        self.assertIn('class="root-section-navigation"', html)
-        self.assertIn('aria-label="Settings sections"', html)
         self.assertIn('href="/settings"', html)
         self.assertIn('href="/agent/sessions"', html)
-        self.assertIn('aria-current="page"', html)
-        self.assertIn(">Problem</a>", html)
-        self.assertIn(">Contest</a>", html)
-        self.assertNotIn("Open admin panel", html)
-        self.assertIn('href="/admin">Admin</a>', html)
-        self.assertNotIn("System Admin Panel", html)
-        self.assertNotIn("Judgehost Runtime Controls", html)
+        self.assertIn('href="/admin"', html)
 
         admin_resp = admin_overview_page(_request("/admin"), user="alice")
         self.assertEqual(admin_resp.status_code, 200)
         admin_html = admin_resp.body.decode("utf-8", errors="replace")
-        self.assertIn("Administration", admin_html)
-        self.assertIn('class="root-section-navigation"', admin_html)
-        self.assertNotIn("admin-workbench", admin_html)
-        self.assertNotIn("System operations and runtime health", admin_html)
-        self.assertNotIn("Current runtime state", admin_html)
-        self.assertNotIn("Judgehost task lifecycle totals", admin_html)
-        self.assertNotIn("Cleanup preserves", admin_html)
-        self.assertIn("Generated artifacts", admin_html)
         self.assertIn('/admin/maintenance/artifacts/cleanup', admin_html)
         self.assertIn('/admin/judgehosts', admin_html)
-        self.assertIn('/admin/judgehosts/snapshot', admin_html)
-        self.assertNotIn('/admin/worker-queue/snapshot', admin_html)
         self.assertIn('/admin/users', admin_html)
 
     def test_admin_overview_shows_generated_artifact_usage(self) -> None:
@@ -1388,14 +1369,7 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         resp = admin_judgehosts_page(_request("/admin/judgehosts"), user="alice")
         self.assertEqual(resp.status_code, 200)
         html = resp.body.decode("utf-8", errors="replace")
-        self.assertIn('data-popup-open="judgehost-gen-script-popup"', html)
-        self.assertIn('id="judgehost-gen-script-popup"', html)
-        self.assertIn('data-gen-script-baseurl="1"', html)
-        self.assertIn('data-gen-script-sudo="1"', html)
-        self.assertIn('data-gen-script-output="1"', html)
-        self.assertIn('data-judgehost-enable-toggle="1"', html)
         self.assertIn('data-judgehost-auth-block="1" hidden', html)
-        self.assertIn('action="/admin/judgehosts/runtime"', html)
 
     def test_admin_judgehosts_shows_auth_fields_when_enabled(self) -> None:
         db_execute("UPDATE users SET is_system_admin=0")
@@ -1417,11 +1391,8 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         resp = admin_judgehosts_page(_request("/admin/judgehosts"), user="alice")
         self.assertEqual(resp.status_code, 200)
         html = resp.body.decode("utf-8", errors="replace")
-        self.assertIn('data-judgehost-enable-toggle="1"', html)
         self.assertIn('data-judgehost-auth-block="1"', html)
         self.assertNotIn('data-judgehost-auth-block="1" hidden', html)
-        self.assertIn('data-judgehost-api-username="1"', html)
-        self.assertIn('data-judgehost-api-token="1"', html)
 
     def test_admin_judgehosts_formats_reported_telemetry(self) -> None:
         db_execute("UPDATE users SET is_system_admin=0")
@@ -1477,10 +1448,6 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         html = resp.body.decode("utf-8", errors="replace")
         self.assertIn("judgehost-lastseen-time", html)
         self.assertIn("203.0.113.10", html)
-        self.assertIn("Judged cases", html)
-        self.assertIn("Last judging", html)
-        self.assertIn("Recent average", html)
-        self.assertIn(">42</dd>", html)
         self.assertIn("0.125 s", html)
         self.assertIn(config.templates.env.filters["local_time"](raw_last_judging), html)
         self.assertNotIn(raw_last_judging, html)
@@ -1488,13 +1455,7 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
             'href="/problems/alice/sample/run/details?verification_id=ver-123456789abcdef"',
             html,
         )
-        self.assertIn(
-            "Solution Run &middot; <code>alice/sample</code> &middot; ac.cpp / 001.in",
-            html,
-        )
-        self.assertIn("Reported toolchains", html)
         self.assertIn("g++ 14.2.0", html)
-        self.assertIn("Reported for judging task 123", html)
 
     def test_footer_judgehost_popup_contains_public_status(self) -> None:
         public_status = {
@@ -1546,16 +1507,9 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         html = resp.body.decode("utf-8", errors="replace")
         self.assertIn("Judgehost 1", html)
         self.assertIn("g++ 14.2.0", html)
-        self.assertIn("Judgehost: <strong", html)
-        self.assertIn(">Details</a>", html)
-        self.assertIn('data-popup-open="judgehost-status-popup"', html)
-        self.assertIn('id="judgehost-status-popup"', html)
-        self.assertNotIn('class="page-profile-judgehost" href=', html)
         self.assertNotIn("private-hostname", html)
         self.assertNotIn("203.0.113.10", html)
         self.assertNotIn("Profile A", html)
-        self.assertNotIn("<dt>Toolchain</dt>", html)
-        self.assertNotIn("judgehost-status-toolchain-warning", html)
 
         public_status["toolchains"][0]["agrees"] = False
         public_status["toolchains"][0]["versions"].append(
@@ -1573,8 +1527,6 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         ):
             mismatch_resp = register_page(_request("/register"))
         mismatch_html = mismatch_resp.body.decode("utf-8", errors="replace")
-        self.assertIn("judgehost-status-toolchain-warning", mismatch_html)
-        self.assertIn("Versions differ", mismatch_html)
         self.assertIn("g++ 13.3.0", mismatch_html)
 
     def test_settings_config_category_update_requires_system_admin(self) -> None:
@@ -1720,7 +1672,7 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         self.assertIn("JUDGEHOST_API_TOKEN must contain only visible ASCII characters", messages[0])
         self.assertNotEqual(str(config.system_config_service.get("JUDGEHOST_API_TOKEN") or ""), bad_token)
 
-    def test_branding_config_renders_unicode_escaped_values_and_optional_tagline(self) -> None:
+    def test_branding_config_escapes_values_and_allows_empty_tagline(self) -> None:
         db_execute("UPDATE users SET is_system_admin=0")
         db_execute("UPDATE users SET is_system_admin=1 WHERE username=?", ["alice"])
         workspace_service.clear_identity_caches()
@@ -1750,7 +1702,7 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         config.reload_config()
         without_tagline = settings_page(_request("/settings"), user="alice")
         without_tagline_html = without_tagline.body.decode("utf-8", errors="replace")
-        self.assertNotIn('class="tagline"', without_tagline_html)
+        self.assertNotIn("Tagline &amp; details", without_tagline_html)
 
     def test_cookie_names_validate_distinct_http_tokens(self) -> None:
         service = config.system_config_service
@@ -2000,24 +1952,7 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         )
         self.assertEqual(page_resp.status_code, 200)
         page_html = page_resp.body.decode("utf-8", errors="replace")
-        self.assertIn("Configuration", page_html)
-        self.assertIn('class="admin-config-sidebar"', page_html)
-        self.assertIn('class="admin-config-reset"', page_html)
-        self.assertNotIn("10 keys", page_html)
         self.assertIn("RUN_EXEC_PROCESS_LIMIT", page_html)
-        self.assertNotIn("RUN_EXEC_MEMORY_MB", page_html)
-        self.assertNotIn("VERIFICATION_EXEC_MEMORY_MB", page_html)
-        self.assertNotIn(">runtime</span>", page_html)
-
-        restart_page = settings_config_category_page(
-            _request("/admin/config/auth"),
-            user="alice",
-            category="auth",
-        )
-        restart_html = restart_page.body.decode("utf-8", errors="replace")
-        self.assertIn('<strong class="warn">Restart required</strong>', restart_html)
-        self.assertNotIn(">runtime</span>", restart_html)
-        self.assertNotIn("pending restart", restart_html)
 
         update_value = 1536
         update_resp = asyncio.run(
@@ -2035,7 +1970,7 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         self.assertEqual(int(config.system_config_service.get("RUN_EXEC_PROCESS_LIMIT")), update_value)
         self.assertEqual(int(config.config_values.RUN_EXEC_PROCESS_LIMIT), update_value)
 
-    def test_settings_config_category_page_renders_token_generate_button(self) -> None:
+    def test_settings_config_category_exposes_token_generation_control(self) -> None:
         db_execute("UPDATE users SET is_system_admin=0")
         db_execute("UPDATE users SET is_system_admin=1 WHERE username=?", ["alice"])
         workspace_service.clear_identity_caches()
@@ -2048,10 +1983,8 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         self.assertEqual(page_resp.status_code, 200)
         page_html = page_resp.body.decode("utf-8", errors="replace")
         self.assertIn("JUDGEHOST_API_TOKEN", page_html)
-        self.assertNotIn("JUDGEHOST_INCLUDE_BUILD_PAYLOAD", page_html)
         self.assertIn("data-token-generate=\"1\"", page_html)
         self.assertIn("data-token-target=\"config_JUDGEHOST_API_TOKEN\"", page_html)
-        self.assertIn(">Generate</button>", page_html)
 
     def test_settings_worker_queue_snapshot_requires_system_admin(self) -> None:
         with self.assertRaises(HTTPException) as blocked:
@@ -2112,13 +2045,11 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         self.assertTrue(token)
         cookie_header = f"{AUTH_COOKIE_NAME}={token}"
 
-        with self.assertRaises(ValueError) as bad_format:
+        with self.assertRaises(ValueError):
             workspace_service.ensure_problem("Sample_Problem")
-        self.assertIn("Use <owner>/<slug>", str(bad_format.exception))
 
-        with self.assertRaises(ValueError) as bad_dash:
+        with self.assertRaises(ValueError):
             workspace_service.ensure_problem("sample-")
-        self.assertIn("Use <owner>/<slug>", str(bad_dash.exception))
 
         invalid_open = switch_workspace(
             _request_with_cookie("/switch-workspace", cookie_header),
@@ -2131,7 +2062,6 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         self.assertNotIn("message=", invalid_loc)
         invalid_messages = _flash_messages_from_response(invalid_open)
         self.assertTrue(invalid_messages)
-        self.assertIn("Use <owner>/<slug>", invalid_messages[0])
 
         valid = switch_workspace(
             _request_with_cookie("/switch-workspace", cookie_header),

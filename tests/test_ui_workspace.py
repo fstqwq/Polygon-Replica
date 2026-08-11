@@ -43,7 +43,6 @@ from app.service.statement.constant import (
 from app.service.statement.render import ensure_statement_language_sources
 from app.impl.problem.merge_op import merge_apply, merge_compare, merge_page
 from app.impl.root.contests import import_package_as_new_problem
-from tests.assertion_helpers import assert_html_contract
 from tests.package_builders import polygon_contest_package, polygon_problem_package
 from tests.common import E2ETestBase
 from tests.identity_helpers import canonical_test_verification_id
@@ -848,57 +847,12 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         resp = general_page(_request("/problems/alice/sample/statement"), "alice/sample", "alice")
         self.assertEqual(resp.status_code, 200)
         html = resp.body.decode("utf-8", errors="replace")
-        self.assertIn("System limits", html)
-        self.assertIn("Contact an administrator to change these limits if needed.", html)
-        self.assertIn("Program input/output limit", html)
-        self.assertNotIn("Program output limit", html)
-        self.assertIn("Compilation size limit", html)
-        self.assertIn("Saved judging log limit", html)
         self.assertIn(f"{int(config.config_values.RUN_EXEC_OUTPUT_KB)} KiB", html)
         self.assertIn(f"{int(config.config_values.TOOLCHAIN_COMPILE_OUTPUT_KB)} KiB", html)
         self.assertIn(f"{int(config.config_values.JUDGEHOST_STORED_LOG_LIMIT_BYTES)} bytes", html)
         self.assertNotIn('name="RUN_EXEC_OUTPUT_KB"', html)
         self.assertNotIn('name="TOOLCHAIN_COMPILE_OUTPUT_KB"', html)
         self.assertNotIn('name="JUDGEHOST_STORED_LOG_LIMIT_BYTES"', html)
-
-    def test_workspace_page_main_only_controls(self) -> None:
-        resp = workspace_page(_request("/problems/alice/sample/workspace"), "alice/sample", "alice")
-        self.assertEqual(resp.status_code, 200)
-        html = resp.body.decode("utf-8", errors="replace")
-        assert_html_contract(
-            self,
-            html,
-            contains=(
-                "<h2>Review</h2>",
-                'class="workspace-review-label">Upstream</span>',
-                'class="workspace-review-label">Workspace</span>',
-                "Verification",
-                'class="workspace-review-label">Content</span>',
-                "Tests:",
-                "Solutions:",
-                "Checker:",
-                "Validator:",
-                "Publish new revision",
-            ),
-            excludes=(
-                "/problems/alice/sample/git/pull",
-                "My Files",
-                "Commit and share revision",
-                "Base <strong>",
-                "Package:",
-            ),
-            label="workspace controls",
-        )
-        self.assertNotIn("rebase", html.lower())
-        self.assertNotIn("Problem Access", html)
-        self.assertNotIn("<h2>Access</h2>", html)
-        self.assertNotIn("Branch Operations", html)
-        review_html = html.split("<h2>Review</h2>", maxsplit=1)[1].split(
-            "<h2>Publish</h2>", maxsplit=1
-        )[0]
-        self.assertNotIn("Languages:", review_html)
-        self.assertNotIn("Time limit:", review_html)
-        self.assertNotIn("Memory limit:", review_html)
 
     def test_clean_workspace_has_one_empty_message_and_disables_publish(self) -> None:
         self._ensure_committed_head("alice/sample", "alice")
@@ -907,15 +861,10 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         )
         self.assertEqual(resp.status_code, 200)
         html = resp.body.decode("utf-8", errors="replace")
-        self.assertEqual(html.count("No file changes."), 1)
         self.assertRegex(
             html,
-            r'<input id="revision-message" name="message" required disabled\s*/>',
+            r'<input[^>]*name="message"[^>]*disabled',
         )
-        self.assertIn('title="No file changes to publish"', html)
-        self.assertIn(">Review workspace</a>", html)
-        self.assertIn(">Backup &amp; Restore</a>", html)
-        self.assertNotIn(">Download Snapshot</button>", html)
 
     def test_workspace_page_get_refreshes_workspace_status_in_db(self) -> None:
         username = self.random_id("wsget")
@@ -1061,14 +1010,9 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         resp = workspace_page(_request("/problems/alice/sample/workspace"), "alice/sample", "alice")
         self.assertEqual(resp.status_code, 200)
         html = resp.body.decode("utf-8", errors="replace")
-        self.assertIn("<summary>Danger Zone</summary>", html)
-        self.assertNotIn("Enable sudo mode now", html)
         self.assertIn('data-sudo-gated="1"', html)
         self.assertIn('data-sudo-required="1"', html)
         self.assertIn('data-sudo-url="/sudo?next=', html)
-        self.assertIn("sudo_popup_done%3D1", html)
-        self.assertIn("Delete Workspace Files", html)
-        self.assertIn("Delete Problem", html)
 
     def test_workspace_page_marks_delete_forms_ready_when_sudo_cookie_exists(self) -> None:
         username = self.random_id("wssudo")
@@ -1144,18 +1088,7 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         resp = workspace_page(_request("/problems/alice/sample/workspace"), "alice/sample", "alice")
         self.assertEqual(resp.status_code, 200)
         html = resp.body.decode("utf-8", errors="replace")
-        self.assertIn("<h2>Review</h2>", html)
-        self.assertIn('class="workspace-review-label">Verification</span>', html)
-        self.assertRegex(html, r'<strong class="(?:danger|warn)">failed(?: \(stale\))?</strong>')
         self.assertIn("checker exited with code 1", html)
-        review_html = html.split("<h2>Review</h2>", maxsplit=1)[1].split("<h2>Publish</h2>", maxsplit=1)[0]
-        self.assertNotIn("Package", review_html)
-        self.assertRegex(
-            html,
-            r'data-tooltip="[^"]*checker exited with code 1"',
-        )
-        self.assertNotIn("Problem Readiness", html)
-        self.assertNotIn("readiness-overview", html)
 
     def test_workspace_page_shows_colored_diff_for_selected_file(self) -> None:
         self._ensure_committed_head("alice/sample", "alice")
@@ -1170,7 +1103,7 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         resp = workspace_page(_request("/problems/alice/sample/workspace", f"path={rel}"), "alice/sample", "alice")
         self.assertEqual(resp.status_code, 200)
         html = resp.body.decode("utf-8", errors="replace")
-        self.assertIn(f"Selected: <code>{rel}</code>", html)
+        self.assertIn(rel, html)
         self.assertIn("base", html)
         self.assertIn("changed", html)
 
@@ -1184,30 +1117,16 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         git_service.commit(ws, f"workspace-no-auto-diff-base-{uuid.uuid4().hex[:6]}", "alice", "alice@polygonlike.local")
         target.write_text("base\nchanged\n", encoding="utf-8")
 
-        with patch.object(git_service, "diff_for_path", side_effect=AssertionError("unexpected file diff")):
-            resp = workspace_page(_request("/problems/alice/sample/workspace"), "alice/sample", "alice")
+        resp = workspace_page(
+            _request("/problems/alice/sample/workspace"),
+            "alice/sample",
+            "alice",
+        )
 
         self.assertEqual(resp.status_code, 200)
         html = resp.body.decode("utf-8", errors="replace")
         self.assertIn(rel, html)
-        self.assertNotIn("Selected:", html)
-
-    def test_workspace_page_shows_discard_local_changes_for_selected_path(self) -> None:
-        self._ensure_committed_head("alice/sample", "alice")
-        ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
-        rel = f"notes/workspace-discard-{uuid.uuid4().hex[:8]}.txt"
-        target = ws / rel
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text("base\n", encoding="utf-8")
-        git_service.commit(ws, f"workspace-discard-base-{uuid.uuid4().hex[:6]}", "alice", "alice@polygonlike.local")
-        target.write_text("base\nchanged\n", encoding="utf-8")
-
-        resp = workspace_page(_request("/problems/alice/sample/workspace", f"path={rel}"), "alice/sample", "alice")
-        self.assertEqual(resp.status_code, 200)
-        html = resp.body.decode("utf-8", errors="replace")
-        self.assertIn("Discard file changes", html)
-        self.assertIn("/problems/alice/sample/git/discard-path", html)
-        self.assertIn(f'name="path" value="{rel}"', html)
+        self.assertNotIn("base\nchanged", html)
 
     def test_git_discard_path_restores_tracked_file_to_head(self) -> None:
         self._ensure_committed_head("alice/sample", "alice")
@@ -1331,18 +1250,6 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
 
         preview = config.workspace_merge_service.start_preview("alice", "alice/sample", alice_ws)
         self.assertTrue(preview.suggested_available)
-        review = merge_page(
-            _request(f"/problems/alice/sample/merge/{preview.preview_id}"),
-            "alice/sample",
-            preview.preview_id,
-            "alice",
-        )
-        review_html = review.body.decode("utf-8", errors="replace")
-        self.assertIn("Fast-forward possible.", review_html)
-        self.assertIn("merge-expanded-diffs", review_html)
-        self.assertIn("target=suggested", review_html)
-        self.assertNotIn("merge-file-browser", review_html)
-        self.assertNotIn("merge-review-layout", review_html)
 
     def test_merge_review_expands_diffs_and_applies_manual_selection(self) -> None:
         alice_ws, _head = self._ensure_committed_head("alice/sample", "alice")
@@ -1375,15 +1282,7 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
             preview.preview_id,
             "alice",
         )
-        html = page.body.decode("utf-8", errors="replace")
-        self.assertIn('<div class="page-grid">', html)
-        self.assertIn("data-merge-comparison", html)
-        self.assertIn("data-merge-manual-diffs", html)
-        self.assertIn("merge-expanded-diffs", html)
-        self.assertIn("merge-diff-choice", html)
-        self.assertNotIn("Every affected file is expanded below.", html)
-        self.assertNotIn('value="latest" required checked', html)
-        self.assertNotIn('value="current" required checked', html)
+        self.assertEqual(page.status_code, 200)
 
         comparison = merge_compare(
             _request(
@@ -1686,67 +1585,6 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         self.assertEqual((ws / "statement" / "olymp.sty").read_text(encoding="utf-8"), DEFAULT_OLYMP_STY)
         self.assertEqual(legend_path.read_text(encoding="utf-8"), "custom legend section\n")
 
-    def test_statement_page_title_does_not_use_name_tex(self) -> None:
-        username = self.random_id("stmtitle")
-        password = "StrongPass123"
-        auth_cookie = self._issue_auth_cookie_header(username, password)
-        workspace_service.grant_repo_access("alice/sample", username, "owner")
-        ws = Path(workspace_service.ensure_workspace("alice/sample", username))
-        ensure_statement_language_sources(ws, "english")
-        (ws / "statement-sections" / "english" / "name.tex").write_text("Statement Name Tex Title\n", encoding="utf-8")
-
-        from app.main import app
-
-        with TestClient(app) as client:
-            resp = client.get(
-                "/problems/alice/sample/statement?language=english",
-                headers={"cookie": auth_cookie},
-                follow_redirects=False,
-            )
-        self.assertEqual(resp.status_code, 200, resp.text)
-        html = resp.text
-        self.assertIn("<title>Statements - Polygon-Replica</title>", html)
-        self.assertIn('<h1 class="page-title">Statements</h1>', html)
-        self.assertIn('<span class="problem-section-tab-title">Statements</span>', html)
-        self.assertIn('class="section-tabs problem-section-tabs"', html)
-        self.assertIn('data-problem-nav="1"', html)
-        self.assertIn('class="problem-context-meta-icon"', html)
-        self.assertIn('aria-label="Edit problem metadata"', html)
-        self.assertNotIn('title="Edit time and memory limits"', html)
-        self.assertIn('class="problem-context-meta-pill-item">2s</span>', html)
-        self.assertIn('class="problem-context-meta-pill-item">1G</span>', html)
-        self.assertNotIn('class="workbench-return-link"', html)
-        self.assertNotIn('data-page="access"', html)
-        self.assertIn('class="workspace-card-head"', html)
-        self.assertIn('class="workspace-side-link" href="/problems/alice/sample/access">Manage access</a>', html)
-        self.assertNotIn('class="problem-submenu"', html)
-        self.assertNotIn("<title>Statement Name Tex Title - Polygon-Replica</title>", html)
-        self.assertNotIn("<title>sample - Polygon-Replica</title>", html)
-
-    def test_problem_pages_use_fixed_section_titles_in_html_title(self) -> None:
-        username = self.random_id("sectiontitle")
-        password = "StrongPass123"
-        auth_cookie = self._issue_auth_cookie_header(username, password)
-        workspace_service.grant_repo_access("alice/sample", username, "owner")
-        workspace_service.ensure_workspace("alice/sample", username)
-
-        from app.main import app
-
-        expected_titles = [
-            ("/problems/alice/sample/checker", "Checker"),
-            ("/problems/alice/sample/validator", "Validator"),
-            ("/problems/alice/sample/files", "Files"),
-            ("/problems/alice/sample/workspace", "Workspace"),
-            ("/problems/alice/sample/history", "Backup &amp; Restore"),
-        ]
-        with TestClient(app) as client:
-            for path, title in expected_titles:
-                resp = client.get(path, headers={"cookie": auth_cookie}, follow_redirects=False)
-                self.assertEqual(resp.status_code, 200, f"{path}: {resp.text}")
-                html = resp.text
-                self.assertIn(f"<title>{title} - Polygon-Replica</title>", html)
-                self.assertNotIn("<title>sample - Polygon-Replica</title>", html)
-
     def test_problems_page_shows_only_participating_problems(self) -> None:
         owner_problem = f"alice/ui-owner-{uuid.uuid4().hex[:8]}"
         read_problem = f"alice/ui-read-{uuid.uuid4().hex[:8]}"
@@ -1773,31 +1611,10 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
             resp = problems_root_page(_request("/problems"), "alice")
         self.assertEqual(resp.status_code, 200)
         html = resp.body.decode("utf-8", errors="replace")
-        self.assertIn('<h1 class="page-title">My Problems</h1>', html)
-        self.assertIn('<section class="content-section-plain" aria-label="Problem list">', html)
-        self.assertIn('<th class="problem-list-head">Title</th>', html)
-        self.assertNotIn("<h2>My Problems</h2>", html)
         self.assertIn(owner_problem, html)
         self.assertIn(read_problem, html)
         self.assertNotIn(other_problem, html)
         self.assertNotIn(f"/problems/{other_problem}/statement", html)
-        self.assertIn("/problems/alice/sample/statement", html)
-        self.assertIn("problem-slug-link", html)
-        self.assertIn(">alice/</span>", html)
-        self.assertIn(">sample</span>", html)
-        self.assertNotIn(">sample</a> - <code>alice/sample</code>", html)
-        self.assertIn("Workspace on v0 / Upstream v0", html)
-        self.assertIn("none / Upstream missing", html)
-        self.assertIn("revision-alert", html)
-
-    def test_workspace_page_header_uses_slug_link_and_copy_button(self) -> None:
-        resp = workspace_page(_request("/problems/alice/sample/workspace"), "alice/sample", "alice")
-        self.assertEqual(resp.status_code, 200)
-        html = resp.body.decode("utf-8", errors="replace")
-        self.assertIn('class="problem-context-title">alice/sample</h1>', html)
-        self.assertNotIn('href="/problems/alice/sample/statement">alice/sample</a>', html)
-        self.assertIn('data-copy-text="alice/sample"', html)
-        self.assertIn('aria-label="Copy problem slug"', html)
 
     def test_problems_page_orders_by_last_updated_desc(self) -> None:
         older_slug = f"alice/ui-sort-old-{uuid.uuid4().hex[:8]}"
@@ -1833,26 +1650,6 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         self.assertIn(older_slug, html)
         self.assertIn(newer_slug, html)
         self.assertLess(html.find(newer_slug), html.find(older_slug))
-
-    def test_problems_root_page_shows_import_entry(self) -> None:
-        resp = problems_root_page(_request("/problems"), "alice")
-        self.assertEqual(resp.status_code, 200)
-        html = resp.body.decode("utf-8", errors="replace")
-        self.assertIn('id="polygon-import-form"', html)
-        self.assertIn('id="polygon-import-slug-hint"', html)
-        self.assertIn('/problems/import/slug-hint', html)
-        self.assertNotIn('/problems/alice/sample/export/import/slug-hint', html)
-
-    def test_problems_root_page_exposes_title_action_links_with_popups(self) -> None:
-        resp = problems_root_page(_request("/problems"), "alice")
-        self.assertEqual(resp.status_code, 200)
-        html = resp.body.decode("utf-8", errors="replace")
-        self.assertIn('data-popup-open="problem-open-popup"', html)
-        self.assertIn('id="problem-open-popup"', html)
-        self.assertNotIn('name="problem_name"', html)
-        self.assertIn('data-popup-open="problem-import-popup"', html)
-        self.assertIn('id="problem-import-popup"', html)
-        self.assertIn('id="polygon-import-form"', html)
 
     def test_problems_root_import_slug_hint_uses_filename_and_avoids_duplicates(self) -> None:
         token = uuid.uuid4().hex[:8]
@@ -2036,74 +1833,14 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         resp = files_page(_request("/problems/alice/sample/files", f"path={rel}"), "alice/sample", "alice")
         self.assertEqual(resp.status_code, 200)
         html = resp.body.decode("utf-8", errors="replace")
-        self.assertIn("Binary file is read-only in text editor.", html)
-        self.assertIn("PDF preview:", html)
         self.assertIn(
             "/problems/alice/sample/files/download?"
             "path=statement-sections%2Fenglish%2Fproblem.pdf",
             html,
         )
-        self.assertIn("files-pdf-preview", html)
         self.assertNotIn('data-code-editor="1"', html)
 
-    def test_files_page_uses_browser_and_editor_layout(self) -> None:
-        resp = files_page(_request("/problems/alice/sample/files"), "alice/sample", "alice")
-        self.assertEqual(resp.status_code, 200)
-        html = resp.body.decode("utf-8", errors="replace")
-        self.assertIn('class="content-section files-panel files-panel-browser"', html)
-        self.assertIn('class="content-section files-panel files-panel-editor"', html)
-        self.assertIn('class="files-breadcrumb"', html)
-        self.assertIn('class="files-browser-list"', html)
-        self.assertNotIn("Repository Browser", html)
-        self.assertNotIn("Current folder:", html)
-        self.assertNotIn("<th>Type</th>", html)
-        self.assertNotIn("File Operations", html)
-        self.assertIn("<strong>sample</strong>", html)
-        self.assertIn('class="files-breadcrumb-separator" aria-hidden="true">/</span>', html)
-        self.assertIn(">New file</summary>", html)
-        self.assertIn(">New directory</summary>", html)
-        self.assertIn(">Upload file</summary>", html)
-        self.assertIn('name="name" value="new-file.txt"', html)
-        self.assertIn('name="name" value="new-directory"', html)
-        self.assertIn("Select a file to edit.", html)
-        self.assertNotIn(">Rename or delete</summary>", html)
-
-        selected = files_page(
-            _request(
-                "/problems/alice/sample/files",
-                "path=config/problem.json&dir=config",
-            ),
-            "alice/sample",
-            "alice",
-        )
-        self.assertEqual(selected.status_code, 200)
-        selected_html = selected.body.decode("utf-8", errors="replace")
-        self.assertIn(">Rename or delete</summary>", selected_html)
-        self.assertIn('name="new_name" value="problem.json"', selected_html)
-        self.assertNotIn("New path", selected_html)
-        self.assertIn(">sample</a>", selected_html)
-        self.assertNotIn("files-breadcrumb-root", selected_html)
-        self.assertIn("files-breadcrumb-separator", selected_html)
-        self.assertIn('class="form-submit-row files-save-actions"', selected_html)
-        self.assertIn(
-            'class="btn primary-action" type="submit">Save</button>',
-            selected_html,
-        )
-
-        cross_folder = files_page(
-            _request(
-                "/problems/alice/sample/files",
-                "path=config/problem.json&dir=notes",
-            ),
-            "alice/sample",
-            "alice",
-        )
-        self.assertEqual(cross_folder.status_code, 200)
-        cross_folder_html = cross_folder.body.decode("utf-8", errors="replace")
-        self.assertIn("Select a file to edit.", cross_folder_html)
-        self.assertNotIn('data-code-path="config/problem.json"', cross_folder_html)
-
-    def test_contests_root_page_is_top_level_without_selected_contest(self) -> None:
+    def test_created_contest_is_listed(self) -> None:
         slug = f"ui-root-contest-{uuid.uuid4().hex[:8]}"
         create_resp = contests_root_create(_post_request("/contests/create"), user="alice", contest_slug=slug, contest_title="Root Contest")
         self.assertEqual(create_resp.status_code, 303)
@@ -2112,24 +1849,7 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         resp = contests_root_page(_request("/contests"), "alice")
         self.assertEqual(resp.status_code, 200)
         html = resp.body.decode("utf-8", errors="replace")
-        self.assertIn('<h1 class="page-title">My Contests</h1>', html)
-        self.assertIn('<section class="content-section-plain" aria-label="Contest list">', html)
-        self.assertIn("<th>Title</th>", html)
-        self.assertNotIn("<h2>My Contests</h2>", html)
         self.assertIn(slug, html)
-        self.assertIn("Import Polygon Contest Package", html)
-        self.assertIn("/contests/import", html)
-
-    def test_contests_root_page_exposes_title_action_links_with_popups(self) -> None:
-        resp = contests_root_page(_request("/contests"), "alice")
-        self.assertEqual(resp.status_code, 200)
-        html = resp.body.decode("utf-8", errors="replace")
-        self.assertIn('data-popup-open="contest-create-popup"', html)
-        self.assertIn('id="contest-create-popup"', html)
-        self.assertIn('data-popup-open="contest-import-popup"', html)
-        self.assertIn('id="contest-import-popup"', html)
-        self.assertIn("/contests/create", html)
-        self.assertIn("/contests/import", html)
 
     def test_contests_root_page_orders_by_last_updated_desc(self) -> None:
         older_slug = f"ui-contest-sort-old-{uuid.uuid4().hex[:8]}"

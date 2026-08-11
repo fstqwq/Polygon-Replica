@@ -7,6 +7,7 @@ from pathlib import Path
 from app.impl.workspace.boundary_coverage import boundary_coverage_from_feedback
 from app.impl.workspace.runtime_threshold import evaluate_summary_runtime_threshold
 from app.service.verification.plan import VerificationTestPlan
+from app.service.verification.result_match import verification_solution_match
 from app.service.platform.runtime_blob_store import PayloadFile
 
 
@@ -38,6 +39,98 @@ def _test_plan(test_name: str = "001.in") -> VerificationTestPlan:
 
 
 class TestVerificationAnalysis(unittest.TestCase):
+    def test_solution_match_enforces_expected_verdict_sets(self) -> None:
+        cases = (
+            (
+                "time limit requires TL and rejects RE",
+                "time_limit_exceeded",
+                "ok",
+                {"tests": [{"verdict": "TL"}, {"verdict": "RE"}]},
+                False,
+                True,
+            ),
+            (
+                "time limit rejects AC-only runs",
+                "time_limit_exceeded",
+                "ok",
+                {"tests": [{"verdict": "OK"}]},
+                False,
+                True,
+            ),
+            (
+                "TL-or-correct rejects RE",
+                "tle_or_correct",
+                "ok",
+                {"tests": [{"verdict": "TL"}, {"verdict": "RE"}]},
+                False,
+                True,
+            ),
+            (
+                "TL-or-RE accepts the mixed run",
+                "tle_or_re",
+                "ok",
+                {"tests": [{"verdict": "TL"}, {"verdict": "RE"}]},
+                True,
+                True,
+            ),
+            (
+                "rejected accepts supported non-AC verdicts",
+                "rejected",
+                "ok",
+                {"tests": [{"verdict": "WA"}, {"verdict": "TL"}]},
+                True,
+                True,
+            ),
+            (
+                "rejected rejects AC-only runs",
+                "rejected",
+                "ok",
+                {"tests": [{"verdict": "OK"}]},
+                False,
+                True,
+            ),
+            (
+                "rejected does not accept infrastructure failure",
+                "rejected",
+                "ok",
+                {"tests": [{"verdict": "FL"}]},
+                False,
+                True,
+            ),
+            (
+                "unknown does not accept infrastructure failure",
+                "unknown",
+                "ok",
+                {"tests": [{"verdict": "FL"}]},
+                False,
+                True,
+            ),
+            (
+                "incomplete run has no terminal match",
+                "rejected",
+                "failed",
+                {"error": "cancelled on service startup"},
+                False,
+                False,
+            ),
+        )
+        for (
+            name,
+            expected_behavior,
+            run_status,
+            summary,
+            expected_match,
+            expected_complete,
+        ) in cases:
+            with self.subTest(name=name):
+                matched, completed, _observed_pass, _reason = verification_solution_match(
+                    expected_behavior,
+                    run_status,
+                    summary,
+                )
+                self.assertEqual(matched, expected_match)
+                self.assertEqual(completed, expected_complete)
+
     def test_runtime_threshold_marks_answer_correct_points(self) -> None:
         report = evaluate_summary_runtime_threshold(
             summary={

@@ -7,7 +7,6 @@ import re
 import time
 import uuid
 from pathlib import Path
-from types import SimpleNamespace
 from urllib.parse import quote_plus, urlencode
 
 from cryptography.hazmat.primitives import hashes, serialization
@@ -41,16 +40,11 @@ import app.impl.root.problems as root_problems_module
 import app.impl.run_export.artifact as run_export_artifact_module
 import app.impl.run_export.export as run_export_export_module
 import app.impl.run_export.import_source as run_export_import_module
-import app.impl.run_export.query as run_export_query_module
 import app.impl.run_export.run as run_export_run_module
 import app.impl.tests_spec.routes as tests_spec_module
 import app.impl.tests_spec.verification as tests_spec_verification_module
 import app.impl.workspace.context_job as workspace_job_module
 import app.impl.workspace.context_ui as workspace_ui_module
-import app.impl.workspace.run_view_detail as workspace_run_view_detail_module
-import app.impl.workspace.run_view_list as workspace_run_view_list_module
-from app.service.verification.result_match import verification_solution_match
-from app.service.verification.workspace_fingerprint import verification_sources_signature
 from app.impl.runtime.config import config
 from app.config import CONFIG_REGISTRY
 _API_MODULES = (
@@ -85,20 +79,6 @@ _API_MODULES = (
     root_auth_pages_module,
     root_contests_module,
     root_problems_module,
-)
-
-run_export_impl = SimpleNamespace(
-    _run_detail_use_compact_layout=run_export_query_module._run_detail_use_compact_layout,
-    artifact_file=run_export_artifact_module.artifact_file,
-    run_cancel=run_export_run_module.run_cancel,
-)
-workspace_impl = SimpleNamespace(
-    _run_cell_kind=workspace_run_view_list_module._run_cell_kind,
-    _verification_solution_match=verification_solution_match,
-    _verification_sources_signature=verification_sources_signature,
-    build_run_detail_context=workspace_run_view_detail_module.build_run_detail_context,
-    run_list_rows=workspace_run_view_list_module.run_list_rows,
-    verification_detail_context=workspace_run_view_detail_module.build_run_detail_context,
 )
 
 def _api_attr(name: str):
@@ -173,6 +153,7 @@ run_new_page = _api_attr("run_new_page")
 run_details_page = _api_attr("run_details_page")
 run_details_test_fragment = _api_attr("run_details_test_fragment")
 run_execute = _api_attr("run_execute")
+run_cancel = _api_attr("run_cancel")
 run_rejudge = _api_attr("run_rejudge")
 verification_start = _api_attr("verification_start")
 contests_root_create = _api_attr("contests_root_create")
