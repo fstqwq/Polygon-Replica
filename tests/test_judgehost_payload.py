@@ -7,6 +7,7 @@ import unittest
 from pathlib import Path
 
 from app.config import build_config_values
+from app.service.judgehost.artifact_capture import decode_callback_blob
 from app.service.judgehost.diagnostic_payload import parse_diagnostic_payload
 from app.service.judgehost.limits import run_memory_limit_kb
 from app.service.judgehost.pass_bundle import BundledPass, PassBundle
@@ -331,6 +332,24 @@ class TestJudgehostPayload(unittest.TestCase):
         encoded = base64.b64encode(blob).decode("ascii")
         self.assertEqual(DomjudgeToolkit.payload_blob_bytes(blob), blob)
         self.assertEqual(DomjudgeToolkit.payload_blob_bytes(encoded), blob)
+
+    def test_callback_blob_accepts_only_canonical_wire_value_types(self) -> None:
+        blob = b"binary-artifact"
+        encoded = base64.b64encode(blob).decode("ascii")
+
+        self.assertEqual(decode_callback_blob(None), b"")
+        self.assertEqual(decode_callback_blob(encoded), blob)
+        self.assertEqual(decode_callback_blob(blob), blob)
+        self.assertEqual(decode_callback_blob(bytearray(blob)), blob)
+        self.assertEqual(decode_callback_blob(memoryview(blob)), blob)
+        with self.assertRaisesRegex(RuntimeError, "not valid base64"):
+            decode_callback_blob("%not-base64%")
+        with self.assertRaisesRegex(RuntimeError, "base64 ASCII text"):
+            decode_callback_blob("not-ascii-\u2603")
+        with self.assertRaisesRegex(RuntimeError, "base64 text or raw bytes"):
+            decode_callback_blob(10**100)
+        with self.assertRaisesRegex(RuntimeError, "base64 text or raw bytes"):
+            decode_callback_blob(True)
 
     def test_diagnostic_payload_selects_failure_context_without_raw_blob(
         self,

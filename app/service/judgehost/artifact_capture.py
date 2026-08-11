@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import base64
+import binascii
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import cast
 
 from app.service.judgehost.pass_bundle import (
     InvalidPassBundle,
@@ -33,47 +33,46 @@ class CaseArtifactRequest:
 
 @dataclass(frozen=True, slots=True)
 class PreparedCaseArtifacts:
-    files: Mapping[str, bytes]
+    files: dict[str, bytes]
     pass_bundle: PassBundle | None
     warning: str
 
 
 @dataclass(frozen=True, slots=True)
 class CapturedCaseArtifacts:
-    payloads: Mapping[str, PayloadFile]
-    artifacts: Mapping[str, CapturedCaseArtifact]
+    payloads: dict[str, PayloadFile]
+    artifacts: dict[str, CapturedCaseArtifact]
     pass_bundle: PassBundle | None
     warning: str
 
 
-def _decode_base64(value: object) -> bytes:
-    encoded = cast(str | bytes | bytearray | memoryview, value)
+def _decode_base64(value: str) -> bytes:
     try:
-        raw = encoded.strip()
-    except AttributeError:
-        try:
-            raw = bytes(encoded).decode("ascii").strip()
-        except UnicodeDecodeError as exc:
-            raise RuntimeError(
-                "DOMjudge payload must be base64 ASCII text"
-            ) from exc
-        except TypeError as exc:
-            raise RuntimeError("DOMjudge payload must be base64 text") from exc
+        raw = value.strip().encode("ascii")
+    except UnicodeEncodeError as exc:
+        raise RuntimeError(
+            "DOMjudge payload must be base64 ASCII text"
+        ) from exc
     if not raw:
         return b""
     try:
         return base64.b64decode(raw, validate=True)
-    except Exception as exc:
+    except (binascii.Error, ValueError) as exc:
         raise RuntimeError("DOMjudge payload is not valid base64") from exc
 
 
-def _payload_blob_bytes(value: object) -> bytes:
+def decode_callback_blob(value: object) -> bytes:
+    """Decode one canonical bounded upload field without coercive allocation."""
+
     if value is None:
         return b""
-    try:
-        return bytes(cast(bytes | bytearray | memoryview, value))
-    except TypeError:
+    if isinstance(value, str):
         return _decode_base64(value)
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        return bytes(value)
+    raise RuntimeError(
+        "DOMjudge payload must be base64 text or raw bytes"
+    )
 
 
 class CaseArtifactCapture:
@@ -101,7 +100,7 @@ class CaseArtifactCapture:
                 if allow_empty:
                     files[name] = b""
                 return b""
-            raw = _payload_blob_bytes(value)
+            raw = decode_callback_blob(value)
             if not raw and not allow_empty:
                 return b""
             files[name] = raw
@@ -139,7 +138,7 @@ class CaseArtifactCapture:
             payload.get("compare_metadata"),
             allow_empty=True,
         )
-        team_message = _payload_blob_bytes(payload.get("team_message"))
+        team_message = decode_callback_blob(payload.get("team_message"))
         capture_expected = request.task_kind in _PASS_CAPTURE_TASK_KINDS and (
             request.interactive or request.pass_limit > 1
         )

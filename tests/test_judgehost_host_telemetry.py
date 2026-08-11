@@ -239,6 +239,33 @@ class TestToolchainVersionCollector(unittest.TestCase):
         self.assertEqual(events, [])
         self.assertEqual(self.state.host_toolchains, {})
 
+    def test_handler_contains_host_event_sink_failure(self) -> None:
+        def failing_sink(
+            *,
+            hostname: str,
+            action: str,
+            task_id: str,
+            run_id: str,
+        ) -> None:
+            _ = (hostname, action, task_id, run_id)
+            raise RuntimeError("host event store unavailable")
+
+        handler = ToolchainTelemetryHandler(self.state, failing_sink)
+
+        handler.record_report(
+            ToolchainVersionReport(
+                judgetask_id=101,
+                hostname="judgehost-a",
+                compiler=self._encoded(b"g++ 14"),
+                runner="",
+                task_id="task-101",
+                run_id="run-101",
+            )
+        )
+
+        telemetry = self.state.host_toolchains["judgehost-a"]["cpp"]
+        self.assertEqual(telemetry.compiler, "g++ 14")
+
 
 def _result(test_name: str):
     return build_case_result(

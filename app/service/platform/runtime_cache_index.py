@@ -4,7 +4,7 @@ import contextlib
 import hashlib
 import re
 import threading
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 
 from app.db import now_iso
@@ -69,7 +69,7 @@ class RuntimeCacheIndex:
         key_hash: str,
         signature: str,
         value: dict[str, object],
-        files: dict[str, bytes | PayloadFile],
+        files: Mapping[str, bytes | PayloadFile],
         tags: dict[str, object] | None = None,
     ) -> RuntimeCacheEntry:
         key = self._entry_key(namespace, key_hash, signature)

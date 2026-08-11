@@ -267,9 +267,17 @@ class ToolchainTelemetryHandler:
             )
             return
         if recorded:
-            self._event_sink(
-                hostname=report.hostname,
-                action="versions",
-                task_id=report.task_id,
-                run_id=report.run_id,
-            )
+            try:
+                self._event_sink(
+                    hostname=report.hostname,
+                    action="versions",
+                    task_id=report.task_id,
+                    run_id=report.run_id,
+                )
+            except Exception:
+                logger.exception(
+                    "failed to record judgehost toolchain host event "
+                    "judgetask_id=%s hostname=%s",
+                    report.judgetask_id,
+                    report.hostname,
+                )

@@ -5,6 +5,7 @@ import json
 import logging
 import re
 import shlex
+from collections.abc import Mapping
 from pathlib import Path
 
 from app.service.judgehost.compile_spec import compile_spec
@@ -264,7 +265,7 @@ class DomjudgeToolkit:
         memory_kb: int,
         score_text: str,
         result_json: str,
-        files: dict[str, bytes | PayloadFile],
+        files: Mapping[str, bytes | PayloadFile],
         shortcut_eligible: bool,
     ) -> dict[str, PayloadFile]:
         entry = self._s.runtime_cache_index.put(
