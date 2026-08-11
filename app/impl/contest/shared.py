@@ -1000,10 +1000,6 @@ def _run_contest_package_job_worker(
     job_root = config.contest_service.job_root(contest_slug, job_id)
     packages_dir = job_root / "packages"
     packages_dir.mkdir(parents=True, exist_ok=True)
-    config_snapshot = _C.snapshot()
-    package_max_expanded_bytes = int(
-        config_snapshot["PROBLEM_ZIP_MAX_EXPANDED_BYTES"]
-    )
     entries = config.contest_service.build_items(job_id)
     results: list[dict[str, object]] = []
     for entry in entries:
@@ -1041,7 +1037,6 @@ def _run_contest_package_job_worker(
                 target_package,
                 short_name=idx,
                 staging_parent=job_root / ".package-staging",
-                max_expanded_bytes=package_max_expanded_bytes,
             )
             item["package_file"] = f"packages/{output_name}"
             item["status"] = "success"

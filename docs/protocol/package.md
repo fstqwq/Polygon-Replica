@@ -113,7 +113,10 @@ a write-authorized operation.
 A problem export artifact is identified by its published Native
 materialization and export type. Export requests remain separate attempts with
 separate job IDs; successful attempts may resolve to the same available
-artifact. A failed attempt does not create or replace a cache hit.
+artifact. Artifact publication and export-job state are independent writes. If
+a canonical artifact has been published and a later job status or link update
+fails, the valid artifact remains reusable by a later attempt; that failure
+does not delete or invalidate the cache entry.
 
 Contest labels are placement metadata rather than problem export identity. A
 contest package build consumes the canonical ICPC ZIP, safely extracts it into
@@ -122,6 +125,12 @@ the contest job staging tree, changes the single `short-name` entry in
 contest-owned artifact. The changed ZIP is not inserted into the problem export
 cache. Thus two contests can publish different labels from the same canonical
 problem artifact without changing that artifact.
+
+This transformation consumes a system-generated artifact whose stored size and
+SHA were already verified. The authenticated-upload entry and expanded-byte
+budgets do not apply again. Extraction remains streaming and still validates
+the central-directory structure, normalized paths, path conflicts, member
+types, encryption state, and the fixed metadata-size boundary.
 
 ## ICPC export
 

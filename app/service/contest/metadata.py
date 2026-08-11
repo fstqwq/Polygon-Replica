@@ -12,9 +12,9 @@ import zipfile
 
 from app.main_constant import CONTEST_IDENT_RE
 from app.service.importing.archive import (
-    ArchiveView,
     PACKAGE_METADATA_MAX_BYTES,
-    problem_archive_policy,
+    normalize_archive_path,
+    preflight_archive,
 )
 
 
@@ -39,6 +39,10 @@ def _validate_member(info: zipfile.ZipInfo) -> None:
         raise ValueError(f"contest package contains a symlink: {info.filename}")
     if mode not in {0, stat.S_IFREG, stat.S_IFDIR}:
         raise ValueError(f"contest package contains a special file: {info.filename}")
+    if info.is_dir() and mode not in {0, stat.S_IFDIR}:
+        raise ValueError(f"contest package has an invalid directory: {info.filename}")
+    if not info.is_dir() and mode == stat.S_IFDIR:
+        raise ValueError(f"contest package has an invalid file: {info.filename}")
 
 
 def _rewrite_short_name(payload: bytes, short_name: str) -> bytes:
@@ -78,10 +82,10 @@ def _rewrite_short_name(payload: bytes, short_name: str) -> bytes:
 
 
 def _extract_package(
-    archive: ArchiveView,
+    archive: zipfile.ZipFile,
+    members: list[tuple[str, zipfile.ZipInfo]],
     destination: Path,
-) -> list[tuple[str, zipfile.ZipInfo]]:
-    members = list(archive.entries.items())
+) -> None:
     for name, info in members:
         _validate_member(info)
         target = destination / Path(*name.split("/"))
@@ -89,10 +93,38 @@ def _extract_package(
         if info.is_dir():
             target.mkdir(parents=True, exist_ok=True)
         else:
-            archive.zip_file.copy_to(info, target)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            with archive.open(info, "r") as source_handle, target.open(
+                "xb"
+            ) as target_handle:
+                shutil.copyfileobj(
+                    source_handle,
+                    target_handle,
+                    length=1024 * 1024,
+                )
         if mode:
             target.chmod(mode)
-    return members
+
+
+def _validated_members(
+    archive_path: Path,
+) -> tuple[zipfile.ZipFile, list[tuple[str, zipfile.ZipInfo]]]:
+    structure = preflight_archive(archive_path, max_entries=None)
+    archive = zipfile.ZipFile(archive_path, "r")
+    try:
+        infos = archive.infolist()
+        if len(infos) != structure.entry_count:
+            raise ValueError(
+                "zip entry count changed after structural validation"
+            )
+        members = [
+            (normalize_archive_path(info.filename), info)
+            for info in infos
+        ]
+    except Exception:
+        archive.close()
+        raise
+    return archive, members
 
 
 def _write_archive(
@@ -125,7 +157,6 @@ def materialize_contest_problem_package(
     *,
     short_name: str,
     staging_parent: Path,
-    max_expanded_bytes: int,
 ) -> None:
     """Create one contest-owned package variant from a canonical ICPC ZIP."""
 
@@ -139,26 +170,29 @@ def materialize_contest_problem_package(
     staging_parent.mkdir(parents=True, exist_ok=True)
     staging = staging_parent / f"contest-package-{uuid.uuid4().hex}"
     extraction = staging / "package"
-    staged_archive = staging / "canonical.zip"
     try:
         extraction.mkdir(parents=True, exist_ok=False)
-        shutil.copy2(source, staged_archive)
-        with ArchiveView(
-            staged_archive,
-            problem_archive_policy(max_expanded_bytes),
-        ) as archive:
+        archive, members = _validated_members(source)
+        with archive:
             metadata_names = [
                 name
-                for name in archive.entries
+                for name, _info in members
                 if name.casefold() == _DOMJUDGE_METADATA_NAME.casefold()
             ]
             if metadata_names != [_DOMJUDGE_METADATA_NAME]:
                 raise ValueError(
                     "contest package requires one root domjudge-problem.ini"
                 )
-            if archive.entries[_DOMJUDGE_METADATA_NAME].is_dir():
+            metadata_info = next(
+                info
+                for name, info in members
+                if name == _DOMJUDGE_METADATA_NAME
+            )
+            if metadata_info.is_dir():
                 raise ValueError("domjudge-problem.ini must be a regular file")
-            members = _extract_package(archive, extraction)
+            if int(metadata_info.file_size) > PACKAGE_METADATA_MAX_BYTES:
+                raise ValueError("DOMjudge problem metadata is too large")
+            _extract_package(archive, members, extraction)
 
         metadata_path = extraction / _DOMJUDGE_METADATA_NAME
         if metadata_path.stat().st_size > PACKAGE_METADATA_MAX_BYTES:

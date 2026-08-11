@@ -235,8 +235,16 @@ def _resolved_central_location(
     return local_offset, disk_start
 
 
-def preflight_archive(path: Path, *, max_entries: int) -> ArchiveStructure:
-    """Validate and count the central directory before ``ZipFile`` allocation."""
+def preflight_archive(
+    path: Path,
+    *,
+    max_entries: int | None,
+) -> ArchiveStructure:
+    """Validate and count the central directory before ``ZipFile`` allocation.
+
+    ``None`` is reserved for trusted system-generated archives that do not pass
+    through authenticated-upload admission.
+    """
 
     size = path.stat().st_size
     if size < _EOCD_STRUCT.size:
@@ -257,8 +265,12 @@ def preflight_archive(path: Path, *, max_entries: int) -> ArchiveStructure:
             if zip64
             else _classic_structure(record)
         )
-        entry_limit = max(1, int(max_entries))
-        if structure.entry_count > entry_limit:
+        entry_limit = (
+            None
+            if max_entries is None
+            else max(1, int(max_entries))
+        )
+        if entry_limit is not None and structure.entry_count > entry_limit:
             raise ValueError(f"zip contains more than {entry_limit} entries")
         central_end = structure.central_offset + structure.central_size
         if (
@@ -308,7 +320,7 @@ def preflight_archive(path: Path, *, max_entries: int) -> ArchiveStructure:
             is_directory = raw_name.endswith("/")
             seen[name] = is_directory
             count += 1
-            if count > entry_limit:
+            if entry_limit is not None and count > entry_limit:
                 raise ValueError(f"zip contains more than {entry_limit} entries")
             consumed += _CENTRAL_STRUCT.size + variable_length
         if consumed != structure.central_size or count != structure.entry_count:

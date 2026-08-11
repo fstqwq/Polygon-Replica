@@ -22,4 +22,6 @@ further additions are rejected.
 Package builds consume canonical problem ICPC exports. The contest service
 safely stages each archive, rewrites only the legacy DOMjudge `short-name` to
 the frozen contest label, and repacks a contest-owned ZIP. These variants live
-under the contest job and never become problem export cache records.
+under the contest job and never become problem export cache records. This
+trusted internal transformation streams payloads and validates archive
+structure and member safety without reapplying authenticated-upload budgets.

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import shutil
+import stat
 import subprocess
 import tempfile
 import unittest
@@ -23,6 +24,7 @@ from app.service.export.icpc_package import (
     write_output_validator,
 )
 from app.service.contest.metadata import materialize_contest_problem_package
+from app.service.importing.archive import ArchivePolicy, ArchiveView
 
 
 class TestICPCExportPackage(unittest.TestCase):
@@ -92,7 +94,6 @@ class TestICPCExportPackage(unittest.TestCase):
                 target,
                 short_name=label,
                 staging_parent=self.root / "staging",
-                max_expanded_bytes=1024 * 1024,
             )
             variants[label] = target
 
@@ -136,7 +137,6 @@ class TestICPCExportPackage(unittest.TestCase):
                         self.root / f"{name}-out.zip",
                         short_name="A",
                         staging_parent=self.root / "staging",
-                        max_expanded_bytes=1024 * 1024,
                     )
 
         canonical = self.root / "valid.zip"
@@ -151,7 +151,57 @@ class TestICPCExportPackage(unittest.TestCase):
                 self.root / "unsafe-out.zip",
                 short_name="A\nB",
                 staging_parent=self.root / "staging",
-                max_expanded_bytes=1024 * 1024,
+            )
+
+    def test_contest_transform_ignores_upload_budgets_but_rejects_symlinks(
+        self,
+    ) -> None:
+        canonical = self.root / "canonical-over-upload-budget.zip"
+        with zipfile.ZipFile(canonical, "w") as archive:
+            archive.writestr("domjudge-problem.ini", "short-name = sample\n")
+            archive.writestr("problem.yaml", "name: {en: Sample}\n")
+            archive.writestr("data/secret/001.in", b"payload larger than one byte\n")
+
+        with self.assertRaisesRegex(ValueError, "more than 1 entries"):
+            ArchiveView(
+                canonical,
+                ArchivePolicy(max_entries=1, max_expanded_bytes=1024 * 1024),
+            )
+        with ArchiveView(
+            canonical,
+            ArchivePolicy(max_entries=10, max_expanded_bytes=1),
+        ) as upload_view:
+            with self.assertRaisesRegex(ValueError, "expanded zip payload"):
+                upload_view.zip_file.open(
+                    upload_view.entries["data/secret/001.in"]
+                )
+
+        transformed = self.root / "trusted-internal.zip"
+        materialize_contest_problem_package(
+            canonical,
+            transformed,
+            short_name="A",
+            staging_parent=self.root / "staging",
+        )
+        with zipfile.ZipFile(transformed, "r") as archive:
+            self.assertEqual(
+                archive.read("data/secret/001.in"),
+                b"payload larger than one byte\n",
+            )
+
+        unsafe = self.root / "canonical-symlink.zip"
+        link = zipfile.ZipInfo("data/secret/link")
+        link.create_system = 3
+        link.external_attr = (stat.S_IFLNK | 0o777) << 16
+        with zipfile.ZipFile(unsafe, "w") as archive:
+            archive.writestr("domjudge-problem.ini", "short-name = sample\n")
+            archive.writestr(link, "001.in")
+        with self.assertRaisesRegex(ValueError, "contains a symlink"):
+            materialize_contest_problem_package(
+                unsafe,
+                self.root / "unsafe-symlink-out.zip",
+                short_name="A",
+                staging_parent=self.root / "staging",
             )
 
     def test_problem_yaml_types_and_combined_legacy_fallback(self) -> None:
