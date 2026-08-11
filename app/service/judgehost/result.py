@@ -12,6 +12,7 @@ from app.db import now_iso
 from app.service.judgehost.artifact_capture import (
     CaseArtifactCapture,
     CaseArtifactRequest,
+    decode_callback_blob,
 )
 from app.service.judgehost.batch_scheduler_models import (
     CaseCallbackReceipt,
@@ -480,7 +481,7 @@ class ResultProcessor:
             )
 
         def _payload_blob_as_b64(value: object) -> str:
-            raw = self._toolkit.payload_blob_bytes(value)
+            raw = decode_callback_blob(value)
             if raw:
                 return base64.b64encode(
                     truncate_stored_log_bytes(
@@ -488,7 +489,7 @@ class ResultProcessor:
                         self._s.config_values.snapshot(),
                     )
                 ).decode("ascii")
-            return domjudge_text(value)
+            return ""
 
         compile_output = ""
         compile_meta = ""

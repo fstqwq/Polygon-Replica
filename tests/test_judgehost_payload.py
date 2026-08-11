@@ -327,11 +327,11 @@ class TestJudgehostPayload(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             DomjudgeToolkit.b64_decode("%not-base64%")
 
-    def test_payload_blob_bytes_keeps_raw_upload_contract(self) -> None:
+    def test_callback_blob_keeps_raw_upload_contract(self) -> None:
         blob = b"binary-artifact"
         encoded = base64.b64encode(blob).decode("ascii")
-        self.assertEqual(DomjudgeToolkit.payload_blob_bytes(blob), blob)
-        self.assertEqual(DomjudgeToolkit.payload_blob_bytes(encoded), blob)
+        self.assertEqual(decode_callback_blob(blob), blob)
+        self.assertEqual(decode_callback_blob(encoded), blob)
 
     def test_callback_blob_accepts_only_canonical_wire_value_types(self) -> None:
         blob = b"binary-artifact"

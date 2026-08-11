@@ -3234,6 +3234,109 @@ class TestJudgehostService(E2ETestBase):
         self.assertEqual(register.status_code, 400)
         self.assertEqual(callback.status_code, 400)
 
+    def test_compile_update_rejects_noncanonical_blobs_without_state_change(
+        self,
+    ) -> None:
+        service = config.judgehost_task_service
+        override_config_values(
+            self,
+            service.state.config_values,
+            JUDGEHOST_ENABLE=True,
+            JUDGEHOST_API_TOKEN="test-token",
+            JUDGEHOST_API_USERNAME="judgehost",
+        )
+
+        verification_id = canonical_test_verification_id(
+            f"b-jh-compile-invalid-{uuid.uuid4().hex[:8]}"
+        )
+        run_id = f"r-jh-compile-invalid-{uuid.uuid4().hex[:8]}"
+        self._seed_build_verification(verification_id)
+        service.enqueue_task(
+            problem=self.problem,
+            username=self.user,
+            artifact_verification_id=verification_id,
+            mode="pass-fail",
+            submission_path="solutions/ac.cpp",
+            upload_content=None,
+            upload_filename=None,
+            run_id=run_id,
+            selected_tests=["001.in"],
+            verification_id=_canonical_verification_id(
+                "inv-domjudge-compile-invalid"
+            ),
+            verification_program_id=_SOLUTION_PROGRAM_ID,
+            expected_behavior="accepted",
+            verification_source="run.execute",
+        )
+        hostname = "judgehost-compile-invalid"
+        service.domjudge_register_host(hostname)
+        leased = service.domjudge_fetch_work(hostname, max_batchsize=1)
+        self.assertEqual(len(leased), 1)
+        case_id = int(leased[0].get("judgetaskid") or 0)
+        case_row = judgehost_fetch_case(service, case_id)
+        self.assertIsNotNone(case_row)
+        assert case_row is not None
+        batch_id = int(case_row["batch_id"])
+        before = judgehost_fetch_batch(service, batch_id)
+        self.assertIsNotNone(before)
+        assert before is not None
+        before_compile_state = (
+            before["compile_success"],
+            before["compile_state"],
+            before["compile_output_b64"],
+            before["compile_metadata_b64"],
+        )
+
+        invalid_payloads = (
+            {
+                "compile_success": "1",
+                "output_compile": 10**100,
+                "compile_metadata": "",
+            },
+            {
+                "compile_success": "1",
+                "output_compile": "",
+                "compile_metadata": True,
+            },
+            {
+                "compile_success": "0",
+                "output_compile": 10**100,
+                "compile_metadata": "",
+            },
+            {
+                "compile_success": "0",
+                "output_compile": "",
+                "compile_metadata": True,
+            },
+        )
+        for invalid_payload in invalid_payloads:
+            with self.subTest(payload=invalid_payload), self.assertRaisesRegex(
+                RuntimeError,
+                "base64 text or raw bytes",
+            ):
+                service.domjudge_update_judging(
+                    hostname,
+                    case_id,
+                    invalid_payload,
+                )
+
+            after = judgehost_fetch_batch(service, batch_id)
+            self.assertIsNotNone(after)
+            assert after is not None
+            self.assertEqual(
+                (
+                    after["compile_success"],
+                    after["compile_state"],
+                    after["compile_output_b64"],
+                    after["compile_metadata_b64"],
+                ),
+                before_compile_state,
+            )
+            current_case = judgehost_fetch_case(service, case_id)
+            self.assertIsNotNone(current_case)
+            assert current_case is not None
+            self.assertEqual(current_case["status"], "leased")
+
     def test_domjudge_compile_logs_are_truncated_before_state_storage(self) -> None:
         service = config.judgehost_task_service
         override_config_values(

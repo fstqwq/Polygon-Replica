@@ -82,15 +82,6 @@ class DomjudgeToolkit:
         except Exception as exc:
             raise RuntimeError("DOMjudge payload is not valid base64") from exc
 
-    @staticmethod
-    def payload_blob_bytes(value: str | bytes | bytearray | memoryview | None) -> bytes:
-        if value is None:
-            return b""
-        try:
-            return bytes(value)
-        except TypeError:
-            return DomjudgeToolkit.b64_decode(value)
-
     def case_cache_ref(
         self,
         *,
