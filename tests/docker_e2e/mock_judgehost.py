@@ -218,6 +218,10 @@ class JudgehostMock:
                 file_content = base64.b64decode(content.encode("ascii"), validate=True)
             except (UnicodeEncodeError, ValueError, binascii.Error) as exc:
                 raise RuntimeError(f"invalid base64 file-array content: {filename}") from exc
+            if filename in decoded:
+                raise RuntimeError(
+                    f"file-array endpoint returned duplicate filename: {filename}"
+                )
             decoded[filename] = file_content
             if executable:
                 executable_rows.append((filename, file_content, bool(is_executable)))
@@ -387,6 +391,10 @@ class JudgehostMock:
                 f"{sorted(sources)!r}"
             )
         source_name, outcome = next(iter(output_candidates.items()))
+        source_sha256s = {
+            filename: hashlib.sha256(content).hexdigest()
+            for filename, content in sorted(sources.items())
+        }
 
         executable_names: dict[str, list[str]] = {}
         compile_path = ENDPOINTS["executable"].format(
@@ -408,6 +416,7 @@ class JudgehostMock:
                     "judgetaskid": judgetaskid,
                     "source": source_name,
                     "source_files": sorted(sources),
+                    "source_sha256s": source_sha256s,
                     "executable_files": executable_names,
                 }
             )
@@ -421,6 +430,7 @@ class JudgehostMock:
                     "judgetaskid": judgetaskid,
                     "source": source_name,
                     "source_files": sorted(sources),
+                    "source_sha256s": source_sha256s,
                     "executable_files": executable_names,
                     "internal_error_ack": internal_error_ack,
                 }
@@ -431,6 +441,10 @@ class JudgehostMock:
         testcase_files = self._download_files(testcase_path, executable=False)
         if not {"input", "output"}.issubset(testcase_files):
             raise RuntimeError("testcase download must contain input and output")
+        testcase_sha256s = {
+            filename: hashlib.sha256(content).hexdigest()
+            for filename, content in sorted(testcase_files.items())
+        }
 
         for file_type, id_field in (
             ("run", "run_script_id"),
@@ -472,9 +486,11 @@ class JudgehostMock:
                 "judgetaskid": judgetaskid,
                 "source": source_name,
                 "source_files": sorted(sources),
+                "source_sha256s": source_sha256s,
                 "runresult": outcome.runresult,
                 "executable_files": executable_names,
                 "testcase_files": sorted(testcase_files),
+                "testcase_sha256s": testcase_sha256s,
                 "output_sha256": hashlib.sha256(outcome.output).hexdigest(),
                 "ack": ack,
                 "duplicate_ack": duplicate_ack,
