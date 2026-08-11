@@ -141,3 +141,8 @@ Other existing column constraints and index definitions are not compared
 against the DDL. A schema change updates the DDL, required-column manifest,
 service queries, cleanup policy, and this document together. No project-owned
 schema version is reserved without an actual compatibility boundary.
+
+The current `workspaces` shape has no recent-verification status field.
+Existing databases may retain that historical extra column because schema
+validation tolerates unrecognized columns; no application path reads, writes,
+or clears it, and fresh databases do not create it.

@@ -178,10 +178,6 @@ class TestArtifactCleanup(unittest.TestCase):
             (self.actor_user_id, now, "2999-01-01T00:00:00+00:00"),
         )
         self._execute(
-            "UPDATE workspaces SET recent_verification_status='running' WHERE id=?",
-            (self.workspace_id,),
-        )
-        self._execute(
             """
             INSERT INTO verifications(
                 id,problem_id,workspace_id,signature,source_commit,kind,status,created_at
@@ -507,13 +503,6 @@ class TestArtifactCleanup(unittest.TestCase):
             "verifications",
         ):
             self.assertEqual(self._count(table), 0, table)
-        workspace_row = isolated_db_fetch_one(
-            self.db,
-            "SELECT recent_verification_status FROM workspaces WHERE id=?",
-            (self.workspace_id,),
-        )
-        self.assertIsNotNone(workspace_row)
-        self.assertIsNone(workspace_row["recent_verification_status"])
         self.assertEqual(self._count("users"), 1)
         self.assertEqual(self._count("auth_sessions"), 1)
         self.assertEqual(self._count("problems"), 1)

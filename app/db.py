@@ -183,7 +183,6 @@ CREATE TABLE IF NOT EXISTS workspaces (
     revision_upstream_higher INTEGER NOT NULL DEFAULT 0,
     revision_ahead_count INTEGER,
     revision_behind_count INTEGER,
-    recent_verification_status TEXT,
     updated_at TEXT NOT NULL,
     UNIQUE(problem_id, user_id),
     FOREIGN KEY(problem_id) REFERENCES problems(id),
@@ -768,7 +767,6 @@ CURRENT_SCHEMA_COLUMNS: dict[str, tuple[str, ...]] = {
         "revision_upstream_higher",
         "revision_ahead_count",
         "revision_behind_count",
-        "recent_verification_status",
         "updated_at",
     ),
     "contests": (

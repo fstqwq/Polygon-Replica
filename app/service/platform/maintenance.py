@@ -321,15 +321,6 @@ class ArtifactCleanupService:
             ):
                 connection.execute(statement)
             cursor = connection.execute(
-                """
-                UPDATE workspaces
-                SET recent_verification_status=NULL, updated_at=?
-                WHERE recent_verification_status IS NOT NULL
-                """,
-                (now_iso(),),
-            )
-            counts["workspace_statuses_cleared"] = max(0, int(cursor.rowcount))
-            cursor = connection.execute(
                 "DELETE FROM audit_log WHERE id < ?",
                 (int(start_audit_id),),
             )
@@ -533,12 +524,8 @@ class ArtifactCleanupService:
                 start_audit_id=start_audit_id
             )
             result["deleted_rows"] = deleted_rows
-            result["deleted_row_total"] = sum(
-                count
-                for label, count in deleted_rows.items()
-                if label != "workspace_statuses_cleared"
-            )
-            result["affected_row_total"] = sum(deleted_rows.values())
+            result["deleted_row_total"] = sum(deleted_rows.values())
+            result["affected_row_total"] = result["deleted_row_total"]
             result["completed_stage"] = "database"
             move("filesystem")
             filesystem_bytes_before = {

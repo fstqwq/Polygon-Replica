@@ -113,6 +113,22 @@ class TestDatabaseService(DBTestBase):
                 "revision_behind_count",
             }.issubset(workspace_columns)
         )
+        self.assertNotIn("recent_verification_status", workspace_columns)
+
+    def test_legacy_workspace_status_column_is_tolerated_as_extra(self) -> None:
+        isolated_db_execute(
+            self.db,
+            "ALTER TABLE workspaces ADD COLUMN recent_verification_status TEXT",
+        )
+
+        self.db.init()
+
+        with isolated_db_connection(self.db) as connection:
+            columns = {
+                str(row[1])
+                for row in connection.execute("PRAGMA table_info(workspaces)")
+            }
+        self.assertIn("recent_verification_status", columns)
 
     def test_export_schema_uses_only_materialization_and_type_identity(self) -> None:
         with isolated_db_connection(self.db) as connection:
