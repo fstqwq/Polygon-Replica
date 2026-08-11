@@ -109,7 +109,7 @@
   <p>
     <span class="muted">Latest:</span>
     <strong>{{ source_backup.size_label }}</strong>
-    <span class="muted">&middot; {{ source_backup.created_at }}</span>
+    <span class="muted">&middot; {{ source_backup.created_at | local_time }}</span>
     &middot;
     <a href="/admin/maintenance/source-backup/latest">Download latest backup</a>
   </p>
