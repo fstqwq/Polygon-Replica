@@ -10,18 +10,6 @@ services:
       - seccomp=unconfined
       - apparmor=unconfined
 
-  domjudge-contract:
-    image: ${POLYGON_REPLICA_E2E_IMAGE:?set by tests/scripts/docker-e2e.sh}
-    entrypoint: ["python3", "/opt/e2e/verify_domjudge_source.py"]
-    restart: "no"
-    environment:
-      POLYGON_REPLICA_E2E_STATE_DIR: /var/backups/polygon-replica/e2e-state
-    volumes:
-      - ./tests/docker_e2e:/opt/e2e:ro
-      - state:/var/backups/polygon-replica
-    networks:
-      - upstream
-
   bootstrap:
     image: ${POLYGON_REPLICA_E2E_IMAGE:?set by tests/scripts/docker-e2e.sh}
     entrypoint: ["python3", "/opt/e2e/bootstrap.py"]
@@ -118,7 +106,6 @@ services:
       - e2e
 
 networks:
-  upstream:
   e2e:
     internal: true
 

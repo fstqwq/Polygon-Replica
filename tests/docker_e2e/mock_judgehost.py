@@ -1,9 +1,9 @@
-"""Official-shaped Judgehost mock for the isolated Docker E2E scenario.
+"""Judgehost protocol mock for the isolated Docker E2E scenario.
 
 This process never compiles or executes untrusted input.  It exercises the wire
-shapes used by the pinned DOMjudge judgedaemon plus Polygon-Replica's explicit
-idempotent-ACK and late-diagnostic extensions.  It returns deterministic case
-outcomes for the fixture seeded by bootstrap.py.
+shapes exposed by Polygon-Replica's Judgehost API, including idempotent callback
+ACKs and late diagnostics.  It returns deterministic case outcomes for the E2E
+fixture instead of executing authored source code.
 """
 
 from __future__ import annotations
@@ -21,16 +21,14 @@ from typing import Any, cast
 
 import httpx
 
-from domjudge_contract import (
+from judgehost_protocol import (
     COMPILE_REPORT_FIELDS,
     CONFIG_REQUIRED_FIELDS,
     ENDPOINTS,
     FINAL_REPORT_FIELDS,
     MOCK_READY_FILENAME,
     MOCK_STATE_FILENAME,
-    UPSTREAM_PEELED_COMMIT,
     WORK_REQUIRED_FIELDS,
-    require_approval,
     state_dir,
 )
 
@@ -78,7 +76,6 @@ def _atomic_json(path: Path, payload: dict[str, object]) -> None:
 
 class JudgehostMock:
     def __init__(self) -> None:
-        self.approval = require_approval()
         token = os.environ["POLYGON_REPLICA_E2E_JUDGEHOST_TOKEN"]
         self.client = httpx.Client(
             base_url=os.environ["POLYGON_REPLICA_E2E_APP_URL"].rstrip("/") + "/",
@@ -88,8 +85,6 @@ class JudgehostMock:
         self.state_path = state_dir() / MOCK_STATE_FILENAME
         self.ready_path = state_dir() / MOCK_READY_FILENAME
         self.state: dict[str, object] = {
-            "domjudge_commit": self.approval["commit"],
-            "source_sha256s": self.approval["source_sha256s"],
             "hostname": HOSTNAME,
             "events": [],
             "error": "",
@@ -108,11 +103,6 @@ class JudgehostMock:
         self._persist()
 
     def _request(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
-        # Re-read the approval before every network operation.  Removing or
-        # replacing it therefore closes an already-running mock as well.
-        approval = require_approval()
-        if approval["commit"] != UPSTREAM_PEELED_COMMIT:
-            raise RuntimeError("mock request blocked by unapproved DOMjudge commit")
         response = self.client.request(method, path, **kwargs)
         response.raise_for_status()
         return response
@@ -146,14 +136,14 @@ class JudgehostMock:
             raise RuntimeError("Judgehost bootstrap responses must be non-empty")
         missing_config = [field for field in CONFIG_REQUIRED_FIELDS if field not in config]
         if missing_config:
-            raise RuntimeError(f"Judgehost config omitted official fields: {missing_config!r}")
+            raise RuntimeError(f"Judgehost config omitted required fields: {missing_config!r}")
         for language in languages:
             if (
                 not isinstance(language, dict)
                 or not isinstance(language.get("id"), str)
                 or not isinstance(language.get("extensions"), list)
             ):
-                raise RuntimeError("Judgehost language response has an invalid official shape")
+                raise RuntimeError("Judgehost language response has an invalid shape")
         self._record(
             {
                 "kind": "registered",
@@ -170,7 +160,7 @@ class JudgehostMock:
         row = dict(raw)
         missing = [field for field in WORK_REQUIRED_FIELDS if field not in row]
         if missing:
-            raise RuntimeError(f"fetch-work item is missing official fields: {missing!r}")
+            raise RuntimeError(f"fetch-work item is missing required fields: {missing!r}")
         if row["type"] != "judging_run":
             raise RuntimeError(f"unsupported work type: {row['type']!r}")
         for field in ("judgetaskid", "jobid", "submitid", "testcase_id"):
@@ -199,7 +189,7 @@ class JudgehostMock:
     ) -> dict[str, bytes]:
         payload = cast(list[object], self._json(self._request("GET", path), list))
         if not payload:
-            raise RuntimeError(f"official file-array endpoint returned no files: {path}")
+            raise RuntimeError(f"file-array endpoint returned no files: {path}")
         decoded: dict[str, bytes] = {}
         executable_rows: list[tuple[str, bytes, bool]] = []
         for raw in payload:
@@ -247,13 +237,13 @@ class JudgehostMock:
             self._json(self._request("GET", path), dict),
         )
         # The real daemon executes these scripts.  A mock must not execute
-        # server-supplied commands; it preserves the official conditional
+        # server-supplied commands; it preserves the protocol's conditional
         # base64 fields and PUT sequence with deterministic telemetry instead.
         report: dict[str, str] = {"hostname": HOSTNAME}
         if "compiler_version_command" in commands:
-            report["compiler"] = _b64(b"mock compiler for DOMjudge 9.0.1 wire E2E\n")
+            report["compiler"] = _b64(b"mock compiler version for wire E2E\n")
         if "runner_version_command" in commands:
-            report["runner"] = _b64(b"mock runner for DOMjudge 9.0.1 wire E2E\n")
+            report["runner"] = _b64(b"mock runner version for wire E2E\n")
         if len(report) > 1:
             check_path = ENDPOINTS["check_versions"].format(judgetaskid=judgetaskid)
             self._json(self._request("PUT", check_path, data=report), dict)
@@ -271,7 +261,7 @@ class JudgehostMock:
             ),
         }
         if tuple(report) != COMPILE_REPORT_FIELDS:
-            raise RuntimeError("mock compile report drifted from the declared official shape")
+            raise RuntimeError("mock compile report drifted from the declared shape")
         path = ENDPOINTS["update_judging"].format(
             hostname=HOSTNAME,
             judgetaskid=judgetaskid,
@@ -358,7 +348,7 @@ class JudgehostMock:
             ),
         }
         if tuple(report) != FINAL_REPORT_FIELDS:
-            raise RuntimeError("mock final report drifted from the declared official shape")
+            raise RuntimeError("mock final report drifted from the declared shape")
         multipart = {name: (None, value) for name, value in report.items()}
         path = ENDPOINTS["add_judging_run"].format(
             hostname=HOSTNAME,

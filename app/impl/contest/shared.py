@@ -23,6 +23,7 @@ from app.service.statement.constant import DEFAULT_OLYMP_STY
 from app.service.statement.context import normalize_statement_language
 from app.service.statement.render import render_statement_problem_assets_for_language
 from app.service.statement.title import statement_title_from_snapshot
+from app.service.problem_package.statement_samples import hydrate_native_statement_samples
 from app.service.platform.git_process import run_git
 from app.service.verification.runtime import coerce_int, normalize_problem_mode
 from app.impl.workspace.problem_config import read_problem_config
@@ -600,6 +601,10 @@ def _prepare_contest_pdf_problem(
             materialization_id,
             expected_archive_sha256=archive_sha256,
         ) as native:
+            hydrate_native_statement_samples(
+                native,
+                tests_spec_max_bytes=int(_C.TEXTAREA_MAX_BYTES),
+            )
             target_dir = _contest_compile_target(
                 compile_root,
                 "problems",

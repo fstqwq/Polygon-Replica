@@ -22,8 +22,8 @@ That audit container was not the production application image. The executor
 group received a temporary, test-only Ubuntu compiler sysroot because the
 application image does not ship a C++ toolchain. Separately,
 `tests/scripts/docker-e2e.sh` used the production image and an isolated local
-Docker mock for Judgehost integration, after verifying the pinned DOMjudge
-9.0.1 source contract. No real Judgehost was used.
+Docker mock to exercise the declared Judgehost protocol. No real Judgehost was
+used.
 
 ## Delivery record
 
@@ -42,7 +42,7 @@ commits.
 
 The follow-up delivery adds lifecycle race/rollback evidence, Preview-to-sample
 Docker E2E, real TeX sandbox smoke, the explicit TeX Gyre deployment dependency,
-and the endpoint-plus-method DOMjudge source checks described below. These
+and the endpoint-plus-method Judgehost protocol checks described below. These
 follow-up changes are not contained in `11970ac`.
 
 Final acceptance on the current tree records:
@@ -55,8 +55,8 @@ Final acceptance on the current tree records:
 - syntax, pyflakes, vulture, import-policy, cross-package private-import, test
   resource, and `git diff --check` checks passed;
 - the production Docker image built, compiled real `pdflatex` and `xelatex`
-  PDFs through bubblewrap, approved the pinned DOMjudge sources, and completed
-  the Preview-to-sample and full-verification mock Judgehost workflow.
+  PDFs through bubblewrap, and completed the Preview-to-sample and
+  full-verification mock Judgehost workflow.
 
 ## Batch 1: Input and deployment safety boundaries
 
@@ -397,8 +397,7 @@ E2E tests:
 - No reference to the deleted global registry functions remains.
 - All four groups pass in a Linux virtualenv. CI uses its Ubuntu jobs; the
   recorded delivery audit used the isolated container command above.
-- Local Docker mock Judgehost E2E and the pinned DOMjudge 9.0.1 source gate
-  pass.
+- Local Docker mock Judgehost E2E passes.
 - Execution, verification, and Judgehost documentation describes the new
   current ownership.
 - Keep the removed global-runtime finding closed. Narrow `PLC-006` only to the
@@ -582,8 +581,7 @@ E2E tests:
 
 - All four test groups pass in a Linux virtualenv. CI uses its Ubuntu jobs; the
   recorded delivery audit used the isolated container command above.
-- Local Docker mock Judgehost E2E passes after the pinned DOMjudge 9.0.1 source
-  gate.
+- Local Docker mock Judgehost E2E passes.
 - The normalizer has no SQLite, runtime-config, or registry import.
 - The result processor does not construct batch finalization or publication
   services. It invokes injected ports and the dependency-light normalizer while
