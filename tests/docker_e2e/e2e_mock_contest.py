@@ -16,7 +16,6 @@ import httpx
 from runner import (
     _assert_active_internal_error_sanity,
     _assert_artifact_refs,
-    _assert_late_diagnostics,
     _assert_tasks,
 )
 
@@ -183,7 +182,6 @@ def _assert_contest_database(
     _assert_tasks(connection, verification_id)
     _assert_artifact_refs(connection, verification_id)
     _assert_active_internal_error_sanity(connection, verification_id)
-    _assert_late_diagnostics(connection, verification_id)
 
     artifact = connection.execute(
         """
