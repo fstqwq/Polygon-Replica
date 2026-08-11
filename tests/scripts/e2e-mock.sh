@@ -10,7 +10,7 @@ project_suffix="$(date -u +%Y%m%d%H%M%S)-$$-${RANDOM}"
 export COMPOSE_PROJECT_NAME="polygon-replica-e2e-mock-${project_suffix}"
 export POLYGON_REPLICA_E2E_JUDGEHOST_TOKEN="e2e-${project_suffix}-judgehost-token"
 export POLYGON_REPLICA_E2E_ADMIN_PASSWORD="e2e-${project_suffix}-Password-9"
-export POLYGON_REPLICA_E2E_IMAGE="polygon-replica-e2e-mock:${project_suffix}"
+export POLYGON_REPLICA_E2E_IMAGE="${POLYGON_REPLICA_E2E_IMAGE:-polygon-replica-e2e-mock:${project_suffix}}"
 
 compose=(
   docker compose
@@ -37,7 +37,11 @@ trap cleanup EXIT
 cd -- "$REPO_ROOT"
 docker compose version >/dev/null
 
-"${compose[@]}" build app
+if [[ "${POLYGON_REPLICA_E2E_IMAGE_PREBUILT:-0}" == "1" ]]; then
+  docker image inspect "$POLYGON_REPLICA_E2E_IMAGE" >/dev/null
+else
+  "${compose[@]}" build app
+fi
 
 # Start the unmodified production entrypoint against entirely fresh volumes.
 "${compose[@]}" up --detach --wait app

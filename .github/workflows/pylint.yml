@@ -67,10 +67,24 @@ jobs:
     timeout-minutes: 35
     permissions:
       contents: read
+    env:
+      POLYGON_REPLICA_E2E_IMAGE: polygon-replica-e2e-mock:${{ github.sha }}
+      POLYGON_REPLICA_E2E_IMAGE_PREBUILT: "1"
     steps:
     - uses: actions/checkout@v6
       with:
         persist-credentials: false
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v4
+    - name: Build E2E image
+      uses: docker/build-push-action@v7
+      with:
+        context: .
+        file: ./Dockerfile
+        load: true
+        tags: ${{ env.POLYGON_REPLICA_E2E_IMAGE }}
+        cache-from: type=gha,scope=e2e-mock
+        cache-to: type=gha,mode=max,scope=e2e-mock
     - name: Configure sandbox namespaces
       run: |
         sudo sysctl -w kernel.unprivileged_userns_clone=1 || true
