@@ -16,7 +16,11 @@ from app.service.judgehost.batch_scheduler_models import (
 )
 from app.service.judgehost.case_result import build_case_result
 from app.service.judgehost.identity import domjudge_submit_id
-from app.service.judgehost.toolchain_versions import ToolchainVersionCollector
+from app.service.judgehost.toolchain_versions import (
+    ToolchainTelemetryHandler,
+    ToolchainVersionCollector,
+    ToolchainVersionReport,
+)
 from app.service.platform.hashing import compile_command_digest
 from app.service.platform.runtime_blob_store import PayloadFile
 
@@ -180,6 +184,60 @@ class TestToolchainVersionCollector(unittest.TestCase):
         self.assertEqual(set(toolchains), {"cpp", "java"})
         self.assertEqual(toolchains["cpp"].compiler, "g++ 14")
         self.assertEqual(toolchains["java"].runner, "java 21")
+
+    def test_handler_records_versions_event_after_telemetry(self) -> None:
+        events: list[dict[str, object]] = []
+        handler = ToolchainTelemetryHandler(
+            self.state,
+            lambda **event: events.append(event),
+        )
+
+        handler.record_report(
+            ToolchainVersionReport(
+                judgetask_id=101,
+                hostname="judgehost-a",
+                compiler=self._encoded(b"g++ 14"),
+                runner="",
+                task_id="task-101",
+                run_id="run-101",
+            )
+        )
+
+        self.assertEqual(
+            events,
+            [
+                {
+                    "hostname": "judgehost-a",
+                    "action": "versions",
+                    "task_id": "task-101",
+                    "run_id": "run-101",
+                }
+            ],
+        )
+
+    def test_handler_contains_optional_telemetry_failures(self) -> None:
+        events: list[dict[str, object]] = []
+        handler = ToolchainTelemetryHandler(
+            self.state,
+            lambda **event: events.append(event),
+        )
+        assert self.scheduler.batch is not None
+        self.scheduler.batch["compile_config_json"] = "not-json"
+
+        self.assertEqual(handler.version_commands(101), {})
+        handler.record_report(
+            ToolchainVersionReport(
+                judgetask_id=101,
+                hostname="judgehost-a",
+                compiler=self._encoded(b"g++ 14"),
+                runner="",
+                task_id="task-101",
+                run_id="run-101",
+            )
+        )
+
+        self.assertEqual(events, [])
+        self.assertEqual(self.state.host_toolchains, {})
 
 
 def _result(test_name: str):

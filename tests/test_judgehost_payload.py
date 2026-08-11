@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import ast
 import base64
 import hashlib
 import unittest
+from pathlib import Path
 
 from app.config import build_config_values
+from app.service.judgehost.diagnostic_payload import parse_diagnostic_payload
 from app.service.judgehost.limits import run_memory_limit_kb
 from app.service.judgehost.pass_bundle import BundledPass, PassBundle
 from app.service.judgehost.result_normalizer import (
@@ -328,6 +331,56 @@ class TestJudgehostPayload(unittest.TestCase):
         encoded = base64.b64encode(blob).decode("ascii")
         self.assertEqual(DomjudgeToolkit.payload_blob_bytes(blob), blob)
         self.assertEqual(DomjudgeToolkit.payload_blob_bytes(encoded), blob)
+
+    def test_diagnostic_payload_selects_failure_context_without_raw_blob(
+        self,
+    ) -> None:
+        judgehost_log = base64.b64encode(
+            b"setup\nComparing failed\ncompare script output: invalid\n"
+        ).decode("ascii")
+        raw_archive = base64.b64encode(b"x" * 96).decode("ascii")
+
+        parsed = parse_diagnostic_payload(
+            {
+                "judgehostlog": judgehost_log,
+                "full_debug": raw_archive,
+                "disabled": "unexpected disabled-object error",
+            }
+        )
+
+        self.assertIn("Comparing failed", parsed.text)
+        self.assertIn("compare script output: invalid", parsed.text)
+        self.assertNotIn(raw_archive, parsed.text)
+        self.assertNotIn("disabled-object", parsed.text)
+
+    def test_diagnostic_payload_owner_is_dependency_light(self) -> None:
+        module_path = (
+            Path(__file__).resolve().parents[1]
+            / "app"
+            / "service"
+            / "judgehost"
+            / "diagnostic_payload.py"
+        )
+        tree = ast.parse(module_path.read_text(encoding="utf-8"))
+        imported_modules: set[str] = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                imported_modules.update(alias.name for alias in node.names)
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                imported_modules.add(node.module)
+        forbidden_prefixes = (
+            "app.db",
+            "app.impl",
+            "app.service.judgehost.batch_scheduler",
+            "app.service.verification",
+        )
+        self.assertFalse(
+            {
+                module_name
+                for module_name in imported_modules
+                if module_name.startswith(forbidden_prefixes)
+            }
+        )
 
     def test_feedback_text_preserves_lines_and_redacts_internal_paths(self) -> None:
         self.assertEqual(

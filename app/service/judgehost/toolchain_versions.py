@@ -6,7 +6,7 @@ import json
 import logging
 import shlex
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Protocol, cast
 
 from app.db import now_iso
 from app.service.platform.hashing import compile_command_digest
@@ -40,6 +40,30 @@ class HostToolchainTelemetry:
 class _VersionContext:
     language_id: str
     lease_owner: str
+
+
+class HostTelemetryEventSink(Protocol):
+    def __call__(
+        self,
+        *,
+        hostname: str,
+        action: str,
+        task_id: str,
+        run_id: str,
+    ) -> None:
+        """Record one accepted host telemetry event."""
+
+        ...
+
+
+@dataclass(frozen=True, slots=True)
+class ToolchainVersionReport:
+    judgetask_id: int
+    hostname: str
+    compiler: str
+    runner: str
+    task_id: str
+    run_id: str
 
 
 class ToolchainVersionCollector:
@@ -195,3 +219,57 @@ class ToolchainVersionCollector:
             host_toolchains = self._state.host_toolchains.setdefault(hostname, {})
             host_toolchains[context.language_id] = telemetry
         return True
+
+
+class ToolchainTelemetryHandler:
+    """Contain optional telemetry failures outside callback orchestration."""
+
+    def __init__(
+        self,
+        state: JudgehostState,
+        event_sink: HostTelemetryEventSink,
+    ) -> None:
+        self._collector = ToolchainVersionCollector(state)
+        self._event_sink = event_sink
+
+    def version_commands(self, judgetask_id: int) -> dict[str, object]:
+        """Return optional commands while containing telemetry-only failures."""
+
+        try:
+            return self._collector.version_commands(int(judgetask_id))
+        except Exception:
+            logger.exception(
+                "failed to prepare judgehost toolchain version commands "
+                "judgetask_id=%s",
+                judgetask_id,
+            )
+            return {}
+
+    def record_report(
+        self,
+        report: ToolchainVersionReport,
+    ) -> None:
+        """Store an authenticated report without affecting task completion."""
+
+        try:
+            recorded = self._collector.record_report(
+                int(report.judgetask_id),
+                hostname=report.hostname,
+                compiler=report.compiler,
+                runner=report.runner,
+            )
+        except Exception:
+            logger.exception(
+                "failed to record judgehost toolchain versions "
+                "judgetask_id=%s hostname=%s",
+                report.judgetask_id,
+                report.hostname,
+            )
+            return
+        if recorded:
+            self._event_sink(
+                hostname=report.hostname,
+                action="versions",
+                task_id=report.task_id,
+                run_id=report.run_id,
+            )

@@ -1,61 +1,59 @@
 from __future__ import annotations
 
 import base64
-import logging
 import json
+import logging
 import re
 import time
 from pathlib import Path
 from typing import cast
 
-from app.service.judgehost.shared import (
-    domjudge_text,
-    domjudge_lower_text,
-)
 from app.db import now_iso
+from app.service.judgehost.artifact_capture import (
+    CaseArtifactCapture,
+    CaseArtifactRequest,
+)
+from app.service.judgehost.batch_scheduler_models import (
+    CaseCallbackReceipt,
+    CaseClaimBusy,
+    CaseReportTelemetry,
+)
+from app.service.judgehost.core import JudgehostCore
+from app.service.judgehost.diagnostic_payload import parse_diagnostic_payload
 from app.service.judgehost.domjudge.cache import domjudge_json_hash
-from app.service.judgehost.domjudge.client import domjudge_parse_script_id, domjudge_script_hash_field, domjudge_script_id
-from app.service.judgehost.limits import truncate_stored_log_bytes, run_output_kb
+from app.service.judgehost.domjudge.client import (
+    domjudge_parse_script_id,
+    domjudge_script_hash_field,
+    domjudge_script_id,
+)
 from app.service.judgehost.file_stream import DomjudgeDownloadFile
-from app.service.platform.runtime_blob_store import PayloadFile
-from app.service.platform.error_text import aux_display_text_limit_bytes
+from app.service.judgehost.finalization import BatchFinalizationPort
+from app.service.judgehost.limits import run_output_kb, truncate_stored_log_bytes
+from app.service.judgehost.publication import (
+    JudgehostCaseCompletionPublisher,
+    JudgehostCaseDiagnosticPublisher,
+)
+from app.service.judgehost.result_normalizer import (
+    CapturedJudgehostCase,
+    normalize_captured_case,
+)
 from app.service.judgehost.runtime import (
     domjudge_bool,
     domjudge_feedback_text_from_text,
     domjudge_parse_float,
     domjudge_parse_int,
 )
-from app.service.judgehost.core import JudgehostCore
-from app.service.judgehost.batch_scheduler_models import (
-    CaseCallbackReceipt,
-    CaseClaimBusy,
-    CaseReportTelemetry,
-)
-from app.service.judgehost.finalization import BatchFinalizationPort
-from app.service.judgehost.publication import (
-    JudgehostCaseCompletionPublisher,
-    JudgehostCaseDiagnosticPublisher,
-)
-from app.service.judgehost.result_normalizer import (
-    CapturedCaseArtifact,
-    CapturedJudgehostCase,
-    normalize_captured_case,
-    pass_cache_file_name,
-)
+from app.service.judgehost.shared import domjudge_lower_text, domjudge_text
 from app.service.judgehost.state import JudgehostState
 from app.service.judgehost.task_queue import TaskQueue
-from app.service.judgehost.toolchain_versions import ToolchainVersionCollector
+from app.service.judgehost.toolchain_versions import (
+    ToolchainTelemetryHandler,
+    ToolchainVersionReport,
+)
 from app.service.judgehost.toolkit import DomjudgeToolkit
-from app.service.judgehost.pass_bundle import (
-    InvalidPassBundle,
-    PassBundle,
-    parse_pass_bundle,
-    split_pass_feedback,
-)
-from app.service.verification.execution_result import (
-    CAPTURE_COMPLETE,
-    execution_result_json,
-)
+from app.service.platform.error_text import aux_display_text_limit_bytes
+from app.service.platform.runtime_blob_store import PayloadFile
+from app.service.verification.execution_result import execution_result_json
 
 logger = logging.getLogger(__name__)
 
@@ -71,8 +69,6 @@ class ResultProcessor:
     STATUS_FAILED = "failed"
     CASE_CACHE_KIND = DomjudgeToolkit.CASE_CACHE_KIND
     _TASK_KIND_COMPILE_ONLY = "compile-only"
-    _TASK_KIND_MAIN_CORRECT = "main-correct"
-    _TASK_KIND_SOLUTION_RUN = "solution-run"
 
     def __init__(
         self,
@@ -89,7 +85,11 @@ class ResultProcessor:
         self._core = core
         self._queue = queue
         self._toolkit = toolkit
-        self._toolchain_versions = ToolchainVersionCollector(state)
+        self._artifact_capture = CaseArtifactCapture(state.runtime_blob_store)
+        self._toolchain_telemetry = ToolchainTelemetryHandler(
+            state,
+            queue._record_host_event_conn,
+        )
         self._diagnostic_publisher = diagnostic_publisher
         self._completion_publisher = completion_publisher
         self._batch_finalizer = batch_finalizer
@@ -286,14 +286,7 @@ class ResultProcessor:
         return self._domjudge_executable_rows(kind=token, executable_hash=executable_hash)
 
     def domjudge_get_version_commands(self, judgetask_id: int) -> dict[str, object]:
-        try:
-            return self._toolchain_versions.version_commands(int(judgetask_id))
-        except Exception:
-            logger.exception(
-                "failed to prepare judgehost toolchain version commands judgetask_id=%s",
-                judgetask_id,
-            )
-            return {}
+        return self._toolchain_telemetry.version_commands(int(judgetask_id))
 
     def domjudge_check_versions(
         self,
@@ -324,28 +317,16 @@ class ResultProcessor:
             )
             if not expected_hostname or expected_hostname != safe_host:
                 return {}
-            try:
-                recorded = self._toolchain_versions.record_report(
-                    int(judgetask_id),
+            self._toolchain_telemetry.record_report(
+                ToolchainVersionReport(
+                    judgetask_id=int(judgetask_id),
                     hostname=safe_host,
                     compiler=compiler,
                     runner=runner,
-                )
-            except Exception:
-                logger.exception(
-                    "failed to record judgehost toolchain versions "
-                    "judgetask_id=%s hostname=%s",
-                    judgetask_id,
-                    hostname,
-                )
-                recorded = False
-            if recorded:
-                self._queue._record_host_event_conn(
-                    hostname=safe_host,
-                    action="versions",
                     task_id=receipt.task_id,
                     run_id=receipt.run_id,
                 )
+            )
             return {}
         finally:
             self._release_case_callback_receipt(receipt)
@@ -779,57 +760,9 @@ class ResultProcessor:
             except Exception:
                 return {}
 
-        payload_files: dict[str, bytes] = {}
-
-        def _capture_payload_file(
-            name: str,
-            value: object,
-            *,
-            allow_empty: bool = False,
-        ) -> bytes:
-            if value is None:
-                if allow_empty:
-                    payload_files[name] = b""
-                return b""
-            raw = self._toolkit.payload_blob_bytes(value)
-            if (not raw) and (not allow_empty):
-                return b""
-            payload_files[name] = raw
-            return raw
-
-        if not compile_only:
-            # Keep program.out intact. For generate-input tasks this is
-            # semantic data consumed by downstream verification tasks.
-            _capture_payload_file(
-                "program.out",
-                payload.get("output_run"),
-                allow_empty=True,
-            )
-        _capture_payload_file("program.err", payload.get("output_error"), allow_empty=True)
-        _capture_payload_file("system.out", payload.get("output_system"), allow_empty=True)
-        _capture_payload_file("judgemessage.txt", payload.get("output_diff"), allow_empty=True)
-        _capture_payload_file(
-            "program.meta",
-            payload.get("metadata"),
-            allow_empty=True,
-        )
-        _capture_payload_file(
-            "compare.meta",
-            payload.get("compare_metadata"),
-            allow_empty=True,
-        )
-        team_message_blob = self._toolkit.payload_blob_bytes(payload.get("team_message"))
-
         interactive = domjudge_lower_text(row["mode"]) == "interactive"
         run_cfg_for_capture = _load_json_object(row["run_config_json"])
         pass_limit = max(1, domjudge_parse_int(run_cfg_for_capture.get("pass_limit"), 1))
-        capture_expected = (
-            task_kind in {
-                self._TASK_KIND_MAIN_CORRECT,
-                self._TASK_KIND_SOLUTION_RUN,
-            }
-            and (interactive or pass_limit > 1)
-        )
         bundle_limit_bytes = min(
             8 * 1024 * 1024,
             max(
@@ -843,78 +776,16 @@ class ResultProcessor:
             ),
         )
         callback_pass = max(0, domjudge_parse_int(payload.get("pass"), 0))
-        pass_bundle: PassBundle | None = None
-        capture_warning = ""
-        rejected_bundle = False
-        if capture_expected:
-            try:
-                pass_bundle = parse_pass_bundle(
-                    team_message_blob,
-                    max_bundle_bytes=bundle_limit_bytes,
-                    max_member_bytes=bundle_limit_bytes,
-                )
-                if (
-                    pass_bundle is not None
-                    and callback_pass > 0
-                    and callback_pass != pass_bundle.final_pass_number
-                ):
-                    raise InvalidPassBundle(
-                        "callback pass does not match final-pass-number"
-                    )
-            except InvalidPassBundle as exc:
-                pass_bundle = None
-                rejected_bundle = True
-                capture_warning = (
-                    "historical pass artifact capture was incomplete: " + str(exc)
-                )
-        if pass_bundle is None:
-            payload_files["teammessage.txt"] = (
-                b"" if rejected_bundle else team_message_blob
+        prepared_artifacts = self._artifact_capture.prepare(
+            CaseArtifactRequest(
+                payload=payload,
+                task_kind=task_kind,
+                interactive=interactive,
+                pass_limit=pass_limit,
+                callback_pass=callback_pass,
+                bundle_limit_bytes=bundle_limit_bytes,
             )
-            if capture_expected and not capture_warning:
-                capture_warning = "historical pass artifact capture was incomplete: bundle missing"
-        else:
-            historical_feedback: dict[int, bytes] = {}
-            final_feedback = payload_files["judgemessage.txt"]
-            try:
-                historical_feedback, final_feedback = split_pass_feedback(
-                    pass_bundle,
-                    final_feedback,
-                )
-            except InvalidPassBundle as exc:
-                capture_warning = (
-                    "historical pass artifact capture was incomplete: " + str(exc)
-                )
-            for bundled_pass in pass_bundle.passes:
-                for name, content in bundled_pass.files.items():
-                    stored_content = historical_feedback.get(
-                        bundled_pass.number,
-                        content,
-                    ) if name == "judgemessage.txt" else content
-                    cache_name = pass_cache_file_name(bundled_pass.number, name)
-                    payload_files[cache_name] = stored_content
-            final_files = pass_bundle.pass_files(pass_bundle.final_pass_number)
-            payload_files["teammessage.txt"] = final_files["teammessage.txt"]
-            payload_files["judgemessage.txt"] = final_feedback
-            reduced: dict[str, list[int]] = {}
-            for bundled_pass in pass_bundle.passes[:-1]:
-                if bundled_pass.capture_status != CAPTURE_COMPLETE:
-                    reduced.setdefault(bundled_pass.capture_status, []).append(
-                        bundled_pass.number
-                    )
-            if reduced:
-                groups = [
-                    f"passes {', '.join(str(number) for number in numbers)} {status}"
-                    for status, numbers in reduced.items()
-                ]
-                reduced_warning = (
-                    "historical pass artifacts were reduced: " + "; ".join(groups)
-                )
-                capture_warning = (
-                    f"{capture_warning}; {reduced_warning}"
-                    if capture_warning
-                    else reduced_warning
-                )
+        )
 
         source_name = domjudge_text(row["source_name"])
         source_hash = domjudge_lower_text(row["source_hash"])
@@ -958,18 +829,7 @@ class ResultProcessor:
             )
             return 1
 
-        cache_files: dict[str, bytes] = dict(payload_files)
-        cached_payloads = {
-            name: self._s.runtime_blob_store.put_bytes(content)
-            for name, content in cache_files.items()
-        }
-        captured_artifacts = {
-            name: CapturedCaseArtifact(
-                content=cache_files[name],
-                blob_ref=payload_file.blob_ref or "",
-            )
-            for name, payload_file in cached_payloads.items()
-        }
+        captured_artifacts = self._artifact_capture.capture(prepared_artifacts)
         debug_context = self._s.batch_scheduler.case_debug_context(case_id)
         debug_text = ""
         if debug_context is not None:
@@ -991,9 +851,9 @@ class ResultProcessor:
                 ),
                 score_text=domjudge_text(payload.get("score")),
                 run_config=run_cfg,
-                artifacts=captured_artifacts,
-                pass_bundle=pass_bundle,
-                capture_warning=capture_warning,
+                artifacts=captured_artifacts.artifacts,
+                pass_bundle=captured_artifacts.pass_bundle,
+                capture_warning=captured_artifacts.warning,
                 debug_text=debug_text,
             ),
             limit_bytes=self._display_text_limit_bytes(),
@@ -1037,7 +897,7 @@ class ResultProcessor:
             memory_kb=memory_kb,
             score_text=score_text,
             result_json=execution_result_json(case_result),
-            files=cached_payloads,
+            files=captured_artifacts.payloads,
             shortcut_eligible=shortcut_eligible,
         )
         now_text = now_iso()
@@ -1147,9 +1007,9 @@ class ResultProcessor:
             if not expected_hostname or safe_host != expected_hostname:
                 raise RuntimeError("judgehost does not own judging run")
             self._touch_task_verification(receipt.task_id)
-            payload_text = self._domjudge_debug_payload_text(
+            payload_text = parse_diagnostic_payload(
                 {} if payload is None else payload
-            )
+            ).text
             diagnostic_text = safe_desc
             if payload_text:
                 if safe_desc.lower() in payload_text.lower():
@@ -1202,165 +1062,6 @@ class ResultProcessor:
         finally:
             self._release_case_callback_receipt(receipt)
 
-    def _domjudge_debug_payload_text(self, payload: dict[str, object]) -> str:
-        if not payload:
-            return ""
-        interesting_markers = (
-            "fail",
-            "error",
-            "exception",
-            "trace",
-            "crash",
-            "compare",
-            "expected",
-            "unexpected",
-        )
-        handled_keys = {
-            "judgehostlog",
-            "description",
-            "message",
-            "error",
-            "detail",
-            "details",
-            "stderr",
-            "stdout",
-            "output_error",
-            "output_system",
-            "output_diff",
-            "compare_output",
-            "compare_error",
-            "judgemessage",
-            "team_message",
-        }
-
-        def _decode_maybe_b64(text: str) -> str:
-            if not text:
-                return ""
-            compact = "".join(text.split())
-            if compact and (len(compact) % 4 == 0) and re.fullmatch(r"[A-Za-z0-9+/=]+", compact):
-                try:
-                    blob = self._toolkit.b64_decode(compact)
-                except RuntimeError:
-                    blob = b""
-                if blob:
-                    decoded = blob.decode("utf-8", errors="replace").strip()
-                    if decoded:
-                        printable = sum((ch.isprintable() or ch in {"\n", "\r", "\t"}) for ch in decoded)
-                        if printable >= int(len(decoded) * 0.9):
-                            return decoded
-            return text
-
-        def _looks_like_raw_b64(text: str) -> bool:
-            compact = "".join(text.split())
-            return bool(compact) and len(compact) >= 64 and (len(compact) % 4 == 0) and bool(re.fullmatch(r"[A-Za-z0-9+/=]+", compact))
-
-        lines: list[str] = []
-        seen: set[str] = set()
-
-        def _append_text(text: str) -> None:
-            decoded = _decode_maybe_b64(text)
-            if not decoded:
-                return
-            for raw_line in decoded.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
-                line = domjudge_text(raw_line)
-                if not line:
-                    continue
-                token = line.lower()
-                if token in seen:
-                    continue
-                seen.add(token)
-                lines.append(line)
-                if len(lines) >= 16:
-                    return
-
-        def _append_judgehost_log(text: str) -> None:
-            decoded = _decode_maybe_b64(text)
-            if not decoded:
-                return
-            raw_lines = [domjudge_text(item) for item in decoded.replace("\r\n", "\n").replace("\r", "\n").split("\n")]
-            raw_lines = [item for item in raw_lines if item]
-            if not raw_lines:
-                return
-            interesting: list[str] = []
-            for idx, line in enumerate(raw_lines):
-                low = line.lower()
-                if any(
-                    marker in low
-                    for marker in (
-                        "comparing failed",
-                        "compare script output",
-                        "expected one of 42/43",
-                        "testcase_run.sh",
-                        "fail ",
-                        "fail:",
-                        "internal error",
-                    )
-                ):
-                    for near in raw_lines[max(0, idx - 1) : min(len(raw_lines), idx + 2)]:
-                        if near:
-                            interesting.append(near)
-            if not interesting:
-                interesting = raw_lines[-8:]
-            for line in interesting:
-                _append_text(line)
-                if len(lines) >= 16:
-                    return
-
-        def _walk_scalars(value: object, *, key_name: str="") -> list[str]:
-            out: list[str] = []
-            key_token = domjudge_lower_text(key_name)
-            if key_token in handled_keys or key_token == "disabled":
-                return out
-            if isinstance(value, dict):
-                for sub_key, sub_value in value.items():
-                    out.extend(_walk_scalars(sub_value, key_name=domjudge_text(sub_key)))
-                    if len(out) >= 32:
-                        break
-                return out
-            if isinstance(value, list):
-                for item in value:
-                    out.extend(_walk_scalars(item, key_name=key_name))
-                    if len(out) >= 32:
-                        break
-                return out
-            decoded = _decode_maybe_b64("" if value is None else str(value))
-            if not decoded or _looks_like_raw_b64(decoded):
-                return out
-            for raw_line in decoded.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
-                text = domjudge_text(raw_line)
-                if not text:
-                    continue
-                low = text.lower()
-                if any(marker in low for marker in interesting_markers):
-                    out.append(text)
-                if len(out) >= 32:
-                    break
-            return out
-
-        for key in handled_keys:
-            if key not in payload:
-                continue
-            value = payload[key]
-            text = "" if value is None else str(value)
-            if key == "judgehostlog":
-                _append_judgehost_log(text)
-            else:
-                _append_text(text)
-            if len(lines) >= 16:
-                break
-        if len(lines) < 16:
-            for text in _walk_scalars(payload):
-                _append_text(text)
-                if len(lines) >= 16:
-                    break
-        if not lines:
-            return ""
-        compact = "\n".join(lines)
-        if len(compact) > 4000:
-            compact = compact[:4000].rstrip()
-        return compact
-
-
     def domjudge_add_debug_info(self, *, hostname: str, judgetask_id: int, payload: dict[str, object] | None = None) -> None:
         safe_host = self._core.normalize_hostname(hostname)
         case_id = int(judgetask_id)
@@ -1391,7 +1092,7 @@ class ResultProcessor:
                     case_id,
                     sorted(debug_payload.keys()),
                 )
-            debug_text = self._domjudge_debug_payload_text(debug_payload)
+            debug_text = parse_diagnostic_payload(debug_payload).text
             if debug_text:
                 disposition = self._diagnostic_publisher.record_debug_info(
                     case_id,
