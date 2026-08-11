@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import app.main_constant as _K
+
 import logging
 from pathlib import Path
 from typing import Annotated, TypedDict, cast
@@ -48,7 +50,7 @@ from app.service.problem.readiness import WorkspaceReadinessSubject
 from app.service.repository.revision import workspace_revision_info
 from app.service.problem.resource_limits import resource_limit_display
 
-_C = config.constants
+_C = config.config_values
 logger = logging.getLogger(__name__)
 
 
@@ -149,15 +151,15 @@ def page_ctx(
     workspace_head = workspace_head_raw or ''
     workspace_dirty = bool(ctx['workspace'].get('dirty'))
     _payload, general_cfg, _cfg_path = read_problem_config(workspace_path)
-    safe_mode = normalize_problem_mode(general_cfg.get('mode'), str(_C.GENERAL_CONFIG_DEFAULTS['mode']))
+    safe_mode = normalize_problem_mode(general_cfg.get('mode'), str(_K.GENERAL_CONFIG_DEFAULTS['mode']))
     ctx['problem_mode'] = safe_mode
-    time_limit_ms = coerce_int(general_cfg.get('time_limit_ms'), int(_C.GENERAL_CONFIG_DEFAULTS['time_limit_ms']), _C.GENERAL_TIME_LIMIT_MIN_MS, _C.GENERAL_TIME_LIMIT_MAX_MS)
-    memory_limit_mb = coerce_int(general_cfg.get('memory_limit_mb'), int(_C.GENERAL_CONFIG_DEFAULTS['memory_limit_mb']), _C.GENERAL_MEMORY_LIMIT_MIN_MB, _C.GENERAL_MEMORY_LIMIT_MAX_MB)
+    time_limit_ms = coerce_int(general_cfg.get('time_limit_ms'), int(_K.GENERAL_CONFIG_DEFAULTS['time_limit_ms']), _C.GENERAL_TIME_LIMIT_MIN_MS, _C.GENERAL_TIME_LIMIT_MAX_MS)
+    memory_limit_mb = coerce_int(general_cfg.get('memory_limit_mb'), int(_K.GENERAL_CONFIG_DEFAULTS['memory_limit_mb']), _C.GENERAL_MEMORY_LIMIT_MIN_MB, _C.GENERAL_MEMORY_LIMIT_MAX_MB)
     ctx['general_cfg'] = {
         'time_limit_ms': time_limit_ms,
         'memory_limit_mb': memory_limit_mb,
         'mode': safe_mode,
-        'pass_limit': normalize_pass_limit(general_cfg.get('pass_limit'), int(_C.GENERAL_CONFIG_DEFAULTS['pass_limit'])),
+        'pass_limit': normalize_pass_limit(general_cfg.get('pass_limit'), int(_K.GENERAL_CONFIG_DEFAULTS['pass_limit'])),
         **resource_limit_display(time_limit_ms, memory_limit_mb),
     }
     ctx['system_limit_info'] = _system_limit_info()
@@ -353,10 +355,10 @@ def _build_problem_nav_status(ctx: dict) -> dict[str, dict[str, object]]:
     workspace_path_text = cast(str | None, workspace_path_raw) or ''
     workspace_path = Path(workspace_path_text) if workspace_path_text else Path('.')
     general_cfg = cast(dict[str, object], ctx['general_cfg'])
-    time_limit_ms = _to_int(general_cfg.get('time_limit_ms'), int(_C.GENERAL_CONFIG_DEFAULTS['time_limit_ms']))
-    memory_limit_mb = _to_int(general_cfg.get('memory_limit_mb'), int(_C.GENERAL_CONFIG_DEFAULTS['memory_limit_mb']))
-    mode_text = normalize_problem_mode(general_cfg.get('mode'), str(_C.GENERAL_CONFIG_DEFAULTS['mode']))
-    pass_limit = normalize_pass_limit(general_cfg.get('pass_limit'), int(_C.GENERAL_CONFIG_DEFAULTS['pass_limit']))
+    time_limit_ms = _to_int(general_cfg.get('time_limit_ms'), int(_K.GENERAL_CONFIG_DEFAULTS['time_limit_ms']))
+    memory_limit_mb = _to_int(general_cfg.get('memory_limit_mb'), int(_K.GENERAL_CONFIG_DEFAULTS['memory_limit_mb']))
+    mode_text = normalize_problem_mode(general_cfg.get('mode'), str(_K.GENERAL_CONFIG_DEFAULTS['mode']))
+    pass_limit = normalize_pass_limit(general_cfg.get('pass_limit'), int(_K.GENERAL_CONFIG_DEFAULTS['pass_limit']))
     time_text = _compact_time_limit_label(time_limit_ms)
     memory_text = _compact_memory_limit_label(memory_limit_mb)
     general_parts = [time_text, memory_text]
@@ -409,7 +411,7 @@ def _build_problem_nav_status(ctx: dict) -> dict[str, dict[str, object]]:
     standard_checker = cast(str | None, checker_status.get('standard_checker')) or ''
     if checker_applies and standard_checker:
         std_name = standard_checker[5:] if standard_checker.startswith('std::') else standard_checker
-        description = str(_C.STANDARD_CHECKER_DESCRIPTIONS.get(std_name, 'general-purpose standard checker from testlib'))
+        description = str(_K.STANDARD_CHECKER_DESCRIPTIONS.get(std_name, 'general-purpose standard checker from testlib'))
         checker_hint = f'Matches standard checker: {standard_checker} - {description}'
         checker_text = standard_checker
     nav['checker'] = {
@@ -507,7 +509,7 @@ def render_workspace_page(request: Request, problem: str, user: Annotated[str, D
     has_destructive_sudo = has_sudo_session(
         request,
         user_id=int(ctx['user']['id']),
-        scope=str(_C.SUDO_SCOPE_DESTRUCTIVE),
+        scope=str(_K.SUDO_SCOPE_DESTRUCTIVE),
     )
     if show_access_admin:
         acl_entries = problem_acl_entries(int(ctx['problem']['id']))

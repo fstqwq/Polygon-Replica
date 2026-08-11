@@ -21,6 +21,7 @@ class TestRunDisplay(unittest.TestCase):
                     "error": "",
                 }
             ],
+            limit_bytes=2048,
         )
 
         self.assertEqual(reason, "ac_python.py: required=[AC], allowed=[AC], got=[TL]")
@@ -36,6 +37,7 @@ class TestRunDisplay(unittest.TestCase):
                     "error": "cancelled on service startup",
                 }
             ],
+            limit_bytes=2048,
         )
 
         self.assertEqual(reason, "luangao.cpp: cancelled on service startup")
@@ -50,6 +52,7 @@ class TestRunDisplay(unittest.TestCase):
                     "error": "",
                 }
             ],
+            limit_bytes=2048,
         )
 
         self.assertEqual(reason, "")

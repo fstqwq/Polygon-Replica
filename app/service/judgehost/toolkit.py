@@ -14,7 +14,7 @@ from app.service.judgehost.domjudge.cache import (
 )
 from app.service.judgehost.shared import (
     _DOMJUDGE_CONTEST_ID_RE,
-    domjudge_config_from_constants,
+    domjudge_config_from_snapshot,
     domjudge_hosts_payload,
     domjudge_languages_payload,
     domjudge_lower_text,
@@ -310,12 +310,12 @@ class DomjudgeToolkit:
         if manual_validate_only:
             return compile_command_digest("skip.compile", [])
         language, _exts = self.language_extensions(source_name)
-        spec = compile_spec(self._s.constants, language)
+        spec = compile_spec(self._s.config_values, language)
         return compile_command_digest(spec.command, spec.digest_arguments)
 
     def public_compile_specs(self) -> list[dict[str, object]]:
         specs = (
-            compile_spec(self._s.constants, language)
+            compile_spec(self._s.config_values, language)
             for language in ("c", "cpp", "java", "py")
         )
         return [
@@ -361,7 +361,7 @@ class DomjudgeToolkit:
         if manual_validate_only:
             return self.load_script_asset("skip.compile").encode("utf-8")
         language, _exts = self.language_extensions(source_name)
-        spec = compile_spec(self._s.constants, language)
+        spec = compile_spec(self._s.config_values, language)
         command = " ".join(
             shlex.quote(token) for token in (spec.command, *spec.command_arguments)
         )
@@ -389,7 +389,7 @@ class DomjudgeToolkit:
         return rendered.encode("utf-8")
 
     def cpp_executable_build_script(self, source_name: str, *, role: str) -> bytes:
-        compiler = domjudge_text(getattr(self._s.constants, "TOOLCHAIN_CPP_COMPILER", "g++"), default="g++")
+        compiler = str(self._s.config_values.TOOLCHAIN_CPP_COMPILER)
         safe_source = shlex.quote(domjudge_path_name(source_name, default="interactor.cpp"))
         safe_role = domjudge_text(role, default="executable")
         template = self.load_script_asset(
@@ -547,7 +547,7 @@ class DomjudgeToolkit:
         return self.load_script_asset(script_name).encode("utf-8")
 
     def config(self) -> dict[str, object]:
-        return domjudge_config_from_constants(self._s.constants)
+        return domjudge_config_from_snapshot(self._s.config_values.snapshot())
 
     @staticmethod
     def languages() -> list[dict[str, object]]:

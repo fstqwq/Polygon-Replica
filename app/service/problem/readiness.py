@@ -300,6 +300,7 @@ class ProblemReadinessService:
                     task_hint = verification_task_failure_hint(
                         self.verification_service.task_store,
                         row["id"],
+                        limit_bytes=_REASON_LIMIT_BYTES,
                     )
                 parts.append(task_hint or error_text or "verification failed")
             elif sanity_attention:

@@ -19,7 +19,7 @@ from app.impl.workspace.context_ui import page_ctx
 from app.main_util import enforce_textarea_max_bytes
 from app.service.platform.workspace_path import normalize_component_source_path, safe_workspace_path
 
-_C = config.constants
+_C = config.config_values
 
 
 def _generator_template_for_target(path: str) -> str:
@@ -119,7 +119,11 @@ def generator_save_source(
     json_requested = str(response_mode or '').strip().lower() == 'json'
     try:
         target = normalize_component_source_path(path, 'generators', 'generator.cpp')
-        safe_content = enforce_textarea_max_bytes(content, label='generator source')
+        safe_content = enforce_textarea_max_bytes(
+            content,
+            label='generator source',
+            max_bytes=int(_C.TEXTAREA_MAX_BYTES),
+        )
         with config.workspace_service.workspace_lock(workspace):
             target_abs = safe_workspace_path(workspace, target)
             target_existed_before = bool(target_abs.exists() and target_abs.is_file() and (not target_abs.is_symlink()))

@@ -1,9 +1,11 @@
 from __future__ import annotations
-import io
+
+import app.main_constant as _K
+from contextlib import contextmanager
 import re
 import shutil
 import uuid
-import zipfile
+from collections.abc import Iterator
 from pathlib import Path
 from typing import TypedDict, cast
 
@@ -13,11 +15,15 @@ from app.impl.run_export.query import (
     _bare_repo_head_commit,
 )
 from app.service.importing.icpc import ICPCPackageImportService
+from app.service.importing.archive import (
+    ArchiveView,
+    ProblemImportPolicy,
+)
 from app.service.importing.native import NATIVE_PACKAGE_ANCHOR, NativePackageImportService
 from app.service.importing.polygon import PolygonPackageImportService
 from app.service.platform.git_process import run_git
 
-_C = config.constants
+_C = config.config_values
 _POLYGON_IMPORTER = PolygonPackageImportService()
 _ICPC_IMPORTER = ICPCPackageImportService()
 _NATIVE_IMPORTER = NativePackageImportService()
@@ -67,9 +73,9 @@ def _select_importer(package_format: str):
     raise ValueError(f"unsupported package format: {package_format}")
 def _problem_slug_segment_max_len(owner: str) -> int:
     safe_owner = owner.strip().lower()
-    if not _C.USER_IDENT_RE.fullmatch(safe_owner):
-        raise ValueError(_C.USERNAME_RULE_MESSAGE)
-    return max(1, int(_C.PROBLEM_ID_MAX_LEN) - len(safe_owner) - 1)
+    if not _K.USER_IDENT_RE.fullmatch(safe_owner):
+        raise ValueError(_K.USERNAME_RULE_MESSAGE)
+    return max(1, int(_K.PROBLEM_ID_MAX_LEN) - len(safe_owner) - 1)
 
 
 def _slugify_problem_id(raw: str, *, max_len: int) -> str:
@@ -85,17 +91,17 @@ def _slugify_problem_id(raw: str, *, max_len: int) -> str:
 def _normalize_problem_slug_segment_required(owner: str, raw: str) -> str:
     token = _slugify_problem_id(raw, max_len=_problem_slug_segment_max_len(owner))
     if not token or (not _PROBLEM_SEGMENT_RE.fullmatch(token)):
-        raise ValueError(_C.PROBLEM_ID_RULE_MESSAGE)
+        raise ValueError(_K.PROBLEM_ID_RULE_MESSAGE)
     return token
 
 def _problem_full_slug(owner: str, slug_segment: str) -> str:
     safe_owner = owner.strip().lower()
-    if not _C.USER_IDENT_RE.fullmatch(safe_owner):
-        raise ValueError(_C.USERNAME_RULE_MESSAGE)
+    if not _K.USER_IDENT_RE.fullmatch(safe_owner):
+        raise ValueError(_K.USERNAME_RULE_MESSAGE)
     safe_segment = _normalize_problem_slug_segment_required(safe_owner, slug_segment)
     full_slug = f"{safe_owner}/{safe_segment}"
-    if len(full_slug) > _C.PROBLEM_ID_MAX_LEN:
-        raise ValueError(_C.PROBLEM_ID_RULE_MESSAGE)
+    if len(full_slug) > _K.PROBLEM_ID_MAX_LEN:
+        raise ValueError(_K.PROBLEM_ID_RULE_MESSAGE)
     return full_slug
 
 def _import_slug_base_from_package_name(owner: str, package_name: str) -> str:
@@ -141,7 +147,7 @@ def build_import_slug_hint(owner: str, filename: str, requested_slug: str) -> di
                 "exists": False,
                 "base": base,
                 "suggested": _next_available_problem_slug(owner, base),
-                "message": _C.PROBLEM_ID_RULE_MESSAGE,
+                "message": _K.PROBLEM_ID_RULE_MESSAGE,
             }
         full_requested = _problem_full_slug(owner, normalized)
         exists = config.workspace_service.known_problem_id(full_requested) is not None
@@ -198,15 +204,8 @@ def _is_package_marker(names: list[str], marker: str) -> bool:
             return True
     return False
 
-def _detect_problem_package_format(package_payload: bytes) -> str:
-    raw = bytes(package_payload or b"")
-    if not raw:
-        raise ValueError("package file is empty")
-    try:
-        with zipfile.ZipFile(io.BytesIO(raw), "r") as zf:
-            names = zf.namelist()
-    except Exception as exc:
-        raise ValueError(f"invalid zip package: {exc}") from exc
+def _detect_problem_package_format(package: ArchiveView) -> str:
+    names = list(package.entries)
     if _is_package_marker(names, "problem.xml"):
         return "polygon"
     if _is_package_marker(names, "problem.yaml"):
@@ -214,6 +213,23 @@ def _detect_problem_package_format(package_payload: bytes) -> str:
     if _is_package_marker(names, NATIVE_PACKAGE_ANCHOR):
         return "native"
     raise ValueError("unsupported package format: expected problem.xml (Polygon), problem.yaml (ICPC), or config/problem.json (native)")
+
+
+@contextmanager
+def _open_problem_archive(
+    package: Path | ArchiveView,
+    policy: ProblemImportPolicy,
+) -> Iterator[ArchiveView]:
+    if isinstance(package, ArchiveView):
+        yield package
+        return
+    try:
+        with ArchiveView(Path(package), policy.archive) as archive:
+            yield archive
+    except ValueError:
+        raise
+    except Exception as exc:
+        raise ValueError(f"invalid zip package: {exc}") from exc
 
 
 def _finalize_imported_problem(problem: str, actor_user: str, workspace: Path, package_format: str) -> str:
@@ -259,7 +275,8 @@ def import_package_into_workspace(
     actor_user: str,
     target_problem: str,
     package_name: str,
-    package_content: bytes,
+    package: Path | ArchiveView,
+    policy: ProblemImportPolicy,
     source_problem: str = "",
     normalize_test_data_newlines: bool = False,
 ) -> dict[str, object]:
@@ -272,32 +289,30 @@ def import_package_into_workspace(
     safe_package_name = package_name.strip()
     if not safe_package_name:
         raise ValueError("package filename is required")
-    payload = bytes(package_content or b"")
-    if not payload:
-        raise ValueError("package file is empty")
-
-    package_format = _detect_problem_package_format(payload)
-    target_workspace = Path(config.workspace_service.ensure_workspace(safe_target_problem, safe_actor_user, refresh_status=False))
-    importer = _select_importer(package_format)
-    staging_root = target_workspace.parent / f".workspace-import-{uuid.uuid4().hex}"
-    staging_workspace = staging_root / "workspace"
-    result: ImportedPackageResult
-    try:
-        staging_workspace.mkdir(parents=True, exist_ok=False)
-        result = cast(
-            ImportedPackageResult,
-            importer.import_package(
-                staging_workspace,
-                safe_package_name,
-                payload,
-                normalize_test_data_newlines=bool(normalize_test_data_newlines),
-            ),
-        )
-        with config.workspace_service.workspace_lock(target_workspace):
-            _merge_imported_tree(staging_workspace, target_workspace)
-        config.workspace_service.ensure_workspace(safe_target_problem, safe_actor_user, refresh_status=True)
-    finally:
-        shutil.rmtree(staging_root, ignore_errors=True)
+    with _open_problem_archive(package, policy) as archive:
+        package_format = _detect_problem_package_format(archive)
+        target_workspace = Path(config.workspace_service.ensure_workspace(safe_target_problem, safe_actor_user, refresh_status=False))
+        importer = _select_importer(package_format)
+        staging_root = target_workspace.parent / f".workspace-import-{uuid.uuid4().hex}"
+        staging_workspace = staging_root / "workspace"
+        result: ImportedPackageResult
+        try:
+            staging_workspace.mkdir(parents=True, exist_ok=False)
+            result = cast(
+                ImportedPackageResult,
+                importer.import_package(
+                    staging_workspace,
+                    safe_package_name,
+                    archive,
+                    normalize_test_data_newlines=bool(normalize_test_data_newlines),
+                    text_limit_bytes=policy.text_limit_bytes,
+                ),
+            )
+            with config.workspace_service.workspace_lock(target_workspace):
+                _merge_imported_tree(staging_workspace, target_workspace)
+            config.workspace_service.ensure_workspace(safe_target_problem, safe_actor_user, refresh_status=True)
+        finally:
+            shutil.rmtree(staging_root, ignore_errors=True)
 
     problem_id = config.workspace_service.known_problem_id(safe_target_problem)
     if problem_id is not None:
@@ -330,7 +345,8 @@ def import_package_as_new_problem(
     actor_user_id: int,
     actor_user: str,
     package_name: str,
-    package_content: bytes,
+    package: Path | ArchiveView,
+    policy: ProblemImportPolicy,
     requested_slug: str = "",
     source_problem: str = "",
     normalize_test_data_newlines: bool = False,
@@ -341,64 +357,62 @@ def import_package_as_new_problem(
     safe_package_name = package_name.strip()
     if not safe_package_name:
         raise ValueError("package filename is required")
-    payload = bytes(package_content or b"")
-    if not payload:
-        raise ValueError("package file is empty")
-
     target_problem = _resolve_import_problem_slug(safe_actor_user, requested_slug, safe_package_name)
-    package_format = _detect_problem_package_format(payload)
-    target_bare = (config.settings.bare_root / f"{target_problem}.git").resolve()
-    existing_bare_head = _bare_repo_head_commit(target_bare)
-    if existing_bare_head:
-        raise ValueError(f"import target already has revision history: {target_problem}")
-    created_problem = False
-    try:
-        config.workspace_service.ensure_problem(target_problem)
-        created_problem = True
-        config.workspace_service.grant_repo_access(target_problem, safe_actor_user, "owner")
-        target_workspace = Path(config.workspace_service.ensure_workspace(target_problem, safe_actor_user))
-        workspace_head = run_git(["git", "-C", str(target_workspace), "rev-parse", "--verify", "HEAD"])
-        if workspace_head.returncode == 0 and workspace_head.stdout.strip():
+    with _open_problem_archive(package, policy) as archive:
+        package_format = _detect_problem_package_format(archive)
+        target_bare = (config.settings.bare_root / f"{target_problem}.git").resolve()
+        existing_bare_head = _bare_repo_head_commit(target_bare)
+        if existing_bare_head:
             raise ValueError(f"import target already has revision history: {target_problem}")
-        with config.workspace_service.workspace_lock(target_workspace):
-            importer = _select_importer(package_format)
-            result = cast(
-                ImportedPackageResult,
-                importer.import_package(
-                    target_workspace,
-                    safe_package_name,
-                    payload,
-                    normalize_test_data_newlines=bool(normalize_test_data_newlines),
-                ),
-            )
-        with config.workspace_service.workspace_lock(target_workspace):
-            imported_commit = _finalize_imported_problem(target_problem, safe_actor_user, target_workspace, package_format)
-        config.workspace_service.ensure_workspace(target_problem, safe_actor_user, refresh_status=True)
-        result["commit"] = imported_commit
-        details = {
-            "package": safe_package_name,
-            "package_format": package_format,
-            "source_problem": source_problem.strip(),
-            "target_problem": target_problem,
-            "import_commit": imported_commit,
-            "statement": result.get("statement"),
-            "tests": result.get("tests"),
-            "components": result.get("components"),
-            "solutions": result.get("solutions"),
-        }
-        target_problem_id = config.workspace_service.known_problem_id(target_problem)
-        if target_problem_id is not None:
-            audit(actor_user_id, int(target_problem_id), "export.import", details)
-        tests_info = result.get("tests")
-        total_tests = int(cast(dict[str, object], tests_info).get("total", 0)) if tests_info is not None else 0
-        return {"target_problem": target_problem, "total_tests": total_tests, "result": result, "package_format": package_format}
-    except Exception:
-        if created_problem:
-            try:
-                config.workspace_service.delete_problem(target_problem)
-            except Exception:
-                pass
-        raise
+        created_problem = False
+        try:
+            config.workspace_service.ensure_problem(target_problem)
+            created_problem = True
+            config.workspace_service.grant_repo_access(target_problem, safe_actor_user, "owner")
+            target_workspace = Path(config.workspace_service.ensure_workspace(target_problem, safe_actor_user))
+            workspace_head = run_git(["git", "-C", str(target_workspace), "rev-parse", "--verify", "HEAD"])
+            if workspace_head.returncode == 0 and workspace_head.stdout.strip():
+                raise ValueError(f"import target already has revision history: {target_problem}")
+            with config.workspace_service.workspace_lock(target_workspace):
+                importer = _select_importer(package_format)
+                result = cast(
+                    ImportedPackageResult,
+                    importer.import_package(
+                        target_workspace,
+                        safe_package_name,
+                        archive,
+                        normalize_test_data_newlines=bool(normalize_test_data_newlines),
+                        text_limit_bytes=policy.text_limit_bytes,
+                    ),
+                )
+            with config.workspace_service.workspace_lock(target_workspace):
+                imported_commit = _finalize_imported_problem(target_problem, safe_actor_user, target_workspace, package_format)
+            config.workspace_service.ensure_workspace(target_problem, safe_actor_user, refresh_status=True)
+            result["commit"] = imported_commit
+            details = {
+                "package": safe_package_name,
+                "package_format": package_format,
+                "source_problem": source_problem.strip(),
+                "target_problem": target_problem,
+                "import_commit": imported_commit,
+                "statement": result.get("statement"),
+                "tests": result.get("tests"),
+                "components": result.get("components"),
+                "solutions": result.get("solutions"),
+            }
+            target_problem_id = config.workspace_service.known_problem_id(target_problem)
+            if target_problem_id is not None:
+                audit(actor_user_id, int(target_problem_id), "export.import", details)
+            tests_info = result.get("tests")
+            total_tests = int(cast(dict[str, object], tests_info).get("total", 0)) if tests_info is not None else 0
+            return {"target_problem": target_problem, "total_tests": total_tests, "result": result, "package_format": package_format}
+        except Exception:
+            if created_problem:
+                try:
+                    config.workspace_service.delete_problem(target_problem)
+                except Exception:
+                    pass
+            raise
 
 def import_package_warnings(import_result: dict[str, object] | None) -> list[str]:
     if import_result is None:

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import app.main_constant as _K
+
 import os
 from pathlib import Path
 
@@ -22,7 +24,7 @@ from app.impl.workspace.context_operation import (
 )
 from app.impl.workspace.test_spec import read_tests_spec, tests_spec_read_payload
 
-_C = config.constants
+_C = config.config_values
 
 
 def _component_repo_source_from_build_cfg(workspace: Path, build_cfg: dict, config_key: str, folder: str, default_filename: str) -> tuple[str, bool]:
@@ -88,16 +90,16 @@ def _resolve_generator_source_from_token_for_nav(token: str, source_paths: list[
     suffix = token_path.suffix.lower()
     candidates: list[str] = []
     if raw.startswith('generators/'):
-        if suffix in _C.SOLUTION_SOURCE_EXTENSIONS:
+        if suffix in _K.SOLUTION_SOURCE_EXTENSIONS:
             candidates.append(raw)
         else:
-            for ext in _C.SOLUTION_SOURCE_EXTENSIONS:
+            for ext in _K.SOLUTION_SOURCE_EXTENSIONS:
                 candidates.append(f'{raw}{ext}')
-    elif suffix in _C.SOLUTION_SOURCE_EXTENSIONS:
+    elif suffix in _K.SOLUTION_SOURCE_EXTENSIONS:
         candidates.append(f'generators/{raw}')
     else:
         candidates.append(f'generators/{raw}')
-        for ext in _C.SOLUTION_SOURCE_EXTENSIONS:
+        for ext in _K.SOLUTION_SOURCE_EXTENSIONS:
             candidates.append(f'generators/{raw}{ext}')
     seen: set[str] = set()
     for rel in candidates:
@@ -108,7 +110,7 @@ def _resolve_generator_source_from_token_for_nav(token: str, source_paths: list[
         if rel_key in source_set:
             return rel_key
     name = token_path.name
-    if suffix in _C.SOLUTION_SOURCE_EXTENSIONS:
+    if suffix in _K.SOLUTION_SOURCE_EXTENSIONS:
         exact = [rel for rel in normalized_sources if Path(rel).name == name]
         if len(exact) == 1:
             return exact[0]
@@ -126,7 +128,10 @@ def _generator_reference_counts(workspace: Path, source_paths: list[str]) -> dic
     if not source_catalog:
         return counts
     try:
-        entries, _ = read_tests_spec(workspace)
+        entries, _ = read_tests_spec(
+            workspace,
+            max_bytes=int(_C.TEXTAREA_MAX_BYTES),
+        )
     except Exception:
         return counts
     for row in entries:
@@ -164,7 +169,7 @@ def generator_status_context(workspace: Path) -> dict:
     generator_candidates, generator_candidates_truncated = _list_sources_with_extensions(
         workspace,
         'generators',
-        set(_C.SOLUTION_SOURCE_EXTENSIONS),
+        set(_K.SOLUTION_SOURCE_EXTENSIONS),
     )
     repo_source = ''
     repo_exists = False
@@ -257,4 +262,3 @@ def checker_status_context(workspace: Path) -> dict:
         'repo_source': repo_source,
         'repo_source_exists': bool(repo_exists),
     }
-

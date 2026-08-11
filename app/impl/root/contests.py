@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import shutil
+import uuid
+from pathlib import Path
 from urllib.parse import quote_plus
 
 from fastapi import File, Form, Request, UploadFile
@@ -33,11 +36,34 @@ from app.impl.workspace.context_operation import (
     user_contests_overview,
 )
 from app.impl.root.shared import _active_root_user, _count_label
-from app.main_util import form_text, read_fileobj_bytes_limited
-from app.service.importing.contest import PolygonContestImportService
+from app.main_util import form_text
+from app.service.importing.archive import (
+    ArchivePolicy,
+    ArchiveView,
+    ProblemImportPolicy,
+    contest_archive_policy,
+    problem_import_policy,
+)
+from app.service.importing.contest import (
+    ImportedContestStatementFile,
+    PolygonContestImportService,
+)
+from app.service.importing.upload import spool_fileobj
 
-_C = config.constants
+_C = config.config_values
 _POLYGON_CONTEST_IMPORT_SERVICE = PolygonContestImportService()
+
+
+def _contest_archive_policies() -> tuple[ArchivePolicy, ProblemImportPolicy, int]:
+    snapshot = _C.snapshot()
+    max_problems = int(snapshot["CONTEST_MAX_PROBLEMS"])
+    problem_expanded = int(snapshot["PROBLEM_ZIP_MAX_EXPANDED_BYTES"])
+    problem_policy = problem_import_policy(
+        problem_expanded,
+        int(snapshot["TEXTAREA_MAX_BYTES"]),
+    )
+    contest_policy = contest_archive_policy(max_problems, problem_expanded)
+    return contest_policy, problem_policy, max_problems
 
 
 def _render_contest_import_review_page(
@@ -159,26 +185,43 @@ def contests_root_import(
         package_name = str(package_upload.filename or "").strip()
         if not package_name:
             raise ValueError("package filename is required")
-        payload = read_fileobj_bytes_limited(package_upload.file, label="package file")
-        parsed = _POLYGON_CONTEST_IMPORT_SERVICE.parse_package(package_name, payload)
-        rows = parsed.get("problems")
-        if not isinstance(rows, list) or not rows:
-            raise ValueError("contest package has no problems")
-        draft_rows = _build_contest_import_problem_draft_rows(actor_username, [dict(item) for item in rows if isinstance(item, dict)])
-        if not draft_rows:
-            raise ValueError("contest package has no importable problem rows")
-        parsed_title_obj = parsed.get("title")
-        parsed_title = parsed_title_obj.strip() if isinstance(parsed_title_obj, str) else ""
-        draft_id = _create_contest_import_draft(
-            actor_user_id=actor_user_id,
-            actor_username=actor_username,
-            package_name=package_name,
-            package_payload=payload,
-            contest_slug_input=form_text(contest_slug).strip(),
-            contest_title_input=form_text(contest_title).strip(),
-            parsed_title=parsed_title,
-            problem_rows=draft_rows,
-        )
+        snapshot = _C.snapshot()
+        contest_policy, problem_policy, max_problems = _contest_archive_policies()
+        with spool_fileobj(
+            package_upload.file,
+            root=config.settings.cache_root / "archive-uploads",
+            max_bytes=int(snapshot["UPLOAD_MAX_BYTES"]),
+            label="package file",
+        ) as package_path:
+            with ArchiveView(package_path, contest_policy) as package:
+                parsed = _POLYGON_CONTEST_IMPORT_SERVICE.parse_package(
+                    package_name,
+                    package,
+                    problem_policy=problem_policy.archive,
+                    max_problems=max_problems,
+                )
+            rows = parsed.get("problems")
+            if not isinstance(rows, list) or not rows:
+                raise ValueError("contest package has no problems")
+            if len(rows) > max_problems:
+                raise ValueError(
+                    f"contest package has more than the configured maximum of {max_problems} problems"
+                )
+            draft_rows = _build_contest_import_problem_draft_rows(actor_username, [dict(item) for item in rows if isinstance(item, dict)])
+            if not draft_rows:
+                raise ValueError("contest package has no importable problem rows")
+            parsed_title_obj = parsed.get("title")
+            parsed_title = parsed_title_obj.strip() if isinstance(parsed_title_obj, str) else ""
+            draft_id = _create_contest_import_draft(
+                actor_user_id=actor_user_id,
+                actor_username=actor_username,
+                package_name=package_name,
+                package_path=package_path,
+                contest_slug_input=form_text(contest_slug).strip(),
+                contest_title_input=form_text(contest_title).strip(),
+                parsed_title=parsed_title,
+                problem_rows=draft_rows,
+            )
         message = f"contest package parsed ({_count_label(len(draft_rows), 'problem')}); review slugs before import"
         return redirect_response(
             f"/contests/import/review?draft_id={quote_plus(draft_id)}",
@@ -222,6 +265,8 @@ async def contests_root_import_confirm(request: Request, user: str = ""):
     actor_username = str(gctx["user"]["username"])
     created_contest_slug = ""
     imported_problem_slugs: list[str] = []
+    contest_archive: ArchiveView | None = None
+    statement_staging: Path | None = None
     form = await request.form()
     draft_id_obj = form.get("draft_id")
     draft_id = draft_id_obj.strip() if isinstance(draft_id_obj, str) else ""
@@ -270,12 +315,20 @@ async def contests_root_import_confirm(request: Request, user: str = ""):
 
     package_name = draft_package_name
     try:
-        payload = payload_path.read_bytes()
-        parsed = _POLYGON_CONTEST_IMPORT_SERVICE.parse_package(package_name, payload)
+        contest_policy, problem_policy, max_problems = _contest_archive_policies()
+        contest_archive = ArchiveView(payload_path, contest_policy)
+        parsed = _POLYGON_CONTEST_IMPORT_SERVICE.parse_package(
+            package_name,
+            contest_archive,
+            problem_policy=problem_policy.archive,
+            max_problems=max_problems,
+        )
         parsed_rows_raw = parsed.get("problems")
         parsed_rows = [dict(item) for item in parsed_rows_raw] if isinstance(parsed_rows_raw, list) else []
         statement_files_raw = parsed.get("statement_files")
-        statement_files = [dict(item) for item in statement_files_raw] if isinstance(statement_files_raw, list) else []
+        statement_files: list[ImportedContestStatementFile] = [
+            dict(item) for item in statement_files_raw if isinstance(item, dict)
+        ] if isinstance(statement_files_raw, list) else []
         default_language_obj = parsed.get("default_language")
         default_language = default_language_obj.strip().lower() if isinstance(default_language_obj, str) else ""
         location_obj = parsed.get("location")
@@ -284,6 +337,10 @@ async def contests_root_import_confirm(request: Request, user: str = ""):
         inferred_date = date_obj.strip() if isinstance(date_obj, str) else ""
         if len(parsed_rows) != len(review_rows):
             raise ValueError("contest package changed; please re-upload and review again")
+        if len(parsed_rows) > max_problems:
+            raise ValueError(
+                f"contest package has more than the configured maximum of {max_problems} problems"
+            )
 
         target_contest_slug = _resolve_import_contest_slug(contest_slug_input, package_name)
         parsed_title_obj = parsed.get("title")
@@ -308,17 +365,23 @@ async def contests_root_import_confirm(request: Request, user: str = ""):
             sub_package_name = sub_package_name_obj.strip() if isinstance(sub_package_name_obj, str) else ""
             if not sub_package_name:
                 sub_package_name = f"problem-{idx}.zip"
-            package_bytes_obj = row.get("package_bytes")
-            sub_package_bytes = bytes(package_bytes_obj) if isinstance(package_bytes_obj, (bytes, bytearray)) else b""
-            if not sub_package_bytes:
-                raise ValueError(f"empty problem package payload for #{idx}")
             requested_problem_slug_obj = row_review.get("slug_input")
             requested_problem_slug = requested_problem_slug_obj.strip().lower() if isinstance(requested_problem_slug_obj, str) else ""
+            source_folder_obj = row.get("source_folder")
+            source_folder = source_folder_obj.strip() if isinstance(source_folder_obj, str) else ""
+            if not source_folder:
+                raise RuntimeError(f"contest source folder missing for problem #{idx}")
+            problem_archive = _POLYGON_CONTEST_IMPORT_SERVICE.problem_archive(
+                contest_archive,
+                source_folder,
+                problem_policy.archive,
+            )
             imported = import_package_as_new_problem(
                 actor_user_id=actor_user_id,
                 actor_user=actor_username,
                 package_name=sub_package_name,
-                package_content=sub_package_bytes,
+                package=problem_archive,
+                policy=problem_policy,
                 requested_slug=requested_problem_slug,
                 source_problem="",
                 normalize_test_data_newlines=True,
@@ -333,10 +396,6 @@ async def contests_root_import_confirm(request: Request, user: str = ""):
             problem_id = config.workspace_service.known_problem_id(imported_problem_slug)
             if problem_id is None:
                 raise RuntimeError(f"imported problem missing: {imported_problem_slug}")
-            source_folder_obj = row.get("source_folder")
-            source_folder = source_folder_obj.strip() if isinstance(source_folder_obj, str) else ""
-            if not source_folder:
-                raise RuntimeError(f"contest source folder missing for problem #{idx}")
             contest_problem_idx = _normalize_import_contest_idx(row.get("index"), idx, used_indices)
             config.contest_service.add_problem(
                 contest_id=contest_id,
@@ -347,11 +406,17 @@ async def contests_root_import_confirm(request: Request, user: str = ""):
             source_folder_map[int(problem_id)] = source_folder
             imported_problem_slugs.append(imported_problem_slug)
 
+        statement_staging = payload_path.parent / f".{draft_id}-statement-{uuid.uuid4().hex}"
+        staged_statement_files = _POLYGON_CONTEST_IMPORT_SERVICE.stage_statement_sources(
+            contest_archive,
+            statement_files,
+            statement_staging,
+        )
         config.contest_service.replace_statement_sources(
             contest_id=contest_id,
             contest_slug=target_contest_slug,
             actor_user_id=actor_user_id,
-            files=statement_files,
+            files=staged_statement_files,
         )
         config.contest_service.set_statement_default_language(contest_id, actor_user_id, default_language)
         if inferred_location:
@@ -378,6 +443,8 @@ async def contests_root_import_confirm(request: Request, user: str = ""):
                 "normalize_test_data_newlines": True,
             },
         )
+        contest_archive.close()
+        contest_archive = None
         _delete_contest_import_draft(draft_id)
         message = f"contest {target_contest_slug} imported ({_count_label(len(imported_problem_slugs), 'problem')})"
         if import_warnings:
@@ -392,6 +459,11 @@ async def contests_root_import_confirm(request: Request, user: str = ""):
         )
     except Exception as exc:
         message = str(exc)
+    finally:
+        if contest_archive is not None:
+            contest_archive.close()
+        if statement_staging is not None:
+            shutil.rmtree(statement_staging, ignore_errors=True)
     if created_contest_slug or imported_problem_slugs:
         try:
             _rollback_imported_contest(created_contest_slug, imported_problem_slugs)

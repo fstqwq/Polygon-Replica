@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+# ascii-lint: allow; reason=chinese-test
+
 import tempfile
 import unittest
 from pathlib import Path
@@ -87,7 +89,10 @@ class TestMergeDiff(unittest.TestCase):
 
         self.assertFalse(comparison.binary)
         self.assertEqual(len(comparison.rows), 1)
-        self.assertEqual(comparison.rows[0].right.segments[0].text, "\t中文")
+        self.assertEqual(
+            comparison.rows[0].right.segments[0].text,
+            "\t中文",
+        )
 
     def test_binary_and_invalid_utf8_use_restricted_preview(self) -> None:
         binary = self.root / "binary.dat"

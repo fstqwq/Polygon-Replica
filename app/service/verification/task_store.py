@@ -175,13 +175,14 @@ class VerificationTaskStore:
         self._task_ids_by_judgehost_task: dict[str, set[str]] = {}
         self._fail_reason_by_verification_id: dict[str, str] = {}
 
-    @staticmethod
-    def _limit_bytes() -> int:
-        return aux_display_text_limit_bytes()
+    def display_text_limit_bytes(self) -> int:
+        return aux_display_text_limit_bytes(self.db.config_values.snapshot())
 
-    @classmethod
-    def _normalize_display_text(cls, value: str) -> str:
-        return bounded_display_text(value, limit_bytes=cls._limit_bytes())
+    def _normalize_display_text(self, value: str) -> str:
+        return bounded_display_text(
+            value,
+            limit_bytes=self.display_text_limit_bytes(),
+        )
 
     def allocate_id(self) -> str:
         for _ in range(8):
@@ -601,7 +602,7 @@ class VerificationTaskStore:
                 "status": str(result["status"]),
                 "result": _bounded_result(
                     cast(ExecutionResult, result["result"]),
-                    limit_bytes=self._limit_bytes(),
+                    limit_bytes=self.display_text_limit_bytes(),
                 ),
             }
             for result in results

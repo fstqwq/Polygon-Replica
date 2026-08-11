@@ -470,19 +470,23 @@ class TestWriterPriorityRWLock(unittest.TestCase):
 
 class TestJudgehostLifecycle(DBTestBase):
     def _service(self) -> Judgehost:
+        values = dict(self.config_values.snapshot())
+        values.update(
+            JUDGEHOST_ENABLE=True,
+            JUDGEHOST_API_TOKEN="test-token",
+            JUDGEHOST_API_USERNAME="judgehost",
+        )
+        self.config_values.replace(values)
         service = Judgehost(
             self.db,
             self.workspace_service,
             self.fs_manager,
             self.settings,
-            self.constants,
+            self.config_values,
             verification_task_store=self.verification_task_store,
             runtime_blob_store=self.runtime_blob_store,
             runtime_cache_index=self.runtime_cache_index,
         )
-        service.state.enabled = True
-        service.state.api_token = "test-token"
-        service.state.api_username = "judgehost"
         return service
 
     @staticmethod

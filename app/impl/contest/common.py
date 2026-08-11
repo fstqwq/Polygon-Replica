@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import re
 
+import app.main_constant as _K
 from app.impl.runtime.config import config
 
-_C = config.constants
+_C = config.config_values
 
 
 def _contest_idx_label(seq: int) -> str:
@@ -23,7 +24,7 @@ def _normalize_contest_problem_idx_required(raw: object) -> str:
         raise ValueError("problem index is required")
     if len(token) > 16:
         raise ValueError("problem index is too long")
-    if not _C.CONTEST_IDENT_RE.fullmatch(token):
+    if not _K.CONTEST_IDENT_RE.fullmatch(token):
         raise ValueError("invalid problem index")
     return token
 

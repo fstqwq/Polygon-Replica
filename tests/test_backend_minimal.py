@@ -33,7 +33,7 @@ from app.impl.auth.internal.runtime import _startup_clear_all_caches
 from app.impl.runtime.config import config
 from app.impl.problem.compile_check import judgehost_compile_check_error
 from app.impl.workspace.context_ui import page_ctx
-from app.main_util import TEXTAREA_MAX_BYTES
+from app.config import CONFIG_REGISTRY
 from app.service.statement.render import (
     default_statement_title_for_workspace,
     ensure_statement_language_sources,
@@ -42,6 +42,9 @@ from app.service.statement.render import (
 from app.service.statement.signature import statement_sources_signature
 from app.service.disk.verification_store import VerificationStore
 from app.service.platform.git_process import run_git
+
+
+TEXTAREA_MAX_BYTES = int(CONFIG_REGISTRY.defaults()["TEXTAREA_MAX_BYTES"])
 
 
 class TestBackendMinimal(E2ETestBase):
@@ -901,6 +904,7 @@ class TestBackendMinimal(E2ETestBase):
                         "statement_signature": statement_sources_signature(
                             ws,
                             problem_title=self._statement_title(ws),
+                            tests_spec_max_bytes=TEXTAREA_MAX_BYTES,
                         ),
                     }
                 ),
@@ -950,6 +954,7 @@ class TestBackendMinimal(E2ETestBase):
                         "statement_signature": statement_sources_signature(
                             ws,
                             problem_title=self._statement_title(ws),
+                            tests_spec_max_bytes=TEXTAREA_MAX_BYTES,
                         ),
                     }
                 ),
@@ -1019,6 +1024,7 @@ class TestBackendMinimal(E2ETestBase):
                         "statement_signature": statement_sources_signature(
                             ws,
                             problem_title=self._statement_title(ws),
+                            tests_spec_max_bytes=TEXTAREA_MAX_BYTES,
                         ),
                     }
                 ),
@@ -1061,6 +1067,7 @@ class TestBackendMinimal(E2ETestBase):
                         "statement_signature": statement_sources_signature(
                             ws,
                             problem_title=self._statement_title(ws, "chinese"),
+                            tests_spec_max_bytes=TEXTAREA_MAX_BYTES,
                         ),
                     }
                 ),
@@ -1096,6 +1103,7 @@ class TestBackendMinimal(E2ETestBase):
                         "statement_signature": statement_sources_signature(
                             ws,
                             problem_title=self._statement_title(ws),
+                            tests_spec_max_bytes=TEXTAREA_MAX_BYTES,
                         ),
                     }
                 ),

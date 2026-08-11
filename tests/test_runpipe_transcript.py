@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+# ascii-lint: allow; reason=chinese-test
+
 import io
 import unittest
 from decimal import Decimal
@@ -53,7 +55,10 @@ class TestRunpipeTranscript(unittest.TestCase):
             ["interactor", "solution"],
         )
         self.assertEqual(transcript["events"][0]["payload_display"], first.decode())
-        self.assertEqual(transcript["events"][1]["payload_display"], "答案 ✓")
+        self.assertEqual(
+            transcript["events"][1]["payload_display"],
+            "答案 ✓",
+        )
         self.assertEqual(transcript["events"][0]["timestamp_seconds"], Decimal("0.019"))
 
     def test_header_and_payload_may_span_short_stream_reads(self) -> None:

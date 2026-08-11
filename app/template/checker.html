@@ -49,7 +49,7 @@
     <div class="checker-standard-control-row">
       <select id="standard-checker-name" name="checker_name" aria-label="Standard checker" data-auto-submit-select="1">
         {% for checker in standard_checker_options %}
-        <option value="{{ checker.value }}" {% if checker.value == selected_standard_checker %}selected{% endif %}>{{ checker.value }} — {{ checker.description }}</option>
+        <option value="{{ checker.value }}" {% if checker.value == selected_standard_checker %}selected{% endif %}>{{ checker.value }} &mdash; {{ checker.description }}</option>
         {% endfor %}
       </select>
       <button class="linkish-button" type="submit" formaction="{{ problem_href('checker_view_standard') }}" formmethod="get">View source</button>
@@ -77,7 +77,7 @@
       <select id="standard-checker-name" name="checker_name" aria-label="Standard checker" data-auto-submit-select="1" {% if not ctx.access.can_write %}disabled title="{{ ctx.access.write_block_reason }}"{% endif %}>
         <option value="" selected disabled>Choose a standard checker</option>
         {% for checker in standard_checker_options %}
-        <option value="{{ checker.value }}">{{ checker.value }} — {{ checker.description }}</option>
+        <option value="{{ checker.value }}">{{ checker.value }} &mdash; {{ checker.description }}</option>
         {% endfor %}
       </select>
     </form>

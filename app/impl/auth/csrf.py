@@ -3,10 +3,11 @@ from __future__ import annotations
 import secrets
 import time
 
+import app.main_constant as _K
 from app.impl.runtime.config import config
 from app.service.platform.hashing import hmac_sha256_hex
 
-_C = config.constants
+_C = config.config_values
 
 def _password_form_csrf_signature(scope: str, issued_at: int, nonce: str) -> str:
     payload = f'{scope}|{issued_at}|{nonce}'.encode('utf-8')
@@ -27,9 +28,9 @@ def verify_password_form_csrf_token(token: str, scope: str) -> bool:
     if len(parts) != 3:
         return False
     issued_raw, nonce, provided_sig = parts
-    if not _C.HEX_32_RE.fullmatch(str(nonce or '').lower()):
+    if not _K.HEX_32_RE.fullmatch(str(nonce or '').lower()):
         return False
-    if not _C.HEX_64_RE.fullmatch(str(provided_sig or '').lower()):
+    if not _K.HEX_64_RE.fullmatch(str(provided_sig or '').lower()):
         return False
     try:
         issued_at = int(issued_raw)

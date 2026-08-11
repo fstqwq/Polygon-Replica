@@ -115,14 +115,14 @@ class ToolchainVersionCollector:
         context = self._version_context(int(judgetask_id))
         if context is None:
             return {}
-        constants = self._state.constants
+        config_values = self._state.config_values
         if context.language_id in {"c", "cpp"}:
-            compiler = constants.TOOLCHAIN_CPP_COMPILER
+            compiler = config_values.TOOLCHAIN_CPP_COMPILER
             return {
                 "compiler_version_command": self._binary_version_script(compiler, "--version"),
             }
         if context.language_id == "java":
-            compiler = constants.TOOLCHAIN_JAVA_COMPILER
+            compiler = config_values.TOOLCHAIN_JAVA_COMPILER
             return {
                 "compiler_version_command": self._binary_version_script(compiler, "-version"),
                 "runner_version_command": self._binary_version_script("java", "-version"),

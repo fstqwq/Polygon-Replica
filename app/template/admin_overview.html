@@ -9,7 +9,7 @@
     <strong class="admin-summary-value{% if judgehost.enabled and judgehost.hosts_online > 0 %} ok{% else %} danger{% endif %}">
       {{ judgehost.hosts_online }} / {{ judgehost.hosts_total }} online
     </strong>
-    <span class="muted">{{ queue.leased }} leased · {{ queue.queued }} queued</span>
+    <span class="muted">{{ queue.leased }} leased &middot; {{ queue.queued }} queued</span>
   </a>
   <a class="admin-summary-card" href="/admin/users">
     <span class="admin-summary-label">Administrators</span>
@@ -53,7 +53,7 @@
     <strong class="{% if cleanup.get('status') == 'failed' %}danger{% elif cleanup.get('status') == 'succeeded' %}ok{% endif %}">
       {{ cleanup.get('status', 'idle') }}
     </strong>
-    {% if cleanup.get('stage') %}<span class="muted">· {{ cleanup.get('stage') }}</span>{% endif %}
+    {% if cleanup.get('stage') %}<span class="muted">&middot; {{ cleanup.get('stage') }}</span>{% endif %}
   </p>
   {% if cleanup.get('status') == 'failed' %}
   <p class="danger">{{ cleanup.get('error', 'Unknown cleanup error') }}</p>

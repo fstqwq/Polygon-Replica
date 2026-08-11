@@ -8,22 +8,22 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
-from app.runtime_value import build_runtime_values
+from app.config import build_config_values
 from app.service.judgehost.pass_bundle import parse_pass_bundle
 from app.service.judgehost.toolkit import DomjudgeToolkit
 from app.service.platform.hashing import compile_command_digest
 
 
-config = SimpleNamespace(constants=build_runtime_values(), judgehost_task_service=None)
+config = SimpleNamespace(config_values=build_config_values(), judgehost_task_service=None)
 
 
 class TestJudgehostScripts(unittest.TestCase):
     def setUp(self) -> None:
         self._root = tempfile.TemporaryDirectory(prefix="judgehost-scripts-")
         self.addCleanup(self._root.cleanup)
-        config.constants = build_runtime_values()
+        config.config_values = build_config_values()
         state = SimpleNamespace(
-            constants=config.constants,
+            config_values=config.config_values,
         )
         config.judgehost_task_service = SimpleNamespace(toolkit=DomjudgeToolkit(state))
 
@@ -419,15 +419,15 @@ class TestJudgehostScripts(unittest.TestCase):
 
     def test_domjudge_compile_script_uses_configurable_flags(self) -> None:
         service = config.judgehost_task_service
-        old_values = config.constants.to_dict()
-        self.addCleanup(config.constants.replace, old_values)
+        old_values = dict(config.config_values.snapshot())
+        self.addCleanup(config.config_values.replace, old_values)
         patched = dict(old_values)
         patched["TOOLCHAIN_CPP_COMPILER"] = "clang++"
         patched["TOOLCHAIN_JAVA_COMPILER"] = "javac-custom"
         patched["TOOLCHAIN_JUDGEHOST_CPP_COMPILE_FLAGS"] = "-O3 -std=gnu++20 -DNDEBUG"
         patched["TOOLCHAIN_JUDGEHOST_JAVA_COMPILE_FLAGS"] = "--release 17 -encoding UTF-8"
         patched["TOOLCHAIN_JUDGEHOST_PYTHON_COMPILE_FLAGS"] = "-X dev"
-        config.constants.replace(patched)
+        config.config_values.replace(patched)
 
         c_script = service.toolkit.compile_script("submission.c").decode("utf-8")
         cpp_script = service.toolkit.compile_script("submission.cpp").decode("utf-8")

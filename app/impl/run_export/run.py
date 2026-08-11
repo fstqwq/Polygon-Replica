@@ -43,7 +43,7 @@ from app.impl.run_export.query import (
 from app.service.verification.task_scheduler import notify_verification_cancelled
 from app.service.verification.types import ACTIVE, Status
 
-_C = config.constants
+_C = config.config_values
 logger = logging.getLogger(__name__)
 
 
@@ -487,7 +487,11 @@ def run_execute(
             normalized_name = (submission_upload.filename or '').strip()
             if normalized_name:
                 upload_filename = normalized_name
-                upload_content = read_fileobj_bytes_limited(submission_upload.file, label='submission upload')
+                upload_content = read_fileobj_bytes_limited(
+                    submission_upload.file,
+                    label='submission upload',
+                    max_bytes=int(config.config_values.UPLOAD_MAX_BYTES),
+                )
                 uploaded = True
         selected_solution_paths = dedupe_preserve_order(
             [

@@ -19,7 +19,7 @@ from app.main_util import enforce_textarea_max_bytes
 from app.service.platform.workspace_path import normalize_component_source_path, safe_workspace_path
 from app.service.verification.standard_checker import copy_standard_checker
 
-_C = config.constants
+_C = config.config_values
 
 
 def checker_page(request: Request, problem: str, user: Annotated[str, Depends(require_session_user)]):
@@ -147,7 +147,11 @@ def checker_save_source(
     json_requested = str(response_mode or '').strip().lower() == 'json'
     try:
         target = normalize_component_source_path(path, 'checkers', 'checker.cpp')
-        safe_content = enforce_textarea_max_bytes(content, label='checker source')
+        safe_content = enforce_textarea_max_bytes(
+            content,
+            label='checker source',
+            max_bytes=int(_C.TEXTAREA_MAX_BYTES),
+        )
         with config.workspace_service.workspace_lock(workspace):
             target_abs = safe_workspace_path(workspace, target)
             target_existed_before = bool(target_abs.exists() and target_abs.is_file() and (not target_abs.is_symlink()))

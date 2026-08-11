@@ -13,7 +13,7 @@ class ImportedLegacyStatementAsset(TypedDict):
     language: str
     package_path: str
     asset_rel: str
-    payload: bytes
+    source_path: Path
 
 
 class StatementAssetMergeSummary(TypedDict):
@@ -51,27 +51,41 @@ def _select_conflict_suffix(language: str) -> str:
     return _LANGUAGE_SUFFIX.get(token, token or "asset")
 
 
-def _write_statement_asset(workspace: Path, rel_path: str, payload: bytes) -> None:
+def _copy_statement_asset(workspace: Path, rel_path: str, source_path: Path) -> Path:
     target = workspace / STATEMENT_ASSETS_DIR / rel_path
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_bytes(payload)
+    shutil.copyfile(source_path, target)
+    return target
+
+
+def _files_equal(left: Path, right: Path) -> bool:
+    if left.stat().st_size != right.stat().st_size:
+        return False
+    with left.open("rb") as left_handle, right.open("rb") as right_handle:
+        while True:
+            left_chunk = left_handle.read(1024 * 1024)
+            right_chunk = right_handle.read(1024 * 1024)
+            if left_chunk != right_chunk:
+                return False
+            if not left_chunk:
+                return True
 
 
 def merge_imported_statement_assets(
     workspace: Path,
     *,
-    shared_assets: dict[str, bytes],
+    shared_assets: dict[str, Path],
     legacy_assets: list[ImportedLegacyStatementAsset],
 ) -> StatementAssetMergeSummary:
     shutil.rmtree(workspace / STATEMENT_ASSETS_DIR, ignore_errors=True)
-    written_payloads: dict[str, bytes] = {}
+    written_paths: dict[str, Path] = {}
     copied_files = 0
     warnings: list[str] = []
 
     for rel_path in sorted(shared_assets):
-        payload = bytes(shared_assets[rel_path])
-        _write_statement_asset(workspace, rel_path, payload)
-        written_payloads[rel_path] = payload
+        written_paths[rel_path] = _copy_statement_asset(
+            workspace, rel_path, shared_assets[rel_path]
+        )
         copied_files += 1
 
     grouped: dict[str, list[ImportedLegacyStatementAsset]] = defaultdict(list)
@@ -83,27 +97,28 @@ def merge_imported_statement_assets(
             grouped[asset_rel],
             key=lambda item: (_language_sort_key(item["language"]), str(item["package_path"])),
         )
-        canonical_payload = written_payloads.get(asset_rel)
-        if canonical_payload is None:
+        canonical_path = written_paths.get(asset_rel)
+        if canonical_path is None:
             first = rows[0]
-            payload = bytes(first["payload"])
-            _write_statement_asset(workspace, asset_rel, payload)
-            written_payloads[asset_rel] = payload
+            canonical_path = _copy_statement_asset(
+                workspace, asset_rel, first["source_path"]
+            )
+            written_paths[asset_rel] = canonical_path
             copied_files += 1
             rows = rows[1:]
-            canonical_payload = payload
         for row in rows:
-            payload = bytes(row["payload"])
-            if payload == canonical_payload:
+            source_path = row["source_path"]
+            if _files_equal(source_path, canonical_path):
                 continue
             suffix = _select_conflict_suffix(row["language"])
             rename_index = 0
             while True:
                 candidate_rel = _rename_asset_rel(asset_rel, suffix, rename_index)
-                existing_payload = written_payloads.get(candidate_rel)
-                if existing_payload is None:
-                    _write_statement_asset(workspace, candidate_rel, payload)
-                    written_payloads[candidate_rel] = payload
+                existing_path = written_paths.get(candidate_rel)
+                if existing_path is None:
+                    written_paths[candidate_rel] = _copy_statement_asset(
+                        workspace, candidate_rel, source_path
+                    )
                     copied_files += 1
                     warnings.append(
                         "statement attachment conflict: "
@@ -111,7 +126,7 @@ def merge_imported_statement_assets(
                         f"{normalize_statement_language(row['language']) or 'statement'} sources may still reference {asset_rel}"
                     )
                     break
-                if existing_payload == payload:
+                if _files_equal(existing_path, source_path):
                     break
                 rename_index += 1
 

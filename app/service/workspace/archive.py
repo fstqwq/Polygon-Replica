@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import io
+import codecs
+import hashlib
 import os
 import shutil
 import stat
@@ -9,7 +11,7 @@ import zipfile
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
-import app.main_util as main_util
+from app.service.importing.archive import ArchiveView
 from app.service.platform.workspace_path import (
     ALLOWED_WORKSPACE_ROOT_NAMES,
     is_allowed_workspace_root_path,
@@ -133,13 +135,67 @@ def _safe_workspace_dirs(root: Path) -> list[str]:
     return sorted(set(result))
 
 
-def _compare_file_maps(remote: dict[str, bytes], local: dict[str, bytes]) -> WorkspaceDiff:
+def _compare_file_maps(remote: dict[str, str], local: dict[str, str]) -> WorkspaceDiff:
     remote_paths = set(remote)
     local_paths = set(local)
     uploads = sorted(path for path in local_paths if path not in remote_paths or local[path] != remote[path])
     deletes = sorted(remote_paths - local_paths)
     same = sorted(path for path in remote_paths & local_paths if remote[path] == local[path])
     return WorkspaceDiff(uploads=uploads, deletes=deletes, same=same)
+
+
+def _normalized_file_digest(path: Path) -> str:
+    raw_digest = hashlib.sha256()
+    text_digest = hashlib.sha256()
+    decoder = codecs.getincrementaldecoder("utf-8")("strict")
+    text_possible = True
+    pending_cr = False
+    with path.open("rb") as handle:
+        while chunk := handle.read(1024 * 1024):
+            raw_digest.update(chunk)
+            if not text_possible:
+                continue
+            try:
+                decoded = decoder.decode(chunk, final=False)
+            except UnicodeDecodeError:
+                text_possible = False
+                continue
+            if pending_cr:
+                decoded = "\r" + decoded
+                pending_cr = False
+            if decoded.endswith("\r"):
+                decoded = decoded[:-1]
+                pending_cr = True
+            text_digest.update(
+                decoded.replace("\r\n", "\n").replace("\r", "\n").encode("utf-8")
+            )
+    if text_possible:
+        try:
+            tail = decoder.decode(b"", final=True)
+        except UnicodeDecodeError:
+            text_possible = False
+        else:
+            if pending_cr:
+                text_digest.update(b"\n")
+            text_digest.update(tail.replace("\r\n", "\n").replace("\r", "\n").encode("utf-8"))
+    return (text_digest if text_possible else raw_digest).hexdigest()
+
+
+def _safe_workspace_digests(root: Path) -> dict[str, str]:
+    result: dict[str, str] = {}
+    for root_name in sorted(ALLOWED_WORKSPACE_ROOT_NAMES):
+        base = root / root_name
+        if not base.exists() or base.is_symlink():
+            continue
+        candidates = [base] if base.is_file() else sorted(base.rglob("*"))
+        for child in candidates:
+            if not child.is_file() or child.is_symlink():
+                continue
+            rel_parts = child.relative_to(root).parts
+            if is_hidden_workspace_path(rel_parts) or is_repository_answer_path(rel_parts):
+                continue
+            result[child.relative_to(root).as_posix()] = _normalized_file_digest(child)
+    return result
 
 
 def _copy_safe_workspace_tree(src: Path, dst: Path) -> None:
@@ -177,60 +233,66 @@ class WorkspaceArchiveService:
                 archive.writestr(rel, payload)
         return buffer.getvalue()
 
-    def extract_zip(self, payload: bytes, destination: Path, *, max_bytes: int | None = None) -> None:
+    def extract_zip(self, package: ArchiveView, destination: Path) -> None:
         destination.mkdir(parents=True, exist_ok=True)
         seen_files: set[str] = set()
         seen_dirs: set[str] = set()
         extracted_total = 0
-        cap = main_util.UPLOAD_MAX_BYTES if max_bytes is None else max(1, int(max_bytes))
+        cap = int(package.policy.max_expanded_bytes)
         try:
-            with zipfile.ZipFile(io.BytesIO(payload), "r") as archive:
-                for info in archive.infolist():
-                    if _zipinfo_is_symlink(info):
-                        raise ValueError(f"zip symlink is not allowed: {info.filename}")
-                    rel = _normalize_zip_entry_name(info.filename)
-                    if not rel:
-                        continue
-                    if info.is_dir():
-                        if rel in seen_files:
-                            raise ValueError(f"zip path conflict: {rel}")
-                        seen_dirs.add(rel)
-                        (destination / rel).mkdir(parents=True, exist_ok=True)
-                        continue
-                    if rel in seen_files or rel in seen_dirs:
+            archive = package.zip_file
+            for info in archive.infolist():
+                if _zipinfo_is_symlink(info):
+                    raise ValueError(f"zip symlink is not allowed: {info.filename}")
+                rel = _normalize_zip_entry_name(info.filename)
+                if not rel:
+                    continue
+                if info.is_dir():
+                    if rel in seen_files:
                         raise ValueError(f"zip path conflict: {rel}")
-                    seen_files.add(rel)
-                    target = destination / rel
-                    extracted_total += extract_zip_entry_to_path_limited(
-                        archive,
-                        info,
-                        target,
-                        total_before=extracted_total,
-                        max_file_bytes=cap,
-                        max_total_bytes=cap,
-                        display_name=rel,
-                        entry_too_large_prefix="workspace archive entry is too large",
-                        payload_too_large_prefix="workspace archive payload is too large at",
-                        normalize_utf8_newlines=True,
-                    )
+                    seen_dirs.add(rel)
+                    (destination / rel).mkdir(parents=True, exist_ok=True)
+                    continue
+                if rel in seen_files or rel in seen_dirs:
+                    raise ValueError(f"zip path conflict: {rel}")
+                seen_files.add(rel)
+                target = destination / rel
+                extracted_total += extract_zip_entry_to_path_limited(
+                    archive,
+                    info,
+                    target,
+                    total_before=extracted_total,
+                    max_file_bytes=cap,
+                    max_total_bytes=cap,
+                    display_name=rel,
+                    entry_too_large_prefix="expanded zip payload is too large",
+                    payload_too_large_prefix="expanded zip payload is too large",
+                    normalize_utf8_newlines=True,
+                )
         except OSError as exc:
             raise ValueError("invalid workspace archive layout") from exc
         except zipfile.BadZipFile as exc:
             raise ValueError("workspace archive is not a valid zip") from exc
 
-    def compare_zip(self, workspace: Path, payload: bytes, *, max_bytes: int | None = None) -> WorkspaceDiff:
+    def compare_zip(self, workspace: Path, package: ArchiveView) -> WorkspaceDiff:
         with tempfile.TemporaryDirectory(prefix="polygon-workspace-compare-") as temp_name:
             local_root = Path(temp_name) / "local"
-            self.extract_zip(payload, local_root, max_bytes=max_bytes)
-            return _compare_file_maps(_safe_workspace_files(workspace), _safe_workspace_files(local_root))
+            self.extract_zip(package, local_root)
+            return _compare_file_maps(
+                _safe_workspace_digests(workspace),
+                _safe_workspace_digests(local_root),
+            )
 
-    def apply_zip(self, workspace: Path, payload: bytes, *, max_bytes: int | None = None) -> WorkspaceDiff:
+    def apply_zip(self, workspace: Path, package: ArchiveView) -> WorkspaceDiff:
         with tempfile.TemporaryDirectory(prefix="polygon-workspace-apply-") as temp_name:
             temp_root = Path(temp_name)
             local_root = temp_root / "local"
             backup_root = temp_root / "backup"
-            self.extract_zip(payload, local_root, max_bytes=max_bytes)
-            diff = _compare_file_maps(_safe_workspace_files(workspace), _safe_workspace_files(local_root))
+            self.extract_zip(package, local_root)
+            diff = _compare_file_maps(
+                _safe_workspace_digests(workspace),
+                _safe_workspace_digests(local_root),
+            )
             _copy_safe_workspace_tree(workspace, backup_root)
             try:
                 _clear_safe_workspace_roots(workspace)

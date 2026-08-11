@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from app.runtime_value import RuntimeValues, build_runtime_values
+from app.config import ConfigValues
 from app.service.platform.latex_process import detect_latex_engine
 from app.service.sandbox.base import ExecResult, ExecSpec, SandboxBackend
 from app.service.sandbox.tex_backend import TexSandboxBackend
@@ -17,62 +17,52 @@ class TexCompileResult:
     pdf_path: Path
 
 
+@dataclass(frozen=True)
+class TexCompilePolicy:
+    timeout_sec: int
+    memory_mb: int
+    process_limit: int
+    output_kb: int
+
+
 class TexCompileService:
     def __init__(
         self,
         *,
+        config_values: ConfigValues,
         sandbox_backend: SandboxBackend | None = None,
-        constants: RuntimeValues | None = None,
     ) -> None:
         self.sandbox = sandbox_backend or TexSandboxBackend()
-        self.timeout_sec = 120
-        self.memory_mb = 1024
-        self.process_limit = 64
-        self.output_kb = 131072
-        self.passes = 2
-        self.apply_runtime_values(constants or build_runtime_values())
+        self._config_values = config_values
 
-    def _coerce_int(self, raw: object, default: int, min_value: int, max_value: int) -> int:
-        try:
-            value = int(raw)
-        except Exception:
-            return default
-        return max(min_value, min(max_value, value))
-
-    def apply_runtime_values(self, values: RuntimeValues) -> None:
-        self.timeout_sec = self._coerce_int(
-            values.get("PREVIEW_TEX_TIMEOUT_SEC", 120),
-            default=120,
-            min_value=5,
-            max_value=1800,
-        )
-        self.memory_mb = self._coerce_int(
-            values.get("PREVIEW_TEX_MEMORY_MB", 1024),
-            default=1024,
-            min_value=16,
-            max_value=262144,
-        )
-        self.process_limit = self._coerce_int(
-            values.get("PREVIEW_TEX_PROCESS_LIMIT", 64),
-            default=64,
-            min_value=1,
-            max_value=4096,
-        )
-        self.output_kb = self._coerce_int(
-            values.get("PREVIEW_TEX_OUTPUT_KB", 131072),
-            default=131072,
-            min_value=64,
-            max_value=1048576,
-        )
-        self.passes = self._coerce_int(
-            values.get("PREVIEW_TEX_PASSES", 2),
-            default=2,
-            min_value=1,
-            max_value=4,
+    def _policy(self) -> TexCompilePolicy:
+        snapshot = self._config_values.snapshot()
+        return TexCompilePolicy(
+            timeout_sec=int(snapshot["PREVIEW_TEX_TIMEOUT_SEC"]),
+            memory_mb=int(snapshot["PREVIEW_TEX_MEMORY_MB"]),
+            process_limit=int(snapshot["PREVIEW_TEX_PROCESS_LIMIT"]),
+            output_kb=int(snapshot["PREVIEW_TEX_OUTPUT_KB"]),
         )
 
     def run(
         self,
+        *,
+        command: list[str],
+        cwd: Path,
+        extra_mounts: tuple[Path, ...] = (),
+        env: dict[str, str] | None = None,
+    ) -> ExecResult:
+        return self._run_with_policy(
+            self._policy(),
+            command=command,
+            cwd=cwd,
+            extra_mounts=extra_mounts,
+            env=env,
+        )
+
+    def _run_with_policy(
+        self,
+        policy: TexCompilePolicy,
         *,
         command: list[str],
         cwd: Path,
@@ -85,19 +75,21 @@ class TexCompileService:
                 cwd=cwd,
                 extra_mounts=extra_mounts,
                 env=env,
-                timeout_sec=self.timeout_sec,
-                output_kb=self.output_kb,
-                memory_mb=self.memory_mb,
-                process_limit=self.process_limit,
+                timeout_sec=policy.timeout_sec,
+                output_kb=policy.output_kb,
+                memory_mb=policy.memory_mb,
+                process_limit=policy.process_limit,
             )
         )
 
     def compile_pdf(self, tex_path: Path) -> TexCompileResult:
+        policy = self._policy()
         engine = detect_latex_engine(tex_path)
         final_proc: ExecResult | None = None
         final_log_text = ""
-        for _ in range(max(1, int(self.passes))):
-            proc = self.run(
+        for _ in range(2):
+            proc = self._run_with_policy(
+                policy,
                 command=[
                     engine,
                     "-interaction=nonstopmode",

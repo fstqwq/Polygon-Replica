@@ -11,7 +11,7 @@
     <a
       class="contest-problem-link{{ ' active' if item.active else '' }}"
       href="{{ item.href }}"
-      title="{{ item.idx }} — {{ item.problem_slug }}"
+      title="{{ item.idx }} &mdash; {{ item.problem_slug }}"
       {% if item.active %}aria-current="page"{% endif %}
     >{{ item_label }}</a>
     {% else %}

@@ -6,7 +6,7 @@ from dataclasses import field
 from typing import Callable
 
 from app.db import DB
-from app.runtime_value import RuntimeValues
+from app.config import ConfigValues
 from app.service.disk.verification_store import VerificationStore
 from app.service.platform.fs.layout import FsManager
 from app.service.platform.runtime_blob_store import RuntimeBlobStore
@@ -19,12 +19,26 @@ from app.service.judgehost.batch_scheduler import BatchScheduler
 from app.service.judgehost.toolchain_versions import HostToolchainTelemetry
 
 
+@dataclass(frozen=True)
+class JudgehostPolicy:
+    enabled: bool
+    api_token: str
+    api_username: str
+    fetch_batch_size: int
+    wait_timeout_sec: int
+    wait_poll_sec: float
+    online_window_sec: int
+    max_submission_source_bytes: int
+    max_tests_per_task: int
+    max_component_source_bytes: int
+
+
 @dataclass
 class JudgehostState:
     db: DB
     workspace_service: WorkspaceService
     fs_manager: FsManager
-    constants: RuntimeValues
+    config_values: ConfigValues
     runtime_blob_store: RuntimeBlobStore
     runtime_cache_index: RuntimeCacheIndex
     verification_task_store: VerificationTaskStore
@@ -33,17 +47,7 @@ class JudgehostState:
     lock: threading.Lock = field(default_factory=threading.Lock)
     state_lock: threading.RLock = field(default_factory=threading.RLock)
 
-    enabled: bool = False
-    api_token: str = ""
-    api_username: str = "judgehost"
-    fetch_batch_size: int = 2
     fetch_long_poll_sec: float = 5.0
-    wait_timeout_sec: int = 900
-    wait_poll_sec: float = 0.5
-    online_window_sec: int = 120
-    max_submission_source_bytes: int = 262144
-    max_tests_per_task: int = 512
-    max_component_source_bytes: int = 8388608
 
     task_registry: JudgehostTaskRegistry = field(init=False)
     touch_verification_runtime: Callable[[str], None] = field(
@@ -57,3 +61,22 @@ class JudgehostState:
     def __post_init__(self) -> None:
         self.verification_store = VerificationStore(self.db)
         self.task_registry = JudgehostTaskRegistry()
+
+    def config_policy(self) -> JudgehostPolicy:
+        snapshot = self.config_values.snapshot()
+        return JudgehostPolicy(
+            enabled=bool(snapshot["JUDGEHOST_ENABLE"]),
+            api_token=str(snapshot["JUDGEHOST_API_TOKEN"]),
+            api_username=str(snapshot["JUDGEHOST_API_USERNAME"]),
+            fetch_batch_size=int(snapshot["JUDGEHOST_FETCH_BATCH_SIZE"]),
+            wait_timeout_sec=int(snapshot["JUDGEHOST_WAIT_TIMEOUT_SEC"]),
+            wait_poll_sec=float(snapshot["JUDGEHOST_WAIT_POLL_SEC"]),
+            online_window_sec=int(snapshot["JUDGEHOST_ONLINE_WINDOW_SEC"]),
+            max_submission_source_bytes=int(
+                snapshot["JUDGEHOST_MAX_SUBMISSION_SOURCE_BYTES"]
+            ),
+            max_tests_per_task=int(snapshot["JUDGEHOST_MAX_TESTS_PER_TASK"]),
+            max_component_source_bytes=int(
+                snapshot["JUDGEHOST_MAX_COMPONENT_SOURCE_BYTES"]
+            ),
+        )

@@ -553,8 +553,9 @@ class DispatchHandler(DispatchCacheMixin):
         admission_gate: MaintenanceAdmissionGate | None = None,
     ) -> list[dict[str, object]]:
         safe_host = self._core.normalize_hostname(hostname)
+        policy = self._s.config_policy()
         cap = (
-            self._s.fetch_batch_size
+            policy.fetch_batch_size
             if max_batchsize is None
             else max(1, min(256, int(max_batchsize)))
         )

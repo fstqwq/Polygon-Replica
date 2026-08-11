@@ -943,7 +943,11 @@ class TestVerificationTaskScheduler(E2ETestBase):
         }
 
         with patch("app.impl.runtime.config.config", fake_config):
-            final_result = finalize_verification_task_result(task_row, result=result)
+            final_result = finalize_verification_task_result(
+                task_row,
+                result=result,
+                limit_bytes=2048,
+            )
 
         self.assertEqual(final_result.status, VerificationTaskStore.TASK_FAILED)
         self.assertEqual(final_result.verdict, "WA")
@@ -1020,7 +1024,11 @@ class TestVerificationTaskScheduler(E2ETestBase):
         }
 
         with patch("app.impl.runtime.config.config", fake_config):
-            final_result = finalize_verification_task_result(task_row, result=result)
+            final_result = finalize_verification_task_result(
+                task_row,
+                result=result,
+                limit_bytes=2048,
+            )
 
         self.assertEqual(final_result.status, VerificationTaskStore.TASK_FAILED)
         self.assertEqual(final_result.verdict, "FL")
@@ -1075,7 +1083,11 @@ class TestVerificationTaskScheduler(E2ETestBase):
             },
         }
 
-        final_result = finalize_verification_task_result(task_row, result=result)
+        final_result = finalize_verification_task_result(
+            task_row,
+            result=result,
+            limit_bytes=2048,
+        )
 
         self.assertEqual(final_result.status, VerificationTaskStore.TASK_FAILED)
         self.assertEqual(final_result.verdict, "CE")
@@ -1290,7 +1302,9 @@ class TestVerificationTaskScheduler(E2ETestBase):
         )
         row = task_store.list_rows(verification_id)[0]
         self.assertTrue(bool(row["answer_correct"]))
-        limit = int(getattr(config.constants, "AUX_DISPLAY_TEXT_LIMIT_BYTES", 2048) or 2048)
+        limit = int(
+            config.config_values.snapshot()["AUX_DISPLAY_TEXT_LIMIT_BYTES"]
+        )
         for key in ("compile_log", "error_text", "feedback_text"):
             value = str(row[key] or "")
             self.assertLessEqual(len(value.encode("utf-8")), limit)
@@ -1571,6 +1585,7 @@ class TestVerificationTaskScheduler(E2ETestBase):
             },
             run_status="ok",
             error_text="compile failed",
+            limit_bytes=1024,
         )
         diagnostics_rows = json.loads(parts.diagnostics_json)
         self.assertEqual(parts.verdict, "WA")
@@ -1599,6 +1614,7 @@ class TestVerificationTaskScheduler(E2ETestBase):
             },
             run_status="failed",
             error_text="",
+            limit_bytes=1024,
         )
         self.assertEqual(parts.verdict, "CE")
         self.assertEqual(parts.error_text, "compile error")

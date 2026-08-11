@@ -4,7 +4,7 @@ import shlex
 from dataclasses import dataclass
 from typing import Literal, cast
 
-from app.runtime_value import RuntimeValues
+from app.config import ConfigValues
 
 
 CompileFamily = Literal["native", "java", "python"]
@@ -48,7 +48,8 @@ def _tokens(raw: str) -> tuple[str, ...]:
         return tuple(raw.split())
 
 
-def compile_spec(constants: RuntimeValues, language_id: str) -> JudgehostCompileSpec:
+def compile_spec(config_values: ConfigValues, language_id: str) -> JudgehostCompileSpec:
+    snapshot = config_values.snapshot()
     if language_id == "c":
         return JudgehostCompileSpec(
             language_id="c",
@@ -62,16 +63,16 @@ def compile_spec(constants: RuntimeValues, language_id: str) -> JudgehostCompile
         return JudgehostCompileSpec(
             language_id="cpp",
             family="native",
-            command=cast(str, constants.TOOLCHAIN_CPP_COMPILER),
-            command_arguments=_tokens(cast(str, constants.TOOLCHAIN_JUDGEHOST_CPP_COMPILE_FLAGS)),
+            command=cast(str, snapshot["TOOLCHAIN_CPP_COMPILER"]),
+            command_arguments=_tokens(cast(str, snapshot["TOOLCHAIN_JUDGEHOST_CPP_COMPILE_FLAGS"])),
             fixed_arguments=("-I.",),
         )
     if language_id == "java":
         return JudgehostCompileSpec(
             language_id="java",
             family="java",
-            command=cast(str, constants.TOOLCHAIN_JAVA_COMPILER),
-            command_arguments=_tokens(cast(str, constants.TOOLCHAIN_JUDGEHOST_JAVA_COMPILE_FLAGS)),
+            command=cast(str, snapshot["TOOLCHAIN_JAVA_COMPILER"]),
+            command_arguments=_tokens(cast(str, snapshot["TOOLCHAIN_JUDGEHOST_JAVA_COMPILE_FLAGS"])),
             fixed_arguments=("-encoding", "UTF-8", "-sourcepath", ".", "-d", "."),
         )
     if language_id == "py":
@@ -79,7 +80,7 @@ def compile_spec(constants: RuntimeValues, language_id: str) -> JudgehostCompile
             language_id="py",
             family="python",
             command="pypy3",
-            command_arguments=_tokens(cast(str, constants.TOOLCHAIN_JUDGEHOST_PYTHON_COMPILE_FLAGS)),
+            command_arguments=_tokens(cast(str, snapshot["TOOLCHAIN_JUDGEHOST_PYTHON_COMPILE_FLAGS"])),
             fixed_arguments=("-m", "py_compile"),
         )
     raise ValueError(f"unsupported judgehost language: {language_id}")

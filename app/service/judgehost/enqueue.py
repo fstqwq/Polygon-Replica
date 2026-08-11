@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from app.main_constant import GENERAL_CONFIG_DEFAULTS
+
 import json
 import re
 import uuid
@@ -328,6 +330,8 @@ class TaskEnqueue:
         if not safe_verification_id:
             return {}
 
+        config_snapshot = self._s.config_values.snapshot()
+        policy = self._s.config_policy()
         wanted_tests: list[str] = []
         if selected_tests:
             for raw in selected_tests:
@@ -354,7 +358,7 @@ class TaskEnqueue:
                 if token in wanted_tests:
                     continue
                 wanted_tests.append(token)
-                if len(wanted_tests) >= self._s.max_tests_per_task:
+                if len(wanted_tests) >= policy.max_tests_per_task:
                     break
 
         tests_payload: list[dict[str, object]] = []
@@ -431,15 +435,12 @@ class TaskEnqueue:
             problem_time_limit_ms = int(problem_cfg_obj.get("time_limit_ms", 0))
         except Exception:
             problem_time_limit_ms = 0
-        default_cfg = cast(
-            dict[str, object],
-            self._s.constants.GENERAL_CONFIG_DEFAULTS,
-        )
+        default_cfg = cast(dict[str, object], GENERAL_CONFIG_DEFAULTS)
         problem_memory_limit_mb = normalize_memory_limit_mb(
             problem_cfg_obj.get("memory_limit_mb"),
             default_mb=int(default_cfg["memory_limit_mb"]),
-            min_mb=int(self._s.constants.GENERAL_MEMORY_LIMIT_MIN_MB),
-            max_mb=int(self._s.constants.GENERAL_MEMORY_LIMIT_MAX_MB),
+            min_mb=int(config_snapshot["GENERAL_MEMORY_LIMIT_MIN_MB"]),
+            max_mb=int(config_snapshot["GENERAL_MEMORY_LIMIT_MAX_MB"]),
         )
         if problem_time_limit_ms < 0:
             problem_time_limit_ms = 0
@@ -491,7 +492,7 @@ class TaskEnqueue:
         sources_payload: dict[str, dict[str, object]] = {}
         for name, source_path in source_files.items():
             descriptor = RuntimeBlobStore.describe_file(source_path)
-            if descriptor.size > self._s.max_component_source_bytes:
+            if descriptor.size > policy.max_component_source_bytes:
                 raise RuntimeError(f"{name} payload exceeds size limit")
             sources_payload[name] = self._s.runtime_blob_store.put_file(
                 descriptor
@@ -540,11 +541,12 @@ class TaskEnqueue:
         source_name: str
         source_label: str
         source_file: PayloadFile
+        policy = self._s.config_policy()
         if upload_file is not None:
             source_file = upload_file
             source_bytes = self._s.runtime_blob_store.read(
                 source_file,
-                max_bytes=self._s.max_submission_source_bytes,
+                max_bytes=policy.max_submission_source_bytes,
             )
             source_name = TaskEnqueue._normalize_text_with_default(upload_filename, default="submission.cpp")
             source_label = source_name
@@ -559,7 +561,7 @@ class TaskEnqueue:
             source_path = self._core.safe_workspace_source(workspace, TaskEnqueue._normalize_text(submission_path))
             source_bytes = self._core.safe_read_bytes(
                 source_path,
-                max_bytes=self._s.max_submission_source_bytes,
+                max_bytes=policy.max_submission_source_bytes,
                 label="submission payload",
             )
             source_file = self._s.runtime_blob_store.put_bytes(source_bytes)
@@ -629,9 +631,10 @@ class TaskEnqueue:
         manual_validate_only: bool = False,
         compile_only: bool = False,
     ) -> dict[str, object]:
+        policy = self._s.config_policy()
         upload_content = self._s.runtime_blob_store.read(
             upload_file,
-            max_bytes=self._s.max_submission_source_bytes,
+            max_bytes=policy.max_submission_source_bytes,
         )
         source_name, entry_point = self._normalize_submission_source(
             source_name=upload_filename,
@@ -658,11 +661,13 @@ class TaskEnqueue:
         return self._domjudge_precomputed_fields_from_payload(payload)
 
     def _domjudge_precomputed_fields_from_payload(self, payload: dict[str, object]) -> dict[str, object]:
+        config_snapshot = self._s.config_values.snapshot()
+        policy = self._s.config_policy()
         source_name = domjudge_path_name(payload.get("source_name"), default="submission.cpp")
         source_file = PayloadFile.from_payload(payload["source_file"])
         source_bytes = self._s.runtime_blob_store.read(
             source_file,
-            max_bytes=self._s.max_submission_source_bytes,
+            max_bytes=policy.max_submission_source_bytes,
         )
         if not source_bytes:
             raise RuntimeError("submission source payload is empty")
@@ -678,7 +683,7 @@ class TaskEnqueue:
             descriptor = PayloadFile.from_payload(raw_file)
             blob = self._s.runtime_blob_store.read(
                 descriptor,
-                max_bytes=self._s.max_submission_source_bytes,
+                max_bytes=policy.max_submission_source_bytes,
             )
             if not blob:
                 continue
@@ -711,10 +716,10 @@ class TaskEnqueue:
             ),
         )
         pass_limit = configured_pass_limit
-        compile_timeout = max(1, int(getattr(self._s.constants, "TOOLCHAIN_COMPILE_TIMEOUT_SEC", 120) or 120))
-        compile_mem_mb = max(64, int(getattr(self._s.constants, "TOOLCHAIN_COMPILE_MEMORY_MB", 2048) or 2048))
-        compile_output_limit_kb = compile_output_kb(self._s.constants)
-        run_output_limit_kb = run_output_kb(self._s.constants)
+        compile_timeout = int(config_snapshot["TOOLCHAIN_COMPILE_TIMEOUT_SEC"])
+        compile_mem_mb = int(config_snapshot["TOOLCHAIN_COMPILE_MEMORY_MB"])
+        compile_output_limit_kb = compile_output_kb(config_snapshot)
+        run_output_limit_kb = run_output_kb(config_snapshot)
         pass_bundle_max_bytes = min(
             8 * 1024 * 1024,
             max(1024, int(run_output_limit_kb * 1024 * 3 // 4)),
@@ -722,11 +727,8 @@ class TaskEnqueue:
         pass_capture_script = self._toolkit.pass_capture_script(
             max_bytes=pass_bundle_max_bytes,
         )
-        run_process_limit = max(
-            1,
-            int(getattr(self._s.constants, "RUN_EXEC_PROCESS_LIMIT", 1024) or 1024),
-        )
-        default_cfg = getattr(self._s.constants, "GENERAL_CONFIG_DEFAULTS", {}) or {}
+        run_process_limit = int(config_snapshot["RUN_EXEC_PROCESS_LIMIT"])
+        default_cfg = GENERAL_CONFIG_DEFAULTS
         run_tl_ms = domjudge_parse_int(
             run_cfg_obj.get("time_limit_ms"),
             domjudge_parse_int(
@@ -754,7 +756,7 @@ class TaskEnqueue:
                 return b""
             return self._s.runtime_blob_store.read(
                 PayloadFile.from_payload(raw_file),
-                max_bytes=self._s.max_component_source_bytes,
+                max_bytes=policy.max_component_source_bytes,
             )
 
         checker_source_bytes = _source_bytes("checker.cpp")

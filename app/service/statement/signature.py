@@ -31,7 +31,12 @@ def _safe_workspace_regular_file(workspace: Path, rel: Path) -> Path | None:
     return candidate
 
 
-def statement_sources_signature(workspace: Path, problem_title: str | None = None) -> str:
+def statement_sources_signature(
+    workspace: Path,
+    problem_title: str | None = None,
+    *,
+    tests_spec_max_bytes: int,
+) -> str:
     """Stable signature of statement sources (excluding derived statement/main.tex)."""
     statement_root = workspace / STATEMENT_DIR
     entries: list[dict[str, object]] = [
@@ -99,7 +104,10 @@ def statement_sources_signature(workspace: Path, problem_title: str | None = Non
 
     spec_path = workspace / TESTS_SPEC_REL
     try:
-        spec_rows = load_tests_spec(spec_path)
+        spec_rows = load_tests_spec(
+            spec_path,
+            max_bytes=tests_spec_max_bytes,
+        )
     except Exception as exc:
         raise RuntimeError(f"invalid tests/spec.json: {exc}") from exc
     sample_related_files: list[Path] = []

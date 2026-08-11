@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import json
 from app.db import DB
-from app.service.platform.error_text import bounded_display_text
+from app.service.platform.error_text import (
+    aux_display_text_limit_bytes,
+    bounded_display_text,
+)
 
 
 class RuntimeStateStore:
@@ -10,6 +13,10 @@ class RuntimeStateStore:
 
     def __init__(self, db: DB):
         self.db = db
+
+    def _bounded_text(self, value: str) -> str:
+        limit = aux_display_text_limit_bytes(self.db.config_values.snapshot())
+        return bounded_display_text(value, limit_bytes=limit)
 
     def cancel_inflight_summary_rows(self, table_name: str, reason: str, *, now_text: str) -> list[str]:
         safe_table = table_name.strip()
@@ -42,7 +49,7 @@ class RuntimeStateStore:
         return warnings
 
     def _cancel_inflight_previews(self, reason: str, *, now_text: str) -> list[str]:
-        safe_reason = bounded_display_text(reason)
+        safe_reason = self._bounded_text(reason)
         rows = self.db.fetch_all(
             """
             SELECT id
@@ -83,7 +90,7 @@ class RuntimeStateStore:
         return warnings
 
     def _cancel_inflight_verifications(self, reason: str, *, now_text: str) -> list[str]:
-        safe_reason = bounded_display_text(reason)
+        safe_reason = self._bounded_text(reason)
         rows = self.db.fetch_all(
             """
             SELECT id,status

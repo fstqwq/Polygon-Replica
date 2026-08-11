@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import app.main_constant as _K
+
 import json
+import os
 import re
 import time
 import uuid
@@ -20,7 +23,7 @@ Invariants:
 - Keep draft file layout/TTL/path-safety checks unchanged.
 """
 
-_C = config.constants
+_C = config.config_values
 _CONTEST_IMPORT_SUFFIX_RE = re.compile(r"-\d+$")
 _CONTEST_IMPORT_DRAFT_ID_RE = re.compile(r"^[a-f0-9]{24}$")
 _CONTEST_IMPORT_DRAFT_TTL_SEC = 6 * 60 * 60
@@ -45,7 +48,7 @@ def _import_contest_slug_base_from_package_name(package_name: str) -> str:
         normalized_stem = raw_stem
     slug = _slugify_contest_id(normalized_stem)
     base = slug or "imported-contest"
-    if not _C.CONTEST_IDENT_RE.fullmatch(base):
+    if not _K.CONTEST_IDENT_RE.fullmatch(base):
         return "imported-contest"
     return base
 
@@ -87,7 +90,7 @@ def _contest_idx_label(seq: int) -> str:
 
 def _normalize_import_contest_idx(raw: object, seq: int, used: set[str]) -> str:
     token = str(raw or "").strip().upper()
-    if token and len(token) <= 16 and _C.CONTEST_IDENT_RE.fullmatch(token) and token not in used:
+    if token and len(token) <= 16 and _K.CONTEST_IDENT_RE.fullmatch(token) and token not in used:
         used.add(token)
         return token
     candidate_seq = max(1, int(seq))
@@ -146,9 +149,9 @@ def _cleanup_stale_contest_import_drafts() -> None:
 
 def _problem_slug_segment_max_len(owner: str) -> int:
     safe_owner = owner.strip().lower()
-    if not _C.USER_IDENT_RE.fullmatch(safe_owner):
-        raise ValueError(_C.USERNAME_RULE_MESSAGE)
-    return max(1, int(_C.PROBLEM_ID_MAX_LEN) - len(safe_owner) - 1)
+    if not _K.USER_IDENT_RE.fullmatch(safe_owner):
+        raise ValueError(_K.USERNAME_RULE_MESSAGE)
+    return max(1, int(_K.PROBLEM_ID_MAX_LEN) - len(safe_owner) - 1)
 
 
 def _slugify_problem_id(raw: str, *, max_len: int) -> str:
@@ -165,18 +168,18 @@ def _slugify_problem_id(raw: str, *, max_len: int) -> str:
 def _normalize_problem_slug_segment_required(owner: str, raw: str) -> str:
     token = _slugify_problem_id(raw, max_len=_problem_slug_segment_max_len(owner))
     if not token or (not _PROBLEM_SEGMENT_RE.fullmatch(token)):
-        raise ValueError(_C.PROBLEM_ID_RULE_MESSAGE)
+        raise ValueError(_K.PROBLEM_ID_RULE_MESSAGE)
     return token
 
 
 def _problem_full_slug(owner: str, slug_segment: str) -> str:
     safe_owner = owner.strip().lower()
-    if not _C.USER_IDENT_RE.fullmatch(safe_owner):
-        raise ValueError(_C.USERNAME_RULE_MESSAGE)
+    if not _K.USER_IDENT_RE.fullmatch(safe_owner):
+        raise ValueError(_K.USERNAME_RULE_MESSAGE)
     safe_segment = _normalize_problem_slug_segment_required(safe_owner, slug_segment)
     full_slug = f"{safe_owner}/{safe_segment}"
-    if len(full_slug) > _C.PROBLEM_ID_MAX_LEN:
-        raise ValueError(_C.PROBLEM_ID_RULE_MESSAGE)
+    if len(full_slug) > _K.PROBLEM_ID_MAX_LEN:
+        raise ValueError(_K.PROBLEM_ID_RULE_MESSAGE)
     return full_slug
 
 
@@ -239,7 +242,7 @@ def _create_contest_import_draft(
     actor_user_id: int,
     actor_username: str,
     package_name: str,
-    package_payload: bytes,
+    package_path: Path,
     contest_slug_input: str,
     contest_title_input: str,
     parsed_title: str,
@@ -248,21 +251,32 @@ def _create_contest_import_draft(
     _cleanup_stale_contest_import_drafts()
     draft_id = uuid.uuid4().hex[:24]
     meta_path, payload_path = _contest_import_draft_paths(draft_id)
-    payload_path.write_bytes(package_payload)
-    payload_stat = payload_path.stat()
-    meta = {
-        "draft_id": draft_id,
-        "actor_user_id": int(actor_user_id),
-        "actor_username": actor_username.strip(),
-        "package_name": package_name.strip(),
-        "package_size": int(payload_stat.st_size),
-        "contest_slug_input": contest_slug_input.strip(),
-        "contest_title_input": contest_title_input.strip(),
-        "parsed_title": parsed_title.strip(),
-        "problem_rows": [dict(row) for row in problem_rows],
-        "created_at": now_iso(),
-    }
-    meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    source = Path(package_path)
+    if not source.is_file() or source.is_symlink():
+        raise ValueError("contest package upload is unavailable")
+    try:
+        os.replace(source, payload_path)
+        payload_stat = payload_path.stat()
+        meta = {
+            "draft_id": draft_id,
+            "actor_user_id": int(actor_user_id),
+            "actor_username": actor_username.strip(),
+            "package_name": package_name.strip(),
+            "package_size": int(payload_stat.st_size),
+            "contest_slug_input": contest_slug_input.strip(),
+            "contest_title_input": contest_title_input.strip(),
+            "parsed_title": parsed_title.strip(),
+            "problem_rows": [dict(row) for row in problem_rows],
+            "created_at": now_iso(),
+        }
+        meta_path.write_text(
+            json.dumps(meta, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+    except Exception:
+        meta_path.unlink(missing_ok=True)
+        payload_path.unlink(missing_ok=True)
+        raise
     return draft_id
 
 
@@ -356,7 +370,7 @@ def _build_problem_slug_review_rows(
         if not requested:
             message = "slug is required"
         elif not valid:
-            message = _C.PROBLEM_ID_RULE_MESSAGE
+            message = _K.PROBLEM_ID_RULE_MESSAGE
         elif duplicate:
             message = "slug duplicated in this import"
         elif exists:

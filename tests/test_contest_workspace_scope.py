@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+# ascii-lint: allow; reason=chinese-test
+
 import json
 import re
 from html.parser import HTMLParser

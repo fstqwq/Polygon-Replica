@@ -17,7 +17,11 @@ from app.impl.workspace.context_operation import audit
 from app.impl.workspace.context_run_detail import normalize_run_test_name_token
 from app.impl.workspace.problem_config import read_problem_config
 from app.impl.workspace.run_view_detail import build_run_detail_context
-from app.main_util import read_upload_bytes_limited
+from app.service.importing.archive import (
+    ArchiveView,
+    problem_archive_policy,
+)
+from app.service.importing.upload import spool_upload
 from app.service.platform.git_process import run_git
 from app.service.workspace.mutation import WorkspaceMutationConflict
 
@@ -619,7 +623,7 @@ async def agent_workspace_files(request: Request):
         listed = config.workspace_file_service.list_entries(
             workspace,
             rel,
-            limit=config.constants.WORKSPACE_FILE_LIST_LIMIT,
+            limit=config.config_values.WORKSPACE_FILE_LIST_LIMIT,
             require_allowed_root=True,
         )
         items = [{"path": item.path, "is_dir": item.is_dir, "is_file": item.is_file} for item in listed.entries]
@@ -684,11 +688,25 @@ async def agent_workspace_compare(request: Request, archive: UploadFile = File(.
     ctx = _agent_problem_ctx(identity)
     workspace = Path(str(ctx["workspace"]["path"])).resolve()
     try:
-        archive_bytes = await read_upload_bytes_limited(archive, label="workspace archive")
-        result = config.workspace_mutation_service.read_locked(
-            workspace,
-            lambda: config.workspace_archive_service.compare_zip(workspace, archive_bytes),
-        )
+        snapshot = config.config_values.snapshot()
+        async with spool_upload(
+            archive,
+            root=config.settings.cache_root / "archive-uploads",
+            max_bytes=int(snapshot["UPLOAD_MAX_BYTES"]),
+            label="workspace archive",
+        ) as archive_path:
+            with ArchiveView(
+                archive_path,
+                problem_archive_policy(
+                    int(snapshot["PROBLEM_ZIP_MAX_EXPANDED_BYTES"])
+                ),
+            ) as package:
+                result = config.workspace_mutation_service.read_locked(
+                    workspace,
+                    lambda: config.workspace_archive_service.compare_zip(
+                        workspace, package
+                    ),
+                )
         status = result.status
         diff = result.value
         payload = {
@@ -712,15 +730,29 @@ async def agent_workspace_apply(
     workspace = Path(str(ctx["workspace"]["path"])).resolve()
     expected_head = str(base_head_commit or "").strip()
     try:
-        archive_bytes = await read_upload_bytes_limited(archive, label="workspace archive")
-        def apply_archive():
-            status_before = config.workspace_service.read_workspace_status(workspace)
-            current_head = str(status_before.get("head_commit") or "")
-            if expected_head and expected_head != current_head:
-                raise WorkspaceMutationConflict("workspace head changed")
-            return config.workspace_archive_service.apply_zip(workspace, archive_bytes)
+        snapshot = config.config_values.snapshot()
+        async with spool_upload(
+            archive,
+            root=config.settings.cache_root / "archive-uploads",
+            max_bytes=int(snapshot["UPLOAD_MAX_BYTES"]),
+            label="workspace archive",
+        ) as archive_path:
+            with ArchiveView(
+                archive_path,
+                problem_archive_policy(
+                    int(snapshot["PROBLEM_ZIP_MAX_EXPANDED_BYTES"])
+                ),
+            ) as package:
+                def apply_archive():
+                    status_before = config.workspace_service.read_workspace_status(workspace)
+                    current_head = str(status_before.get("head_commit") or "")
+                    if expected_head and expected_head != current_head:
+                        raise WorkspaceMutationConflict("workspace head changed")
+                    return config.workspace_archive_service.apply_zip(workspace, package)
 
-        result = config.workspace_mutation_service.write_locked(workspace, apply_archive)
+                result = config.workspace_mutation_service.write_locked(
+                    workspace, apply_archive
+                )
         diff = result.value
         status_after = result.status
         audit(

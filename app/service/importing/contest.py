@@ -1,148 +1,64 @@
+"""Polygon contest-package metadata and bounded archive views."""
+
 from __future__ import annotations
 
-import io
 import re
-import xml.etree.ElementTree as ET
+import shutil
 import zipfile
-from pathlib import Path, PurePosixPath
+import xml.etree.ElementTree as ET
+from pathlib import Path
 from typing import TypedDict
 from urllib.parse import unquote, urlparse
 
-from app.main_util import UPLOAD_MAX_BYTES
 from app.service.contest.statement_meta import infer_contest_header_fields
-
-ZIP_MAX_BYTES = UPLOAD_MAX_BYTES
-ZIP_MAX_FILE_BYTES = UPLOAD_MAX_BYTES
-ZIP_TEXT_MAX_BYTES = UPLOAD_MAX_BYTES
+from app.service.importing.archive import ArchivePolicy, ArchiveView
 
 
-ContestName = TypedDict(
-    "ContestName",
-    {
-        "language": str,
-        "value": str,
-    },
-)
-
-ContestProblemRow = TypedDict(
-    "ContestProblemRow",
-    {
-        "index": str,
-        "url": str,
-        "short_name": str,
-        "slug_hint": str,
-    },
-)
-
-ParsedContest = TypedDict(
-    "ParsedContest",
-    {
-        "title": str,
-        "problems": list[ContestProblemRow],
-    },
-)
-
-ImportedContestProblem = TypedDict(
-    "ImportedContestProblem",
-    {
-        "index": str,
-        "source_slug": str,
-        "source_folder": str,
-        "package_name": str,
-        "package_bytes": bytes,
-    },
-)
-
-ImportedContestStatementFile = TypedDict(
-    "ImportedContestStatementFile",
-    {
-        "key": str,
-        "language": str,
-        "package_bytes": bytes,
-    },
-)
-
-ParsedContestPackage = TypedDict(
-    "ParsedContestPackage",
-    {
-        "package_name": str,
-        "title": str,
-        "location": str,
-        "date": str,
-        "problems": list[ImportedContestProblem],
-        "statement_files": list[ImportedContestStatementFile],
-        "default_language": str,
-        "total_problems": int,
-    },
-)
+class ContestName(TypedDict):
+    language: str
+    value: str
 
 
-def _normalize_zip_path(raw: str) -> str:
-    text = raw.replace("\\", "/").strip()
-    if not text:
-        return ""
-    pure = PurePosixPath(text)
-    if pure.is_absolute():
-        return ""
-    parts: list[str] = []
-    for part in pure.parts:
-        if not part or part == ".":
-            continue
-        if part == "..":
-            return ""
-        parts.append(part)
-    return "/".join(parts)
+class ContestProblemRow(TypedDict):
+    index: str
+    url: str
+    short_name: str
+    slug_hint: str
 
 
-def _read_text_from_zip(zf: zipfile.ZipFile, info: zipfile.ZipInfo) -> str:
-    if info.file_size > ZIP_TEXT_MAX_BYTES:
-        raise ValueError(f"zip entry too large for text: {info.filename}")
-    with zf.open(info, "r") as fh:
-        raw = fh.read(ZIP_TEXT_MAX_BYTES + 1)
-    if len(raw) > ZIP_TEXT_MAX_BYTES:
-        raise ValueError(f"zip entry too large for text: {info.filename}")
-    return raw.decode("utf-8", errors="replace")
+class ParsedContest(TypedDict):
+    title: str
+    problems: list[ContestProblemRow]
 
 
-def _read_bytes_from_zip(zf: zipfile.ZipFile, info: zipfile.ZipInfo) -> bytes:
-    if info.file_size > ZIP_MAX_FILE_BYTES:
-        raise ValueError(f"zip entry too large: {info.filename}")
-    with zf.open(info, "r") as fh:
-        raw = fh.read(ZIP_MAX_FILE_BYTES + 1)
-    if len(raw) > ZIP_MAX_FILE_BYTES:
-        raise ValueError(f"zip entry too large: {info.filename}")
-    return raw
+class ImportedContestProblem(TypedDict):
+    index: str
+    source_slug: str
+    source_folder: str
+    package_name: str
 
 
-def _entry_map_from_zip(zf: zipfile.ZipFile, anchor_name: str) -> dict[str, zipfile.ZipInfo]:
-    raw_entries: dict[str, zipfile.ZipInfo] = {}
-    for info in zf.infolist():
-        if info.is_dir():
-            continue
-        normalized = _normalize_zip_path(info.filename)
-        if not normalized:
-            continue
-        raw_entries[normalized] = info
-    anchor = _normalize_zip_path(anchor_name)
-    if not anchor:
-        raise ValueError("invalid package anchor")
-    if anchor in raw_entries:
-        return raw_entries
-    suffix = f"/{anchor}"
-    candidates = sorted([path for path in raw_entries if path.endswith(suffix)], key=len)
-    if not candidates:
-        raise ValueError(f"{anchor} not found in package")
-    prefix = candidates[0][:-len(anchor)]
-    mapped_entries: dict[str, zipfile.ZipInfo] = {}
-    for path, info in raw_entries.items():
-        if not path.startswith(prefix):
-            continue
-        relative_path = path[len(prefix):]
-        if relative_path:
-            mapped_entries[relative_path] = info
-    if anchor not in mapped_entries:
-        raise ValueError(f"{anchor} not found in package")
-    return mapped_entries
+class ImportedContestStatementFile(TypedDict):
+    key: str
+    language: str
+    archive_path: str
+
+
+class StagedContestStatementFile(TypedDict):
+    key: str
+    language: str
+    source_path: Path
+
+
+class ParsedContestPackage(TypedDict):
+    package_name: str
+    title: str
+    location: str
+    date: str
+    problems: list[ImportedContestProblem]
+    statement_files: list[ImportedContestStatementFile]
+    default_language: str
+    total_problems: int
 
 
 def _slugify_problem_token(raw: str) -> str:
@@ -151,9 +67,7 @@ def _slugify_problem_token(raw: str) -> str:
         return ""
     token = re.sub(r"[^a-z0-9]+", "-", token)
     token = re.sub(r"-{2,}", "-", token).strip("-")
-    if len(token) > 64:
-        token = token[:64].rstrip("-")
-    return token
+    return token[:64].rstrip("-")
 
 
 def _slug_hint_from_url(raw_url: str) -> str:
@@ -166,8 +80,7 @@ def _slug_hint_from_url(raw_url: str) -> str:
         path = text
     if not path:
         return ""
-    leaf = unquote(path.split("/")[-1]).strip()
-    return _slugify_problem_token(leaf)
+    return _slugify_problem_token(unquote(path.split("/")[-1]).strip())
 
 
 def _contest_idx_label(seq: int) -> str:
@@ -185,103 +98,95 @@ def _xml_attr(node: ET.Element, name: str) -> str:
 
 
 class PolygonContestImportService:
+    """Parse contest metadata and expose child archives without copying bytes."""
+
     def _infer_statement_header_fields(
         self,
+        package: ArchiveView,
         statement_files: list[ImportedContestStatementFile],
         default_language: str,
     ) -> dict[str, str]:
-        text_by_key: dict[str, str] = {}
-        for row in statement_files:
-            key = str(row["key"]).strip()
-            if not key.endswith("/statements.tex"):
-                continue
-            try:
-                text_by_key[key] = bytes(row["package_bytes"]).decode("utf-8", errors="replace")
-            except Exception:
-                continue
+        rows_by_key = {row["key"]: row for row in statement_files}
         candidate_keys: list[str] = []
-        safe_default_language = str(default_language or "").strip().lower()
+        safe_default_language = default_language.strip().lower()
         if safe_default_language:
             candidate_keys.append(f"statements/{safe_default_language}/statements.tex")
         if "statements/english/statements.tex" not in candidate_keys:
             candidate_keys.append("statements/english/statements.tex")
-        for key in sorted(text_by_key):
-            if key not in candidate_keys:
-                candidate_keys.append(key)
+        candidate_keys.extend(
+            key
+            for key in sorted(rows_by_key)
+            if key.endswith("/statements.tex") and key not in candidate_keys
+        )
+        entries = package.entries
         for key in candidate_keys:
-            text = text_by_key.get(key, "")
-            if not text:
+            row = rows_by_key.get(key)
+            info = entries.get(row["archive_path"]) if row is not None else None
+            if info is None:
                 continue
+            text = package.read_metadata(info, label=key).decode(
+                "utf-8", errors="replace"
+            )
             inferred = infer_contest_header_fields(text)
             if inferred["title"] or inferred["location"] or inferred["date"]:
                 return inferred
         return {"title": "", "location": "", "date": ""}
 
-    def _statement_source_rows(self, zf: zipfile.ZipFile, entries: dict[str, zipfile.ZipInfo]) -> list[ImportedContestStatementFile]:
+    @staticmethod
+    def _statement_source_rows(
+        entries: dict[str, zipfile.ZipInfo],
+    ) -> list[ImportedContestStatementFile]:
         rows: list[ImportedContestStatementFile] = []
-        for path, info in sorted(entries.items()):
+        for path in sorted(entries):
             if not path.startswith("statements/"):
                 continue
             parts = path.split("/")
             if len(parts) < 3:
                 continue
             language = parts[1].strip().lower()
-            if not language:
-                continue
-            rows.append(
-                {
-                    "key": path,
-                    "language": language,
-                    "package_bytes": _read_bytes_from_zip(zf, info),
-                }
-            )
+            if language:
+                rows.append(
+                    {"key": path, "language": language, "archive_path": path}
+                )
         return rows
 
-    def _default_statement_language(self, statement_files: list[ImportedContestStatementFile]) -> str:
-        languages: set[str] = set()
-        statement_roots: set[str] = set()
-        for row in statement_files:
-            language = row["language"].strip().lower()
-            key = row["key"].strip()
-            if not language or not key:
-                continue
-            languages.add(language)
-            if key.endswith("/statements.tex"):
-                statement_roots.add(language)
-        if "english" in statement_roots:
+    @staticmethod
+    def _default_statement_language(
+        statement_files: list[ImportedContestStatementFile],
+    ) -> str:
+        roots = {
+            row["language"].strip().lower()
+            for row in statement_files
+            if row["key"].endswith("/statements.tex")
+        }
+        if "english" in roots:
             return "english"
-        if statement_roots:
-            return sorted(statement_roots)[0]
+        if roots:
+            return sorted(roots)[0]
         raise ValueError("contest package missing statements/<language>/statements.tex")
 
-    def _parse_contest_xml(self, xml_text: str) -> ParsedContest:
+    @staticmethod
+    def _parse_contest_xml(xml_text: str) -> ParsedContest:
         try:
             root = ET.fromstring(xml_text)
         except ET.ParseError as exc:
             raise ValueError(f"invalid contest.xml: {exc}") from exc
-        title = ""
         names: list[ContestName] = []
         for node in root.findall("./names/name"):
             language = _xml_attr(node, "language")
             value = _xml_attr(node, "value")
             if language and value:
                 names.append({"language": language, "value": value})
-        for row in names:
-            if row["language"].lower() == "english":
-                title = row["value"]
-                break
-        if not title and names:
-            title = names[0]["value"]
+        title = next(
+            (row["value"] for row in names if row["language"].lower() == "english"),
+            names[0]["value"] if names else "",
+        )
         problems: list[ContestProblemRow] = []
         for seq, node in enumerate(root.findall("./problems/problem"), start=1):
-            index = _xml_attr(node, "index")
-            if not index:
-                index = _contest_idx_label(seq)
+            index = _xml_attr(node, "index") or _contest_idx_label(seq)
             url = _xml_attr(node, "url")
             short_name = _xml_attr(node, "short-name")
-            slug_hint = _slug_hint_from_url(url)
-            if not slug_hint and short_name:
-                slug_hint = _slugify_problem_token(short_name)
+            slug_hint = _slug_hint_from_url(url) or _slugify_problem_token(short_name)
             problems.append(
                 {
                     "index": index.upper(),
@@ -294,119 +199,134 @@ class PolygonContestImportService:
             raise ValueError("contest.xml has no problems")
         return {"title": title, "problems": problems}
 
-    def _problem_folder_map(self, entries: dict[str, zipfile.ZipInfo]) -> dict[str, str]:
+    @staticmethod
+    def _problem_folder_map(
+        entries: dict[str, zipfile.ZipInfo],
+    ) -> dict[str, str]:
         mapping: dict[str, str] = {}
         for path in entries:
-            if not path.startswith("problems/") or not path.endswith("/problem.xml"):
-                continue
-            parts = path.split("/")
-            if len(parts) < 3:
-                continue
-            folder = parts[1]
-            if not folder:
-                continue
-            mapping[folder.lower()] = folder
+            if path.startswith("problems/") and path.endswith("/problem.xml"):
+                parts = path.split("/")
+                if len(parts) >= 3 and parts[1]:
+                    mapping[parts[1].lower()] = parts[1]
         return mapping
 
+    @staticmethod
     def _resolve_problem_folder(
-        self,
         row: ContestProblemRow,
         folder_map: dict[str, str],
         used: set[str],
     ) -> str:
         candidates: list[str] = []
         if row["slug_hint"]:
-            candidates.append(row["slug_hint"])
-            candidates.append(row["slug_hint"].replace("-", "_"))
+            candidates.extend((row["slug_hint"], row["slug_hint"].replace("-", "_")))
         short_name = _slugify_problem_token(row["short_name"])
         if short_name:
-            candidates.append(short_name)
-            candidates.append(short_name.replace("-", "_"))
-        seen: set[str] = set()
-        for candidate in candidates:
-            if candidate in seen or candidate in used:
-                continue
-            seen.add(candidate)
-            folder = folder_map.get(candidate)
-            if folder is not None:
-                return folder
-        for token in sorted(folder_map):
-            if token not in used:
-                return folder_map[token]
-        return ""
+            candidates.extend((short_name, short_name.replace("-", "_")))
+        for candidate in dict.fromkeys(candidates):
+            if candidate not in used and candidate in folder_map:
+                return folder_map[candidate]
+        return next(
+            (folder_map[token] for token in sorted(folder_map) if token not in used),
+            "",
+        )
 
-    def _build_problem_package_bytes(
+    def parse_package(
         self,
-        zf: zipfile.ZipFile,
-        entries: dict[str, zipfile.ZipInfo],
-        folder: str,
-    ) -> bytes:
-        if not folder:
-            raise ValueError("invalid problem folder")
-        prefix = f"problems/{folder}/"
-        buffer = io.BytesIO()
-        copied = 0
-        with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as out_zip:
-            for path, info in entries.items():
-                if not path.startswith(prefix):
-                    continue
-                target_rel = path[len(prefix):]
-                if not target_rel:
-                    continue
-                out_zip.writestr(target_rel, _read_bytes_from_zip(zf, info))
-                copied += 1
-        if copied <= 0:
-            raise ValueError(f"problem folder is empty: {folder}")
-        payload = buffer.getvalue()
-        with zipfile.ZipFile(io.BytesIO(payload), "r") as check_zip:
-            check_entries = _entry_map_from_zip(check_zip, "problem.xml")
-            if "problem.xml" not in check_entries:
-                raise ValueError(f"problem.xml missing in problem folder: {folder}")
-        return payload
-
-    def parse_package(self, package_name: str, package_bytes: bytes) -> ParsedContestPackage:
-        if not package_bytes:
-            raise ValueError("empty package file")
-        if len(package_bytes) > ZIP_MAX_BYTES:
-            raise ValueError("contest package file is too large")
-        package_name = package_name.strip()
-        with zipfile.ZipFile(io.BytesIO(package_bytes), "r") as zf:
-            entry_map = _entry_map_from_zip(zf, "contest.xml")
-            contest = self._parse_contest_xml(_read_text_from_zip(zf, entry_map["contest.xml"]))
-            statement_files = self._statement_source_rows(zf, entry_map)
-            default_language = self._default_statement_language(statement_files)
-            inferred_header = self._infer_statement_header_fields(statement_files, default_language)
-            folder_map = self._problem_folder_map(entry_map)
-            if not folder_map:
-                raise ValueError("no problem.xml found under problems/ in contest package")
-            used_folders: set[str] = set()
-            imported_rows: list[ImportedContestProblem] = []
-            for seq, row in enumerate(contest["problems"], start=1):
-                folder = self._resolve_problem_folder(row, folder_map, used_folders)
-                if not folder:
-                    raise ValueError(f"cannot resolve contest problem folder for index #{seq}")
-                used_folders.add(folder.lower())
-                package_payload = self._build_problem_package_bytes(zf, entry_map, folder)
-                source_slug = _slugify_problem_token(folder) or f"problem-{seq}"
-                imported_rows.append(
-                    {
-                        "index": row["index"],
-                        "source_slug": source_slug,
-                        "source_folder": folder,
-                        "package_name": f"{source_slug}.zip",
-                        "package_bytes": package_payload,
-                    }
+        package_name: str,
+        package: ArchiveView,
+        *,
+        problem_policy: ArchivePolicy,
+        max_problems: int,
+    ) -> ParsedContestPackage:
+        rooted = package.rooted_at("contest.xml")
+        entries = {
+            path: info for path, info in rooted.entries.items() if not info.is_dir()
+        }
+        xml_info = entries.get("contest.xml")
+        if xml_info is None:
+            raise ValueError("contest.xml not found in package")
+        contest = self._parse_contest_xml(
+            rooted.read_metadata(xml_info, label="contest.xml").decode(
+                "utf-8", errors="replace"
+            )
+        )
+        if len(contest["problems"]) > int(max_problems):
+            raise ValueError(
+                "contest package has more than the configured maximum of "
+                f"{int(max_problems)} problems"
+            )
+        statement_files = self._statement_source_rows(entries)
+        default_language = self._default_statement_language(statement_files)
+        inferred = self._infer_statement_header_fields(
+            rooted, statement_files, default_language
+        )
+        folder_map = self._problem_folder_map(entries)
+        if not folder_map:
+            raise ValueError("no problem.xml found under problems/ in contest package")
+        used_folders: set[str] = set()
+        imported_rows: list[ImportedContestProblem] = []
+        for seq, row in enumerate(contest["problems"], start=1):
+            folder = self._resolve_problem_folder(row, folder_map, used_folders)
+            if not folder:
+                raise ValueError(
+                    f"cannot resolve contest problem folder for index #{seq}"
                 )
-            title = contest["title"]
-            if not title:
-                title = inferred_header["title"] or Path(package_name or "imported-contest").stem
-            return {
-                "package_name": package_name,
-                "title": title,
-                "location": inferred_header["location"],
-                "date": inferred_header["date"],
-                "problems": imported_rows,
-                "statement_files": statement_files,
-                "default_language": default_language,
-                "total_problems": len(imported_rows),
-            }
+            child = rooted.subview(f"problems/{folder}", problem_policy)
+            child.rooted_at("problem.xml")
+            used_folders.add(folder.lower())
+            source_slug = _slugify_problem_token(folder) or f"problem-{seq}"
+            imported_rows.append(
+                {
+                    "index": row["index"],
+                    "source_slug": source_slug,
+                    "source_folder": folder,
+                    "package_name": f"{source_slug}.zip",
+                }
+            )
+        package_name = package_name.strip()
+        return {
+            "package_name": package_name,
+            "title": contest["title"] or inferred["title"] or Path(package_name or "imported-contest").stem,
+            "location": inferred["location"],
+            "date": inferred["date"],
+            "problems": imported_rows,
+            "statement_files": statement_files,
+            "default_language": default_language,
+            "total_problems": len(imported_rows),
+        }
+
+    @staticmethod
+    def problem_archive(
+        package: ArchiveView,
+        source_folder: str,
+        policy: ArchivePolicy,
+    ) -> ArchiveView:
+        rooted = package.rooted_at("contest.xml")
+        return rooted.subview(f"problems/{source_folder}", policy)
+
+    @staticmethod
+    def stage_statement_sources(
+        package: ArchiveView,
+        files: list[ImportedContestStatementFile],
+        staging_root: Path,
+    ) -> list[StagedContestStatementFile]:
+        rooted = package.rooted_at("contest.xml")
+        entries = rooted.entries
+        shutil.rmtree(staging_root, ignore_errors=True)
+        staging_root.mkdir(parents=True, exist_ok=False)
+        staged: list[StagedContestStatementFile] = []
+        for row in files:
+            info = entries.get(row["archive_path"])
+            if info is None:
+                raise ValueError(f"contest statement member is missing: {row['key']}")
+            source_path = staging_root / row["key"]
+            rooted.zip_file.copy_to(info, source_path)
+            staged.append(
+                {
+                    "key": row["key"],
+                    "language": row["language"],
+                    "source_path": source_path,
+                }
+            )
+        return staged

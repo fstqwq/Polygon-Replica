@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+# ascii-lint: allow; reason=chinese-test
+
 import io
 import json
 import tempfile
@@ -16,6 +18,7 @@ from app.service.statement.title import (
     normalize_problem_title,
     statement_title_from_snapshot,
 )
+from tests.archive_support import import_problem_package
 
 
 class TestICPCPackageImport(unittest.TestCase):
@@ -28,6 +31,22 @@ class TestICPCPackageImport(unittest.TestCase):
 
     def _workspace_path(self) -> Path:
         return self.workspace
+
+    def test_unconsumed_member_does_not_spend_expansion_budget(self) -> None:
+        payload = io.BytesIO()
+        with zipfile.ZipFile(payload, "w", compression=zipfile.ZIP_DEFLATED) as package:
+            package.writestr("problem.yaml", "name: Budgeted\nvalidation: default\n")
+            package.writestr("data/secret/001.in", "1\n")
+            package.writestr("unused/large.bin", b"x" * (1024 * 1024))
+
+        result = import_problem_package(
+            ICPCPackageImportService(),
+            self.workspace,
+            "icpc.zip",
+            payload.getvalue(),
+            max_expanded_bytes=64 * 1024,
+        )
+        self.assertEqual(result["tests"]["total"], 1)
 
     def _import_title_metadata(
         self,
@@ -51,7 +70,8 @@ class TestICPCPackageImport(unittest.TestCase):
                 "\n".join(ini_lines) + "\n",
             )
             zf.writestr("problem/data/secret/001.in", "1\n")
-        return ICPCPackageImportService().import_package(
+        return import_problem_package(
+            ICPCPackageImportService(),
             self.workspace,
             package_name,
             payload.getvalue(),
@@ -208,7 +228,9 @@ limits:
             zf.writestr("roundtrip/output_validator/checker.cpp", "int main(){return 0;}\n")
 
         service = ICPCPackageImportService()
-        result = service.import_package(ws, "roundtrip.zip", payload.getvalue())
+        result = import_problem_package(
+            service, ws, "roundtrip.zip", payload.getvalue()
+        )
         self.assertEqual(str(result.get("title") or ""), "Roundtrip ICPC")
         self.assertEqual((ws / "statement" / "statements.ftl").read_text(encoding="utf-8"), "ROUNDTRIP_FTL\n")
 
@@ -260,7 +282,8 @@ limits:
                 yaml.safe_dump(metadata, sort_keys=False),
             )
 
-        result = ICPCPackageImportService().import_package(
+        result = import_problem_package(
+            ICPCPackageImportService(),
             ws,
             "roundtrip.zip",
             payload.getvalue(),
@@ -293,7 +316,8 @@ limits:
             )
             zf.writestr("submissions/submissions.yaml", yaml.safe_dump(metadata))
 
-        result = ICPCPackageImportService().import_package(
+        result = import_problem_package(
+            ICPCPackageImportService(),
             ws,
             "conflict.zip",
             payload.getvalue(),
@@ -319,7 +343,8 @@ limits:
             )
 
         with self.assertRaisesRegex(ValueError, "invalid permitted verdict"):
-            ICPCPackageImportService().import_package(
+            import_problem_package(
+                ICPCPackageImportService(),
                 self.workspace,
                 "invalid.zip",
                 payload.getvalue(),
@@ -336,7 +361,8 @@ limits:
             zf.writestr("data/secret/001.in", "1\n")
             zf.writestr("submissions/accepted/ac.cpp", source)
 
-        ICPCPackageImportService().import_package(
+        import_problem_package(
+            ICPCPackageImportService(),
             self.workspace,
             "user-comment.zip",
             payload.getvalue(),
@@ -369,7 +395,9 @@ limits:
             zf.writestr("interactive/output_validator/interactor.cpp", "int main(){return 0;}\n")
 
         service = ICPCPackageImportService()
-        result = service.import_package(ws, "interactive.zip", payload.getvalue())
+        result = import_problem_package(
+            service, ws, "interactive.zip", payload.getvalue()
+        )
         self.assertEqual(str(result.get("title") or ""), "Interactive ICPC")
 
         problem_cfg = json.loads((ws / "config" / "problem.json").read_text(encoding="utf-8"))
@@ -401,7 +429,9 @@ limits:
             zf.writestr("noaccepted/output_validator/checker.cpp", "int main(){return 0;}\n")
 
         service = ICPCPackageImportService()
-        result = service.import_package(ws, "noaccepted.zip", payload.getvalue())
+        result = import_problem_package(
+            service, ws, "noaccepted.zip", payload.getvalue()
+        )
         self.assertEqual(str(result.get("title") or ""), "No Accepted")
 
         self.assertFalse((ws / "solutions" / "accepted.cpp").exists())
@@ -431,7 +461,7 @@ limits:
             zf.writestr("lang/statement-sections/russian/legend.tex", "Legend RU\n")
 
         service = ICPCPackageImportService()
-        result = service.import_package(ws, "lang.zip", payload.getvalue())
+        result = import_problem_package(service, ws, "lang.zip", payload.getvalue())
         statement_summary = result.get("statement") if isinstance(result.get("statement"), dict) else {}
         self.assertEqual(str(statement_summary.get("language") or ""), "russian")
         self.assertIn("english not found", str(statement_summary.get("language_warning") or ""))
@@ -465,7 +495,7 @@ limits:
             zf.writestr("lang/statement-sections/chinese/shared.png", b"SAME")
 
         service = ICPCPackageImportService()
-        result = service.import_package(ws, "lang.zip", payload.getvalue())
+        result = import_problem_package(service, ws, "lang.zip", payload.getvalue())
         self.assertEqual((ws / "statement-assets" / "diagram.png").read_bytes(), b"EN")
         self.assertEqual((ws / "statement-assets" / "diagram-zh.png").read_bytes(), b"ZH")
         self.assertEqual((ws / "statement-assets" / "shared.png").read_bytes(), b"SAME")

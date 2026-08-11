@@ -1,43 +1,16 @@
+"""Durable overrides and active snapshots for typed system configuration."""
+
 from __future__ import annotations
 
 import json
-import math
-import re
 import threading
 from typing import TypedDict
 
+from app.config.model import ConfigDefinition
+from app.config.registry import CONFIG_REGISTRY, ConfigRegistry
 from app.db import DB, now_iso
-from app.runtime_value import build_runtime_values
 from app.service.disk.system_config_store import SystemConfigStore
 
-
-_RUNTIME_DEFAULTS = build_runtime_values()
-_ADMIN_CONFIG_DEFAULTS = dict(_RUNTIME_DEFAULTS.ADMIN_CONFIG_DEFAULTS)
-_ADMIN_CONFIG_SPECS = dict(_RUNTIME_DEFAULTS.ADMIN_CONFIG_SPECS)
-
-
-_BOOL_TRUE = {"1", "true", "yes", "on", "y"}
-_BOOL_FALSE = {"0", "false", "no", "off", "n"}
-_COOKIE_NAME_RE = re.compile(r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$")
-
-
-AdminConfigSpec = TypedDict(
-    "AdminConfigSpec",
-    {
-        "type": str,
-        "category": str,
-        "description": str,
-        "min": int | float,
-        "max": int | float,
-        "unit": str,
-        "restart_required": bool,
-        "impact": str,
-        "choices": list[object] | tuple[object, ...] | set[object],
-        "ascii": str,
-        "format": str,
-    },
-    total=False,
-)
 
 SystemConfigPatchPreview = TypedDict(
     "SystemConfigPatchPreview",
@@ -52,6 +25,8 @@ SystemConfigPatchPreview = TypedDict(
 
 
 class SystemConfigService:
+    """Own persisted overrides and the process-active config snapshot."""
+
     _CATEGORY_ORDER = (
         "Judging",
         "Queue",
@@ -63,53 +38,32 @@ class SystemConfigService:
         "Auth",
         "Misc",
     )
-    _CATEGORY_PREFIXES: tuple[tuple[str, str], ...] = (
-        ("WORKER_QUEUE_", "Queue"),
-        ("JUDGEHOST_", "Judgehost"),
-        ("TOOLCHAIN_", "Toolchain"),
-        ("RUN_", "Judging"),
-        ("GENERAL_", "Limits"),
-        ("TESTS_SPEC_", "Limits"),
-        ("WORKSPACE_FILE_", "UI"),
-        ("UI_", "UI"),
-        ("PREVIEW_", "UI"),
-        ("SOLUTION_", "UI"),
-        ("WORKSPACE_HISTORY_", "UI"),
-        ("AUTH_", "Auth"),
-        ("FLASH_", "Auth"),
-        ("PASSWORD_", "Security"),
-        ("LOGIN_RATE_", "Security"),
-        ("CONTEST_", "Limits"),
-    )
 
-    def __init__(self, db: DB):
+    def __init__(self, db: DB, registry: ConfigRegistry = CONFIG_REGISTRY):
         self.db = db
         self._store = SystemConfigStore(db)
-        self._lock = threading.Lock()
-        self._admin_defaults: dict[str, object] = dict(_ADMIN_CONFIG_DEFAULTS)
-        self._admin_specs: dict[str, AdminConfigSpec] = dict(_ADMIN_CONFIG_SPECS)
-        self._effective_values: dict[str, object] = dict(self._admin_defaults)
-        self._persisted_values: dict[str, object] = dict(self._admin_defaults)
+        self._registry = registry
+        self._definitions = dict(registry.by_key)
+        self._defaults = registry.defaults()
+        self._lock = threading.RLock()
+        self._effective_values = dict(self._defaults)
+        self._persisted_values = dict(self._defaults)
 
     def refresh(self, *, include_restart_required: bool = False) -> dict[str, object]:
         with self._lock:
             persisted = self._load_persisted_values_locked()
             effective = persisted if include_restart_required else dict(self._effective_values)
-            for key, spec in self._admin_specs.items():
-                if include_restart_required or not bool(spec.get("restart_required", False)):
-                    effective[key] = persisted[key]
+            for definition in self._registry.definitions:
+                if include_restart_required or not definition.restart_required:
+                    effective[definition.key] = persisted[definition.key]
+            self._registry.validate_snapshot(effective)
             self._persisted_values = persisted
             self._effective_values = effective
             return dict(effective)
 
     def get(self, key: str, default: object | None = None) -> object:
-        key = key.strip()
         with self._lock:
-            if key in self._effective_values:
-                return self._effective_values[key]
-        if key in self._admin_defaults:
-            return self._admin_defaults[key]
-        return default
+            return self._effective_values.get(key, default)
 
     def snapshot(self) -> dict[str, object]:
         with self._lock:
@@ -120,60 +74,48 @@ class SystemConfigService:
             effective = dict(self._effective_values)
             persisted = dict(self._persisted_values)
         buckets: dict[str, list[dict[str, object]]] = {}
-        for key, spec in self._admin_specs.items():
-            row = self._config_row(key, spec, persisted, effective)
-            category = row["category"]
-            if category in buckets:
-                buckets[category].append(row)
-            else:
-                buckets[category] = [row]
+        for definition in self._registry.definitions:
+            buckets.setdefault(definition.category, []).append(
+                self._config_row(definition, persisted, effective)
+            )
         sections: list[dict[str, object]] = []
         for category, rows in sorted(
             buckets.items(),
-            key=lambda item: (
-                self._category_index(item[0]),
-                item[0].lower(),
-            ),
+            key=lambda item: (self._category_index(item[0]), item[0].lower()),
         ):
             rows.sort(key=lambda row: row["key"])
-            changed_count = sum(1 for row in rows if row["changed"])
             sections.append(
                 {
                     "category": category,
                     "slug": self.category_slug(category),
                     "rows": rows,
                     "count": len(rows),
-                    "changed_count": changed_count,
+                    "changed_count": sum(1 for row in rows if row["changed"]),
                 }
             )
         return sections
 
     def section_by_slug(self, slug: str) -> dict[str, object] | None:
-        slug = self.category_slug(slug)
-        for section in self.ui_sections():
-            if section["slug"] == slug:
-                return section
-        return None
+        safe_slug = self.category_slug(slug)
+        return next(
+            (section for section in self.ui_sections() if section["slug"] == safe_slug),
+            None,
+        )
 
     @staticmethod
     def category_slug(category: str) -> str:
         token = category.strip().lower()
-        if not token:
-            return "misc"
         parts: list[str] = []
-        current = []
-        for ch in token:
-            if ch.isalnum():
-                current.append(ch)
-                continue
-            if current:
+        current: list[str] = []
+        for char in token:
+            if char.isalnum():
+                current.append(char)
+            elif current:
                 parts.append("".join(current))
                 current = []
         if current:
             parts.append("".join(current))
-        if not parts:
-            return "misc"
-        return "-".join(parts)
+        return "-".join(parts) or "misc"
 
     def validate_patch(self, payload: dict[str, object]) -> SystemConfigPatchPreview:
         with self._lock:
@@ -181,17 +123,10 @@ class SystemConfigService:
         normalized: dict[str, object] = {}
         for payload_key, raw_value in payload.items():
             key = payload_key.strip()
-            if key not in self._admin_specs:
-                raise ValueError(f"unknown system config key: {key}")
-            normalized[key] = self._normalize_value(key, raw_value)
+            normalized[key] = self._registry.normalize(key, raw_value)
         after = dict(before)
         after.update(normalized)
-        cookie_names = {
-            key: str(after[key])
-            for key in ("AUTH_COOKIE_NAME", "SUDO_COOKIE_NAME", "FLASH_COOKIE_NAME")
-        }
-        if len(set(cookie_names.values())) != len(cookie_names):
-            raise ValueError("AUTH_COOKIE_NAME, SUDO_COOKIE_NAME, and FLASH_COOKIE_NAME must be distinct")
+        self._registry.validate_snapshot(after)
         diff_rows = self._diff_rows(before, after)
         return {
             "normalized": normalized,
@@ -202,12 +137,12 @@ class SystemConfigService:
         }
 
     def apply_patch(self, payload: dict[str, object], actor_user_id: int) -> dict[str, object]:
-        preview = self.validate_patch(payload)
-        after = dict(preview["after"])
-        self._persist_overrides(after, actor_user_id)
-        effective = self.refresh()
-        diff_rows = self._diff_rows(dict(preview["before"]), after)
         with self._lock:
+            preview = self.validate_patch(payload)
+            after = dict(preview["after"])
+            self._persist_overrides(after, actor_user_id)
+            effective = self.refresh()
+            diff_rows = self._diff_rows(dict(preview["before"]), after)
             persisted = dict(self._persisted_values)
         return {
             "changed": len(diff_rows),
@@ -217,244 +152,110 @@ class SystemConfigService:
         }
 
     def reset(self) -> dict[str, object]:
-        self._store.clear_overrides()
-        return self.refresh()
-
-    def _category_for_key(self, key: str, spec: AdminConfigSpec) -> str:
-        explicit = spec.get("category")
-        if explicit:
-            return explicit
-        token = key.upper()
-        for prefix, category in self._CATEGORY_PREFIXES:
-            if token.startswith(prefix):
-                return category
-        return "Misc"
+        with self._lock:
+            self._store.clear_overrides()
+            return self.refresh()
 
     def _category_index(self, category: str) -> int:
-        token = category
-        if token in self._CATEGORY_ORDER:
-            return self._CATEGORY_ORDER.index(token)
+        if category in self._CATEGORY_ORDER:
+            return self._CATEGORY_ORDER.index(category)
         return len(self._CATEGORY_ORDER) + 1
 
     def _config_row(
         self,
-        key: str,
-        spec: AdminConfigSpec,
+        definition: ConfigDefinition,
         persisted: dict[str, object],
         effective: dict[str, object],
     ) -> dict[str, object]:
-        default_value = self._admin_defaults[key]
-        current_value = persisted.get(key, default_value)
-        effective_value = effective.get(key, default_value)
-        kind = spec.get("type", "str")
-        restart_required = spec.get("restart_required", False)
-        impact = spec.get("impact")
-        if impact is None:
-            impact = "restart" if restart_required else "runtime"
-        choices_raw = spec.get("choices")
-        choices = [] if choices_raw is None else [str(item) for item in choices_raw]
-        description = spec.get("description")
-        if description is None:
-            description = ""
-        unit = spec.get("unit")
-        if unit is None:
-            unit = ""
+        key = definition.key
+        default_value = self._defaults[key]
+        current_value = persisted[key]
+        effective_value = effective[key]
+        display = self._registry.display_value
         return {
             "key": key,
-            "type": kind,
-            "category": self._category_for_key(key, spec),
-            "description": description,
-            "min": spec.get("min"),
-            "max": spec.get("max"),
-            "unit": unit,
-            "restart_required": restart_required,
-            "impact": impact,
-            "choices": choices,
+            "type": definition.kind.value,
+            "category": definition.category,
+            "description": definition.description,
+            "min": definition.minimum,
+            "max": definition.maximum,
+            "restart_required": definition.restart_required,
+            "impact": definition.impact,
+            "choices": [str(item) for item in definition.choices],
             "default_value": default_value,
             "current_value": current_value,
             "effective_value": effective_value,
-            "default_display": self._display_value(kind, default_value),
-            "current_display": self._display_value(kind, current_value),
-            "effective_display": self._display_value(kind, effective_value),
+            "default_display": display(definition.kind, default_value),
+            "current_display": display(definition.kind, current_value),
+            "effective_display": display(definition.kind, effective_value),
             "changed": current_value != default_value,
-            "pending_restart": bool(restart_required and current_value != effective_value),
+            "pending_restart": bool(
+                definition.restart_required and current_value != effective_value
+            ),
             "input_name": f"config_{key}",
         }
 
-    def _diff_rows(self, before: dict[str, object], after: dict[str, object]) -> list[dict[str, object]]:
+    def _diff_rows(
+        self,
+        before: dict[str, object],
+        after: dict[str, object],
+    ) -> list[dict[str, object]]:
         rows: list[dict[str, object]] = []
-        for key in self._admin_specs:
-            prev = before.get(key, self._admin_defaults[key])
-            nxt = after.get(key, self._admin_defaults[key])
-            if prev == nxt:
+        display = self._registry.display_value
+        for definition in self._registry.definitions:
+            key = definition.key
+            previous = before.get(key, self._defaults[key])
+            current = after.get(key, self._defaults[key])
+            if previous == current:
                 continue
-            spec = self._admin_specs[key]
-            kind = spec.get("type", "str")
-            restart_required = spec.get("restart_required", False)
-            impact = spec.get("impact")
-            if impact is None:
-                impact = "restart" if restart_required else "runtime"
             rows.append(
                 {
                     "key": key,
-                    "category": self._category_for_key(key, spec),
-                    "type": kind,
-                    "restart_required": restart_required,
-                    "impact": impact,
-                    "before": prev,
-                    "after": nxt,
-                    "before_display": self._display_value(kind, prev),
-                    "after_display": self._display_value(kind, nxt),
+                    "category": definition.category,
+                    "type": definition.kind.value,
+                    "restart_required": definition.restart_required,
+                    "impact": definition.impact,
+                    "before": previous,
+                    "after": current,
+                    "before_display": display(definition.kind, previous),
+                    "after_display": display(definition.kind, current),
                 }
             )
         return rows
 
     def _persist_overrides(self, values: dict[str, object], actor_user_id: int) -> None:
         self._store.replace_overrides(
-            keys=list(self._admin_specs.keys()),
+            keys=list(self._definitions),
             values=values,
-            defaults=self._admin_defaults,
+            defaults=self._defaults,
             actor_user_id=int(actor_user_id),
             updated_at=now_iso(),
         )
 
     def _load_persisted_values_locked(self) -> dict[str, object]:
         rows = self._store.override_rows()
-        stale_keys = [row["key"] for row in rows if row["key"] not in self._admin_specs]
-        self._store.delete_keys(stale_keys)
+        stale_keys = [row["key"] for row in rows if row["key"] not in self._definitions]
+        if stale_keys:
+            raise ValueError(
+                "unknown persisted system config: " + ", ".join(sorted(stale_keys))
+            )
         overrides: dict[str, object] = {}
         for row in rows:
             key = row["key"]
-            if key not in self._admin_specs:
+            if key not in self._definitions:
                 continue
             raw_json = row["value_json"]
-            if not raw_json:
-                continue
             try:
                 parsed = json.loads(raw_json)
-            except Exception:
-                continue
+            except (TypeError, json.JSONDecodeError) as exc:
+                raise ValueError(f"invalid persisted system config JSON: {key}") from exc
             try:
-                normalized = self._normalize_value(key, parsed)
-            except ValueError:
-                continue
-            if normalized == self._admin_defaults[key]:
-                continue
-            overrides[key] = normalized
-        persisted = dict(self._admin_defaults)
+                normalized = self._registry.normalize(key, parsed)
+            except ValueError as exc:
+                raise ValueError(f"invalid persisted system config {key}: {exc}") from exc
+            if normalized != self._defaults[key]:
+                overrides[key] = normalized
+        persisted = dict(self._defaults)
         persisted.update(overrides)
+        self._registry.validate_snapshot(persisted)
         return persisted
-
-    def _normalize_value(self, key: str, raw_value: object) -> object:
-        if key not in self._admin_specs:
-            raise ValueError(f"unknown system config key: {key}")
-        spec = self._admin_specs[key]
-        kind = spec.get("type", "str")
-        if kind == "int":
-            value = self._normalize_int(raw_value, key)
-        elif kind == "float":
-            value = self._normalize_float(raw_value, key)
-        elif kind == "bool":
-            value = self._normalize_bool(raw_value, key)
-        elif kind == "str":
-            value = self._normalize_str(raw_value, key, spec)
-        else:
-            raise ValueError(f"unsupported config type for {key}: {kind}")
-
-        if ("min" in spec) and kind in {"int", "float"}:
-            minimum = float(spec["min"])
-            if float(value) < minimum:
-                raise ValueError(f"{key} must be >= {self._display_bound(spec['min'])}")
-        if ("max" in spec) and kind in {"int", "float"}:
-            maximum = float(spec["max"])
-            if float(value) > maximum:
-                raise ValueError(f"{key} must be <= {self._display_bound(spec['max'])}")
-        if ("min" in spec) and kind == "str":
-            if len(str(value)) < int(spec["min"]):
-                raise ValueError(f"{key} length must be >= {self._display_bound(spec['min'])}")
-        if ("max" in spec) and kind == "str":
-            if len(str(value)) > int(spec["max"]):
-                raise ValueError(f"{key} length must be <= {self._display_bound(spec['max'])}")
-        choices = spec.get("choices")
-        if choices:
-            if value not in set(choices):
-                values = ", ".join((str(item) for item in choices))
-                raise ValueError(f"{key} must be one of: {values}")
-
-        return value
-
-    def _normalize_int(self, raw_value: object, key: str) -> int:
-        try:
-            if raw_value is True:
-                return 1
-            if raw_value is False:
-                return 0
-            text = "" if raw_value is None else str(raw_value).strip()
-            if not text:
-                raise ValueError
-            return int(text)
-        except Exception as exc:
-            raise ValueError(f"{key} must be an integer") from exc
-
-    def _normalize_float(self, raw_value: object, key: str) -> float:
-        try:
-            value = float(str(raw_value).strip())
-        except Exception as exc:
-            raise ValueError(f"{key} must be a number") from exc
-        if not math.isfinite(value):
-            raise ValueError(f"{key} must be a finite number")
-        return value
-
-    def _normalize_bool(self, raw_value: object, key: str) -> bool:
-        if raw_value is True:
-            return True
-        if raw_value is False:
-            return False
-        text = "" if raw_value is None else str(raw_value).strip().lower()
-        if text in _BOOL_TRUE:
-            return True
-        if text in _BOOL_FALSE:
-            return False
-        raise ValueError(f"{key} must be a boolean (true/false)")
-
-    def _normalize_str(self, raw_value: object, key: str, spec: AdminConfigSpec) -> str:
-        value = "" if raw_value is None else str(raw_value)
-        if spec.get("format") == "cookie-name" and _COOKIE_NAME_RE.fullmatch(value) is None:
-            raise ValueError(f"{key} must be a valid HTTP cookie token")
-        ascii_mode = spec.get("ascii")
-        if ascii_mode is None:
-            ascii_mode = "printable"
-        if ascii_mode in {"none", "off", "false", "0"}:
-            return value
-        if ascii_mode == "visible":
-            min_code = 0x21
-            max_code = 0x7E
-            hint = "visible ASCII characters (0x21-0x7E)"
-        else:
-            min_code = 0x20
-            max_code = 0x7E
-            hint = "printable ASCII characters (0x20-0x7E)"
-        for ch in value:
-            code = ord(ch)
-            if code < min_code or code > max_code:
-                raise ValueError(f"{key} must contain only {hint}")
-        return value
-
-    def _display_value(self, kind: str, value: object) -> str:
-        if kind == "bool":
-            return "true" if value else "false"
-        if kind == "float":
-            text = f"{float(value):.6f}".rstrip("0").rstrip(".")
-            return text if text else "0"
-        if kind in {"int", "str"}:
-            return str(value)
-        return json.dumps(value, ensure_ascii=False)
-
-    def _display_bound(self, value: object) -> str:
-        try:
-            numeric = float(str(value))
-        except Exception:
-            return str(value)
-        if numeric.is_integer():
-            return str(int(numeric))
-        return str(value)

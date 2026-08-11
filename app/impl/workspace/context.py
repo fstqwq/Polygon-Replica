@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import app.main_constant as _K
+
 from fastapi import HTTPException
 
 from app.impl.runtime.config import config
 
-_C = config.constants
+_C = config.config_values
 
 
 def count_label(count: int, singular: str, plural: str | None = None) -> str:
@@ -28,7 +30,7 @@ def default_problem_slug_for_user(
     user_problem_selector=None,
 ) -> str:
     if user_ident_re is None:
-        user_ident_re = _C.USER_IDENT_RE
+        user_ident_re = _K.USER_IDENT_RE
     safe_user = str(username or "").strip()
     if not user_ident_re.fullmatch(safe_user):
         return ""
@@ -51,9 +53,9 @@ def global_user_ctx(
     default_problem_selector=None,
 ) -> dict:
     if user_ident_re is None:
-        user_ident_re = _C.USER_IDENT_RE
+        user_ident_re = _K.USER_IDENT_RE
     if username_rule_message is None:
-        username_rule_message = str(_C.USERNAME_RULE_MESSAGE)
+        username_rule_message = str(_K.USERNAME_RULE_MESSAGE)
     selector = default_problem_selector
     if selector is None:
         selector = lambda token: default_problem_slug_for_user(
@@ -76,4 +78,3 @@ def global_user_ctx(
         },
         "default_problem": selector(safe_user),
     }
-

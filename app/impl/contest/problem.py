@@ -1,4 +1,6 @@
 from __future__ import annotations
+
+import app.main_constant as _K
 from app.impl.auth.session import require_session_user
 from typing import Annotated
 
@@ -25,7 +27,7 @@ from app.impl.contest.shared import (
     _run_problem_general_update,
 )
 
-_C = config.constants
+_C = config.config_values
 
 
 def contest_problems_page(request: Request, contest: str, user: Annotated[str, Depends(require_session_user)], q: str = "", job_id: str = ""):
@@ -339,8 +341,8 @@ def _apply_general_changes(
     for row in rows:
         pid = int(row["problem_id"])
         defaults = {
-            "time_limit_ms": str(_C.GENERAL_CONFIG_DEFAULTS["time_limit_ms"]),
-            "memory_limit_mb": str(_C.GENERAL_CONFIG_DEFAULTS["memory_limit_mb"]),
+            "time_limit_ms": str(_K.GENERAL_CONFIG_DEFAULTS["time_limit_ms"]),
+            "memory_limit_mb": str(_K.GENERAL_CONFIG_DEFAULTS["memory_limit_mb"]),
         }
         requested = requested_map.get(pid, defaults)
         result = _run_problem_general_update(

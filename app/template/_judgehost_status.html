@@ -60,8 +60,8 @@
       {% for version in toolchain.versions %}
       <p>
         {{ version.compiler }}
-        {% if version.runner and version.runner != version.compiler %}<span class="muted">· {{ version.runner }}</span>{% endif %}
-        {% if not toolchain.agrees %}<span class="muted">· {{ version.host_count }} {{ 'host' if version.host_count == 1 else 'hosts' }}</span>{% endif %}
+        {% if version.runner and version.runner != version.compiler %}<span class="muted">&middot; {{ version.runner }}</span>{% endif %}
+        {% if not toolchain.agrees %}<span class="muted">&middot; {{ version.host_count }} {{ 'host' if version.host_count == 1 else 'hosts' }}</span>{% endif %}
       </p>
       {% endfor %}
     </article>

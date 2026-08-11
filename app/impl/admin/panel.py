@@ -27,7 +27,7 @@ from app.main_util import form_text
 from app.service.verification.runtime import coerce_int
 
 
-_C = config.constants
+_C = config.config_values
 
 
 class JudgehostToolchainView(TypedDict):
@@ -533,7 +533,7 @@ def admin_judgehost_runtime_update(
             "JUDGEHOST_API_USERNAME": form_text(judgehost_api_username).strip(),
         }
         result = config.system_config_service.apply_patch(payload, actor_user_id=actor_user_id)
-        config.reload_runtime_values()
+        config.reload_config()
         changed = int(result.get("changed") or 0)
         diff_rows = result.get("diff")
         diffs = diff_rows if isinstance(diff_rows, list) else []
@@ -640,7 +640,7 @@ async def admin_config_category_update(
             elif input_name in form:
                 payload[key] = form.get(input_name)
         result = config.system_config_service.apply_patch(payload, actor_user_id=actor_user_id)
-        config.reload_runtime_values()
+        config.reload_config()
         changed = int(result.get("changed") or 0)
         raw_diff = result.get("diff")
         diff_rows = raw_diff if isinstance(raw_diff, list) else []
@@ -664,7 +664,7 @@ async def admin_config_category_update(
 def admin_system_config_reset(user: Annotated[str, Depends(require_session_user)]):
     ctx, _actor_user_id = _admin_user_context(user)
     config.system_config_service.reset()
-    config.reload_runtime_values()
+    config.reload_config()
     audit(ctx["user"]["id"], None, "system_config.reset", {})
     return redirect_response(
         "/admin/config",

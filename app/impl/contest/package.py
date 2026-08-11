@@ -277,7 +277,13 @@ def contest_statement_source_save(
         display_path = _contest_statement_display_path(key, current_language)
         if not config.contest_service.statement_source_is_text(key):
             raise ValueError("contest statement source is not a text file")
-        text = enforce_textarea_max_bytes(content, label=f"contest statement source {display_path}")
+        text = enforce_textarea_max_bytes(
+            content,
+            label=f"contest statement source {display_path}",
+            max_bytes=int(
+                config.config_values.snapshot()["TEXTAREA_MAX_BYTES"]
+            ),
+        )
         config.contest_service.write_statement_source_file(
             contest_id=contest_id,
             contest_slug=str(ctx["contest"]["slug"]),
@@ -324,7 +330,11 @@ async def contest_statement_source_upload(
             upload_filename=upload.filename or "",
         )
         display_path = _contest_statement_display_path(key, current_language)
-        payload = await read_upload_bytes_limited(upload, label="contest statement source")
+        payload = await read_upload_bytes_limited(
+            upload,
+            label="contest statement source",
+            max_bytes=int(config.config_values.snapshot()["UPLOAD_MAX_BYTES"]),
+        )
         config.contest_service.write_statement_source_file(
             contest_id=contest_id,
             contest_slug=str(ctx["contest"]["slug"]),

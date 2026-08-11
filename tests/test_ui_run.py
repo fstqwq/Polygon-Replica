@@ -13,14 +13,13 @@ from urllib.parse import parse_qs, urlparse
 
 from fastapi import HTTPException
 
-from app.main_util import TEXTAREA_MAX_BYTES
+from app.config import CONFIG_REGISTRY
 from app.service.statement.render import statement_title_for_language
 from app.service.statement.signature import statement_sources_signature
 from app.service.repository.revision import workspace_verification_source
-from tests.common import E2ETestBase
+from tests.common import E2ETestBase, override_config_values
 from tests.identity_helpers import canonical_test_verification_id
 from tests.assertion_helpers import assert_html_contract
-
 from tests.ui_support import (
     Path,
     UIHelpersMixin,
@@ -55,6 +54,7 @@ from tests.ui_support import (
     workspace_impl,
     workspace_service,
 )
+
 import app.impl.workspace.context_job as workspace_context_job
 import app.impl.workspace.run_view_detail as run_view_detail_module
 import app.service.problem.readiness as problem_readiness_module
@@ -71,6 +71,8 @@ from app.service.verification.execution_result import (
 )
 from app.service.verification.task_store import VerificationTaskStore
 from app.service.verification.types import Kind
+
+TEXTAREA_MAX_BYTES = int(CONFIG_REGISTRY.defaults()["TEXTAREA_MAX_BYTES"])
 
 
 class TestUIRun(UIHelpersMixin, E2ETestBase):
@@ -558,7 +560,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         )
         configured_html = configured_page.body.decode("utf-8", errors="replace")
         self.assertIn("Generation script", configured_html)
-        self.assertIn("configured · 2 commands", configured_html)
+        self.assertIn("configured &middot; 2 commands", configured_html)
         self.assertIn("Edit generation script", configured_html)
         self.assertNotIn('id="tests-gen-script-text"', configured_html)
 
@@ -771,15 +773,15 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         )
         self.assertEqual(add_manual.status_code, 303)
 
-        with patch("app.main_util.UPLOAD_MAX_BYTES", 8):
-            uploaded = asyncio.run(
-                tests_spec_payload_upload(
-                    problem="alice/sample",
-                    user="alice",
-                    index="1",
-                    payload_upload=self._FakeUpload(b"123456789"),
-                )
+        override_config_values(self, config.config_values, UPLOAD_MAX_BYTES=1024)
+        uploaded = asyncio.run(
+            tests_spec_payload_upload(
+                problem="alice/sample",
+                user="alice",
+                index="1",
+                payload_upload=self._FakeUpload(b"x" * 1025),
             )
+        )
         self.assertEqual(uploaded.status_code, 303)
         self.assertIn("uploaded payload is too large.", _flash_messages_from_response(uploaded))
         self.assertEqual((manual_dir / "001.in").read_text(encoding="utf-8"), "seed\n")
@@ -900,16 +902,16 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             for p in generator_dir.glob("*.in"):
                 p.unlink(missing_ok=True)
 
-        with patch("app.main_util.UPLOAD_MAX_BYTES", 8):
-            created = asyncio.run(
-                tests_spec_add_manual_upload(
-                    problem="alice/sample",
-                    user="alice",
-                    test_id="",
-                    sample="0",
-                    manual_upload=self._FakeUpload(b"123456789"),
-                )
+        override_config_values(self, config.config_values, UPLOAD_MAX_BYTES=1024)
+        created = asyncio.run(
+            tests_spec_add_manual_upload(
+                problem="alice/sample",
+                user="alice",
+                test_id="",
+                sample="0",
+                manual_upload=self._FakeUpload(b"x" * 1025),
             )
+        )
         self.assertEqual(created.status_code, 303)
         self.assertIn("uploaded payload is too large.", _flash_messages_from_response(created))
         self.assertFalse((manual_dir / "001.in").exists())
@@ -5663,7 +5665,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         )
         self.assertEqual(page.status_code, 200)
         page_html = page.body.decode("utf-8", errors="replace")
-        self.assertEqual(config.constants.RUN_DETAIL_TEST_LIST_LIMIT, 999)
+        self.assertEqual(config.config_values.RUN_DETAIL_TEST_LIST_LIMIT, 999)
         visible_rows = set(
             re.findall(
                 r'data-test-name="(20[5-9]\.in|21[0-3]\.in)" data-test-source-kind="generated" '
@@ -6268,6 +6270,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
                 "english",
                 fallback_title=Path(str(ctx["problem"]["slug"])).name,
             ),
+            tests_spec_max_bytes=TEXTAREA_MAX_BYTES,
         )
 
         preview_id = f"ui-previewctx-{uuid.uuid4().hex[:8]}"

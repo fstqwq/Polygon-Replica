@@ -332,10 +332,12 @@ class VerificationRuntimeCoordinator:
         task_store: VerificationTaskStore,
         callbacks: VerificationRuntimeCallbacks,
         edges: list[tuple[str, str]],
+        display_text_limit_bytes: int,
     ) -> None:
         self.verification_id = verification_id
         self._task_store = task_store
         self._callbacks = callbacks
+        self._display_text_limit_bytes = int(display_text_limit_bytes)
         self._dag = _IncrementalDagState(task_store.list_rows(verification_id), edges)
         self._events: queue.Queue[_VerificationEvent] = queue.Queue()
         self._cache_probe_task_ids: dict[str, None] = {}
@@ -505,7 +507,11 @@ class VerificationRuntimeCoordinator:
                 if "final_result" in event.result:
                     result = cast(TaskExecutionResult, event.result["final_result"])
                 else:
-                    result = finalize_verification_task_result(row, result=event.result)
+                    result = finalize_verification_task_result(
+                        row,
+                        result=event.result,
+                        limit_bytes=self._display_text_limit_bytes,
+                    )
                 prepared.append((task_id, result))
                 prepared_task_ids.add(task_id)
                 continue
@@ -526,7 +532,16 @@ class VerificationRuntimeCoordinator:
                 )
                 if result is None:
                     continue
-                prepared.append((task_id, finalize_verification_task_result(row, result=result)))
+                prepared.append(
+                    (
+                        task_id,
+                        finalize_verification_task_result(
+                            row,
+                            result=result,
+                            limit_bytes=self._display_text_limit_bytes,
+                        ),
+                    )
+                )
                 prepared_task_ids.add(task_id)
         if not prepared:
             return False
@@ -706,7 +721,11 @@ class VerificationRuntimeCoordinator:
                 continue
             from app.service.verification.task_result_finalize import finalize_verification_task_result
 
-            final_result = finalize_verification_task_result(row, result=result)
+            final_result = finalize_verification_task_result(
+                row,
+                result=result,
+                limit_bytes=self._display_text_limit_bytes,
+            )
             skipped_task_ids = _save_result(
                 verification_id=self.verification_id,
                 task_store=self._task_store,

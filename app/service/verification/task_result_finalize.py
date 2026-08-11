@@ -6,7 +6,6 @@ from typing import cast
 from app.service.judgehost.limits import STORED_LOG_TRUNCATED_MARKER
 from app.service.platform.runtime_blob_store import PayloadFile
 from app.service.platform.error_text import (
-    aux_display_text_limit_bytes,
     bounded_display_text,
     normalize_display_text,
 )
@@ -55,6 +54,7 @@ def verification_task_fail_reason(
     *,
     error_text: str,
     fallback: str = "",
+    limit_bytes: int,
 ) -> str:
     detail_text = _normalized_error_text(str(error_text or fallback))
     origin_tokens = [
@@ -64,10 +64,13 @@ def verification_task_fail_reason(
     ]
     origin_text = " / ".join(token for token in origin_tokens if token)
     if origin_text and detail_text:
-        return bounded_display_text(f"{origin_text}: {detail_text}")
+        return bounded_display_text(
+            f"{origin_text}: {detail_text}",
+            limit_bytes=limit_bytes,
+        )
     if origin_text:
-        return bounded_display_text(origin_text)
-    return bounded_display_text(detail_text)
+        return bounded_display_text(origin_text, limit_bytes=limit_bytes)
+    return bounded_display_text(detail_text, limit_bytes=limit_bytes)
 
 
 def _register_verification_artifact(
@@ -119,13 +122,18 @@ def _verdict_from_summary(summary: dict[str, object], run_status: str) -> str:
     return "AC" if run_status == Status.OK.value else "FL"
 
 
-def _summary_parts(summary: dict[str, object], *, run_status: str, error_text: str) -> _TaskSummaryParts:
+def _summary_parts(
+    summary: dict[str, object],
+    *,
+    run_status: str,
+    error_text: str,
+    limit_bytes: int,
+) -> _TaskSummaryParts:
     verdict = _verdict_from_summary(summary, run_status)
-    aux_limit = aux_display_text_limit_bytes()
     diagnostics_meta = canonical_diagnostics(
         cast(list[dict[str, object]] | list[object] | None, summary.get("compile_diagnostics") or []),
         list_limit=_COMPILE_DIAGNOSTICS_LIMIT,
-        message_limit=aux_limit,
+        message_limit=limit_bytes,
     )
     diagnostics_json = diagnostics_json_text(diagnostics_meta["rows"])
     tests = cast(list[dict[str, object]], summary.get("tests") or [])
@@ -235,12 +243,24 @@ def _canonical_task_result(
     )
 
 
-def finalize_verification_task_result(task_row: VerificationTaskRow, *, result: dict[str, object]) -> TaskExecutionResult:
+def finalize_verification_task_result(
+    task_row: VerificationTaskRow,
+    *,
+    result: dict[str, object],
+    limit_bytes: int,
+) -> TaskExecutionResult:
     verification_id = str(task_row["verification_id"] or "")
     task_id = str(task_row["id"] or "")
     task_kind = str(task_row["task_kind"] or "")
     test_name = str(task_row["test_name"] or "")
     judgehost_task_id = str(task_row["judgehost_task_id"] or "")
+    def task_fail_reason(value: str) -> str:
+        return verification_task_fail_reason(
+            task_row,
+            error_text=value,
+            limit_bytes=limit_bytes,
+        )
+
     run_id = str(result.get("run_id") or str(task_row["run_id"] or ""))
     result_summary = dict(result.get("summary") or {})
     result_status = str(result.get("status") or "")
@@ -248,7 +268,12 @@ def finalize_verification_task_result(task_row: VerificationTaskRow, *, result: 
     result_error_text = str(result.get("error") or "")
     error_text = summary_error_text or result_error_text
     missing_case_result = bool(result.get("missing_case_result"))
-    parts = _summary_parts(result_summary, run_status=result_status, error_text=error_text)
+    parts = _summary_parts(
+        result_summary,
+        run_status=result_status,
+        error_text=error_text,
+        limit_bytes=limit_bytes,
+    )
     source_result = cast(ExecutionResult | None, result.get("execution_result"))
     if source_result is not None:
         parts = _TaskSummaryParts(
@@ -287,7 +312,7 @@ def finalize_verification_task_result(task_row: VerificationTaskRow, *, result: 
                 answer_correct=False,
             ),
             fail_flag_reason=(
-                verification_task_fail_reason(task_row, error_text=fail_reason)
+                task_fail_reason(fail_reason)
                 if task_kind == TASK_MAIN_CORRECT
                 else ""
             ),
@@ -314,7 +339,7 @@ def finalize_verification_task_result(task_row: VerificationTaskRow, *, result: 
                     output_ref=materialized_output_ref,
                     answer_correct=parts.answer_correct,
                 ),
-                fail_flag_reason=verification_task_fail_reason(task_row, error_text=fail_reason),
+                fail_flag_reason=task_fail_reason(fail_reason),
             )
         if materialized_output_file is None:
             fail_message = f"generated input output missing for {test_name}"
@@ -332,7 +357,7 @@ def finalize_verification_task_result(task_row: VerificationTaskRow, *, result: 
                     output_ref=materialized_output_ref,
                     answer_correct=parts.answer_correct,
                 ),
-                fail_flag_reason=verification_task_fail_reason(task_row, error_text=fail_message),
+                fail_flag_reason=task_fail_reason(fail_message),
             )
         from app.impl.runtime.config import config
 
@@ -354,7 +379,7 @@ def finalize_verification_task_result(task_row: VerificationTaskRow, *, result: 
                     output_ref=materialized_output_ref,
                     answer_correct=parts.answer_correct,
                 ),
-                fail_flag_reason=verification_task_fail_reason(task_row, error_text=fail_message),
+                fail_flag_reason=task_fail_reason(fail_message),
             )
         _register_verification_artifact(
             verification_id=verification_id,
@@ -383,7 +408,7 @@ def finalize_verification_task_result(task_row: VerificationTaskRow, *, result: 
     final_error = parts.error_text
     if task_kind == TASK_MAIN_CORRECT and task_status != VerificationTaskStore.TASK_DONE:
         final_error = _final_error_text(parts, fallback=error_text or f"main correct failed on {test_name}")
-        fail_flag_reason = verification_task_fail_reason(task_row, error_text=final_error)
+        fail_flag_reason = task_fail_reason(final_error)
     if task_kind == TASK_MAIN_CORRECT and task_status == VerificationTaskStore.TASK_DONE:
         if materialized_output_file is None:
             fail_message = f"main correct output missing for {test_name}"
@@ -401,7 +426,7 @@ def finalize_verification_task_result(task_row: VerificationTaskRow, *, result: 
                     output_ref=materialized_output_ref,
                     answer_correct=parts.answer_correct,
                 ),
-                fail_flag_reason=verification_task_fail_reason(task_row, error_text=fail_message),
+                fail_flag_reason=task_fail_reason(fail_message),
             )
         _register_verification_artifact(
             verification_id=verification_id,

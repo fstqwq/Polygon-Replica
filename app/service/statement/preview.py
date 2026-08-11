@@ -107,12 +107,17 @@ class PreviewService:
             raw_mode = ""
         return normalize_problem_mode(raw_mode, "pass-fail")
 
-    def _sample_verification_rows_from_spec(self, workspace: Path) -> list[_SampleVerificationRow]:
+    def _sample_verification_rows_from_spec(
+        self,
+        workspace: Path,
+        *,
+        max_bytes: int,
+    ) -> list[_SampleVerificationRow]:
         if self._problem_mode(workspace) == "interactive":
             return []
         spec_path = workspace / TESTS_SPEC_REL
         try:
-            entries = load_tests_spec(spec_path)
+            entries = load_tests_spec(spec_path, max_bytes=max_bytes)
         except Exception as exc:
             raise RuntimeError(f"invalid tests/spec.json: {exc}") from exc
         rows: list[PreviewService._SampleVerificationRow] = []
@@ -164,9 +169,14 @@ class PreviewService:
         return rows
 
     def _copy_sample_payloads_from_verification(self, problem: str, username: str, snapshot: Path) -> dict[str, object]:
+        config_snapshot = self.db.config_values.snapshot()
+        tests_spec_max_bytes = int(config_snapshot["TEXTAREA_MAX_BYTES"])
         if self._problem_mode(snapshot) == "interactive":
             return {"sample_count": 0, "copied": 0, "verification_id": "", "skipped": "interactive"}
-        rows = self._sample_verification_rows_from_spec(snapshot)
+        rows = self._sample_verification_rows_from_spec(
+            snapshot,
+            max_bytes=tests_spec_max_bytes,
+        )
         if not rows:
             return {"sample_count": 0, "copied": 0, "verification_id": ""}
         if self.verification_service is None:
@@ -188,7 +198,10 @@ class PreviewService:
             raise RuntimeError(f"sample verification failed ({verification_id})")
         copied = 0
         snapshot_root = snapshot.resolve()
-        spec_entries = load_tests_spec(snapshot / TESTS_SPEC_REL)
+        spec_entries = load_tests_spec(
+            snapshot / TESTS_SPEC_REL,
+            max_bytes=tests_spec_max_bytes,
+        )
         spec_changed = False
         for row in rows:
             index = int(row.index)
@@ -224,7 +237,10 @@ class PreviewService:
             if copied_row:
                 copied += 1
         if spec_changed:
-            (snapshot / TESTS_SPEC_REL).write_text(dumps_tests_spec(spec_entries), encoding="utf-8")
+            (snapshot / TESTS_SPEC_REL).write_text(
+                dumps_tests_spec(spec_entries, max_bytes=tests_spec_max_bytes),
+                encoding="utf-8",
+            )
         return {"sample_count": len(rows), "copied": copied, "verification_id": verification_id}
 
     def sync_sample_payloads_for_snapshot(self, problem: str, username: str, snapshot: Path) -> dict[str, object]:
@@ -477,6 +493,8 @@ class PreviewService:
         self._store.delete_previews(problem_id, workspace_id, terminal_ids)
 
     def compile_preview(self, problem: str, username: str, language: str) -> str:
+        config_snapshot = self.db.config_values.snapshot()
+        tests_spec_max_bytes = int(config_snapshot["TEXTAREA_MAX_BYTES"])
         ctx = self.workspace_service.workspace_context(problem, username, include_recent=False)
         workspace = Path(ctx["workspace"]["path"])
         safe_language = normalize_statement_language(language)
@@ -508,8 +526,17 @@ class PreviewService:
             if not branch:
                 branch = source_ref
             dirty = bool(ws_status.get("dirty"))
-            statement_signature = statement_sources_signature(workspace, problem_title=problem_title)
-            dynamic_samples = bool(self._sample_verification_rows_from_spec(workspace))
+            statement_signature = statement_sources_signature(
+                workspace,
+                problem_title=problem_title,
+                tests_spec_max_bytes=tests_spec_max_bytes,
+            )
+            dynamic_samples = bool(
+                self._sample_verification_rows_from_spec(
+                    workspace,
+                    max_bytes=tests_spec_max_bytes,
+                )
+            )
             if not head:
                 head = run_git(["git", "-C", str(workspace), "rev-parse", "HEAD"]).stdout.strip()
             if head:
@@ -590,7 +617,12 @@ class PreviewService:
                     sample_verification_id_text = str(sample_verification_id_obj).strip()
                     sample_verification_id = sample_verification_id_text if sample_verification_id_text else None
                 summary["sample_sync"] = sample_sync
-            tex = render_statement_main(snapshot / "statement", problem_title=problem_title, language=safe_language)
+            tex = render_statement_main(
+                snapshot / "statement",
+                problem_title=problem_title,
+                language=safe_language,
+                tests_spec_max_bytes=tests_spec_max_bytes,
+            )
 
             try:
                 compile_result = self.pdf_compiler.compile_pdf(tex)

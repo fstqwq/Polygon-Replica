@@ -596,6 +596,8 @@ class ExportService:
         include_sample_tests: bool = True,
     ) -> bool:
         compiled_any = False
+        limits = self.db.config_values.snapshot()
+        tests_spec_max_bytes = int(limits["TEXTAREA_MAX_BYTES"])
         for language in self._statement_export_languages(snapshot):
             try:
                 rendered = render_statement_main(
@@ -603,6 +605,7 @@ class ExportService:
                     problem_title=problem_name,
                     language=language,
                     include_sample_tests=include_sample_tests,
+                    tests_spec_max_bytes=tests_spec_max_bytes,
                 )
             except Exception as exc:
                 raise ValueError(f"failed to render {language} statement: {exc}") from exc
@@ -696,12 +699,13 @@ class ExportService:
             newline="\n",
         )
 
-    @staticmethod
-    def _hydrate_statement_samples(native: NativePackageReader) -> None:
+    def _hydrate_statement_samples(self, native: NativePackageReader) -> None:
         """Populate the converter's private source copy from Native judge data."""
 
+        limits = self.db.config_values.snapshot()
+        tests_spec_max_bytes = int(limits["TEXTAREA_MAX_BYTES"])
         spec_path = native.root / "tests" / "spec.json"
-        rows = load_tests_spec(spec_path)
+        rows = load_tests_spec(spec_path, max_bytes=tests_spec_max_bytes)
         manifest_by_id = {row["id"]: row for row in native.manifest["tests"]}
         changed = False
         for row in rows:
@@ -719,7 +723,11 @@ class ExportService:
                 row["sample_output"] = output_path.read_text(encoding="utf-8", errors="replace")
                 changed = True
         if changed:
-            spec_path.write_text(dumps_tests_spec(rows), encoding="utf-8", newline="\n")
+            spec_path.write_text(
+                dumps_tests_spec(rows, max_bytes=tests_spec_max_bytes),
+                encoding="utf-8",
+                newline="\n",
+            )
 
     def _build_icpc_package(
         self,

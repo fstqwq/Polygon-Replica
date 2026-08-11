@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import app.main_constant as _K
+
 import re
 from pathlib import Path
 from typing import TypedDict, cast
@@ -14,7 +16,7 @@ from app.main_util import (
 
 from app.impl.workspace.context_operation import dedupe_preserve_order, workspace_rel_file_exists
 
-_C = config.constants
+_C = config.config_values
 
 RunDetailPreview = TypedDict(
     "RunDetailPreview",
@@ -258,7 +260,7 @@ def normalize_run_test_name_token(raw: str | None) -> str:
     token = raw.strip()
     if not token:
         return ''
-    if not _C.RUN_TEST_NAME_RE.fullmatch(token):
+    if not _K.RUN_TEST_NAME_RE.fullmatch(token):
         return ''
     return token
 

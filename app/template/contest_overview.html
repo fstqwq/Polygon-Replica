@@ -33,13 +33,13 @@
         {% if row.details_available %}
         {% set content = row.content_review %}
         <span class="contest-problem-detail">
-          {{ row.mode }}{% if row.pass_limit > 1 %} · {{ row.pass_limit }} passes{% endif %}
-          · <span class="{{ 'warn' if content.time_limit.tone == 'warning' else '' }}">{{ content.time_limit.display }}</span>
+          {{ row.mode }}{% if row.pass_limit > 1 %} &middot; {{ row.pass_limit }} passes{% endif %}
+          &middot; <span class="{{ 'warn' if content.time_limit.tone == 'warning' else '' }}">{{ content.time_limit.display }}</span>
           / <span class="{{ 'warn' if content.memory_limit.tone == 'warning' else '' }}">{{ content.memory_limit.display }}</span>
         </span>
         <span class="contest-problem-detail contest-problem-detail-summary">
           <span class="{{ 'danger' if content.tests.tone == 'danger' else '' }}">{{ content.tests.display }}</span>
-          · <span class="{{ 'danger' if content.solutions.tone == 'danger' else '' }}">{{ content.solutions.display }}</span>
+          &middot; <span class="{{ 'danger' if content.solutions.tone == 'danger' else '' }}">{{ content.solutions.display }}</span>
         </span>
         <span class="contest-problem-detail contest-problem-detail-components">
           {{ content.output_component.label }}: <span class="{{ 'danger' if content.output_component.tone == 'danger' else '' }}">{{ content.output_component.display }}</span>

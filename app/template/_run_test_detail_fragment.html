@@ -86,7 +86,7 @@
               <td class="fb-cell interactive-feedback-cell">
                 {% if feedback.available %}
                   {% if feedback.text == '(empty)' %}
-                  <span class="muted">—</span>
+                  <span class="muted">&mdash;</span>
                   {% else %}
                   <pre class="feedback-preview">{{ feedback.text }}</pre>
                   {% endif %}
@@ -114,7 +114,7 @@
               <div class="transcript-event transcript-event-{{ event.source }}">
                 <pre class="transcript-payload{{ ' transcript-payload-meta' if event.kind == 'eof' or event.payload_display == '(empty)' else '' }}">{{ event.payload_display }}</pre>
                 {% if event.payload_bytes_omitted %}
-                <span class="transcript-omitted">… {{ event.payload_bytes_omitted }} B omitted</span>
+                <span class="transcript-omitted">&hellip; {{ event.payload_bytes_omitted }} B omitted</span>
                 {% endif %}
               </div>
               {% endfor %}

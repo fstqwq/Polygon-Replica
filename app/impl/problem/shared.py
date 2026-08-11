@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import app.main_constant as _K
+
 from pathlib import Path
 from typing import Callable, Literal, TypedDict
 from urllib.parse import quote_plus
@@ -22,7 +24,7 @@ from app.impl.workspace.context_ui import page_ctx
 from app.main_util import normalize_component_source_path, normalize_workspace_rel_path
 from app.service.platform.workspace_path import safe_workspace_path
 
-_C = config.constants
+_C = config.config_values
 MAIN_CORRECT_EXPECTED_VALUE = "main_correct"
 MAIN_CORRECT_EXPECTED_LABEL = "main correct solution (AC)"
 
@@ -218,4 +220,4 @@ def _has_destructive_sudo_for_ctx(request: Request, ctx: dict) -> bool:
             user_id = 0
     if user_id <= 0:
         return False
-    return has_sudo_session(request, user_id=user_id, scope=str(_C.SUDO_SCOPE_DESTRUCTIVE))
+    return has_sudo_session(request, user_id=user_id, scope=str(_K.SUDO_SCOPE_DESTRUCTIVE))

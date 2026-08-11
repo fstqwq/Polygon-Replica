@@ -13,7 +13,7 @@ from starlette.datastructures import UploadFile
 from starlette.formparsers import MultiPartParser
 
 from app.impl.runtime.config import config
-from app.main_util import UPLOAD_MAX_BYTES, read_upload_bytes_limited
+from app.main_util import read_upload_bytes_limited
 from app.service.judgehost.batch_scheduler_models import CaseClaimBusy
 from app.service.judgehost.core import InvalidJudgehostHostname, normalize_judgehost_hostname
 from app.service.judgehost.limits import judgehost_form_part_limit_bytes
@@ -103,12 +103,10 @@ _logger = logging.getLogger(__name__)
 
 
 def _judgehost_form_part_limit_bytes() -> int:
-    service = getattr(config, "judgehost_task_service", None)
-    state = getattr(service, "state", None)
-    constants = getattr(state, "constants", None)
+    values = config.config_values.snapshot()
     return judgehost_form_part_limit_bytes(
-        constants,
-        upload_max_bytes=UPLOAD_MAX_BYTES,
+        values,
+        upload_max_bytes=int(values["UPLOAD_MAX_BYTES"]),
         default_part_limit_bytes=_JUDGEHOST_FORM_PART_LIMIT_BYTES,
         headroom_bytes=_JUDGEHOST_FORM_PART_LIMIT_HEADROOM_BYTES,
     )

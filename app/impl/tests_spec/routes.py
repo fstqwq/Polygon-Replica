@@ -48,6 +48,31 @@ from app.service.problem.test_spec import (
     normalize_tests_spec_entry,
 )
 
+_C = config.config_values
+
+
+def _read_tests_spec(workspace: Path) -> tuple[list[dict[str, str]], Path]:
+    return read_tests_spec(
+        workspace,
+        max_bytes=int(_C.TEXTAREA_MAX_BYTES),
+    )
+
+
+def _write_tests_spec(path: Path, entries: list[dict[str, str]]) -> None:
+    write_tests_spec(
+        path,
+        entries,
+        max_bytes=int(_C.TEXTAREA_MAX_BYTES),
+    )
+
+
+def _normalize_tests_spec_entry(raw: object, *, index: int) -> dict:
+    return normalize_tests_spec_entry(
+        raw,
+        index=index,
+        max_bytes=int(_C.TEXTAREA_MAX_BYTES),
+    )
+
 
 def render_tests_page(request: Request, problem: str, user: Annotated[str, Depends(require_session_user)]):
     ctx = page_ctx(
@@ -59,7 +84,10 @@ def render_tests_page(request: Request, problem: str, user: Annotated[str, Depen
     tests_editor_error = ''
     tests_gen_script = {'text': '', 'count': 0}
     try:
-        tests_editor = tests_spec_editor_context(workspace)
+        tests_editor = tests_spec_editor_context(
+            workspace,
+            limit=int(_C.TESTS_SPEC_ROWS_LIMIT),
+        )
     except (ValueError, OSError) as exc:
         tests_editor_error = str(exc)
         tests_editor = {'path': TESTS_SPEC_REL.as_posix(), 'exists': False, 'entries': [], 'rows': [], 'summary': {'total': 0, 'manual': 0, 'gen': 0}, 'total': 0, 'shown': 0, 'truncated': False}
@@ -98,7 +126,10 @@ def add_manual_test(
     msg = 'manual test added'
     redirect_query = ''
     try:
-        safe_input = normalize_manual_input(tests_spec_form_text(manual_input))
+        safe_input = normalize_manual_input(
+            tests_spec_form_text(manual_input),
+            max_bytes=int(_C.TEXTAREA_MAX_BYTES),
+        )
         safe_sample = tests_spec_bool_flag(tests_spec_form_text(sample))
         requested_id = tests_spec_form_text(test_id).strip()
         safe_sample_input = tests_spec_sample_input_value(sample_input, '')
@@ -154,7 +185,11 @@ async def upload_manual_test(
     msg = 'manual test added'
     redirect_query = ''
     try:
-        raw_payload = await read_upload_bytes_limited(manual_upload, label='uploaded payload')
+        raw_payload = await read_upload_bytes_limited(
+            manual_upload,
+            label='uploaded payload',
+            max_bytes=int(_C.UPLOAD_MAX_BYTES),
+        )
         try:
             uploaded_text = raw_payload.decode('utf-8')
         except UnicodeDecodeError as exc:
@@ -283,9 +318,9 @@ def edit_spec_test(
         safe_kind = normalize_test_kind(tests_spec_form_text(kind))
         safe_sample = tests_spec_bool_flag(tests_spec_form_text(sample))
         with config.workspace_service.workspace_lock(workspace):
-            entries, spec_path = read_tests_spec(workspace)
+            entries, spec_path = _read_tests_spec(workspace)
             idx = tests_spec_resolve_index(index, len(entries))
-            current = normalize_tests_spec_entry(dict(entries[idx - 1]), index=idx)
+            current = _normalize_tests_spec_entry(dict(entries[idx - 1]), index=idx)
             old_id = normalize_test_id(current.get('id'))
             if safe_test_id != old_id and any((normalize_test_id(row.get('id')) == safe_test_id for i, row in enumerate(entries) if i != idx - 1)):
                 raise ValueError(f'test id already exists: {safe_test_id}')
@@ -301,7 +336,10 @@ def edit_spec_test(
             if not str(submitted_payload):
                 submitted_payload = tests_spec_read_payload(workspace, current)
             if safe_kind == 'manual':
-                safe_payload = normalize_manual_input(submitted_payload)
+                safe_payload = normalize_manual_input(
+                    submitted_payload,
+                    max_bytes=int(_C.TEXTAREA_MAX_BYTES),
+                )
             elif safe_kind == 'gen':
                 safe_payload = normalize_gen_command(submitted_payload)
             else:
@@ -315,7 +353,7 @@ def edit_spec_test(
                 sample_output_validate=safe_sample_output_validate,
                 index=idx,
             )
-            write_tests_spec(spec_path, entries)
+            _write_tests_spec(spec_path, entries)
             tests_spec_write_payload(workspace, safe_test_id, safe_kind, safe_payload)
             if safe_test_id != old_id:
                 tests_spec_remove_payload(workspace, old_id)
@@ -344,11 +382,11 @@ def delete_spec_test(problem: str, user: Annotated[str, Depends(require_session_
     msg = 'test deleted'
     try:
         with config.workspace_service.workspace_lock(workspace):
-            entries, spec_path = read_tests_spec(workspace)
+            entries, spec_path = _read_tests_spec(workspace)
             idx = tests_spec_resolve_index(index, len(entries))
             deleted = entries.pop(idx - 1)
             deleted_id = normalize_test_id(deleted.get('id'))
-            write_tests_spec(spec_path, entries)
+            _write_tests_spec(spec_path, entries)
             if deleted_id:
                 tests_spec_remove_payload(workspace, deleted_id)
         audit(ctx['user']['id'], ctx['problem']['id'], 'tests.spec.delete', {'index': idx, 'kind': normalize_test_kind(deleted.get('kind')), 'id': deleted_id})
@@ -377,7 +415,7 @@ def reindex_spec_test(
         except Exception as exc:
             raise ValueError('target position must be an integer') from exc
         with config.workspace_service.workspace_lock(workspace):
-            entries, spec_path = read_tests_spec(workspace)
+            entries, spec_path = _read_tests_spec(workspace)
             if not entries:
                 raise ValueError('no tests to reindex')
             if target_pos < 1 or target_pos > len(entries):
@@ -398,7 +436,7 @@ def reindex_spec_test(
                     raise ValueError(f'test id not found: {safe_test_id}')
             row = entries.pop(source_pos)
             entries.insert(target_pos - 1, row)
-            write_tests_spec(spec_path, entries)
+            _write_tests_spec(spec_path, entries)
             redirect_query = f'focus={target_pos}'
         audit_payload = {'target': target_pos, 'source_index': source_pos + 1}
         if safe_test_id_raw:
@@ -421,14 +459,15 @@ def save_gen_script(problem: str, user: Annotated[str, Depends(require_session_u
         safe_script_text = enforce_textarea_max_bytes(
             tests_spec_form_text(gen_script_text),
             label='generator script',
+            max_bytes=int(_C.TEXTAREA_MAX_BYTES),
         )
         desired_commands = parse_gen_script_lines(safe_script_text)
         with config.workspace_service.workspace_lock(workspace):
-            entries, spec_path = read_tests_spec(workspace)
+            entries, spec_path = _read_tests_spec(workspace)
             existing_gen_rows: list[dict[str, object]] = []
             seed_entries: list[dict[str, object]] = []
             for idx, row in enumerate(entries, start=1):
-                normalized_row = normalize_tests_spec_entry(row, index=idx)
+                normalized_row = _normalize_tests_spec_entry(row, index=idx)
                 row_id = normalize_test_id(normalized_row.get('id'))
                 seed_entries.append({'id': row_id})
                 if normalized_row['kind'].strip().lower() == 'gen':
@@ -470,7 +509,7 @@ def save_gen_script(problem: str, user: Annotated[str, Depends(require_session_u
             rebuilt_entries: list[dict[str, object]] = []
             replacement_idx = 0
             for idx, row in enumerate(entries, start=1):
-                normalized_row = normalize_tests_spec_entry(row, index=idx)
+                normalized_row = _normalize_tests_spec_entry(row, index=idx)
                 kind = normalized_row['kind'].strip().lower()
                 if kind == 'gen':
                     if replacement_idx >= len(replacement_gen_rows):
@@ -512,7 +551,7 @@ def save_gen_script(problem: str, user: Annotated[str, Depends(require_session_u
                         index=len(rebuilt_entries) + 1,
                     )
                 )
-            write_tests_spec(spec_path, rebuilt_entries)
+            _write_tests_spec(spec_path, rebuilt_entries)
             old_gen_ids = {normalize_test_id(row.get('id')) for row in existing_gen_rows if normalize_test_id(row.get('id'))}
             new_gen_ids = {normalize_test_id(row.get('id')) for row in replacement_gen_rows if normalize_test_id(row.get('id'))}
             for replacement in replacement_gen_rows:
@@ -531,7 +570,7 @@ def download_test_payload(problem: str, user: Annotated[str, Depends(require_ses
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
     workspace = Path(ctx['workspace']['path'])
     with config.workspace_service.workspace_lock(workspace):
-        entries, _spec_path = read_tests_spec(workspace)
+        entries, _spec_path = _read_tests_spec(workspace)
         idx = tests_spec_resolve_index(index, len(entries))
         entry = dict(entries[idx - 1])
         test_id = normalize_test_id(entry.get('id'))
@@ -565,14 +604,18 @@ async def upload_test_payload(
     workspace = Path(ctx['workspace']['path'])
     msg = 'test payload uploaded'
     try:
-        raw_payload = await read_upload_bytes_limited(payload_upload, label='uploaded payload')
+        raw_payload = await read_upload_bytes_limited(
+            payload_upload,
+            label='uploaded payload',
+            max_bytes=int(_C.UPLOAD_MAX_BYTES),
+        )
         try:
             uploaded_text = raw_payload.decode('utf-8')
         except UnicodeDecodeError as exc:
             raise ValueError('uploaded payload must be utf-8 text') from exc
         safe_payload = normalize_file_manual_input(uploaded_text)
         with config.workspace_service.workspace_lock(workspace):
-            entries, _spec_path = read_tests_spec(workspace)
+            entries, _spec_path = _read_tests_spec(workspace)
             idx = tests_spec_resolve_index(index, len(entries))
             entry = dict(entries[idx - 1])
             test_id = normalize_test_id(entry.get('id'))
@@ -589,4 +632,3 @@ async def upload_test_payload(
         except Exception:
             pass
     return redirect_response(f'/problems/{problem}/tests', status_code=303, message=msg)
-

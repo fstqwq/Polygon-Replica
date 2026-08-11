@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+# ascii-lint: allow; reason=chinese-test
+
 import shutil
 import subprocess
 import tempfile
@@ -49,7 +51,10 @@ class TestICPCExportPackage(unittest.TestCase):
         metadata = yaml.safe_load(text)
         self.assertEqual(metadata["problem_format_version"], "2025-09")
         self.assertEqual(metadata["type"], "pass-fail")
-        self.assertEqual(metadata["name"], {"en": "O'Brien: #1", "zh": "中文题目"})
+        self.assertEqual(
+            metadata["name"],
+            {"en": "O'Brien: #1", "zh": "中文题目"},
+        )
         self.assertEqual(
             metadata["uuid"],
             str(uuid.uuid5(uuid.NAMESPACE_URL, f"polygon-replica/problem/{slug}")),

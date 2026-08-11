@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import app.main_constant as _K
+
 import json
 import os
 import re
@@ -25,7 +27,7 @@ from app.service.platform.git_process import run_git
 from app.service.verification.runtime import coerce_int, normalize_problem_mode
 from app.impl.workspace.problem_config import read_problem_config
 
-_C = config.constants
+_C = config.config_values
 
 _CONTEST_PROPERTY_LOCATION = "location"
 _CONTEST_PROPERTY_DATE = "date"
@@ -614,6 +616,7 @@ def _prepare_contest_pdf_problem(
                     fallback_title=problem_slug_leaf(problem_slug),
                     language=language,
                 ),
+                tests_spec_max_bytes=int(_C.TEXTAREA_MAX_BYTES),
             )
             item["preamble_lines"] = _extract_latex_color_definition_lines(native.root / "statement" / "olymp.sty")
             item["source_commit"] = native.manifest["source_commit"]
@@ -687,13 +690,13 @@ def _run_problem_general_update(
         workspace = Path(config.workspace_service.ensure_workspace(problem_slug, actor_username, refresh_status=True))
         safe_tl = coerce_int(
             requested.get("time_limit_ms"),
-            int(_C.GENERAL_CONFIG_DEFAULTS["time_limit_ms"]),
+            int(_K.GENERAL_CONFIG_DEFAULTS["time_limit_ms"]),
             _C.GENERAL_TIME_LIMIT_MIN_MS,
             _C.GENERAL_TIME_LIMIT_MAX_MS,
         )
         safe_ml = coerce_int(
             requested.get("memory_limit_mb"),
-            int(_C.GENERAL_CONFIG_DEFAULTS["memory_limit_mb"]),
+            int(_K.GENERAL_CONFIG_DEFAULTS["memory_limit_mb"]),
             _C.GENERAL_MEMORY_LIMIT_MIN_MB,
             _C.GENERAL_MEMORY_LIMIT_MAX_MB,
         )
@@ -705,14 +708,14 @@ def _run_problem_general_update(
             if int(before.get("total", 0)) > 0:
                 raise RuntimeError("workspace has uncommitted changes")
             payload, general_cfg, cfg_path = read_problem_config(workspace)
-            safe_mode = normalize_problem_mode(general_cfg.get("mode"), str(_C.GENERAL_CONFIG_DEFAULTS["mode"]))
+            safe_mode = normalize_problem_mode(general_cfg.get("mode"), str(_K.GENERAL_CONFIG_DEFAULTS["mode"]))
             payload.pop("interactive", None)
             payload.update(
                 {
                     "time_limit_ms": safe_tl,
                     "memory_limit_mb": safe_ml,
                     "mode": safe_mode,
-                    "pass_limit": int(general_cfg.get("pass_limit") or _C.GENERAL_CONFIG_DEFAULTS["pass_limit"]),
+                    "pass_limit": int(general_cfg.get("pass_limit") or _K.GENERAL_CONFIG_DEFAULTS["pass_limit"]),
                 }
             )
             cfg_path.parent.mkdir(parents=True, exist_ok=True)

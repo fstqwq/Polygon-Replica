@@ -8,8 +8,16 @@ from app.service.platform.error_text import bounded_display_text, normalize_disp
 from app.service.platform.testlib_source import workspace_testlib_header
 from app.service.platform.runtime_blob_store import RuntimeBlobStore
 
-_C = config.constants
+_C = config.config_values
 _CPP_EXTENSIONS = {".cpp", ".cc", ".cxx", ".c++", ".c"}
+
+
+def _bounded_text(value: str) -> str:
+    snapshot = _C.snapshot()
+    return bounded_display_text(
+        value,
+        limit_bytes=int(snapshot["AUX_DISPLAY_TEXT_LIMIT_BYTES"]),
+    )
 
 
 def _first_compile_message(summary: dict[str, object]) -> str:
@@ -69,14 +77,14 @@ def _compile_error_text(summary: dict[str, object]) -> str:
         if text:
             lines.append(text)
     if lines:
-        return bounded_display_text("\n".join(lines))
+        return _bounded_text("\n".join(lines))
     fallback = summary.get("error")
     if isinstance(fallback, str):
         fallback = fallback.strip()
     else:
         fallback = ""
     if fallback:
-        return bounded_display_text(fallback)
+        return _bounded_text(fallback)
     return ""
 
 
@@ -220,5 +228,5 @@ def judgehost_compile_check_error(
         message = _compile_error_text(summary) or _first_compile_message(summary) or f"judge backend compile failed ({verdict})"
         return _with_path(message or "compile check failed")
     if backend_error:
-        return _with_path(bounded_display_text(backend_error) or "compile check failed")
+        return _with_path(_bounded_text(backend_error) or "compile check failed")
     return ""

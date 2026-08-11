@@ -20,9 +20,10 @@ from app.impl.runtime.config import config
 from app.impl.workspace.access import require_write_access
 from app.impl.workspace.context import count_label
 from app.impl.workspace.context_ui import page_ctx
-from app.main_util import read_fileobj_bytes_limited
+from app.service.importing.upload import spool_fileobj
+from app.service.importing.archive import ArchiveView, problem_import_policy
 
-_C = config.constants
+_C = config.config_values
 _REVISION_TOKEN_RE = re.compile(r"v[1-9][0-9]*")
 
 
@@ -193,16 +194,28 @@ def history_import(
         package_name = (package_upload.filename or "").strip()
         if not package_name:
             raise ValueError("archive filename is required")
-        package_content = read_fileobj_bytes_limited(package_upload.file, label="archive file")
         user_context = cast(dict[str, object], ctx["user"])
-        imported = import_package_into_workspace(
-            actor_user_id=cast(int, user_context["id"]),
-            actor_user=cast(str, user_context["username"]),
-            target_problem=problem,
-            package_name=package_name,
-            package_content=package_content,
-            source_problem=problem,
-        )
+        snapshot = _C.snapshot()
+        with spool_fileobj(
+            package_upload.file,
+            root=config.settings.cache_root / "archive-uploads",
+            max_bytes=int(snapshot["UPLOAD_MAX_BYTES"]),
+            label="archive file",
+        ) as package_path:
+            policy = problem_import_policy(
+                int(snapshot["PROBLEM_ZIP_MAX_EXPANDED_BYTES"]),
+                int(snapshot["TEXTAREA_MAX_BYTES"]),
+            )
+            with ArchiveView(package_path, policy.archive) as package:
+                imported = import_package_into_workspace(
+                    actor_user_id=cast(int, user_context["id"]),
+                    actor_user=cast(str, user_context["username"]),
+                    target_problem=problem,
+                    package_name=package_name,
+                    package=package,
+                    policy=policy,
+                    source_problem=problem,
+                )
         target_problem = cast(str, imported["target_problem"])
         total_tests = cast(int, imported["total_tests"])
         message = (

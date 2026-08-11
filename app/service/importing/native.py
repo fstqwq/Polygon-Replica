@@ -1,87 +1,29 @@
 from __future__ import annotations
 
-import io
 import json
 import shutil
 import stat
 import uuid
 import zipfile
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 
-from app.main_util import UPLOAD_MAX_BYTES
-from app.service.platform.zip_extract import extract_zip_entry_to_path_limited, validate_zip_entry_size
+from app.service.importing.archive import ArchiveView
 from app.service.platform.workspace_path import (
     is_allowed_workspace_root_path,
     is_hidden_workspace_path,
     is_repository_answer_path,
 )
-from app.service.problem.test_spec import load_tests_spec
+from app.service.problem.test_spec import loads_tests_spec
 from app.service.statement.constant import STATEMENT_SECTIONS_DIR
 
 
 NATIVE_PACKAGE_ANCHOR = "config/problem.json"
-ZIP_MAX_BYTES = UPLOAD_MAX_BYTES
-ZIP_MAX_FILE_BYTES = UPLOAD_MAX_BYTES
-ZIP_MAX_EXTRACTED_BYTES = UPLOAD_MAX_BYTES
-
-
-def _normalize_zip_path(raw: str) -> str:
-    text = raw.replace("\\", "/")
-    if not text:
-        return ""
-    pure = PurePosixPath(text)
-    if pure.is_absolute():
-        return ""
-    parts: list[str] = []
-    for part in pure.parts:
-        if part in {"", ".", ".."}:
-            return ""
-        parts.append(part)
-    return "/".join(parts)
-
-
-def _entry_map_from_zip(zf: zipfile.ZipFile, anchor: str) -> dict[str, zipfile.ZipInfo]:
-    raw: dict[str, zipfile.ZipInfo] = {}
-    for info in zf.infolist():
-        if info.is_dir():
-            continue
-        normalized = _normalize_zip_path(info.filename)
-        if not normalized:
-            continue
-        if normalized in raw:
-            raise ValueError(f"duplicate Native package path: {normalized}")
-        raw[normalized] = info
-    if anchor in raw:
-        return raw
-    suffix = "/" + anchor
-    package_roots = [
-        path[: -len(anchor)]
-        for path in raw
-        if path.endswith(suffix)
-    ]
-    if len(package_roots) != 1:
-        raise ValueError(f"{anchor} not found at Native package root")
-    package_root = package_roots[0]
-    if any(not path.startswith(package_root) for path in raw):
-        raise ValueError("Native package contains files outside its package root")
-    nested: dict[str, zipfile.ZipInfo] = {}
-    for path, info in raw.items():
-        relative = path.removeprefix(package_root)
-        if not relative:
-            continue
-        if relative in nested:
-            raise ValueError(f"duplicate Native package path: {relative}")
-        nested[relative] = info
-    if anchor not in nested:
-        raise ValueError(f"{anchor} not found at Native package root")
-    return nested
 
 
 def _validated_native_entries(
     entry_map: dict[str, zipfile.ZipInfo],
 ) -> list[tuple[Path, zipfile.ZipInfo, str]]:
     validated: list[tuple[Path, zipfile.ZipInfo, str]] = []
-    total_size = 0
     for rel in sorted(entry_map):
         target_rel = Path(rel)
         if not target_rel.parts:
@@ -93,40 +35,8 @@ def _validated_native_entries(
         if is_repository_answer_path(target_rel.parts):
             raise ValueError(f"native package contains repository answer file: {rel}")
         info = entry_map[rel]
-        entry_size = validate_zip_entry_size(
-            info,
-            total_before=total_size,
-            max_file_bytes=ZIP_MAX_FILE_BYTES,
-            max_total_bytes=ZIP_MAX_EXTRACTED_BYTES,
-            display_name=rel,
-            entry_too_large_prefix="zip entry too large",
-            payload_too_large_prefix="native package repo payload is too large at",
-        )
-        total_size += entry_size
         validated.append((target_rel, info, rel))
     return validated
-
-
-def _extract_zip_entry_to_path(
-    zf: zipfile.ZipFile,
-    info: zipfile.ZipInfo,
-    target: Path,
-    *,
-    extracted_before: int,
-    display_name: str,
-) -> int:
-    return extract_zip_entry_to_path_limited(
-        zf,
-        info,
-        target,
-        total_before=extracted_before,
-        max_file_bytes=ZIP_MAX_FILE_BYTES,
-        max_total_bytes=ZIP_MAX_EXTRACTED_BYTES,
-        display_name=display_name,
-        entry_too_large_prefix="zip entry too large",
-        payload_too_large_prefix="native package repo payload is too large at",
-        normalize_utf8_newlines=False,
-    )
 
 
 def _clear_workspace_tree(workspace: Path) -> None:
@@ -141,13 +51,11 @@ def _clear_workspace_tree(workspace: Path) -> None:
             continue
         child.unlink(missing_ok=True)
 
-def _read_title_from_problem_config(workspace: Path) -> str:
-    cfg_path = workspace / "config" / "problem.json"
+def _title_from_problem_config(payload: bytes) -> str:
     try:
-        if cfg_path.exists() and cfg_path.is_file() and not cfg_path.is_symlink():
-            payload = json.loads(cfg_path.read_text(encoding="utf-8"))
-            if isinstance(payload, dict):
-                return str(payload.get("name") or "").strip()
+        config = json.loads(payload.decode("utf-8"))
+        if isinstance(config, dict):
+            return str(config.get("name") or "").strip()
     except Exception:
         pass
     return ""
@@ -175,61 +83,61 @@ class NativePackageImportService:
         self,
         workspace: Path,
         package_name: str,
-        package_bytes: bytes,
+        package: ArchiveView,
         *,
         normalize_test_data_newlines: bool = False,
+        text_limit_bytes: int,
     ) -> dict[str, object]:
         del normalize_test_data_newlines
-        raw = bytes(package_bytes or b"")
-        if not raw:
-            raise ValueError("empty package file")
-        if len(raw) > ZIP_MAX_BYTES:
-            raise ValueError("package file is too large")
-
-        with zipfile.ZipFile(io.BytesIO(raw), "r") as zf:
-            entry_map = _entry_map_from_zip(zf, NATIVE_PACKAGE_ANCHOR)
-            source_entries = {
-                rel: info for rel, info in entry_map.items() if not rel.startswith("test_data/")
-            }
-            _validated_native_entries(source_entries)
-            staging_root = workspace.parent / f".native-import-{uuid.uuid4().hex}"
-            written_total = 0
-            try:
-                staging_root.mkdir(parents=True, exist_ok=False)
-                for rel in sorted(entry_map):
-                    target_rel = Path(rel)
-                    info = entry_map[rel]
-                    written_total += _extract_zip_entry_to_path(
-                        zf,
-                        info,
-                        staging_root / target_rel,
-                        extracted_before=written_total,
-                        display_name=rel,
-                    )
-                    mode = info.external_attr >> 16
-                    file_type = stat.S_IFMT(mode)
-                    if file_type == stat.S_IFLNK:
-                        raise ValueError(f"native package contains a symbolic link: {rel}")
-                    if file_type not in {0, stat.S_IFREG}:
-                        raise ValueError(f"native package contains a special file: {rel}")
-                    if mode:
-                        (staging_root / target_rel).chmod(stat.S_IMODE(mode))
-
-                shutil.rmtree(staging_root / "test_data", ignore_errors=True)
-
-                _clear_workspace_tree(workspace)
-                for child in staging_root.iterdir():
-                    shutil.move(str(child), str(workspace / child.name))
-            finally:
-                shutil.rmtree(staging_root, ignore_errors=True)
-
-        title = _read_title_from_problem_config(workspace)
-        _ensure_statement_name_from_problem_config(workspace, title)
+        rooted = package.rooted_at(NATIVE_PACKAGE_ANCHOR)
+        entry_map = {
+            rel: info
+            for rel, info in rooted.entries.items()
+            if (not info.is_dir()) and (not rel.startswith("test_data/"))
+        }
+        problem_info = entry_map.get(NATIVE_PACKAGE_ANCHOR)
+        if problem_info is None:
+            raise ValueError(f"{NATIVE_PACKAGE_ANCHOR} is not a file")
+        problem_metadata = rooted.read_metadata(
+            problem_info,
+            label=NATIVE_PACKAGE_ANCHOR,
+        )
+        title = _title_from_problem_config(problem_metadata)
         tests_total = 0
+        tests_spec_info = entry_map.get("tests/spec.json")
+        if tests_spec_info is not None:
+            try:
+                tests_total = len(
+                    loads_tests_spec(
+                        rooted.read_metadata(
+                            tests_spec_info,
+                            label="tests/spec.json",
+                        ).decode("utf-8"),
+                        max_bytes=text_limit_bytes,
+                    )
+                )
+            except (UnicodeDecodeError, ValueError):
+                tests_total = 0
+        source_entries = _validated_native_entries(entry_map)
+        staging_root = workspace.parent / f".native-import-{uuid.uuid4().hex}"
         try:
-            tests_total = len(load_tests_spec(workspace / "tests" / "spec.json"))
-        except Exception:
-            tests_total = 0
+            staging_root.mkdir(parents=True, exist_ok=False)
+            for target_rel, info, rel in source_entries:
+                rooted.zip_file.copy_to(info, staging_root / target_rel)
+                mode = info.external_attr >> 16
+                file_type = stat.S_IFMT(mode)
+                if file_type not in {0, stat.S_IFREG}:
+                    raise ValueError(f"native package contains a special file: {rel}")
+                if mode:
+                    (staging_root / target_rel).chmod(stat.S_IMODE(mode))
+
+            _clear_workspace_tree(workspace)
+            for child in staging_root.iterdir():
+                shutil.move(str(child), str(workspace / child.name))
+        finally:
+            shutil.rmtree(staging_root, ignore_errors=True)
+
+        _ensure_statement_name_from_problem_config(workspace, title)
         return {
             "package_name": package_name.strip(),
             "title": title,

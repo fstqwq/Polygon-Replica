@@ -187,7 +187,7 @@ cat >"$tmpd/main.tex" <<EOF
 \setmainfont{TeX Gyre Termes}
 \setCJKmainfont{Noto Serif CJK SC}
 \begin{document}
-XeLaTeX probe 你好
+XeLaTeX probe \char"4F60\char"597D
 \end{document}
 EOF
 xelatex -interaction=nonstopmode -halt-on-error -output-directory "$tmpd" "$tmpd/main.tex" >/dev/null 2>&1
@@ -206,7 +206,7 @@ cat >"$tmpd/main.tex" <<EOF
 \setmainfont{TeX Gyre Termes}
 \setCJKmainfont{Noto Serif CJK SC}
 \begin{document}
-XeLaTeX probe 你好
+XeLaTeX probe \char"4F60\char"597D
 \end{document}
 EOF
 xelatex -interaction=nonstopmode -halt-on-error -output-directory "$tmpd" "$tmpd/main.tex" >/dev/null 2>&1

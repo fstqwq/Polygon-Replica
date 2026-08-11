@@ -9,7 +9,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from app.runtime_value import build_runtime_values
+from app.config import build_config_values
 from app.service.judgehost.cleanup import JudgehostTerminalCleanup
 from app.service.judgehost.case_result import build_case_result
 from app.service.judgehost.domjudge.client import domjudge_script_id
@@ -1546,10 +1546,10 @@ class TestJudgehostScheduler(unittest.TestCase):
         self.assertEqual(len(scheduler.cases_for_batch(batch_id, status="leased")), 256)
 
     def test_judgehost_runtime_defaults_and_overrides(self) -> None:
-        defaults = build_runtime_values()
+        defaults = build_config_values()
         self.assertEqual(defaults.JUDGEHOST_FETCH_BATCH_SIZE, 2)
         self.assertEqual(defaults.RUN_EXEC_PROCESS_LIMIT, 1024)
-        overridden = build_runtime_values(
+        overridden = build_config_values(
             {"JUDGEHOST_FETCH_BATCH_SIZE": 8, "RUN_EXEC_PROCESS_LIMIT": 256}
         )
         self.assertEqual(overridden.JUDGEHOST_FETCH_BATCH_SIZE, 8)

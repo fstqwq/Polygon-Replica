@@ -132,6 +132,10 @@ class ResultProcessor:
         if task is not None:
             self._s.touch_verification_runtime(domjudge_text(task.get("verification_id")))
 
+    def _display_text_limit_bytes(self) -> int:
+        snapshot = self._s.config_values.snapshot()
+        return int(snapshot["AUX_DISPLAY_TEXT_LIMIT_BYTES"])
+
     def finalize_host_lease_release(self, release: HostLeaseRelease) -> None:
         for task_id in release.terminal_task_ids:
             batch_row = self._s.batch_scheduler.batch_for_task(task_id)
@@ -169,6 +173,7 @@ class ResultProcessor:
             output_error_ref=output_error_ref,
             output_diff_ref=output_diff_ref,
             team_message_ref=team_message_ref,
+            limit_bytes=self._display_text_limit_bytes(),
         )
 
     def domjudge_get_source_files(
@@ -502,7 +507,11 @@ class ResultProcessor:
         )
         if verification_task_row is None:
             return True
-        final_result = finalize_verification_task_result(verification_task_row, result=case_result)
+        final_result = finalize_verification_task_result(
+            verification_task_row,
+            result=case_result,
+            limit_bytes=verification_task_store.display_text_limit_bytes(),
+        )
         verification_task_store.save_task_result(
             final_result.task_id,
             status=final_result.status,
@@ -653,7 +662,10 @@ class ResultProcessor:
             if compile_text.strip():
                 message = compile_text.strip()
             compile_error_summary = message
-            compile_error_task = domjudge_feedback_text_from_text(message) or "compilation failed"
+            compile_error_task = domjudge_feedback_text_from_text(
+                message,
+                limit_bytes=self._display_text_limit_bytes(),
+            ) or "compilation failed"
             compile_diag.append(
                 {
                     "level": "error",
@@ -812,7 +824,8 @@ class ResultProcessor:
         if runresult == "compiler-error" and not feedback:
             compile_blob = self._toolkit.b64_decode(batch_row["compile_output_b64"])
             feedback = domjudge_feedback_text_from_text(
-                compile_blob.decode("utf-8", errors="replace")
+                compile_blob.decode("utf-8", errors="replace"),
+                limit_bytes=self._display_text_limit_bytes(),
             ) or "compilation failed"
         if not feedback:
             feedback = runresult.replace("-", " ")
@@ -1002,6 +1015,7 @@ class ResultProcessor:
         judgetask_id: int,
         payload: dict[str, object],
     ) -> None:
+        config_snapshot = self._s.config_values.snapshot()
         safe_host = self._core.normalize_hostname(hostname)
         case_id = int(judgetask_id)
         case_row = self._s.batch_scheduler.case_execution_row(case_id)
@@ -1042,7 +1056,9 @@ class ResultProcessor:
         def _payload_blob_as_b64(value: object) -> str:
             raw = self._toolkit.payload_blob_bytes(value)
             if raw:
-                return base64.b64encode(truncate_stored_log_bytes(raw, self._s.constants)).decode("ascii")
+                return base64.b64encode(
+                    truncate_stored_log_bytes(raw, config_snapshot)
+                ).decode("ascii")
             return domjudge_text(value)
 
         compile_output = _payload_blob_as_b64(payload.get("output_compile"))
@@ -1054,7 +1070,8 @@ class ResultProcessor:
                 compile_blob = self._toolkit.b64_decode(compile_output)
                 failure_text = (
                     domjudge_feedback_text_from_text(
-                        compile_blob.decode("utf-8", errors="replace")
+                        compile_blob.decode("utf-8", errors="replace"),
+                        limit_bytes=self._display_text_limit_bytes(),
                     )
                     or "compilation failed"
                 )
@@ -1169,6 +1186,7 @@ class ResultProcessor:
         claim_generation: int,
         report_telemetry: CaseReportTelemetry,
     ) -> int:
+        config_snapshot = self._s.config_values.snapshot()
         safe_host = self._core.normalize_hostname(hostname)
         case_id = int(judgetask_id)
         row = self._s.batch_scheduler.case_execution_row(case_id)
@@ -1258,7 +1276,7 @@ class ResultProcessor:
         )
         bundle_limit_bytes = min(
             8 * 1024 * 1024,
-            max(1024, int(run_output_kb(self._s.constants) * 1024 * 3 // 4)),
+            max(1024, int(run_output_kb(config_snapshot) * 1024 * 3 // 4)),
         )
         callback_pass = max(0, domjudge_parse_int(payload.get("pass"), 0))
         pass_bundle: PassBundle | None = None
@@ -1471,7 +1489,10 @@ class ResultProcessor:
                 debug_text = domjudge_text(debug_context["case_debug_text"])
                 if not debug_text:
                     debug_text = domjudge_text(debug_context["batch_debug_text"])
-                feedback_text = domjudge_feedback_text_from_text(debug_text)
+                feedback_text = domjudge_feedback_text_from_text(
+                    debug_text,
+                    limit_bytes=self._display_text_limit_bytes(),
+                )
         def _bundled_ref(number: int, name: str) -> str:
             if (
                 pass_bundle is not None
@@ -1959,7 +1980,11 @@ class ResultProcessor:
                             safe_test_name,
                         )
                         if verification_task_row is not None:
-                            final_result = finalize_verification_task_result(verification_task_row, result=case_result)
+                            final_result = finalize_verification_task_result(
+                                verification_task_row,
+                                result=case_result,
+                                limit_bytes=verification_task_store.display_text_limit_bytes(),
+                            )
                             verification_task_store.overwrite_task_result(
                                 final_result.task_id,
                                 status=final_result.status,

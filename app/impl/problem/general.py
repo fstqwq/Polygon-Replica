@@ -1,4 +1,6 @@
 from __future__ import annotations
+
+import app.main_constant as _K
 from app.impl.auth.session import require_session_user
 
 import json
@@ -27,7 +29,7 @@ from app.service.verification.runtime import (
 )
 from app.impl.workspace.problem_config import read_problem_config
 
-_C = config.constants
+_C = config.config_values
 
 _BUILD_SOURCE_KEYS = (
     'accepted_solution_source',
@@ -77,20 +79,20 @@ def general_save(
     try:
         safe_time_limit = coerce_int(
             time_limit_ms,
-            int(_C.GENERAL_CONFIG_DEFAULTS['time_limit_ms']),
+            int(_K.GENERAL_CONFIG_DEFAULTS['time_limit_ms']),
             _C.GENERAL_TIME_LIMIT_MIN_MS,
             _C.GENERAL_TIME_LIMIT_MAX_MS,
         )
         safe_memory = normalize_memory_limit_mb(
             memory_limit_mb,
-            default_mb=int(_C.GENERAL_CONFIG_DEFAULTS['memory_limit_mb']),
+            default_mb=int(_K.GENERAL_CONFIG_DEFAULTS['memory_limit_mb']),
             min_mb=_C.GENERAL_MEMORY_LIMIT_MIN_MB,
             max_mb=_C.GENERAL_MEMORY_LIMIT_MAX_MB,
         )
-        safe_mode = normalize_problem_mode(mode, str(_C.GENERAL_CONFIG_DEFAULTS['mode']))
+        safe_mode = normalize_problem_mode(mode, str(_K.GENERAL_CONFIG_DEFAULTS['mode']))
         safe_pass_limit = normalize_pass_limit(
             pass_limit,
-            int(_C.GENERAL_CONFIG_DEFAULTS['pass_limit']),
+            int(_K.GENERAL_CONFIG_DEFAULTS['pass_limit']),
             min_value=_C.GENERAL_PASS_LIMIT_MIN,
             max_value=_C.GENERAL_PASS_LIMIT_MAX,
         )

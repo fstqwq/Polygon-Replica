@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from app.db import DB, now_iso
-from app.runtime_value import RuntimeValues
+from app.config import ConfigValues
 from app.service.platform.admission import MaintenanceAdmissionGate
 from app.service.platform.fs.layout import FsManager
 from app.service.platform.runtime_blob_store import RuntimeBlobStore
@@ -39,7 +39,7 @@ class Judgehost:
         workspace_service: WorkspaceService,
         fs_manager: FsManager,
         settings: Settings,
-        constants: RuntimeValues,
+        config_values: ConfigValues,
         *,
         verification_task_store: VerificationTaskStore,
         runtime_blob_store: RuntimeBlobStore,
@@ -51,7 +51,7 @@ class Judgehost:
             db=db,
             workspace_service=workspace_service,
             fs_manager=fs_manager,
-            constants=constants,
+            config_values=config_values,
             runtime_blob_store=runtime_blob_store,
             runtime_cache_index=runtime_cache_index,
             verification_task_store=verification_task_store,
@@ -72,7 +72,6 @@ class Judgehost:
         )
         self._state.touch_verification_runtime = self._terminal_cleanup.touch
         self._admission_gate: MaintenanceAdmissionGate | None = None
-        self.apply_runtime_values(constants)
 
     @property
     def state(self) -> JudgehostState:
@@ -103,9 +102,6 @@ class Judgehost:
         return self._enqueue
 
     # Public API delegation.
-    def apply_runtime_values(self, constants: RuntimeValues) -> None:
-        return self._core.apply_runtime_values(constants)
-
     def enabled(self) -> bool:
         return self._core.enabled()
 

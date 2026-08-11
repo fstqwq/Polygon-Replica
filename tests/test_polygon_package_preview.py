@@ -15,6 +15,7 @@ class TestPolygonPackagePreview(E2ETestBase):
             workspace / "statement",
             problem_title="Sample Problem",
             language="english",
+            tests_spec_max_bytes=256 * 1024,
         )
         with (
             patch.object(

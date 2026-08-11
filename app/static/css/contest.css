@@ -169,7 +169,7 @@
 }
 
 .contest-member-actions .inline-form + .inline-form::before {
-  content: "路";
+  content: "\8def";
   margin: 0 var(--space-2);
   color: var(--muted);
 }

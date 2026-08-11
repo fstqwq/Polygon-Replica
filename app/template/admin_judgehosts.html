@@ -137,7 +137,7 @@
       <div class="admin-host-last-work">
         <span class="muted">Last judging</span>
         {% if host.last_judging_href %}<a href="{{ host.last_judging_href }}">{% endif %}
-          {{ host.last_judging.task_kind | replace('-', ' ') | title }} · <code>{{ host.last_judging.problem_slug }}</code> · {{ host.last_judging.source_label }} / {{ host.last_judging.test_name }}
+          {{ host.last_judging.task_kind | replace('-', ' ') | title }} &middot; <code>{{ host.last_judging.problem_slug }}</code> &middot; {{ host.last_judging.source_label }} / {{ host.last_judging.test_name }}
         {% if host.last_judging_href %}</a>{% endif %}
       </div>
       {% endif %}
@@ -150,7 +150,7 @@
           <details class="admin-toolchain">
             <summary>
               <strong>{{ toolchain.language_label }}</strong>
-              <span>{{ toolchain.compiler_summary }}{% if toolchain.runner and toolchain.runner_summary != toolchain.compiler_summary %} · {{ toolchain.runner_summary }}{% endif %}</span>
+              <span>{{ toolchain.compiler_summary }}{% if toolchain.runner and toolchain.runner_summary != toolchain.compiler_summary %} &middot; {{ toolchain.runner_summary }}{% endif %}</span>
               <span class="muted">{{ toolchain.observed_at | local_time }}</span>
             </summary>
             <div class="admin-toolchain-output">

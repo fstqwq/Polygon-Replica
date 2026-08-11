@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import app.main_constant as _K
+
 from pathlib import Path
 
 from app.impl.runtime.config import config
@@ -18,12 +20,12 @@ from app.impl.workspace.published_materialization import ensure_published_materi
 from app.impl.workspace.problem_config import read_problem_config
 from app.impl.workspace.verification_dag import run_workspace_verification_dag
 
-_C = config.constants
+_C = config.config_values
 
 
 def _workspace_mode_and_pass_limit(problem_id: int, workspace_id: int) -> tuple[str, int]:
-    default_mode = str(_C.GENERAL_CONFIG_DEFAULTS.get("mode") or "pass-fail")
-    default_pass_limit = int(_C.GENERAL_CONFIG_DEFAULTS.get("pass_limit") or 1)
+    default_mode = str(_K.GENERAL_CONFIG_DEFAULTS.get("mode") or "pass-fail")
+    default_pass_limit = int(_K.GENERAL_CONFIG_DEFAULTS.get("pass_limit") or 1)
     workspace_path_text = config.workspace_service.workspace_path(int(problem_id), int(workspace_id))
     if not workspace_path_text:
         return (default_mode, default_pass_limit)

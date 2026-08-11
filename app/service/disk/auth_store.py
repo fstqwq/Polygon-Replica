@@ -6,7 +6,8 @@ from datetime import datetime, timedelta, timezone
 from typing import TypedDict
 
 from app.db import DB, now_iso
-from app.runtime_value import RuntimeValues
+from app.config import ConfigValues
+from app.main_constant import SESSION_TOKEN_RE, USER_IDENT_RE
 from app.service.platform.hashing import sha256_hex_text
 
 
@@ -68,12 +69,13 @@ class RateLimitHit(TypedDict):
 
 
 class AuthStore:
-    def __init__(self, db: DB, *, constants: RuntimeValues):
+    def __init__(self, db: DB, *, config_values: ConfigValues):
         self.db = db
-        self.apply_runtime_values(constants)
+        self._config_values = config_values
 
-    def apply_runtime_values(self, constants: RuntimeValues) -> None:
-        self._constants = constants
+    @property
+    def config_values(self) -> ConfigValues:
+        return self._config_values
 
     @staticmethod
     def _parse_iso_utc(raw: str) -> datetime | None:
@@ -92,7 +94,7 @@ class AuthStore:
 
     def auth_user_row(self, username: str) -> AuthUserRow | None:
         safe_username = username.strip()
-        if not self._constants.USER_IDENT_RE.fullmatch(safe_username):
+        if not USER_IDENT_RE.fullmatch(safe_username):
             return None
         row = self.db.fetch_one(
             """
@@ -695,7 +697,7 @@ class AuthStore:
 
     def create_auth_session(self, user_id: int) -> str:
         expires_at = (
-            datetime.now(timezone.utc) + timedelta(seconds=int(self._constants.AUTH_COOKIE_MAX_AGE))
+            datetime.now(timezone.utc) + timedelta(seconds=int(self._config_values.AUTH_COOKIE_MAX_AGE))
         ).isoformat()
         for _ in range(4):
             token = secrets.token_urlsafe(32)
@@ -719,7 +721,7 @@ class AuthStore:
         if not safe_scope:
             raise ValueError("invalid sudo scope")
         expires_at = (
-            datetime.now(timezone.utc) + timedelta(seconds=int(self._constants.SUDO_COOKIE_MAX_AGE))
+            datetime.now(timezone.utc) + timedelta(seconds=int(self._config_values.SUDO_COOKIE_MAX_AGE))
         ).isoformat()
         for _ in range(4):
             token = secrets.token_urlsafe(32)
@@ -740,7 +742,7 @@ class AuthStore:
 
     def revoke_auth_session(self, token: str) -> None:
         raw_token = token.strip()
-        if not raw_token or not self._constants.SESSION_TOKEN_RE.fullmatch(raw_token):
+        if not raw_token or not SESSION_TOKEN_RE.fullmatch(raw_token):
             return
         self.db.execute(
             "UPDATE auth_sessions SET revoked_at=? WHERE token_hash=? AND revoked_at IS NULL",
@@ -755,7 +757,7 @@ class AuthStore:
 
     def revoke_sudo_session(self, token: str) -> None:
         raw_token = token.strip()
-        if not raw_token or not self._constants.SESSION_TOKEN_RE.fullmatch(raw_token):
+        if not raw_token or not SESSION_TOKEN_RE.fullmatch(raw_token):
             return
         self.db.execute(
             "UPDATE sudo_sessions SET revoked_at=? WHERE token_hash=? AND revoked_at IS NULL",
@@ -770,7 +772,7 @@ class AuthStore:
 
     def session_identity(self, token: str) -> AuthSessionIdentity | None:
         raw_token = token.strip()
-        if not raw_token or not self._constants.SESSION_TOKEN_RE.fullmatch(raw_token):
+        if not raw_token or not SESSION_TOKEN_RE.fullmatch(raw_token):
             return None
         row = self.db.fetch_one(
             """
@@ -802,7 +804,7 @@ class AuthStore:
         if not safe_scope:
             return None
         raw_token = token.strip()
-        if not raw_token or not self._constants.SESSION_TOKEN_RE.fullmatch(raw_token):
+        if not raw_token or not SESSION_TOKEN_RE.fullmatch(raw_token):
             return None
         row = self.db.fetch_one(
             """

@@ -22,6 +22,8 @@ from app.service.verification.task_scheduler import (
 )
 from app.service.verification.task_store import VerificationTaskStore
 
+_DISPLAY_TEXT_LIMIT_BYTES = 512 * 1024
+
 
 def _execution_result(
     verdict: str,
@@ -341,6 +343,7 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
             task_store=store,
             callbacks=callbacks,
             edges=[("vt-generate", "vt-main")],
+            display_text_limit_bytes=_DISPLAY_TEXT_LIMIT_BYTES,
         )
         thread = threading.Thread(target=coordinator.run, daemon=True)
         thread.start()
@@ -439,6 +442,7 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
                 close_logical_runs=lambda _run_ids: None,
             ),
             edges=[("vt-generate", "vt-main"), ("vt-main", "vt-solution")],
+            display_text_limit_bytes=_DISPLAY_TEXT_LIMIT_BYTES,
         )
 
         coordinator.run()
@@ -526,6 +530,7 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
             task_store=store,
             callbacks=callbacks,
             edges=[],
+            display_text_limit_bytes=_DISPLAY_TEXT_LIMIT_BYTES,
         )
         thread = threading.Thread(target=coordinator.run, daemon=True)
         thread.start()
@@ -587,6 +592,7 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
             task_store=store,
             callbacks=callbacks,
             edges=[],
+            display_text_limit_bytes=_DISPLAY_TEXT_LIMIT_BYTES,
         )
         thread = threading.Thread(target=coordinator.run, daemon=True)
         thread.start()
@@ -664,6 +670,7 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
             task_store=store,
             callbacks=callbacks,
             edges=[("vt-generate", "vt-solution")],
+            display_text_limit_bytes=_DISPLAY_TEXT_LIMIT_BYTES,
         )
         thread = threading.Thread(target=coordinator.run, daemon=True)
         thread.start()
@@ -749,6 +756,7 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
             task_store=store,
             callbacks=callbacks,
             edges=[],
+            display_text_limit_bytes=_DISPLAY_TEXT_LIMIT_BYTES,
         )
         thread = threading.Thread(target=coordinator.run, daemon=True)
         thread.start()
@@ -818,6 +826,7 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
                 close_logical_runs=lambda _run_ids: None,
             ),
             edges=list(zip(task_ids, task_ids[1:])),
+            display_text_limit_bytes=_DISPLAY_TEXT_LIMIT_BYTES,
         )
 
         coordinator.run()
@@ -867,7 +876,13 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
             published.append(task_id)
             return TaskPublishResult(task_id, f"run-{task_id}", f"judgehost-{task_id}")
 
-        def _finalize(row: dict[str, object], *, result: dict[str, object]) -> TaskExecutionResult:
+        def _finalize(
+            row: dict[str, object],
+            *,
+            result: dict[str, object],
+            limit_bytes: int,
+        ) -> TaskExecutionResult:
+            del result, limit_bytes
             task_id = str(row["id"])
             finalized.append(task_id)
             return TaskExecutionResult(
@@ -889,6 +904,7 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
                 close_logical_runs=lambda _run_ids: None,
             ),
             edges=[("vt-parent-a", "vt-child"), ("vt-parent-b", "vt-child")],
+            display_text_limit_bytes=_DISPLAY_TEXT_LIMIT_BYTES,
         )
         with patch(
             "app.service.verification.task_result_finalize.finalize_verification_task_result",

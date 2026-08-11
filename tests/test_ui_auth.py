@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from tests.db_helpers import db_execute, db_fetch_one
+# ascii-lint: allow; reason=chinese-test
+
+from tests.db_helpers import db_execute, db_fetch_all, db_fetch_one
 
 import asyncio
 import sqlite3
@@ -11,13 +13,14 @@ from starlette.responses import PlainTextResponse
 import app.impl.admin.panel as admin_panel_module
 from app.service.auth.password_hash import password_verifier_storage_hash
 from app import main_constant
+from app.config import CONFIG_REGISTRY, ConfigKind
 from app.impl.auth.password_envelope import PasswordEnvelopeStore
 from app.impl.root.auth_pages import logout
 from app.service.platform.maintenance import CleanupStart
-from tests.common import E2ETestBase
+from tests.common import E2ETestBase, override_config_values
 
 from tests.ui_support import (
-    ADMIN_CONFIG_DEFAULTS,
+    DEFAULT_CONFIG_VALUES,
     AUTH_COOKIE_NAME,
     admin_judgehosts_page,
     admin_overview_page,
@@ -68,8 +71,8 @@ from tests.ui_support import (
     uuid,
     workspace_service,
 )
-SUDO_COOKIE_NAME = config.constants.SUDO_COOKIE_NAME
-SUDO_COOKIE_MAX_AGE = int(config.constants.SUDO_COOKIE_MAX_AGE)
+SUDO_COOKIE_NAME = config.config_values.SUDO_COOKIE_NAME
+SUDO_COOKIE_MAX_AGE = int(config.config_values.SUDO_COOKIE_MAX_AGE)
 
 
 class TestUIAuth(UIHelpersMixin, E2ETestBase):
@@ -77,16 +80,16 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
     seed_default_workspace = True
 
     def test_password_crypto_production_parameters_remain_strong(self) -> None:
-        self.assertEqual(main_constant.PASSWORD_HASH_ITERS, 240_000)
+        self.assertEqual(DEFAULT_CONFIG_VALUES["PASSWORD_HASH_ITERS"], 240_000)
         private_key = PasswordEnvelopeStore()._key_factory()
         self.assertEqual(private_key.key_size, 2048)
 
     def _replace_auth_constants(self, **overrides: object) -> None:
-        previous = config.constants.to_dict()
+        previous = dict(config.config_values.snapshot())
         updated = dict(previous)
         updated.update(overrides)
-        config.constants.replace(updated)
-        self.addCleanup(config.constants.replace, previous)
+        config.config_values.replace(updated)
+        self.addCleanup(config.config_values.replace, previous)
 
     def _valid_registration_kwargs(self, username: str, *, email: str | None = None) -> dict[str, object]:
         password = "StrongPass123"
@@ -1369,7 +1372,7 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
             },
             actor_user_id=int(admin["id"]),
         )
-        config.reload_runtime_values()
+        config.reload_config()
 
         resp = admin_judgehosts_page(_request("/admin/judgehosts"), user="alice")
         self.assertEqual(resp.status_code, 200)
@@ -1398,7 +1401,7 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
             },
             actor_user_id=int(admin["id"]),
         )
-        config.reload_runtime_values()
+        config.reload_config()
 
         resp = admin_judgehosts_page(_request("/admin/judgehosts"), user="alice")
         self.assertEqual(resp.status_code, 200)
@@ -1474,7 +1477,10 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
             'href="/problems/alice/sample/run/details?verification_id=ver-123456789abcdef"',
             html,
         )
-        self.assertIn("Solution Run · <code>alice/sample</code> · ac.cpp / 001.in", html)
+        self.assertIn(
+            "Solution Run &middot; <code>alice/sample</code> &middot; ac.cpp / 001.in",
+            html,
+        )
         self.assertIn("Reported toolchains", html)
         self.assertIn("g++ 14.2.0", html)
         self.assertIn("Reported for judging task 123", html)
@@ -1597,7 +1603,7 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
             override_value,
         )
         self.assertEqual(
-            int(config.constants.RUN_TEST_SELECTOR_LIMIT),
+            int(config.config_values.RUN_TEST_SELECTOR_LIMIT),
             override_value,
         )
 
@@ -1609,12 +1615,12 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         self.assertEqual(reset_resp.status_code, 303)
         self.assertEqual(
             int(config.system_config_service.get("RUN_TEST_SELECTOR_LIMIT")),
-            int(ADMIN_CONFIG_DEFAULTS["RUN_TEST_SELECTOR_LIMIT"]),
+            int(DEFAULT_CONFIG_VALUES["RUN_TEST_SELECTOR_LIMIT"]),
         )
         row_after = db_fetch_one("SELECT value_json FROM system_config WHERE key=?", ["RUN_TEST_SELECTOR_LIMIT"])
         self.assertIsNone(row_after)
 
-    def test_system_config_refresh_prunes_removed_keys(self) -> None:
+    def test_system_config_refresh_rejects_unknown_persisted_keys(self) -> None:
         removed_key = "JUDGEHOST_INCLUDE_BUILD_PAYLOAD"
         db_execute(
             """
@@ -1624,9 +1630,17 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
             [removed_key, "false", "2026-08-08T00:00:00+00:00"],
         )
 
-        config.system_config_service.refresh()
-
-        self.assertIsNone(db_fetch_one("SELECT key FROM system_config WHERE key=?", [removed_key]))
+        try:
+            with self.assertRaisesRegex(
+                ValueError,
+                "unknown persisted system config: JUDGEHOST_INCLUDE_BUILD_PAYLOAD",
+            ):
+                config.system_config_service.refresh()
+            self.assertIsNotNone(
+                db_fetch_one("SELECT key FROM system_config WHERE key=?", [removed_key])
+            )
+        finally:
+            db_execute("DELETE FROM system_config WHERE key=?", [removed_key])
 
     def test_settings_config_category_update_can_revert_single_override_to_default(self) -> None:
         db_execute("UPDATE users SET is_system_admin=0")
@@ -1634,7 +1648,7 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         workspace_service.clear_identity_caches()
         self.addCleanup(settings_system_config_reset, user="alice")
 
-        override_value = int(ADMIN_CONFIG_DEFAULTS["RUN_TEST_SELECTOR_LIMIT"]) + 123
+        override_value = int(DEFAULT_CONFIG_VALUES["RUN_TEST_SELECTOR_LIMIT"]) + 123
         set_override_resp = asyncio.run(
             settings_config_category_update(
                 _post_form_request(
@@ -1666,7 +1680,7 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         self.assertEqual(revert_resp.status_code, 303)
         self.assertEqual(
             int(config.system_config_service.get("RUN_TEST_SELECTOR_LIMIT")),
-            int(ADMIN_CONFIG_DEFAULTS["RUN_TEST_SELECTOR_LIMIT"]),
+            int(DEFAULT_CONFIG_VALUES["RUN_TEST_SELECTOR_LIMIT"]),
         )
         row_after = db_fetch_one("SELECT value_json FROM system_config WHERE key=?", ["RUN_TEST_SELECTOR_LIMIT"])
         self.assertIsNone(row_after)
@@ -1699,7 +1713,7 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         db_execute("UPDATE users SET is_system_admin=0")
         db_execute("UPDATE users SET is_system_admin=1 WHERE username=?", ["alice"])
         workspace_service.clear_identity_caches()
-        self.addCleanup(config.reload_runtime_values, include_restart_required=True)
+        self.addCleanup(config.reload_config, include_restart_required=True)
         self.addCleanup(settings_system_config_reset, user="alice")
 
         config.system_config_service.apply_patch(
@@ -1710,7 +1724,7 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
             },
             actor_user_id=int(db_fetch_one("SELECT id FROM users WHERE username=?", ["alice"])["id"]),
         )
-        config.reload_runtime_values()
+        config.reload_config()
 
         rendered = settings_page(_request("/settings"), user="alice")
         html = rendered.body.decode("utf-8", errors="replace")
@@ -1722,7 +1736,7 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
             {"UI_BRAND_TAGLINE": ""},
             actor_user_id=int(db_fetch_one("SELECT id FROM users WHERE username=?", ["alice"])["id"]),
         )
-        config.reload_runtime_values()
+        config.reload_config()
         without_tagline = settings_page(_request("/settings"), user="alice")
         without_tagline_html = without_tagline.body.decode("utf-8", errors="replace")
         self.assertNotIn('class="tagline"', without_tagline_html)
@@ -1739,20 +1753,150 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
                 }
             )
 
+    def test_config_registry_is_complete_and_not_duplicated_in_main_constants(self) -> None:
+        definitions = CONFIG_REGISTRY.definitions
+        self.assertEqual(len(definitions), 94)
+        self.assertEqual(len({definition.key for definition in definitions}), 94)
+        self.assertIn("PROBLEM_ZIP_MAX_EXPANDED_BYTES", CONFIG_REGISTRY.by_key)
+        self.assertIn("CONTEST_MAX_PROBLEMS", CONFIG_REGISTRY.by_key)
+        for definition in definitions:
+            with self.subTest(key=definition.key):
+                self.assertTrue(definition.category)
+                self.assertFalse(hasattr(main_constant, definition.key))
+                value = definition.normalize(definition.default)
+                expected_type = {
+                    ConfigKind.BOOL: bool,
+                    ConfigKind.FLOAT: float,
+                    ConfigKind.INT: int,
+                    ConfigKind.STR: str,
+                }[definition.kind]
+                self.assertIs(type(value), expected_type)
+
+    def test_config_registry_validates_regex_and_limit_pairs(self) -> None:
+        service = config.system_config_service
+        self.assertEqual(CONFIG_REGISTRY.normalize("CONTEST_MAX_PROBLEMS", 1), 1)
+        self.assertEqual(CONFIG_REGISTRY.normalize("CONTEST_MAX_PROBLEMS", 64), 64)
+        with self.assertRaisesRegex(ValueError, "must be >= 1"):
+            CONFIG_REGISTRY.normalize("CONTEST_MAX_PROBLEMS", 0)
+        with self.assertRaisesRegex(ValueError, "must be <= 64"):
+            CONFIG_REGISTRY.normalize("CONTEST_MAX_PROBLEMS", 65)
+        with self.assertRaisesRegex(ValueError, "valid regular expression"):
+            service.validate_patch({"AUTH_EMAIL_ALLOW_REGEX": "["})
+        for minimum_key, maximum_key in (
+            ("GENERAL_TIME_LIMIT_MIN_MS", "GENERAL_TIME_LIMIT_MAX_MS"),
+            ("GENERAL_MEMORY_LIMIT_MIN_MB", "GENERAL_MEMORY_LIMIT_MAX_MB"),
+            ("GENERAL_PASS_LIMIT_MIN", "GENERAL_PASS_LIMIT_MAX"),
+        ):
+            with self.subTest(minimum_key=minimum_key):
+                maximum = int(CONFIG_REGISTRY.defaults()[maximum_key])
+                with self.assertRaisesRegex(ValueError, f"{minimum_key} must be <="):
+                    service.validate_patch(
+                        {
+                            minimum_key: maximum + 1,
+                            maximum_key: maximum,
+                        }
+                    )
+
+    def test_every_config_definition_round_trips_through_sqlite_with_its_type(self) -> None:
+        defaults = CONFIG_REGISTRY.defaults()
+        cookie_values = {
+            "AUTH_COOKIE_NAME": "roundtrip_auth",
+            "SUDO_COOKIE_NAME": "roundtrip_sudo",
+            "FLASH_COOKIE_NAME": "roundtrip_flash",
+        }
+        overrides: dict[str, object] = {}
+        for definition in CONFIG_REGISTRY.definitions:
+            default = defaults[definition.key]
+            if definition.key in cookie_values:
+                value = cookie_values[definition.key]
+            elif definition.key == "AUTH_EMAIL_ALLOW_REGEX":
+                value = r"^[a-z]+@example\.com$"
+            elif definition.kind is ConfigKind.BOOL:
+                value = not bool(default)
+            elif definition.kind is ConfigKind.INT:
+                candidate = int(default) + 1
+                if definition.maximum is not None and candidate > definition.maximum:
+                    candidate = int(default) - 1
+                value = candidate
+            elif definition.kind is ConfigKind.FLOAT:
+                candidate = float(default) + 1.0
+                if definition.maximum is not None and candidate > definition.maximum:
+                    candidate = float(default) - 1.0
+                value = candidate
+            else:
+                value = f"{default}x" if str(default) else "x"
+            self.assertNotEqual(value, default, definition.key)
+            overrides[definition.key] = value
+
+        canonical = CONFIG_REGISTRY.normalize_snapshot(overrides)
+        actor = db_fetch_one("SELECT id FROM users WHERE username='alice'")
+        self.assertIsNotNone(actor)
+
+        def restore() -> None:
+            config.system_config_service.reset()
+            config.reload_config(include_restart_required=True)
+
+        self.addCleanup(restore)
+        config.system_config_service.apply_patch(
+            canonical,
+            actor_user_id=int(actor["id"]),
+        )
+        persisted = {
+            str(row["key"]): json.loads(str(row["value_json"]))
+            for row in db_fetch_all(
+                "SELECT key,value_json FROM system_config ORDER BY key"
+            )
+        }
+        self.assertEqual(set(persisted), set(canonical))
+        loaded = config.system_config_service.refresh(include_restart_required=True)
+        expected_types = {
+            ConfigKind.BOOL: bool,
+            ConfigKind.FLOAT: float,
+            ConfigKind.INT: int,
+            ConfigKind.STR: str,
+        }
+        for definition in CONFIG_REGISTRY.definitions:
+            with self.subTest(key=definition.key):
+                expected_type = expected_types[definition.kind]
+                self.assertIs(type(persisted[definition.key]), expected_type)
+                self.assertIs(type(loaded[definition.key]), expected_type)
+                self.assertEqual(loaded[definition.key], canonical[definition.key])
+
+    def test_config_values_replace_preserves_immutable_prior_snapshot(self) -> None:
+        previous = dict(config.config_values.snapshot())
+        self.addCleanup(config.config_values.replace, previous)
+        old_snapshot = config.config_values.snapshot()
+        updated = dict(previous)
+        updated_value = int(updated["RUN_TEST_SELECTOR_LIMIT"]) + 1
+        updated["RUN_TEST_SELECTOR_LIMIT"] = str(updated_value)
+        config.config_values.replace(updated)
+        self.assertEqual(
+            int(old_snapshot["RUN_TEST_SELECTOR_LIMIT"]),
+            int(previous["RUN_TEST_SELECTOR_LIMIT"]),
+        )
+        self.assertEqual(
+            int(config.config_values.snapshot()["RUN_TEST_SELECTOR_LIMIT"]),
+            updated_value,
+        )
+        self.assertIs(
+            type(config.config_values.snapshot()["RUN_TEST_SELECTOR_LIMIT"]),
+            int,
+        )
+
     def test_restart_cookie_names_wait_for_restart_and_apply_to_auth_flow(self) -> None:
         db_execute("UPDATE users SET is_system_admin=0")
         db_execute("UPDATE users SET is_system_admin=1 WHERE username=?", ["alice"])
         workspace_service.clear_identity_caches()
-        self.addCleanup(config.reload_runtime_values, include_restart_required=True)
+        self.addCleanup(config.reload_config, include_restart_required=True)
         self.addCleanup(settings_system_config_reset, user="alice")
         config.system_config_service.reset()
-        config.reload_runtime_values(include_restart_required=True)
+        config.reload_config(include_restart_required=True)
 
         admin = db_fetch_one("SELECT id FROM users WHERE username=?", ["alice"])
         self.assertIsNotNone(admin)
-        old_auth_name = str(config.constants.AUTH_COOKIE_NAME)
-        old_sudo_name = str(config.constants.SUDO_COOKIE_NAME)
-        old_flash_name = str(config.constants.FLASH_COOKIE_NAME)
+        old_auth_name = str(config.config_values.AUTH_COOKIE_NAME)
+        old_sudo_name = str(config.config_values.SUDO_COOKIE_NAME)
+        old_flash_name = str(config.config_values.FLASH_COOKIE_NAME)
         custom_names = {
             "AUTH_COOKIE_NAME": "test_auth_cookie",
             "SUDO_COOKIE_NAME": "test_sudo_cookie",
@@ -1760,7 +1904,7 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         }
         config.system_config_service.apply_patch(custom_names, actor_user_id=int(admin["id"]))
 
-        self.assertEqual(str(config.constants.AUTH_COOKIE_NAME), old_auth_name)
+        self.assertEqual(str(config.config_values.AUTH_COOKIE_NAME), old_auth_name)
         self.assertEqual(str(config.system_config_service.get("AUTH_COOKIE_NAME")), old_auth_name)
         auth_row = next(
             row
@@ -1772,12 +1916,12 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         self.assertEqual(auth_row["effective_value"], old_auth_name)
         self.assertTrue(auth_row["pending_restart"])
 
-        config.reload_runtime_values()
-        self.assertEqual(str(config.constants.AUTH_COOKIE_NAME), old_auth_name)
-        config.reload_runtime_values(include_restart_required=True)
-        self.assertEqual(str(config.constants.AUTH_COOKIE_NAME), custom_names["AUTH_COOKIE_NAME"])
-        self.assertEqual(str(config.constants.SUDO_COOKIE_NAME), custom_names["SUDO_COOKIE_NAME"])
-        self.assertEqual(str(config.constants.FLASH_COOKIE_NAME), custom_names["FLASH_COOKIE_NAME"])
+        config.reload_config()
+        self.assertEqual(str(config.config_values.AUTH_COOKIE_NAME), old_auth_name)
+        config.reload_config(include_restart_required=True)
+        self.assertEqual(str(config.config_values.AUTH_COOKIE_NAME), custom_names["AUTH_COOKIE_NAME"])
+        self.assertEqual(str(config.config_values.SUDO_COOKIE_NAME), custom_names["SUDO_COOKIE_NAME"])
+        self.assertEqual(str(config.config_values.FLASH_COOKIE_NAME), custom_names["FLASH_COOKIE_NAME"])
 
         username = self.random_id("cookie")
         registration = _register_with_password_envelope(username, "StrongPass123")
@@ -1793,9 +1937,9 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         logout_set_cookie = _response_set_cookie_blob(logout_response)
         self.assertIn(f"{custom_names['AUTH_COOKIE_NAME']}=", logout_set_cookie)
         self.assertIn(f"{custom_names['FLASH_COOKIE_NAME']}=", logout_set_cookie)
-        self.assertNotEqual(str(config.constants.AUTH_COOKIE_NAME), old_auth_name)
-        self.assertNotEqual(str(config.constants.SUDO_COOKIE_NAME), old_sudo_name)
-        self.assertNotEqual(str(config.constants.FLASH_COOKIE_NAME), old_flash_name)
+        self.assertNotEqual(str(config.config_values.AUTH_COOKIE_NAME), old_auth_name)
+        self.assertNotEqual(str(config.config_values.SUDO_COOKIE_NAME), old_sudo_name)
+        self.assertNotEqual(str(config.config_values.FLASH_COOKIE_NAME), old_flash_name)
 
     def test_settings_config_category_update_allows_printable_ascii_compile_flags(self) -> None:
         db_execute("UPDATE users SET is_system_admin=0")
@@ -1864,7 +2008,7 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         self.assertEqual(update_resp.status_code, 303)
         self.assertIn("/admin/config/judging", update_resp.headers.get("location", ""))
         self.assertEqual(int(config.system_config_service.get("RUN_EXEC_PROCESS_LIMIT")), update_value)
-        self.assertEqual(int(config.constants.RUN_EXEC_PROCESS_LIMIT), update_value)
+        self.assertEqual(int(config.config_values.RUN_EXEC_PROCESS_LIMIT), update_value)
 
     def test_settings_config_category_page_renders_token_generate_button(self) -> None:
         db_execute("UPDATE users SET is_system_admin=0")
@@ -1919,12 +2063,12 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         db_execute("UPDATE users SET is_system_admin=1 WHERE username=?", ["alice"])
         workspace_service.clear_identity_caches()
         service = config.judgehost_task_service
-        old_enabled = bool(service.state.enabled)
-        old_token = str(service.state.api_token or "")
-        self.addCleanup(setattr, service.state, "enabled", old_enabled)
-        self.addCleanup(setattr, service.state, "api_token", old_token)
-        service.state.enabled = True
-        service.state.api_token = "admin-snapshot-token"
+        override_config_values(
+            self,
+            service.state.config_values,
+            JUDGEHOST_ENABLE=True,
+            JUDGEHOST_API_TOKEN="admin-snapshot-token",
+        )
         service.domjudge_register_host("judgehost-admin-snapshot")
         resp = settings_judgehost_snapshot(user="alice")
         self.assertEqual(resp.status_code, 200)

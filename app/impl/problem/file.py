@@ -31,7 +31,7 @@ from app.main_util import (
 )
 from app.service.statement.constant import STATEMENT_DEFAULT_FILES
 
-_C = config.constants
+_C = config.config_values
 
 
 def _files_redirect_href(

@@ -457,8 +457,12 @@ class ProblemPackageService:
         package_root: Path,
         verification_id: str,
         mode: str,
+        tests_spec_max_bytes: int,
     ) -> list[NativeTestEntry]:
-        tests = load_tests_spec(snapshot / "tests" / "spec.json")
+        tests = load_tests_spec(
+            snapshot / "tests" / "spec.json",
+            max_bytes=tests_spec_max_bytes,
+        )
         if not tests:
             raise ValueError("Native materialization requires tests/spec.json entries")
         manifest_tests: list[NativeTestEntry] = []
@@ -534,6 +538,8 @@ class ProblemPackageService:
         build_id: str,
         invalidate_exports: bool,
     ) -> MaterializationRow:
+        config_snapshot = self.db.config_values.snapshot()
+        tests_spec_max_bytes = int(config_snapshot["TEXTAREA_MAX_BYTES"])
         self.store.mark_build_phase(build_id, "native")
         existing = self.store.materialization_for_revision(
             int(revision.problem["id"]), revision.source_commit
@@ -561,6 +567,7 @@ class ProblemPackageService:
                 package_root=package_root,
                 verification_id=verification_id,
                 mode=mode,
+                tests_spec_max_bytes=tests_spec_max_bytes,
             )
             manifest: NativeManifest = {
                 "source_commit": revision.source_commit,
@@ -574,7 +581,11 @@ class ProblemPackageService:
             manifest_path = package_root / "test_data" / "manifest.json"
             manifest_path.parent.mkdir(parents=True, exist_ok=True)
             manifest_path.write_text(dumps_manifest(manifest), encoding="utf-8", newline="\n")
-            validate_manifest_files(package_root, manifest)
+            validate_manifest_files(
+                package_root,
+                manifest,
+                tests_spec_max_bytes=tests_spec_max_bytes,
+            )
             self._write_archive(package_root, archive_partial)
             now = now_iso()
             staged_row: MaterializationRow = {
@@ -783,7 +794,13 @@ class ProblemPackageService:
                 raise ValueError(
                     "Native manifest verification does not match materialization"
                 )
-            validate_manifest_files(extraction, manifest)
+            validate_manifest_files(
+                extraction,
+                manifest,
+                tests_spec_max_bytes=int(
+                    self.db.config_values.snapshot()["TEXTAREA_MAX_BYTES"]
+                ),
+            )
             yield NativePackageReader(
                 materialization=row,
                 root=extraction,

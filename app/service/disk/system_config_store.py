@@ -51,20 +51,6 @@ class SystemConfigStore:
 
         self.db.write_transaction(_tx)
 
-    def delete_keys(self, keys: list[str]) -> None:
-        if not keys:
-            return
-
-        def _tx(conn) -> None:
-            conn.execute(
-                "DELETE FROM system_config WHERE key IN ({})".format(
-                    ",".join("?" for _ in keys)
-                ),
-                keys,
-            )
-
-        self.db.write_transaction(_tx)
-
     def override_rows(self) -> list[dict[str, str]]:
         try:
             rows = self.db.fetch_all("SELECT key, value_json FROM system_config ORDER BY key ASC")

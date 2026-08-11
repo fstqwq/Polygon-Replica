@@ -16,6 +16,10 @@ Configured roots MUST resolve to distinct intended locations. Archive members,
 user paths, and stored relative locators MUST remain below their owning root and
 MUST NOT escape through `..`, absolute paths, or symlink traversal.
 
+There is currently no per-repository disk quota. Upload and package expansion
+limits protect individual admission operations; they are not durable workspace
+or Git repository quotas.
+
 ## Locators and availability
 
 Database rows store typed relative paths or immutable runtime blob references,

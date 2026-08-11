@@ -7,7 +7,7 @@ from app.db import now_iso
 from app.impl.runtime.config import config
 from app.service.verification.types import is_cancel_reason
 
-_C = config.constants
+_C = config.config_values
 
 def _runtime_judgehost_health_profile() -> dict[str, str]:
     try:
@@ -142,7 +142,7 @@ def startup() -> None:
     config.runtime_state_service.initialize_metadata()
     config.problem_package_service.fail_interrupted_builds()
     config.export_service.fail_interrupted_export_jobs()
-    config.verification_service.apply_runtime_values(config.constants)
+    config.verification_service.refresh_config_state(config.config_values)
     _startup_reset_runtime_state()
     config.worker_queue_service.start()
 

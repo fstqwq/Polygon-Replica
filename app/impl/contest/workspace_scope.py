@@ -11,6 +11,7 @@ from starlette.responses import JSONResponse, RedirectResponse, Response
 
 from app.impl.auth.session import require_session_user
 from app.impl.runtime.config import config
+from app.main_constant import CONTEST_IDENT_RE
 
 
 ProblemSection = Literal[
@@ -250,7 +251,7 @@ def add_contest_problem_hrefs(
 def _normalize_contest_query(value: str) -> str:
     if not value or value != value.strip():
         raise ValueError("invalid contest query parameter")
-    if not config.constants.CONTEST_IDENT_RE.fullmatch(value):
+    if not CONTEST_IDENT_RE.fullmatch(value):
         raise ValueError("invalid contest query parameter")
     return value
 

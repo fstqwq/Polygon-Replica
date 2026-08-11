@@ -5,7 +5,6 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
 from app.db import DB, now_iso
-from app.runtime_value import RuntimeValues
 from app.service.agent.store import AgentStore
 from app.service.platform.hashing import canonical_json, sha256_hex_text
 from app.service.repository.workspace import WorkspaceService
@@ -34,18 +33,14 @@ class AgentTokenIdentity:
 
 
 class AgentService:
-    def __init__(self, db: DB, workspace_service: WorkspaceService, *, constants: RuntimeValues):
+    def __init__(self, db: DB, workspace_service: WorkspaceService):
         self.db = db
         self.workspace_service = workspace_service
         self._store = AgentStore(db)
-        self.apply_runtime_values(constants)
 
     @property
     def store(self) -> AgentStore:
         return self._store
-
-    def apply_runtime_values(self, constants: RuntimeValues) -> None:
-        self._constants = constants
 
     @staticmethod
     def _parse_iso_utc(raw: str) -> datetime | None:

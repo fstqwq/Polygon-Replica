@@ -14,7 +14,7 @@
     Workspace: <strong class="{{ workspace_tone }}">{{ ('v' ~ workspace.local_revision) if workspace.local_revision is not none else 'none' }}</strong>
   </span>
   <span class="problem-review-line">
-    Verification: <span class="{{ verification_tone }}">{{ verification.display }}</span>{% if show_verification_reason and verification.reason_short %}<span class="problem-review-reason"> — {{ verification.reason_short }}</span>{% endif %}
+    Verification: <span class="{{ verification_tone }}">{{ verification.display }}</span>{% if show_verification_reason and verification.reason_short %}<span class="problem-review-reason"> &mdash; {{ verification.reason_short }}</span>{% endif %}
   </span>
   <span class="problem-review-line">
     Package: <span class="{{ package_tone }}">{% if package.state == 'ready' and package.revision_number is not none %}v{{ package.revision_number }}{% elif package.state == 'stale' and package.revision_number is not none %}v{{ package.revision_number }} (stale){% else %}none{% endif %}</span>

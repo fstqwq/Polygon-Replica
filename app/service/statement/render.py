@@ -81,10 +81,15 @@ def _safe_workspace_regular_file(workspace: Path, rel: Path) -> Path | None:
     return candidate
 
 
-def _collect_sample_tests(workspace: Path, rendered_lang_root: Path) -> list[dict[str, str]]:
+def _collect_sample_tests(
+    workspace: Path,
+    rendered_lang_root: Path,
+    *,
+    tests_spec_max_bytes: int,
+) -> list[dict[str, str]]:
     spec_path = workspace / TESTS_SPEC_REL
     try:
-        entries = load_tests_spec(spec_path)
+        entries = load_tests_spec(spec_path, max_bytes=tests_spec_max_bytes)
     except Exception as exc:
         raise RuntimeError(f"invalid tests/spec.json: {exc}") from exc
     rows: list[dict[str, str]] = []
@@ -251,6 +256,7 @@ def _render_polygon_statement(
     *,
     language: str,
     include_sample_tests: bool = True,
+    tests_spec_max_bytes: int,
 ) -> Path:
     template_text = _read_required_text(
         workspace / STATEMENT_TEMPLATE_REL,
@@ -268,7 +274,11 @@ def _render_polygon_statement(
     rendered_lang_root = workspace / STATEMENT_RENDERED_DIR_REL / safe_language
     _prepare_statement_language_compile_tree(workspace, safe_language, rendered_lang_root)
     sample_tests = (
-        _collect_sample_tests(workspace, rendered_lang_root)
+        _collect_sample_tests(
+            workspace,
+            rendered_lang_root,
+            tests_spec_max_bytes=tests_spec_max_bytes,
+        )
         if include_sample_tests
         else []
     )
@@ -314,6 +324,7 @@ def render_statement_problem_assets_for_language(
     target_dir: Path,
     *,
     problem_title: str | None = None,
+    tests_spec_max_bytes: int,
 ) -> Path:
     template_text = _safe_read_text(workspace / STATEMENT_PROBLEM_REL, DEFAULT_STATEMENT_PROBLEM_TEMPLATE)
     _read_required_text(
@@ -324,7 +335,11 @@ def render_statement_problem_assets_for_language(
     if not safe_language:
         raise RuntimeError("statement language is required")
     _prepare_statement_language_compile_tree(workspace, safe_language, target_dir)
-    sample_tests = _collect_sample_tests(workspace, target_dir)
+    sample_tests = _collect_sample_tests(
+        workspace,
+        target_dir,
+        tests_spec_max_bytes=tests_spec_max_bytes,
+    )
     problem_ctx = _problem_context_for_language(
         workspace,
         safe_language,
@@ -357,6 +372,7 @@ def render_statement_main(
     *,
     language: str,
     include_sample_tests: bool = True,
+    tests_spec_max_bytes: int,
 ) -> Path:
     workspace = statement_root.parent
     return _render_polygon_statement(
@@ -365,4 +381,5 @@ def render_statement_main(
         problem_title=problem_title,
         language=language,
         include_sample_tests=include_sample_tests,
+        tests_spec_max_bytes=tests_spec_max_bytes,
     )

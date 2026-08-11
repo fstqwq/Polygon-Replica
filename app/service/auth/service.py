@@ -1,17 +1,15 @@
 from __future__ import annotations
 
-from app.runtime_value import RuntimeValues
+from app.config import ConfigValues
 from app.service.disk.auth_store import AuthStore
 from app.service.auth.password_hash import password_verifier_storage_hash
 
 
 class AuthService:
-    def __init__(self, store: AuthStore, *, constants: RuntimeValues):
+    def __init__(self, store: AuthStore, *, config_values: ConfigValues):
         self._store = store
-        self.apply_runtime_values(constants)
-
-    def apply_runtime_values(self, constants: RuntimeValues) -> None:
-        self._store.apply_runtime_values(constants)
+        if config_values is not store.config_values:
+            raise ValueError("auth service and store must share ConfigValues")
 
     def lookup_user_auth(self, username: str) -> dict[str, object] | None:
         return self._store.auth_user_row(username)

@@ -15,7 +15,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from app.service.sandbox.base import ExecResult
-from app.service.problem.test_spec import dumps_tests_spec, load_tests_spec
+import app.service.problem.test_spec as tests_spec_service
 from app.service.statement.constant import (
     DEFAULT_STATEMENT_PROBLEM_TEMPLATE,
     STATEMENT_ASSETS_DIR,
@@ -40,6 +40,21 @@ from tests.identity_helpers import canonical_test_verification_id
 from app.impl.runtime.config import config
 
 preview_service = config.preview_service
+_TESTS_SPEC_MAX_BYTES = 256 * 1024
+
+
+def dumps_tests_spec(entries: list[dict]) -> str:
+    return tests_spec_service.dumps_tests_spec(
+        entries,
+        max_bytes=_TESTS_SPEC_MAX_BYTES,
+    )
+
+
+def load_tests_spec(path: Path) -> list[dict]:
+    return tests_spec_service.load_tests_spec(
+        path,
+        max_bytes=_TESTS_SPEC_MAX_BYTES,
+    )
 
 
 class TestPreview(E2ETestBase):
@@ -174,7 +189,12 @@ class TestPreview(E2ETestBase):
         (statement / "problem.tex").write_text(problem_template, encoding="utf-8")
         (sections / "name.tex").write_text("Rendered Title\n", encoding="utf-8")
         (sections / "legend.tex").write_text("Rendered content.\n", encoding="utf-8")
-        out = render_statement_main(statement, problem_title="Rendered Title", language="english")
+        out = render_statement_main(
+            statement,
+            problem_title="Rendered Title",
+            language="english",
+            tests_spec_max_bytes=256 * 1024,
+        )
         rendered = out.read_text(encoding="utf-8")
         self.assertIn("\\usepackage{olymp}", rendered)
         self.assertIn("\\import{rendered/english/}{./problem.tex}", rendered)
@@ -188,14 +208,24 @@ class TestPreview(E2ETestBase):
         statement = ws / "statement"
         (statement / "olymp.sty").unlink(missing_ok=True)
         with self.assertRaisesRegex(RuntimeError, r"statement olymp style \(statement/olymp\.sty\) is missing"):
-            render_statement_main(statement, problem_title="Rendered Title", language="english")
+            render_statement_main(
+                statement,
+                problem_title="Rendered Title",
+                language="english",
+                tests_spec_max_bytes=256 * 1024,
+            )
 
     def test_statement_template_render_fails_when_main_template_missing(self) -> None:
         ws = self._workspace_path()
         statement = ws / "statement"
         (statement / "statements.ftl").unlink(missing_ok=True)
         with self.assertRaisesRegex(RuntimeError, r"statement template \(statement/statements\.ftl\) is missing"):
-            render_statement_main(statement, problem_title="Rendered Title", language="english")
+            render_statement_main(
+                statement,
+                problem_title="Rendered Title",
+                language="english",
+                tests_spec_max_bytes=256 * 1024,
+            )
 
     def test_statement_template_problem_name_prefers_name_tex(self) -> None:
         ws = self._workspace_path()
@@ -207,7 +237,12 @@ class TestPreview(E2ETestBase):
             "\\end{problem}\n"
         )
         (statement / "problem.tex").write_text(problem_template, encoding="utf-8")
-        out = render_statement_main(statement, problem_title="Preview Saved Title", language="english")
+        out = render_statement_main(
+            statement,
+            problem_title="Preview Saved Title",
+            language="english",
+            tests_spec_max_bytes=256 * 1024,
+        )
         _ = out.read_text(encoding="utf-8")
         rendered_problem = (statement / "rendered" / "english" / "problem.tex").read_text(encoding="utf-8")
         self.assertIn("\\begin{problem}{Language Title}", rendered_problem)
@@ -224,7 +259,12 @@ class TestPreview(E2ETestBase):
         (assets / "figures").mkdir(parents=True, exist_ok=True)
         (assets / "figures" / "diagram.png").write_bytes(b"PNG")
 
-        out = render_statement_main(statement, problem_title="Preview Saved Title", language="english")
+        out = render_statement_main(
+            statement,
+            problem_title="Preview Saved Title",
+            language="english",
+            tests_spec_max_bytes=256 * 1024,
+        )
         _ = out.read_text(encoding="utf-8")
         rendered_root = statement / "rendered" / "english"
         self.assertTrue((rendered_root / "figures" / "diagram.png").is_file())
@@ -241,7 +281,12 @@ class TestPreview(E2ETestBase):
         (sections / "output.tex").write_text("OUTPUT_MARKER_20260302\n", encoding="utf-8")
         (sections / "notes.tex").write_text("NOTES_MARKER_20260302\n", encoding="utf-8")
 
-        out = render_statement_main(statement, problem_title="Preview Saved Title", language="english")
+        out = render_statement_main(
+            statement,
+            problem_title="Preview Saved Title",
+            language="english",
+            tests_spec_max_bytes=256 * 1024,
+        )
         _ = out.read_text(encoding="utf-8")
         rendered_problem = (statement / "rendered" / "english" / "problem.tex").read_text(encoding="utf-8")
 
@@ -269,7 +314,12 @@ class TestPreview(E2ETestBase):
             encoding="utf-8",
         )
 
-        out = render_statement_main(statement, problem_title="Preview Saved Title", language="english")
+        out = render_statement_main(
+            statement,
+            problem_title="Preview Saved Title",
+            language="english",
+            tests_spec_max_bytes=256 * 1024,
+        )
         _ = out.read_text(encoding="utf-8")
         rendered_problem = (statement / "rendered" / "english" / "problem.tex").read_text(encoding="utf-8")
 
@@ -292,7 +342,12 @@ class TestPreview(E2ETestBase):
             encoding="utf-8",
         )
 
-        out = render_statement_main(statement, problem_title="Preview Saved Title", language="english")
+        out = render_statement_main(
+            statement,
+            problem_title="Preview Saved Title",
+            language="english",
+            tests_spec_max_bytes=256 * 1024,
+        )
         _ = out.read_text(encoding="utf-8")
         rendered_problem = (statement / "rendered" / "english" / "problem.tex").read_text(encoding="utf-8")
 
@@ -323,7 +378,12 @@ class TestPreview(E2ETestBase):
             encoding="utf-8",
         )
 
-        out = render_statement_main(statement, problem_title="Preview Saved Title", language="english")
+        out = render_statement_main(
+            statement,
+            problem_title="Preview Saved Title",
+            language="english",
+            tests_spec_max_bytes=256 * 1024,
+        )
         _ = out.read_text(encoding="utf-8")
         self.assertEqual((statement / "rendered" / "english" / "sample.001.in").read_text(encoding="utf-8"), "custom-input\n")
         self.assertEqual((statement / "rendered" / "english" / "sample.001.ans").read_text(encoding="utf-8"), "custom-output\n")
@@ -354,7 +414,10 @@ class TestPreview(E2ETestBase):
             encoding="utf-8",
         )
 
-        rows = preview_service._sample_verification_rows_from_spec(ws)
+        rows = preview_service._sample_verification_rows_from_spec(
+            ws,
+            max_bytes=_TESTS_SPEC_MAX_BYTES,
+        )
         self.assertEqual(len(rows), 2)
         self.assertEqual(rows[0].index, 1)
         self.assertEqual(rows[0].test_id, "001")
@@ -386,7 +449,10 @@ class TestPreview(E2ETestBase):
             encoding="utf-8",
         )
 
-        rows = preview_service._sample_verification_rows_from_spec(ws)
+        rows = preview_service._sample_verification_rows_from_spec(
+            ws,
+            max_bytes=_TESTS_SPEC_MAX_BYTES,
+        )
         self.assertEqual(rows, [])
 
     def test_generation_params_digest_changes_when_build_sources_change(self) -> None:
@@ -634,7 +700,10 @@ class TestPreview(E2ETestBase):
         old_verification_service = preview_service.verification_service
         try:
             preview_service.verification_service = _FailingVerificationService()
-            rows = preview_service._sample_verification_rows_from_spec(ws)
+            rows = preview_service._sample_verification_rows_from_spec(
+                ws,
+                max_bytes=_TESTS_SPEC_MAX_BYTES,
+            )
             summary = preview_service._copy_sample_payloads_from_verification("alice/sample", "alice", ws)
         finally:
             preview_service.verification_service = old_verification_service
@@ -918,7 +987,12 @@ class TestPreview(E2ETestBase):
             encoding="utf-8",
         )
         (statement / "problem.tex").write_text("\\begin{problem}{${problem.name}}{stdin}{stdout}{1 second}{1 megabyte}\\end{problem}\n", encoding="utf-8")
-        out = render_statement_main(statement, problem_title="Preview Title", language="english")
+        out = render_statement_main(
+            statement,
+            problem_title="Preview Title",
+            language="english",
+            tests_spec_max_bytes=256 * 1024,
+        )
         rendered = out.read_text(encoding="utf-8")
         self.assertIn("\\def\\ShortProblemTitle{}", rendered)
 
@@ -994,7 +1068,11 @@ class TestPreview(E2ETestBase):
                 stderr="",
             )
 
-        with patch.object(preview_service.pdf_compiler, "passes", 2), patch.object(preview_service.pdf_compiler.sandbox, "run", side_effect=_fake_run):
+        with patch.object(
+            preview_service.pdf_compiler.sandbox,
+            "run",
+            side_effect=_fake_run,
+        ):
             preview_id = preview_service.compile_preview("alice/sample", "alice", language="english")
 
         self.assertEqual(int(calls["count"]), 2)
@@ -1171,9 +1249,17 @@ class TestPreview(E2ETestBase):
             dumps_tests_spec([{"id": "901", "kind": "gen", "sample": True, "sample_output": "ans-a\n"}]),
             encoding="utf-8",
         )
-        before = statement_sources_signature(ws, problem_title="T")
+        before = statement_sources_signature(
+            ws,
+            problem_title="T",
+            tests_spec_max_bytes=256 * 1024,
+        )
         (ws / "tests" / "generator" / "901.in").write_text("gen-b\n", encoding="utf-8")
-        after = statement_sources_signature(ws, problem_title="T")
+        after = statement_sources_signature(
+            ws,
+            problem_title="T",
+            tests_spec_max_bytes=256 * 1024,
+        )
         self.assertNotEqual(before, after)
 
     def test_preview_sample_rows_invalid_kind_raises(self) -> None:
@@ -1184,7 +1270,10 @@ class TestPreview(E2ETestBase):
             encoding="utf-8",
         )
         with self.assertRaisesRegex(RuntimeError, "invalid tests/spec.json"):
-            preview_service._sample_verification_rows_from_spec(ws)
+            preview_service._sample_verification_rows_from_spec(
+                ws,
+                max_bytes=_TESTS_SPEC_MAX_BYTES,
+            )
 
     def test_prune_workspace_preview_history_keeps_running_rows(self) -> None:
         ctx = preview_service.workspace_service.workspace_context("alice/sample", "alice", include_recent=False)

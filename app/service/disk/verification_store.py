@@ -3,7 +3,10 @@ from __future__ import annotations
 from typing import TypedDict
 
 from app.db import DB, now_iso
-from app.service.platform.error_text import bounded_display_text
+from app.service.platform.error_text import (
+    aux_display_text_limit_bytes,
+    bounded_display_text,
+)
 from app.service.verification.identity import new_verification_id
 from app.service.verification.types import (
     ACTIVE,
@@ -36,6 +39,10 @@ class VerificationRecordRow(TypedDict):
 class VerificationStore:
     def __init__(self, db: DB):
         self.db = db
+
+    def _bounded_text(self, value: str) -> str:
+        limit = aux_display_text_limit_bytes(self.db.config_values.snapshot())
+        return bounded_display_text(value, limit_bytes=limit)
 
     def allocate_id(self) -> str:
         for _ in range(8):
@@ -149,7 +156,9 @@ class VerificationStore:
             )
 
     def cancel_active_verification(self, verification_id: str, *, reason: str, now_text: str) -> bool:
-        cancel_reason = bounded_display_text(reason or "verification cancelled by user")
+        cancel_reason = self._bounded_text(
+            reason or "verification cancelled by user"
+        )
 
         def _tx(conn) -> int:
             verification_row = conn.execute(
@@ -440,7 +449,7 @@ class VerificationStore:
         fail_reason: str,
         finished: bool,
     ) -> None:
-        safe_fail_reason = bounded_display_text(fail_reason)
+        safe_fail_reason = self._bounded_text(fail_reason)
         if finished:
             self.db.execute(
                 "UPDATE verifications SET status=?, fail_reason=?, finished_at=? WHERE id=?",

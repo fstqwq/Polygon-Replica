@@ -237,11 +237,11 @@ class TestUIComponents(UIHelpersMixin, E2ETestBase):
         self.assertEqual(resp.status_code, 200)
         html = resp.body.decode("utf-8", errors="replace")
         self.assertIn(
-            "std::wcmp.cpp — ordered sequence of tokens",
+            "std::wcmp.cpp &mdash; ordered sequence of tokens",
             html,
         )
         self.assertIn(
-            "std::rcmp9.cpp — double sequence, abs/rel error &lt;= 1e-9",
+            "std::rcmp9.cpp &mdash; double sequence, abs/rel error &lt;= 1e-9",
             html,
         )
         self.assertEqual(html.count("ordered sequence of tokens"), 1)

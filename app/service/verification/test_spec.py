@@ -6,12 +6,16 @@ import os
 from app.service.problem.test_spec import load_tests_spec, payload_rel_path_for_test
 
 
-def load_tests_spec_entries(snapshot: Path) -> list[dict] | None:
+def load_tests_spec_entries(
+    snapshot: Path,
+    *,
+    max_bytes: int,
+) -> list[dict] | None:
     spec_path = snapshot / "tests" / "spec.json"
     if not spec_path.exists():
         return None
     try:
-        return load_tests_spec(spec_path)
+        return load_tests_spec(spec_path, max_bytes=max_bytes)
     except ValueError as exc:
         raise RuntimeError(f"invalid tests/spec.json: {exc}") from exc
 
@@ -278,4 +282,3 @@ def prepare_tests_spec_runtime(
             }
         )
     return runtime_entries, generator_targets
-

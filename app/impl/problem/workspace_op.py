@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Annotated
 
+import app.main_constant as _K
 from app.impl.auth.session import require_session_user
 
 from fastapi import Form, Request, Depends
@@ -15,7 +16,7 @@ from app.impl.workspace.access import require_manage_access, require_write_acces
 from app.impl.workspace.context_ui import page_ctx
 from app.main_util import problem_slug_leaf
 
-_C = config.constants
+_C = config.config_values
 
 
 def switch_workspace(
@@ -55,8 +56,8 @@ def switch_workspace(
                     )
                 else:
                     safe_problem = owned_problem
-        if len(safe_problem) > _C.PROBLEM_ID_MAX_LEN or not _C.PROBLEM_IDENT_RE.fullmatch(safe_problem):
-            raise ValueError(_C.PROBLEM_ID_RULE_MESSAGE)
+        if len(safe_problem) > _K.PROBLEM_ID_MAX_LEN or not _K.PROBLEM_IDENT_RE.fullmatch(safe_problem):
+            raise ValueError(_K.PROBLEM_ID_RULE_MESSAGE)
         problem_id = config.workspace_service.known_problem_id(safe_problem)
         if problem_id is None:
             config.workspace_service.ensure_problem(safe_problem)

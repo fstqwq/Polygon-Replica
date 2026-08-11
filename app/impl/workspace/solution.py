@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import app.main_constant as _K
+
 import os
 from pathlib import Path
 
@@ -13,7 +15,7 @@ from app.service.problem.solution_metadata import (
     render_solution_desc,
 )
 
-_C = config.constants
+_C = config.config_values
 
 
 def list_solution_sources(workspace: Path, limit: int = 64) -> tuple[list[str], bool]:
@@ -28,7 +30,7 @@ def list_solution_sources(workspace: Path, limit: int = 64) -> tuple[list[str], 
         with os.scandir(base) as entries:
             for entry in entries:
                 name = str(entry.name or "")
-                if Path(name).suffix.lower() not in _C.SOLUTION_SOURCE_EXTENSIONS:
+                if Path(name).suffix.lower() not in _K.SOLUTION_SOURCE_EXTENSIONS:
                     continue
                 try:
                     if not entry.is_file(follow_symlinks=False):
@@ -56,7 +58,7 @@ def normalize_solution_source_path_required(raw: str | None) -> str:
     if not normalized.startswith("solutions/"):
         raise ValueError("solution source must be under solutions/")
     suffix = Path(normalized).suffix.lower()
-    if suffix not in _C.SOLUTION_SOURCE_EXTENSIONS:
+    if suffix not in _K.SOLUTION_SOURCE_EXTENSIONS:
         raise ValueError("solution source must be .cpp/.cc/.cxx/.c++/.py/.java")
     return normalized
 
@@ -70,7 +72,4 @@ def ensure_solution_metadata_for_source(workspace: Path, source_rel: str) -> boo
         return False
     config.git_service.write_file(workspace, desc_rel, render_solution_desc(expected, ""))
     return True
-
-
-
 

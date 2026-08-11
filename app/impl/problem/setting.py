@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import app.main_constant as _K
+
 import secrets
 from typing import Annotated
 
@@ -26,7 +28,7 @@ from app.main_util import form_text
 from app.service.auth.password_hash import password_verifier_storage_hash
 
 
-_C = config.constants
+_C = config.config_values
 
 
 def settings_page(
@@ -45,7 +47,7 @@ def settings_page(
         )
     except (TypeError, ValueError):
         current_iters = int(_C.PASSWORD_HASH_ITERS)
-    if not _C.HEX_32_RE.fullmatch(current_salt):
+    if not _K.HEX_32_RE.fullmatch(current_salt):
         current_salt = dummy_password_salt_hex(str(user_row["username"]))
     if current_iters <= 0:
         current_iters = int(_C.PASSWORD_HASH_ITERS)
@@ -89,7 +91,7 @@ def settings_password_update(
         if not verify_password_form_csrf_token(password_csrf, "settings-password"):
             raise ValueError("invalid password token")
         stored_hash = str(row["password_hash"] or "").strip().lower()
-        if not _C.HEX_64_RE.fullmatch(stored_hash):
+        if not _K.HEX_64_RE.fullmatch(stored_hash):
             raise ValueError("current password is incorrect")
         try:
             current_verifier = password_envelope_store.consume(

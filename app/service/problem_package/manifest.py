@@ -167,12 +167,20 @@ def load_manifest(path: Path) -> NativeManifest:
     return cast(NativeManifest, raw)
 
 
-def validate_manifest_files(package_root: Path, manifest: NativeManifest) -> None:
+def validate_manifest_files(
+    package_root: Path,
+    manifest: NativeManifest,
+    *,
+    tests_spec_max_bytes: int,
+) -> None:
     """Verify every declared payload and reject undeclared materialized files."""
 
     declared: set[str] = set()
     test_ids: set[str] = set()
-    spec = load_tests_spec(package_root / "tests" / "spec.json")
+    spec = load_tests_spec(
+        package_root / "tests" / "spec.json",
+        max_bytes=tests_spec_max_bytes,
+    )
     manifest_shape: list[tuple[str, str, bool]] = []
     allowed_test_keys = {
         "id",

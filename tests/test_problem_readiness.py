@@ -44,7 +44,7 @@ class TestProblemReadiness(E2ETestBase):
         self.assertEqual(review["tests"]["display"], "0 tests")
         self.assertEqual(
             review["solutions"]["display"],
-            "3 solutions · no main correct",
+            "3 solutions \u00b7 no main correct",
         )
         self.assertEqual(review["time_limit"]["tone"], "warning")
         self.assertEqual(review["memory_limit"]["tone"], "warning")

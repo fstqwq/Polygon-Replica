@@ -21,12 +21,16 @@ from app.service.problem.test_spec import (
     normalize_test_kind,
     normalize_tests_spec_entry,
 )
+_C = config.config_values
 
 
 def tests_spec_gen_script_context(workspace: Path) -> dict[str, object]:
     lines: list[str] = []
     with config.workspace_service.workspace_lock(workspace):
-        entries, _spec_path = read_tests_spec(workspace)
+        entries, _spec_path = read_tests_spec(
+            workspace,
+            max_bytes=int(_C.TEXTAREA_MAX_BYTES),
+        )
         for entry in entries:
             kind = kind.strip().lower() if isinstance(kind := entry.get("kind"), str) else ""
             if kind != "gen":
@@ -50,15 +54,19 @@ def parse_gen_script_lines(raw: object) -> list[str]:
 
 
 def tests_spec_sample_input_value(raw: object | None, fallback: object = "") -> str:
-    if raw is None:
-        return normalize_sample_input(fallback)
-    return normalize_sample_input(tests_spec_form_text(raw))
+    value = fallback if raw is None else tests_spec_form_text(raw)
+    return normalize_sample_input(
+        value,
+        max_bytes=int(_C.TEXTAREA_MAX_BYTES),
+    )
 
 
 def tests_spec_sample_output_value(raw: object | None, fallback: object = "") -> str:
-    if raw is None:
-        return normalize_sample_output(fallback)
-    return normalize_sample_output(tests_spec_form_text(raw))
+    value = fallback if raw is None else tests_spec_form_text(raw)
+    return normalize_sample_output(
+        value,
+        max_bytes=int(_C.TEXTAREA_MAX_BYTES),
+    )
 
 
 def tests_spec_sample_output_validate_value(raw: object | list[object] | None, fallback: object = True) -> bool:
@@ -86,15 +94,19 @@ def tests_spec_row(
         "kind": normalize_test_kind(kind),
         "sample": bool(sample),
     }
-    safe_sample_input = normalize_sample_input(sample_input)
-    safe_sample_output = normalize_sample_output(sample_output)
+    safe_sample_input = tests_spec_sample_input_value(sample_input)
+    safe_sample_output = tests_spec_sample_output_value(sample_output)
     if safe_sample_input:
         payload["sample_input"] = safe_sample_input
     if safe_sample_output:
         payload["sample_output"] = safe_sample_output
     if bool(sample) and safe_sample_output and (not bool(sample_output_validate)):
         payload["sample_output_validate"] = False
-    return normalize_tests_spec_entry(payload, index=index)
+    return normalize_tests_spec_entry(
+        payload,
+        index=index,
+        max_bytes=int(_C.TEXTAREA_MAX_BYTES),
+    )
 
 
 def tests_spec_add_single_entry(
@@ -108,7 +120,10 @@ def tests_spec_add_single_entry(
     sample_output: str,
     sample_output_validate: bool,
 ) -> tuple[int, str]:
-    entries, spec_path = read_tests_spec(workspace)
+    entries, spec_path = read_tests_spec(
+        workspace,
+        max_bytes=int(_C.TEXTAREA_MAX_BYTES),
+    )
     safe_test_id = normalize_test_id(requested_id) if requested_id else next_test_id(entries)
     if any((row.get("id") == safe_test_id for row in entries)):
         raise ValueError(f"test id already exists: {safe_test_id}")
@@ -123,7 +138,11 @@ def tests_spec_add_single_entry(
             index=len(entries) + 1,
         )
     )
-    write_tests_spec(spec_path, entries)
+    write_tests_spec(
+        spec_path,
+        entries,
+        max_bytes=int(_C.TEXTAREA_MAX_BYTES),
+    )
     tests_spec_write_payload(workspace, safe_test_id, kind, payload)
     return len(entries), safe_test_id
 

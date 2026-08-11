@@ -14,7 +14,7 @@ from fastapi.testclient import TestClient
 
 from fastapi import HTTPException
 
-from app.main_util import TEXTAREA_MAX_BYTES
+from app.config import CONFIG_REGISTRY
 from app.service.problem.test_spec import normalize_file_manual_input, normalize_manual_input
 from app.service.platform.git_process import GitCommandResult, run_git
 from app.service.repository.revision import workspace_revision_info
@@ -24,8 +24,8 @@ from app.service.statement.constant import (
     DEFAULT_STATEMENT_TEMPLATE,
 )
 from app.service.statement.render import ensure_statement_language_sources
-from app.impl.run_export.import_source import import_package_as_new_problem
 from app.impl.problem.merge_op import merge_apply, merge_compare, merge_page
+from app.impl.root.contests import import_package_as_new_problem
 from tests.assertion_helpers import assert_html_contract
 from tests.package_builders import polygon_contest_package, polygon_problem_package
 from tests.common import E2ETestBase
@@ -75,7 +75,9 @@ from tests.ui_support import (
     workspace_service,
 )
 
-SUDO_COOKIE_NAME = config.constants.SUDO_COOKIE_NAME
+TEXTAREA_MAX_BYTES = int(CONFIG_REGISTRY.defaults()["TEXTAREA_MAX_BYTES"])
+
+SUDO_COOKIE_NAME = config.config_values.SUDO_COOKIE_NAME
 
 
 class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
@@ -607,9 +609,9 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         self.assertNotIn("Program output limit", html)
         self.assertIn("Compilation size limit", html)
         self.assertIn("Saved judging log limit", html)
-        self.assertIn(f"{int(config.constants.RUN_EXEC_OUTPUT_KB)} KiB", html)
-        self.assertIn(f"{int(config.constants.TOOLCHAIN_COMPILE_OUTPUT_KB)} KiB", html)
-        self.assertIn(f"{int(config.constants.JUDGEHOST_STORED_LOG_LIMIT_BYTES)} bytes", html)
+        self.assertIn(f"{int(config.config_values.RUN_EXEC_OUTPUT_KB)} KiB", html)
+        self.assertIn(f"{int(config.config_values.TOOLCHAIN_COMPILE_OUTPUT_KB)} KiB", html)
+        self.assertIn(f"{int(config.config_values.JUDGEHOST_STORED_LOG_LIMIT_BYTES)} bytes", html)
         self.assertNotIn('name="RUN_EXEC_OUTPUT_KB"', html)
         self.assertNotIn('name="TOOLCHAIN_COMPILE_OUTPUT_KB"', html)
         self.assertNotIn('name="JUDGEHOST_STORED_LOG_LIMIT_BYTES"', html)
@@ -1903,6 +1905,37 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         self.assertIn(newer_slug, html)
         self.assertLess(html.find(newer_slug), html.find(older_slug))
 
+    def test_contest_import_rejects_more_than_configured_problem_count(self) -> None:
+        class _Upload:
+            def __init__(self, filename: str, content: bytes):
+                self.filename = filename
+                self.file = io.BytesIO(content)
+
+        previous = dict(config.config_values.snapshot())
+        updated = dict(previous)
+        updated["CONTEST_MAX_PROBLEMS"] = 26
+        config.config_values.replace(updated)
+        self.addCleanup(config.config_values.replace, previous)
+        target_slug = f"contest-too-large-{uuid.uuid4().hex[:8]}"
+        response = contests_root_import(
+            _post_request("/contests/import"),
+            user="alice",
+            package_upload=_Upload(
+                "too-many.zip",
+                polygon_contest_package(problem_count=27),
+            ),
+            contest_slug=target_slug,
+            contest_title="",
+        )
+        self.assertEqual(response.status_code, 303)
+        self.assertEqual(response.headers.get("location"), "/contests")
+        messages = _flash_messages_from_response(response)
+        self.assertTrue(messages)
+        self.assertIn("configured maximum of 26 problems", messages[0])
+        self.assertIsNone(
+            db_fetch_one("SELECT id FROM contests WHERE slug=?", [target_slug])
+        )
+
     def test_contests_root_import_polygon_contest_package_creates_contest_and_normalizes_newlines(self) -> None:
         class _Upload:
             def __init__(self, filename: str, content: bytes):
@@ -2041,7 +2074,7 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
     def test_file_manual_input_allows_payloads_larger_than_ui_limit(self) -> None:
         oversized = ("1" * (TEXTAREA_MAX_BYTES + 32)) + "\n"
         with self.assertRaisesRegex(ValueError, "manual test input is too long"):
-            normalize_manual_input(oversized)
+            normalize_manual_input(oversized, max_bytes=TEXTAREA_MAX_BYTES)
         normalized = normalize_file_manual_input(oversized)
         self.assertGreater(len(normalized.encode("utf-8")), TEXTAREA_MAX_BYTES)
         self.assertTrue(normalized.endswith("\n"))

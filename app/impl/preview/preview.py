@@ -1,4 +1,6 @@
 from __future__ import annotations
+
+import app.main_constant as _K
 from app.impl.auth.session import require_session_user
 
 import os
@@ -51,7 +53,7 @@ from app.service.statement.render import (
 )
 from app.service.statement.signature import statement_sources_signature
 
-_C = config.constants
+_C = config.config_values
 _CONTESTANT_ATTACHMENTS_ROOT = "attachments"
 
 def statement_compile_asset_rows(workspace: Path) -> list[dict[str, str]]:
@@ -311,7 +313,11 @@ def preview_page(request: Request, problem: str, user: Annotated[str, Depends(re
         current_language or pick_statement_language(workspace),
         fallback_title=problem_slug_leaf(problem),
     )
-    current_statement_signature = statement_sources_signature(workspace, problem_title=problem_title)
+    current_statement_signature = statement_sources_signature(
+        workspace,
+        problem_title=problem_title,
+        tests_spec_max_bytes=int(_C.TEXTAREA_MAX_BYTES),
+    )
     workspace_head = str(ctx["workspace"].get("head_commit") or "")
     requested_preview_id = request.query_params.get("preview_id", "")
     has_statement_language = bool(current_language)
@@ -476,7 +482,7 @@ def preview_page(request: Request, problem: str, user: Annotated[str, Depends(re
             'preview_failure_detail': preview_failure_detail,
             'preview_failed_stage': preview_failed_stage,
             'latex_log_available': latex_log_available,
-            'problem_mode_values': list(_C.GENERAL_MODE_VALUES),
+            'problem_mode_values': list(_K.GENERAL_MODE_VALUES),
             'time_limit_min_ms': _C.GENERAL_TIME_LIMIT_MIN_MS,
             'time_limit_max_ms': _C.GENERAL_TIME_LIMIT_MAX_MS,
             'memory_limit_min_mb': _C.GENERAL_MEMORY_LIMIT_MIN_MB,
@@ -582,7 +588,11 @@ def preview_status(problem: str, user: Annotated[str, Depends(require_session_us
         current_language or pick_statement_language(workspace),
         fallback_title=problem_slug_leaf(problem),
     )
-    current_statement_signature = statement_sources_signature(workspace, problem_title=problem_title)
+    current_statement_signature = statement_sources_signature(
+        workspace,
+        problem_title=problem_title,
+        tests_spec_max_bytes=int(_C.TEXTAREA_MAX_BYTES),
+    )
     workspace_head = str(ctx['workspace'].get('head_commit') or "")
     workspace_key = f'{problem_id}:{workspace_id}'
     with config.preview_lock:
@@ -631,6 +641,7 @@ def statement_tex_source(problem: str, user: Annotated[str, Depends(require_sess
                     current_language,
                     fallback_title=problem_slug_leaf(problem),
                 ),
+                tests_spec_max_bytes=int(_C.TEXTAREA_MAX_BYTES),
             )
             tex_text = tex_path.read_text(encoding='utf-8')
     except ValueError as exc:
@@ -673,12 +684,13 @@ def preview_save(
     statement_mode = statement_mode_from_ctx(ctx)
     msg = 'statement saved'
     try:
-        safe_name_tex = enforce_textarea_max_bytes(name_tex, label="statement title")
-        safe_legend_tex = enforce_textarea_max_bytes(legend_tex, label="statement legend")
-        safe_input_tex = enforce_textarea_max_bytes(input_tex, label="statement input")
-        safe_output_tex = enforce_textarea_max_bytes(output_tex, label="statement output")
-        safe_notes_tex = enforce_textarea_max_bytes(notes_tex, label="statement notes")
-        safe_interaction_tex = enforce_textarea_max_bytes(interaction_tex, label="statement interaction")
+        textarea_limit = int(_C.TEXTAREA_MAX_BYTES)
+        safe_name_tex = enforce_textarea_max_bytes(name_tex, label="statement title", max_bytes=textarea_limit)
+        safe_legend_tex = enforce_textarea_max_bytes(legend_tex, label="statement legend", max_bytes=textarea_limit)
+        safe_input_tex = enforce_textarea_max_bytes(input_tex, label="statement input", max_bytes=textarea_limit)
+        safe_output_tex = enforce_textarea_max_bytes(output_tex, label="statement output", max_bytes=textarea_limit)
+        safe_notes_tex = enforce_textarea_max_bytes(notes_tex, label="statement notes", max_bytes=textarea_limit)
+        safe_interaction_tex = enforce_textarea_max_bytes(interaction_tex, label="statement interaction", max_bytes=textarea_limit)
         with config.workspace_service.workspace_lock(workspace):
             section_paths = statement_editor_section_paths(current_language)
             write_plan = {
@@ -836,7 +848,12 @@ async def statement_compile_asset_upload(
             tmp_path = Path(tmp_name)
             try:
                 with os.fdopen(fd, 'wb') as out:
-                    total_bytes = await write_upload_file_limited(upload, out, label='statement asset')
+                    total_bytes = await write_upload_file_limited(
+                        upload,
+                        out,
+                        label='statement asset',
+                        max_bytes=int(_C.UPLOAD_MAX_BYTES),
+                    )
                 os.replace(tmp_path, asset_abs)
                 tmp_path = None
             except Exception:
@@ -895,7 +912,12 @@ async def statement_attachment_upload(
             tmp_path = Path(tmp_name)
             try:
                 with os.fdopen(fd, 'wb') as out:
-                    total_bytes = await write_upload_file_limited(upload, out, label='attachment')
+                    total_bytes = await write_upload_file_limited(
+                        upload,
+                        out,
+                        label='attachment',
+                        max_bytes=int(_C.UPLOAD_MAX_BYTES),
+                    )
                 os.replace(tmp_path, attachment_abs)
                 tmp_path = None
             except Exception:

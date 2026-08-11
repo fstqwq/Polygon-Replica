@@ -174,7 +174,7 @@
   <div class="tests-generation-head">
     <div>
       <h2>Generation script</h2>
-      <span class="{{ 'ok' if tests_gen_script_configured else 'muted' }}">{{ 'configured' if tests_gen_script_configured else 'not configured' }}{% if tests_gen_script.count %} · {{ tests_gen_script.count }} command{% if tests_gen_script.count != 1 %}s{% endif %}{% endif %}</span>
+      <span class="{{ 'ok' if tests_gen_script_configured else 'muted' }}">{{ 'configured' if tests_gen_script_configured else 'not configured' }}{% if tests_gen_script.count %} &middot; {{ tests_gen_script.count }} command{% if tests_gen_script.count != 1 %}s{% endif %}{% endif %}</span>
     </div>
     {% if tests_gen_script_edit %}
     <a href="{{ problem_href('problem_tests') }}">Close editor</a>

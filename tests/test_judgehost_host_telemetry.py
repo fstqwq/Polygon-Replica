@@ -44,7 +44,7 @@ class TestToolchainVersionCollector(unittest.TestCase):
     def setUp(self) -> None:
         self.scheduler = _VersionScheduler()
         self.state = SimpleNamespace(
-            constants=SimpleNamespace(
+            config_values=SimpleNamespace(
                 TOOLCHAIN_CPP_COMPILER="/opt/tool chains/clang++",
                 TOOLCHAIN_JAVA_COMPILER="javac-custom",
             ),

@@ -4,12 +4,8 @@ import json
 from unittest.mock import patch
 
 from app.db import DB, now_iso, sqlite3
+from app.config import build_config_values
 from tests.db_fixture import DBTestBase
-
-
-class _TraceValues:
-    def __init__(self, enabled: bool) -> None:
-        self.DB_SQL_TRACE_ENABLED = bool(enabled)
 
 
 class TestDBSqlTrace(DBTestBase):
@@ -68,7 +64,7 @@ class TestDBSqlTrace(DBTestBase):
                 )
                 """
             )
-        database = DB(path)
+        database = DB(path, config_values=build_config_values())
         database.init()
 
         with database.conn() as connection:
@@ -82,7 +78,9 @@ class TestDBSqlTrace(DBTestBase):
         self.assertFalse(columns["archive_sha256"])
 
     def test_db_trace_can_be_enabled_at_runtime(self) -> None:
-        self.db.apply_runtime_values(_TraceValues(True))
+        values = dict(self.config_values.snapshot())
+        values["DB_SQL_TRACE_ENABLED"] = True
+        self.config_values.replace(values)
         with patch("app.db.logger.info") as info:
             row = self._fetch_one(self.db, "SELECT 1 AS value")
         self.assertIsNotNone(row)
@@ -90,7 +88,9 @@ class TestDBSqlTrace(DBTestBase):
         self.assertTrue(any(text == "SELECT 1 AS value" for text in sql_texts), sql_texts)
 
     def test_db_trace_redacts_details_and_value_json_sql(self) -> None:
-        self.db.apply_runtime_values(_TraceValues(True))
+        values = dict(self.config_values.snapshot())
+        values["DB_SQL_TRACE_ENABLED"] = True
+        self.config_values.replace(values)
         payload = {"kind": "verification.start", "blob": "Y" * 1024}
         with patch("app.db.logger.info") as info:
             self._execute(

@@ -4,11 +4,9 @@ from pathlib import Path, PurePosixPath
 
 from fastapi import HTTPException
 
-from app.runtime_value import RuntimeValues, build_runtime_values
+from app.main_constant import CPP_SOURCE_EXTENSIONS, SOLUTION_SOURCE_EXTENSIONS
 
-CPP_SOURCE_EXTENSIONS: set[str] = set()
-SOLUTION_SOURCE_EXTENSIONS: set[str] = set()
-GENERATOR_SOURCE_EXTENSIONS: set[str] = set()
+GENERATOR_SOURCE_EXTENSIONS = SOLUTION_SOURCE_EXTENSIONS
 ALLOWED_WORKSPACE_ROOT_NAMES = {
     "attachments",
     "checkers",
@@ -23,20 +21,6 @@ ALLOWED_WORKSPACE_ROOT_NAMES = {
     "third_party",
     "validators",
 }
-
-
-def apply_runtime_values(values: RuntimeValues) -> None:
-    global CPP_SOURCE_EXTENSIONS
-    global SOLUTION_SOURCE_EXTENSIONS
-    global GENERATOR_SOURCE_EXTENSIONS
-    CPP_SOURCE_EXTENSIONS = {str(item).strip().lower() for item in values.CPP_SOURCE_EXTENSIONS}
-    SOLUTION_SOURCE_EXTENSIONS = {
-        str(item).strip().lower() for item in values.SOLUTION_SOURCE_EXTENSIONS
-    }
-    GENERATOR_SOURCE_EXTENSIONS = set(SOLUTION_SOURCE_EXTENSIONS)
-
-
-apply_runtime_values(build_runtime_values())
 
 
 def contains_symlink_component(root: Path, candidate: Path) -> bool:

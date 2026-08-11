@@ -1,16 +1,20 @@
 from __future__ import annotations
 
-import io
 import json
 import re
 import shutil
+import uuid
 import xml.etree.ElementTree
 ET = xml.etree.ElementTree
 import zipfile
 from pathlib import Path, PurePosixPath
 from typing import TypedDict, cast
 
-from app.main_util import UPLOAD_MAX_BYTES
+from app.service.importing.archive import (
+    ArchiveView,
+    BudgetedZipFile,
+    PACKAGE_METADATA_MAX_BYTES,
+)
 from app.service.importing.statement_assets import ImportedLegacyStatementAsset, merge_imported_statement_assets
 from app.service.platform.testlib_source import maintained_testlib_header
 from app.service.problem.build_config import dumps_build_config
@@ -33,15 +37,11 @@ from app.service.statement.render import default_olymp_sty_text
 from app.service.problem.test_spec import (
     dumps_tests_spec,
     normalize_gen_command,
-    normalize_file_manual_input,
     parse_gen_command_tokens,
     payload_rel_path_for_test,
 )
 
 
-ZIP_MAX_BYTES = UPLOAD_MAX_BYTES
-ZIP_MAX_FILE_BYTES = UPLOAD_MAX_BYTES
-ZIP_TEXT_MAX_BYTES = UPLOAD_MAX_BYTES
 SOURCE_SUFFIX_ALLOW = {".cpp", ".cc", ".cxx", ".c++", ".h", ".hpp", ".py", ".java"}
 GENERATOR_SOURCE_SUFFIX_ALLOW = {".cpp", ".cc", ".cxx", ".c++", ".py", ".java"}
 STATEMENT_SECTION_SAMPLE_FILE_RE = re.compile(r"^example\.(\d+)(?:\.a)?$", re.IGNORECASE)
@@ -220,55 +220,20 @@ def _safe_read_json(path: Path) -> dict[str, object]:
     return {}
 
 
-def _read_text_from_zip(zf: zipfile.ZipFile, info: zipfile.ZipInfo) -> str:
-    if int(info.file_size) > ZIP_TEXT_MAX_BYTES:
-        raise ValueError(f"zip entry too large for text: {info.filename}")
-    with zf.open(info, "r") as fh:
-        raw = fh.read(ZIP_TEXT_MAX_BYTES + 1)
-    if len(raw) > ZIP_TEXT_MAX_BYTES:
-        raise ValueError(f"zip entry too large for text: {info.filename}")
-    return raw.decode("utf-8", errors="replace")
+def _read_small_bytes(zf: BudgetedZipFile, info: zipfile.ZipInfo) -> bytes:
+    return zf.read_metadata(
+        info,
+        limit=PACKAGE_METADATA_MAX_BYTES,
+        label=info.filename,
+    )
 
 
-def _read_bytes_from_zip(zf: zipfile.ZipFile, info: zipfile.ZipInfo) -> bytes:
-    if int(info.file_size) > ZIP_MAX_FILE_BYTES:
-        raise ValueError(f"zip entry too large: {info.filename}")
-    with zf.open(info, "r") as fh:
-        raw = fh.read(ZIP_MAX_FILE_BYTES + 1)
-    if len(raw) > ZIP_MAX_FILE_BYTES:
-        raise ValueError(f"zip entry too large: {info.filename}")
-    return raw
+def _read_small_text(zf: BudgetedZipFile, info: zipfile.ZipInfo) -> str:
+    return _read_small_bytes(zf, info).decode("utf-8", errors="replace")
 
 
 def _normalize_text_newlines_bytes(payload: bytes) -> bytes:
     return payload.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
-
-
-def _entry_map_from_zip(zf: zipfile.ZipFile) -> dict[str, zipfile.ZipInfo]:
-    raw: dict[str, zipfile.ZipInfo] = {}
-    for info in zf.infolist():
-        if info.is_dir():
-            continue
-        normalized = _normalize_zip_path(info.filename)
-        if not normalized:
-            continue
-        raw[normalized] = info
-    if "problem.xml" in raw:
-        return raw
-    candidates = sorted([p for p in raw if p.endswith("/problem.xml")], key=len)
-    if not candidates:
-        raise ValueError("problem.xml not found in package")
-    prefix = candidates[0][:-len("problem.xml")]
-    mapped: dict[str, zipfile.ZipInfo] = {}
-    for path, info in raw.items():
-        if not path.startswith(prefix):
-            continue
-        rel = path[len(prefix):]
-        if rel:
-            mapped[rel] = info
-    if "problem.xml" not in mapped:
-        raise ValueError("problem.xml not found in package")
-    return mapped
 
 
 def _expand_pattern(pattern: str, index: int) -> str:
@@ -450,19 +415,19 @@ class PolygonPackageImportService:
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(payload)
 
-    def _copy_zip_entry(self, zf: zipfile.ZipFile, entries: dict[str, zipfile.ZipInfo], source_rel: str, workspace: Path, target_rel: Path) -> bool:
+    def _copy_zip_entry(self, zf: BudgetedZipFile, entries: dict[str, zipfile.ZipInfo], source_rel: str, workspace: Path, target_rel: Path) -> bool:
         normalized = _normalize_zip_path(source_rel)
         if not normalized:
             return False
         info = entries.get(normalized)
         if info is None:
             return False
-        self._write_bytes(workspace, target_rel, _read_bytes_from_zip(zf, info))
+        zf.copy_to(info, workspace / target_rel)
         return True
 
     def _import_statement(
         self,
-        zf: zipfile.ZipFile,
+        zf: BudgetedZipFile,
         entries: dict[str, zipfile.ZipInfo],
         workspace: Path,
         meta: PolygonMeta,
@@ -500,43 +465,52 @@ class PolygonPackageImportService:
             self._write_text(workspace, STATEMENT_STYLE_REL, default_olymp_sty_text())
 
         copied_section_files = 0
-        shared_assets: dict[str, bytes] = {}
+        shared_assets: dict[str, Path] = {}
         legacy_assets: list[ImportedLegacyStatementAsset] = []
-        for path, info in entries.items():
-            rel = Path(path.replace("\\", "/"))
-            if path.startswith(f"{STATEMENT_ASSETS_DIR.as_posix()}/"):
-                asset_rel = rel.relative_to(STATEMENT_ASSETS_DIR).as_posix()
-                if not asset_rel:
+        asset_staging = workspace.parent / f".polygon-statement-assets-{uuid.uuid4().hex}"
+        try:
+            asset_staging.mkdir(parents=True, exist_ok=False)
+            for path, info in entries.items():
+                rel = Path(path.replace("\\", "/"))
+                if path.startswith(f"{STATEMENT_ASSETS_DIR.as_posix()}/"):
+                    asset_rel = rel.relative_to(STATEMENT_ASSETS_DIR).as_posix()
+                    if not asset_rel:
+                        continue
+                    source_path = asset_staging / "shared" / asset_rel
+                    zf.copy_to(info, source_path)
+                    shared_assets[asset_rel] = source_path
                     continue
-                shared_assets[asset_rel] = _read_bytes_from_zip(zf, info)
-                continue
-            if not path.startswith("statement-sections/"):
-                continue
-            if len(rel.parts) >= 3 and STATEMENT_SECTION_SAMPLE_FILE_RE.fullmatch(rel.name):
-                continue
-            if len(rel.parts) < 3:
-                continue
-            rel_in_section = Path(*rel.parts[2:])
-            if is_ignored_statement_section_entry(rel_in_section):
-                continue
-            if is_canonical_statement_section_entry(rel_in_section):
-                self._write_bytes(workspace, rel, _read_bytes_from_zip(zf, info))
-                copied_section_files += 1
-                continue
-            legacy_assets.append(
-                {
-                    "language": rel.parts[1],
-                    "package_path": rel.as_posix(),
-                    "asset_rel": rel_in_section.as_posix(),
-                    "payload": _read_bytes_from_zip(zf, info),
-                }
-            )
+                if not path.startswith("statement-sections/"):
+                    continue
+                if len(rel.parts) >= 3 and STATEMENT_SECTION_SAMPLE_FILE_RE.fullmatch(rel.name):
+                    continue
+                if len(rel.parts) < 3:
+                    continue
+                rel_in_section = Path(*rel.parts[2:])
+                if is_ignored_statement_section_entry(rel_in_section):
+                    continue
+                if is_canonical_statement_section_entry(rel_in_section):
+                    zf.copy_to(info, workspace / rel)
+                    copied_section_files += 1
+                    continue
+                source_path = asset_staging / "legacy" / rel
+                zf.copy_to(info, source_path)
+                legacy_assets.append(
+                    {
+                        "language": rel.parts[1],
+                        "package_path": rel.as_posix(),
+                        "asset_rel": rel_in_section.as_posix(),
+                        "source_path": source_path,
+                    }
+                )
 
-        asset_merge = merge_imported_statement_assets(
-            workspace,
-            shared_assets=shared_assets,
-            legacy_assets=legacy_assets,
-        )
+            asset_merge = merge_imported_statement_assets(
+                workspace,
+                shared_assets=shared_assets,
+                legacy_assets=legacy_assets,
+            )
+        finally:
+            shutil.rmtree(asset_staging, ignore_errors=True)
 
         languages = sorted(
             {
@@ -601,7 +575,7 @@ class PolygonPackageImportService:
 
     def _statement_sample_overrides(
         self,
-        zf: zipfile.ZipFile,
+        zf: BudgetedZipFile,
         entries: dict[str, zipfile.ZipInfo],
         statement_language: str,
     ) -> dict[int, dict[str, str]]:
@@ -618,20 +592,21 @@ class PolygonPackageImportService:
                 continue
             slot = overrides.setdefault(sample_index, {})
             if is_output:
-                slot["sample_output"] = _read_text_from_zip(zf, info)
+                slot["sample_output"] = _read_small_text(zf, info)
                 continue
-            slot["sample_input"] = _read_text_from_zip(zf, info)
+            slot["sample_input"] = _read_small_text(zf, info)
         return overrides
 
     def _import_tests(
         self,
-        zf: zipfile.ZipFile,
+        zf: BudgetedZipFile,
         entries: dict[str, zipfile.ZipInfo],
         workspace: Path,
         meta: PolygonMeta,
         *,
         statement_language: str,
         normalize_test_data_newlines: bool = False,
+        text_limit_bytes: int,
     ) -> TestsImportSummary:
         tests = meta["tests"]
 
@@ -663,7 +638,7 @@ class PolygonPackageImportService:
             if sample and answer_rel:
                 answer_info = entries.get(answer_rel)
                 if answer_info is not None:
-                    answer_payload = _read_bytes_from_zip(zf, answer_info)
+                    answer_payload = _read_small_bytes(zf, answer_info)
                     if normalize_test_data_newlines:
                         answer_payload = _normalize_text_newlines_bytes(answer_payload)
                     sample_output_text = answer_payload.decode("utf-8", errors="replace")
@@ -699,17 +674,21 @@ class PolygonPackageImportService:
                     gen_count += 1
                     continue
                 raise ValueError(f"missing test input file in package: {input_rel}")
+            spec_entries.append({**spec_row, "kind": "manual"})
+            target_path = workspace / Path(payload_rel_path_for_test(test_id, "manual"))
             try:
-                payload_text = normalize_file_manual_input(_read_bytes_from_zip(zf, info).decode("utf-8"))
+                zf.copy_canonical_text_to(info, target_path)
             except UnicodeDecodeError as exc:
                 raise ValueError(f"manual test input must be utf-8 text: {input_rel}") from exc
-            spec_entries.append({**spec_row, "kind": "manual"})
-            self._write_text(workspace, Path(payload_rel_path_for_test(test_id, "manual")), payload_text)
             manual_count += 1
             if is_generated:
                 generated_fallback_to_manual += 1
 
-        self._write_text(workspace, Path("tests/spec.json"), dumps_tests_spec(spec_entries))
+        self._write_text(
+            workspace,
+            Path("tests/spec.json"),
+            dumps_tests_spec(spec_entries, max_bytes=text_limit_bytes),
+        )
         return {
             "manual": manual_count,
             "gen": gen_count,
@@ -718,7 +697,7 @@ class PolygonPackageImportService:
             "answers": answer_count,
         }
 
-    def _copy_source_from_zip(self, zf: zipfile.ZipFile, entries: dict[str, zipfile.ZipInfo], source_path: str, workspace: Path, target_folder: str, target_name: str) -> str:
+    def _copy_source_from_zip(self, zf: BudgetedZipFile, entries: dict[str, zipfile.ZipInfo], source_path: str, workspace: Path, target_folder: str, target_name: str) -> str:
         normalized = _normalize_zip_path(source_path)
         if not normalized:
             return ""
@@ -729,8 +708,7 @@ class PolygonPackageImportService:
         if suffix and suffix not in SOURCE_SUFFIX_ALLOW:
             return ""
         rel = Path(target_folder) / target_name
-        payload = _read_bytes_from_zip(zf, info)
-        self._write_bytes(workspace, rel, payload)
+        zf.copy_to(info, workspace / rel)
         return rel.as_posix()
 
     def _write_maintained_testlib(self, workspace: Path) -> str:
@@ -740,7 +718,7 @@ class PolygonPackageImportService:
 
     def _import_components(
         self,
-        zf: zipfile.ZipFile,
+        zf: BudgetedZipFile,
         entries: dict[str, zipfile.ZipInfo],
         workspace: Path,
         meta: PolygonMeta,
@@ -878,7 +856,7 @@ class PolygonPackageImportService:
 
     def _import_solutions(
         self,
-        zf: zipfile.ZipFile,
+        zf: BudgetedZipFile,
         entries: dict[str, zipfile.ZipInfo],
         workspace: Path,
         meta: PolygonMeta,
@@ -900,8 +878,7 @@ class PolygonPackageImportService:
             source_type = row["source_type"]
             filename = self._solution_filename_for_import(source_path, source_type)
             target_rel = _unique_rel_path(workspace, solutions_dir_rel, filename)
-            payload = _read_bytes_from_zip(zf, info)
-            self._write_bytes(workspace, Path(target_rel), payload)
+            zf.copy_to(info, workspace / Path(target_rel))
             tag = row["tag"]
             expected = polygon_solution_expected_from_tag(tag)
             self._write_text(workspace, Path(f"{target_rel}.desc"), render_solution_desc(expected, ""))
@@ -939,57 +916,60 @@ class PolygonPackageImportService:
         self,
         workspace: Path,
         package_name: str,
-        package_bytes: bytes,
+        package: ArchiveView,
         *,
         normalize_test_data_newlines: bool = False,
+        text_limit_bytes: int,
     ) -> dict[str, object]:
-        raw = package_bytes
-        if not raw:
-            raise ValueError("empty package file")
-        if len(raw) > ZIP_MAX_BYTES:
-            raise ValueError("package file is too large")
-
-        with zipfile.ZipFile(io.BytesIO(raw), "r") as zf:
-            entry_map = _entry_map_from_zip(zf)
-            xml_info = entry_map.get("problem.xml")
-            if xml_info is None:
-                raise ValueError("problem.xml not found in package")
-            meta = self._parse_problem_xml(_read_text_from_zip(zf, xml_info))
-            statement_summary, statement_warnings = self._import_statement(zf, entry_map, workspace, meta)
-            tests_summary = self._import_tests(
-                zf,
-                entry_map,
-                workspace,
-                meta,
-                statement_language=statement_summary["language"],
-                normalize_test_data_newlines=normalize_test_data_newlines,
+        rooted = package.rooted_at("problem.xml")
+        zf = rooted.zip_file
+        entry_map = {
+            rel: info for rel, info in rooted.entries.items() if not info.is_dir()
+        }
+        xml_info = entry_map.get("problem.xml")
+        if xml_info is None:
+            raise ValueError("problem.xml not found in package")
+        meta = self._parse_problem_xml(
+            rooted.read_metadata(xml_info, label="problem.xml").decode(
+                "utf-8", errors="replace"
             )
-            component_summary = self._import_components(zf, entry_map, workspace, meta)
-            solutions_summary = self._import_solutions(zf, entry_map, workspace, meta)
-            build_cfg = _safe_read_json(workspace / "config" / "build.json")
-            build_cfg_changed = False
-            if solutions_summary["accepted_source"]:
-                build_cfg["accepted_solution_source"] = solutions_summary["accepted_source"]
-                build_cfg_changed = True
-            if build_cfg_changed:
-                (workspace / "config" / "build.json").write_text(
-                    dumps_build_config(build_cfg),
-                    encoding="utf-8",
-                    newline="\n",
-                )
-            problem_cfg = self._write_problem_config(workspace, meta, component_summary)
-            warnings: list[str] = []
-            checker_warning = component_summary["checker_import_warning"]
-            if checker_warning:
-                warnings.append(checker_warning)
-            warnings.extend(statement_warnings)
-            return {
-                "package_name": package_name.strip(),
-                "title": meta["title"],
-                "statement": statement_summary,
-                "tests": tests_summary,
-                "components": component_summary,
-                "solutions": solutions_summary,
-                "problem_cfg": problem_cfg,
-                "warnings": warnings,
-            }
+        )
+        statement_summary, statement_warnings = self._import_statement(zf, entry_map, workspace, meta)
+        tests_summary = self._import_tests(
+            zf,
+            entry_map,
+            workspace,
+            meta,
+            statement_language=statement_summary["language"],
+            normalize_test_data_newlines=normalize_test_data_newlines,
+            text_limit_bytes=text_limit_bytes,
+        )
+        component_summary = self._import_components(zf, entry_map, workspace, meta)
+        solutions_summary = self._import_solutions(zf, entry_map, workspace, meta)
+        build_cfg = _safe_read_json(workspace / "config" / "build.json")
+        build_cfg_changed = False
+        if solutions_summary["accepted_source"]:
+            build_cfg["accepted_solution_source"] = solutions_summary["accepted_source"]
+            build_cfg_changed = True
+        if build_cfg_changed:
+            (workspace / "config" / "build.json").write_text(
+                dumps_build_config(build_cfg),
+                encoding="utf-8",
+                newline="\n",
+            )
+        problem_cfg = self._write_problem_config(workspace, meta, component_summary)
+        warnings: list[str] = []
+        checker_warning = component_summary["checker_import_warning"]
+        if checker_warning:
+            warnings.append(checker_warning)
+        warnings.extend(statement_warnings)
+        return {
+            "package_name": package_name.strip(),
+            "title": meta["title"],
+            "statement": statement_summary,
+            "tests": tests_summary,
+            "components": component_summary,
+            "solutions": solutions_summary,
+            "problem_cfg": problem_cfg,
+            "warnings": warnings,
+        }

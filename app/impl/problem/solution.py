@@ -29,7 +29,7 @@ from app.service.platform.workspace_path import (
     safe_workspace_path,
 )
 
-_C = config.constants
+_C = config.config_values
 
 _EXPECTED_BEHAVIOR_TAG_CLASS: dict[str, str] = {
     MAIN_CORRECT_EXPECTED_VALUE: "tag-select-main-correct",
@@ -138,7 +138,11 @@ def solutions_save_source(request: Request, problem: str, user: Annotated[str, D
     try:
         selected = normalize_solution_source_path_required(source_path)
         normalized_expected = normalize_expected_behavior(expected_behavior)
-        safe_content = enforce_textarea_max_bytes(content, label='solution source')
+        safe_content = enforce_textarea_max_bytes(
+            content,
+            label='solution source',
+            max_bytes=int(_C.TEXTAREA_MAX_BYTES),
+        )
         selected_for_redirect = selected
         with config.workspace_service.workspace_lock(workspace):
             desc_path = desc_rel_path_for_source(selected)

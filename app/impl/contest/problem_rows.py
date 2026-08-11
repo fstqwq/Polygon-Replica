@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import app.main_constant as _K
+
 from pathlib import Path
 from typing import TypedDict
 
@@ -27,7 +29,7 @@ from app.service.verification.runtime import (
 )
 from app.service.workspace.state import WorkspaceState
 
-_C = config.constants
+_C = config.config_values
 
 class ContestProblemDisplayRow(TypedDict):
     contest_problem_id: int
@@ -242,10 +244,10 @@ def _contest_problem_rows(
         workspace_revision_display = "unavailable"
         workspace_revision_warn = False
         dirty = False
-        time_limit_ms = int(_C.GENERAL_CONFIG_DEFAULTS["time_limit_ms"])
-        memory_limit_mb = int(_C.GENERAL_CONFIG_DEFAULTS["memory_limit_mb"])
-        mode = str(_C.GENERAL_CONFIG_DEFAULTS["mode"])
-        pass_limit = int(_C.GENERAL_CONFIG_DEFAULTS["pass_limit"])
+        time_limit_ms = int(_K.GENERAL_CONFIG_DEFAULTS["time_limit_ms"])
+        memory_limit_mb = int(_K.GENERAL_CONFIG_DEFAULTS["memory_limit_mb"])
+        mode = str(_K.GENERAL_CONFIG_DEFAULTS["mode"])
+        pass_limit = int(_K.GENERAL_CONFIG_DEFAULTS["pass_limit"])
         test_count = 0
         solution_count = 0
         solutions_truncated = False
@@ -277,25 +279,30 @@ def _contest_problem_rows(
                 _payload, general_config, _config_path = read_problem_config(workspace)
                 time_limit_ms = coerce_int(
                     general_config.get("time_limit_ms"),
-                    int(_C.GENERAL_CONFIG_DEFAULTS["time_limit_ms"]),
+                    int(_K.GENERAL_CONFIG_DEFAULTS["time_limit_ms"]),
                     _C.GENERAL_TIME_LIMIT_MIN_MS,
                     _C.GENERAL_TIME_LIMIT_MAX_MS,
                 )
                 memory_limit_mb = coerce_int(
                     general_config.get("memory_limit_mb"),
-                    int(_C.GENERAL_CONFIG_DEFAULTS["memory_limit_mb"]),
+                    int(_K.GENERAL_CONFIG_DEFAULTS["memory_limit_mb"]),
                     _C.GENERAL_MEMORY_LIMIT_MIN_MB,
                     _C.GENERAL_MEMORY_LIMIT_MAX_MB,
                 )
                 mode = normalize_problem_mode(
                     general_config.get("mode"),
-                    str(_C.GENERAL_CONFIG_DEFAULTS["mode"]),
+                    str(_K.GENERAL_CONFIG_DEFAULTS["mode"]),
                 )
                 pass_limit = normalize_pass_limit(
                     general_config.get("pass_limit"),
-                    int(_C.GENERAL_CONFIG_DEFAULTS["pass_limit"]),
+                    int(_K.GENERAL_CONFIG_DEFAULTS["pass_limit"]),
                 )
-                test_count = len(read_tests_spec(workspace)[0])
+                test_count = len(
+                    read_tests_spec(
+                        workspace,
+                        max_bytes=int(_C.TEXTAREA_MAX_BYTES),
+                    )[0]
+                )
                 solution_sources, solutions_truncated = list_solution_sources(
                     workspace,
                     limit=int(_C.SOLUTION_LIST_LIMIT),

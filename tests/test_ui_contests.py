@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import tempfile
+import threading
 from unittest.mock import patch
 
 from tests.db_helpers import (
@@ -57,6 +59,124 @@ def _app_request(path: str) -> Request:
 class TestUIContests(UIHelpersMixin, E2ETestBase):
     seed_primary_workspace = False
     seed_default_workspace = True
+
+    def _insert_problem_row(self, suffix: str) -> int:
+        slug = f"alice/{suffix}"
+        db_execute(
+            "INSERT INTO problems(slug,repo_name,created_at) VALUES(?,?,?)",
+            [slug, f"{slug}.git", "2026-08-11T00:00:00+00:00"],
+        )
+        row = db_fetch_one("SELECT id FROM problems WHERE slug=?", [slug])
+        self.assertIsNotNone(row)
+        return int(row["id"])
+
+    def test_contest_problem_limit_serializes_the_last_slot(self) -> None:
+        previous = dict(config.config_values.snapshot())
+        limited = dict(previous)
+        limited["CONTEST_MAX_PROBLEMS"] = 1
+        config.config_values.replace(limited)
+        self.addCleanup(config.config_values.replace, previous)
+
+        actor = db_fetch_one("SELECT id FROM users WHERE username='alice'")
+        self.assertIsNotNone(actor)
+        actor_id = int(actor["id"])
+        contest_id = config.contest_service.create_contest_with_owner(
+            slug=f"limit-{uuid.uuid4().hex[:8]}",
+            title="Limit race",
+            owner_user_id=actor_id,
+        )
+        problem_ids = [
+            self._insert_problem_row(f"limit-{uuid.uuid4().hex[:8]}")
+            for _ in range(2)
+        ]
+        barrier = threading.Barrier(3)
+        outcomes: list[str] = []
+        outcomes_lock = threading.Lock()
+
+        def add(label: str, problem_id: int) -> None:
+            barrier.wait()
+            try:
+                config.contest_service.add_problem(
+                    contest_id,
+                    label,
+                    problem_id,
+                    actor_id,
+                )
+            except ValueError:
+                outcome = "rejected"
+            else:
+                outcome = "added"
+            with outcomes_lock:
+                outcomes.append(outcome)
+
+        workers = [
+            threading.Thread(target=add, args=(label, problem_id))
+            for label, problem_id in zip(("A", "B"), problem_ids, strict=True)
+        ]
+        for worker in workers:
+            worker.start()
+        barrier.wait()
+        for worker in workers:
+            worker.join(timeout=10)
+
+        self.assertTrue(all(not worker.is_alive() for worker in workers))
+        self.assertEqual(sorted(outcomes), ["added", "rejected"])
+        self.assertEqual(
+            int(
+                db_fetch_one(
+                    "SELECT COUNT(*) AS n FROM contest_problems WHERE contest_id=?",
+                    [contest_id],
+                )["n"]
+            ),
+            1,
+        )
+
+    def test_existing_over_limit_contest_remains_mutable_except_for_addition(self) -> None:
+        previous = dict(config.config_values.snapshot())
+        self.addCleanup(config.config_values.replace, previous)
+        actor = db_fetch_one("SELECT id FROM users WHERE username='alice'")
+        self.assertIsNotNone(actor)
+        actor_id = int(actor["id"])
+        contest_slug = f"over-limit-{uuid.uuid4().hex[:8]}"
+        contest_id = config.contest_service.create_contest_with_owner(
+            slug=contest_slug,
+            title="Existing over limit",
+            owner_user_id=actor_id,
+        )
+        problem_ids = [
+            self._insert_problem_row(f"over-limit-{uuid.uuid4().hex[:8]}")
+            for _ in range(3)
+        ]
+        initial = dict(previous)
+        initial["CONTEST_MAX_PROBLEMS"] = 2
+        config.config_values.replace(initial)
+        config.contest_service.add_problem(contest_id, "A", problem_ids[0], actor_id)
+        config.contest_service.add_problem(contest_id, "B", problem_ids[1], actor_id)
+
+        limited = dict(previous)
+        limited["CONTEST_MAX_PROBLEMS"] = 1
+        config.config_values.replace(limited)
+        config.contest_service.upsert_property(
+            contest_id,
+            actor_id,
+            "location",
+            "Still editable",
+        )
+        self.assertEqual(len(config.contest_service.contest_problems(contest_id)), 2)
+        self.assertEqual(
+            config.contest_service.overview_properties_map(
+                contest_id,
+                contest_slug,
+            )["location"],
+            "Still editable",
+        )
+        with self.assertRaisesRegex(ValueError, "configured maximum"):
+            config.contest_service.add_problem(
+                contest_id,
+                "C",
+                problem_ids[2],
+                actor_id,
+            )
 
     def test_contest_problem_rows_batch_acl_skips_inaccessible_workspaces(self) -> None:
         problem = {
@@ -681,26 +801,29 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
         alice_row = db_fetch_one("SELECT id FROM users WHERE username='alice'")
         self.assertIsNotNone(alice_row)
         actor_user_id = int(alice_row["id"])
-        config.contest_service.replace_statement_sources(
-            contest_id=contest_id,
-            contest_slug=contest_slug,
-            actor_user_id=actor_user_id,
-            files=[
-                {
-                    "key": "statements/english/statements.tex",
-                    "language": "english",
-                    "package_bytes": (
-                        b"\\documentclass{article}\n"
-                        b"\\begin{document}\n"
-                        b"\\contest\n"
-                        b"{Overview Contest}%\n"
-                        b"{Hangzhou, China}%\n"
-                        b"{1 February, 2026}%\n"
-                        b"\\end{document}\n"
-                    ),
-                }
-            ],
-        )
+        with tempfile.TemporaryDirectory(prefix="contest-statement-source-") as temp:
+            source_path = Path(temp) / "statements.tex"
+            source_path.write_bytes(
+                b"\\documentclass{article}\n"
+                b"\\begin{document}\n"
+                b"\\contest\n"
+                b"{Overview Contest}%\n"
+                b"{Hangzhou, China}%\n"
+                b"{1 February, 2026}%\n"
+                b"\\end{document}\n"
+            )
+            config.contest_service.replace_statement_sources(
+                contest_id=contest_id,
+                contest_slug=contest_slug,
+                actor_user_id=actor_user_id,
+                files=[
+                    {
+                        "key": "statements/english/statements.tex",
+                        "language": "english",
+                        "source_path": source_path,
+                    }
+                ],
+            )
         config.contest_service.set_statement_default_language(contest_id, actor_user_id, "english")
 
         properties = config.contest_service.overview_properties_map(

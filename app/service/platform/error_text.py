@@ -1,8 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 import re
-
-from app.main_constant import AUX_DISPLAY_TEXT_LIMIT_BYTES
 
 _LOG_ANSI_ESCAPE_RE = re.compile(r"\x1B\[[0-?]*[ -/]*[@-~]")
 _LOG_CONTROL_CHAR_RE = re.compile(r"[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]")
@@ -11,6 +10,14 @@ _DOMJUDGE_INTERNAL_BUILD_PREFIX_RE = re.compile(
     r"/opt/domjudge/judgehost/judgings/[^:\s]+/endpoint-[^:\s]+/executable/[^:\s]+/[^:\s]+/build/"
 )
 _TRUNCATION_MARKER = "..."
+
+
+def aux_display_text_limit_bytes(
+    snapshot: Mapping[str, object],
+) -> int:
+    """Read the auxiliary-text cap from one explicit configuration snapshot."""
+
+    return max(1, int(snapshot["AUX_DISPLAY_TEXT_LIMIT_BYTES"]))
 
 
 def sanitize_log_text_for_ui(raw: str, *, path_prefixes: list[tuple[str, str]] | None = None) -> str:
@@ -37,24 +44,6 @@ def sanitize_log_text_for_ui(raw: str, *, path_prefixes: list[tuple[str, str]] |
     for prefix_token, marker_token in pairs:
         normalized = normalized.replace(prefix_token, marker_token)
     return normalized
-
-
-def aux_display_text_limit_bytes(constants: object | None = None) -> int:
-    default = max(1, int(AUX_DISPLAY_TEXT_LIMIT_BYTES))
-    source = constants
-    if source is None:
-        try:
-            from app.impl.runtime.config import config
-
-            source = getattr(config, "constants", None)
-        except Exception:
-            source = None
-    if source is None:
-        return default
-    try:
-        return max(1, int(getattr(source, "AUX_DISPLAY_TEXT_LIMIT_BYTES", default) or default))
-    except Exception:
-        return default
 
 
 def normalize_display_text(raw: str | None, *, path_prefixes: list[tuple[str, str]] | None = None) -> str:
@@ -96,20 +85,22 @@ def truncate_utf8_text_bytes(
 def truncate_display_text(
     raw: str | None,
     *,
-    limit_bytes: int | None = None,
+    limit_bytes: int,
     path_prefixes: list[tuple[str, str]] | None = None,
 ) -> tuple[str, bool]:
     normalized = normalize_display_text(raw, path_prefixes=path_prefixes)
     if not normalized:
         return ("", False)
-    limit = aux_display_text_limit_bytes() if limit_bytes is None else max(1, int(limit_bytes))
-    return truncate_utf8_text_bytes(normalized, max_bytes=limit)
+    return truncate_utf8_text_bytes(
+        normalized,
+        max_bytes=max(1, int(limit_bytes)),
+    )
 
 
 def bounded_display_text(
     raw: str | None,
     *,
-    limit_bytes: int | None = None,
+    limit_bytes: int,
     path_prefixes: list[tuple[str, str]] | None = None,
 ) -> str:
     text, _truncated = truncate_display_text(

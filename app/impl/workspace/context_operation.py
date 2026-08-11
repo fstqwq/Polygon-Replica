@@ -1,4 +1,6 @@
 from __future__ import annotations
+
+import app.main_constant as _K
 import json
 import os
 import time
@@ -41,7 +43,7 @@ from app.service.problem.test_spec import (
 from app.service.repository.revision import workspace_upstream_revision_display
 from app.service.verification.runtime import coerce_int
 
-_C = config.constants
+_C = config.config_values
 
 _STANDARD_CHECKER_CACHE_TTL_SEC = 2.0
 _STANDARD_CHECKER_CACHE_TS = 0.0
@@ -53,7 +55,7 @@ _STANDARD_CHECKER_CACHE_SET: frozenset[str] = frozenset()
 def _db_revision_display(local: int | None, upstream: int | None) -> str:
     return workspace_upstream_revision_display(local, upstream)
 
-def user_participating_problems(user_id: int, limit: int=_C.API_PROBLEMS_LIST_LIMIT) -> list[dict]:
+def user_participating_problems(user_id: int, limit: int) -> list[dict]:
     uid = int(user_id)
     cap = max(1, int(limit))
     rows = config.workspace_service.participating_problem_rows(uid, limit=cap)
@@ -87,7 +89,7 @@ def normalize_contest_role(raw: str | None) -> str:
 
 def normalize_contest_slug_required(value: str) -> str:
     slug = value.strip()
-    if not _C.CONTEST_IDENT_RE.fullmatch(slug):
+    if not _K.CONTEST_IDENT_RE.fullmatch(slug):
         raise ValueError('invalid contest slug')
     return slug
 
@@ -99,7 +101,7 @@ def normalize_contest_title_required(value: str) -> str:
         raise ValueError(f'contest title is too long (max {_C.CONTEST_TITLE_MAX_LEN})')
     return title
 
-def user_contests_overview(user_id: int, limit: int=_C.API_PROBLEMS_LIST_LIMIT) -> list[dict]:
+def user_contests_overview(user_id: int, limit: int) -> list[dict]:
     uid = int(user_id)
     cap = max(1, int(limit))
     return config.contest_service.user_contests_overview(uid, limit=cap)
@@ -271,16 +273,16 @@ def build_repo_browser_context(
     }
 
 def kind_for_path(path: str) -> str:
-    for row in _C.CORE_SOURCE_TARGETS:
+    for row in _K.CORE_SOURCE_TARGETS:
         if row['path'] == path:
             return row['kind']
     return ''
 
 def template_for_kind(kind: str) -> str:
     key = kind.strip().lower()
-    if key not in _C.FILE_TEMPLATES:
+    if key not in _K.FILE_TEMPLATES:
         raise ValueError('unknown template kind')
-    return str(_C.FILE_TEMPLATES[key])
+    return str(_K.FILE_TEMPLATES[key])
 
 def _standard_checker_cache_values() -> tuple[tuple[str, ...], frozenset[str], bool]:
     global _STANDARD_CHECKER_CACHE_TS
@@ -290,7 +292,7 @@ def _standard_checker_cache_values() -> tuple[tuple[str, ...], frozenset[str], b
     now = time.monotonic()
     if (now - _STANDARD_CHECKER_CACHE_TS) <= _STANDARD_CHECKER_CACHE_TTL_SEC:
         return (_STANDARD_CHECKER_CACHE_NAMES, _STANDARD_CHECKER_CACHE_SET, _STANDARD_CHECKER_CACHE_AVAILABLE)
-    root = _C.STANDARD_CHECKER_ROOT
+    root = _K.STANDARD_CHECKER_ROOT
     available = False
     names: list[str] = []
     try:
@@ -301,7 +303,7 @@ def _standard_checker_cache_values() -> tuple[tuple[str, ...], frozenset[str], b
                     name = entry.name
                     if Path(name).suffix.lower() != '.cpp':
                         continue
-                    if not _C.STANDARD_CHECKER_NAME_RE.fullmatch(name):
+                    if not _K.STANDARD_CHECKER_NAME_RE.fullmatch(name):
                         continue
                     try:
                         if entry.is_symlink() or (not entry.is_file(follow_symlinks=False)):
@@ -327,7 +329,7 @@ def standard_checker_catalog() -> list[dict]:
     catalog: list[dict] = []
     for name in _standard_checker_options():
         canonical = f'std::{name}'
-        description = _C.STANDARD_CHECKER_DESCRIPTIONS.get(name, 'general-purpose standard checker from testlib')
+        description = _K.STANDARD_CHECKER_DESCRIPTIONS.get(name, 'general-purpose standard checker from testlib')
         catalog.append({'name': name, 'value': canonical, 'description': description, 'label': f'{canonical} - {description}'})
     return catalog
 
@@ -341,7 +343,7 @@ def _normalize_standard_checker_name(raw: str) -> str:
         raise ValueError('invalid standard checker name')
     if not value.endswith('.cpp'):
         value += '.cpp'
-    if not _C.STANDARD_CHECKER_NAME_RE.fullmatch(value):
+    if not _K.STANDARD_CHECKER_NAME_RE.fullmatch(value):
         raise ValueError('invalid standard checker name')
     return value
 
@@ -355,11 +357,11 @@ def resolve_standard_checker_path(raw_name: str) -> tuple[str, Path]:
         raise ValueError('standard checker catalog is unavailable')
     if checker_name not in name_set:
         raise ValueError(f'unknown standard checker: std::{checker_name}')
-    source = _C.STANDARD_CHECKER_ROOT / checker_name
+    source = _K.STANDARD_CHECKER_ROOT / checker_name
     return (checker_name, source)
 
 def read_build_config(workspace: Path) -> tuple[dict, Path]:
-    cfg_path = safe_workspace_path(workspace, _C.BUILD_CONFIG_REL)
+    cfg_path = safe_workspace_path(workspace, _K.BUILD_CONFIG_REL)
     payload: dict = {}
     if cfg_path.exists() and cfg_path.is_file():
         try:
@@ -423,8 +425,11 @@ def _file_head_text(path: Path, max_bytes: int) -> tuple[str, bool]:
     text = head[:cap].decode('utf-8', errors='replace')
     return (text, clipped)
 
-def tests_spec_editor_context(workspace: Path, limit: int=_C.TESTS_SPEC_ROWS_LIMIT) -> dict:
-    entries, path = read_tests_spec(workspace)
+def tests_spec_editor_context(workspace: Path, limit: int) -> dict:
+    entries, path = read_tests_spec(
+        workspace,
+        max_bytes=int(_C.TEXTAREA_MAX_BYTES),
+    )
     summary = summarize_tests_spec(entries)
     rows: list[dict] = []
     cap = max(1, int(limit))
@@ -505,7 +510,10 @@ def tests_spec_editor_context(workspace: Path, limit: int=_C.TESTS_SPEC_ROWS_LIM
 
 def _tests_spec_status_context(workspace: Path) -> dict:
     try:
-        entries, _path = read_tests_spec(workspace)
+        entries, _path = read_tests_spec(
+            workspace,
+            max_bytes=int(_C.TEXTAREA_MAX_BYTES),
+        )
     except ValueError:
         return {'mode': 'invalid', 'display': 'invalid', 'total': 0, 'manual': 0, 'gen': 0, 'sample': 0}
     summary = summarize_tests_spec(entries)
@@ -640,7 +648,7 @@ def _tests_meta_text_field(item: dict[str, object], key: str) -> str:
         return ''
     return str(value)
 
-def _run_test_options_from_verification(problem: str, verification_id: str, limit: int=_C.RUN_TEST_SELECTOR_LIMIT) -> tuple[list[dict], bool]:
+def _run_test_options_from_verification(problem: str, verification_id: str, limit: int) -> tuple[list[dict], bool]:
     options: list[dict] = []
     truncated = False
     try:
@@ -658,7 +666,7 @@ def _run_test_options_from_verification(problem: str, verification_id: str, limi
         with os.scandir(tests_dir) as entries:
             for entry in entries:
                 name = entry.name
-                if not _C.RUN_TEST_NAME_RE.fullmatch(name):
+                if not _K.RUN_TEST_NAME_RE.fullmatch(name):
                     continue
                 try:
                     if not entry.is_file(follow_symlinks=False):
@@ -709,10 +717,13 @@ def _run_test_options_from_verification(problem: str, verification_id: str, limi
         options.append({'name': name, 'label': f'{name}{suffix}'})
     return (options, truncated)
 
-def _run_test_options_from_spec(workspace: Path, limit: int=_C.RUN_TEST_SELECTOR_LIMIT) -> tuple[list[dict], bool]:
+def _run_test_options_from_spec(workspace: Path, limit: int) -> tuple[list[dict], bool]:
     options: list[dict] = []
     try:
-        entries, _ = read_tests_spec(workspace)
+        entries, _ = read_tests_spec(
+            workspace,
+            max_bytes=int(_C.TEXTAREA_MAX_BYTES),
+        )
     except Exception:
         return (options, False)
     cap = max(1, int(limit))

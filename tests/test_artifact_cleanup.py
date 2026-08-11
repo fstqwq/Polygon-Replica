@@ -10,7 +10,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from app.db import DB, now_iso
-from app.runtime_value import build_runtime_values
+from app.config import build_config_values
 from app.service.judgehost.task_registry import JudgehostTaskRegistry
 from app.service.platform.fs.layout import FsManager
 from app.service.platform.maintenance import (
@@ -82,9 +82,9 @@ class TestArtifactCleanup(unittest.TestCase):
             contest_source_root=self.root / "contest-sources",
             backup_root=self.root / "backups",
         )
-        self.db = DB(self.settings.db_path)
+        self.config_values = build_config_values()
+        self.db = DB(self.settings.db_path, config_values=self.config_values)
         self.db.init()
-        self.db.apply_runtime_values(build_runtime_values())
         self.verification_task_store = VerificationTaskStore(self.db)
         self.workspace_service = WorkspaceService(
             self.db,

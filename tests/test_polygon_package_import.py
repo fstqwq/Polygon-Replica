@@ -9,6 +9,8 @@ from pathlib import Path
 
 from app.service.importing.polygon import PolygonPackageImportService
 from app.service.problem.test_spec import load_tests_spec
+from tests.archive_support import import_problem_package
+from tests.package_builders import polygon_problem_package
 
 
 class TestPolygonPackageImport(unittest.TestCase):
@@ -21,6 +23,20 @@ class TestPolygonPackageImport(unittest.TestCase):
 
     def _workspace_path(self) -> Path:
         return self.workspace
+
+    def test_unconsumed_member_does_not_spend_expansion_budget(self) -> None:
+        payload = io.BytesIO(polygon_problem_package())
+        with zipfile.ZipFile(payload, "a", compression=zipfile.ZIP_DEFLATED) as package:
+            package.writestr("unused/large.bin", b"x" * (1024 * 1024))
+
+        result = import_problem_package(
+            PolygonPackageImportService(),
+            self.workspace,
+            "polygon.zip",
+            payload.getvalue(),
+            max_expanded_bytes=64 * 1024,
+        )
+        self.assertEqual(result["tests"]["total"], 1)
 
     def test_import_generated_python_generator_keeps_generator_source(self) -> None:
         ws = self._workspace_path()
@@ -53,7 +69,9 @@ class TestPolygonPackageImport(unittest.TestCase):
             zf.writestr("files/gen.py", "print(7)\n")
 
         service = PolygonPackageImportService()
-        result = service.import_package(ws, "python-generator.zip", payload.getvalue())
+        result = import_problem_package(
+            service, ws, "python-generator.zip", payload.getvalue()
+        )
         tests_summary = result.get("tests") if isinstance(result.get("tests"), dict) else {}
         self.assertEqual(int(tests_summary.get("gen") or 0), 1)
         self.assertEqual(int(tests_summary.get("generated_fallback_to_manual") or 0), 0)
@@ -98,7 +116,9 @@ class TestPolygonPackageImport(unittest.TestCase):
 
         service = PolygonPackageImportService()
         with self.assertRaisesRegex(ValueError, "missing explicit pass limit"):
-            service.import_package(ws, "mp-override.zip", payload.getvalue())
+            import_problem_package(
+                service, ws, "mp-override.zip", payload.getvalue()
+            )
 
     def test_import_can_normalize_windows_newlines_for_test_data(self) -> None:
         ws = self._workspace_path()
@@ -127,7 +147,8 @@ class TestPolygonPackageImport(unittest.TestCase):
             zf.writestr("tests/01.a", b"5\r\n6\r\n")
 
         service = PolygonPackageImportService()
-        service.import_package(
+        import_problem_package(
+            service,
             ws,
             "windows-data.zip",
             payload.getvalue(),
@@ -165,7 +186,9 @@ class TestPolygonPackageImport(unittest.TestCase):
 
         service = PolygonPackageImportService()
         with self.assertRaisesRegex(ValueError, "manual test input must be utf-8 text: tests/01"):
-            service.import_package(ws, "bad-utf8.zip", payload.getvalue())
+            import_problem_package(
+                service, ws, "bad-utf8.zip", payload.getvalue()
+            )
 
     def test_import_accepts_root_level_statement_resources(self) -> None:
         ws = self._workspace_path()
@@ -205,7 +228,9 @@ class TestPolygonPackageImport(unittest.TestCase):
             zf.writestr("statement-sections/english/legend.tex", "Root legend.\n")
 
         service = PolygonPackageImportService()
-        result = service.import_package(ws, "root-level.zip", payload.getvalue())
+        result = import_problem_package(
+            service, ws, "root-level.zip", payload.getvalue()
+        )
         self.assertEqual(str(result.get("title") or ""), "Root Style Import")
         self.assertEqual((ws / "statement" / "statements.ftl").read_text(encoding="utf-8"), "ROOT_FTL_TEMPLATE\n")
         self.assertEqual((ws / "statement" / "problem.tex").read_text(encoding="utf-8"), "ROOT_PROBLEM_TEMPLATE\n")
@@ -243,7 +268,9 @@ class TestPolygonPackageImport(unittest.TestCase):
             zf.writestr("tests/01", "1\n")
 
         service = PolygonPackageImportService()
-        result = service.import_package(ws, "missing-sections.zip", payload.getvalue())
+        result = import_problem_package(
+            service, ws, "missing-sections.zip", payload.getvalue()
+        )
         self.assertEqual(str(result.get("title") or ""), "No Sections Import")
         self.assertFalse((ws / "statement-sections" / "english" / "legend.tex").exists())
         self.assertFalse((ws / "statement-sections" / "english" / "input.tex").exists())
@@ -276,7 +303,9 @@ class TestPolygonPackageImport(unittest.TestCase):
             zf.writestr("statement-sections/russian/legend.tex", "Legend RU\n")
 
         service = PolygonPackageImportService()
-        result = service.import_package(ws, "non-english-sections.zip", payload.getvalue())
+        result = import_problem_package(
+            service, ws, "non-english-sections.zip", payload.getvalue()
+        )
         statement_summary = result.get("statement") if isinstance(result.get("statement"), dict) else {}
         self.assertEqual(str(statement_summary.get("language") or ""), "russian")
         self.assertIn("english not found", str(statement_summary.get("language_warning") or ""))
@@ -314,7 +343,9 @@ class TestPolygonPackageImport(unittest.TestCase):
             zf.writestr("statement-sections/chinese/shared.png", b"SAME")
 
         service = PolygonPackageImportService()
-        result = service.import_package(ws, "shared-assets.zip", payload.getvalue())
+        result = import_problem_package(
+            service, ws, "shared-assets.zip", payload.getvalue()
+        )
 
         self.assertEqual((ws / "statement-assets" / "diagram.png").read_bytes(), b"EN")
         self.assertEqual((ws / "statement-assets" / "diagram-zh.png").read_bytes(), b"ZH")
@@ -362,10 +393,15 @@ class TestPolygonPackageImport(unittest.TestCase):
             zf.writestr("statement-sections/english/example.02.a", "example output 2\n")
 
         service = PolygonPackageImportService()
-        result = service.import_package(ws, "example-override.zip", payload.getvalue())
+        result = import_problem_package(
+            service, ws, "example-override.zip", payload.getvalue()
+        )
         self.assertEqual(str(result.get("title") or ""), "Example Override")
 
-        tests = load_tests_spec(ws / "tests" / "spec.json")
+        tests = load_tests_spec(
+            ws / "tests" / "spec.json",
+            max_bytes=256 * 1024,
+        )
         self.assertEqual(len(tests), 3)
         self.assertEqual(str(tests[0].get("sample_input") or ""), "example input 1\n")
         self.assertEqual(str(tests[0].get("sample_output") or ""), "example output 1\n")
@@ -411,14 +447,18 @@ class TestPolygonPackageImport(unittest.TestCase):
             package.writestr("tests/01.a", "team output\n")
             package.writestr("files/interactor.cpp", "int main(){return 0;}\n")
 
-        PolygonPackageImportService().import_package(
+        import_problem_package(
+            PolygonPackageImportService(),
             workspace,
             "interactive-answer.zip",
             payload.getvalue(),
         )
 
         problem = json.loads((workspace / "config/problem.json").read_text(encoding="utf-8"))
-        tests = load_tests_spec(workspace / "tests/spec.json")
+        tests = load_tests_spec(
+            workspace / "tests/spec.json",
+            max_bytes=256 * 1024,
+        )
         self.assertEqual(problem["mode"], "interactive")
         self.assertEqual(problem["pass_limit"], 1)
         self.assertEqual(tests[0]["sample_output"], "team output\n")

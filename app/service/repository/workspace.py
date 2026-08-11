@@ -13,7 +13,13 @@ from pathlib import Path, PurePosixPath
 import re
 
 from app.db import DB
-from app.runtime_value import RuntimeValues, build_runtime_values
+from app.main_constant import (
+    PROBLEM_ID_MAX_LEN,
+    PROBLEM_ID_RULE_MESSAGE,
+    PROBLEM_IDENT_RE,
+    USERNAME_RULE_MESSAGE,
+    USER_IDENT_RE,
+)
 from app.service.disk.workspace_store import WorkspaceDiskStore
 from app.service.platform.fs.op import copytree, ensure_dir, extract_git_archive, remove_symlinks
 from app.service.platform.testlib_source import maintained_testlib_header
@@ -23,13 +29,6 @@ from app.service.platform.git_process import run_git
 from app.service.repository.revision import workspace_revision_info
 from app.service.verification.task_store import VerificationTaskStore
 from app.service.workspace.state import WorkspaceState
-
-PROBLEM_ID_RULE_MESSAGE: str = "invalid problem id"
-USERNAME_RULE_MESSAGE: str = "invalid username"
-APP_PROBLEM_IDENT_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*/[a-z0-9]+(?:-[a-z0-9]+)*$")
-APP_USER_IDENT_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
-APP_PROBLEM_ID_MAX_LEN = 64
-
 
 def _workspace_transaction_path(workspace: Path) -> Path:
     return workspace.parent / f".{workspace.name}.merge-transaction.json"
@@ -121,26 +120,11 @@ def atomic_swap_workspace(workspace: Path, candidate: Path) -> None:
     _fsync_directory(workspace.parent)
 
 
-def apply_runtime_values(values: RuntimeValues) -> None:
-    global PROBLEM_ID_RULE_MESSAGE
-    global USERNAME_RULE_MESSAGE
-    global APP_PROBLEM_IDENT_RE
-    global APP_USER_IDENT_RE
-    global APP_PROBLEM_ID_MAX_LEN
-    PROBLEM_ID_RULE_MESSAGE = str(values.PROBLEM_ID_RULE_MESSAGE)
-    USERNAME_RULE_MESSAGE = str(values.USERNAME_RULE_MESSAGE)
-    APP_PROBLEM_IDENT_RE = values.PROBLEM_IDENT_RE
-    APP_USER_IDENT_RE = values.USER_IDENT_RE
-    APP_PROBLEM_ID_MAX_LEN = int(values.PROBLEM_ID_MAX_LEN)
-
-apply_runtime_values(build_runtime_values())
-
-
 class WorkspaceService:
     IDENT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
-    PROBLEM_IDENT_RE = APP_PROBLEM_IDENT_RE
-    USER_IDENT_RE = APP_USER_IDENT_RE
-    PROBLEM_ID_MAX_LEN = APP_PROBLEM_ID_MAX_LEN
+    PROBLEM_IDENT_RE = PROBLEM_IDENT_RE
+    USER_IDENT_RE = USER_IDENT_RE
+    PROBLEM_ID_MAX_LEN = PROBLEM_ID_MAX_LEN
     PROBLEM_CACHE_MAX_ENTRIES = 512
     USER_CACHE_MAX_ENTRIES = 2048
     REPO_ROLES = {"owner", "write", "read"}

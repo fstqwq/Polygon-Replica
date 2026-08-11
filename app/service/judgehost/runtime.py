@@ -96,13 +96,17 @@ def domjudge_bool(raw: object, default: bool = False) -> bool:
     return bool(default)
 
 
-def domjudge_feedback_text_from_text(text: str) -> str:
-    return bounded_display_text(str(text or ""))
+def domjudge_feedback_text_from_text(text: str, *, limit_bytes: int) -> str:
+    return bounded_display_text(
+        str(text or ""),
+        limit_bytes=limit_bytes,
+    )
 
 
-def domjudge_feedback_text_from_bytes(blob: bytes) -> str:
+def domjudge_feedback_text_from_bytes(blob: bytes, *, limit_bytes: int) -> str:
     return domjudge_feedback_text_from_text(
         bytes(blob or b"").decode("utf-8", errors="replace"),
+        limit_bytes=limit_bytes,
     )
 
 
@@ -133,6 +137,7 @@ def domjudge_feedback_text_and_files(
     output_error_ref: str,
     output_diff_ref: str,
     team_message_ref: str,
+    limit_bytes: int,
 ) -> tuple[str, list[str]]:
     feedback_files = domjudge_feedback_token_order(
         runresult=runresult,
@@ -146,7 +151,10 @@ def domjudge_feedback_text_and_files(
             break
         blob = read_blob(token)
         if blob is not None:
-            feedback_text = domjudge_feedback_text_from_bytes(blob)
+            feedback_text = domjudge_feedback_text_from_bytes(
+                blob,
+                limit_bytes=limit_bytes,
+            )
     return feedback_text, feedback_files
 
 

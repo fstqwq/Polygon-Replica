@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import app.main_constant as _K
+
 import ipaddress
 import re
 import secrets
@@ -49,7 +51,7 @@ from app.impl.workspace.context_operation import audit
 from app.main_util import form_text
 from app.service.auth.password_hash import password_verifier_storage_hash
 
-_C = config.constants
+_C = config.config_values
 _REGISTRATION_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 _REGISTRATION_CODE_LENGTH = 12
 
@@ -320,7 +322,7 @@ def login_submit(
         login_rate_limit_check(rate_limit_key)
         safe_user = (
             raw_user
-            if _C.USERNAME_MIN_LEN <= len(raw_user) <= _C.USERNAME_MAX_LEN and _C.USER_IDENT_RE.fullmatch(raw_user)
+            if _K.USERNAME_MIN_LEN <= len(raw_user) <= _K.USERNAME_MAX_LEN and _K.USER_IDENT_RE.fullmatch(raw_user)
             else ''
         )
         if not safe_user:
@@ -337,7 +339,7 @@ def login_submit(
             login_rate_limit_fail(rate_limit_key)
             raise ValueError('invalid username or password')
         stored_hash = str(row['password_hash'] or '').strip().lower()
-        if not _C.HEX_64_RE.fullmatch(stored_hash):
+        if not _K.HEX_64_RE.fullmatch(stored_hash):
             login_rate_limit_fail(rate_limit_key)
             raise ValueError('invalid username or password')
         try:
@@ -583,7 +585,7 @@ def sudo_page(request: Request):
     if identity is None:
         return redirect_response('/login', status_code=303)
     next_path = safe_next_path(request.query_params.get('next'), "/settings")
-    if has_sudo_session(request, user_id=int(identity['user_id']), scope=str(_C.SUDO_SCOPE_DESTRUCTIVE)):
+    if has_sudo_session(request, user_id=int(identity['user_id']), scope=str(_K.SUDO_SCOPE_DESTRUCTIVE)):
         return redirect_response(next_path, status_code=303)
     auth_row = lookup_user_auth(str(identity['username']))
     if auth_row is None:
@@ -593,7 +595,7 @@ def sudo_page(request: Request):
         password_iters = int(auth_row['password_iters'] or 0)
     except Exception:
         password_iters = 0
-    if not _C.HEX_32_RE.fullmatch(password_salt):
+    if not _K.HEX_32_RE.fullmatch(password_salt):
         return redirect_response('/login', status_code=303, message='password metadata unavailable')
     if password_iters <= 0:
         return redirect_response('/login', status_code=303, message='password metadata unavailable')
@@ -633,7 +635,7 @@ def sudo_submit(
         if row is None:
             raise ValueError('invalid password envelope')
         stored_hash = str(row['password_hash'] or '').strip().lower()
-        if not _C.HEX_64_RE.fullmatch(stored_hash):
+        if not _K.HEX_64_RE.fullmatch(stored_hash):
             raise ValueError('invalid password envelope')
         try:
             verifier = password_envelope_store.consume(
@@ -650,7 +652,7 @@ def sudo_submit(
         expected_hash = password_verifier_storage_hash(verifier)
         if not secrets.compare_digest(expected_hash, stored_hash):
             raise ValueError('invalid password envelope')
-        token = create_sudo_session_for_user(int(identity['user_id']), str(_C.SUDO_SCOPE_DESTRUCTIVE))
+        token = create_sudo_session_for_user(int(identity['user_id']), str(_K.SUDO_SCOPE_DESTRUCTIVE))
     except ValueError as exc:
         return redirect_response(f'/sudo?next={quote_plus(next_path)}', status_code=303, message=str(exc))
     response = redirect_response(next_path, status_code=303, message='sudo mode enabled')

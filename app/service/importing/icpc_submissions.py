@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import re
-from pathlib import PurePosixPath
+import os
+from pathlib import Path, PurePosixPath
+import uuid
 
 import yaml
 
@@ -118,9 +120,17 @@ def parse_submissions_yaml(text: str) -> tuple[dict[str, str], list[str]]:
     return (behaviors, warnings)
 
 
-def generated_expected_results(payload: bytes) -> tuple[str | None, bytes, str]:
-    newline = payload.find(b"\n")
-    first_line = payload if newline < 0 else payload[: newline + 1]
+def consume_generated_expected_results(path: Path) -> tuple[str | None, str]:
+    """Read and remove a DOMjudge expected-results first-line annotation."""
+
+    with path.open("rb") as handle:
+        first_line = handle.readline(4097)
+    if len(first_line) > 4096 and not first_line.endswith(b"\n"):
+        if first_line.startswith(
+            (b"# @EXPECTED_RESULTS@:", b"// @EXPECTED_RESULTS@:")
+        ):
+            raise ValueError("submission annotation contains invalid expected results")
+        return (None, "")
     match = re.fullmatch(
         rb"(?:#|//) @EXPECTED_RESULTS@: ([A-Z-]+(?:,[A-Z-]+)*)\r?\n?",
         first_line,
@@ -130,7 +140,7 @@ def generated_expected_results(payload: bytes) -> tuple[str | None, bytes, str]:
             (b"# @EXPECTED_RESULTS@:", b"// @EXPECTED_RESULTS@:")
         ):
             raise ValueError("submission annotation contains invalid expected results")
-        return (None, payload, "")
+        return (None, "")
     raw_results = match.group(1).decode("ascii").split(",")
     try:
         verdicts = frozenset(_DOMJUDGE_RESULT_TO_PPF[result] for result in raw_results)
@@ -140,4 +150,13 @@ def generated_expected_results(payload: bytes) -> tuple[str | None, bytes, str]:
         raise ValueError("submission annotation contains duplicate expected results")
     behavior = _ANNOTATION_BEHAVIOR_BY_RESULTS.get(verdicts, "unknown")
     warning = "" if behavior != "unknown" else "submission annotation result set is not representable"
-    return (behavior, payload[len(first_line) :], warning)
+    temporary = path.with_name(f".{path.name}.annotation-{uuid.uuid4().hex}")
+    try:
+        with path.open("rb") as source, temporary.open("wb") as destination:
+            source.seek(len(first_line))
+            while chunk := source.read(1024 * 1024):
+                destination.write(chunk)
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+    return (behavior, warning)

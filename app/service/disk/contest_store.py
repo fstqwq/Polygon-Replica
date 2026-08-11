@@ -186,12 +186,29 @@ class ContestDiskStore:
                 raise ValueError("contest slug already exists") from exc
             raise
 
-    def add_problem(self, contest_id: int, idx: str, problem_id: int, added_by_user_id: int, created_at: str) -> None:
+    def add_problem(
+        self,
+        contest_id: int,
+        idx: str,
+        problem_id: int,
+        added_by_user_id: int,
+        created_at: str,
+        *,
+        max_problems: int,
+    ) -> None:
         def tx(conn: sqlite3.Connection) -> None:
             row = conn.execute(
-                "SELECT COALESCE(MAX(position),0)+1 AS next_position FROM contest_problems WHERE contest_id=?",
+                """
+                SELECT COUNT(*) AS problem_count,
+                       COALESCE(MAX(position),0)+1 AS next_position
+                FROM contest_problems WHERE contest_id=?
+                """,
                 [int(contest_id)],
             ).fetchone()
+            if int(row["problem_count"]) >= int(max_problems):
+                raise ValueError(
+                    f"contest already has the configured maximum of {int(max_problems)} problems"
+                )
             position = int(row["next_position"])
             conn.execute(
                 """

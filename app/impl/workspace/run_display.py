@@ -42,6 +42,8 @@ def run_cpu_wall_ms_text(cpu_ms: int, wall_ms: int) -> str:
 def rewrite_failure_reason_with_source(
     current_reason: str,
     columns: list[dict[str, object]],
+    *,
+    limit_bytes: int,
 ) -> str:
     source_reason = ""
     generic_match_reasons: set[str] = set()
@@ -58,7 +60,12 @@ def rewrite_failure_reason_with_source(
             continue
         if (not error_text) and match_reason in _TRANSIENT_REASON_TOKENS:
             continue
-        source_reason = verification_solution_failure_hint(source_path, match_reason, error_text)
+        source_reason = verification_solution_failure_hint(
+            source_path,
+            match_reason,
+            error_text,
+            limit_bytes=limit_bytes,
+        )
         if source_reason:
             break
     if not source_reason:

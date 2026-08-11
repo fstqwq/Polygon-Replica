@@ -11,11 +11,13 @@ def verification_solution_failure_hint(
     source_path: str,
     reason: str,
     error_text: str = "",
+    *,
+    limit_bytes: int,
 ) -> str:
     source_label = Path(source_path).name if source_path else ""
     if not source_label:
         source_label = "solution"
-    rich_error = bounded_display_text(error_text)
+    rich_error = bounded_display_text(error_text, limit_bytes=limit_bytes)
     if reason and rich_error:
         detail = f"{reason}: {rich_error}"
     elif reason:
@@ -24,7 +26,10 @@ def verification_solution_failure_hint(
         detail = rich_error
     else:
         detail = "verification mismatch"
-    return bounded_display_text(f"{source_label}: {detail}")
+    return bounded_display_text(
+        f"{source_label}: {detail}",
+        limit_bytes=limit_bytes,
+    )
 
 
 def _task_status(rows: list[VerificationTaskRow]) -> str:
@@ -46,6 +51,8 @@ def _task_status(rows: list[VerificationTaskRow]) -> str:
 def verification_task_failure_hint(
     task_store: VerificationTaskStore,
     verification_id: str,
+    *,
+    limit_bytes: int,
 ) -> str:
     grouped: dict[str, list[VerificationTaskRow]] = {}
     order: list[str] = []
@@ -75,11 +82,16 @@ def verification_task_failure_hint(
         )
         error_text = str(summary["error"])
         if completed and reason:
-            return verification_solution_failure_hint(first["source_path"], reason)
+            return verification_solution_failure_hint(
+                first["source_path"],
+                reason,
+                limit_bytes=limit_bytes,
+            )
         if completed and error_text:
             return verification_solution_failure_hint(
                 first["source_path"],
                 "",
                 error_text,
+                limit_bytes=limit_bytes,
             )
     return ""

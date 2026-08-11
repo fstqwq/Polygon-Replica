@@ -8,7 +8,7 @@ import uuid
 from pathlib import Path
 
 from app.db import DB
-from app.runtime_value import build_runtime_values
+from app.config import build_config_values
 from app.service.platform.fs.layout import FsManager
 from app.service.platform.runtime_blob_store import RuntimeBlobStore
 from app.service.platform.runtime_cache_index import RuntimeCacheIndex
@@ -46,7 +46,7 @@ def _remove_database_sidecars() -> None:
 
 def _create_template() -> None:
     _PROCESS_ROOT.mkdir(parents=True, exist_ok=True)
-    database = DB(_DB_PATH)
+    database = DB(_DB_PATH, config_values=build_config_values())
     database.init()
     with database.conn() as connection:
         connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
@@ -77,9 +77,8 @@ class DBTestBase(unittest.TestCase):
     def setUp(self) -> None:
         _restore_template()
         self.settings = _settings()
-        self.db = DB(_DB_PATH)
-        self.constants = build_runtime_values()
-        self.db.apply_runtime_values(self.constants)
+        self.config_values = build_config_values()
+        self.db = DB(_DB_PATH, config_values=self.config_values)
         self.verification_task_store = VerificationTaskStore(self.db)
         self.workspace_service = WorkspaceService(
             self.db,

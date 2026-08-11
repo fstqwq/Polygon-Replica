@@ -1,4 +1,6 @@
 from __future__ import annotations
+
+import app.main_constant as _K
 import json
 from pathlib import Path
 from typing import cast
@@ -81,7 +83,7 @@ from app.impl.workspace.runtime_threshold import (
     time_limit_ms_from_run_config_json,
 )
 
-_C = config.constants
+_C = config.config_values
 _TASK_KIND_GENERATE_INPUT = "generate-input"
 _TASK_KIND_MAIN_CORRECT = "main-correct"
 _TASK_KIND_SOLUTION_RUN = "solution-run"
@@ -161,7 +163,10 @@ def _sanity_status_tone(status: str) -> str:
 
 
 def _sanity_reason(payload: dict[str, object]) -> str:
-    error = bounded_display_text(str(payload.get("error") or ""))
+    error = bounded_display_text(
+        str(payload.get("error") or ""),
+        limit_bytes=int(_C.AUX_DISPLAY_TEXT_LIMIT_BYTES),
+    )
     if error:
         return error
     status = str(payload.get("sanity_status") or "")
@@ -178,7 +183,10 @@ def _sanity_messages(raw_messages: object) -> list[dict[str, object]]:
     for raw in cast(list[object], raw_messages or []):
         if not isinstance(raw, dict):
             continue
-        message = bounded_display_text(str(raw.get("message") or ""))
+        message = bounded_display_text(
+            str(raw.get("message") or ""),
+            limit_bytes=int(_C.AUX_DISPLAY_TEXT_LIMIT_BYTES),
+        )
         if not message:
             continue
         messages.append(
@@ -201,7 +209,10 @@ def _sanity_task_rows_from_results(payload: dict[str, object]) -> list[dict[str,
     if not results:
         failed_check = str(payload.get("failed_check") or "")
         if failed_check and status in {"warning", "failed"}:
-            message = bounded_display_text(str(payload.get("error") or _sanity_reason(payload)))
+            message = bounded_display_text(
+                str(payload.get("error") or _sanity_reason(payload)),
+                limit_bytes=int(_C.AUX_DISPLAY_TEXT_LIMIT_BYTES),
+            )
             messages = (
                 [
                     {
@@ -219,7 +230,10 @@ def _sanity_task_rows_from_results(payload: dict[str, object]) -> list[dict[str,
                     "label": _sanity_check_label(failed_check),
                     "status": status,
                     "tone": _sanity_status_tone(status),
-                    "detail": "" if messages else bounded_display_text(_sanity_reason(payload)),
+                    "detail": "" if messages else bounded_display_text(
+                        _sanity_reason(payload),
+                        limit_bytes=int(_C.AUX_DISPLAY_TEXT_LIMIT_BYTES),
+                    ),
                     "messages": messages,
                 }
             ]
@@ -249,7 +263,10 @@ def _sanity_task_rows_from_results(payload: dict[str, object]) -> list[dict[str,
                 "label": _sanity_check_label(check_name),
                 "status": row_status,
                 "tone": _sanity_status_tone(row_status),
-                "detail": bounded_display_text(detail),
+                "detail": bounded_display_text(
+                    detail,
+                    limit_bytes=int(_C.AUX_DISPLAY_TEXT_LIMIT_BYTES),
+                ),
                 "messages": messages,
             }
         )
@@ -571,12 +588,12 @@ def build_run_detail_context(
     fallback_timeout_ms = 0
     try:
         _payload, general_cfg, _cfg_path = read_problem_config(workspace)
-        fallback_time_limit_ms = int(general_cfg.get('time_limit_ms') or _C.GENERAL_CONFIG_DEFAULTS['time_limit_ms'])
+        fallback_time_limit_ms = int(general_cfg.get('time_limit_ms') or _K.GENERAL_CONFIG_DEFAULTS['time_limit_ms'])
         fallback_timeout_ms = effective_run_timeout_ms(
             fallback_time_limit_ms,
             mode=general_cfg.get('mode'),
             pass_limit=general_cfg.get('pass_limit'),
-            default_ms=int(_C.GENERAL_CONFIG_DEFAULTS['time_limit_ms']),
+            default_ms=int(_K.GENERAL_CONFIG_DEFAULTS['time_limit_ms']),
             min_ms=int(_C.GENERAL_TIME_LIMIT_MIN_MS),
             max_ms=int(_C.GENERAL_TIME_LIMIT_MAX_MS),
             pass_fail_slack_sec=int(_C.RUN_WALL_TIME_SLACK_PASS_FAIL_SEC),
@@ -782,7 +799,14 @@ def build_run_detail_context(
         test_name = normalize_run_test_name_token(str(item.get('test_name') or ''))
         if test_name and test_name not in tests_meta_by_test_name:
             tests_meta_by_test_name[test_name] = dict(item)
-    test_generation_views = build_test_generation_views(task_rows, tests_meta_by_test_name)
+    display_limit = int(
+        _C.snapshot()["AUX_DISPLAY_TEXT_LIMIT_BYTES"]
+    )
+    test_generation_views = build_test_generation_views(
+        task_rows,
+        tests_meta_by_test_name,
+        limit_bytes=display_limit,
+    )
     row_generate_notes: dict[str, dict[str, str]] = {
         test_name: {
             'tone': str(view['tone']),
@@ -835,7 +859,10 @@ def build_run_detail_context(
             normalized_diags = _normalize_diagnostics(compile_diags, _C.DIAGNOSTIC_MESSAGE_CHAR_LIMIT)
             summary['compile_diagnostics'] = _decorate_compile_diagnostics(normalized_diags)
         detail_compile_diagnostics = list(cast(list[dict[str, object]], summary.get('compile_diagnostics') or []))
-        detail_compile_error = bounded_display_text(summary.get('error') or '')
+        detail_compile_error = bounded_display_text(
+            summary.get('error') or '',
+            limit_bytes=int(_C.AUX_DISPLAY_TEXT_LIMIT_BYTES),
+        )
         if (not detail_compile_error) and detail_compile_diagnostics:
             first_diag = detail_compile_diagnostics[0]
             diag_location = str(first_diag.get('location_display') or '').strip()
@@ -939,7 +966,10 @@ def build_run_detail_context(
                 if include_row_details:
                     passes_raw = item.get('passes')
                     feedback_display = '-'
-                    inline_feedback = bounded_display_text(item.get('message') or item.get('error') or '')
+                    inline_feedback = bounded_display_text(
+                        item.get('message') or item.get('error') or '',
+                        limit_bytes=int(_C.AUX_DISPLAY_TEXT_LIMIT_BYTES),
+                    )
                     feedback_files = item.get('feedback_files') or []
                     feedback_items: list[str] = []
                     for feedback_entry in feedback_files:
@@ -983,7 +1013,10 @@ def build_run_detail_context(
                                 pass_memory_kb = int(pass_item.get('memory_kb') or 0)
                             except Exception:
                                 pass_memory_kb = 0
-                            pass_feedback = bounded_display_text(pass_item.get('feedback') or '')
+                            pass_feedback = bounded_display_text(
+                                pass_item.get('feedback') or '',
+                                limit_bytes=int(_C.AUX_DISPLAY_TEXT_LIMIT_BYTES),
+                            )
                             row_feedback_display = pass_feedback or feedback_display
                             output_rel = (pass_item.get('output_ref') or '')
                             pass_number = int(pass_item['pass'])
@@ -1000,7 +1033,7 @@ def build_run_detail_context(
                                     'time_display': pass_time_display,
                                     'time_tone': time_tone,
                                     'memory_display': pass_memory_display,
-                                    'status_display': f'{pass_verdict_short} · {pass_time_display} · {pass_memory_display}',
+                                    'status_display': f'{pass_verdict_short} \u00b7 {pass_time_display} \u00b7 {pass_memory_display}',
                                     'feedback_display': row_feedback_display,
                                     'input_ref': str(pass_item.get('input_ref') or ''),
                                     'output_rel': str(output_rel),
@@ -1025,7 +1058,7 @@ def build_run_detail_context(
                                 'time_display': time_display,
                                 'time_tone': time_tone,
                                 'memory_display': memory_mb_text,
-                                'status_display': f'{verdict_short} · {time_display} · {memory_mb_text}',
+                                'status_display': f'{verdict_short} \u00b7 {time_display} \u00b7 {memory_mb_text}',
                                 'feedback_display': feedback_display,
                                 'input_ref': '',
                                 'output_rel': str(output_rel),
@@ -1048,7 +1081,7 @@ def build_run_detail_context(
                         'time_display': f'{time_ms}ms',
                         'time_tone': time_tone,
                         'memory_display': memory_mb_text,
-                        'status_display': f'{verdict_short} · {run_cpu_wall_ms_text(time_user_ms, time_wall_ms)} · {memory_mb_text}',
+                        'status_display': f'{verdict_short} \u00b7 {run_cpu_wall_ms_text(time_user_ms, time_wall_ms)} \u00b7 {memory_mb_text}',
                         'feedback_display': feedback_display,
                         'pass_rows': pass_rows,
                         'final_row': final_row,
@@ -1077,7 +1110,8 @@ def build_run_detail_context(
                 }
         execution_skipped = bool(execution_skipped_from_summary and (not has_materialized_tests))
         execution_skipped_reason = bounded_display_text(
-            (summary.get('execution_skipped_reason') or summary.get('error') or '')
+            (summary.get('execution_skipped_reason') or summary.get('error') or ''),
+            limit_bytes=int(_C.AUX_DISPLAY_TEXT_LIMIT_BYTES),
         )
         if (not has_task_graph) and (not execution_skipped):
             case_cells = domjudge_case_cells_by_run.get(run_id) or {}
@@ -1122,7 +1156,7 @@ def build_run_detail_context(
                         'kind': _run_cell_kind(verdict, expected_behavior),
                         'time_display': run_cpu_wall_ms_text(case_cpu_ms, case_wall_ms),
                         'memory_display': run_memory_mb_text(memory_kb),
-                        'status_display': f'{short if short else "--"} · {run_cpu_wall_ms_text(case_cpu_ms, case_wall_ms)} · {run_memory_mb_text(memory_kb)}',
+                        'status_display': f'{short if short else "--"} \u00b7 {run_cpu_wall_ms_text(case_cpu_ms, case_wall_ms)} \u00b7 {run_memory_mb_text(memory_kb)}',
                         'feedback_display': '-',
                         'output_rel': output_rel,
                         'output_task_id': '',
@@ -1134,7 +1168,7 @@ def build_run_detail_context(
                         'verdict_short': short if short else '--',
                         'time_display': f'{time_ms}ms',
                         'memory_display': run_memory_mb_text(memory_kb),
-                        'status_display': f'{short if short else "--"} · {run_cpu_wall_ms_text(case_cpu_ms, case_wall_ms)} · {run_memory_mb_text(memory_kb)}',
+                        'status_display': f'{short if short else "--"} \u00b7 {run_cpu_wall_ms_text(case_cpu_ms, case_wall_ms)} \u00b7 {run_memory_mb_text(memory_kb)}',
                         'feedback_display': '-',
                         'pass_rows': [pass_row],
                         'final_row': dict(pass_row),
@@ -1163,7 +1197,12 @@ def build_run_detail_context(
         max_time_display = f'{max_time_ms}ms' if has_test_metrics else '-'
         max_memory_display = run_memory_mb_text(max_memory_kb) if has_test_metrics else '-'
         failure_display = (
-            verification_solution_failure_hint(source_for_display, match_reason, str(summary.get('error') or ''))
+            verification_solution_failure_hint(
+                source_for_display,
+                match_reason,
+                str(summary.get('error') or ''),
+                limit_bytes=int(_C.AUX_DISPLAY_TEXT_LIMIT_BYTES),
+            )
             if (match_reason or summary.get('error'))
             else ''
         )
@@ -1660,7 +1699,11 @@ def build_run_detail_context(
         running_tasks = list(verification_details.get('running_tasks') or []) if isinstance(verification_details.get('running_tasks'), list) else []
     detail_fail_reason = str((verification_record.get('fail_reason') if verification_record is not None else '') or '')
     detail_fail_flag = bool(detail_fail_reason)
-    detail_fail_reason = rewrite_failure_reason_with_source(detail_fail_reason, columns)
+    detail_fail_reason = rewrite_failure_reason_with_source(
+        detail_fail_reason,
+        columns,
+        limit_bytes=int(_C.AUX_DISPLAY_TEXT_LIMIT_BYTES),
+    )
     detail_fail_flag = bool(detail_fail_reason)
     detail_sanity = _detail_sanity_context(verification_id, verification_details)
     detail_status = str(status_summary['status'])
@@ -1717,8 +1760,16 @@ def build_run_detail_context(
                 artifact_verification_error = f'{diag_location}: {diag_message}'
             elif diag_message:
                 artifact_verification_error = diag_message
-        source_aware_column_reason = rewrite_failure_reason_with_source("", columns)
-        artifact_verification_error = rewrite_failure_reason_with_source(artifact_verification_error, columns)
+        source_aware_column_reason = rewrite_failure_reason_with_source(
+            "",
+            columns,
+            limit_bytes=int(_C.AUX_DISPLAY_TEXT_LIMIT_BYTES),
+        )
+        artifact_verification_error = rewrite_failure_reason_with_source(
+            artifact_verification_error,
+            columns,
+            limit_bytes=int(_C.AUX_DISPLAY_TEXT_LIMIT_BYTES),
+        )
         generic_column_reasons = {
             str(col.get('match_reason') or '').strip()
             for col in columns

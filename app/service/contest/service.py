@@ -8,6 +8,7 @@ from pathlib import Path, PurePosixPath
 from typing import Literal, TypedDict
 
 from app.db import DB, now_iso
+from app.config import ConfigValues
 from app.service.contest.model import ContestBuildRevision
 from app.service.contest.statement_meta import infer_contest_header_fields
 from app.service.disk.contest_store import ContestDiskStore
@@ -116,7 +117,7 @@ class ContestArtifact(TypedDict):
 class ContestStatementSourceFile(TypedDict):
     key: str
     language: str
-    package_bytes: bytes
+    source_path: Path
 
 
 class ContestStatementAttachment(TypedDict):
@@ -146,9 +147,10 @@ class ContestService:
         ".txt",
     }
 
-    def __init__(self, db: DB, settings: Settings):
+    def __init__(self, db: DB, settings: Settings, *, config_values: ConfigValues):
         self.db = db
         self.settings = settings
+        self._config_values = config_values
         self._store = ContestDiskStore(db)
 
     def _normalize_role(self, raw_role: str | None) -> str:
@@ -434,12 +436,14 @@ class ContestService:
         )
 
     def add_problem(self, contest_id: int, idx: str, problem_id: int, added_by_user_id: int) -> None:
+        snapshot = self._config_values.snapshot()
         self._store.add_problem(
             int(contest_id),
             idx,
             int(problem_id),
             int(added_by_user_id),
             now_iso(),
+            max_problems=int(snapshot["CONTEST_MAX_PROBLEMS"]),
         )
         self._store.bump_source_generation(int(contest_id))
 
@@ -602,7 +606,13 @@ class ContestService:
             if safe_root not in target.parents:
                 raise ValueError(f"invalid contest source path: {key}")
             target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(self._normalize_statement_source_bytes(key, bytes(row["package_bytes"])))
+            source_path = Path(row["source_path"])
+            if not source_path.is_file() or source_path.is_symlink():
+                raise ValueError(f"contest statement source is unavailable: {key}")
+            if self.statement_source_is_text(key):
+                self._copy_normalized_text_file(source_path, target)
+            else:
+                shutil.copyfile(source_path, target)
             attachment_rows.append((key, key))
         self._store.replace_attachment_rows(
             contest_id=int(contest_id),
@@ -611,6 +621,21 @@ class ContestService:
             rows=attachment_rows,
         )
         self._store.bump_source_generation(int(contest_id))
+
+    @staticmethod
+    def _copy_normalized_text_file(source: Path, target: Path) -> None:
+        pending_cr = False
+        with source.open("rb") as input_handle, target.open("wb") as output_handle:
+            while chunk := input_handle.read(1024 * 1024):
+                if pending_cr:
+                    chunk = b"\r" + chunk
+                    pending_cr = False
+                if chunk.endswith(b"\r"):
+                    chunk = chunk[:-1]
+                    pending_cr = True
+                output_handle.write(chunk.replace(b"\r\n", b"\n").replace(b"\r", b"\n"))
+            if pending_cr:
+                output_handle.write(b"\n")
 
     def statement_attachment_rows(self, contest_id: int) -> list[ContestStatementAttachment]:
         result: list[ContestStatementAttachment] = []

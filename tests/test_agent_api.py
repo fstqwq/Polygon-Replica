@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 
 from tests.common import E2ETestBase
 from tests.db_helpers import db_execute, db_fetch_one
+from tests.archive_support import archive_view_from_bytes
 from tests.execution_result_helpers import execution_result
 from tests.ui_support import AUTH_COOKIE_NAME, _cookie_value_from_response, _register_with_password_envelope
 from app.impl.runtime.config import config
@@ -849,12 +850,21 @@ class TestAgentAPI(E2ETestBase):
 
         oversized_entry_zip = self._workspace_zip({"solutions/bomb.txt": "x" * 17})
         oversized_total_zip = self._workspace_zip({"solutions/a.txt": "1234567890", "solutions/b.txt": "abcdefghij"})
-        with self.assertRaisesRegex(ValueError, "workspace archive entry is too large"):
-            config.workspace_archive_service.compare_zip(workspace, oversized_entry_zip, max_bytes=16)
-        with self.assertRaisesRegex(ValueError, "workspace archive payload is too large"):
-            config.workspace_archive_service.compare_zip(workspace, oversized_total_zip, max_bytes=16)
-        with self.assertRaisesRegex(ValueError, "workspace archive payload is too large"):
-            config.workspace_archive_service.apply_zip(workspace, oversized_total_zip, max_bytes=16)
+        with archive_view_from_bytes(
+            oversized_entry_zip, max_expanded_bytes=16
+        ) as archive:
+            with self.assertRaisesRegex(ValueError, "expanded zip payload is too large"):
+                config.workspace_archive_service.compare_zip(workspace, archive)
+        with archive_view_from_bytes(
+            oversized_total_zip, max_expanded_bytes=16
+        ) as archive:
+            with self.assertRaisesRegex(ValueError, "expanded zip payload is too large"):
+                config.workspace_archive_service.compare_zip(workspace, archive)
+        with archive_view_from_bytes(
+            oversized_total_zip, max_expanded_bytes=16
+        ) as archive:
+            with self.assertRaisesRegex(ValueError, "expanded zip payload is too large"):
+                config.workspace_archive_service.apply_zip(workspace, archive)
         self.assertEqual(sentinel.read_text(encoding="utf-8"), "keep\n")
 
     def test_agent_verification_export_workspace_and_commit_endpoints(self) -> None:

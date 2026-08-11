@@ -1,20 +1,24 @@
 from __future__ import annotations
 
-import io
 import json
 import re
 import shutil
+import uuid
 import zipfile
 from pathlib import Path, PurePosixPath
 from typing import TypedDict
 
 import yaml
 
-from app.main_util import UPLOAD_MAX_BYTES
+from app.service.importing.archive import (
+    ArchiveView,
+    BudgetedZipFile,
+    PACKAGE_METADATA_MAX_BYTES,
+)
 from app.service.importing.statement_assets import ImportedLegacyStatementAsset, merge_imported_statement_assets
 from app.service.problem.build_config import dumps_build_config
 from app.service.importing.icpc_submissions import (
-    generated_expected_results,
+    consume_generated_expected_results,
     parse_submissions_yaml,
     submission_expected_from_group,
 )
@@ -37,9 +41,6 @@ from app.service.statement.title import normalize_problem_title
 from app.service.problem.test_spec import dumps_tests_spec
 
 
-ZIP_MAX_BYTES = UPLOAD_MAX_BYTES
-ZIP_MAX_FILE_BYTES = UPLOAD_MAX_BYTES
-ZIP_TEXT_MAX_BYTES = UPLOAD_MAX_BYTES
 SOURCE_SUFFIX_ALLOW = {
     ".cpp",
     ".cc",
@@ -146,24 +147,12 @@ def _normalize_text_newlines_bytes(payload: bytes) -> bytes:
     return payload.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
 
 
-def _read_text_from_zip(zf: zipfile.ZipFile, info: zipfile.ZipInfo) -> str:
-    if int(info.file_size) > ZIP_TEXT_MAX_BYTES:
-        raise ValueError(f"zip entry too large for text: {info.filename}")
-    with zf.open(info, "r") as fh:
-        raw = fh.read(ZIP_TEXT_MAX_BYTES + 1)
-    if len(raw) > ZIP_TEXT_MAX_BYTES:
-        raise ValueError(f"zip entry too large for text: {info.filename}")
-    return raw.decode("utf-8", errors="replace")
-
-
-def _read_bytes_from_zip(zf: zipfile.ZipFile, info: zipfile.ZipInfo) -> bytes:
-    if int(info.file_size) > ZIP_MAX_FILE_BYTES:
-        raise ValueError(f"zip entry too large: {info.filename}")
-    with zf.open(info, "r") as fh:
-        raw = fh.read(ZIP_MAX_FILE_BYTES + 1)
-    if len(raw) > ZIP_MAX_FILE_BYTES:
-        raise ValueError(f"zip entry too large: {info.filename}")
-    return raw
+def _read_small_bytes(zf: BudgetedZipFile, info: zipfile.ZipInfo) -> bytes:
+    return zf.read_metadata(
+        info,
+        limit=PACKAGE_METADATA_MAX_BYTES,
+        label=info.filename,
+    )
 
 
 def _read_json_or_empty(path: Path) -> dict[str, object]:
@@ -173,33 +162,6 @@ def _read_json_or_empty(path: Path) -> dict[str, object]:
     except Exception:
         return {}
     return {}
-
-
-def _entry_map_from_zip(zf: zipfile.ZipFile, marker: str) -> dict[str, zipfile.ZipInfo]:
-    raw: dict[str, zipfile.ZipInfo] = {}
-    for info in zf.infolist():
-        if info.is_dir():
-            continue
-        normalized = _normalize_zip_path(info.filename)
-        if not normalized:
-            continue
-        raw[normalized] = info
-    if marker in raw:
-        return raw
-    candidates = sorted([p for p in raw if p.endswith(f"/{marker}")], key=len)
-    if not candidates:
-        raise ValueError(f"{marker} not found in package")
-    prefix = candidates[0][: -len(marker)]
-    mapped: dict[str, zipfile.ZipInfo] = {}
-    for path, info in raw.items():
-        if not path.startswith(prefix):
-            continue
-        rel = path[len(prefix) :]
-        if rel:
-            mapped[rel] = info
-    if marker not in mapped:
-        raise ValueError(f"{marker} not found in package")
-    return mapped
 
 
 def _ini_unquote(raw: str) -> str:
@@ -398,14 +360,9 @@ class ICPCPackageImportService:
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(text, encoding="utf-8")
 
-    def _write_bytes(self, workspace: Path, rel: Path, payload: bytes) -> None:
-        target = workspace / rel
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(payload)
-
     def _import_statement(
         self,
-        zf: zipfile.ZipFile,
+        zf: BudgetedZipFile,
         entries: dict[str, zipfile.ZipInfo],
         workspace: Path,
         _meta: ProblemMeta,
@@ -421,49 +378,58 @@ class ICPCPackageImportService:
                 continue
             if rel.startswith("statement/rendered/"):
                 continue
-            self._write_bytes(workspace, Path(rel), _read_bytes_from_zip(zf, info))
+            zf.copy_to(info, workspace / Path(rel))
             copied_statement += 1
 
         copied_sections = 0
-        shared_assets: dict[str, bytes] = {}
+        shared_assets: dict[str, Path] = {}
         legacy_assets: list[ImportedLegacyStatementAsset] = []
         section_languages: set[str] = set()
-        for path, info in entries.items():
-            rel = path.replace("\\", "/")
-            if rel.startswith(f"{STATEMENT_ASSETS_DIR.as_posix()}/"):
-                asset_rel = Path(rel).relative_to(STATEMENT_ASSETS_DIR).as_posix()
-                if asset_rel:
-                    shared_assets[asset_rel] = _read_bytes_from_zip(zf, info)
-                continue
-            if not rel.startswith("statement-sections/"):
-                continue
-            rel_path = Path(rel)
-            if len(rel_path.parts) < 3:
-                continue
-            rel_in_section = Path(*rel_path.parts[2:])
-            if is_ignored_statement_section_entry(rel_in_section):
-                continue
-            if is_canonical_statement_section_entry(rel_in_section):
-                self._write_bytes(workspace, rel_path, _read_bytes_from_zip(zf, info))
-                copied_sections += 1
-            else:
-                legacy_assets.append(
-                    {
-                        "language": rel_path.parts[1],
-                        "package_path": rel_path.as_posix(),
-                        "asset_rel": rel_in_section.as_posix(),
-                        "payload": _read_bytes_from_zip(zf, info),
-                    }
-                )
-            parts = rel_path.parts
-            if len(parts) >= 2:
-                section_languages.add(_normalize_language_token(parts[1]))
+        asset_staging = workspace.parent / f".icpc-statement-assets-{uuid.uuid4().hex}"
+        try:
+            asset_staging.mkdir(parents=True, exist_ok=False)
+            for path, info in entries.items():
+                rel = path.replace("\\", "/")
+                if rel.startswith(f"{STATEMENT_ASSETS_DIR.as_posix()}/"):
+                    asset_rel = Path(rel).relative_to(STATEMENT_ASSETS_DIR).as_posix()
+                    if asset_rel:
+                        source_path = asset_staging / "shared" / asset_rel
+                        zf.copy_to(info, source_path)
+                        shared_assets[asset_rel] = source_path
+                    continue
+                if not rel.startswith("statement-sections/"):
+                    continue
+                rel_path = Path(rel)
+                if len(rel_path.parts) < 3:
+                    continue
+                rel_in_section = Path(*rel_path.parts[2:])
+                if is_ignored_statement_section_entry(rel_in_section):
+                    continue
+                if is_canonical_statement_section_entry(rel_in_section):
+                    zf.copy_to(info, workspace / rel_path)
+                    copied_sections += 1
+                else:
+                    source_path = asset_staging / "legacy" / rel_path
+                    zf.copy_to(info, source_path)
+                    legacy_assets.append(
+                        {
+                            "language": rel_path.parts[1],
+                            "package_path": rel_path.as_posix(),
+                            "asset_rel": rel_in_section.as_posix(),
+                            "source_path": source_path,
+                        }
+                    )
+                parts = rel_path.parts
+                if len(parts) >= 2:
+                    section_languages.add(_normalize_language_token(parts[1]))
 
-        asset_merge = merge_imported_statement_assets(
-            workspace,
-            shared_assets=shared_assets,
-            legacy_assets=legacy_assets,
-        )
+            asset_merge = merge_imported_statement_assets(
+                workspace,
+                shared_assets=shared_assets,
+                legacy_assets=legacy_assets,
+            )
+        finally:
+            shutil.rmtree(asset_staging, ignore_errors=True)
 
         if not (workspace / STATEMENT_TEMPLATE_REL).exists():
             self._write_text(workspace, STATEMENT_TEMPLATE_REL, DEFAULT_STATEMENT_TEMPLATE)
@@ -517,11 +483,12 @@ class ICPCPackageImportService:
 
     def _import_tests(
         self,
-        zf: zipfile.ZipFile,
+        zf: BudgetedZipFile,
         entries: dict[str, zipfile.ZipInfo],
         workspace: Path,
         *,
         normalize_test_data_newlines: bool = False,
+        text_limit_bytes: int,
     ) -> TestsSummary:
         manual_dir = workspace / "tests" / "manual"
         gen_dir = workspace / "tests" / "generator"
@@ -558,13 +525,6 @@ class ICPCPackageImportService:
         spec_entries: list[dict[str, object]] = []
         answer_count = 0
 
-        def _read_input_payload(rel: str) -> bytes:
-            info = entries[rel]
-            payload = _read_bytes_from_zip(zf, info)
-            if normalize_test_data_newlines:
-                payload = _normalize_text_newlines_bytes(payload)
-            return payload
-
         def _import_answer(rel: str, test_id: str, spec_row: dict[str, object]) -> None:
             nonlocal answer_count
             ans_rel = rel[:-len(".in")] + ".ans"
@@ -576,7 +536,7 @@ class ICPCPackageImportService:
                 or str(spec_row.get("sample_output") or "")
             ):
                 return
-            ans_payload = _read_bytes_from_zip(zf, ans_info)
+            ans_payload = _read_small_bytes(zf, ans_info)
             if normalize_test_data_newlines:
                 ans_payload = _normalize_text_newlines_bytes(ans_payload)
             answer_count += 1
@@ -585,9 +545,12 @@ class ICPCPackageImportService:
         def _import_input(rel: str, *, sample: bool, fallback_index: int) -> dict[str, object]:
             preferred_id = self._test_id_from_data_path(rel)
             test_id = self._unique_imported_test_id(preferred_id, used_ids, fallback_index)
-            payload = _read_input_payload(rel)
-            text = payload.decode("utf-8", errors="replace")
-            self._write_text(workspace, Path("tests") / "manual" / f"{test_id}.in", text)
+            target = workspace / "tests" / "manual" / f"{test_id}.in"
+            zf.copy_to(
+                entries[rel],
+                target,
+                normalize_newlines=normalize_test_data_newlines,
+            )
             spec_row: dict[str, object] = {"id": test_id, "kind": "manual", "sample": sample}
             used_ids.add(test_id)
             entry_by_id[test_id] = spec_row
@@ -605,7 +568,11 @@ class ICPCPackageImportService:
                 continue
             _import_input(rel, sample=False, fallback_index=idx)
 
-        self._write_text(workspace, Path("tests/spec.json"), dumps_tests_spec(spec_entries))
+        self._write_text(
+            workspace,
+            Path("tests/spec.json"),
+            dumps_tests_spec(spec_entries, max_bytes=text_limit_bytes),
+        )
         return {
             "total": len(spec_entries),
             "manual": len(spec_entries),
@@ -616,17 +583,22 @@ class ICPCPackageImportService:
 
     def _submission_yaml_behaviors(
         self,
-        zf: zipfile.ZipFile,
+        zf: BudgetedZipFile,
         entries: dict[str, zipfile.ZipInfo],
     ) -> tuple[dict[str, str], list[str]]:
         info = entries.get("submissions/submissions.yaml")
         if info is None:
             return ({}, [])
-        return parse_submissions_yaml(_read_text_from_zip(zf, info))
+        payload = zf.read_metadata(
+            info,
+            limit=PACKAGE_METADATA_MAX_BYTES,
+            label="submissions/submissions.yaml",
+        )
+        return parse_submissions_yaml(payload.decode("utf-8", errors="replace"))
 
     def _import_solutions(
         self,
-        zf: zipfile.ZipFile,
+        zf: BudgetedZipFile,
         entries: dict[str, zipfile.ZipInfo],
         workspace: Path,
     ) -> SolutionsSummary:
@@ -654,8 +626,10 @@ class ICPCPackageImportService:
             if info is None:
                 continue
             target_rel = _unique_rel_path(workspace, solutions_dir_rel, filename)
-            payload = _read_bytes_from_zip(zf, info)
-            annotation_expected, payload, annotation_warning = generated_expected_results(payload)
+            zf.copy_to(info, workspace / Path(target_rel))
+            annotation_expected, annotation_warning = consume_generated_expected_results(
+                workspace / Path(target_rel)
+            )
             if annotation_warning:
                 warnings.append(f"{rel}: {annotation_warning}")
             directory_expected = submission_expected_from_group(group)
@@ -681,7 +655,6 @@ class ICPCPackageImportService:
                     warnings.append(
                         f"{rel}: {chosen_source} expected behavior overrides conflicting {source_name}"
                     )
-            self._write_bytes(workspace, Path(target_rel), payload)
             self._write_text(workspace, Path(f"{target_rel}.desc"), render_solution_desc(expected, ""))
             if not accepted_source and expected == "accepted":
                 accepted_source = target_rel
@@ -696,7 +669,7 @@ class ICPCPackageImportService:
 
     def _copy_component_tree(
         self,
-        zf: zipfile.ZipFile,
+        zf: BudgetedZipFile,
         entries: dict[str, zipfile.ZipInfo],
         source_prefix: str,
         workspace: Path,
@@ -711,7 +684,7 @@ class ICPCPackageImportService:
             if not suffix_rel:
                 continue
             target_rel = Path(target_prefix) / suffix_rel
-            self._write_bytes(workspace, target_rel, _read_bytes_from_zip(zf, entries[rel]))
+            zf.copy_to(entries[rel], workspace / target_rel)
             copied.append(target_rel.as_posix())
         return copied
 
@@ -736,7 +709,7 @@ class ICPCPackageImportService:
 
     def _import_components(
         self,
-        zf: zipfile.ZipFile,
+        zf: BudgetedZipFile,
         entries: dict[str, zipfile.ZipInfo],
         workspace: Path,
         meta: ProblemMeta,
@@ -872,75 +845,82 @@ class ICPCPackageImportService:
         self,
         workspace: Path,
         package_name: str,
-        package_bytes: bytes,
+        package: ArchiveView,
         *,
         normalize_test_data_newlines: bool = False,
+        text_limit_bytes: int,
     ) -> dict[str, object]:
         package_name = package_name.strip()
-        raw = package_bytes
-        if not raw:
-            raise ValueError("empty package file")
-        if len(raw) > ZIP_MAX_BYTES:
-            raise ValueError("package file is too large")
-
-        with zipfile.ZipFile(io.BytesIO(raw), "r") as zf:
-            entry_map = _entry_map_from_zip(zf, "problem.yaml")
-            yaml_info = entry_map.get("problem.yaml")
-            if yaml_info is None:
-                raise ValueError("problem.yaml not found in package")
-            meta = self._parse_problem_yaml(_read_text_from_zip(zf, yaml_info))
-            domjudge_meta: DomjudgeMeta = {
-                "time_limit_ms": None,
-                "name": "",
-                "external_id": "",
-                "short_name": "",
-            }
-            domjudge_info = entry_map.get("domjudge-problem.ini")
-            if domjudge_info is not None:
-                domjudge_meta = _parse_domjudge_ini(_read_text_from_zip(zf, domjudge_info))
-                if meta["time_limit_ms"] is None:
-                    meta["time_limit_ms"] = domjudge_meta["time_limit_ms"]
-            external_id = domjudge_meta["external_id"].replace("\\", "/")
-            public_slug = PurePosixPath(external_id).name
-            if not public_slug:
-                public_slug = Path(package_name).stem.strip() or "problem"
-            meta["title"] = normalize_problem_title(
-                meta["title"] or domjudge_meta["name"],
-                fallback_title=public_slug,
+        rooted = package.rooted_at("problem.yaml")
+        zf = rooted.zip_file
+        entry_map = {
+            rel: info for rel, info in rooted.entries.items() if not info.is_dir()
+        }
+        yaml_info = entry_map.get("problem.yaml")
+        if yaml_info is None:
+            raise ValueError("problem.yaml not found in package")
+        meta = self._parse_problem_yaml(
+            rooted.read_metadata(yaml_info, label="problem.yaml").decode(
+                "utf-8", errors="replace"
             )
-            statement_summary, statement_warnings = self._import_statement(zf, entry_map, workspace, meta)
-            tests_summary = self._import_tests(
-                zf,
-                entry_map,
-                workspace,
-                normalize_test_data_newlines=normalize_test_data_newlines,
+        )
+        domjudge_meta: DomjudgeMeta = {
+            "time_limit_ms": None,
+            "name": "",
+            "external_id": "",
+            "short_name": "",
+        }
+        domjudge_info = entry_map.get("domjudge-problem.ini")
+        if domjudge_info is not None:
+            domjudge_meta = _parse_domjudge_ini(
+                rooted.read_metadata(
+                    domjudge_info, label="domjudge-problem.ini"
+                ).decode("utf-8", errors="replace")
             )
-            solutions_summary = self._import_solutions(zf, entry_map, workspace)
-            components_summary = self._import_components(zf, entry_map, workspace, meta)
-            self._import_attachments(zf, entry_map, workspace)
-            problem_result = self._write_problem_config(workspace, meta, statement_summary)
-            problem_cfg = problem_result["cfg"]
-            file_io_warning = problem_result.get("file_io_warning", "")
-            build_cfg = self._write_build_config(workspace, meta, components_summary, solutions_summary)
-            result: dict[str, object] = {
-                "package_name": package_name,
-                "title": meta["title"],
-                "statement": statement_summary,
-                "tests": tests_summary,
-                "solutions": solutions_summary,
-                "components": components_summary,
-                "problem_cfg": problem_cfg,
-                "build_cfg": build_cfg,
-                "domjudge": domjudge_meta,
-                "warnings": list(statement_warnings) + list(solutions_summary["warnings"]),
-            }
-            if file_io_warning:
-                result["file_io_warning"] = file_io_warning
-            return result
+            if meta["time_limit_ms"] is None:
+                meta["time_limit_ms"] = domjudge_meta["time_limit_ms"]
+        external_id = domjudge_meta["external_id"].replace("\\", "/")
+        public_slug = PurePosixPath(external_id).name
+        if not public_slug:
+            public_slug = Path(package_name).stem.strip() or "problem"
+        meta["title"] = normalize_problem_title(
+            meta["title"] or domjudge_meta["name"],
+            fallback_title=public_slug,
+        )
+        statement_summary, statement_warnings = self._import_statement(zf, entry_map, workspace, meta)
+        tests_summary = self._import_tests(
+            zf,
+            entry_map,
+            workspace,
+            normalize_test_data_newlines=normalize_test_data_newlines,
+            text_limit_bytes=text_limit_bytes,
+        )
+        solutions_summary = self._import_solutions(zf, entry_map, workspace)
+        components_summary = self._import_components(zf, entry_map, workspace, meta)
+        self._import_attachments(zf, entry_map, workspace)
+        problem_result = self._write_problem_config(workspace, meta, statement_summary)
+        problem_cfg = problem_result["cfg"]
+        file_io_warning = problem_result.get("file_io_warning", "")
+        build_cfg = self._write_build_config(workspace, meta, components_summary, solutions_summary)
+        result: dict[str, object] = {
+            "package_name": package_name,
+            "title": meta["title"],
+            "statement": statement_summary,
+            "tests": tests_summary,
+            "solutions": solutions_summary,
+            "components": components_summary,
+            "problem_cfg": problem_cfg,
+            "build_cfg": build_cfg,
+            "domjudge": domjudge_meta,
+            "warnings": list(statement_warnings) + list(solutions_summary["warnings"]),
+        }
+        if file_io_warning:
+            result["file_io_warning"] = file_io_warning
+        return result
 
     def _import_attachments(
         self,
-        zf: zipfile.ZipFile,
+        zf: BudgetedZipFile,
         entries: dict[str, zipfile.ZipInfo],
         workspace: Path,
     ) -> None:

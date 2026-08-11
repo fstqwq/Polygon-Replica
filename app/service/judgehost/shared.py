@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from pathlib import Path
 from typing import cast
 
@@ -63,18 +64,18 @@ def domjudge_hosts_payload(hosts_state: dict[str, dict[str, object]]) -> list[di
     return out
 
 
-def domjudge_config_from_constants(constants: object) -> dict[str, object]:
-    compile_timeout = max(1, int(getattr(constants, "TOOLCHAIN_COMPILE_TIMEOUT_SEC", 120) or 120))
-    compile_mem_mb = max(64, int(getattr(constants, "TOOLCHAIN_COMPILE_MEMORY_MB", 2048) or 2048))
+def domjudge_config_from_snapshot(values: Mapping[str, object]) -> dict[str, object]:
+    compile_timeout = int(values["TOOLCHAIN_COMPILE_TIMEOUT_SEC"])
+    compile_mem_mb = int(values["TOOLCHAIN_COMPILE_MEMORY_MB"])
     return {
         "diskspace_error": 1048576,
         # DOMjudge applies output_storage_limit to program stdout artifacts.
         # Generator stdout becomes verification input for downstream tasks, so
         # this must follow the run input/output cap, not the saved-log cap.
-        "output_storage_limit": int(run_output_kb(constants) * 1024),
+        "output_storage_limit": int(run_output_kb(values) * 1024),
         "script_timelimit": compile_timeout,
         "script_memory_limit": int(compile_mem_mb * 1024),
-        "script_filesize_limit": int(compile_output_kb(constants)),
+        "script_filesize_limit": int(compile_output_kb(values)),
         "timelimit_overshoot": "1s|100%",
     }
 

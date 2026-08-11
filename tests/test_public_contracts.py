@@ -22,6 +22,43 @@ CONTEST_CSS_PATH = ROOT / "app" / "static" / "css" / "contest.css"
 UI_JS_PATH = ROOT / "app" / "static" / "ui.js"
 JS_ROOT = ROOT / "app" / "static" / "js"
 ADMIN_JUDGEHOST_TEMPLATE_PATH = ROOT / "app" / "template" / "admin_judgehosts.html"
+_NON_ASCII_TEST_PRAGMA = b"ascii-lint: allow; reason=chinese-test"
+
+_FIRST_PARTY_TEXT_SUFFIXES = frozenset(
+    {
+        ".cfg",
+        ".conf",
+        ".cpp",
+        ".css",
+        ".h",
+        ".html",
+        ".ini",
+        ".java",
+        ".js",
+        ".json",
+        ".md",
+        ".py",
+        ".service",
+        ".sh",
+        ".sql",
+        ".sty",
+        ".svg",
+        ".tex",
+        ".toml",
+        ".txt",
+        ".xml",
+        ".yaml",
+        ".yml",
+    }
+)
+_ROOT_TEXT_FILENAMES = frozenset(
+    {
+        ".gitattributes",
+        ".gitignore",
+        "Dockerfile",
+        "LICENSE",
+    }
+)
 
 
 def _python_files_under(root: Path) -> list[Path]:
@@ -42,6 +79,27 @@ def _app_python_files() -> list[Path]:
 
 def _test_case_files() -> list[Path]:
     return sorted((ROOT / "tests").glob("test_*.py"))
+
+
+def _first_party_text_files() -> list[Path]:
+    paths: list[Path] = []
+    for root_name in ("app", "docs", "scripts", "tests", ".github"):
+        source_root = ROOT / root_name
+        if not source_root.exists():
+            continue
+        for path in source_root.rglob("*"):
+            if not path.is_file() or path.suffix.lower() not in _FIRST_PARTY_TEXT_SUFFIXES:
+                continue
+            relative = path.relative_to(ROOT)
+            if relative.as_posix().startswith("app/static/vendor/"):
+                continue
+            paths.append(path)
+    for path in ROOT.iterdir():
+        if not path.is_file():
+            continue
+        if path.name in _ROOT_TEXT_FILENAMES or path.suffix.lower() in _FIRST_PARTY_TEXT_SUFFIXES:
+            paths.append(path)
+    return sorted(set(paths))
 
 
 def _imported_symbol_set(module_name: str) -> set[str]:
@@ -71,6 +129,35 @@ def _is_db_handle(node: ast.AST) -> bool:
 
 
 class TestPublicContracts(unittest.TestCase):
+    def test_first_party_text_files_are_ascii(self) -> None:
+        offenders: list[str] = []
+        invalid_pragmas: list[str] = []
+        for path in _first_party_text_files():
+            payload = path.read_bytes()
+            relative = path.relative_to(ROOT)
+            has_non_ascii = any(byte > 0x7F for byte in payload)
+            header = b"\n".join(payload.splitlines()[:5])
+            has_pragma = _NON_ASCII_TEST_PRAGMA in header
+            if has_pragma and (
+                not relative.parts
+                or relative.parts[0] != "tests"
+                or not has_non_ascii
+            ):
+                invalid_pragmas.append(relative.as_posix())
+            if has_non_ascii and not has_pragma:
+                offenders.append(relative.as_posix())
+        self.assertEqual(
+            offenders,
+            [],
+            "Use ASCII escapes/entities, or add the file-header pragma "
+            "'# ascii-lint: allow; reason=chinese-test' to an intentional test.",
+        )
+        self.assertEqual(
+            invalid_pragmas,
+            [],
+            "The non-ASCII pragma is test-only and must not remain on an ASCII file.",
+        )
+
     def test_ui_colors_are_owned_by_global_tokens(self) -> None:
         color_literal = re.compile(r"#[0-9a-fA-F]{3,8}\b|(?:rgb|hsl)a?\(")
         offenders: list[str] = []

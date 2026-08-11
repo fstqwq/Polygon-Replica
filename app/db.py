@@ -17,7 +17,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, TypeVar
 
-from app.main_util import coerce_bool, is_sqlite_locked_error, summarize_traced_sql
+from app.config.model import ConfigValues
+from app.main_util import is_sqlite_locked_error, summarize_traced_sql
 
 logger = logging.getLogger("uvicorn.error")
 logger.setLevel(logging.INFO)
@@ -987,19 +988,12 @@ class DB:
     """Small SQLite wrapper used by services and request handlers."""
 
     path: Path
-    sql_trace_enabled: bool = False
+    config_values: ConfigValues
 
     LOCK_RETRY_ATTEMPTS = 3
     LOCK_RETRY_BASE_SEC = 0.05
     SQLITE_BUSY_TIMEOUT_MS = 5000
-    SQL_TRACE_ENABLED = False
     SQL_TRACE_TEXT_LIMIT = 256
-    def apply_runtime_values(self, values: object) -> None:
-        """Apply runtime database tracing flags."""
-
-        enabled = getattr(values, "DB_SQL_TRACE_ENABLED", self.SQL_TRACE_ENABLED)
-        self.sql_trace_enabled = coerce_bool(enabled, default=bool(self.SQL_TRACE_ENABLED))
-
     def init(self) -> None:
         """Create or validate the current database schema."""
 
@@ -1141,7 +1135,8 @@ class DB:
             conn.close()
 
     def _install_sql_trace(self, conn: sqlite3.Connection) -> None:
-        enabled = getattr(self, "sql_trace_enabled", self.SQL_TRACE_ENABLED)
+        snapshot = self.config_values.snapshot()
+        enabled = snapshot["DB_SQL_TRACE_ENABLED"]
         if not bool(enabled):
             return
         conn_id = id(conn)

@@ -17,9 +17,10 @@ from app.impl.runtime.config import config
 from app.impl.workspace.context import global_user_ctx
 from app.impl.workspace.context_operation import user_participating_problems
 from app.impl.root.shared import _active_root_user, _count_label
-from app.main_util import read_fileobj_bytes_limited
+from app.service.importing.upload import spool_fileobj
+from app.service.importing.archive import ArchiveView, problem_import_policy
 
-_C = config.constants
+_C = config.config_values
 
 
 def problems_root_page(request: Request, user: str = ""):
@@ -62,22 +63,34 @@ def problems_root_import(request: Request, user: str = "", package_upload: Uploa
     active_user = _active_root_user(request, user)
     gctx = global_user_ctx(active_user)
     package_name = ""
-    package_content: bytes = b""
     try:
         if package_upload is None:
             raise ValueError("package file is required")
         package_name = str(package_upload.filename or "").strip()
         if not package_name:
             raise ValueError("package filename is required")
-        package_content = read_fileobj_bytes_limited(package_upload.file, label="package file")
-        imported = import_package_as_new_problem(
-            actor_user_id=int(gctx["user"]["id"]),
-            actor_user=str(gctx["user"]["username"]),
-            package_name=package_name,
-            package_content=package_content,
-            requested_slug=str(problem_slug or "").strip(),
-            source_problem="",
-        )
+        snapshot = _C.snapshot()
+        upload_root = config.settings.cache_root / "archive-uploads"
+        with spool_fileobj(
+            package_upload.file,
+            root=upload_root,
+            max_bytes=int(snapshot["UPLOAD_MAX_BYTES"]),
+            label="package file",
+        ) as package_path:
+            policy = problem_import_policy(
+                int(snapshot["PROBLEM_ZIP_MAX_EXPANDED_BYTES"]),
+                int(snapshot["TEXTAREA_MAX_BYTES"]),
+            )
+            with ArchiveView(package_path, policy.archive) as package:
+                imported = import_package_as_new_problem(
+                    actor_user_id=int(gctx["user"]["id"]),
+                    actor_user=str(gctx["user"]["username"]),
+                    package_name=package_name,
+                    package=package,
+                    policy=policy,
+                    requested_slug=str(problem_slug or "").strip(),
+                    source_problem="",
+                )
         target_problem_obj = imported.get("target_problem")
         target_problem = target_problem_obj.strip() if isinstance(target_problem_obj, str) else ""
         total_tests_obj = imported.get("total_tests")

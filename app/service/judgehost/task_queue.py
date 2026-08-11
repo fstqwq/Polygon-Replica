@@ -292,7 +292,8 @@ class TaskQueue:
     def wait_for_task_result(self, task_id: str, timeout_sec: float | None = None) -> dict[str, object]:
         if not task_id:
             raise RuntimeError("judgehost task id is required")
-        timeout = self._s.wait_timeout_sec if timeout_sec is None else max(1.0, float(timeout_sec))
+        policy = self._s.config_policy()
+        timeout = policy.wait_timeout_sec if timeout_sec is None else max(1.0, float(timeout_sec))
         deadline = time.monotonic() + timeout
         generation = self._s.task_registry.change_generation()
         while True:
@@ -331,7 +332,8 @@ class TaskQueue:
             raise RuntimeError("judgehost task id is required")
         if not test_name:
             raise RuntimeError("judgehost test name is required")
-        timeout = self._s.wait_timeout_sec if timeout_sec is None else max(1.0, float(timeout_sec))
+        policy = self._s.config_policy()
+        timeout = policy.wait_timeout_sec if timeout_sec is None else max(1.0, float(timeout_sec))
         deadline = time.monotonic() + timeout
         generation = self._s.task_registry.change_generation()
         while True:
@@ -438,6 +440,7 @@ class TaskQueue:
         return result["run_id"]
 
     def _host_status_rows(self) -> tuple[list[dict[str, object]], int]:
+        policy = self._s.config_policy()
         now_dt = datetime.now(timezone.utc)
         active_by_host = self._s.batch_scheduler.active_lease_counts()
         telemetry_by_host = self._s.batch_scheduler.host_telemetry_snapshot()
@@ -471,7 +474,7 @@ class TaskQueue:
             if last_seen_dt is not None:
                 delta = max(0.0, (now_dt - last_seen_dt).total_seconds())
                 age_sec = int(delta)
-                is_online = delta <= float(self._s.online_window_sec)
+                is_online = delta <= float(policy.online_window_sec)
             if is_online and enabled_flag:
                 online_count += 1
             telemetry = telemetry_by_host.get(hostname)
@@ -526,11 +529,12 @@ class TaskQueue:
         return release
 
     def status(self) -> dict[str, object]:
+        policy = self._s.config_policy()
         counts = self._core.task_status_counts()
         host_rows, online_count = self._host_status_rows()
         return {
-            "enabled": bool(self._s.enabled),
-            "auth_configured": bool(self._s.api_token),
+            "enabled": policy.enabled,
+            "auth_configured": bool(policy.api_token),
             "hosts_total": len(host_rows),
             "hosts_online": int(online_count),
             "hosts": host_rows,

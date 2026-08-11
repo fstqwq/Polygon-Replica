@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import app.main_constant as _K
+
 from fastapi import Request
 
 from app.impl.auth.csrf import issue_password_form_csrf_token
@@ -11,7 +13,7 @@ from app.impl.auth.shared import (
     login_redirect,
 )
 
-_C = config.constants
+_C = config.config_values
 
 _ = (issue_password_form_csrf_token,)
 
@@ -44,12 +46,10 @@ async def auth_middleware(request: Request, call_next):
         _apply_security_headers(response)
         return response
     enforce_same_origin_state_change(request)
-    if _C.ROOT_PROBLEMS_PATH_RE.fullmatch(path) or _C.ROOT_CONTESTS_PATH_RE.fullmatch(path):
+    if _K.ROOT_PROBLEMS_PATH_RE.fullmatch(path) or _K.ROOT_CONTESTS_PATH_RE.fullmatch(path):
         response = await call_next(request)
         _apply_security_headers(response)
         return response
     response = await call_next(request)
     _apply_security_headers(response)
     return response
-
-

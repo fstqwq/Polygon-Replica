@@ -13,7 +13,7 @@ from unittest.mock import patch
 from fastapi import HTTPException
 from starlette.requests import Request
 
-from tests.common import E2ETestBase, suite_root
+from tests.common import E2ETestBase, override_config_values, suite_root
 from tests.identity_helpers import canonical_test_verification_id
 from app.impl.runtime.config import config
 from app.impl.problem.checker import checker_rename_source, checker_set_standard
@@ -39,14 +39,16 @@ from app.impl.problem.validator import validator_rename_source, validator_save_s
 from app.impl.run_export.artifact import artifact_file
 from app.impl.run_export.run import run_cancel, run_execute
 from app.impl.root.auth_pages import auth_password_meta, login_page
-from app.main_util import TEXTAREA_MAX_BYTES
+from app.config import CONFIG_REGISTRY
 from app.service.verification.task_store import VerificationTaskStore
 from tests.ui_support import _register_with_password_envelope
+
+TEXTAREA_MAX_BYTES = int(CONFIG_REGISTRY.defaults()["TEXTAREA_MAX_BYTES"])
 
 db = config.db
 workspace_service = config.workspace_service
 
-FLASH_COOKIE_NAME = config.constants.FLASH_COOKIE_NAME
+FLASH_COOKIE_NAME = config.config_values.FLASH_COOKIE_NAME
 
 
 def _request(
@@ -440,17 +442,17 @@ class TestSecurity(E2ETestBase):
         self.assertIn("file content is too long", self._first_flash_message(resp).lower())
 
     def test_files_upload_rejects_payload_over_shared_upload_limit(self) -> None:
-        upload = self._FakeUpload(b"123456789")
-        with patch("app.main_util.UPLOAD_MAX_BYTES", 8):
-            response = asyncio.run(
-                files_upload(
-                    request=_request("/problems/alice/sample/files/upload"),
-                    problem="alice/sample",
-                    user="alice",
-                    path="notes/upload-too-large.txt",
-                    upload=upload,
-                )
+        upload = self._FakeUpload(b"x" * 1025)
+        override_config_values(self, config.config_values, UPLOAD_MAX_BYTES=1024)
+        response = asyncio.run(
+            files_upload(
+                request=_request("/problems/alice/sample/files/upload"),
+                problem="alice/sample",
+                user="alice",
+                path="notes/upload-too-large.txt",
+                upload=upload,
             )
+        )
         self.assertEqual(response.status_code, 303)
         self.assertIn(
             "uploaded file is too large",

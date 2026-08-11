@@ -54,7 +54,6 @@ based on present impact, not on an imagined future architecture.
 | PLC-010 | refactor | Maintenance mechanics and domain deletion policy are implemented together. | platform maintenance |
 | PLC-011 | refactor | Top-level application startup imports a private authentication implementation helper. | runtime |
 | PLC-012 | refactor | Cross-resource authorization policy has no single service owner. | auth/access |
-| PLC-013 | refactor | Durable configuration metadata, persistence, and mutable global application constants span separate layers. | platform configuration |
 | PLC-014 | refactor | Audit write policy is coupled to workspace and maintenance services. | audit service |
 
 ## Operations
@@ -70,5 +69,11 @@ based on present impact, not on an imagined future architecture.
 - RUN-001: startup resets both loaded worker history and its JSONL.
 - OPS-001: the installer renders the systemd account and repository path.
 - OPS-002: the unused secure-cookie environment variable was removed.
+- PKG-004: authenticated ZIP imports preflight entry structure and stream only
+  selected content under separate compressed, entry, expanded, and metadata
+  budgets; Native materialization payloads are skipped.
+- PLC-013: the typed configuration registry now owns every admin-editable
+  default and validator, while services consume one atomic `ConfigValues`
+  snapshot and fixed constants remain separate.
 - SRC-001 was removed: `app/` is the current package tree, not a deviation from
   an unimplemented future layout.

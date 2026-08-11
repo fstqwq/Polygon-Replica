@@ -53,6 +53,7 @@ import app.impl.workspace.run_view_list as workspace_run_view_list_module
 from app.service.verification.result_match import verification_solution_match
 from app.service.verification.workspace_fingerprint import verification_sources_signature
 from app.impl.runtime.config import config
+from app.config import CONFIG_REGISTRY
 _API_MODULES = (
     admin_panel_module,
     auth_middleware_module,
@@ -115,9 +116,9 @@ def _api_attr(name: str):
             return getattr(module, name)
     raise AttributeError(f"api symbol not found: {name}")
 
-AUTH_COOKIE_NAME = config.constants.AUTH_COOKIE_NAME
-FLASH_COOKIE_NAME = config.constants.FLASH_COOKIE_NAME
-ADMIN_CONFIG_DEFAULTS = config.constants.ADMIN_CONFIG_DEFAULTS
+AUTH_COOKIE_NAME = config.config_values.AUTH_COOKIE_NAME
+FLASH_COOKIE_NAME = config.config_values.FLASH_COOKIE_NAME
+DEFAULT_CONFIG_VALUES = CONFIG_REGISTRY.defaults()
 issue_password_form_csrf_token = _api_attr("issue_password_form_csrf_token")
 session_user = _api_attr("session_user")
 workspace_revision_info = _api_attr("workspace_revision_info")
@@ -660,7 +661,7 @@ def _settings_password_update_with_envelope(user: str, current_password: str, ne
 def _settings_admin_password_update_with_envelope(actor_user: str, target_user: str, new_password: str):
     csrf = issue_password_form_csrf_token("admin-password")
     new_salt = uuid.uuid4().hex
-    new_iters = int(config.constants.PASSWORD_HASH_ITERS)
+    new_iters = int(config.config_values.PASSWORD_HASH_ITERS)
     new_verifier = _password_verifier_hex(new_password, new_salt, new_iters)
     new_envelope = _password_envelope_fields_direct(
         scope="admin-password",

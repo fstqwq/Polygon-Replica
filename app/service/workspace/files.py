@@ -9,6 +9,7 @@ from pathlib import Path
 
 from fastapi import UploadFile
 
+from app.config import ConfigValues
 from app.main_util import enforce_textarea_max_bytes, write_upload_file_limited
 from app.service.platform.file_type import looks_like_binary_file
 from app.service.platform.workspace_path import (
@@ -57,9 +58,16 @@ class WorkspaceFileView:
 
 
 class WorkspaceFileService:
-    def __init__(self, git_service: GitService, workspace_service: WorkspaceService):
+    def __init__(
+        self,
+        git_service: GitService,
+        workspace_service: WorkspaceService,
+        *,
+        config_values: ConfigValues,
+    ):
         self._git_service = git_service
         self._workspace_service = workspace_service
+        self._config_values = config_values
 
     def normalize_path(self, raw: str | None, *, allow_empty: bool = False, require_allowed_root: bool = False) -> str:
         return validate_workspace_rel_path(raw, allow_empty=allow_empty, require_allowed_root=require_allowed_root)
@@ -171,7 +179,12 @@ class WorkspaceFileService:
     def write_text(self, workspace: Path, raw_path: str, content: str, *, require_allowed_root: bool) -> str:
         normalized = self.normalize_path(raw_path, require_allowed_root=require_allowed_root)
         self._reject_repository_answer_path(normalized)
-        safe_content = enforce_textarea_max_bytes(content, label="file content")
+        limits = self._config_values.snapshot()
+        safe_content = enforce_textarea_max_bytes(
+            content,
+            label="file content",
+            max_bytes=int(limits["TEXTAREA_MAX_BYTES"]),
+        )
         with self._workspace_service.workspace_lock(workspace):
             self._git_service.write_file(workspace, normalized, safe_content)
         return normalized
@@ -210,7 +223,12 @@ class WorkspaceFileService:
                 tmp_path = Path(tmp_name)
                 try:
                     with os.fdopen(fd, "wb") as out:
-                        total_bytes = await write_upload_file_limited(upload, out)
+                        limits = self._config_values.snapshot()
+                        total_bytes = await write_upload_file_limited(
+                            upload,
+                            out,
+                            max_bytes=int(limits["UPLOAD_MAX_BYTES"]),
+                        )
                     os.replace(tmp_path, target)
                     tmp_path = None
                 except Exception:

@@ -1,23 +1,17 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 
 STORED_LOG_TRUNCATED_MARKER = b"\n...[truncated]\n"
 
 
-def _constant_int(constants: object, key: str, *, default: int, minimum: int) -> int:
-    try:
-        value = int(getattr(constants, key, default) or default)
-    except Exception:
-        value = default
-    return max(int(minimum), int(value))
+def run_output_kb(values: Mapping[str, object]) -> int:
+    return int(values["RUN_EXEC_OUTPUT_KB"])
 
 
-def run_output_kb(constants: object) -> int:
-    return _constant_int(constants, "RUN_EXEC_OUTPUT_KB", default=65536, minimum=64)
-
-
-def compile_output_kb(constants: object) -> int:
-    return _constant_int(constants, "TOOLCHAIN_COMPILE_OUTPUT_KB", default=262144, minimum=1024)
+def compile_output_kb(values: Mapping[str, object]) -> int:
+    return int(values["TOOLCHAIN_COMPILE_OUTPUT_KB"])
 
 
 def run_memory_limit_kb(memory_limit_mb: object) -> int:
@@ -30,26 +24,26 @@ def run_memory_limit_kb(memory_limit_mb: object) -> int:
     return memory_limit_mb * 1024
 
 
-def stored_log_limit_bytes(constants: object) -> int:
-    return _constant_int(constants, "JUDGEHOST_STORED_LOG_LIMIT_BYTES", default=65536, minimum=1024)
+def stored_log_limit_bytes(values: Mapping[str, object]) -> int:
+    return int(values["JUDGEHOST_STORED_LOG_LIMIT_BYTES"])
 
 
-def aux_display_limit_bytes(constants: object) -> int:
-    return _constant_int(constants, "AUX_DISPLAY_TEXT_LIMIT_BYTES", default=2048, minimum=256)
+def aux_display_limit_bytes(values: Mapping[str, object]) -> int:
+    return int(values["AUX_DISPLAY_TEXT_LIMIT_BYTES"])
 
 
 def judgehost_form_part_limit_bytes(
-    constants: object,
+    values: Mapping[str, object],
     *,
     upload_max_bytes: int,
     default_part_limit_bytes: int,
     headroom_bytes: int,
 ) -> int:
     payload_limit_bytes = max(
-        run_output_kb(constants) * 1024,
-        compile_output_kb(constants) * 1024,
-        stored_log_limit_bytes(constants),
-        aux_display_limit_bytes(constants),
+        run_output_kb(values) * 1024,
+        compile_output_kb(values) * 1024,
+        stored_log_limit_bytes(values),
+        aux_display_limit_bytes(values),
     )
     return max(
         int(default_part_limit_bytes),
@@ -58,10 +52,13 @@ def judgehost_form_part_limit_bytes(
     )
 
 
-def truncate_stored_log_bytes(raw: bytes, constants: object) -> bytes:
+def truncate_stored_log_bytes(
+    raw: bytes,
+    values: Mapping[str, object],
+) -> bytes:
     # This limit is only for server-side auxiliary logs such as compile output
     # and compile metadata. Do not use it for program.out/output_run artifacts.
-    limit = stored_log_limit_bytes(constants)
+    limit = stored_log_limit_bytes(values)
     if len(raw) <= limit:
         return raw
     marker = STORED_LOG_TRUNCATED_MARKER

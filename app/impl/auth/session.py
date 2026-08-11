@@ -4,7 +4,7 @@ from fastapi import HTTPException, Request
 
 from app.impl.runtime.config import config
 
-_C = config.constants
+_C = config.config_values
 
 
 def create_session_for_user(user_id: int) -> str:

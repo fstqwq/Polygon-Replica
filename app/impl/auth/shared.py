@@ -10,6 +10,7 @@ from urllib.parse import parse_qsl, quote_plus, urlencode, urlparse, urlunparse
 from fastapi import HTTPException, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 
+import app.main_constant as _K
 from app.impl.auth.internal import runtime
 from app.impl.contest.workspace_scope import (
     problem_template_navigation,
@@ -17,7 +18,7 @@ from app.impl.contest.workspace_scope import (
 from app.impl.runtime.config import config
 from app.service.platform.hashing import hmac_sha256_hex, sha256_hex_bytes
 
-_C = config.constants
+_C = config.config_values
 
 def _runtime_judgehost_health_profile() -> dict[str, str]:
     return runtime._runtime_judgehost_health_profile()
@@ -350,14 +351,14 @@ def template_response(request: Request, template_name: str, context: dict | None
 
 def normalize_password_salt_hex(value: str) -> str:
     raw = str(value or "").strip().lower()
-    if not _C.HEX_32_RE.fullmatch(raw):
+    if not _K.HEX_32_RE.fullmatch(raw):
         raise ValueError("invalid password salt")
     return raw
 
 
 def normalize_password_verifier_hex(value: str) -> str:
     raw = str(value or "").strip().lower()
-    if not _C.HEX_64_RE.fullmatch(raw):
+    if not _K.HEX_64_RE.fullmatch(raw):
         raise ValueError("invalid password verifier")
     return raw
 
@@ -388,14 +389,14 @@ def password_meta_for_username(username: str) -> tuple[str, int]:
         iterations = int(row["password_iters"] or 0)
     except Exception:
         iterations = 0
-    if _C.HEX_64_RE.fullmatch(stored_hash) and _C.HEX_32_RE.fullmatch(salt_hex) and (iterations > 0):
+    if _K.HEX_64_RE.fullmatch(stored_hash) and _K.HEX_32_RE.fullmatch(salt_hex) and (iterations > 0):
         return (salt_hex, iterations)
     return (dummy_password_salt_hex(username), int(_C.PASSWORD_HASH_ITERS))
 
 
 def lookup_user_auth(username: str):
     safe = str(username or "").strip()
-    if len(safe) < _C.USERNAME_MIN_LEN or len(safe) > _C.USERNAME_MAX_LEN or not _C.USER_IDENT_RE.fullmatch(safe):
+    if len(safe) < _K.USERNAME_MIN_LEN or len(safe) > _K.USERNAME_MAX_LEN or not _K.USER_IDENT_RE.fullmatch(safe):
         return None
     return config.auth_service.lookup_user_auth(safe)
 
@@ -410,8 +411,8 @@ def has_registered_users() -> bool:
 
 def normalize_username_required(value: str) -> str:
     safe = str(value or "").strip()
-    if len(safe) < _C.USERNAME_MIN_LEN or len(safe) > _C.USERNAME_MAX_LEN or not _C.USER_IDENT_RE.fullmatch(safe):
-        raise ValueError(_C.USERNAME_RULE_MESSAGE)
+    if len(safe) < _K.USERNAME_MIN_LEN or len(safe) > _K.USERNAME_MAX_LEN or not _K.USER_IDENT_RE.fullmatch(safe):
+        raise ValueError(_K.USERNAME_RULE_MESSAGE)
     return safe
 
 

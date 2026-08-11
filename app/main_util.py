@@ -9,7 +9,7 @@ from typing import BinaryIO
 
 from fastapi import UploadFile
 
-from app.runtime_value import RuntimeValues, build_runtime_values
+from app.main_constant import CPP_SOURCE_EXTENSIONS, SOLUTION_SOURCE_EXTENSIONS
 from app.service.platform.workspace_path import (
     contains_symlink_component,
     normalize_workspace_rel_path,
@@ -23,43 +23,7 @@ __all__ = [
 ]
 
 
-CPP_SOURCE_EXTENSIONS: set[str] = set()
-SOLUTION_SOURCE_EXTENSIONS: set[str] = set()
-GENERATOR_SOURCE_EXTENSIONS: set[str] = set()
-TEXTAREA_MAX_BYTES = 256 * 1024
-UPLOAD_MAX_BYTES = 256 * 1024 * 1024
-
-
-def _runtime_global_values(values: RuntimeValues) -> dict[str, object]:
-    """Build the module-level runtime values consumed by existing imports."""
-
-    solution_source_extensions = {
-        str(item).strip().lower() for item in values.SOLUTION_SOURCE_EXTENSIONS
-    }
-    return {
-        "CPP_SOURCE_EXTENSIONS": {
-            str(item).strip().lower() for item in values.CPP_SOURCE_EXTENSIONS
-        },
-        "SOLUTION_SOURCE_EXTENSIONS": solution_source_extensions,
-        "GENERATOR_SOURCE_EXTENSIONS": set(solution_source_extensions),
-        "TEXTAREA_MAX_BYTES": int(values.TEXTAREA_MAX_BYTES),
-        "UPLOAD_MAX_BYTES": int(values.UPLOAD_MAX_BYTES),
-    }
-
-
-def _apply_runtime_values(values: RuntimeValues) -> None:
-    """Refresh module-level limits from runtime values."""
-
-    globals().update(_runtime_global_values(values))
-
-
-def configure_runtime_values(values: RuntimeValues) -> None:
-    """Apply runtime configuration to this helper module."""
-
-    _apply_runtime_values(values)
-
-
-_apply_runtime_values(build_runtime_values())
+GENERATOR_SOURCE_EXTENSIONS = SOLUTION_SOURCE_EXTENSIONS
 
 _LOG_ANSI_ESCAPE_RE = re.compile(r"\x1B\[[0-?]*[ -/]*[@-~]")
 _LOG_CONTROL_CHAR_RE = re.compile(r"[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]")
@@ -244,12 +208,12 @@ def enforce_textarea_max_bytes(
     value: str,
     *,
     label: str,
-    max_bytes: int | None = None,
+    max_bytes: int,
 ) -> str:
     """Validate textarea payload size after newline normalization."""
 
     safe_value = normalize_form_text_newlines(value)
-    cap = TEXTAREA_MAX_BYTES if max_bytes is None else max(1, int(max_bytes))
+    cap = max(1, int(max_bytes))
     if len(safe_value.encode("utf-8")) > cap:
         raise ValueError(f"{label} is too long")
     return safe_value
@@ -258,7 +222,7 @@ def enforce_textarea_max_bytes(
 async def read_upload_bytes_limited(
     upload: UploadFile,
     *,
-    max_bytes: int | None = None,
+    max_bytes: int,
     label: str = "uploaded file",
     chunk_size: int = 1024 * 1024,
 ) -> bytes:
@@ -266,7 +230,7 @@ async def read_upload_bytes_limited(
 
     chunks: list[bytes] = []
     total = 0
-    cap = UPLOAD_MAX_BYTES if max_bytes is None else max(1, int(max_bytes))
+    cap = max(1, int(max_bytes))
     while True:
         chunk = await upload.read(chunk_size)
         if not chunk:
@@ -282,14 +246,14 @@ async def write_upload_file_limited(
     upload: UploadFile,
     handle: BinaryIO,
     *,
-    max_bytes: int | None = None,
+    max_bytes: int,
     label: str = "uploaded file",
     chunk_size: int = 1024 * 1024,
 ) -> int:
     """Stream an UploadFile to a binary handle with a byte cap."""
 
     total = 0
-    cap = UPLOAD_MAX_BYTES if max_bytes is None else max(1, int(max_bytes))
+    cap = max(1, int(max_bytes))
     while True:
         chunk = await upload.read(chunk_size)
         if not chunk:
@@ -304,7 +268,7 @@ async def write_upload_file_limited(
 def read_fileobj_bytes_limited(
     fileobj: BinaryIO,
     *,
-    max_bytes: int | None = None,
+    max_bytes: int,
     label: str = "uploaded file",
     chunk_size: int = 1024 * 1024,
 ) -> bytes:
@@ -312,7 +276,7 @@ def read_fileobj_bytes_limited(
 
     chunks: list[bytes] = []
     total = 0
-    cap = UPLOAD_MAX_BYTES if max_bytes is None else max(1, int(max_bytes))
+    cap = max(1, int(max_bytes))
     while True:
         chunk = fileobj.read(chunk_size)
         if not chunk:
@@ -322,6 +286,29 @@ def read_fileobj_bytes_limited(
             raise ValueError(f"{label} is too large")
         chunks.append(chunk)
     return b"".join(chunks)
+
+
+def write_fileobj_limited(
+    fileobj: BinaryIO,
+    handle: BinaryIO,
+    *,
+    max_bytes: int,
+    label: str = "uploaded file",
+    chunk_size: int = 1024 * 1024,
+) -> int:
+    """Stream a synchronous uploaded file to disk with a compressed-byte cap."""
+
+    total = 0
+    cap = max(1, int(max_bytes))
+    while True:
+        chunk = fileobj.read(chunk_size)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > cap:
+            raise ValueError(f"{label} is too large")
+        handle.write(chunk)
+    return total
 
 
 def sanitize_log_text_for_ui(

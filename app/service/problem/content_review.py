@@ -109,7 +109,7 @@ def problem_content_review(
         truncated=solutions_truncated,
     )
     if safe_solution_count > 0 and not main_solution_ready:
-        solutions_display = f"{solutions_display} · no main correct"
+        solutions_display = f"{solutions_display} \u00b7 no main correct"
     solutions = _check(
         "solutions",
         "Solutions",
@@ -134,7 +134,7 @@ def problem_content_review(
     if language_count == 0:
         language_display = "none"
     elif language_count <= 2:
-        language_display = " · ".join(statement_language_names)
+        language_display = " \u00b7 ".join(statement_language_names)
     else:
         language_display = f"{language_count} languages"
     languages = _check(

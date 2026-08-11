@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import app.main_constant as _K
+
 import re
 from pathlib import Path
 
@@ -12,7 +14,7 @@ from app.service.verification.runtime import coerce_int, normalize_problem_mode
 
 from app.service.verification.result_match import run_verdict_short, verification_solution_match
 
-_C = config.constants
+_C = config.config_values
 _TASK_KIND_MAIN_CORRECT = "main-correct"
 _TEST_NAME_NUM_RE = re.compile(r"^(\d+)\.in$")
 _RUN_LIST_REASON_LIMIT_BYTES = 180
@@ -108,7 +110,7 @@ def _run_timeout_ms_from_summary(summary: dict | None) -> int:
     run_cfg = summary.get("run_config")
     if not isinstance(run_cfg, dict):
         return 0
-    mode = normalize_problem_mode(run_cfg.get("mode"), str(_C.GENERAL_CONFIG_DEFAULTS["mode"]))
+    mode = normalize_problem_mode(run_cfg.get("mode"), str(_K.GENERAL_CONFIG_DEFAULTS["mode"]))
     time_limit_ms = coerce_int(run_cfg.get("time_limit_ms"), 0, 0, int(_C.GENERAL_TIME_LIMIT_MAX_MS))
     if time_limit_ms <= 0:
         return 0
