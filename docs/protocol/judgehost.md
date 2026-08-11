@@ -56,12 +56,13 @@ for a correct case treats any successful HTTP response as delivery and does not
 interpret the body. Its synchronous incorrect-result path converts the response
 body to a boolean to decide whether to continue with remaining work. The
 official server returns its `hasFinalResult` decision from this endpoint; that
-value is neither a completion receipt nor a task identity. These facts are
-checked against the pinned
+value is neither a completion receipt nor a task identity. The relevant
+upstream implementation is documented by the pinned
 [daemon](https://github.com/DOMjudge/domjudge/blob/90bbb727906efb438ac2ec7512c09f17824cfc41/judge/judgedaemon.main.php)
 and
-[server controller](https://github.com/DOMjudge/domjudge/blob/90bbb727906efb438ac2ec7512c09f17824cfc41/webapp/src/Controller/API/JudgehostController.php)
-before the Docker mock runs.
+[server controller](https://github.com/DOMjudge/domjudge/blob/90bbb727906efb438ac2ec7512c09f17824cfc41/webapp/src/Controller/API/JudgehostController.php).
+The Docker mock asserts Polygon-Replica's declared API contract directly; it
+does not clone or approve upstream source before running.
 
 Polygon-Replica deliberately defines a narrower project ACK: successful and
 idempotent `add-judging-run` responses are the JSON integer `1`. A newly accepted

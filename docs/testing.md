@@ -103,33 +103,34 @@ through the production `TexCompileService` and bubblewrap backend in a
 networkless one-shot container; this checks both image formats and the
 production root-switch path rather than only the presence of packages. Network
 isolation here belongs to the one-shot container; it is not a claim that the TeX
-backend itself unshares the network. Before the mock Judgehost can contact the
-application, a
-second one-shot contract container clones the official DOMjudge `9.0.1` tag,
-verifies its exact peeled commit, and checks the endpoint, HTTP method and form
-encoding, required fields and download shapes, and HTTP-success handling used by
-the mock against `judge/judgedaemon.main.php`. It also checks the official
-meaning of the final response plus debug/internal-error persistence against
-`webapp/src/Controller/API/JudgehostController.php`. It then writes both source
-digests into a scoped approval record, which the mock revalidates before every
-request. In particular, the gate proves that the daemon's array-valued debug
-upload is sent as `multipart/form-data`; the mock uses the same encoding.
+backend itself unshares the network.
 
-The mock exercises the official-shaped registration, work lease, file download,
+The mock exercises registration, work lease, file download,
 version report, compile report, and final-result exchange without executing
 untrusted programs or starting a real Judgehost. Its fixture covers successful
 results, CE through `update-judging`, RE, active internal-error, idempotent final
 ACKs, and retry-deduplicated late debug/internal diagnostics. Application, mock,
 and result runner share an internal-only Compose network and publish no host
-port; only the one-shot source verifier has upstream network access. The runner
-first invokes the public Preview route, observes its sample verification and
-materialized input/answer refs, and checks the completed preview. It then runs a
-full verification and observes immutable canonical task results, generated
+port. The runner first invokes the public Preview route, observes its sample
+verification and exact materialized input/answer refs, and checks that TeX read
+the rendered sample files before producing a PDF. It then runs a full
+verification and observes immutable canonical task results, generated
 input/answer blobs, and the separate late-diagnostic snapshot through persisted
-state.
+state. The mock is a project-owned protocol fixture; the test does not clone or
+approve an upstream source tree.
+
+`tests/scripts/e2e-mock.sh` adds the deployed authoring journey. It performs
+first-run setup, Judgehost configuration, problem creation, and every fixture
+file save through public HTTP. It then runs sample preview and full verification,
+commits and publishes the exact authored files, creates a contest, adds the
+published problem, materializes that commit through another full verification,
+and exports the contest statement PDF with two `xelatex` passes. The final
+assertions compare the verified `7`/`49` sample payloads used by `problem.tex`,
+the downloaded PDF, frozen commit/materialization identities, and audit records.
 
 Run the isolated E2E from the repository root:
 
 ```bash
 bash tests/scripts/docker-e2e.sh
+bash tests/scripts/e2e-mock.sh
 ```

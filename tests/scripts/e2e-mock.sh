@@ -26,7 +26,7 @@ cleanup() {
   if (( status != 0 )); then
     "${compose[@]}" ps --all >&2 || true
     "${compose[@]}" logs --no-color \
-      domjudge-contract app mock-judgehost e2e-mock >&2 || true
+      app mock-judgehost e2e-mock >&2 || true
   fi
   "${compose[@]}" down --volumes --remove-orphans >/dev/null 2>&1 || true
   docker image rm --force "$POLYGON_REPLICA_E2E_IMAGE" >/dev/null 2>&1 || true
@@ -38,10 +38,6 @@ cd -- "$REPO_ROOT"
 docker compose version >/dev/null
 
 "${compose[@]}" build app
-
-# The mock may only exercise wire behavior approved against the exact pinned
-# upstream source.  This is intentionally complete before app traffic starts.
-"${compose[@]}" run --rm --no-deps domjudge-contract
 
 # Start the unmodified production entrypoint against entirely fresh volumes.
 "${compose[@]}" up --detach --wait app

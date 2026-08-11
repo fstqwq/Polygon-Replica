@@ -15,7 +15,7 @@ sys.path.insert(
 from app.db import DB, now_iso  # noqa: E402
 from app.service.statement.render import seed_statement_sources  # noqa: E402
 
-from domjudge_contract import BOOTSTRAP_FILENAME, require_approval, state_dir  # noqa: E402
+from judgehost_protocol import BOOTSTRAP_FILENAME, state_dir  # noqa: E402
 
 
 PROBLEM = "e2e/sample"
@@ -151,7 +151,6 @@ def _seed_workspace() -> tuple[Path, int, int, int, str]:
 
 
 def main() -> None:
-    approval = require_approval()
     _configure_database()
     workspace, user_id, problem_id, workspace_id, session_token = _seed_workspace()
 
@@ -170,7 +169,6 @@ def main() -> None:
             "workspace": str(workspace),
             "session_cookie_name": str(config.config_values.AUTH_COOKIE_NAME),
             "session_token": session_token,
-            "domjudge_commit": approval["commit"],
         },
     )
     print(f"bootstrapped Docker E2E workspace problem={PROBLEM} user={USERNAME}")

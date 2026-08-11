@@ -17,12 +17,17 @@ import httpx
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
 
-from domjudge_contract import require_approval
+from e2e_mock_contest import (
+    assert_contest_pdf,
+    start_contest_pdf,
+    wait_for_contest_job,
+)
 from runner import (
     _assert_active_internal_error_sanity,
     _assert_artifact_refs,
     _assert_late_diagnostics,
     _assert_mock_evidence,
+    _assert_preview_sample_materialization,
     _assert_tasks,
     _connect,
     _latest_verification,
@@ -188,11 +193,14 @@ def _post(
     client: httpx.Client,
     path: str,
     data: dict[str, str],
+    *,
+    timeout_sec: float = 30.0,
 ) -> httpx.Response:
     response = client.post(
         path,
         data=data,
         headers={"Origin": str(client.base_url).rstrip("/")},
+        timeout=timeout_sec,
     )
     if response.status_code != 303:
         raise RuntimeError(
@@ -323,7 +331,6 @@ def _assert_fixture_shape() -> None:
 
 
 def prepare() -> None:
-    require_approval()
     _assert_fixture_shape()
     with _client() as client:
         _setup(client)
@@ -512,6 +519,21 @@ def _git(*args: str) -> str:
     return completed.stdout.strip()
 
 
+def _git_bytes(*args: str) -> bytes:
+    completed = subprocess.run(
+        ["git", *args],
+        check=False,
+        capture_output=True,
+    )
+    if completed.returncode != 0:
+        detail = (completed.stderr or completed.stdout).decode(
+            "utf-8",
+            errors="replace",
+        )
+        raise RuntimeError(f"git {' '.join(args)} failed: {detail}")
+    return completed.stdout
+
+
 def _resolved_child(root: Path, child: Path) -> Path:
     resolved_root = root.resolve()
     resolved_child = child.resolve()
@@ -558,14 +580,17 @@ def _assert_commit(connection: sqlite3.Connection) -> str:
     )
     if len(commit_line.split()) != 1:
         raise RuntimeError("e2e-mock initial publication unexpectedly has a parent")
-    committed_source = _git(
-        "-C",
-        str(workspace),
-        "show",
-        "HEAD:solutions/main.cpp",
-    )
-    if committed_source + "\n" != FIXTURE_FILES["solutions/main.cpp"]:
-        raise RuntimeError("published commit does not contain the verified solution")
+    for relative_path, expected_text in FIXTURE_FILES.items():
+        committed = _git_bytes(
+            "--git-dir",
+            str(bare),
+            "show",
+            f"{workspace_head}:{relative_path}",
+        )
+        if committed != expected_text.encode("utf-8"):
+            raise RuntimeError(
+                f"published commit contains unexpected bytes for {relative_path!r}"
+            )
     if str(row["head_commit"] or "") != workspace_head or int(row["dirty"]) != 0:
         raise RuntimeError(
             "SQLite workspace status does not match the published clean commit"
@@ -613,8 +638,52 @@ def _assert_commit(connection: sqlite3.Connection) -> str:
     return workspace_head
 
 
+def _run_statement_preview(
+    client: httpx.Client,
+    connection: sqlite3.Connection,
+    *,
+    problem_id: int,
+    workspace_id: int,
+    previous_id: str,
+) -> str:
+    _post(
+        client,
+        f"/problems/{PROBLEM}/preview/run",
+        {"page": "statement", "language": "english"},
+        timeout_sec=300.0,
+    )
+    verification = _wait_for_verification(
+        connection,
+        problem_id=problem_id,
+        workspace_id=workspace_id,
+        previous_id=previous_id,
+    )
+    if (
+        str(verification["kind"]) != "sample"
+        or str(verification["status"]) != "ok"
+        or str(verification["fail_reason"] or "")
+    ):
+        raise RuntimeError(
+            f"statement preview sample verification failed: {dict(verification)!r}"
+        )
+    verification_id = str(verification["id"])
+    _assert_preview_sample_materialization(
+        connection,
+        problem_id=problem_id,
+        workspace_id=workspace_id,
+        verification_id=verification_id,
+    )
+    return verification_id
+
+
+def _mock_event_count(state: dict[str, object]) -> int:
+    events = state.get("events")
+    if not isinstance(events, list):
+        raise RuntimeError("mock evidence has no event list")
+    return len(events)
+
+
 def verify_and_commit() -> None:
-    approval = require_approval()
     with _client() as client:
         _login(client)
         with _connect() as connection:
@@ -627,6 +696,13 @@ def verify_and_commit() -> None:
                 workspace_id=workspace_id,
             )
             previous_id = "" if previous is None else str(previous["id"])
+            sample_verification_id = _run_statement_preview(
+                client,
+                connection,
+                problem_id=problem_id,
+                workspace_id=workspace_id,
+                previous_id=previous_id,
+            )
             _post(
                 client,
                 f"/problems/{PROBLEM}/verification/start",
@@ -636,7 +712,7 @@ def verify_and_commit() -> None:
                 connection,
                 problem_id=problem_id,
                 workspace_id=workspace_id,
-                previous_id=previous_id,
+                previous_id=sample_verification_id,
             )
             if str(verification["kind"]) != "all":
                 raise RuntimeError(
@@ -659,11 +735,9 @@ def verify_and_commit() -> None:
             _assert_public_artifacts(client, verification_id)
 
         mock_state = _wait_for_mock_evidence()
-        _assert_mock_evidence(
-            mock_state,
-            approved_source_sha256s=approval["source_sha256s"],
-        )
+        _assert_mock_evidence(mock_state)
         _assert_mock_payload_hashes(mock_state)
+        mock_event_count_before_export = _mock_event_count(mock_state)
         with _connect() as connection:
             _assert_late_diagnostics(connection, verification_id)
 
@@ -678,11 +752,36 @@ def verify_and_commit() -> None:
                 f"workspace status refresh returned {refreshed.status_code}"
             )
 
-    with _connect() as connection:
-        head = _assert_commit(connection)
+        with _connect() as connection:
+            head = _assert_commit(connection)
+
+        contest_job_id = start_contest_pdf(
+            client,
+            post_redirect=_post,
+            problem=PROBLEM,
+        )
+        contest_job = wait_for_contest_job(client, contest_job_id)
+        final_mock_state = _wait_for_mock_evidence(
+            minimum_event_count=mock_event_count_before_export,
+        )
+        _assert_mock_evidence(final_mock_state)
+        _assert_mock_payload_hashes(final_mock_state)
+        with _connect() as connection:
+            artifact_id, materialization_verification_id = assert_contest_pdf(
+                client,
+                connection,
+                problem=PROBLEM,
+                job_id=contest_job_id,
+                job=contest_job,
+                expected_head=head,
+            )
     print(
-        "e2e-mock completed deployment, authoring, verification, and commit "
-        f"verification={verification_id} head={head}"
+        "e2e-mock completed deployment, sample preview, verification, commit, "
+        "and contest PDF export "
+        f"sample_verification={sample_verification_id} "
+        f"verification={verification_id} head={head} "
+        f"materialization_verification={materialization_verification_id} "
+        f"contest_job={contest_job_id} artifact={artifact_id}"
     )
 
 

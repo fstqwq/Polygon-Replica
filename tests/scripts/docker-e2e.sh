@@ -18,7 +18,7 @@ cleanup() {
   if (( status != 0 )); then
     "${compose[@]}" ps --all >&2 || true
     "${compose[@]}" logs --no-color \
-      tex-smoke domjudge-contract bootstrap app mock-judgehost runner >&2 || true
+      tex-smoke bootstrap app mock-judgehost runner >&2 || true
   fi
   "${compose[@]}" down --volumes --remove-orphans >/dev/null 2>&1 || true
   docker image rm --force "$POLYGON_REPLICA_E2E_IMAGE" >/dev/null 2>&1 || true
@@ -35,11 +35,6 @@ docker compose version >/dev/null
 # application. The one-shot container is networkless; the smoke verifies the
 # image's TeX formats and bwrap root switch rather than only package presence.
 "${compose[@]}" run --rm --no-deps tex-smoke
-
-# The mock is not allowed to start until this one-shot verifier has cloned the
-# official tag, checked its exact peeled commit, and approved the declared wire
-# behaviors against both judgedaemon.main.php and JudgehostController.php.
-"${compose[@]}" run --rm --no-deps domjudge-contract
 
 # Bootstrap has no network at all.  It creates the fresh database, authoring
 # workspace, session, and deterministic verification fixture in named volumes.

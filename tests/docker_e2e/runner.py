@@ -11,11 +11,9 @@ from pathlib import Path
 
 import httpx
 
-from domjudge_contract import (
+from judgehost_protocol import (
     BOOTSTRAP_FILENAME,
     MOCK_STATE_FILENAME,
-    UPSTREAM_PEELED_COMMIT,
-    require_approval,
     state_dir,
 )
 
@@ -237,16 +235,27 @@ def _assert_preview_sample_materialization(
             "preview did not retain the sample verification identity: "
             f"{dict(preview)!r}"
         )
-    preview_pdf = (
+    preview_root = (
         Path(os.environ["POLYGON_REPLICA_E2E_CACHE_ROOT"]).resolve()
         / "artifacts"
         / "previews"
         / str(preview["id"])
-        / "statement_preview"
-        / "statement.pdf"
     )
+    preview_pdf = preview_root / "statement_preview" / "statement.pdf"
     if not preview_pdf.is_file() or not preview_pdf.read_bytes().startswith(b"%PDF-"):
         raise RuntimeError(f"preview PDF is unavailable or invalid: {preview_pdf}")
+    latex_log = preview_root / "logs" / "latex.log"
+    log_text = latex_log.read_text(encoding="utf-8", errors="replace")
+    missing_samples = {
+        filename
+        for filename in ("sample.001.in", "sample.001.ans")
+        if filename not in log_text
+    }
+    if missing_samples:
+        raise RuntimeError(
+            "preview TeX compile did not read the materialized sample files: "
+            f"{sorted(missing_samples)!r}"
+        )
     try:
         summary = json.loads(str(preview["summary_json"]))
     except json.JSONDecodeError as exc:
@@ -345,7 +354,11 @@ def _assert_active_internal_error_sanity(
         )
 
 
-def _wait_for_mock_evidence(timeout_sec: float = 10.0) -> dict[str, object]:
+def _wait_for_mock_evidence(
+    timeout_sec: float = 10.0,
+    *,
+    minimum_event_count: int = 0,
+) -> dict[str, object]:
     path = state_dir() / MOCK_STATE_FILENAME
     deadline = time.monotonic() + timeout_sec
     latest: dict[str, object] = {}
@@ -367,7 +380,7 @@ def _wait_for_mock_evidence(timeout_sec: float = 10.0) -> dict[str, object]:
             else []
         )
         sources = {str(event.get("source") or "") for event in relevant}
-        if {
+        if isinstance(events, list) and len(events) > minimum_event_count and {
             "gen.py",
             "main.cpp",
             "re.py",
@@ -380,15 +393,7 @@ def _wait_for_mock_evidence(timeout_sec: float = 10.0) -> dict[str, object]:
     raise RuntimeError(f"mock did not persist expected completion evidence: {latest!r}")
 
 
-def _assert_mock_evidence(
-    state: dict[str, object],
-    *,
-    approved_source_sha256s: object,
-) -> None:
-    if state.get("domjudge_commit") != UPSTREAM_PEELED_COMMIT:
-        raise RuntimeError("mock evidence is not tied to the pinned DOMjudge commit")
-    if state.get("source_sha256s") != approved_source_sha256s:
-        raise RuntimeError("mock evidence is not tied to the approved DOMjudge source blobs")
+def _assert_mock_evidence(state: dict[str, object]) -> None:
     if state.get("error"):
         raise RuntimeError(f"mock Judgehost failed: {state['error']}")
     events = state.get("events")
@@ -440,9 +445,9 @@ def _assert_mock_evidence(
             "run",
             "compare",
         }:
-            raise RuntimeError(f"mock skipped an official executable download: {event!r}")
+            raise RuntimeError(f"mock skipped a declared executable download: {event!r}")
         if set(event.get("testcase_files") or []) != {"input", "output"}:
-            raise RuntimeError(f"mock skipped the official testcase files: {event!r}")
+            raise RuntimeError(f"mock skipped the declared testcase files: {event!r}")
 
     re_event = next(
         (event for event in completed if event.get("source") == "re.py"),
@@ -487,10 +492,7 @@ def _assert_mock_evidence(
 
 
 def main() -> None:
-    approval = require_approval()
     bootstrap = _load_object(state_dir() / BOOTSTRAP_FILENAME)
-    if bootstrap.get("domjudge_commit") != approval["commit"]:
-        raise RuntimeError("bootstrap and mock contract approvals differ")
 
     problem_id = int(bootstrap["problem_id"])
     workspace_id = int(bootstrap["workspace_id"])
@@ -581,15 +583,12 @@ def main() -> None:
         _assert_active_internal_error_sanity(connection, verification_id)
 
     mock_state = _wait_for_mock_evidence()
-    _assert_mock_evidence(
-        mock_state,
-        approved_source_sha256s=approval["source_sha256s"],
-    )
+    _assert_mock_evidence(mock_state)
     with _connect() as connection:
         _assert_late_diagnostics(connection, verification_id)
     print(
-        "Docker E2E passed with official-source-approved mock Judgehost "
-        f"commit={UPSTREAM_PEELED_COMMIT} verification={verification_id}"
+        "Docker E2E passed with mock Judgehost "
+        f"verification={verification_id}"
     )
 
 

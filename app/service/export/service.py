@@ -25,7 +25,6 @@ from app.service.export.icpc_package import (
 )
 from app.service.platform.hashing import sha256_file
 from app.service.platform.fs.op import extract_git_archive, remove_symlinks
-from app.service.problem.test_spec import dumps_tests_spec, load_tests_spec
 from app.service.problem.solution_metadata import infer_expected_behavior_from_name, normalize_expected_behavior, parse_solution_desc
 from app.service.statement.render import render_statement_main
 from app.service.statement.tex_compile import TexCompileService
@@ -37,6 +36,7 @@ from app.service.platform.workspace_path import (
     is_repository_answer_path,
 )
 from app.service.problem_package.service import NativePackageReader, ProblemPackageService
+from app.service.problem_package.statement_samples import hydrate_native_statement_samples
 
 
 class ExportService:
@@ -694,36 +694,6 @@ class ExportService:
             newline="\n",
         )
 
-    def _hydrate_statement_samples(self, native: NativePackageReader) -> None:
-        """Populate the converter's private source copy from Native judge data."""
-
-        limits = self.db.config_values.snapshot()
-        tests_spec_max_bytes = int(limits["TEXTAREA_MAX_BYTES"])
-        spec_path = native.root / "tests" / "spec.json"
-        rows = load_tests_spec(spec_path, max_bytes=tests_spec_max_bytes)
-        manifest_by_id = {row["id"]: row for row in native.manifest["tests"]}
-        changed = False
-        for row in rows:
-            if not bool(row["sample"]):
-                continue
-            materialized = manifest_by_id.get(str(row["id"]))
-            if materialized is None:
-                raise ValueError(f"Native manifest is missing test: {row['id']}")
-            input_path = native.payload(materialized, "sample_input") or native.payload(materialized, "input")
-            output_path = native.payload(materialized, "sample_output") or native.payload(materialized, "answer")
-            if not row["sample_input"] and input_path is not None:
-                row["sample_input"] = input_path.read_text(encoding="utf-8", errors="replace")
-                changed = True
-            if not row["sample_output"] and output_path is not None:
-                row["sample_output"] = output_path.read_text(encoding="utf-8", errors="replace")
-                changed = True
-        if changed:
-            spec_path.write_text(
-                dumps_tests_spec(rows, max_bytes=tests_spec_max_bytes),
-                encoding="utf-8",
-                newline="\n",
-            )
-
     def _build_icpc_package(
         self,
         *,
@@ -752,7 +722,11 @@ class ExportService:
         validator_source = self._effective_validator_source(snapshot, strict=True)
 
         samples_as_secret = self._keep_samples_out_of_domjudge_sample_data(mode, pass_limit)
-        self._hydrate_statement_samples(native)
+        limits = self.db.config_values.snapshot()
+        hydrate_native_statement_samples(
+            native,
+            tests_spec_max_bytes=int(limits["TEXTAREA_MAX_BYTES"]),
+        )
 
         statement_languages_to_export = self._statement_export_languages(snapshot)
         statement_dir = package_root / "statement"
