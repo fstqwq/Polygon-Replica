@@ -2,8 +2,9 @@
 
 ## Status and baseline
 
-This is the active plan for the next parallel refactoring pass. The previous
-three-batch plan is complete and is not an implementation target for this pass.
+This pass is implemented on `main` through `90fae55`. Linux acceptance remains
+pending; no test suite was run on Windows. The previous three-batch plan is
+complete and is not an implementation target for this pass.
 
 All implementation worktrees start from:
 
@@ -11,8 +12,21 @@ All implementation worktrees start from:
 7cebb3acb36b0bfb0e01ebee8a5f2eb012174c8d
 ```
 
-The coordinator remains in the `main` worktree. Three implementation agents use
-dedicated branches and worktrees. They must not edit another agent's worktree.
+The coordinator used the `main` worktree. Three implementation agents used
+dedicated branches and worktrees without editing another agent's worktree.
+
+## Delivery record
+
+- Runtime lifecycle: `9e887e5`, `a585c9e`.
+- Judgehost callback ingestion: `618ee2c`, `f50ae56`, `0aa53cd`, `a7bf5f3`.
+- Canonical package identity and SQLite cleanup: `5fa8732`, `8273f77`,
+  `72f8a34`.
+- Rebased deployed mock-Judgehost E2E range: `542a4da` through `90fae55`.
+- Coordinator plan checkpoint: `7dc9690`.
+
+Independent review findings were fixed before integration. Per the final
+operator decision, the Docker mock asserts the project-owned Judgehost protocol
+and does not clone or approve pinned upstream DOMjudge source.
 
 ## Canonical decisions
 
@@ -87,6 +101,7 @@ Contest package identity
 | Agent 1: Package and SQLite | `codex/package-artifact-identity` | `C:\code\Polygon-Replica\worktrees\package-artifact-identity` | Canonical problem exports, contest metadata rewrite, export schema, obsolete workspace field |
 | Agent 2: Judgehost ingestion | `codex/judgehost-callback-ingestion` | `C:\code\Polygon-Replica\worktrees\judgehost-callback-ingestion` | Split callback ingestion responsibilities without behavior changes |
 | Agent 3: Runtime lifecycle | `codex/runtime-lifecycle` | `C:\code\Polygon-Replica\worktrees\runtime-lifecycle` | Move process lifecycle out of private auth implementation |
+| E2E integration | `tests/e2e-mock` | `C:\code\Polygon-Replica-e2e-mock` | Rebase the deployed mock workflow and contest PDF journey onto the integrated implementation |
 
 The worktrees and branches already exist at the baseline commit above.
 
@@ -486,7 +501,7 @@ After all commits are integrated:
 
 - run all four resource groups: `unit`, `service`, `executor`, and `e2e`;
 - run all static checks and the resource manifest;
-- run the Docker mock Judgehost E2E and pinned DOMjudge 9.0.1 source gate;
+- run the project-owned deployed mock Judgehost E2E;
 - inspect fresh and upgraded SQLite schemas;
 - inspect one canonical ICPC ZIP plus two contest variants with different
   labels;
