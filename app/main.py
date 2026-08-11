@@ -10,10 +10,10 @@ from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.types import ASGIApp, Receive, Scope, Send
 
-import app.impl.auth.internal.runtime as auth_runtime
 import app.impl.auth.middleware as auth_http
-from app.impl.runtime.config import config
+import app.impl.runtime.lifecycle as runtime_lifecycle
 from app.impl.auth.shared import _apply_security_headers
+from app.impl.runtime.config import config
 from app.route import (
     admin_route,
     tests_route,
@@ -75,11 +75,11 @@ class MaintenanceAdmissionMiddleware:  # pylint: disable=too-few-public-methods
 async def lifespan(_app: FastAPI):
     """Start and stop process-wide runtime helpers."""
 
-    auth_runtime.startup()
+    runtime_lifecycle.startup()
     try:
         yield
     finally:
-        auth_runtime.shutdown()
+        runtime_lifecycle.shutdown()
 
 
 app = FastAPI(title="Polygonlike", lifespan=lifespan)

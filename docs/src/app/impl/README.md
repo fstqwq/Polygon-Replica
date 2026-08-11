@@ -9,3 +9,5 @@ Reusable domain behavior generally lives in `app/service`. Current large read
 models, contest build policy, verification planning adapters, and runtime
 composition that remain here are recorded in the
 [findings ledger](../../../implementation/findings.md#placement-and-maintainability).
+`app/impl/runtime/config.py` constructs the service graph, while
+`app/impl/runtime/lifecycle.py` owns process startup and shutdown orchestration.

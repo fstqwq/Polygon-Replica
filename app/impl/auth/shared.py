@@ -10,8 +10,8 @@ from urllib.parse import parse_qsl, quote_plus, urlencode, urlparse, urlunparse
 from fastapi import HTTPException, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 
+import app.impl.runtime.lifecycle as runtime_lifecycle
 import app.main_constant as _K
-from app.impl.auth.internal import runtime
 from app.impl.contest.workspace_scope import (
     problem_template_navigation,
 )
@@ -21,7 +21,7 @@ from app.service.platform.hashing import hmac_sha256_hex, sha256_hex_bytes
 _C = config.config_values
 
 def _runtime_judgehost_health_profile() -> dict[str, str]:
-    return runtime._runtime_judgehost_health_profile()
+    return runtime_lifecycle._runtime_judgehost_health_profile()
 
 def parse_iso_utc(raw: str) -> datetime | None:
     text = str(raw or "").strip()

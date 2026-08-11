@@ -3,7 +3,7 @@ from __future__ import annotations
 import sqlite3
 from unittest.mock import patch
 
-from app.impl.auth.internal.runtime import (
+from app.impl.runtime.lifecycle import (
     _startup_clear_all_caches,
     _startup_reset_runtime_state,
 )
@@ -66,11 +66,11 @@ class TestRuntimeStartupE2E(BackendE2ETestBase):
         install_startup_recovery_abort_fault()
         try:
             with patch(
-                "app.impl.auth.internal.runtime._startup_cancel_summary_rows"
+                "app.impl.runtime.lifecycle._startup_cancel_summary_rows"
             ), patch(
-                "app.impl.auth.internal.runtime._startup_cancel_judgehost_inflight"
+                "app.impl.runtime.lifecycle._startup_cancel_judgehost_inflight"
             ) as cancel_judgehost, patch(
-                "app.impl.auth.internal.runtime._startup_clear_all_caches",
+                "app.impl.runtime.lifecycle._startup_clear_all_caches",
                 wraps=_startup_clear_all_caches,
             ) as clear_caches:
                 with self.assertRaisesRegex(

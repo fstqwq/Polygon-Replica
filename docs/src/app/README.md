@@ -9,9 +9,8 @@ fixed invariants. `app/main_util.py` contains shared boundary helpers.
 Subpackages separate HTTP registration (`route`), request/use-case handling
 (`impl`), reusable domain services (`service`), and rendered assets
 (`static`/`template`). The service graph is constructed in
-`app/impl/runtime/config.py`; startup and shutdown orchestration remains in
-`app/impl/auth/internal/runtime.py`, the placement described by
-[PLC-001](../../implementation/findings.md#placement-and-maintainability).
+`app/impl/runtime/config.py`; `app/impl/runtime/lifecycle.py` owns startup and
+shutdown orchestration.
 
 The normal dependency direction is `route` to `impl` to `service`. Modules in
 all three layers may use the small application support modules at `app/` where

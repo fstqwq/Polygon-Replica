@@ -43,7 +43,8 @@ does not require root.
 
 ## Startup and shutdown
 
-Startup initializes metadata, marks interrupted package/export work failed,
+Runtime composition owns application startup and shutdown. Startup initializes
+metadata, marks interrupted package/export work failed,
 applies durable configuration, and atomically terminalizes unfinished
 verification parents and tasks before deleting their runtime blobs. A failed
 verification recovery aborts startup. It then reconciles other unfinished

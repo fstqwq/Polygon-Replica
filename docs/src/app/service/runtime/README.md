@@ -7,9 +7,7 @@ configuration and startup reason/time; outputs are canonical toolchain values
 and reconciliation warnings. It owns no independent persistent store.
 
 Application-wide dependency construction occurs in `app/impl/runtime/config.py`
-and lifecycle orchestration in `app/impl/auth/internal/runtime.py`; that split is
-tracked as
-[PLC-001](../../../../implementation/findings.md#placement-and-maintainability).
+and lifecycle orchestration in `app/impl/runtime/lifecycle.py`.
 Restart behavior is owned by the
 [execution](../../../../protocol/execution.md) and
 [storage](../../../../protocol/storage.md) protocols.
