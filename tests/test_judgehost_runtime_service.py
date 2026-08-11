@@ -237,7 +237,7 @@ class TestJudgehostRuntimeService(DBTestBase):
         self.config_values.replace(
             {
                 **self.config_values.snapshot(),
-                "JUDGEHOST_ONLINE_WINDOW_SEC": 1,
+                "JUDGEHOST_ONLINE_WINDOW_SEC": 5,
             }
         )
         self.service.domjudge_register_host(host)
