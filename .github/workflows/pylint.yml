@@ -61,3 +61,22 @@ jobs:
         name: test-timings-${{ matrix.group }}
         path: .test-results/${{ matrix.group }}.json
         if-no-files-found: warn
+
+  e2e-mock:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    permissions:
+      contents: read
+    steps:
+    - uses: actions/checkout@v6
+      with:
+        persist-credentials: false
+    - name: Configure sandbox namespaces
+      run: |
+        sudo sysctl -w kernel.unprivileged_userns_clone=1 || true
+        sudo sysctl -w user.max_user_namespaces=1048576
+        if sysctl -n kernel.apparmor_restrict_unprivileged_userns >/dev/null 2>&1; then
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+        fi
+    - name: Run deployed mock-Judgehost E2E
+      run: bash tests/scripts/e2e-mock.sh
