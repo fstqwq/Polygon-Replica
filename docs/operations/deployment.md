@@ -161,7 +161,8 @@ own image pinning and upgrade validation.
 
 ## Upgrade
 
-Create a backup first. Then update one deployment at a time.
+Create and download a source backup from Admin first. Then update one deployment
+at a time.
 
 Systemd:
 
@@ -188,54 +189,39 @@ Project-owned removed shapes are not kept through compatibility layers.
 
 ## Backup
 
-Backups must be taken while the application is stopped so SQLite, Git, and
-filesystem roots describe one point in time. Also retain the encryption key and
-TLS/proxy configuration through the operator's secret/configuration backup.
-`cache_root` is disposable and is not backed up.
+Open Admin and use **Create source backup**. The action closes the site-wide
+maintenance gate, refuses to start until active requests and runtime work have
+drained, and then archives the complete bare Git and workspace roots. While it
+runs, `/maintenance` shows progress and other site requests receive a temporary
+maintenance response.
 
-For systemd, stop the service and archive the durable roots plus complete
-artifacts if desired:
+After it succeeds, use **Download latest backup**. The application retains one
+published file at `backup_root/source-backup/latest.tar.gz`; a later successful
+run atomically replaces it. Move the downloaded file to independent off-host
+storage if it must survive loss of the application host.
 
-```bash
-stamp="$(date -u +%Y%m%dT%H%M%SZ)"
-sudo systemctl stop polygon-replica.service
-sudo tar --acls --xattrs -C / -czf \
-  "/var/backups/polygon-replica/system-$stamp.tgz" \
-  var/lib/polygon-replica \
-  srv/polygon-replica
-sudo systemctl start polygon-replica.service
-```
-
-For Compose, stop the app, discover the actual volume names with
-`docker volume ls`, and mount the `srv` and `var` volumes read-only into a backup
-container:
-
-```bash
-sudo docker compose stop app
-sudo docker run --rm \
-  -v <project>_srv:/srv/polygon-replica:ro \
-  -v <project>_var:/var/lib/polygon-replica:ro \
-  -v /var/backups/polygon-replica:/backup \
-  alpine sh -c 'tar czf /backup/compose.tgz /srv/polygon-replica /var/lib/polygon-replica'
-sudo docker compose start app
-```
-
-The separately mounted backup root is permanent operator data; include it in an
-off-host backup policy rather than recursively archiving it into itself.
+The archive contains committed problem history and every workspace, including
+uncommitted files. It deliberately excludes SQLite, contest source and
+attachments, artifacts, caches, other backup-root content, application code,
+the encryption key, and TLS/proxy configuration. Keep secrets and deployment
+configuration under the operator's separate secret/configuration backup policy.
+This source archive is not a full application-state backup.
 
 ## Restore
 
-Restore onto an empty replacement location or move the current roots aside; do
-not overlay an archive onto a running or partially populated installation.
+There is no in-application restore action. Treat the download as a source
+recovery archive:
 
 1. Stop the application and Judgehosts.
-2. Verify the archive checksum and inspect its member paths.
-3. Restore `/var/lib/polygon-replica` and `/srv/polygon-replica` (or the matching
-   Compose volumes), then restore the same encryption key and proxy/TLS config.
-4. Set ownership to the configured runtime uid/gid.
-5. Start only one application process and inspect startup reconciliation logs.
-6. Check login, published problems, workspace status, artifact downloads,
-   contest attachments, and Judgehost registration before reopening traffic.
+2. Inspect `manifest.json` and the member paths before extraction.
+3. Extract into an isolated staging directory, not over live roots.
+4. Replace the configured bare Git and workspace roots from the staged `bare/`
+   and `workspaces/` trees, then restore runtime ownership.
+5. Reconcile or recreate the SQLite metadata that identifies those repositories
+   and workspaces; it is not present in this archive.
+6. Start one application process and validate repository history and workspace
+   contents before reopening traffic.
 
-After an in-place recovery, keep the displaced roots until the restored service
-has passed these checks. Never restore `cache_root`; startup recreates it.
+If an operator also retains a matching SQLite copy, it may be restored through
+the operator's offline procedure. Mixing source roots with unrelated SQLite
+metadata is not a supported point-in-time restore.

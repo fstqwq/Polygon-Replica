@@ -5,7 +5,7 @@ from typing import Annotated, TypedDict
 from urllib.parse import quote, quote_plus, urlencode
 
 from fastapi import Depends, Form, HTTPException, Request
-from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 
 from app.impl.auth.csrf import issue_password_form_csrf_token, verify_password_form_csrf_token
 from app.impl.auth.password_envelope import password_envelope_store
@@ -24,6 +24,7 @@ from app.impl.workspace.access import require_system_admin
 from app.impl.workspace.context import global_user_ctx
 from app.impl.workspace.context_operation import audit
 from app.main_util import form_text
+from app.service.platform.source_backup import SOURCE_BACKUP_DOWNLOAD_NAME
 from app.service.verification.runtime import coerce_int
 
 
@@ -203,6 +204,14 @@ def _artifact_usage_view() -> ArtifactUsageView:
     }
 
 
+def _source_backup_view() -> dict[str, object]:
+    summary = config.source_backup_service.latest_summary()
+    return {
+        **summary,
+        "size_label": _storage_size_label(int(summary["size_bytes"])),
+    }
+
+
 def _duration_label(age_sec: object) -> str:
     if not isinstance(age_sec, int) or age_sec < 0:
         return "unknown"
@@ -355,6 +364,7 @@ def admin_overview_page(
             "smtp": config.smtp_config_service.snapshot().__dict__,
             "maintenance_status": config.maintenance_service.snapshot(),
             "artifact_usage": _artifact_usage_view(),
+            "source_backup": _source_backup_view(),
         }
     )
     return template_response(request, "admin_overview.html", page)
@@ -458,11 +468,54 @@ def admin_artifacts_cleanup(user: Annotated[str, Depends(require_session_user)])
     _ctx, actor_user_id = _admin_user_context(user)
     started = config.maintenance_service.start_cleanup(actor_user_id=actor_user_id)
     if started.accepted or started.reason == "already_running":
-        return RedirectResponse("/maintenance", status_code=303, headers={"Cache-Control": "no-store"})
+        return RedirectResponse(
+            "/maintenance",
+            status_code=303,
+            headers={"Cache-Control": "no-store"},
+        )
     return JSONResponse(
         {"error": started.reason, "busy": dict(started.busy)},
         headers={"Cache-Control": "no-store"},
         status_code=409 if started.reason == "busy" else 500,
+    )
+
+
+def admin_source_backup(
+    user: Annotated[str, Depends(require_session_user)],
+):
+    """Take the site offline and create the single latest source backup."""
+
+    _ctx, actor_user_id = _admin_user_context(user)
+    started = config.maintenance_service.start_source_backup(
+        actor_user_id=actor_user_id
+    )
+    if started.accepted or started.reason == "already_running":
+        return RedirectResponse(
+            "/maintenance",
+            status_code=303,
+            headers={"Cache-Control": "no-store"},
+        )
+    return JSONResponse(
+        {"error": started.reason, "busy": dict(started.busy)},
+        headers={"Cache-Control": "no-store"},
+        status_code=409 if started.reason == "busy" else 500,
+    )
+
+
+def admin_source_backup_download(
+    user: Annotated[str, Depends(require_session_user)],
+) -> FileResponse:
+    """Stream the single latest source backup to a system administrator."""
+
+    _admin_user_context(user)
+    archive = config.source_backup_service.latest_archive_path()
+    if archive is None:
+        raise HTTPException(status_code=404, detail="source backup not found")
+    return FileResponse(
+        archive,
+        media_type="application/gzip",
+        filename=SOURCE_BACKUP_DOWNLOAD_NAME,
+        headers={"Cache-Control": "no-store"},
     )
 
 

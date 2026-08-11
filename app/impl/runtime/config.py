@@ -42,6 +42,7 @@ from app.service.platform.maintenance import (
     MaintenanceCoordinator,
     validate_runtime_startup_preconditions,
 )
+from app.service.platform.source_backup import SourceBackupService
 from app.service.repository import workspace
 from app.setting import Settings, load_settings
 
@@ -77,6 +78,7 @@ class RuntimeConfig:
     problem_readiness_service: ProblemReadinessService = field(init=False)
     worker_queue_service: WorkerQueueService = field(init=False)
     artifact_cleanup_service: ArtifactCleanupService = field(init=False)
+    source_backup_service: SourceBackupService = field(init=False)
     maintenance_service: MaintenanceCoordinator = field(init=False)
     system_config_service: SystemConfigService = field(init=False)
     smtp_config_service: SmtpConfigService = field(init=False)
@@ -264,10 +266,15 @@ class RuntimeConfig:
             self.verification_task_store,
             self._reset_process_job_tracking,
         )
+        self.source_backup_service = SourceBackupService(
+            self.db,
+            self.settings,
+        )
         self.maintenance_service = MaintenanceCoordinator(
             self.artifact_cleanup_service,
             self.worker_queue_service,
             self.judgehost_task_service,
+            source_backup_service=self.source_backup_service,
         )
         self.worker_queue_service.set_admission_gate(
             self.maintenance_service.admission_gate

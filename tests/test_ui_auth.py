@@ -16,7 +16,7 @@ from app import main_constant
 from app.config import CONFIG_REGISTRY, ConfigKind
 from app.impl.auth.password_envelope import PasswordEnvelopeStore
 from app.impl.root.auth_pages import logout
-from app.service.platform.maintenance import CleanupStart
+from app.service.platform.maintenance import MaintenanceStart
 from tests.common import E2ETestBase, override_config_values
 
 from tests.ui_support import (
@@ -1198,6 +1198,8 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
                 "/admin/users",
                 "/admin/mail",
                 "/admin/config/{category}",
+                "/admin/maintenance/source-backup",
+                "/admin/maintenance/source-backup/latest",
             }.issubset(route_paths)
         )
         self.assertTrue(
@@ -1218,7 +1220,7 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         with patch.object(
             config.maintenance_service,
             "start_cleanup",
-            return_value=CleanupStart(True, "started", {}),
+            return_value=MaintenanceStart(True, "started", {}),
         ):
             accepted = admin_panel_module.admin_artifacts_cleanup(user="alice")
         self.assertEqual(accepted.status_code, 303)
@@ -1235,11 +1237,20 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         with patch.object(
             config.maintenance_service,
             "start_cleanup",
-            return_value=CleanupStart(False, "busy", busy_counts),
+            return_value=MaintenanceStart(False, "busy", busy_counts),
         ):
             busy = admin_panel_module.admin_artifacts_cleanup(user="alice")
         self.assertEqual(busy.status_code, 409)
         self.assertIn(b'"worker_queued":1', busy.body)
+
+        with patch.object(
+            config.maintenance_service,
+            "start_source_backup",
+            return_value=MaintenanceStart(True, "started", {}),
+        ):
+            backup = admin_panel_module.admin_source_backup(user="alice")
+        self.assertEqual(backup.status_code, 303)
+        self.assertEqual(backup.headers.get("location"), "/maintenance")
 
     def test_admin_users_page_can_search_user_list(self) -> None:
         match_user = self.random_id("lookupa")

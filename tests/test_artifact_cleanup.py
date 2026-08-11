@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import tarfile
 import tempfile
 import threading
 import unittest
@@ -15,12 +16,13 @@ from app.service.judgehost.task_registry import JudgehostTaskRegistry
 from app.service.platform.fs.layout import FsManager
 from app.service.platform.maintenance import (
     ArtifactCleanupService,
-    CleanupStart,
+    MaintenanceStart,
     MaintenanceCoordinator,
     validate_storage_layout,
 )
 from app.service.platform.runtime_blob_store import RuntimeBlobStore
 from app.service.platform.runtime_cache_index import RuntimeCacheIndex
+from app.service.platform.source_backup import SourceBackupService
 from app.service.repository.workspace import WorkspaceService
 from app.service.verification.execution_result import (
     execution_result_json,
@@ -133,6 +135,7 @@ class TestArtifactCleanup(unittest.TestCase):
             self.verification_task_store,
             self._reset_process_tracking,
         )
+        self.source_backup = SourceBackupService(self.db, self.settings)
 
     def _reset_process_tracking(self) -> None:
         self.process_reset_count += 1
@@ -147,6 +150,22 @@ class TestArtifactCleanup(unittest.TestCase):
         )
         assert row is not None
         return int(row["count"])
+
+    def _run_source_backup(self, operation_id: str) -> dict[str, object]:
+        started_at = now_iso()
+        start_audit_id = self.source_backup.write_start_audit(
+            actor_user_id=self.actor_user_id,
+            operation_id=operation_id,
+            started_at=started_at,
+            roots=self.source_backup.configured_roots(),
+        )
+        return self.source_backup.run(
+            actor_user_id=self.actor_user_id,
+            operation_id=operation_id,
+            start_audit_id=start_audit_id,
+            started_at=started_at,
+            set_stage=lambda _stage: None,
+        )
 
     def _seed_generated_data(self) -> dict[str, bytes]:
         now = now_iso()
@@ -453,6 +472,7 @@ class TestArtifactCleanup(unittest.TestCase):
             self.cleanup,
             self.worker_queue,
             self.judgehost,
+            self.source_backup,
         )
 
         started = coordinator.start_cleanup(actor_user_id=self.actor_user_id)
@@ -628,6 +648,7 @@ class TestArtifactCleanup(unittest.TestCase):
             self.cleanup,
             self.worker_queue,
             self.judgehost,
+            self.source_backup,
         )
         self.worker_queue.queued = 1
         self.judgehost.reporting = 2
@@ -654,6 +675,7 @@ class TestArtifactCleanup(unittest.TestCase):
             self.cleanup,
             self.worker_queue,
             self.judgehost,
+            self.source_backup,
         )
 
         with patch.object(
@@ -673,6 +695,7 @@ class TestArtifactCleanup(unittest.TestCase):
             self.cleanup,
             self.worker_queue,
             self.judgehost,
+            self.source_backup,
         )
 
         with patch.object(
@@ -696,10 +719,11 @@ class TestArtifactCleanup(unittest.TestCase):
             self.cleanup,
             self.worker_queue,
             self.judgehost,
+            self.source_backup,
         )
         audit_started = threading.Event()
         release_audit = threading.Event()
-        start_results: list[CleanupStart] = []
+        start_results: list[MaintenanceStart] = []
         original_write_start = self.cleanup.write_start_audit
 
         def blocked_start_audit(**kwargs) -> int:
@@ -783,6 +807,7 @@ class TestArtifactCleanup(unittest.TestCase):
             self.cleanup,
             self.worker_queue,
             self.judgehost,
+            self.source_backup,
         )
         running = threading.Event()
         release = threading.Event()
@@ -943,6 +968,7 @@ class TestArtifactCleanup(unittest.TestCase):
             self.cleanup,
             self.worker_queue,
             self.judgehost,
+            self.source_backup,
         )
         retried = restarted_coordinator.start_cleanup(
             actor_user_id=self.actor_user_id
@@ -999,6 +1025,157 @@ class TestArtifactCleanup(unittest.TestCase):
             )
         ]
         self.assertEqual(actions, ["artifact_cleanup.start"])
+
+    def test_source_backup_contains_only_bare_repositories_and_workspaces(
+        self,
+    ) -> None:
+        uncommitted = self.workspace / "uncommitted.txt"
+        uncommitted.write_text("not committed\n", encoding="utf-8")
+        excluded = {
+            self.settings.artifacts_root / "artifact.bin",
+            self.settings.cache_root / "cache.bin",
+            self.settings.contest_source_root / "statement.tex",
+            self.settings.backup_root / "contest-migration.tar.gz",
+        }
+        for path in excluded:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"excluded")
+
+        result = self._run_source_backup("backup-boundary")
+
+        self.assertEqual(result["completed_stage"], "publish")
+        archive_path = self.source_backup.latest_archive_path()
+        self.assertIsNotNone(archive_path)
+        assert archive_path is not None
+        with tarfile.open(archive_path, mode="r:gz") as archive:
+            names = set(archive.getnames())
+            top_level = {name.split("/", maxsplit=1)[0] for name in names}
+            self.assertEqual(top_level, {"manifest.json", "bare", "workspaces"})
+            workspace_relative = self.workspace.relative_to(
+                self.settings.workspace_root
+            )
+            workspace_prefix = f"workspaces/{workspace_relative.as_posix()}"
+            self.assertIn(f"{workspace_prefix}/uncommitted.txt", names)
+            self.assertTrue(
+                any(name.startswith(f"{workspace_prefix}/.git") for name in names)
+            )
+            self.assertTrue(
+                any(name.startswith("bare/") and name.endswith("/HEAD") for name in names)
+            )
+            manifest_file = archive.extractfile("manifest.json")
+            self.assertIsNotNone(manifest_file)
+            assert manifest_file is not None
+            manifest = json.loads(manifest_file.read().decode("ascii"))
+        self.assertEqual(manifest["contents"], ["bare", "workspaces"])
+
+    def test_source_backup_replaces_one_latest_archive(self) -> None:
+        marker = self.workspace / "backup-marker.txt"
+        marker.write_text("first\n", encoding="utf-8")
+        self._run_source_backup("backup-first")
+        first_bytes = self.source_backup.latest_path.read_bytes()
+
+        marker.write_text("second\n", encoding="utf-8")
+        self._run_source_backup("backup-second")
+
+        self.assertNotEqual(self.source_backup.latest_path.read_bytes(), first_bytes)
+        self.assertEqual(
+            [path.name for path in self.source_backup.backup_directory.iterdir()],
+            ["latest.tar.gz"],
+        )
+        with tarfile.open(self.source_backup.latest_path, mode="r:gz") as archive:
+            relative = self.workspace.relative_to(self.settings.workspace_root)
+            payload = archive.extractfile(
+                f"workspaces/{relative.as_posix()}/backup-marker.txt"
+            )
+            self.assertIsNotNone(payload)
+            assert payload is not None
+            self.assertEqual(payload.read(), b"second\n")
+
+    def test_source_backup_failure_restores_previous_latest(self) -> None:
+        marker = self.workspace / "backup-marker.txt"
+        marker.write_text("first\n", encoding="utf-8")
+        self._run_source_backup("backup-stable")
+        previous = self.source_backup.latest_path.read_bytes()
+        marker.write_text("replacement\n", encoding="utf-8")
+        original_write_audit = self.source_backup._write_audit
+
+        def fail_success_audit(
+            actor_user_id: int,
+            action: str,
+            details: dict[str, object],
+        ) -> int:
+            if action == "source_backup.succeeded":
+                raise RuntimeError("forced success audit failure")
+            return original_write_audit(actor_user_id, action, details)
+
+        with patch.object(
+            self.source_backup,
+            "_write_audit",
+            side_effect=fail_success_audit,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "forced success audit failure"):
+                self._run_source_backup("backup-failing")
+
+        self.assertEqual(self.source_backup.latest_path.read_bytes(), previous)
+        actions = [
+            str(row["action"])
+            for row in isolated_db_fetch_all(
+                self.db,
+                "SELECT action FROM audit_log ORDER BY id",
+            )
+        ]
+        self.assertEqual(
+            actions,
+            [
+                "source_backup.start",
+                "source_backup.succeeded",
+                "source_backup.start",
+                "source_backup.failed",
+            ],
+        )
+
+    def test_source_backup_and_artifact_cleanup_are_mutually_exclusive(self) -> None:
+        coordinator = MaintenanceCoordinator(
+            self.cleanup,
+            self.worker_queue,
+            self.judgehost,
+            source_backup_service=self.source_backup,
+        )
+        running = threading.Event()
+        release = threading.Event()
+
+        def blocking_backup(**_kwargs) -> dict[str, object]:
+            running.set()
+            release.wait(timeout=5)
+            return {"finished_at": now_iso(), "duration_ms": 1}
+
+        with patch.object(
+            self.source_backup,
+            "run",
+            side_effect=blocking_backup,
+        ):
+            started = coordinator.start_source_backup(
+                actor_user_id=self.actor_user_id
+            )
+            self.assertTrue(started.accepted)
+            self.assertTrue(running.wait(timeout=2))
+            self.assertFalse(coordinator.allow_new_work())
+            snapshot = coordinator.snapshot()
+            self.assertEqual(snapshot["operation"], "source_backup")
+            blocked_cleanup = coordinator.start_cleanup(
+                actor_user_id=self.actor_user_id
+            )
+            self.assertFalse(blocked_cleanup.accepted)
+            self.assertEqual(blocked_cleanup.reason, "already_running")
+            release.set()
+            worker = coordinator._worker
+            self.assertIsNotNone(worker)
+            assert worker is not None
+            worker.join(timeout=5)
+
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(coordinator.snapshot()["status"], "succeeded")
+        self.assertTrue(coordinator.allow_new_work())
 
     def test_task_registry_reports_reporting_separately_for_maintenance(self) -> None:
         registry = JudgehostTaskRegistry()

@@ -10,7 +10,6 @@ identity/status remain in SQLite through `repository.WorkspaceService`.
 Snapshots are returned to the caller rather than retained here. Archive input
 is validated before replacement, and write-locked operations refresh the status
 projection after mutation. Repository merge replacement uses a recoverable
-filesystem journal; archive application uses an in-process rollback copy, whose
-interruption risk is tracked as
-[STO-008](../../../../implementation/findings.md#storage-and-persistence).
-Published source remains the Git `main` commit.
+filesystem journal; archive application uses an in-process rollback copy. A
+process interruption may require the user to reapply the archive. Published
+source remains the Git `main` commit.

@@ -1,4 +1,4 @@
-"""Process-local maintenance coordination and destructive artifact cleanup."""
+"""Process-local coordination for exclusive site maintenance operations."""
 
 from __future__ import annotations
 
@@ -26,6 +26,7 @@ from app.setting import Settings
 
 
 MaintenanceStatus = Literal["idle", "running", "succeeded", "failed"]
+MaintenanceOperation = Literal["", "artifact_cleanup", "source_backup"]
 
 _STORAGE_ROOT_ATTRIBUTES = (
     "bare_root",
@@ -51,6 +52,38 @@ class JudgehostMaintenancePort(Protocol):
 
 class VerificationTaskMaintenancePort(Protocol):
     def reset_runtime_state(self) -> None: ...
+
+
+class MaintenanceOperationPort(Protocol):
+    """Operation hooks executed while the shared admission gate is closed."""
+
+    def configured_roots(self) -> dict[str, object]: ...
+
+    def write_start_audit(
+        self,
+        *,
+        actor_user_id: int,
+        operation_id: str,
+        started_at: str,
+        roots: dict[str, object],
+    ) -> int: ...
+
+    def write_failed_audit(
+        self,
+        *,
+        actor_user_id: int,
+        details: dict[str, object],
+    ) -> int: ...
+
+    def run(
+        self,
+        *,
+        actor_user_id: int,
+        operation_id: str,
+        start_audit_id: int,
+        started_at: str,
+        set_stage: Callable[[str], None],
+    ) -> dict[str, object]: ...
 
 
 class ArtifactUsageSnapshot(TypedDict):
@@ -168,7 +201,7 @@ def validate_cleanup_preconditions(settings: Settings) -> dict[str, Path]:
 
 
 @dataclass(frozen=True)
-class CleanupStart:
+class MaintenanceStart:
     accepted: bool
     reason: str
     busy: dict[str, int]
@@ -177,6 +210,7 @@ class CleanupStart:
 @dataclass
 class MaintenanceSnapshot:
     status: MaintenanceStatus = "idle"
+    operation: MaintenanceOperation = ""
     stage: str = ""
     operation_id: str = ""
     started_at: str = ""
@@ -188,6 +222,7 @@ class MaintenanceSnapshot:
     def as_dict(self) -> dict[str, object]:
         return {
             "status": self.status,
+            "operation": self.operation,
             "stage": self.stage,
             "operation_id": self.operation_id,
             "started_at": self.started_at,
@@ -583,20 +618,27 @@ class ArtifactCleanupService:
 
 
 class MaintenanceCoordinator:
-    """Single-process state and shared admission boundary for cleanup."""
+    """Single-process boundary for mutually exclusive site maintenance."""
 
     _EXEMPT_PREFIXES = ("/api/v4/",)
     _EXEMPT_PATHS = frozenset(
-        {"/api/v4", "/maintenance", "/admin/maintenance/artifacts/cleanup"}
+        {
+            "/api/v4",
+            "/maintenance",
+            "/admin/maintenance/artifacts/cleanup",
+            "/admin/maintenance/source-backup",
+        }
     )
 
     def __init__(
         self,
-        cleanup_service: ArtifactCleanupService,
+        cleanup_service: MaintenanceOperationPort,
         worker_queue_service: WorkerMaintenancePort,
         judgehost_task_service: JudgehostMaintenancePort,
+        source_backup_service: MaintenanceOperationPort,
     ) -> None:
         self._cleanup = cleanup_service
+        self._source_backup = source_backup_service
         self._worker_queue = worker_queue_service
         self._judgehost = judgehost_task_service
         self._gate = MaintenanceAdmissionGate()
@@ -673,23 +715,52 @@ class MaintenanceCoordinator:
             "inflight_requests": int(self._active_requests),
         }
 
-    def start_cleanup(self, *, actor_user_id: int) -> CleanupStart:
+    def start_cleanup(self, *, actor_user_id: int) -> MaintenanceStart:
+        return self._start_operation(
+            actor_user_id=actor_user_id,
+            operation="artifact_cleanup",
+            operation_id_prefix="cleanup",
+            thread_name="artifact-cleanup",
+            service=self._cleanup,
+        )
+
+    def start_source_backup(self, *, actor_user_id: int) -> MaintenanceStart:
+        """Start the exclusive bare-repository and workspace backup."""
+
+        return self._start_operation(
+            actor_user_id=actor_user_id,
+            operation="source_backup",
+            operation_id_prefix="backup",
+            thread_name="source-backup",
+            service=self._source_backup,
+        )
+
+    def _start_operation(
+        self,
+        *,
+        actor_user_id: int,
+        operation: MaintenanceOperation,
+        operation_id_prefix: str,
+        thread_name: str,
+        service: MaintenanceOperationPort,
+    ) -> MaintenanceStart:
         with self._gate.locked():
             if self._snapshot.status == "running":
-                return CleanupStart(False, "already_running", {})
+                return MaintenanceStart(False, "already_running", {})
             self._gate.close_locked()
             try:
                 busy = self._busy_snapshot_locked()
             except Exception as exc:
                 self._gate.open_locked()
-                return CleanupStart(False, f"admission_failed: {exc}", {})
+                return MaintenanceStart(False, f"admission_failed: {exc}", {})
             if any(value > 0 for value in busy.values()):
                 self._gate.open_locked()
-                return CleanupStart(False, "busy", busy)
-            operation_id = f"cleanup-{uuid.uuid4().hex}"
+                return MaintenanceStart(False, "busy", busy)
+            operation_id = f"{operation_id_prefix}-{uuid.uuid4().hex}"
             started_at = now_iso()
             self._snapshot = MaintenanceSnapshot(
                 status="running",
+                operation=operation,
                 stage="start_audit",
                 operation_id=operation_id,
                 started_at=started_at,
@@ -697,16 +768,17 @@ class MaintenanceCoordinator:
             )
 
         try:
-            start_audit_id = self._cleanup.write_start_audit(
+            start_audit_id = service.write_start_audit(
                 actor_user_id=int(actor_user_id),
                 operation_id=operation_id,
                 started_at=started_at,
-                roots=self._cleanup.configured_roots(),
+                roots=service.configured_roots(),
             )
         except Exception as exc:
             with self._gate.locked():
                 self._snapshot = MaintenanceSnapshot(
                     status="failed",
+                    operation=operation,
                     stage="start_audit",
                     operation_id=operation_id,
                     started_at=started_at,
@@ -719,7 +791,7 @@ class MaintenanceCoordinator:
                     error=str(exc),
                 )
                 self._gate.open_locked()
-            return CleanupStart(False, f"audit_failed: {exc}", busy)
+            return MaintenanceStart(False, f"audit_failed: {exc}", busy)
 
         thread_error: Exception | None = None
         with self._gate.locked():
@@ -727,22 +799,23 @@ class MaintenanceCoordinator:
             self._snapshot.result = {"start_audit_id": int(start_audit_id)}
             try:
                 self._worker = threading.Thread(
-                    target=self._run_cleanup,
+                    target=self._run_operation,
                     args=(
+                        service,
                         int(actor_user_id),
                         operation_id,
                         int(start_audit_id),
                         started_at,
                     ),
                     daemon=True,
-                    name="artifact-cleanup",
+                    name=thread_name,
                 )
                 self._worker.start()
             except Exception as exc:
                 self._snapshot.stage = "thread_start"
                 thread_error = exc
         if thread_error is None:
-            return CleanupStart(True, "started", {})
+            return MaintenanceStart(True, "started", {})
 
         details = {
             "operation_id": operation_id,
@@ -755,7 +828,7 @@ class MaintenanceCoordinator:
         }
         audit_error = ""
         try:
-            self._cleanup.write_failed_audit(
+            service.write_failed_audit(
                 actor_user_id=int(actor_user_id),
                 details=details,
             )
@@ -767,10 +840,11 @@ class MaintenanceCoordinator:
             self._snapshot.result = details
             self._snapshot.error = f"{thread_error}{audit_error}"
             self._gate.open_locked()
-        return CleanupStart(False, "thread_start_failed", {})
+        return MaintenanceStart(False, "thread_start_failed", {})
 
-    def _run_cleanup(
+    def _run_operation(
         self,
+        service: MaintenanceOperationPort,
         actor_user_id: int,
         operation_id: str,
         start_audit_id: int,
@@ -781,7 +855,7 @@ class MaintenanceCoordinator:
                 self._snapshot.stage = stage
 
         try:
-            result = self._cleanup.run(
+            result = service.run(
                 actor_user_id=actor_user_id,
                 operation_id=operation_id,
                 start_audit_id=start_audit_id,
@@ -789,7 +863,11 @@ class MaintenanceCoordinator:
                 set_stage=set_stage,
             )
         except Exception as exc:
-            failure_result = getattr(exc, "cleanup_result", {})
+            failure_result = getattr(
+                exc,
+                "maintenance_result",
+                getattr(exc, "cleanup_result", {}),
+            )
             with self._gate.locked():
                 self._snapshot.status = "failed"
                 self._snapshot.finished_at = now_iso()

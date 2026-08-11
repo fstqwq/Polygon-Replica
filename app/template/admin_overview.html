@@ -2,7 +2,9 @@
 {% block admin_title %}Admin overview{% endblock %}
 {% block admin_content %}
 {% set queue = judgehost.queue %}
-{% set cleanup = maintenance_status if maintenance_status else {} %}
+{% set maintenance = maintenance_status if maintenance_status else {} %}
+{% set cleanup_visible = maintenance.get('operation') == 'artifact_cleanup' %}
+{% set backup_visible = maintenance.get('operation') == 'source_backup' %}
 <div class="admin-summary-grid">
   <a class="admin-summary-card" href="/admin/judgehosts">
     <span class="admin-summary-label">Judgehosts</span>
@@ -50,13 +52,13 @@
   </div>
   <p>
     Status:
-    <strong class="{% if cleanup.get('status') == 'failed' %}danger{% elif cleanup.get('status') == 'succeeded' %}ok{% endif %}">
-      {{ cleanup.get('status', 'idle') }}
+    <strong class="{% if cleanup_visible and maintenance.get('status') == 'failed' %}danger{% elif cleanup_visible and maintenance.get('status') == 'succeeded' %}ok{% endif %}">
+      {{ maintenance.get('status', 'idle') if cleanup_visible else 'idle' }}
     </strong>
-    {% if cleanup.get('stage') %}<span class="muted">&middot; {{ cleanup.get('stage') }}</span>{% endif %}
+    {% if cleanup_visible and maintenance.get('stage') %}<span class="muted">&middot; {{ maintenance.get('stage') }}</span>{% endif %}
   </p>
-  {% if cleanup.get('status') == 'failed' %}
-  <p class="danger">{{ cleanup.get('error', 'Unknown cleanup error') }}</p>
+  {% if cleanup_visible and maintenance.get('status') == 'failed' %}
+  <p class="danger">{{ maintenance.get('error', 'Unknown cleanup error') }}</p>
   {% endif %}
   <p>
     <span class="muted">Current estimate:</span>
@@ -78,7 +80,48 @@
     action="/admin/maintenance/artifacts/cleanup"
     data-confirm-message="Delete all generated artifacts, generated jobs, runtime caches, and all previous audit history?"
   >
-    <button class="btn danger-link" type="submit">Clear generated artifacts</button>
+    <button class="btn danger-link" type="submit"{% if maintenance.get('status') == 'running' %} disabled{% endif %}>Clear generated artifacts</button>
+  </form>
+</section>
+
+<section class="content-section-plain admin-overview-section">
+  <div class="admin-card-head">
+    <h2>Source backup</h2>
+    <a href="/maintenance">Maintenance details</a>
+  </div>
+  <p>
+    Status:
+    <strong class="{% if backup_visible and maintenance.get('status') == 'failed' %}danger{% elif backup_visible and maintenance.get('status') == 'succeeded' %}ok{% endif %}">
+      {{ maintenance.get('status', 'idle') if backup_visible else 'idle' }}
+    </strong>
+    {% if backup_visible and maintenance.get('stage') %}<span class="muted">&middot; {{ maintenance.get('stage') }}</span>{% endif %}
+  </p>
+  {% if backup_visible and maintenance.get('status') == 'failed' %}
+  <p class="danger">{{ maintenance.get('error', 'Unknown backup error') }}</p>
+  {% endif %}
+  <p>
+    Creates one downloadable archive containing every bare Git repository and
+    every user workspace, including uncommitted workspace files. SQLite,
+    contest sources, generated artifacts, caches, and deployment secrets are
+    not included.
+  </p>
+  {% if source_backup.available %}
+  <p>
+    <span class="muted">Latest:</span>
+    <strong>{{ source_backup.size_label }}</strong>
+    <span class="muted">&middot; {{ source_backup.created_at }}</span>
+    &middot;
+    <a href="/admin/maintenance/source-backup/latest">Download latest backup</a>
+  </p>
+  {% else %}
+  <p class="muted">No source backup is available.</p>
+  {% endif %}
+  <form
+    method="post"
+    action="/admin/maintenance/source-backup"
+    data-confirm-message="Take the whole site offline and replace the previous source backup with a new archive of bare repositories and workspaces?"
+  >
+    <button class="btn" type="submit"{% if maintenance.get('status') == 'running' %} disabled{% endif %}>Create source backup</button>
   </form>
 </section>
 {% endblock %}

@@ -10,7 +10,7 @@
 | Contest source root | durable contest statement source and attachments outside problem Git | durable |
 | Artifact root | exports, `contests/` build products, temporary snapshot archives | survives startup; maintenance-cleanable |
 | Cache root | preview/verification payloads, runtime snapshots/blobs, JudgeFS data, workdirs, queue history, and import drafts | `artifacts/` and `runtime/` are startup-cleared; the whole root is maintenance-cleanable |
-| Backup root | operator-managed contest migration archives | permanent and never cleared by application cleanup |
+| Backup root | the single application source backup and operator-managed contest migration archives | permanent and never cleared by application cleanup |
 
 The six managed directory roots MUST be non-root directories, MUST NOT be
 symlinks, and MUST NOT contain or overlap one another after resolution. The
@@ -68,3 +68,28 @@ entire artifact and cache roots; resets process-local execution state; vacuums
 SQLite; and appends a terminal audit event. It does not remove problem, user,
 workspace, contest, membership, contest attachment, configuration, or backup
 data.
+
+## Source backup
+
+The system-admin source-backup action uses the same exclusive maintenance gate
+as artifact cleanup. It starts only after ordinary requests, Judgehost
+callbacks, worker jobs, and queued, leased, or reporting Judgehost work have
+drained. The gate stays closed while the archive is built and published.
+
+The archive contains exactly three top-level members:
+
+- `manifest.json`, with bounded creation and source-tree summary data;
+- `bare/`, containing every repository and its Git history from the bare root;
+- `workspaces/`, containing every workspace, including Git metadata and
+  uncommitted files.
+
+SQLite, contest source, artifacts, cache data, existing backup-root content,
+application code, and deployment secrets are not included. This is a source
+recovery archive, not a complete application-state backup.
+
+The application publishes only
+`backup_root/source-backup/latest.tar.gz`. It builds a hidden temporary archive
+and atomically replaces the published file only after archive creation
+succeeds. A handled failure restores the preceding published archive. Only a
+system administrator can start or download the backup. Artifact cleanup never
+removes it.

@@ -604,7 +604,7 @@ Out of scope:
 
 After all three batches are complete and independently verified, the next
 planning cycle covers Runtime/config separation, `STO-003`, `STO-005`,
-`STO-008`, `STO-007`, `STO-009`, source canonicalization, backup/restore, and
-the remaining ownership findings.
+`STO-009`, source canonicalization, export admission deduplication, and the
+remaining ownership findings.
 
 Do not automatically push these commits unless explicitly requested.

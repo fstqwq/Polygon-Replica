@@ -72,12 +72,14 @@ model.
 ## Operations
 
 Admin operations include Judgehost status and enablement, users, SMTP/system
-configuration, and exclusive artifact cleanup. Do not manually delete active
+configuration, exclusive artifact cleanup, and exclusive source backup. Source
+backup publishes one archive containing the bare Git and workspace roots; it
+does not include SQLite or other storage roots. Do not manually delete active
 cache subtrees while the process is running. Observe process health, worker
 capacity, Judgehost leases, domain job status, artifact availability, disk
 space, and backup age as separate signals.
 
-Exclusive cleanup closes Judgehost callback admission as well as ordinary work
-admission. It remains busy until in-flight callbacks have released their
-receipts; callbacks arriving after the gate closes are acknowledged without
-touching scheduler, database, or blob state.
+Both exclusive operations close Judgehost callback admission as well as
+ordinary work admission. They remain busy until in-flight callbacks have
+released their receipts; callbacks arriving after the gate closes are
+acknowledged without touching scheduler, database, or blob state.

@@ -34,8 +34,11 @@ selection keys are `accepted_solution_source`, `validator_source`,
 `checker_source`, `interactor_source`, and the ordered `generator_sources`
 array. Each selected source is a normalized workspace-relative path below its
 corresponding source directory. When a component selection is absent,
-verification and export choose the first eligible source in that component
-directory; configured paths therefore provide the only unambiguous selection.
+verification and export choose the lexicographically first eligible source in
+that component directory. A directory with multiple eligible sources and no
+selection is non-canonical import input: this fallback is best effort and does
+not guarantee that the author's intended checker, validator, or interactor was
+chosen. A configured path is the only unambiguous selection.
 
 Execution also reads `checker_args`. When `tests/spec.json` is absent or empty,
 it discovers `.in` files below `tests/manual/` and runs every configured

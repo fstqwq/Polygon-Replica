@@ -13,9 +13,14 @@ router = APIRouter()
 def maintenance_page():
     snapshot = config.maintenance_service.snapshot()
     status = str(snapshot.get("status") or "idle")
+    operation = str(snapshot.get("operation") or "artifact_cleanup")
+    operation_label = (
+        "source backup" if operation == "source_backup" else "artifact cleanup"
+    )
     if status == "succeeded":
+        query = "backup=success" if operation == "source_backup" else "cleanup=success"
         return RedirectResponse(
-            "/admin?cleanup=success",
+            f"/admin?{query}",
             status_code=303,
             headers={"Cache-Control": "no-store"},
         )
@@ -32,16 +37,17 @@ def maintenance_page():
             else "none"
         )
         body = (
-            "Site-wide artifact cleanup failed.\n"
+            f"Site-wide {operation_label} failed.\n"
             f"operation_id: {snapshot.get('operation_id') or 'unknown'}\n"
             f"stage: {snapshot.get('stage') or 'unknown'}\n"
             f"completed_stage: {completed_stage}\n"
             f"error: {snapshot.get('error') or 'unknown error'}\n"
-            "An administrator may retry the cleanup from Admin.\n"
+            f"An administrator may retry the {operation_label} from Admin.\n"
         )
         return PlainTextResponse(body, headers={"Cache-Control": "no-store"})
     body = (
         "The site is in maintenance mode.\n"
+        f"operation: {operation_label}\n"
         f"status: {status}\n"
         f"operation_id: {snapshot.get('operation_id') or 'unknown'}\n"
         f"stage: {snapshot.get('stage') or 'starting'}\n"

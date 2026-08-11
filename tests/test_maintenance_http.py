@@ -35,6 +35,7 @@ class TestMaintenanceAdmissionMiddleware(unittest.IsolatedAsyncioTestCase):
     def test_raw_maintenance_page_reports_running_success_and_failure(self) -> None:
         running_state = {
             "status": "running",
+            "operation": "artifact_cleanup",
             "operation_id": "cleanup-running",
             "stage": "filesystem",
             "started_at": "2026-08-08T00:00:00Z",
@@ -50,7 +51,10 @@ class TestMaintenanceAdmissionMiddleware(unittest.IsolatedAsyncioTestCase):
         self.assertIn("text/plain", running.headers.get("content-type", ""))
         self.assertIn(b"stage: filesystem", running.body)
 
-        succeeded_state = {"status": "succeeded"}
+        succeeded_state = {
+            "status": "succeeded",
+            "operation": "artifact_cleanup",
+        }
         with patch.object(
             config,
             "maintenance_service",
@@ -65,6 +69,7 @@ class TestMaintenanceAdmissionMiddleware(unittest.IsolatedAsyncioTestCase):
 
         failed_state = {
             "status": "failed",
+            "operation": "artifact_cleanup",
             "operation_id": "cleanup-failed",
             "stage": "vacuum",
             "error": "disk full",
@@ -79,6 +84,40 @@ class TestMaintenanceAdmissionMiddleware(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(failed.status_code, 200)
         self.assertIn(b"completed_stage: runtime", failed.body)
         self.assertIn(b"disk full", failed.body)
+
+        backup_succeeded_state = {
+            "status": "succeeded",
+            "operation": "source_backup",
+        }
+        with patch.object(
+            config,
+            "maintenance_service",
+            SimpleNamespace(snapshot=lambda: backup_succeeded_state),
+        ):
+            backup_succeeded = maintenance_page()
+        self.assertEqual(backup_succeeded.status_code, 303)
+        self.assertEqual(
+            backup_succeeded.headers.get("location"),
+            "/admin?backup=success",
+        )
+
+        backup_failed_state = {
+            "status": "failed",
+            "operation": "source_backup",
+            "operation_id": "backup-failed",
+            "stage": "archive",
+            "error": "disk full",
+            "result": {"completed_stage": "preflight"},
+        }
+        with patch.object(
+            config,
+            "maintenance_service",
+            SimpleNamespace(snapshot=lambda: backup_failed_state),
+        ):
+            backup_failed = maintenance_page()
+        self.assertEqual(backup_failed.status_code, 200)
+        self.assertIn(b"source backup failed", backup_failed.body)
+        self.assertIn(b"completed_stage: preflight", backup_failed.body)
 
     async def test_request_remains_counted_through_body_and_background_work(self) -> None:
         stub = _AdmissionStub()

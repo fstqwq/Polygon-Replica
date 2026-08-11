@@ -14,6 +14,8 @@ from app.impl.admin.panel import (
     admin_judgehosts_page,
     admin_mail_page,
     admin_overview_page,
+    admin_source_backup,
+    admin_source_backup_download,
     admin_smtp_test,
     admin_smtp_update,
     admin_system_config_reset,
@@ -49,7 +51,21 @@ router.add_api_route(
     methods=["POST"],
 )
 
-router.add_api_route("/admin/maintenance/artifacts/cleanup", admin_artifacts_cleanup, methods=["POST"])
+router.add_api_route(
+    "/admin/maintenance/artifacts/cleanup",
+    admin_artifacts_cleanup,
+    methods=["POST"],
+)
+router.add_api_route(
+    "/admin/maintenance/source-backup",
+    admin_source_backup,
+    methods=["POST"],
+)
+router.add_api_route(
+    "/admin/maintenance/source-backup/latest",
+    admin_source_backup_download,
+    methods=["GET"],
+)
 router.add_api_route("/admin/judgehosts/runtime", admin_judgehost_runtime_update, methods=["POST"])
 router.add_api_route("/admin/judgehosts/host-action", admin_judgehost_host_action, methods=["POST"])
 router.add_api_route("/admin/judgehosts/snapshot", admin_judgehost_snapshot, methods=["GET"])

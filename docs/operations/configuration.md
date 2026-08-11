@@ -13,7 +13,7 @@ be read:
 | `POLYGON_REPLICA_ARTIFACTS_ROOT` | export and derived artifacts | `/srv/polygon-replica/export` |
 | `POLYGON_REPLICA_CACHE_ROOT` | runtime/cache tree | `/tmp/polygon-replica` |
 | `POLYGON_REPLICA_CONTEST_SOURCE_ROOT` | contest sources and attachments | `/var/lib/polygon-replica/contest-sources` |
-| `POLYGON_REPLICA_BACKUP_ROOT` | operator archives | `/var/backups/polygon-replica` |
+| `POLYGON_REPLICA_BACKUP_ROOT` | source backup and operator archives | `/var/backups/polygon-replica` |
 
 Root paths must obey the [storage protocol](../protocol/storage.md).
 
