@@ -343,13 +343,14 @@ class Judgehost:
             return []
         now_dt = datetime.now(timezone.utc)
         now_text = now_iso()
+        online_window_sec = self._state.config_policy().online_window_sec
         with self._state.state_lock:
             stale_hosts: list[str] = []
             for hostname, row in self._state.hosts_state.items():
                 seen_at = parse_iso_utc(row.get("last_seen_at"))
                 if seen_at is None:
                     continue
-                if (now_dt - seen_at).total_seconds() > float(self._state.online_window_sec):
+                if (now_dt - seen_at).total_seconds() > online_window_sec:
                     stale_hosts.append(str(hostname))
         released_task_ids: set[str] = set()
         for hostname in stale_hosts:

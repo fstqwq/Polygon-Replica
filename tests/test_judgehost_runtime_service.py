@@ -4,6 +4,7 @@ import hashlib
 import unittest
 import uuid
 from pathlib import Path
+from unittest.mock import patch
 
 from app.service.judgehost.api import Judgehost
 from app.service.judgehost.batch_scheduler_models import (
@@ -230,6 +231,32 @@ class TestJudgehostRuntimeService(DBTestBase):
 
         self.service.reset_runtime_state()
         self.assertEqual(self.service.state.host_toolchains, {})
+
+    def test_expired_lease_reconcile_reads_online_window_from_policy(self) -> None:
+        host = "judgehost-stale-policy"
+        self.config_values.replace(
+            {
+                **self.config_values.snapshot(),
+                "JUDGEHOST_ONLINE_WINDOW_SEC": 1,
+            }
+        )
+        self.service.domjudge_register_host(host)
+        with self.service.state.state_lock:
+            self.service.state.hosts_state[host]["last_seen_at"] = (
+                "2000-01-01T00:00:00+00:00"
+            )
+
+        with patch.object(
+            self.service.state.batch_scheduler,
+            "cases_for_host",
+            return_value=[],
+        ) as cases_for_host:
+            released = self.service.reconcile_expired_verification_leases(
+                "ver-policy-window"
+            )
+
+        self.assertEqual(released, [])
+        cases_for_host.assert_called_once_with(host)
 
     def test_wait_for_transient_result_has_no_durable_artifact_path(self) -> None:
         verification_id = "ver-123"
