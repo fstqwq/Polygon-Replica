@@ -19,6 +19,7 @@ compose=(
   --file "$COMPOSE_FILE"
   --file "$MOCK_COMPOSE_FILE"
 )
+image_owned=0
 
 cleanup() {
   status=$?
@@ -29,7 +30,9 @@ cleanup() {
       app mock-judgehost e2e-mock >&2 || true
   fi
   "${compose[@]}" down --volumes --remove-orphans >/dev/null 2>&1 || true
-  docker image rm --force "$POLYGON_REPLICA_E2E_IMAGE" >/dev/null 2>&1 || true
+  if (( image_owned )); then
+    docker image rm --force "$POLYGON_REPLICA_E2E_IMAGE" >/dev/null 2>&1 || true
+  fi
   exit "$status"
 }
 trap cleanup EXIT
@@ -40,6 +43,7 @@ docker compose version >/dev/null
 if [[ "${POLYGON_REPLICA_E2E_IMAGE_PREBUILT:-0}" == "1" ]]; then
   docker image inspect "$POLYGON_REPLICA_E2E_IMAGE" >/dev/null
 else
+  image_owned=1
   "${compose[@]}" build app
 fi
 
