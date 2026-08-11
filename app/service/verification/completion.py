@@ -15,7 +15,7 @@ from app.service.verification.execution_result import (
     execution_result_with_outcome,
     normalize_execution_result,
 )
-from app.service.verification.result_match import verification_execution_result_match
+from app.service.verification.result_match import verification_case_result_match
 from app.service.verification.task_completion import (
     CompletionCommit,
     TaskCompletion,
@@ -283,7 +283,7 @@ class VerificationTaskCompletionService:
                 report_ok=report_ok,
             )
         matched, completed, _observed_pass, mismatch_reason = (
-            verification_execution_result_match(
+            verification_case_result_match(
                 task_row["expected_behavior"],
                 result,
             )

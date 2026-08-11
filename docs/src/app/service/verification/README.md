@@ -11,11 +11,13 @@ own the Judgehost wire protocol or blob filesystem.
 The lifecycle service admits a verification once, atomically activates one
 immutable execution plan, commits first-wins task decisions, finalizes sanity,
 and terminalizes cancellation or restart interruption. The completion boundary
-validates required generator and accepted-solution outputs and commits the task
-result, dependent locator, parent transition, and remaining-task cancellation
-together. It accepts Judgehost publication through narrow completion and
-diagnostic sinks and has explicit task-store and runtime-blob dependencies; it
-does not query global runtime configuration.
+validates required generator and accepted-solution outputs, applies a checked
+solution's allowed verdicts per testcase, and applies its required verdicts only
+after all durable tasks for that program are terminal. It commits the task
+result, program-level mismatch, dependent locator, parent transition, and
+remaining-task cancellation together. It accepts Judgehost publication through
+narrow completion and diagnostic sinks and has explicit task-store and
+runtime-blob dependencies; it does not query global runtime configuration.
 
 Planning models a program as `program_id`, kind, source path, and normalized
 compile specification; a task selects that program and a test. The generator,

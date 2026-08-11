@@ -35,6 +35,9 @@ from app.service.verification.lifecycle import (
     VerificationTransitionCommit,
     cancelled_task_result,
 )
+from app.service.verification.result_match import (
+    verification_program_results_match,
+)
 from app.service.verification.task_completion import (
     CompletionCommit,
     TaskCompletion,
@@ -750,6 +753,74 @@ class VerificationTaskStore:
         )
         return task_ids
 
+    def _completed_solution_program_failure(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        verification_id: str,
+        program_ids: tuple[str, ...],
+    ) -> str:
+        if not program_ids:
+            return ""
+        rows = conn.execute(
+            f"""
+            SELECT id,program_id,source_path,test_name,expected_behavior,
+                   final_status,result_json
+            FROM verification_tasks
+            WHERE verification_id=? AND task_kind='solution-run'
+              AND program_id IN ({','.join('?' for _ in program_ids)})
+            """,
+            [verification_id, *program_ids],
+        ).fetchall()
+        rows_by_program: dict[str, list[sqlite3.Row]] = {}
+        for row in rows:
+            rows_by_program.setdefault(str(row["program_id"] or ""), []).append(row)
+
+        for program_id in program_ids:
+            program_rows = rows_by_program.get(program_id)
+            if not program_rows:
+                raise RuntimeError(
+                    f"verification solution program {program_id} has no tasks"
+                )
+            final_statuses = {
+                str(row["final_status"] or "") for row in program_rows
+            }
+            if "" in final_statuses:
+                continue
+            if final_statuses != {self.TASK_DONE}:
+                continue
+            source_paths = {str(row["source_path"] or "") for row in program_rows}
+            expected_behaviors = {
+                str(row["expected_behavior"] or "") for row in program_rows
+            }
+            if len(source_paths) != 1 or len(expected_behaviors) != 1:
+                raise RuntimeError(
+                    f"verification solution program {program_id} is inconsistent"
+                )
+            ordered_rows = sorted(
+                program_rows,
+                key=lambda row: (
+                    _test_name_order(str(row["test_name"] or "")),
+                    str(row["id"] or ""),
+                ),
+            )
+            matched, reason = verification_program_results_match(
+                next(iter(expected_behaviors)),
+                (
+                    execution_result_from_json(str(row["result_json"] or "{}"))
+                    for row in ordered_rows
+                ),
+            )
+            if not matched:
+                source_path = next(iter(source_paths))
+                origin = " / ".join(
+                    token for token in ("solution-run", source_path) if token
+                )
+                return self._normalize_display_text(
+                    f"{origin}: {reason or 'verification mismatch'}"
+                )
+        return ""
+
     def commit_task_completions(
         self,
         completions: list[TaskCompletion] | tuple[TaskCompletion, ...],
@@ -788,7 +859,8 @@ class VerificationTaskStore:
             def _tx(conn: sqlite3.Connection) -> CompletionCommit:
                 rows = conn.execute(
                     f"""
-                    SELECT t.id,t.verification_id,t.task_kind,t.test_name,
+                    SELECT t.id,t.verification_id,t.task_kind,t.program_id,
+                           t.test_name,
                            t.final_status,t.result_json,
                            COALESCE(r.input_ref,'') AS input_ref,
                            COALESCE(r.answer_ref,'') AS answer_ref
@@ -842,6 +914,8 @@ class VerificationTaskStore:
                 skipped_task_ids: set[str] = set()
                 cancelled_task_ids: set[str] = set()
                 stale_skipped_generator_ids: set[str] = set()
+                affected_solution_program_ids: list[str] = []
+                affected_solution_program_id_set: set[str] = set()
                 new_failure_reason = ""
                 hard_failure_reason = ""
                 for task_id in task_ids:
@@ -926,6 +1000,11 @@ class VerificationTaskStore:
                         )
                     committed_task_ids.add(task_id)
                     effective.append(effective_completion)
+                    if task_kind == "solution-run":
+                        program_id = str(row["program_id"] or "")
+                        if program_id not in affected_solution_program_id_set:
+                            affected_solution_program_id_set.add(program_id)
+                            affected_solution_program_ids.append(program_id)
                     if effective_completion.fail_reason and not new_failure_reason:
                         new_failure_reason = effective_completion.fail_reason
                     if (
@@ -1011,6 +1090,28 @@ class VerificationTaskStore:
                             str(item["result_json"] or "{}")
                         ).verdict.upper()
                         == "SK"
+                    )
+                if skipped_task_ids and not new_failure_reason:
+                    skipped_rows = conn.execute(
+                        f"""
+                        SELECT DISTINCT program_id
+                        FROM verification_tasks
+                        WHERE task_kind='solution-run'
+                          AND id IN ({','.join('?' for _ in skipped_task_ids)})
+                        ORDER BY program_id
+                        """,
+                        sorted(skipped_task_ids),
+                    ).fetchall()
+                    for skipped_row in skipped_rows:
+                        program_id = str(skipped_row["program_id"] or "")
+                        if program_id not in affected_solution_program_id_set:
+                            affected_solution_program_id_set.add(program_id)
+                            affected_solution_program_ids.append(program_id)
+                if not new_failure_reason:
+                    new_failure_reason = self._completed_solution_program_failure(
+                        conn,
+                        verification_id=verification_id,
+                        program_ids=tuple(affected_solution_program_ids),
                     )
                 parent_transition: ParentTransition = ""
                 sanity_claimed = False

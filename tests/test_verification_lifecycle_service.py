@@ -673,7 +673,157 @@ class TestVerificationLifecycleService(VerificationServiceTestBase):
             [],
         )
 
+    def _commit_solution_result(
+        self,
+        verification_id: str,
+        task_id: str,
+        verdict: str,
+    ) -> tuple[TaskCompletion, CompletionCommit]:
+        task_row = self.verification_task_store.runtime_row(task_id)
+        assert task_row is not None
+        completion = self.verification_task_completion_service.prepare(
+            task_row,
+            terminal_report(
+                judgehost_task_id=task_row["judgehost_task_id"],
+                verification_id=verification_id,
+                run_id=task_row["run_id"],
+                result=make_execution_result(verdict=verdict),
+                summary={"tests": [{"verdict": verdict}]},
+            ),
+        )
+        commit = self.verification_task_completion_service.commit(
+            (completion,),
+            notify=False,
+        )
+        return completion, commit
 
+    def test_program_required_verdict_uses_all_testcases(self) -> None:
+        verification_id = canonical_test_verification_id(
+            f"program-required:{self.test_id}"
+        )
+        self._insert_verification_row(verification_id)
+        first_task_id = verification_task_id(
+            verification_id,
+            "solution-0",
+            "001.in",
+        )
+        second_task_id = verification_task_id(
+            verification_id,
+            "solution-0",
+            "002.in",
+        )
+        self._activate_graph(
+            verification_id,
+            tasks=[
+                {
+                    "id": first_task_id,
+                    "task_kind": "solution-run",
+                    "source_path": "solutions/rejected.cpp",
+                    "program_id": "solution-0",
+                    "test_name": "001.in",
+                    "expected_behavior": "rejected",
+                    "status": VerificationTaskStore.TASK_QUEUED,
+                },
+                {
+                    "id": second_task_id,
+                    "task_kind": "solution-run",
+                    "source_path": "solutions/rejected.cpp",
+                    "program_id": "solution-0",
+                    "test_name": "002.in",
+                    "expected_behavior": "rejected",
+                    "status": VerificationTaskStore.TASK_QUEUED,
+                },
+            ],
+            edges=[],
+        )
+
+        first_completion, first_commit = self._commit_solution_result(
+            verification_id,
+            first_task_id,
+            "WA",
+        )
+        self.assertEqual(first_completion.status, VerificationTaskStore.TASK_DONE)
+        self.assertEqual(first_completion.fail_reason, "")
+        self.assertEqual(first_commit.parent_transition, "")
+        parent = self.verification_service.verification_record(verification_id)
+        assert parent is not None
+        self.assertEqual(str(parent["status"]), "running")
+        self.assertEqual(str(parent["fail_reason"]), "")
+
+        second_completion, second_commit = self._commit_solution_result(
+            verification_id,
+            second_task_id,
+            "AC",
+        )
+        self.assertEqual(second_completion.status, VerificationTaskStore.TASK_DONE)
+        self.assertEqual(second_completion.fail_reason, "")
+        self.assertEqual(second_commit.parent_transition, "ok")
+        parent = self.verification_service.verification_record(verification_id)
+        assert parent is not None
+        self.assertEqual(str(parent["status"]), "ok")
+        self.assertEqual(str(parent["fail_reason"]), "")
+
+    def test_missing_program_required_verdict_fails_after_last_testcase(self) -> None:
+        verification_id = canonical_test_verification_id(
+            f"program-required-missing:{self.test_id}"
+        )
+        self._insert_verification_row(verification_id)
+        task_ids = tuple(
+            verification_task_id(verification_id, "solution-0", test_name)
+            for test_name in ("001.in", "002.in")
+        )
+        self._activate_graph(
+            verification_id,
+            tasks=[
+                {
+                    "id": task_id,
+                    "task_kind": "solution-run",
+                    "source_path": "solutions/rejected.cpp",
+                    "program_id": "solution-0",
+                    "test_name": test_name,
+                    "expected_behavior": "rejected",
+                    "status": VerificationTaskStore.TASK_QUEUED,
+                }
+                for task_id, test_name in zip(
+                    task_ids,
+                    ("001.in", "002.in"),
+                    strict=True,
+                )
+            ],
+            edges=[],
+        )
+
+        first_completion, first_commit = self._commit_solution_result(
+            verification_id,
+            task_ids[0],
+            "AC",
+        )
+        self.assertEqual(first_completion.status, VerificationTaskStore.TASK_DONE)
+        self.assertEqual(first_commit.parent_transition, "")
+        self.assertEqual(first_commit.failure_reason, "")
+
+        second_completion, second_commit = self._commit_solution_result(
+            verification_id,
+            task_ids[1],
+            "AC",
+        )
+        self.assertEqual(second_completion.status, VerificationTaskStore.TASK_DONE)
+        self.assertEqual(second_completion.fail_reason, "")
+        self.assertEqual(second_commit.parent_transition, "failed")
+        self.assertIn(
+            "required=[WA, TL, RE, CE]",
+            second_commit.failure_reason,
+        )
+        self.assertIn("got=[AC]", second_commit.failure_reason)
+        rows = {
+            str(row["id"]): row
+            for row in self.verification_task_store.list_rows(verification_id)
+        }
+        for task_id in task_ids:
+            self.assertEqual(
+                str(rows[task_id]["status"]),
+                VerificationTaskStore.TASK_DONE,
+            )
 
     def test_solution_mismatch_waits_for_graph_then_fails_parent(self) -> None:
         verification_id = canonical_test_verification_id(
@@ -743,7 +893,7 @@ class TestVerificationLifecycleService(VerificationServiceTestBase):
             notify=False,
         )
         self.assertEqual(mismatch.status, VerificationTaskStore.TASK_FAILED)
-        self.assertIn("required=[AC]", mismatch.fail_reason)
+        self.assertIn("allowed=[AC]", mismatch.fail_reason)
         self.assertEqual(first_commit.parent_transition, "")
         parent = self.verification_service.verification_record(verification_id)
         assert parent is not None

@@ -146,15 +146,22 @@ a closed event and reloads terminal task state instead of publishing work. A
 cancellation that committed before registration is therefore observed from
 SQLite, while a later cancellation reaches the registered coordinator.
 
-Completion evaluates each `solution-run` against its authored expected behavior
-using the canonical `ExecutionResult`, not the batch transport status or summary.
-AC, WA, TL, RE, and CE are complete decisions, so an expected CE remains a
-successful verification task even though Judgehost reports the batch as failed.
-A mismatch or an FL/missing/infrastructure outcome fails the task and stores the
-first failure reason, while independent solution tasks continue. Once no task
-remains open, that stored mismatch makes the parent `failed`. Generator,
-`main-correct`, and cancellation failures are hard failures: they fail the
-parent and cancel all remaining open tasks immediately in the same transaction.
+Completion evaluates each `solution-run` from its canonical `ExecutionResult`,
+not the batch transport status or summary. At the testcase boundary, AC, WA, TL,
+RE, and CE are complete decisions and only the expected behavior's `allowed`
+set applies. An FL, missing, incomplete, or disallowed decision fails that task
+and stores the first failure reason. The `required` set belongs to the program:
+after every durable task for one `program_id` is terminal without a case-level
+failure, the completion transaction aggregates its testcase verdicts and checks
+`required` once.
+Skipped duplicate-input tasks contribute no verdict. A missing required verdict
+does not rewrite the completed testcase tasks, but it stores the verification's
+first failure reason. Independent solution tasks continue, and once no task
+remains open that stored mismatch makes the parent `failed`. Thus an expected CE
+is a successful task and can satisfy a program requirement even when Judgehost
+reports the batch as failed. Generator, `main-correct`, and cancellation
+failures are hard failures: they fail the parent and cancel all remaining open
+tasks immediately in the same transaction.
 
 Cancellation atomically changes the parent to `failed` and every open task to
 `cancelled`. Already leased or reporting cases then drain in process-local

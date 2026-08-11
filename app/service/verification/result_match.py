@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
+
 from app.service.problem.solution_metadata import normalize_expected_behavior
 from app.service.verification.execution_result import ExecutionResult
 
@@ -130,6 +132,20 @@ def _status_codes_rule_match(
     )
 
 
+def _status_codes_allowed_match(
+    expected_behavior: str,
+    observed_code: str,
+) -> tuple[bool, str]:
+    _required_codes, allowed_codes = expected_status_rule(expected_behavior)
+    if observed_code in allowed_codes:
+        return (True, "")
+    return (
+        False,
+        f"allowed={_status_codes_display(allowed_codes)}, "
+        f"got={_status_codes_display([observed_code])}",
+    )
+
+
 def _status_rule_match(
     expected_behavior: str,
     run_status: str,
@@ -186,25 +202,49 @@ def verification_solution_match(
     return (False, True, observed_pass, reason or "verification mismatch")
 
 
-def verification_execution_result_match(
+def verification_case_result_match(
     expected_behavior: str,
     result: ExecutionResult,
 ) -> tuple[bool, bool, bool, str]:
-    """Match a terminal solution against its canonical execution decision.
+    """Validate one testcase decision without applying program-wide requirements.
 
     Transport and batch status do not define whether a judging decision is
     complete. CE, RE, TL, WA, and AC are all complete decisions; FL, missing,
-    and unknown verdicts are infrastructure/incomplete outcomes.
+    and unknown verdicts are infrastructure/incomplete outcomes. Required
+    verdicts are checked only after every testcase for the program is terminal.
     """
 
     observed_code = run_verdict_short(result.verdict.upper())
     if observed_code not in _CANONICAL_DECISION_CODES:
         return (False, False, False, "")
     observed_pass = observed_code == "AC"
-    matched, reason = _status_codes_rule_match(
+    matched, reason = _status_codes_allowed_match(
         expected_behavior,
-        [observed_code],
+        observed_code,
     )
     if matched:
         return (True, True, observed_pass, "")
     return (False, True, observed_pass, reason or "verification mismatch")
+
+
+def verification_program_results_match(
+    expected_behavior: str,
+    results: Iterable[ExecutionResult],
+) -> tuple[bool, str]:
+    """Match the durable decisions for one completed verification program."""
+
+    observed_codes: list[str] = []
+    saw_result = False
+    for result in results:
+        saw_result = True
+        observed_code = run_verdict_short(result.verdict.upper())
+        if observed_code == "SK":
+            continue
+        if observed_code not in _CANONICAL_DECISION_CODES:
+            return (False, "completed solution program has an incomplete result")
+        observed_codes.append(observed_code)
+    if not saw_result:
+        return (False, "completed solution program has no testcase results")
+    if not observed_codes:
+        return (True, "")
+    return _status_codes_rule_match(expected_behavior, observed_codes)
