@@ -365,20 +365,21 @@ def _wait_for_mock_evidence(
     while time.monotonic() < deadline:
         latest = _load_object(path)
         events = latest.get("events")
-        relevant = (
-            [
-                event
-                for event in events
-                if isinstance(event, dict)
-                and event.get("kind") in {
-                    "completed",
-                    "compile-error",
-                    "internal-error",
-                }
-            ]
+        new_events = (
+            events[minimum_event_count:]
             if isinstance(events, list)
             else []
         )
+        relevant = [
+            event
+            for event in new_events
+            if isinstance(event, dict)
+            and event.get("kind") in {
+                "completed",
+                "compile-error",
+                "internal-error",
+            }
+        ]
         sources = {str(event.get("source") or "") for event in relevant}
         if isinstance(events, list) and len(events) > minimum_event_count and {
             "gen.py",
