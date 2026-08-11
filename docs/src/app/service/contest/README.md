@@ -18,3 +18,8 @@ New roster entries are admitted under the active `CONTEST_MAX_PROBLEMS` policy.
 The store serializes count, position allocation, and insert in one writer
 transaction. Existing contests above a newly lowered limit remain usable; only
 further additions are rejected.
+
+Package builds consume canonical problem ICPC exports. The contest service
+safely stages each archive, rewrites only the legacy DOMjudge `short-name` to
+the frozen contest label, and repacks a contest-owned ZIP. These variants live
+under the contest job and never become problem export cache records.

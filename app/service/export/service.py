@@ -81,15 +81,14 @@ class ExportService:
         self.tex_compile_service = tex_compile_service
         self.problem_package_service = problem_package_service
         self._conversion_locks_guard = threading.Lock()
-        self._conversion_locks: dict[tuple[str, str, str], threading.Lock] = {}
+        self._conversion_locks: dict[tuple[str, str], threading.Lock] = {}
 
     def _conversion_lock(
         self,
         materialization_id: str,
         export_type: str,
-        domjudge_short_name: str | None,
     ) -> threading.Lock:
-        key = (materialization_id, export_type, domjudge_short_name or "")
+        key = (materialization_id, export_type)
         with self._conversion_locks_guard:
             return self._conversion_locks.setdefault(key, threading.Lock())
 
@@ -733,7 +732,6 @@ class ExportService:
         problem_name: str,
         problem_slug: str,
         source_commit: str,
-        domjudge_short_name: str,
         mode: str,
         pass_limit: int,
     ) -> None:
@@ -802,7 +800,9 @@ class ExportService:
             self._build_domjudge_problem_ini(
                 problem_name=problem_name,
                 external_id=self._public_problem_slug(problem_slug),
-                short_name=domjudge_short_name,
+                short_name=self._domjudge_short_name(
+                    self._public_problem_slug(problem_slug)
+                ),
                 snapshot=snapshot,
             ),
             encoding="utf-8",
@@ -942,23 +942,16 @@ class ExportService:
             raise ValueError("invalid export archive path")
         return candidate
 
-    @staticmethod
-    def _options_hash(options: dict[str, object]) -> str:
-        payload = json.dumps(options, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
-
     def _cached_export_path(
         self,
         *,
         problem_id: int,
         materialization_id: str,
         export_type: str,
-        options_hash: str,
     ) -> tuple[str, Path] | None:
         export_id = self._store.cached_export(
             materialization_id=materialization_id,
             export_type=export_type,
-            options_hash=options_hash,
         )
         if not export_id:
             return None
@@ -988,19 +981,16 @@ class ExportService:
         export_type: str,
         *,
         materialization_id: str,
-        domjudge_short_name: str | None = None,
         expected_archive_sha256: str | None = None,
     ) -> tuple[str, Path]:
         safe_export_type = str(export_type).strip().lower()
-        safe_short_name = None if domjudge_short_name is None else self._domjudge_short_name(domjudge_short_name)
-        lock = self._conversion_lock(materialization_id, safe_export_type, safe_short_name)
+        lock = self._conversion_lock(materialization_id, safe_export_type)
         with self.problem_package_service.materialization_operation(materialization_id):
             with lock:
                 return self._create_export(
                     problem,
                     safe_export_type,
                     materialization_id=materialization_id,
-                    domjudge_short_name=safe_short_name,
                     expected_archive_sha256=expected_archive_sha256,
                 )
 
@@ -1010,7 +1000,6 @@ class ExportService:
         export_type: str,
         *,
         materialization_id: str,
-        domjudge_short_name: str | None = None,
         expected_archive_sha256: str | None = None,
     ) -> tuple[str, Path]:
         """Return a cached or newly converted artifact from one validated Native."""
@@ -1029,14 +1018,10 @@ class ExportService:
             expected_archive_sha256=expected_archive_sha256,
         )
         public_slug = self._public_problem_slug(str(problem_row["slug"]))
-        short_name = self._domjudge_short_name(domjudge_short_name or public_slug)
-        options: dict[str, object] = {} if resolved_export_type == "native" else {"domjudge_short_name": short_name}
-        options_hash = self._options_hash(options)
         cached = self._cached_export_path(
             problem_id=int(problem_row["id"]),
             materialization_id=materialization_id,
             export_type=resolved_export_type,
-            options_hash=options_hash,
         )
         if cached is not None:
             return cached
@@ -1070,7 +1055,6 @@ class ExportService:
                         problem_name=problem_name,
                         problem_slug=str(problem_row["slug"]),
                         source_commit=materialization["source_commit"],
-                        domjudge_short_name=short_name,
                         mode=mode,
                         pass_limit=pass_limit,
                     )
@@ -1085,7 +1069,6 @@ class ExportService:
             problem_id=int(problem_row["id"]),
             materialization_id=materialization_id,
             export_type=resolved_export_type,
-            options_hash=options_hash,
             filename=filename,
             archive_rel_path=out.relative_to(self.artifacts_root).as_posix(),
             sha256=sha256_file(out),

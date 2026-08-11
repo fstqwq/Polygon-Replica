@@ -231,12 +231,10 @@ class ExportStore:
         *,
         materialization_id: str,
         export_type: str,
-        options_hash: str,
     ) -> str:
         row = self.db.fetch_one(
-            """SELECT id FROM exports WHERE materialization_id=? AND export_type=?
-               AND options_hash=?""",
-            [materialization_id, export_type, options_hash],
+            "SELECT id FROM exports WHERE materialization_id=? AND export_type=?",
+            [materialization_id, export_type],
         )
         return "" if row is None else str(row["id"])
 
@@ -250,7 +248,6 @@ class ExportStore:
         problem_id: int,
         materialization_id: str,
         export_type: str,
-        options_hash: str,
         filename: str,
         archive_rel_path: str,
         sha256: str,
@@ -259,12 +256,12 @@ class ExportStore:
     ) -> None:
         self.db.execute(
             """INSERT INTO exports(
-               id,problem_id,materialization_id,export_type,options_hash,
+               id,problem_id,materialization_id,export_type,
                filename,archive_rel_path,sha256,size_bytes,source_commit,created_at
-               ) VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
+               ) VALUES(?,?,?,?,?,?,?,?,?,?)""",
             [
                 export_id, int(problem_id), materialization_id, export_type,
-                options_hash, filename, archive_rel_path,
+                filename, archive_rel_path,
                 sha256, int(size_bytes), source_commit, now_iso(),
             ],
         )

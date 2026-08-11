@@ -18,6 +18,7 @@ from app.impl.workspace.access import workspace_access_context
 from app.impl.workspace.context_operation import audit, normalize_contest_slug_required
 from app.impl.workspace.context import global_user_ctx
 from app.impl.workspace.published_materialization import ensure_published_materialization
+from app.service.contest.metadata import materialize_contest_problem_package
 from app.service.sandbox.base import ExecResult
 from app.service.statement.constant import DEFAULT_OLYMP_STY
 from app.service.statement.context import normalize_statement_language
@@ -999,6 +1000,10 @@ def _run_contest_package_job_worker(
     job_root = config.contest_service.job_root(contest_slug, job_id)
     packages_dir = job_root / "packages"
     packages_dir.mkdir(parents=True, exist_ok=True)
+    config_snapshot = _C.snapshot()
+    package_max_expanded_bytes = int(
+        config_snapshot["PROBLEM_ZIP_MAX_EXPANDED_BYTES"]
+    )
     entries = config.contest_service.build_items(job_id)
     results: list[dict[str, object]] = []
     for entry in entries:
@@ -1022,7 +1027,6 @@ def _run_contest_package_job_worker(
                 problem_slug,
                 "icpc",
                 materialization_id=str(entry["materialization_id"]),
-                domjudge_short_name=idx,
                 expected_archive_sha256=str(entry["archive_sha256"]),
             )
             item["export_id"] = export_id
@@ -1032,7 +1036,13 @@ def _run_contest_package_job_worker(
             file_token = _contest_problem_slug_file_token(problem_slug)
             output_name = f"{idx}-{file_token}.zip" if idx else f"{file_token}.zip"
             target_package = (packages_dir / output_name).resolve()
-            shutil.copy2(export_path, target_package)
+            materialize_contest_problem_package(
+                export_path,
+                target_package,
+                short_name=idx,
+                staging_parent=job_root / ".package-staging",
+                max_expanded_bytes=package_max_expanded_bytes,
+            )
             item["package_file"] = f"packages/{output_name}"
             item["status"] = "success"
         except Exception as exc:

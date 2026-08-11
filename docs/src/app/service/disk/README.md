@@ -16,3 +16,8 @@ package. The table and locator contracts are documented in the
 Store instances are process-lived wrappers around short-lived SQLite
 connections and retain no task lifecycle of their own. Cross-store boundary
 fragmentation is recorded as PLC-009.
+
+Concrete historical table reconstructions run before these stores are used.
+The dependency-light SQLite shape-upgrade owner invalidates old derived export
+rows when removing their obsolete option identity and preserves historical job
+rows without stale artifact references.

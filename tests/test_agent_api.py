@@ -264,16 +264,15 @@ class TestAgentAPI(E2ETestBase):
         db_execute(
             """
             INSERT INTO exports(
-                id,problem_id,materialization_id,export_type,options_hash,
+                id,problem_id,materialization_id,export_type,
                 filename,archive_rel_path,sha256,size_bytes,source_commit,created_at
-            ) VALUES(?,?,?,?,?,?,?,?,?,?,?)
+            ) VALUES(?,?,?,?,?,?,?,?,?,?)
             """,
             [
                 export_id,
                 problem_id,
                 materialization["id"],
                 "icpc",
-                "0" * 64,
                 filename,
                 archive.relative_to(config.settings.artifacts_root).as_posix(),
                 hashlib.sha256(archive.read_bytes()).hexdigest(),

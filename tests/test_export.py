@@ -641,6 +641,13 @@ class TestPublishedRevisionExport(E2ETestBase):
         with zipfile.ZipFile(archive, "r") as package:
             metadata = package.read("problem.yaml").decode("utf-8")
             self.assertIn(commit, metadata)
+            legacy_metadata = package.read("domjudge-problem.ini").decode(
+                "utf-8"
+            )
+            self.assertIn(
+                f"short-name = {self.problem.rsplit('/', 1)[-1]}\n",
+                legacy_metadata,
+            )
             self.assertIn("data/sample/001.in", package.namelist())
             self.assertIn("data/sample/001.ans", package.namelist())
 

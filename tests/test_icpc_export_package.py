@@ -2,11 +2,13 @@ from __future__ import annotations
 
 # ascii-lint: allow; reason=chinese-test
 
+import hashlib
 import shutil
 import subprocess
 import tempfile
 import unittest
 import uuid
+import zipfile
 from pathlib import Path
 
 import yaml
@@ -20,6 +22,7 @@ from app.service.export.icpc_package import (
     write_input_validator,
     write_output_validator,
 )
+from app.service.contest.metadata import materialize_contest_problem_package
 
 
 class TestICPCExportPackage(unittest.TestCase):
@@ -62,6 +65,94 @@ class TestICPCExportPackage(unittest.TestCase):
         self.assertEqual(problem_uuid(slug), metadata["uuid"])
         self.assertEqual(metadata["version"], "a" * 40)
         self.assertEqual(metadata["limits"], {"time_limit": 2.25, "memory": 1})
+
+    def test_contest_short_names_are_variants_of_one_canonical_archive(self) -> None:
+        canonical = self.root / "canonical.zip"
+        with zipfile.ZipFile(
+            canonical,
+            "w",
+            compression=zipfile.ZIP_DEFLATED,
+        ) as archive:
+            archive.writestr("problem.yaml", "name: {en: Sample}\n")
+            archive.writestr(
+                "domjudge-problem.ini",
+                "name = Sample\n"
+                "externalid = sample\n"
+                "short-name = sample\n"
+                "timelimit = 2\n",
+            )
+            archive.writestr("data/secret/001.in", b"1\n")
+        canonical_digest = hashlib.sha256(canonical.read_bytes()).hexdigest()
+
+        variants: dict[str, Path] = {}
+        for label in ("A", "E"):
+            target = self.root / f"{label}-sample.zip"
+            materialize_contest_problem_package(
+                canonical,
+                target,
+                short_name=label,
+                staging_parent=self.root / "staging",
+                max_expanded_bytes=1024 * 1024,
+            )
+            variants[label] = target
+
+        self.assertEqual(
+            hashlib.sha256(canonical.read_bytes()).hexdigest(),
+            canonical_digest,
+        )
+        for label, target in variants.items():
+            with zipfile.ZipFile(target, "r") as archive:
+                self.assertIn(
+                    f"short-name = {label}\n",
+                    archive.read("domjudge-problem.ini").decode("utf-8"),
+                )
+                self.assertEqual(
+                    archive.read("problem.yaml"),
+                    b"name: {en: Sample}\n",
+                )
+                self.assertEqual(archive.read("data/secret/001.in"), b"1\n")
+
+    def test_contest_short_name_rewrite_rejects_ambiguous_metadata(self) -> None:
+        cases = {
+            "missing": {"problem.yaml": "name: Sample\n"},
+            "duplicate-entry": {
+                "domjudge-problem.ini": (
+                    "short-name = sample\nshort-name = duplicate\n"
+                )
+            },
+            "multiline-entry": {
+                "domjudge-problem.ini": "short-name = sample\n continuation\n"
+            },
+        }
+        for name, members in cases.items():
+            with self.subTest(name=name):
+                canonical = self.root / f"{name}.zip"
+                with zipfile.ZipFile(canonical, "w") as archive:
+                    for member, payload in members.items():
+                        archive.writestr(member, payload)
+                with self.assertRaises(ValueError):
+                    materialize_contest_problem_package(
+                        canonical,
+                        self.root / f"{name}-out.zip",
+                        short_name="A",
+                        staging_parent=self.root / "staging",
+                        max_expanded_bytes=1024 * 1024,
+                    )
+
+        canonical = self.root / "valid.zip"
+        with zipfile.ZipFile(canonical, "w") as archive:
+            archive.writestr("domjudge-problem.ini", "short-name = sample\n")
+        with self.assertRaisesRegex(
+            ValueError,
+            "invalid contest problem short-name",
+        ):
+            materialize_contest_problem_package(
+                canonical,
+                self.root / "unsafe-out.zip",
+                short_name="A\nB",
+                staging_parent=self.root / "staging",
+                max_expanded_bytes=1024 * 1024,
+            )
 
     def test_problem_yaml_types_and_combined_legacy_fallback(self) -> None:
         cases = (

@@ -283,12 +283,12 @@ class TestArtifactCleanup(unittest.TestCase):
         self._execute(
             """
             INSERT INTO exports(
-                id,problem_id,materialization_id,export_type,options_hash,
+                id,problem_id,materialization_id,export_type,
                 filename,archive_rel_path,sha256,size_bytes,source_commit,created_at
-            ) VALUES('export-cleanup',?,'pm-cleanup','native',?,'package.zip',
+            ) VALUES('export-cleanup',?,'pm-cleanup','native','package.zip',
                      'materializations/native.zip',?,10,?,?)
             """,
-            (self.problem_id, "0" * 64, "e" * 64, "c" * 40, now),
+            (self.problem_id, "e" * 64, "c" * 40, now),
         )
         self._execute(
             """

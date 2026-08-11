@@ -4,6 +4,7 @@ import hashlib
 from pathlib import Path
 from unittest.mock import patch
 from urllib.parse import parse_qs, urlparse
+import zipfile
 
 from app.impl.contest.shared import _run_contest_package_job_worker  # pylint: disable=protected-access
 from tests.contest_support import ContestActionBase
@@ -418,6 +419,88 @@ class TestContestBuilds(ContestActionBase):
         )
         self.assertIsNotNone(row)
         self.assertEqual(str(row["status"]), "available")
+
+    def test_package_worker_rewrites_contest_owned_short_name(self) -> None:
+        contest_slug, contest_id, problem_id, problem_slug = (
+            self._contest_with_problem()
+        )
+        published = config.problem_package_service.published_revision(problem_id)
+        materialization_id = self._seed_materialization(
+            problem_id=problem_id,
+            source_commit=published.source_commit,
+            revision_number=published.revision_number,
+        )
+        actor = db_fetch_one("SELECT id FROM users WHERE username='alice'")
+        self.assertIsNotNone(actor)
+        frozen = config.contest_service.freeze_build_job(
+            contest_id=contest_id,
+            actor_user_id=int(actor["id"]),
+            job_type="build",
+            summary={"job_type": "build", "contest_slug": contest_slug},
+            revisions=self._frozen_revisions(
+                contest_id,
+                source_commit=published.source_commit,
+                revision_number=published.revision_number,
+            ),
+        )
+        canonical = Path(config.settings.artifacts_root) / "canonical-icpc.zip"
+        with zipfile.ZipFile(canonical, "w") as archive:
+            archive.writestr("problem.yaml", "name: {en: Sample}\n")
+            archive.writestr(
+                "domjudge-problem.ini",
+                "name = Sample\nshort-name = revision-build-problem\n",
+            )
+        canonical_digest = hashlib.sha256(canonical.read_bytes()).hexdigest()
+
+        materialization = config.problem_package_service.store.materialization(
+            materialization_id
+        )
+        self.assertIsNotNone(materialization)
+
+        def canonical_export(
+            requested_problem: str,
+            requested_type: str,
+            *,
+            materialization_id: str,
+            expected_archive_sha256: str | None = None,
+        ) -> tuple[str, Path]:
+            self.assertEqual(requested_problem, problem_slug)
+            self.assertEqual(requested_type, "icpc")
+            self.assertEqual(materialization_id, str(materialization["id"]))
+            self.assertEqual(
+                expected_archive_sha256,
+                str(materialization["archive_sha256"]),
+            )
+            return "export-canonical", canonical
+
+        with patch.object(
+            config.export_service,
+            "create_export",
+            side_effect=canonical_export,
+        ):
+            result = _run_contest_package_job_worker(
+                contest_id=contest_id,
+                contest_slug=contest_slug,
+                actor_user_id=int(actor["id"]),
+                job_id=frozen["job_id"],
+                finalize=False,
+            )
+
+        self.assertEqual(result["totals"]["success"], 1)
+        package_file = str(result["results"][0]["package_file"])
+        target = config.contest_service.job_root(
+            contest_slug,
+            frozen["job_id"],
+        ) / package_file
+        with zipfile.ZipFile(target, "r") as archive:
+            self.assertIn(
+                "short-name = A\n",
+                archive.read("domjudge-problem.ini").decode("utf-8"),
+            )
+        self.assertEqual(
+            hashlib.sha256(canonical.read_bytes()).hexdigest(),
+            canonical_digest,
+        )
 
     def test_binding_rejects_replacement_of_an_already_frozen_native(self) -> None:
         contest_slug, contest_id, problem_id, _problem_slug = self._contest_with_problem()

@@ -110,6 +110,11 @@ execution/package/export/build subset described by the
 [storage protocol](storage.md#maintenance-cleanup), while identity, authoring,
 contest source, attachment, and configuration rows remain.
 
+`exports` owns one derived cache row for each Native materialization and export
+type. `export_jobs` owns request attempts: distinct requests retain distinct job
+IDs even when they finish by referencing the same cached export row. Contest
+label variants are contest artifacts and do not enter `exports`.
+
 ## Configuration and audit
 
 `system_config` is a key/value JSON store with update identity and timestamp. It
@@ -123,10 +128,16 @@ write service rather than blocking the audit record.
 
 ## Schema changes
 
-At startup the application creates missing tables, runs the current narrow
-contest-build nullability rebuild when required, validates that every canonical
-table and required column exists, and creates missing named indexes. It does not
-compare existing column constraints or existing index definitions against the
-DDL. A schema change updates the DDL, required-column manifest, service queries,
-cleanup policy, and this document together. No project-owned schema version is
-reserved without an actual compatibility boundary.
+At startup the application first applies the concrete recognized table-shape
+upgrades, then creates missing current objects, validates every canonical table
+and required column plus the constraints owned by those upgrades, and creates
+missing named indexes. The shape-upgrade owner reconstructs the historical
+non-nullable `contest_build_items` table when present. It also recognizes the
+historical `exports.options_hash` table, clears job references to those derived
+rows, and replaces it atomically with the canonical materialization/type cache.
+It does not preserve the old derived export rows.
+
+Other existing column constraints and index definitions are not compared
+against the DDL. A schema change updates the DDL, required-column manifest,
+service queries, cleanup policy, and this document together. No project-owned
+schema version is reserved without an actual compatibility boundary.

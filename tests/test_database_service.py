@@ -16,6 +16,87 @@ from tests.isolated_db_helpers import (
 
 
 class TestDatabaseService(DBTestBase):
+    _OLD_EXPORTS_DDL = """
+        CREATE TABLE exports (
+            id TEXT PRIMARY KEY,
+            problem_id INTEGER NOT NULL,
+            materialization_id TEXT NOT NULL,
+            export_type TEXT NOT NULL,
+            options_hash TEXT NOT NULL,
+            filename TEXT NOT NULL,
+            archive_rel_path TEXT NOT NULL,
+            sha256 TEXT NOT NULL,
+            size_bytes INTEGER NOT NULL,
+            source_commit TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            UNIQUE(materialization_id,export_type,options_hash),
+            FOREIGN KEY(problem_id) REFERENCES problems(id),
+            FOREIGN KEY(materialization_id)
+                REFERENCES problem_package_materializations(id)
+        )
+    """
+
+    def _install_options_hash_export_shape(self) -> None:
+        timestamp = "2026-08-11T00:00:00+00:00"
+        isolated_db_execute(
+            self.db,
+            """
+            INSERT INTO problems(id,slug,repo_name,created_at)
+            VALUES(1,'owner/p','p.git',?)
+            """,
+            [timestamp],
+        )
+        isolated_db_execute(
+            self.db,
+            """
+            INSERT INTO users(
+                id,username,email,email_normalized,created_at
+            ) VALUES(1,'owner','owner@example.test','owner@example.test',?)
+            """,
+            [timestamp],
+        )
+        isolated_db_execute(
+            self.db,
+            """
+            INSERT INTO problem_package_materializations(
+                id,problem_id,source_commit,revision_number,source_digest,
+                archive_rel_path,archive_sha256,archive_size_bytes,
+                verification_id,status,created_at,checked_at,unavailable_reason
+            ) VALUES(
+                'pm-old',1,?,1,?,'materializations/old.zip',?,123,
+                'ver-old','available',?,?,'')
+            """,
+            ["a" * 40, "b" * 64, "c" * 64, timestamp, timestamp],
+        )
+
+        def replace_exports(connection: sqlite3.Connection) -> None:
+            connection.execute("DROP TABLE exports")
+            connection.execute(self._OLD_EXPORTS_DDL)
+
+        self.db.write_schema_reset_transaction(replace_exports)
+        isolated_db_execute(
+            self.db,
+            """
+            INSERT INTO exports(
+                id,problem_id,materialization_id,export_type,options_hash,
+                filename,archive_rel_path,sha256,size_bytes,source_commit,created_at
+            ) VALUES('export-old',1,'pm-old','icpc',?,'old.zip',
+                     'exports/old.zip',?,456,?,?)
+            """,
+            ["d" * 64, "e" * 64, "a" * 40, timestamp],
+        )
+        isolated_db_execute(
+            self.db,
+            """
+            INSERT INTO export_jobs(
+                id,problem_id,actor_user_id,export_type,source_commit,status,
+                materialization_id,export_id,error,created_at,started_at,finished_at
+            ) VALUES(
+                'job-old',1,1,'icpc',?,'succeeded','pm-old','export-old','',?,?,?)
+            """,
+            ["a" * 40, timestamp, timestamp, timestamp],
+        )
+
     def test_current_problem_schema_has_no_name_column(self) -> None:
         self.assertNotIn("name", CURRENT_SCHEMA_COLUMNS["problems"])
 
@@ -32,6 +113,86 @@ class TestDatabaseService(DBTestBase):
                 "revision_behind_count",
             }.issubset(workspace_columns)
         )
+
+    def test_export_schema_uses_only_materialization_and_type_identity(self) -> None:
+        with isolated_db_connection(self.db) as connection:
+            columns = {
+                str(row[1])
+                for row in connection.execute("PRAGMA table_info(exports)")
+            }
+            unique_columns = {
+                tuple(
+                    str(column[2])
+                    for column in connection.execute(
+                        f'PRAGMA index_info("{str(index[1])}")'
+                    ).fetchall()
+                )
+                for index in connection.execute("PRAGMA index_list(exports)")
+                if bool(index[2])
+            }
+        self.assertNotIn("options_hash", columns)
+        self.assertIn(("materialization_id", "export_type"), unique_columns)
+
+    def test_options_hash_export_shape_is_invalidated_atomically(self) -> None:
+        self._install_options_hash_export_shape()
+
+        self.db.init()
+
+        job = isolated_db_fetch_one(
+            self.db,
+            """
+            SELECT status,materialization_id,export_id
+            FROM export_jobs WHERE id='job-old'
+            """,
+        )
+        self.assertIsNotNone(job)
+        self.assertEqual(str(job["status"]), "succeeded")
+        self.assertEqual(str(job["materialization_id"]), "pm-old")
+        self.assertIsNone(job["export_id"])
+        export_count = isolated_db_fetch_one(
+            self.db,
+            "SELECT COUNT(*) AS count FROM exports",
+        )
+        self.assertIsNotNone(export_count)
+        self.assertEqual(int(export_count["count"]), 0)
+        isolated_db_execute(
+            self.db,
+            """
+            INSERT INTO exports(
+                id,problem_id,materialization_id,export_type,filename,
+                archive_rel_path,sha256,size_bytes,source_commit,created_at
+            ) VALUES('export-current',1,'pm-old','icpc','current.zip',
+                     'exports/current.zip',?,789,?,?)
+            """,
+            ["f" * 64, "a" * 40, "2026-08-11T01:00:00+00:00"],
+        )
+
+    def test_options_hash_export_shape_upgrade_rolls_back_on_failure(self) -> None:
+        self._install_options_hash_export_shape()
+
+        with patch(
+            "app.sqlite_shape_upgrade._create_current_table",
+            side_effect=RuntimeError("forced export table replacement failure"),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "forced export"):
+                self.db.init()
+
+        with isolated_db_connection(self.db) as connection:
+            columns = {
+                str(row[1])
+                for row in connection.execute("PRAGMA table_info(exports)")
+            }
+            export = connection.execute(
+                "SELECT id FROM exports WHERE id='export-old'"
+            ).fetchone()
+            job = connection.execute(
+                "SELECT export_id FROM export_jobs WHERE id='job-old'"
+            ).fetchone()
+            violations = connection.execute("PRAGMA foreign_key_check").fetchall()
+        self.assertIn("options_hash", columns)
+        self.assertIsNotNone(export)
+        self.assertEqual(str(job["export_id"]), "export-old")
+        self.assertEqual(violations, [])
 
     def test_current_verification_task_schema_has_only_unified_result(self) -> None:
         columns = set(CURRENT_SCHEMA_COLUMNS["verification_tasks"])

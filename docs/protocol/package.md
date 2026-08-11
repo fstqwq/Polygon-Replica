@@ -110,6 +110,19 @@ created as a side effect of contest builds. An available Native materialization
 can be downloaded directly from the Packages page. Creating an export remains
 a write-authorized operation.
 
+A problem export artifact is identified by its published Native
+materialization and export type. Export requests remain separate attempts with
+separate job IDs; successful attempts may resolve to the same available
+artifact. A failed attempt does not create or replace a cache hit.
+
+Contest labels are placement metadata rather than problem export identity. A
+contest package build consumes the canonical ICPC ZIP, safely extracts it into
+the contest job staging tree, changes the single `short-name` entry in
+`domjudge-problem.ini` to the frozen contest label, and repacks the result as a
+contest-owned artifact. The changed ZIP is not inserted into the problem export
+cache. Thus two contests can publish different labels from the same canonical
+problem artifact without changing that artifact.
+
 ## ICPC export
 
 ICPC export produces one hybrid ZIP; there are no selectable compatibility
@@ -140,10 +153,11 @@ semantics.
 
 The output aims at PPF 2025-09 and best-effort legacy DOMjudge consumption.
 There is no compatibility release gate and no guarantee for every legacy
-DOMjudge version. The export cache may reuse an available archive for the same
-materialization/type/options identity. If rebuilding is required, ZIP bytes,
-timestamps, ordering effects, and SHA are not guaranteed to match an earlier
-build.
+DOMjudge version. A canonical problem-level export uses the public problem slug
+as the legacy DOMjudge `short-name`. The export cache may reuse an available
+archive for the same materialization/type identity. If rebuilding is required,
+ZIP bytes, timestamps, ordering effects, and SHA are not guaranteed to match an
+earlier build.
 
 ## Polygon import
 
