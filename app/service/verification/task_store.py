@@ -772,9 +772,12 @@ class VerificationTaskStore:
             """,
             [verification_id, *program_ids],
         ).fetchall()
-        rows_by_program: dict[str, list[sqlite3.Row]] = {}
+        rows_by_program: dict[str, list[dict[str, object]]] = {}
         for row in rows:
-            rows_by_program.setdefault(str(row["program_id"] or ""), []).append(row)
+            task_row = dict(row)
+            rows_by_program.setdefault(
+                str(task_row["program_id"] or ""), []
+            ).append(task_row)
 
         for program_id in program_ids:
             program_rows = rows_by_program.get(program_id)
