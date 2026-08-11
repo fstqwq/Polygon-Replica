@@ -6,27 +6,6 @@ import warnings
 from app.db import now_iso
 from app.impl.runtime.config import config
 
-_C = config.config_values
-
-def _runtime_judgehost_health_profile() -> dict[str, str]:
-    try:
-        status = config.judgehost_task_service.public_status()
-    except Exception:
-        return {
-            "runtime_judgehost_health_summary": "offline",
-            "runtime_judgehost_health_tone": "danger",
-            "runtime_judgehost_enabled": "0",
-            "runtime_judgehost_hosts_online": "0",
-            "runtime_judgehost_hosts_total": "0",
-        }
-    return {
-        "runtime_judgehost_health_summary": status["summary"],
-        "runtime_judgehost_health_tone": status["tone"],
-        "runtime_judgehost_enabled": "1" if status["enabled"] else "0",
-        "runtime_judgehost_hosts_online": str(status["hosts_online"]),
-        "runtime_judgehost_hosts_total": str(status["hosts_total"]),
-    }
-
 
 def _startup_cancel_summary_rows(table_name: str, reason: str, *, now_text: str) -> None:
     warning_rows = config.runtime_state_service.cancel_inflight_summary_rows(table_name, reason, now_text=now_text)

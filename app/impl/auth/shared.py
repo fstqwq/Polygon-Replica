@@ -10,7 +10,6 @@ from urllib.parse import parse_qsl, quote_plus, urlencode, urlparse, urlunparse
 from fastapi import HTTPException, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 
-import app.impl.runtime.lifecycle as runtime_lifecycle
 import app.main_constant as _K
 from app.impl.contest.workspace_scope import (
     problem_template_navigation,
@@ -21,7 +20,23 @@ from app.service.platform.hashing import hmac_sha256_hex, sha256_hex_bytes
 _C = config.config_values
 
 def _runtime_judgehost_health_profile() -> dict[str, str]:
-    return runtime_lifecycle._runtime_judgehost_health_profile()
+    try:
+        status = config.judgehost_task_service.public_status()
+    except Exception:
+        return {
+            "runtime_judgehost_health_summary": "offline",
+            "runtime_judgehost_health_tone": "danger",
+            "runtime_judgehost_enabled": "0",
+            "runtime_judgehost_hosts_online": "0",
+            "runtime_judgehost_hosts_total": "0",
+        }
+    return {
+        "runtime_judgehost_health_summary": status["summary"],
+        "runtime_judgehost_health_tone": status["tone"],
+        "runtime_judgehost_enabled": "1" if status["enabled"] else "0",
+        "runtime_judgehost_hosts_online": str(status["hosts_online"]),
+        "runtime_judgehost_hosts_total": str(status["hosts_total"]),
+    }
 
 def parse_iso_utc(raw: str) -> datetime | None:
     text = str(raw or "").strip()
