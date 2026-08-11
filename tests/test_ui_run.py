@@ -12,6 +12,7 @@ from tests.execution_result_helpers import execution_result
 
 import asyncio
 import base64
+from html import unescape
 import io
 import os
 import re
@@ -2231,8 +2232,13 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             "alice/sample",
             "alice",
         )
-        list_html = list_page.body.decode("utf-8", errors="replace")
-        self.assertIn("Published verification · original is read-only", list_html)
+        list_html = unescape(
+            list_page.body.decode("utf-8", errors="replace")
+        )
+        self.assertIn(
+            "Published verification \u00b7 original is read-only",
+            list_html,
+        )
         self.assertIn(
             f'name="verification_id" value="{published_id}"',
             list_html,
@@ -2251,7 +2257,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         self.assertFalse(detail["owns_verification"])
         self.assertEqual(
             detail["verification_scope_notice"],
-            "Published verification · the original record is read-only",
+            "Published verification \u00b7 the original record is read-only",
         )
 
         with patch(
@@ -2319,7 +2325,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         self.assertFalse(detail["owns_verification"])
         self.assertEqual(
             detail["verification_scope_notice"],
-            "Verification from another workspace · the original record is read-only",
+            "Verification from another workspace \u00b7 the original record is read-only",
         )
 
     def test_rejudge_unavailable_consistent_between_list_and_details_while_running(self) -> None:

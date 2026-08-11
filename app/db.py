@@ -1171,7 +1171,7 @@ class DB:
 
     def write_transaction(
         self,
-        fn: Callable[[sqlite3.Connection], _TxResult],
+        transaction_fn: Callable[[sqlite3.Connection], _TxResult],
     ) -> _TxResult:
         """Run a write transaction with lock retry handling."""
 
@@ -1180,7 +1180,7 @@ class DB:
                 with self.conn() as conn:
                     conn.execute("BEGIN IMMEDIATE")
                     try:
-                        result = fn(conn)
+                        result = transaction_fn(conn)
                     except Exception:
                         conn.rollback()
                         raise
@@ -1195,7 +1195,7 @@ class DB:
 
     def write_schema_reset_transaction(
         self,
-        fn: Callable[[sqlite3.Connection], _TxResult],
+        transaction_fn: Callable[[sqlite3.Connection], _TxResult],
     ) -> _TxResult:
         """Atomically replace tables, validating foreign keys before commit.
 
@@ -1217,7 +1217,7 @@ class DB:
                         )
                     conn.execute("BEGIN IMMEDIATE")
                     try:
-                        result = fn(conn)
+                        result = transaction_fn(conn)
                         violations = conn.execute(
                             "PRAGMA foreign_key_check"
                         ).fetchmany(10)

@@ -21,6 +21,8 @@ from app.service.verification.signature import (
     verification_signature,
 )
 
+_TESTS_SPEC_MAX_BYTES = 256 * 1024
+
 
 class TestPreviewUnit(unittest.TestCase):
     def setUp(self) -> None:
@@ -70,6 +72,7 @@ class TestPreviewUnit(unittest.TestCase):
             statement,
             problem_title="Fallback Title",
             language="english",
+            tests_spec_max_bytes=_TESTS_SPEC_MAX_BYTES,
         )
 
         rendered = output.read_text(encoding="utf-8")
@@ -89,6 +92,7 @@ class TestPreviewUnit(unittest.TestCase):
                 statement,
                 problem_title="Title",
                 language="english",
+                tests_spec_max_bytes=_TESTS_SPEC_MAX_BYTES,
             )
 
         seed_statement_sources(self.workspace)
@@ -98,6 +102,7 @@ class TestPreviewUnit(unittest.TestCase):
                 statement,
                 problem_title="Title",
                 language="english",
+                tests_spec_max_bytes=_TESTS_SPEC_MAX_BYTES,
             )
 
     def test_statement_render_copies_shared_assets_only(self) -> None:
@@ -111,6 +116,7 @@ class TestPreviewUnit(unittest.TestCase):
             self.workspace / "statement",
             problem_title="Title",
             language="english",
+            tests_spec_max_bytes=_TESTS_SPEC_MAX_BYTES,
         )
 
         rendered = self.workspace / "statement" / "rendered" / "english"
@@ -145,7 +151,8 @@ class TestPreviewUnit(unittest.TestCase):
                         "sample": True,
                         "sample_output": "generated output\n",
                     },
-                ]
+                ],
+                max_bytes=_TESTS_SPEC_MAX_BYTES,
             ),
             encoding="utf-8",
         )
@@ -154,6 +161,7 @@ class TestPreviewUnit(unittest.TestCase):
             self.workspace / "statement",
             problem_title="Title",
             language="english",
+            tests_spec_max_bytes=_TESTS_SPEC_MAX_BYTES,
         )
 
         rendered = self.workspace / "statement/rendered/english"
@@ -185,7 +193,8 @@ class TestPreviewUnit(unittest.TestCase):
                         "sample_input": "display input\n",
                         "sample_output": "display output\n",
                     }
-                ]
+                ],
+                max_bytes=_TESTS_SPEC_MAX_BYTES,
             ),
             encoding="utf-8",
         )
@@ -194,6 +203,7 @@ class TestPreviewUnit(unittest.TestCase):
             self.workspace / "statement",
             problem_title="Title",
             language="english",
+            tests_spec_max_bytes=_TESTS_SPEC_MAX_BYTES,
         )
 
         rendered = self.workspace / "statement/rendered/english"
@@ -233,7 +243,8 @@ class TestPreviewUnit(unittest.TestCase):
                         "sample_output": "display only\n",
                         "sample_output_validate": False,
                     },
-                ]
+                ],
+                max_bytes=_TESTS_SPEC_MAX_BYTES,
             ),
             encoding="utf-8",
         )
@@ -242,7 +253,10 @@ class TestPreviewUnit(unittest.TestCase):
             encoding="utf-8",
         )
 
-        rows = self.preview._sample_verification_rows_from_spec(self.workspace)
+        rows = self.preview._sample_verification_rows_from_spec(
+            self.workspace,
+            max_bytes=_TESTS_SPEC_MAX_BYTES,
+        )
 
         self.assertEqual([row.test_id for row in rows], ["001", "002"])
         self.assertTrue(rows[0].validate_custom_output)
@@ -252,11 +266,17 @@ class TestPreviewUnit(unittest.TestCase):
         config_path = self.workspace / "config/problem.json"
         config_path.write_text('{"mode":"interactive"}\n', encoding="utf-8")
         (self.workspace / "tests/spec.json").write_text(
-            dumps_tests_spec([{"id": "001", "kind": "gen", "sample": True}]),
+            dumps_tests_spec(
+                [{"id": "001", "kind": "gen", "sample": True}],
+                max_bytes=_TESTS_SPEC_MAX_BYTES,
+            ),
             encoding="utf-8",
         )
         self.assertEqual(
-            self.preview._sample_verification_rows_from_spec(self.workspace),
+            self.preview._sample_verification_rows_from_spec(
+                self.workspace,
+                max_bytes=_TESTS_SPEC_MAX_BYTES,
+            ),
             [],
         )
 
@@ -266,7 +286,10 @@ class TestPreviewUnit(unittest.TestCase):
             encoding="utf-8",
         )
         with self.assertRaisesRegex(RuntimeError, "invalid tests/spec.json"):
-            self.preview._sample_verification_rows_from_spec(self.workspace)
+            self.preview._sample_verification_rows_from_spec(
+                self.workspace,
+                max_bytes=_TESTS_SPEC_MAX_BYTES,
+            )
 
     def test_verification_signature_tracks_content_but_not_mtime(self) -> None:
         build = self.workspace / "config/build.json"
@@ -310,15 +333,24 @@ class TestPreviewUnit(unittest.TestCase):
                         "sample": True,
                         "sample_output": "answer\n",
                     }
-                ]
+                ],
+                max_bytes=_TESTS_SPEC_MAX_BYTES,
             ),
             encoding="utf-8",
         )
-        before = statement_sources_signature(self.workspace, problem_title="T")
+        before = statement_sources_signature(
+            self.workspace,
+            problem_title="T",
+            tests_spec_max_bytes=_TESTS_SPEC_MAX_BYTES,
+        )
         payload.write_text("second\n", encoding="utf-8")
         self.assertNotEqual(
             before,
-            statement_sources_signature(self.workspace, problem_title="T"),
+            statement_sources_signature(
+                self.workspace,
+                problem_title="T",
+                tests_spec_max_bytes=_TESTS_SPEC_MAX_BYTES,
+            ),
         )
 
     def test_ftl_renderer_strips_standalone_directive_lines(self) -> None:

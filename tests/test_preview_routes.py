@@ -172,6 +172,9 @@ class TestPreviewRoutes(BackendE2ETestBase):
                         "statement_signature": statement_sources_signature(
                             ws,
                             problem_title=self._statement_title(ws),
+                            tests_spec_max_bytes=int(
+                                config.config_values.TEXTAREA_MAX_BYTES
+                            ),
                         ),
                     }
                 ),
@@ -215,6 +218,9 @@ class TestPreviewRoutes(BackendE2ETestBase):
                         "statement_signature": statement_sources_signature(
                             ws,
                             problem_title=self._statement_title(ws),
+                            tests_spec_max_bytes=int(
+                                config.config_values.TEXTAREA_MAX_BYTES
+                            ),
                         ),
                     }
                 ),
@@ -257,6 +263,9 @@ class TestPreviewRoutes(BackendE2ETestBase):
                         "statement_signature": statement_sources_signature(
                             ws,
                             problem_title=self._statement_title(ws, "chinese"),
+                            tests_spec_max_bytes=int(
+                                config.config_values.TEXTAREA_MAX_BYTES
+                            ),
                         ),
                     }
                 ),
@@ -292,6 +301,9 @@ class TestPreviewRoutes(BackendE2ETestBase):
                         "statement_signature": statement_sources_signature(
                             ws,
                             problem_title=self._statement_title(ws),
+                            tests_spec_max_bytes=int(
+                                config.config_values.TEXTAREA_MAX_BYTES
+                            ),
                         ),
                     }
                 ),

@@ -7,6 +7,7 @@ import zipfile
 from pathlib import Path
 
 from app.service.importing.native import NativePackageImportService
+from tests.archive_support import import_problem_package
 
 
 class TestExportService(unittest.TestCase):
@@ -26,7 +27,8 @@ class TestExportService(unittest.TestCase):
             workspace.mkdir()
             (workspace / "old.txt").write_text("old\n", encoding="utf-8")
 
-            NativePackageImportService().import_package(
+            import_problem_package(
+                NativePackageImportService(),
                 workspace,
                 archive.name,
                 archive.read_bytes(),
@@ -56,7 +58,8 @@ class TestExportService(unittest.TestCase):
             workspace = Path(temp) / "workspace"
             workspace.mkdir()
 
-            NativePackageImportService().import_package(
+            import_problem_package(
+                NativePackageImportService(),
                 workspace,
                 archive.name,
                 archive.read_bytes(),

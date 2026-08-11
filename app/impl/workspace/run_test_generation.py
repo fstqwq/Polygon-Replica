@@ -106,6 +106,8 @@ def _status_presentation(status: str, verdict: str) -> tuple[str, str, str]:
 def build_test_generation_views(
     task_rows: list[VerificationTaskRow],
     tests_meta_by_test_name: dict[str, dict[str, object]],
+    *,
+    limit_bytes: int,
 ) -> dict[str, TestGenerationView]:
     generate_rows = [
         row
@@ -136,16 +138,24 @@ def build_test_generation_views(
         alert_severity = ""
         alert_message = ""
         if row is not None:
-            error_text = bounded_display_text(str(row["error_text"] or ""))
-            feedback_text = bounded_display_text(str(row["feedback_text"] or ""))
+            error_text = bounded_display_text(
+                str(row["error_text"] or ""),
+                limit_bytes=limit_bytes,
+            )
+            feedback_text = bounded_display_text(
+                str(row["feedback_text"] or ""),
+                limit_bytes=limit_bytes,
+            )
             late_diagnostic_text = bounded_display_text(
-                str(row.get("late_diagnostic_text") or "")
+                str(row.get("late_diagnostic_text") or ""),
+                limit_bytes=limit_bytes,
             )
             if late_diagnostic_text:
                 if error_text:
                     if late_diagnostic_text not in error_text:
                         error_text = bounded_display_text(
-                            f"{error_text}\n\n{late_diagnostic_text}"
+                            f"{error_text}\n\n{late_diagnostic_text}",
+                            limit_bytes=limit_bytes,
                         )
                 elif late_diagnostic_text not in feedback_text:
                     feedback_text = bounded_display_text(
@@ -153,7 +163,8 @@ def build_test_generation_views(
                             value
                             for value in (feedback_text, late_diagnostic_text)
                             if value
-                        )
+                        ),
+                        limit_bytes=limit_bytes,
                     )
             detail = error_text or feedback_text
             duplicate_of = duplicate_owner_by_task_id.get(str(row["id"]), "")

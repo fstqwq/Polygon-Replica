@@ -109,6 +109,8 @@ def _program_meta_usage(payload: bytes) -> ExecutionUsage:
 
 def normalize_captured_case(
     captured: CapturedJudgehostCase,
+    *,
+    limit_bytes: int,
 ) -> NormalizedJudgehostCase:
     artifacts = captured.artifacts
 
@@ -203,8 +205,12 @@ def normalize_captured_case(
         output_error_ref=output_error_ref,
         output_diff_ref=output_diff_ref,
         team_message_ref=team_message_ref,
+        limit_bytes=limit_bytes,
     )
-    debug_feedback = domjudge_feedback_text_from_text(captured.debug_text)
+    debug_feedback = domjudge_feedback_text_from_text(
+        captured.debug_text,
+        limit_bytes=limit_bytes,
+    )
     if debug_feedback:
         if not feedback_text:
             feedback_text = debug_feedback
@@ -267,6 +273,7 @@ def normalize_captured_case(
                     output_error_ref=historical_error_ref,
                     output_diff_ref=historical_judge_ref,
                     team_message_ref=historical_team_ref,
+                    limit_bytes=limit_bytes,
                 )
             )
             historical_passes.append(

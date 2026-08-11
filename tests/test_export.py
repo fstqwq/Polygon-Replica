@@ -19,6 +19,7 @@ from app.service.problem_package.manifest import load_manifest, validate_manifes
 from app.service.verification.lifecycle import PlannedTask, verification_task_id
 from app.service.verification.task_completion import TaskCompletion
 from app.service.verification.task_store import VerificationTaskStore
+from tests.archive_support import import_problem_package
 from tests.common import E2ETestBase
 from tests.db_helpers import (
     activate_test_verification,
@@ -716,7 +717,8 @@ class TestPublishedRevisionExport(E2ETestBase):
         with tempfile.TemporaryDirectory(prefix="native-import-") as temp:
             workspace = Path(temp) / "workspace"
             workspace.mkdir()
-            NativePackageImportService().import_package(
+            import_problem_package(
+                NativePackageImportService(),
                 workspace,
                 archive.name,
                 archive.read_bytes(),
@@ -743,7 +745,8 @@ class TestPublishedRevisionExport(E2ETestBase):
             with tempfile.TemporaryDirectory(prefix="snapshot-roundtrip-") as temp:
                 restored = Path(temp) / "workspace"
                 restored.mkdir()
-                NativePackageImportService().import_package(
+                import_problem_package(
+                    NativePackageImportService(),
                     restored,
                     archive.name,
                     archive.read_bytes(),
@@ -815,7 +818,13 @@ class TestPublishedRevisionExport(E2ETestBase):
             payload = native.root / "test_data" / "tests" / "001" / "input"
             payload.write_bytes(b"tampered\n")
             with self.assertRaisesRegex(ValueError, "integrity"):
-                validate_manifest_files(native.root, manifest)
+                validate_manifest_files(
+                    native.root,
+                    manifest,
+                    tests_spec_max_bytes=int(
+                        config.config_values.TEXTAREA_MAX_BYTES
+                    ),
+                )
         stored = config.problem_package_service.store.materialization(materialization["id"])
         self.assertIsNotNone(stored)
         self.assertEqual(stored["status"], "available")

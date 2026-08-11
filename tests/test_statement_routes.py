@@ -16,13 +16,15 @@ from app.impl.preview.preview import (
 )
 from app.impl.runtime.config import config
 from app.impl.workspace.context_ui import page_ctx
-from app.main_util import TEXTAREA_MAX_BYTES
+from app.config import CONFIG_REGISTRY
 from app.service.statement.render import (
     default_statement_title_for_workspace,
     ensure_statement_language_sources,
 )
 from tests.backend_e2e_fixture import BackendE2ETestBase
 from tests.ui_support import _flash_messages_from_response, _request
+
+TEXTAREA_MAX_BYTES = int(CONFIG_REGISTRY.defaults()["TEXTAREA_MAX_BYTES"])
 
 
 class TestStatementRoutes(BackendE2ETestBase):

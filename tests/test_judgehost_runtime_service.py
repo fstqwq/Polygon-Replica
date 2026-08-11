@@ -45,9 +45,14 @@ class TestJudgehostRuntimeService(DBTestBase):
             case_diagnostic_sink=self.completion_service,
             case_lease_sink=self.runtime_registry,
         )
-        self.service.state.enabled = True
-        self.service.state.api_token = "test-token"
-        self.service.state.api_username = "judgehost"
+        self.config_values.replace(
+            {
+                **self.config_values.snapshot(),
+                "JUDGEHOST_ENABLE": True,
+                "JUDGEHOST_API_TOKEN": "test-token",
+                "JUDGEHOST_API_USERNAME": "judgehost",
+            }
+        )
         self.addCleanup(self.service.reset_runtime_state)
 
     def _seed_workspace(self) -> None:

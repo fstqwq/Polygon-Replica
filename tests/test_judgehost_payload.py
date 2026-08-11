@@ -22,6 +22,8 @@ from app.service.judgehost.shared import domjudge_config_from_snapshot
 from app.service.judgehost.toolkit import DomjudgeToolkit
 from app.service.platform.hashing import domjudge_executable_hash
 
+_DISPLAY_LIMIT_BYTES = 64 * 1024
+
 
 class TestJudgehostPayload(unittest.TestCase):
     @staticmethod
@@ -66,7 +68,8 @@ class TestJudgehostPayload(unittest.TestCase):
                     }
                 ),
                 pass_bundle=None,
-            )
+            ),
+            limit_bytes=_DISPLAY_LIMIT_BYTES,
         )
         self.assertEqual(normalized.runresult, "checker-fail")
         self.assertEqual(normalized.verdict, "FL")
@@ -94,7 +97,8 @@ class TestJudgehostPayload(unittest.TestCase):
                         artifacts=self._captured_artifacts(),
                         pass_bundle=None,
                         debug_text="runtime diagnostic",
-                    )
+                    ),
+                    limit_bytes=_DISPLAY_LIMIT_BYTES,
                 )
 
                 self.assertEqual(normalized.runresult, expected_runresult)
@@ -129,7 +133,8 @@ class TestJudgehostPayload(unittest.TestCase):
                 run_config={"time_limit": 1.0, "output_limit": 2},
                 artifacts=artifacts,
                 pass_bundle=None,
-            )
+            ),
+            limit_bytes=_DISPLAY_LIMIT_BYTES,
         )
 
         self.assertEqual(normalized.runresult, "output-limit")
@@ -156,7 +161,8 @@ class TestJudgehostPayload(unittest.TestCase):
                 },
                 pass_bundle=None,
                 capture_warning="final artifact metadata is incomplete",
-            )
+            ),
+            limit_bytes=_DISPLAY_LIMIT_BYTES,
         )
 
         self.assertEqual(normalized.verdict, "RE")
@@ -179,7 +185,8 @@ class TestJudgehostPayload(unittest.TestCase):
                 run_config={"time_limit": 1.0},
                 artifacts=self._captured_artifacts(),
                 pass_bundle=None,
-            )
+            ),
+            limit_bytes=_DISPLAY_LIMIT_BYTES,
         )
 
         final_pass = normalized.result.final_pass
@@ -243,7 +250,8 @@ class TestJudgehostPayload(unittest.TestCase):
                 run_config={"time_limit": 1.0},
                 artifacts=artifacts,
                 pass_bundle=bundle,
-            )
+            ),
+            limit_bytes=_DISPLAY_LIMIT_BYTES,
         )
         self.assertEqual(len(normalized.result.passes), 2)
         self.assertEqual(
@@ -323,7 +331,10 @@ class TestJudgehostPayload(unittest.TestCase):
 
     def test_feedback_text_preserves_lines_and_redacts_internal_paths(self) -> None:
         self.assertEqual(
-            domjudge_feedback_text_from_text("\n\nfailed on pass 2\nignored"),
+            domjudge_feedback_text_from_text(
+                "\n\nfailed on pass 2\nignored",
+                limit_bytes=_DISPLAY_LIMIT_BYTES,
+            ),
             "failed on pass 2\nignored",
         )
         compile_output = (
@@ -339,9 +350,18 @@ class TestJudgehostPayload(unittest.TestCase):
             "validator.cpp: In function 'void EachTestCase()':\n"
             "validator.cpp:4:35: error: expected ';' before 'inf'"
         )
-        self.assertEqual(domjudge_feedback_text_from_text(compile_output), expected)
         self.assertEqual(
-            domjudge_feedback_text_from_bytes(compile_output.encode("utf-8")),
+            domjudge_feedback_text_from_text(
+                compile_output,
+                limit_bytes=_DISPLAY_LIMIT_BYTES,
+            ),
+            expected,
+        )
+        self.assertEqual(
+            domjudge_feedback_text_from_bytes(
+                compile_output.encode("utf-8"),
+                limit_bytes=_DISPLAY_LIMIT_BYTES,
+            ),
             expected,
         )
 

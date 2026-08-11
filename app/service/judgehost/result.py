@@ -18,6 +18,7 @@ from app.service.judgehost.domjudge.client import domjudge_parse_script_id, domj
 from app.service.judgehost.limits import truncate_stored_log_bytes, run_output_kb
 from app.service.judgehost.file_stream import DomjudgeDownloadFile
 from app.service.platform.runtime_blob_store import PayloadFile
+from app.service.platform.error_text import aux_display_text_limit_bytes
 from app.service.judgehost.runtime import (
     domjudge_bool,
     domjudge_feedback_text_from_text,
@@ -92,6 +93,9 @@ class ResultProcessor:
         self._diagnostic_publisher = diagnostic_publisher
         self._completion_publisher = completion_publisher
         self._batch_finalizer = batch_finalizer
+
+    def _display_text_limit_bytes(self) -> int:
+        return aux_display_text_limit_bytes(self._s.config_values.snapshot())
 
     def _touch_task_verification(self, task_id: str) -> None:
         task = self._s.task_registry.get(task_id)
@@ -563,7 +567,8 @@ class ResultProcessor:
                 compile_log = compile_blob.decode("utf-8", errors="replace").strip()
                 failure_text = (
                     domjudge_feedback_text_from_text(
-                        compile_log
+                        compile_log,
+                        limit_bytes=self._display_text_limit_bytes(),
                     )
                     or "compilation failed"
                 )
@@ -990,7 +995,8 @@ class ResultProcessor:
                 pass_bundle=pass_bundle,
                 capture_warning=capture_warning,
                 debug_text=debug_text,
-            )
+            ),
+            limit_bytes=self._display_text_limit_bytes(),
         )
         case_result = normalized.result
         runresult = normalized.runresult

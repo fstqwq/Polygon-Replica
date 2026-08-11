@@ -323,6 +323,10 @@ def build_run_detail_context(
     detail_test_name: str = '',
     detail_program_id: str = '',
 ) -> dict:
+    display_limit = int(
+        _C.snapshot()["AUX_DISPLAY_TEXT_LIMIT_BYTES"]
+    )
+
     def _task_graph_column_keys_from_task_rows(
         rows: list[VerificationTaskRow],
     ) -> list[str]:
@@ -395,7 +399,7 @@ def build_run_detail_context(
     def _late_task_diagnostic_text(row: VerificationTaskRow) -> str:
         rendered = str(row.get("late_diagnostic_text") or "")
         if rendered:
-            return bounded_display_text(rendered)
+            return bounded_display_text(rendered, limit_bytes=display_limit)
         raw_items = row.get("late_diagnostics")
         if not isinstance(raw_items, list):
             return ""
@@ -413,7 +417,10 @@ def build_run_detail_context(
             if received_at:
                 label = f"{label} at {received_at}"
             messages.append(f"[{label}]\n{text}")
-        return bounded_display_text("\n\n".join(messages))
+        return bounded_display_text(
+            "\n\n".join(messages),
+            limit_bytes=display_limit,
+        )
 
     def _task_graph_fallback_rows(
         rows: list[VerificationTaskRow],
@@ -498,7 +505,8 @@ def build_run_detail_context(
                                     late_diagnostic_text,
                                 )
                                 if value
-                            )
+                            ),
+                            limit_bytes=display_limit,
                         )
                     test_row['late_diagnostics'] = list(
                         cast(list[object], row.get('late_diagnostics') or [])
@@ -535,7 +543,8 @@ def build_run_detail_context(
                         value
                         for value in (error_text, *late_diagnostic_texts)
                         if value
-                    )
+                    ),
+                    limit_bytes=display_limit,
                 )
             summary: dict[str, object] = {
                 'mode': verification_mode,
@@ -857,9 +866,6 @@ def build_run_detail_context(
         test_name = normalize_run_test_name_token(str(item.get('test_name') or ''))
         if test_name and test_name not in tests_meta_by_test_name:
             tests_meta_by_test_name[test_name] = dict(item)
-    display_limit = int(
-        _C.snapshot()["AUX_DISPLAY_TEXT_LIMIT_BYTES"]
-    )
     test_generation_views = build_test_generation_views(
         task_rows,
         tests_meta_by_test_name,
@@ -1026,7 +1032,8 @@ def build_run_detail_context(
                 if include_row_details:
                     passes_raw = item.get('passes')
                     late_diagnostic_text = bounded_display_text(
-                        item.get('late_diagnostic_text') or ''
+                        item.get('late_diagnostic_text') or '',
+                        limit_bytes=display_limit,
                     )
                     feedback_display = '-'
                     inline_feedback = bounded_display_text(
@@ -1153,7 +1160,8 @@ def build_run_detail_context(
                                             late_diagnostic_text,
                                         )
                                         if value
-                                    )
+                                    ),
+                                    limit_bytes=display_limit,
                                 )
                             )
                     final_row = (
@@ -1891,10 +1899,10 @@ def build_run_detail_context(
             else ''
         ),
         'verification_scope_notice': (
-            'Published verification · the original record is read-only'
+            'Published verification \u00b7 the original record is read-only'
             if verification_visible and verification_workspace_id is None
             else (
-                'Verification from another workspace · the original record is read-only'
+                'Verification from another workspace \u00b7 the original record is read-only'
                 if verification_visible and not owns_verification
                 else ''
             )

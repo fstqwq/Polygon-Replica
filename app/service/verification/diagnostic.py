@@ -167,6 +167,8 @@ def _fit_single_diagnostic_item(
 def compose_task_diagnostic_display(
     result: ExecutionResult,
     snapshot: TaskDiagnosticSnapshot,
+    *,
+    limit_bytes: int,
 ) -> dict[str, object]:
     """Build display-only diagnostics without changing the canonical result."""
 
@@ -177,7 +179,8 @@ def compose_task_diagnostic_display(
                 f"{item.text}"
             )
             for item in snapshot.items
-        )
+        ),
+        limit_bytes=limit_bytes,
     )
     return {
         "canonical_error": result.outcome.error,

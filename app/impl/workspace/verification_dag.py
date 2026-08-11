@@ -607,6 +607,7 @@ def _verification_summary_from_tasks(
     fail_flag: bool,
     fail_reason: str,
 ) -> tuple[str, dict[str, object], dict[str, object]]:
+    display_limit = int(_C.snapshot()["AUX_DISPLAY_TEXT_LIMIT_BYTES"])
     visible_programs = _visible_programs(programs)
     all_programs = _visible_programs(programs)
     counts = _task_counts(rows)
@@ -631,12 +632,14 @@ def _verification_summary_from_tasks(
                 program.source_path,
                 "",
                 str(run_summary.get("error") or ""),
+                limit_bytes=display_limit,
             )
         if (not matched) and completed and (not first_solution_error):
             first_solution_error = reason_text or verification_solution_failure_hint(
                 program.source_path,
                 "",
                 str(run_summary.get("error") or ""),
+                limit_bytes=display_limit,
             )
         all_matched = all_matched and bool(matched)
     if fail_flag:

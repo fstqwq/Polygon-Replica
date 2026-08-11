@@ -780,9 +780,14 @@ class TestJudgehostLifecycle(DBTestBase):
             case_diagnostic_sink=completion_service,
             case_lease_sink=VerificationRuntimeRegistry(),
         )
-        service.state.enabled = True
-        service.state.api_token = "test-token"
-        service.state.api_username = "judgehost"
+        self.config_values.replace(
+            {
+                **self.config_values.snapshot(),
+                "JUDGEHOST_ENABLE": True,
+                "JUDGEHOST_API_TOKEN": "test-token",
+                "JUDGEHOST_API_USERNAME": "judgehost",
+            }
+        )
         return service
 
     @staticmethod

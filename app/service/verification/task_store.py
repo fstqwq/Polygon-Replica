@@ -457,6 +457,7 @@ class VerificationTaskStore:
         ).fetchall()
         ordered = sorted((dict(row) for row in rows), key=self._row_order)
         values: list[dict[str, object]] = []
+        limit_bytes = self._limit_bytes()
         for index, row in enumerate(ordered, start=1):
             task_id = str(row["id"] or "")
             decorated = dict(
@@ -474,6 +475,7 @@ class VerificationTaskStore:
             display = compose_task_diagnostic_display(
                 cast(ExecutionResult, decorated["result"]),
                 snapshot,
+                limit_bytes=limit_bytes,
             )
             decorated["late_diagnostics"] = display["late_diagnostics"]
             decorated["late_diagnostic_text"] = display["late_text"]

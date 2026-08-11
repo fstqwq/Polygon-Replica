@@ -14,6 +14,7 @@ from app.service.judgehost.shared import domjudge_lower_text, domjudge_text
 from app.service.judgehost.state import JudgehostState
 from app.service.judgehost.task_queue import TaskQueue
 from app.service.judgehost.toolkit import DomjudgeToolkit
+from app.service.platform.error_text import aux_display_text_limit_bytes
 
 
 logger = logging.getLogger(__name__)
@@ -76,6 +77,9 @@ class JudgehostBatchFinalizer:
         self._queue = queue
         self._toolkit = toolkit
         self._publisher = publisher
+
+    def _display_text_limit_bytes(self) -> int:
+        return aux_display_text_limit_bytes(self._s.config_values.snapshot())
 
     def finalize_host_lease_release(self, release: HostLeaseRelease) -> None:
         for task_id in release.terminal_task_ids:
@@ -188,7 +192,10 @@ class JudgehostBatchFinalizer:
             message = compile_text.strip() or "compilation failed"
             compile_error_summary = message
             compile_error_task = (
-                domjudge_feedback_text_from_text(message)
+                domjudge_feedback_text_from_text(
+                    message,
+                    limit_bytes=self._display_text_limit_bytes(),
+                )
                 or "compilation failed"
             )
             compile_diagnostics.append(
@@ -397,7 +404,8 @@ class JudgehostBatchFinalizer:
             )
             feedback = (
                 domjudge_feedback_text_from_text(
-                    compile_blob.decode("utf-8", errors="replace")
+                    compile_blob.decode("utf-8", errors="replace"),
+                    limit_bytes=self._display_text_limit_bytes(),
                 )
                 or "compilation failed"
             )
