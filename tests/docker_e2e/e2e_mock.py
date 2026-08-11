@@ -12,6 +12,7 @@ import subprocess
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import cast
+from urllib.parse import parse_qs, urlparse
 
 import httpx
 from cryptography.hazmat.primitives import hashes, serialization
@@ -364,6 +365,19 @@ def prepare() -> None:
             raise RuntimeError(
                 f"problem creation redirected unexpectedly: {response.headers!r}"
             )
+        response = _post(
+            client,
+            f"/problems/{PROBLEM}/statement/languages/add",
+            {"language": "english", "page": "statement"},
+        )
+        expected_statement_location = (
+            f"/problems/{PROBLEM}/statement?language=english"
+        )
+        if response.headers.get("location") != expected_statement_location:
+            raise RuntimeError(
+                "statement language creation redirected unexpectedly: "
+                f"{response.headers!r}"
+            )
         for path, content in FIXTURE_FILES.items():
             _post(
                 client,
@@ -605,6 +619,7 @@ def _assert_commit(connection: sqlite3.Connection) -> str:
     required_actions = {
         "system.setup",
         "system_config.update_judgehost_runtime_controls",
+        "statement.language.add",
         "verification.start",
         "revision.commit",
     }
@@ -646,12 +661,19 @@ def _run_statement_preview(
     workspace_id: int,
     previous_id: str,
 ) -> str:
-    _post(
+    response = _post(
         client,
         f"/problems/{PROBLEM}/preview/run",
         {"page": "statement", "language": "english"},
         timeout_sec=300.0,
     )
+    location = response.headers.get("location", "")
+    preview_ids = parse_qs(urlparse(location).query).get("preview_id", [])
+    if len(preview_ids) != 1 or not preview_ids[0]:
+        raise RuntimeError(
+            "statement preview did not start a compile: "
+            f"location={location!r} set-cookie={response.headers.get('set-cookie', '')!r}"
+        )
     verification = _wait_for_verification(
         connection,
         problem_id=problem_id,
