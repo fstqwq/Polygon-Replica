@@ -3286,6 +3286,14 @@ class TestJudgehostService(E2ETestBase):
             before["compile_output_b64"],
             before["compile_metadata_b64"],
         )
+        before_host = dict(service.state.hosts_state[hostname])
+        before_host_telemetry = (
+            before_host["last_seen_at"],
+            before_host["last_action"],
+            before_host["last_task_id"],
+            before_host["last_run_id"],
+            before_host["update_count"],
+        )
 
         invalid_payloads = (
             {
@@ -3336,6 +3344,17 @@ class TestJudgehostService(E2ETestBase):
             self.assertIsNotNone(current_case)
             assert current_case is not None
             self.assertEqual(current_case["status"], "leased")
+            after_host = service.state.hosts_state[hostname]
+            self.assertEqual(
+                (
+                    after_host["last_seen_at"],
+                    after_host["last_action"],
+                    after_host["last_task_id"],
+                    after_host["last_run_id"],
+                    after_host["update_count"],
+                ),
+                before_host_telemetry,
+            )
 
     def test_domjudge_compile_logs_are_truncated_before_state_storage(self) -> None:
         service = config.judgehost_task_service

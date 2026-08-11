@@ -530,6 +530,13 @@ class ResultProcessor:
         if not self._domjudge_task_accepts_case_updates(safe_task_id):
             logger.info("ignoring update for cancelled DOMjudge task case id: %s", case_id)
             return
+        if compile_success == 0:
+            compile_output = _payload_blob_as_b64(
+                payload.get("output_compile")
+            )
+            compile_meta = _payload_blob_as_b64(
+                payload.get("compile_metadata")
+            )
         self._queue._record_host_event_conn(
             hostname=safe_host,
             action="update",
@@ -539,12 +546,6 @@ class ResultProcessor:
         if compile_success is not None:
             updated_at = compile_updated_at or now_iso()
             if compile_success == 0:
-                compile_output = _payload_blob_as_b64(
-                    payload.get("output_compile")
-                )
-                compile_meta = _payload_blob_as_b64(
-                    payload.get("compile_metadata")
-                )
                 compile_blob = self._toolkit.b64_decode(compile_output)
                 compile_log = compile_blob.decode("utf-8", errors="replace").strip()
                 failure_text = (
