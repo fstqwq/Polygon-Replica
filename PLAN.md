@@ -1,610 +1,508 @@
-# Three Refactoring Batches
+# Parallel Refactoring Plan
 
-This plan records three implementation batches in dependency order: safety
-boundaries, verification runtime ownership, then Judgehost result-pipeline
-convergence. The owning current-state documentation changes with the
-implementation.
+## Status and baseline
 
-Tests do not run on Windows. CI runs each of the four resource groups directly
-from an Ubuntu checkout and virtualenv through `tests/scripts/test.sh`; it does
-not run those groups through `docker-e2e.sh`. For this delivery, a separate
-acceptance audit ran the current checkout in an isolated Linux container with
-`/opt/polygon-replica/.venv` using:
+This is the active plan for the next parallel refactoring pass. The previous
+three-batch plan is complete and is not an implementation target for this pass.
 
-```bash
-for group in unit service executor e2e; do
-  /opt/polygon-replica/.venv/bin/python \
-    tests/scripts/run_test_groups.py "$group"
-done
-```
-
-That audit container was not the production application image. The executor
-group received a temporary, test-only Ubuntu compiler sysroot because the
-application image does not ship a C++ toolchain. Separately,
-`tests/scripts/docker-e2e.sh` used the production image and an isolated local
-Docker mock for Judgehost integration, after verifying the pinned DOMjudge
-9.0.1 source contract. No real Judgehost was used.
-
-## Delivery record
-
-The safety changes retain their independent review boundaries:
-
-- `5f94c61 Migrate configuration and stream ZIP imports`
-- `5685098 Preserve secure host environment configuration`
-- `616f5f4 Fail Docker builds on TeX setup errors`
-
-The runtime-registry, execution-service, finalization, normalization, and
-publication changes all cross the same runtime composition root. They were
-delivered without temporary compatibility wrappers in the single atomic commit
-`11970ac Own verification runtime and Judgehost result flow`. The responsibility
-steps below remain separate for review, but they are not separate historical
-commits.
-
-The follow-up delivery adds lifecycle race/rollback evidence, Preview-to-sample
-Docker E2E, real TeX sandbox smoke, the explicit TeX Gyre deployment dependency,
-and the endpoint-plus-method DOMjudge source checks described below. These
-follow-up changes are not contained in `11970ac`.
-
-Final acceptance on the current tree records:
-
-- `unit`: 239 tests passed;
-- `service`: 141 tests passed;
-- `executor`: 68 tests passed;
-- `e2e`: 506 tests passed;
-- pylint: `10.00/10`;
-- syntax, pyflakes, vulture, import-policy, cross-package private-import, test
-  resource, and `git diff --check` checks passed;
-- the production Docker image built, compiled real `pdflatex` and `xelatex`
-  PDFs through bubblewrap, approved the pinned DOMjudge sources, and completed
-  the Preview-to-sample and full-verification mock Judgehost workflow.
-
-## Batch 1: Input and deployment safety boundaries
-
-This batch resolves three independent, low-coupling risks without changing the
-verification lifecycle. Each subsection is a separate commit.
-
-### 1A. Package archive path safety
-
-Delivered commit:
+All implementation worktrees start from:
 
 ```text
-Reject unsafe package archive paths
+7cebb3acb36b0bfb0e01ebee8a5f2eb012174c8d
 ```
 
-Implementation:
+The coordinator remains in the `main` worktree. Three implementation agents use
+dedicated branches and worktrees. They must not edit another agent's worktree.
 
-- Add one shared ZIP-entry canonicalizer under `app/service/importing/`.
-- Make the Polygon problem, Polygon contest, and ICPC problem importers use the
-  same rules:
-  - normalize `\` to `/`;
-  - allow harmless `.` components and a supported outer wrapper directory;
-  - reject absolute paths, drive-qualified paths, NUL bytes, and `..` traversal;
-  - ignore directory entries;
-  - reject non-directory entries whose canonical path is empty;
-  - reject multiple entries that canonicalize to the same path;
-  - check for collisions again after removing a supported outer wrapper.
-- Keep package-format detection classification-only. The selected importer
-  validates every file entry before reading its marker; detection is not a
-  security authority.
-- Preserve the existing supported single-wrapper package layout.
-- Leave the Native importer unchanged; it already rejects normalized duplicate
-  paths.
+## Canonical decisions
 
-Observable change:
+The following decisions are fixed for this pass.
 
-- Polygon problem, Polygon contest, and ICPC archives that were previously accepted after silently
-  omitting or replacing unsafe entries are rejected.
-- Successful package layout, problem models, and persisted formats do not
+### Package and job identity
+
+```text
+Published source identity
+  = problem_id + published source_commit
+
+Problem export artifact identity
+  = published source identity + export_type
+
+Export attempt identity
+  = export_job_id
+
+Worker execution identity
+  = export-job:{export_job_id}
+
+Contest package identity
+  = contest job + frozen contest problem + contest label
+```
+
+- `problem_package_builds` is one mutable build-state row per published source
+  identity. It is not an attempt-history table. Its existing unique constraint
+  and retry-in-place behavior remain unchanged.
+- Distinct export requests retain distinct `export_job_id` values. A successful
+  attempt may reference an already available artifact. Artifact publication and
+  export-job status are independent writes: if a valid canonical artifact is
+  published before a later job-link or status write fails, the artifact remains
+  reusable and a later cache hit counts as a successful attempt.
+- `domjudge_short_name` is contest placement metadata. It is not part of the
+  problem export artifact identity and must not affect a problem export cache
+  key.
+- A problem-level ICPC package is canonical and uses the public problem slug as
+  its legacy DOMjudge `short-name`.
+- A contest build consumes the canonical package, changes contest-owned metadata
+  in its own staging tree, and publishes the changed ZIP only as a contest
+  artifact.
+- There is no remaining configurable export option. `options_hash` must be
+  removed instead of retained as a constant or hidden cache salt.
+
+### Database and compatibility
+
+- The current SQLite schema is authoritative.
+- A concrete old table shape may have one explicit structural upgrade. Do not
+  add a project schema version, compatibility wrapper, or generic migration
+  framework.
+- Export rows and export archives are derived cache data. The `options_hash`
+  shape upgrade may invalidate all existing export rows. Historical export job
+  rows remain, with unavailable artifact references cleared.
+- Old unreferenced export files need not be recovered. They remain inaccessible
+  and are removed by the existing exclusive artifact cleanup.
+- `workspaces.recent_verification_status` is logically deleted. New databases do
+  not contain it. Existing databases may retain the unused extra column; the
+  application must not read, write, clear, or validate it.
+
+### Judgehost and runtime
+
+- Judgehost HTTP routes, authentication, callback acknowledgements, result
+  normalization, artifact references, and late-diagnostic behavior do not
   change.
+- Application startup and shutdown belong to runtime composition, not the
+  private authentication implementation package.
 
-Tests:
+## Worktree allocation
 
-- Extend the existing Polygon and ICPC problem-import unit modules and the
-  Polygon contest service module (`tests/test_large_package_import.py`); do not
-  create a new resource group.
-- Cover `../statement.pdf`, absolute paths, drive-qualified paths, `a/../b`,
-  `a\b` versus `a/b`, and a valid wrapped package. The canonicalizer rejects a
-  NUL when one is present in its input, but Python's ZIP reader truncates a NUL
-  filename before exposing `ZipInfo.filename`, so package-level tests and
-  protocol claims do not promise detection of discarded bytes. Wrapper removal
-  retains a defensive collision check, although prefix removal is injective
-  after the first canonical-map collision check.
-- Assert the error category and observable import result, not complete error
-  wording or private helper calls.
+| Agent | Branch | Worktree | Responsibility |
+| --- | --- | --- | --- |
+| Coordinator | `main` | `C:\code\Polygon-Replica\Polygon-Replica` | Integration, `PLAN.md`, findings ledger, final verification |
+| Agent 1: Package and SQLite | `codex/package-artifact-identity` | `C:\code\Polygon-Replica\worktrees\package-artifact-identity` | Canonical problem exports, contest metadata rewrite, export schema, obsolete workspace field |
+| Agent 2: Judgehost ingestion | `codex/judgehost-callback-ingestion` | `C:\code\Polygon-Replica\worktrees\judgehost-callback-ingestion` | Split callback ingestion responsibilities without behavior changes |
+| Agent 3: Runtime lifecycle | `codex/runtime-lifecycle` | `C:\code\Polygon-Replica\worktrees\runtime-lifecycle` | Move process lifecycle out of private auth implementation |
 
-Documentation:
+The worktrees and branches already exist at the baseline commit above.
 
-- Update the package/import protocol with the accepted archive-name boundary.
-- Remove `PKG-003` from the findings ledger, which contains current debt rather
-  than a history of resolved findings.
+## Shared coordination rules
 
-### 1B. Installer environment-file safety
+- Agents may modify only the files assigned to their workstream plus directly
+  owning documentation and existing tests.
+- Only the coordinator edits `PLAN.md`, `docs/implementation/findings.md`, test
+  resource manifests, CI workflows, import-policy configuration, or repository
+  policy files.
+- Do not add compatibility aliases, old-signature wrappers, schema versions,
+  cache salts, or placeholder option fields.
+- Extend existing test modules. Do not add a test module merely to isolate one
+  assertion, and do not add UI markup assertions for internal refactors.
+- Each agent leaves a clean worktree with the requested atomic commits. Agents
+  do not merge, push, or rebase against a moving `main` unless the coordinator
+  explicitly asks.
+- No tests run on Windows. The Linux host and virtualenv must be confirmed with
+  the user immediately before test execution.
 
-Delivered commit:
+## Agent 1: Canonical package artifacts and SQLite cleanup
 
-```text
-Preserve secure host environment configuration
-```
+### Objective
 
-Implementation:
+Make the problem export cache own exactly one artifact for each
+`materialization_id + export_type`. Move contest-label rewriting into the
+contest build. Remove dead SQLite identity and workspace fields.
 
-- Write `/etc/polygon-replica.env` as `root:root` with mode `0600`.
-- On installer reruns:
-  - update only installer-owned keys;
-  - preserve operator-owned configuration, including the encryption key;
-  - parse existing single-line assignments as data and never execute the file
-    with `source`;
-  - reject duplicate keys, malformed assignments, unbalanced quotes, and
-    single-line values that request continuation instead of choosing one
-    silently.
-- Accept an optional `export` prefix only when reading an existing shell-style
-  file, and always emit systemd-compatible `NAME=VALUE` assignments. Preserve
-  both `#` and `;` comment lines.
-- Render unprivileged content to a temporary file, install it as `root:root`
-  mode `0600` into a second temporary file beside the `/etc` target, and replace
-  the target atomically.
-- Preserve the current runtime-user derivation, root-runtime rejection, and
-  systemd unit rendering behavior.
+### File ownership
 
-Tests:
+Primary production ownership:
 
-- Extend the installer executor contract tests.
-- Execute the environment renderer for operator-secret preservation, managed
-  value replacement, `export` migration, comment preservation, and invalid or
-  duplicate record rejection. Statically verify the root-owned `0600` atomic
-  install command, ordinary/sudo-origin identity branches, root-runtime
-  rejection, and non-root values in the rendered unit; exercise the resulting
-  scripts on Linux during deployment validation.
+- `app/db.py` and a dependency-light adjacent SQLite shape-upgrade module if
+  separation is needed;
+- `app/service/disk/export_store.py`;
+- `app/service/export/`;
+- the contest package-building portion of `app/impl/contest/shared.py`;
+- a new contest-owned metadata helper under `app/service/contest/`;
+- `app/service/platform/maintenance.py` only for removal of
+  `recent_verification_status` handling.
 
-### 1C. Transparent Docker build failures
+Owning tests and documentation:
 
-Delivered commit:
+- `tests/test_database_service.py`;
+- `tests/test_export.py`;
+- `tests/test_export_service.py`;
+- `tests/test_icpc_export_package.py`;
+- `tests/test_contest_builds.py`;
+- `tests/test_artifact_cleanup.py`;
+- `docs/protocol/package.md`;
+- `docs/protocol/persistence.md`;
+- `docs/src/app/service/export/README.md`;
+- `docs/src/app/service/contest/README.md`;
+- `docs/src/app/service/disk/README.md`.
 
-```text
-Fail Docker builds on TeX setup errors
-```
+Agent 1 must not modify Judgehost, runtime lifecycle, `PLAN.md`, or the findings
+ledger.
 
-Implementation:
+### Change 1: Canonical problem export
 
-- Remove broad `|| true` suppression from TeX and package setup.
-- Make required `mktexlsr`, `updmap-sys`, and related setup failures terminate
-  the build.
-- Install the TeX Gyre fonts used by the canonical statement template
-  explicitly in both deployment paths instead of relying on apt recommendations
-  omitted by the Docker build.
-- Where a step is genuinely optional, use an explicit applicability check and
-  ignore only its documented not-applicable state.
-- Do not change the image entry point or runtime configuration protocol.
+- Remove the `domjudge_short_name` parameter from the public and internal
+  problem export APIs.
+- Derive the canonical legacy DOMjudge `short-name` only from the public problem
+  slug.
+- Reduce the in-process conversion lock identity from
+  `materialization_id + export_type + short_name` to
+  `materialization_id + export_type`.
+- Remove `_options_hash()` and all option-hash arguments from export service and
+  store methods.
+- Change the durable uniqueness rule from
+  `UNIQUE(materialization_id, export_type, options_hash)` to
+  `UNIQUE(materialization_id, export_type)`.
+- Preserve `export_job_id`, worker dedupe keys, job status transitions, audit
+  attribution, filenames, archive integrity checks, and cache-hit behavior.
 
-Verification:
+### Change 2: Contest-owned metadata rewrite
 
-- Build the complete image in Linux Docker.
-- Compile real `pdflatex` and `xelatex` PDFs using the canonical Latin and CJK
-  fonts, require the bubblewrap root switch, and check the resulting PDF magic.
-- Run the image startup probe and public Preview workflow.
+- The contest package worker first requests the canonical ICPC export without a
+  contest label.
+- Copy and safely extract that ZIP into the contest job staging tree.
+- Rewrite exactly the `short-name` entry in `domjudge-problem.ini` to the frozen
+  contest label.
+- Require one valid metadata file and one `short-name` entry. Reject duplicate,
+  missing, multi-line, or unsafe values.
+- Preserve `problem.yaml`, `externalid`, UUID, version, color, limits,
+  statements, validators, submissions, tests, and attachments byte-for-byte
+  except for archive-container effects and the intended INI line.
+- Repack the staged tree into the existing contest package filename and include
+  it in the contest package bundle.
+- Do not insert the rewritten ZIP into `exports`; it is owned by the contest job
+  and contest artifact lifecycle.
+- Use bounded streaming and existing safe archive helpers. Do not load a whole
+  problem ZIP into memory.
 
-### Batch 1 acceptance
+### Change 3: Concrete export schema upgrade
 
-- Targeted `unit` and `executor` tests pass.
-- All four test groups pass in a Linux virtualenv. CI uses its Ubuntu jobs; the
-  recorded delivery audit used the isolated container command above.
-- The Docker image build and smoke tests pass.
-- The resource manifest, import policy, static checks, and `git diff --check`
-  pass.
-- Correct the stale statement in `tests/RESOURCE_GROUPS.md` that still refers to
-  six groups; the current groups are `unit`, `service`, `executor`, and `e2e`.
-- Keep 1A, 1B, and 1C as separate commits.
+- Detect the concrete old `exports.options_hash` shape structurally; do not add
+  a schema version.
+- Clear `export_jobs.export_id` references to the old derived cache records.
+- Recreate `exports` with the current columns and the two-column uniqueness
+  rule. Do not preserve old problem or contest variants.
+- Keep historical export jobs and materializations.
+- Ensure transaction rollback restores the entire old database shape if the
+  table replacement fails.
+- Move the existing `contest_build_items` nullability reconstruction out of the
+  normal schema declaration path into the same explicit, dependency-light shape
+  upgrade owner. Preserve its behavior and foreign-key validation.
+- The normal path remains: apply concrete shape upgrades, create missing current
+  objects, validate current required columns and constraints, then create
+  indexes.
+- Unreferenced old export files are not served and remain eligible for the
+  existing exclusive artifact cleanup.
 
-Out of scope:
+### Change 4: Remove the obsolete workspace field
 
-- Verification or Judgehost behavior.
-- New package-format versions, compatibility flags, or cache salts.
+- Remove `recent_verification_status` from the current `workspaces` DDL and
+  required-column manifest.
+- Remove maintenance writes and counts for the field.
+- Remove tests that exist only to populate or clear it.
+- Do not rebuild existing `workspaces` tables solely to remove the physical
+  column. Extra columns in an existing current database remain tolerated.
 
-## Batch 2: Single ownership of Verification Runtime
+### Agent 1 invariants
 
-This batch has two responsibility steps. At completion there is no module-global
-coordinator registry, and every execution and cancellation path uses the same
-runtime owner. Both steps were delivered in the combined runtime/result commit
-listed in the delivery record.
+- A materialization has at most one `native` and one `icpc` problem export row.
+- Contest labels never affect problem export identity or problem export bytes.
+- Two contest labels may produce different contest ZIPs from the same canonical
+  problem export.
+- Distinct export jobs remain distinct even when they point to one artifact.
+- A failed export attempt does not delete a valid canonical artifact.
+- A schema upgrade never leaves a half-rebuilt table or broken foreign key.
 
-### 2A. Instance-owned runtime registry
+### Agent 1 tests
 
-Review boundary:
+- Repeated canonical export returns the same export ID and archive.
+- Native and ICPC remain separate identities.
+- Two contest builds using labels `A` and `E` reuse one canonical ICPC export but
+  contain their respective `short-name` values.
+- The canonical archive remains unchanged after contest packaging.
+- Contest rewriting rejects malformed or duplicate INI metadata.
+- A database with the old `options_hash` schema upgrades atomically, preserves
+  jobs/materializations, clears stale artifact references, and accepts a new
+  canonical export.
+- A forced failure during table replacement rolls back fully.
+- Fresh schema contains neither `options_hash` nor
+  `recent_verification_status`.
+- A current database with an extra legacy workspace column still starts.
+- Existing artifact cleanup recreates the current export schema and no longer
+  touches workspace verification status.
 
-```text
-Own verification runtime registry
-```
+### Agent 1 commits
 
-Introduce dependency-light interfaces equivalent to:
-
-```python
-class VerificationRuntimeHandle(Protocol):
-    def case_leased(...) -> None: ...
-    def completion_committed(...) -> None: ...
-    def cancelled(...) -> None: ...
-
-
-class VerificationRuntimeRegistry:
-    def register(
-        self,
-        verification_id: str,
-        handle: VerificationRuntimeHandle,
-    ) -> None: ...
-
-    def unregister(
-        self,
-        verification_id: str,
-        handle: VerificationRuntimeHandle,
-    ) -> bool: ...
-```
-
-Registry invariants:
-
-- Registration is insert-only; a duplicate verification ID fails.
-- Unregistration requires both the verification ID and the same handle object.
-- A stale worker cannot unregister a newer runtime.
-- The registry lock protects only the object map. It selects a handle and
-  releases the lock before enqueueing an in-memory event, so its scope never
-  includes SQLite, Judgehost, blob storage, network operations, or handle
-  callbacks.
-- A notification for a missing runtime is a valid no-op because SQLite is the
-  durable source of truth.
-- If direct completion-event delivery fails for a registered runtime, enqueue a
-  durable task-snapshot reconciliation. Idle coordinators repeat reconciliation
-  so a persisted predecessor completion cannot strand successors.
-- If both delivery paths fail and the durable parent is already terminal, the
-  idle coordinator drains Judgehost execution before retiring; the immediate
-  caller receives an error that preserves both delivery failures.
-- Lease-event delivery retries the current registered owner once. A second
-  failure propagates to the Judgehost fetch request so the lease can expire and
-  be requested again rather than being silently detached from the coordinator.
-
-Production caller migration:
-
-- Runtime composition creates one registry instance.
-- Verification DAG execution uses the injected instance to register and
-  unregister.
-- The completion service receives the registry notification method as its
-  post-commit notifier.
-- Judgehost dispatch reports leases through an injected consumer-owned
-  `CaseLeaseSink`; it no longer imports the verification scheduler.
-- Cancellation uses the injected registry instance.
-- Delete the module-global coordinator map and all module-level register,
-  unregister, and notification functions after every caller is migrated.
-
-The commit must close the activation/cancellation registration race with this
-sequence:
+Produce two commits in this order:
 
 ```text
-durable activation
-  -> construct coordinator from the immutable durable graph
-  -> register runtime
-  -> reload the durable parent snapshot
-  -> inject closed state and reload terminal tasks when already closed
-  -> otherwise begin coordinator execution
+Make problem export artifacts canonical
+Remove obsolete workspace verification status
 ```
 
-This provides a linearization point for all relevant orderings:
+The first commit includes the export shape upgrade and contest rewrite so that
+every commit is runnable. The second commit contains only the dead workspace
+field removal.
 
-- Cancellation before registration is observed by the post-registration
-  durable-state read.
-- Cancellation between registration and the read finds the registry and queues
-  an event.
-- Cancellation after the read reaches the already registered runtime.
+## Agent 2: Judgehost callback ingestion boundaries
 
-### 2B. Verification execution service
+### Objective
 
-Review boundary:
+Reduce `app/service/judgehost/result.py` to callback orchestration. Extract
+artifact capture, diagnostic payload parsing, and toolchain telemetry into
+dependency-light owners without changing protocol behavior.
 
-```text
-Own verification execution lifecycle
-```
+### File ownership
 
-Add `app/service/verification/execution.py` with a
-`VerificationExecutionService` that explicitly receives:
+Primary production ownership:
 
-- the verification lifecycle service;
-- the verification task store;
-- the verification completion service;
-- the runtime registry;
-- a Judgehost drain port.
+- `app/service/judgehost/result.py`;
+- new narrowly named modules under `app/service/judgehost/`;
+- `app/service/judgehost/toolchain_versions.py` only where telemetry ownership
+  naturally belongs.
 
-It constructs the one canonical coordinator directly; the lifecycle service is
-also its durable parent-snapshot reader. A separate factory/reader abstraction
-would add a second composition policy without changing the current boundary.
+Owning tests and documentation:
 
-The execution service owns:
+- `tests/test_judgehost_payload.py`;
+- `tests/test_judgehost_host_telemetry.py`;
+- `tests/test_judgehost_lifecycle.py`;
+- `tests/test_judgehost_service.py`;
+- `docs/protocol/judgehost.md`;
+- `docs/src/app/service/judgehost/README.md`.
 
-- coordinator construction;
-- registration, durable-state synchronization, execution, and exact
-  unregistration;
-- scheduler-exception failure handling;
-- user cancellation;
-- Judgehost drain ordering.
+Agent 2 must not modify `app/db.py`, export/contest code, runtime lifecycle,
+`PLAN.md`, or the findings ledger.
 
-Every failure and cancellation follows:
+### Change 1: Diagnostic payload parser
 
-```text
-SQLite parent/task transition
-  -> coordinator event
-  -> Judgehost drain
-```
+- Extract parsing and normalization of `full_debug`, `output_run`, and internal
+  error text.
+- Accept already bounded protocol inputs and return a typed canonical diagnostic
+  value.
+- Keep size limits, newline behavior, digest/deduplication inputs, and late
+  diagnostic classification unchanged.
+- The parser must not import SQLite, runtime composition, BatchScheduler, or
+  verification services.
 
-The drain is idempotent and must still be attempted if the runtime event enqueue
-fails; a failed cancel event falls back to a closed event, and the coordinator
-also checks durable parent state after an idle wait. Drain receives one bounded
-immediate retry. A later cancellation/failure request also retries drain even
-when its lifecycle compare-and-set returns `closed`, so a prior failed drain is
-recoverable without reopening SQLite state. A synchronous terminal hard failure
-stops the current publication slice before another independent ready root is
-exposed. Registration conflicts do not fail the durable verification, and
-event/drain/unregistration errors do not mask one another or an earlier
-scheduler error.
+### Change 2: Artifact capture
 
-Workspace continues to own:
+- Extract upload-field validation and streaming capture into a component that
+  returns typed artifact refs and capture warnings.
+- Keep existing locator formats, truncation rules, output selection, pass
+  ordering, and runtime blob ownership.
+- Artifact capture does not choose verdicts, acknowledge callbacks, publish
+  completions, or update coordinators.
 
-- Git snapshots;
-- source and test planning;
-- payload construction;
-- verification-program planning;
-- sanity callbacks;
-- audit context.
+### Change 3: Toolchain telemetry
 
-Workspace no longer constructs coordinators, accesses the registry, decides the
-cancellation order, directly drains Judgehost, or writes a second verification
-failure from an outer exception handler.
+- Move compiler/runner telemetry extraction and recording behind one narrow
+  owner.
+- Keep Judgehost reports trusted after protocol authentication.
+- Do not add consistency gates, cache identity fields, versions, or rejection
+  behavior.
 
-Caller migration:
+### Change 4: ResultProcessor orchestration
 
-- Worker/context jobs use the execution service.
-- Preview and sample verification paths also use the execution service.
-- UI cancellation invokes the execution service once.
-- The context-job layer records worker outcome but does not fail the same
-  verification again.
-- Preserve the existing staged -> bind -> expose implementation in
-  `bind_and_expose_judgehost_runtime()`.
-
-### Batch 2 tests
-
-Unit tests:
-
-- duplicate registration;
-- identity-matched and stale unregistration;
-- notification ordering and missing-runtime no-op;
-- registry lock scope does not execute external work.
-
-Service tests:
-
-- cancellation before, during, and after registration;
-- scheduler exception and activation failure;
-- completion commit precedes successor notification;
-- SQLite failure prevents Judgehost drain.
-
-E2E tests:
-
-- the public preview route drives a sample verification through the same
-  execution service and materializes its input/answer refs before compiling;
-- an immediate mock Judgehost callback;
-- public cancellation;
-- a complete verification workflow;
-- callback/cancellation races;
-- a cancelled verification cannot be revived by coordinator startup.
-
-### Batch 2 acceptance
-
-- Judgehost dispatch has no verification-scheduler import.
-- Workspace has no coordinator register/unregister operation.
-- No reference to the deleted global registry functions remains.
-- All four groups pass in a Linux virtualenv. CI uses its Ubuntu jobs; the
-  recorded delivery audit used the isolated container command above.
-- Local Docker mock Judgehost E2E and the pinned DOMjudge 9.0.1 source gate
-  pass.
-- Execution, verification, and Judgehost documentation describes the new
-  current ownership.
-- Keep the removed global-runtime finding closed. Narrow `PLC-006` only to the
-  verification models and stores that remain direct Judgehost dependencies.
-
-Out of scope:
-
-- Moving the complete `verification_dag.py` module.
-- Splitting `app/service/judgehost/result.py`.
-- Moving RuntimeConfig or changing SQLite schema, wire payloads, task identity,
-  program identity, cache identity, canonical completion, or late diagnostics.
-
-## Batch 3: Judgehost result pipeline convergence
-
-This batch has three responsibility steps. It reduces the responsibility
-density of the Judgehost result processor while preserving `/api/v4/*`, JSON
-integer `1`, scheduler claims, and late-diagnostic behavior. All three steps
-were delivered in the combined runtime/result commit listed above.
-
-### 3A. Public batch-finalization boundary
-
-Review boundary:
-
-```text
-Separate Judgehost batch finalization
-```
-
-Implementation:
-
-- Extract `JudgehostBatchFinalizer`.
-- Give it batch/program terminal checks, final lease release, retry handling,
-  and finalization coordination.
-- Inject this boundary into dispatch and the Judgehost API.
-- Construct the finalizer and both publishers once in the Judgehost composition
-  root; inject a narrow finalization port into callback and dispatch
-  orchestration instead of constructing it in `ResultProcessor`.
-- Remove calls from dispatch and API to private ResultProcessor finalization
-  methods.
-- Keep case, program, and batch state transitions owned by BatchScheduler.
-
-Invariants:
-
-- Scheduler lock scope produces only immutable claims and snapshots.
-- SQLite, blob storage, completion sinks, and callbacks execute outside the
-  scheduler lock.
-- Result normalization does not change in this commit.
-
-### 3B. Canonical case-result normalization
-
-Review boundary:
-
-```text
-Normalize Judgehost case results
-```
-
-Extract dependency-light captured-case models and
-`normalize_captured_case()`.
-
-Inputs:
-
-- test/input identity and interactive mode;
-- the raw final run result, fallback runtime, score, and canonical run config;
-- already captured artifact bytes and refs;
-- an optional parsed pass bundle, capture warning, and active debug text.
-
-Outputs:
-
-- the canonical case `ExecutionResult` used by the scheduler;
-- the normalized run result and verdict;
-- normalized runtime, CPU, wall, memory, and score fields.
-
-The normalizer must not access SQLite, write blobs or caches, operate the
-BatchScheduler, notify a coordinator, or construct an HTTP response.
-
-It covers final-run RE/FL/WA/OK classification, interactive and multi-pass
-execution, missing metadata, output and time limits, incomplete pass bundles,
-capture warnings, resource usage, debug feedback, and complete artifact-ref
-preservation. Compile failure/CE arrives through `update-judging` without a
-final run callback; scheduler helpers construct its canonical result and the
-batch finalizer owns orchestration and publication. Expected-RE matching remains
-a verification-completion responsibility. Toolchain telemetry is captured by
-callback orchestration and is not a normalizer input.
-
-Artifact ingestion remains an orchestration step:
-
-```text
-validate and claim
-  -> ingest artifacts
-  -> normalize result
-  -> commit scheduler decision
-  -> persist verification completion
-```
-
-### 3C. Completion and diagnostic publication
-
-Review boundary:
-
-```text
-Separate Judgehost result publication
-```
-
-Introduce `CaseCompletionPublisher` and `CaseDiagnosticPublisher`.
-
-Completion publication:
-
-- Sends scheduler-decided terminal cases to the verification completion sink.
-- Marks `completion_acknowledged` only after durable persistence succeeds.
-- Treats first completion and valid idempotent retries as success.
-- Leaves the case unacknowledged and returns a non-2xx result when the sink or
-  SQLite write fails.
-- For a custom-run case without `verification_task_id`, acknowledges the
-  scheduler's captured terminal decision without invoking the verification
-  completion sink.
-
-Diagnostic publication:
-
-- Diagnostics before decision capture are included in the canonical result.
-- Diagnostics after capture but before completion remain pending in memory.
-- Diagnostics after completion update only the late-diagnostic snapshot.
-- Pending diagnostics prevent quiet cleanup until persisted.
-- Diagnostic persistence does not notify the coordinator.
-
-The final callback sequence is:
+`ResultProcessor` retains only this order:
 
 ```text
 callback admission
-  -> acquire immutable case receipt
-  -> validate owner and generation
+  -> immutable case receipt
+  -> owner/generation validation
   -> scheduler claim
-  -> artifact ingestion
-  -> result normalization
-  -> scheduler decision
-  -> durable verification completion (only when verification_task_id is set)
-  -> completion acknowledgement
+  -> artifact capture
+  -> diagnostic parsing and telemetry
+  -> existing result normalization
+  -> durable completion or diagnostic publication
   -> batch finalization
-  -> release receipt
-  -> HTTP JSON 1
+  -> receipt release
+  -> existing HTTP acknowledgement
 ```
 
-Failure behavior:
+No extracted component may return an HTTP response or directly notify a
+verification coordinator.
 
-- A busy claim remains retryable with a non-2xx response.
-- Owner or generation mismatch remains non-2xx.
-- Artifact, sink, or SQLite failure is non-2xx so judgedaemon retries.
-- Valid callbacks for already terminal, cancelled, or cleaned cases are
-  acknowledged as no-ops.
-- An ordinary duplicate final result never becomes a late diagnostic.
+### Agent 2 invariants
 
-### Batch 3 tests
+- Successful and idempotent final callbacks still return JSON integer `1`.
+- Invalid owner, generation, payload, or persistence failures remain non-2xx as
+  currently documented.
+- Canonical completion remains first-wins.
+- Late diagnostics never change verdict, refs, parent status, or successor
+  release.
+- Multi-pass evidence, warnings, compile data, usage, and artifact refs survive
+  unchanged.
+- Cleanup receipt and maintenance admission ordering do not change.
 
-Unit tests:
+### Agent 2 tests
 
-- RE/FL/WA/OK, output-limit, interactive, missing-metadata, and multi-pass
-  final-run normalization matrices;
-- artifact, capture-warning, debug-feedback, and usage round trips;
-- compile/CE construction through batch-finalizer tests;
-- batch-finalizer state transitions;
-- diagnostic deduplication and bounded-size eviction.
+- Existing result-normalization matrices remain unchanged.
+- Compile failure, RE, internal error, late debug, duplicate callback, and
+  persistence retry retain their observable results.
+- Artifact capture failure remains retryable and does not acknowledge early.
+- Toolchain telemetry still records authenticated compiler/runner versions but
+  never blocks completion.
+- Static dependency tests prove the new parser has no DB, runtime, scheduler, or
+  verification imports.
+- No test asserts private call counts merely to prove the split.
 
-Service tests:
+### Agent 2 commit
 
-- CE versus final-result races;
-- internal-error versus final-result races;
-- receipt versus quiet-cleanup ordering in both directions;
-- completion-persistence failure and retry;
-- pending diagnostics blocking cleanup;
-- duplicate callback persistence exactly once;
-- valid ACK/no-op after in-memory case loss on restart.
+Produce one commit:
 
-E2E tests:
+```text
+Separate Judgehost callback ingestion
+```
 
-- `/api/v4` authentication and complete lease/fetch/report flow;
-- compile failure and expected RE;
-- active internal-error;
-- late add-debug-info and late internal-error;
-- duplicate callback;
-- maintenance admission;
-- JSON integer `1` acknowledgement.
+## Agent 3: Runtime lifecycle ownership
 
-### Batch 3 acceptance
+### Objective
 
-- All four test groups pass in a Linux virtualenv. CI uses its Ubuntu jobs; the
-  recorded delivery audit used the isolated container command above.
-- Local Docker mock Judgehost E2E passes after the pinned DOMjudge 9.0.1 source
-  gate.
-- The normalizer has no SQLite, runtime-config, or registry import.
-- The result processor does not construct batch finalization or publication
-  services. It invokes injected ports and the dependency-light normalizer while
-  retaining callback validation and artifact-capture orchestration.
-- Judgehost, execution, and persistence documentation reflects the current
-  implementation, and `PLC-007` is closed or narrowed to its remaining facts.
+Resolve the top-level dependency on a private authentication module by moving
+application startup and shutdown to runtime composition. Do not move the full
+`RuntimeConfig` or change startup behavior.
 
-Out of scope:
+### File ownership
 
-- HTTP route, Judgehost wire, or SQLite schema changes.
-- Artifact owner indexing.
-- Task, program, or cache identity changes.
-- Moving the `ExecutionResult` package.
-- Complete RuntimeConfig separation.
-- Source/config canonicalization.
+Primary production ownership:
 
-## Work after these batches
+- `app/impl/auth/internal/runtime.py`;
+- a new `app/impl/runtime/lifecycle.py`;
+- `app/main.py`;
+- runtime lifecycle imports only.
 
-After all three batches are complete and independently verified, the next
-planning cycle covers Runtime/config separation, `STO-003`, `STO-005`,
-`STO-009`, source canonicalization, export admission deduplication, and the
-remaining ownership findings.
+Owning tests and documentation:
 
-Do not automatically push these commits unless explicitly requested.
+- `tests/test_runtime_startup_e2e.py`;
+- `docs/operations/runtime.md`;
+- `docs/src/app/impl/README.md`.
+
+Agent 3 must not modify `app/impl/runtime/config.py`, Judgehost internals,
+export/contest code, `app/db.py`, `PLAN.md`, or the findings ledger.
+
+### Changes
+
+- Move startup recovery, interrupted-job failure, Judgehost cancellation,
+  runtime cache clearing, worker start, worker stop, and their private helpers
+  unchanged into `app.impl.runtime.lifecycle`.
+- Update `app/main.py` to import the public runtime lifecycle owner.
+- Update runtime-startup tests to patch the new owner.
+- Delete `app/impl/auth/internal/runtime.py`; do not leave a re-export or
+  compatibility wrapper.
+- Keep auth middleware, sessions, routes, and authentication policy untouched.
+
+### Agent 3 invariants
+
+- Database initialization and startup recovery run in the same order.
+- Runtime blobs, worker history, and startup-cleared caches retain current
+  behavior.
+- Interrupted package, export, preview, contest, verification, and Judgehost
+  work retains current terminal handling.
+- WorkerQueue starts once and stops once through the FastAPI lifespan.
+- Importing `app.main` exposes the same HTTP application and routes.
+
+### Agent 3 tests
+
+- Existing startup recovery scenarios pass after importing the new owner.
+- A startup-recovery failure still prevents application startup at the same
+  boundary.
+- Shutdown still stops the worker service.
+- Static search finds no production import of
+  `app.impl.auth.internal.runtime`.
+- Import policy and cross-package private-import checks pass.
+
+### Agent 3 commit
+
+Produce one commit:
+
+```text
+Move application lifecycle out of auth
+```
+
+## Coordinator responsibilities
+
+The coordinator does not implement production changes while the three agents
+are working. It owns integration and shared records.
+
+### Before integration
+
+- Confirm every agent started from the recorded baseline.
+- Reject changes outside assigned ownership unless the agent reports the reason
+  before editing.
+- Keep the `main` worktree limited to this plan and integration-only changes.
+
+### Integration order
+
+Integrate complete commits, never copy uncommitted files between worktrees:
+
+1. `Move application lifecycle out of auth`
+2. `Separate Judgehost callback ingestion`
+3. `Make problem export artifacts canonical`
+4. `Remove obsolete workspace verification status`
+
+If `main` moves before integration, the coordinator rebases or cherry-picks one
+branch at a time against the new baseline and resolves conflicts using current
+`main` behavior. Agents must not independently race to rebase their branches.
+
+### Findings and documentation reconciliation
+
+After code integration, the coordinator updates the findings ledger:
+
+- remove `PKG-005` because its job-dedupe premise was incorrect, not because
+  jobs were coalesced;
+- remove `STO-005` after the obsolete workspace field is gone;
+- remove or narrow `STO-003` according to the final explicit shape-upgrade
+  owner;
+- remove or narrow `PLC-007` according to the remaining ResultProcessor
+  responsibilities;
+- remove `PLC-011` after `app.main` no longer imports private auth runtime code.
+
+The coordinator then updates this plan with commit SHAs and actual acceptance
+results.
+
+## Verification
+
+### Per-agent checks
+
+Each agent performs, in the user-confirmed Linux environment:
+
+- tests for its assigned existing modules;
+- syntax, pyflakes, pylint for changed application modules;
+- import-policy, cross-package private-import, and test-resource checks;
+- `git diff --check`.
+
+Agent 2 additionally runs the Judgehost service tests. Agent 1 runs package and
+contest service tests. Agent 3 runs runtime startup E2E tests.
+
+### Integrated checks
+
+After all commits are integrated:
+
+- run all four resource groups: `unit`, `service`, `executor`, and `e2e`;
+- run all static checks and the resource manifest;
+- run the Docker mock Judgehost E2E and pinned DOMjudge 9.0.1 source gate;
+- inspect fresh and upgraded SQLite schemas;
+- inspect one canonical ICPC ZIP plus two contest variants with different
+  labels;
+- run `git diff --check` and confirm the final worktree is clean.
+
+Do not use a real Judgehost. Do not run tests on Windows. Do not push any branch
+unless the user explicitly requests it.
+
+## Out of scope
+
+- Coalescing distinct export jobs.
+- Changing `problem_package_builds` retry-in-place behavior.
+- New package, schema, cache, or implementation version fields.
+- Preserving old option-hash export cache rows.
+- Full RuntimeConfig relocation.
+- Judgehost wire, ACK, verdict, or cache identity changes.
+- Artifact owner indexing (`STO-009`).
+- Source-format canonicalization (`SRCFMT-001` and `SRCFMT-002`).
+- Global authorization ownership or broad UI/test-suite cleanup.
