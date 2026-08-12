@@ -23,7 +23,7 @@ from app.impl.contest.workspace_scope import (
     resolve_problem_contest_scope,
 )
 from tests.contest_support import ContestActionBase
-from tests.ui_support import AUTH_COOKIE_NAME, config, workspace_service
+from tests.ui_support import AUTH_COOKIE_NAME, runtime, workspace_service
 
 
 class _HtmlElements(HTMLParser):
@@ -85,7 +85,7 @@ class TestContestWorkspaceScope(ContestActionBase):
     ) -> int:
         problem_id = workspace_service.known_problem_id("alice/sample")
         self.assertIsNotNone(problem_id)
-        config.contest_service.add_problem(
+        runtime.contest_service.add_problem(
             contest_id,
             idx,
             int(problem_id),
@@ -96,7 +96,7 @@ class TestContestWorkspaceScope(ContestActionBase):
     def _session_cookie(self, username: str) -> str:
         user_id = workspace_service.known_user_id(username)
         self.assertIsNotNone(user_id)
-        token = config.auth_service.create_session_for_user(int(user_id))
+        token = runtime.auth_service.create_session_for_user(int(user_id))
         return f"{AUTH_COOKIE_NAME}={token}"
 
     def _resolve(
@@ -123,12 +123,12 @@ class TestContestWorkspaceScope(ContestActionBase):
         )
         with (
             patch.object(
-                config.contest_service,
+                runtime.contest_service,
                 "contest_context",
                 side_effect=AssertionError("contest lookup is forbidden"),
             ),
             patch.object(
-                config.workspace_service,
+                runtime.workspace_service,
                 "page_identity",
                 side_effect=AssertionError("problem lookup is forbidden"),
             ),
@@ -212,7 +212,7 @@ class TestContestWorkspaceScope(ContestActionBase):
 
         carol = self.random_id("carol")
         workspace_service.ensure_user(carol)
-        config.contest_service.grant_member_role(contest_id, carol, "read")
+        runtime.contest_service.grant_member_role(contest_id, carol, "read")
         carol_cookie = self._session_cookie(carol)
         alice_cookie = self._session_cookie("alice")
 
@@ -298,7 +298,7 @@ class TestContestWorkspaceScope(ContestActionBase):
         workspace_service.ensure_problem(locked_slug)
         locked_problem_id = workspace_service.known_problem_id(locked_slug)
         self.assertIsNotNone(locked_problem_id)
-        config.contest_service.add_problem(
+        runtime.contest_service.add_problem(
             contest_id,
             "CCC",
             int(locked_problem_id),
@@ -367,7 +367,7 @@ class TestContestWorkspaceScope(ContestActionBase):
         self._add_default_problem(contest_id, actor_user_id, idx="A")
         cookie = self._session_cookie("alice")
         workspace = Path(
-            config.workspace_service.ensure_workspace("alice/sample", "alice")
+            runtime.workspace_service.ensure_workspace("alice/sample", "alice")
         )
         (workspace / "notes").mkdir(exist_ok=True)
 
@@ -538,7 +538,7 @@ class TestContestWorkspaceScope(ContestActionBase):
         self.assertEqual(first.status_code, 200, first.text)
         self.assertEqual(second.status_code, 200, second.text)
 
-        config.contest_service.remove_problem(first_id, workspace_service.known_problem_id("alice/sample"))
+        runtime.contest_service.remove_problem(first_id, workspace_service.known_problem_id("alice/sample"))
         request = _app_request(
             "/problems/alice/sample/statement",
             query=urlencode([("contest", first_slug)]),

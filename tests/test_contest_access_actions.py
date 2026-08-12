@@ -4,7 +4,7 @@ from tests.contest_support import ContestActionBase
 from tests.db_helpers import db_fetch_one
 from tests.ui_support import (
     _flash_messages_from_response,
-    config,
+    runtime,
     contest_access_revoke,
     workspace_service,
 )
@@ -20,7 +20,7 @@ class TestContestAccessActions(ContestActionBase):
             "membership-problem",
         )
         workspace_service.ensure_user("carol")
-        config.contest_service.grant_member_role(contest_id, "carol", "read")
+        runtime.contest_service.grant_member_role(contest_id, "carol", "read")
         workspace_service.grant_repo_access(problem_slug, "carol", "read")
 
         response = contest_access_revoke(contest=contest_slug, user="alice", target_user="carol")
@@ -40,17 +40,17 @@ class TestContestAccessActions(ContestActionBase):
             contest_id, actor_user_id, "A", "dynamic-problem"
         )
         workspace_service.ensure_user("bob")
-        config.contest_service.grant_member_role(contest_id, "bob", "write")
+        runtime.contest_service.grant_member_role(contest_id, "bob", "write")
         bob = db_fetch_one("SELECT id FROM users WHERE username='bob'")
         self.assertIsNotNone(bob)
         self.assertTrue(
-            config.access_query.problem_context(problem_id, int(bob["id"]))["can_write"]
+            runtime.access_query.problem_context(problem_id, int(bob["id"]))["can_write"]
         )
         self.assertIn(
             _problem_slug,
-            config.workspace_service.accessible_problem_slugs(int(bob["id"]), limit=20),
+            runtime.workspace_service.accessible_problem_slugs(int(bob["id"]), limit=20),
         )
-        participating = config.workspace_service.participating_problem_rows(
+        participating = runtime.workspace_service.participating_problem_rows(
             int(bob["id"]), limit=20
         )
         self.assertIn(_problem_slug, [str(row["slug"]) for row in participating])
@@ -65,9 +65,9 @@ class TestContestAccessActions(ContestActionBase):
 
         self.assertEqual(response.status_code, 303)
         self.assertFalse(
-            config.access_query.problem_context(problem_id, int(bob["id"]))["can_read"]
+            runtime.access_query.problem_context(problem_id, int(bob["id"]))["can_read"]
         )
         self.assertNotIn(
             _problem_slug,
-            config.workspace_service.accessible_problem_slugs(int(bob["id"]), limit=20),
+            runtime.workspace_service.accessible_problem_slugs(int(bob["id"]), limit=20),
         )

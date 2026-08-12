@@ -338,6 +338,7 @@ def export_create(problem: str, user: Annotated[str, Depends(require_session_use
         if requested_export_type not in {'icpc', 'native'}:
             raise ValueError('unsupported package type')
         started = start_export_job(
+            runtime(),
             problem,
             user,
             actor_user_id=actor_user_id,

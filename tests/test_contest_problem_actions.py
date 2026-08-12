@@ -6,7 +6,7 @@ from tests.contest_support import ContestActionBase
 from tests.db_helpers import db_fetch_all
 from tests.ui_support import (
     _flash_messages_from_response,
-    config,
+    runtime,
     contest_problems_change_general_retry,
     contest_problems_renumber,
 )
@@ -55,7 +55,7 @@ class TestContestProblemActions(ContestActionBase):
             "B",
             "retry-second",
         )
-        job_id = config.contest_service.create_job(
+        job_id = runtime.contest_service.create_job(
             contest_id,
             actor_user_id,
             "change-general",

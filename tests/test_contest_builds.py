@@ -15,7 +15,7 @@ from tests.db_helpers import (
     db_fetch_one,
     read_contest_job_summary,
 )
-from tests.ui_support import config, contest_packages_build_start, uuid
+from tests.ui_support import runtime, contest_packages_build_start, uuid
 
 
 class TestContestBuilds(ContestActionBase):
@@ -27,17 +27,17 @@ class TestContestBuilds(ContestActionBase):
             "A",
             "revision-build-problem",
         )
-        workspace = Path(config.workspace_service.ensure_workspace(problem_slug, "alice"))
+        workspace = Path(runtime.workspace_service.ensure_workspace(problem_slug, "alice"))
         marker = workspace / "notes" / "published.txt"
         marker.parent.mkdir(parents=True, exist_ok=True)
         marker.write_text("published contest fixture\n", encoding="utf-8")
-        config.git_service.commit(
+        runtime.git_service.commit(
             workspace,
             "Publish contest build fixture",
             "alice",
             "alice@example.test",
         )
-        config.git_service.push(workspace, "main")
+        runtime.git_service.push(workspace, "main")
         return contest_slug, contest_id, problem_id, problem_slug
 
     def _seed_materialization(
@@ -49,7 +49,7 @@ class TestContestBuilds(ContestActionBase):
     ) -> str:
         materialization_id = f"pm-{uuid.uuid4().hex}"
         archive = (
-            Path(config.settings.artifacts_root)
+            Path(runtime.settings.artifacts_root)
             / "materializations"
             / str(problem_id)
             / source_commit
@@ -73,7 +73,7 @@ class TestContestBuilds(ContestActionBase):
                 source_commit,
                 revision_number,
                 "0" * 64,
-                archive.relative_to(config.settings.artifacts_root).as_posix(),
+                archive.relative_to(runtime.settings.artifacts_root).as_posix(),
                 hashlib.sha256(payload).hexdigest(),
                 len(payload),
                 f"ver-{uuid.uuid4().int & ((1 << 63) - 1):x}",
@@ -90,7 +90,7 @@ class TestContestBuilds(ContestActionBase):
         source_commit: str,
         revision_number: int,
     ) -> list[dict[str, object]]:
-        rows = config.contest_service.contest_problems(contest_id)
+        rows = runtime.contest_service.contest_problems(contest_id)
         return [
             {
                 "contest_problem_id": int(row["contest_problem_id"]),
@@ -107,7 +107,7 @@ class TestContestBuilds(ContestActionBase):
 
     def test_build_freezes_current_revision_without_requiring_native(self) -> None:
         contest_slug, contest_id, problem_id, _problem_slug = self._contest_with_problem()
-        published = config.problem_package_service.published_revision(problem_id)
+        published = runtime.problem_package_service.published_revision(problem_id)
         runners: list[Callable[[], None]] = []
 
         def submit(*, fn, **_kwargs):
@@ -115,8 +115,8 @@ class TestContestBuilds(ContestActionBase):
             return None, True, "queued"
 
         with (
-            patch.object(config.worker_queue_service, "submit", side_effect=submit),
-            patch.object(config.export_service, "create_export") as create_export,
+            patch.object(runtime.worker_queue_service, "submit", side_effect=submit),
+            patch.object(runtime.export_service, "create_export") as create_export,
         ):
             response = contest_packages_build_start(
                 contest=contest_slug,
@@ -131,7 +131,7 @@ class TestContestBuilds(ContestActionBase):
         self.assertEqual(str(job["status"]), "queued")
         self.assertFalse(
             (
-                config.contest_service.job_root(
+                runtime.contest_service.job_root(
                     contest_slug,
                     job_id,
                     create=False,
@@ -160,7 +160,7 @@ class TestContestBuilds(ContestActionBase):
         self.assertEqual(len(runners), 1)
         with (
             patch.object(
-                config.contest_snapshot_service, "create",
+                runtime.contest_snapshot_service, "create",
                 side_effect=assert_worker_boundary,
             ),
             self.assertRaisesRegex(RuntimeError, "stop after worker boundary"),
@@ -174,7 +174,7 @@ class TestContestBuilds(ContestActionBase):
         contest_slug, contest_id, _problem_id, _problem_slug = self._contest_with_problem()
 
         with patch.object(
-            config.worker_queue_service,
+            runtime.worker_queue_service,
             "submit",
             return_value=(None, False, "capacity"),
         ):
@@ -195,7 +195,7 @@ class TestContestBuilds(ContestActionBase):
         self.assertTrue(str(job["finished_at"] or ""))
         self.assertFalse(
             (
-                config.contest_service.job_root(
+                runtime.contest_service.job_root(
                     contest_slug,
                     str(job["id"]),
                     create=False,
@@ -206,14 +206,14 @@ class TestContestBuilds(ContestActionBase):
 
     def test_requested_outputs_share_one_frozen_revision_mapping(self) -> None:
         contest_slug, contest_id, problem_id, _problem_slug = self._contest_with_problem()
-        published = config.problem_package_service.published_revision(problem_id)
+        published = runtime.problem_package_service.published_revision(problem_id)
         source_commit = published.source_commit
         materialization_id = self._seed_materialization(
             problem_id=problem_id,
             source_commit=source_commit,
             revision_number=published.revision_number,
         )
-        materialization = config.problem_package_service.store.materialization(
+        materialization = runtime.problem_package_service.store.materialization(
             materialization_id
         )
         self.assertIsNotNone(materialization)
@@ -223,17 +223,17 @@ class TestContestBuilds(ContestActionBase):
             return None, True, "queued"
 
         with (
-            patch.object(config.worker_queue_service, "submit", side_effect=submit),
+            patch.object(runtime.worker_queue_service, "submit", side_effect=submit),
             patch(
                 "app.impl.workspace.published_materialization.ensure_published_materialization",
                 return_value=materialization,
             ),
             patch.object(
-                config.contest_statement_service, "build_pdf",
+                runtime.contest_statement_service, "build_pdf",
                 return_value={"artifact_id": "ca-pdf", "error": ""},
             ) as build_pdf,
             patch.object(
-                config.contest_package_service, "build_bundle",
+                runtime.contest_package_service, "build_bundle",
                 return_value={"artifact_id": "ca-icpc", "error": ""},
             ) as build_icpc,
         ):
@@ -273,23 +273,23 @@ class TestContestBuilds(ContestActionBase):
 
     def test_build_materializes_current_revision_instead_of_reusing_older_native(self) -> None:
         contest_slug, contest_id, problem_id, problem_slug = self._contest_with_problem()
-        older = config.problem_package_service.published_revision(problem_id)
+        older = runtime.problem_package_service.published_revision(problem_id)
         older_materialization_id = self._seed_materialization(
             problem_id=problem_id,
             source_commit=older.source_commit,
             revision_number=older.revision_number,
         )
-        workspace = Path(config.workspace_service.ensure_workspace(problem_slug, "alice"))
+        workspace = Path(runtime.workspace_service.ensure_workspace(problem_slug, "alice"))
         marker = workspace / "notes" / "newer.txt"
         marker.write_text("new published revision\n", encoding="utf-8")
-        config.git_service.commit(
+        runtime.git_service.commit(
             workspace,
             "Publish newer contest revision",
             "alice",
             "alice@example.test",
         )
-        config.git_service.push(workspace, "main")
-        current = config.problem_package_service.published_revision(problem_id)
+        runtime.git_service.push(workspace, "main")
+        current = runtime.problem_package_service.published_revision(problem_id)
         self.assertNotEqual(current.source_commit, older.source_commit)
 
         observed_commits: list[str] = []
@@ -301,7 +301,7 @@ class TestContestBuilds(ContestActionBase):
                 source_commit=revision.source_commit,
                 revision_number=revision.revision_number,
             )
-            row = config.problem_package_service.store.materialization(
+            row = runtime.problem_package_service.store.materialization(
                 materialization_id
             )
             assert row is not None
@@ -312,13 +312,13 @@ class TestContestBuilds(ContestActionBase):
             return None, True, "queued"
 
         with (
-            patch.object(config.worker_queue_service, "submit", side_effect=submit),
+            patch.object(runtime.worker_queue_service, "submit", side_effect=submit),
             patch(
                 "app.impl.workspace.published_materialization.ensure_published_materialization",
                 side_effect=materialize,
             ),
             patch.object(
-                config.contest_package_service, "build_bundle",
+                runtime.contest_package_service, "build_bundle",
                 return_value={"artifact_id": "ca-icpc", "error": ""},
             ),
         ):
@@ -344,7 +344,7 @@ class TestContestBuilds(ContestActionBase):
 
     def test_build_freeze_rejects_changed_roster_without_creating_job(self) -> None:
         contest_slug, contest_id, problem_id, _problem_slug = self._contest_with_problem()
-        published = config.problem_package_service.published_revision(problem_id)
+        published = runtime.problem_package_service.published_revision(problem_id)
         revisions = self._frozen_revisions(
             contest_id,
             source_commit=published.source_commit,
@@ -357,7 +357,7 @@ class TestContestBuilds(ContestActionBase):
         actor = db_fetch_one("SELECT id FROM users WHERE username='alice'")
         self.assertIsNotNone(actor)
 
-        frozen = config.contest_service.freeze_build_job(
+        frozen = runtime.contest_service.freeze_build_job(
             contest_id=contest_id,
             actor_user_id=int(actor["id"]),
             job_type="build",
@@ -387,7 +387,7 @@ class TestContestBuilds(ContestActionBase):
             "status": "running",
         }
 
-        first = config.contest_service.freeze_build_job(
+        first = runtime.contest_service.freeze_build_job(
             contest_id=contest_id,
             actor_user_id=int(actor["id"]),
             job_type="build",
@@ -398,7 +398,7 @@ class TestContestBuilds(ContestActionBase):
                 revision_number=3,
             ),
         )
-        second = config.contest_service.freeze_build_job(
+        second = runtime.contest_service.freeze_build_job(
             contest_id=contest_id,
             actor_user_id=int(actor["id"]),
             job_type="build",
@@ -421,13 +421,13 @@ class TestContestBuilds(ContestActionBase):
 
     def test_build_freeze_fails_immediately_when_sqlite_admission_is_busy(self) -> None:
         contest_slug, contest_id, problem_id, _problem_slug = self._contest_with_problem()
-        published = config.problem_package_service.published_revision(problem_id)
+        published = runtime.problem_package_service.published_revision(problem_id)
         actor = db_fetch_one("SELECT id FROM users WHERE username='alice'")
         self.assertIsNotNone(actor)
 
         with db_connection() as connection:
             connection.execute("BEGIN IMMEDIATE")
-            frozen = config.contest_service.freeze_build_job(
+            frozen = runtime.contest_service.freeze_build_job(
                 contest_id=contest_id,
                 actor_user_id=int(actor["id"]),
                 job_type="build",
@@ -451,7 +451,7 @@ class TestContestBuilds(ContestActionBase):
         )
         actor = db_fetch_one("SELECT id FROM users WHERE username='alice'")
         self.assertIsNotNone(actor)
-        frozen = config.contest_service.freeze_build_job(
+        frozen = runtime.contest_service.freeze_build_job(
             contest_id=contest_id,
             actor_user_id=int(actor["id"]),
             job_type="build",
@@ -467,7 +467,7 @@ class TestContestBuilds(ContestActionBase):
             ["f" * 64, frozen["job_id"]],
         )
 
-        result = config.contest_package_service.build_bundle(
+        result = runtime.contest_package_service.build_bundle(
             contest_id=contest_id,
             contest_slug=contest_slug,
             job_id=frozen["job_id"],
@@ -487,7 +487,7 @@ class TestContestBuilds(ContestActionBase):
         contest_slug, contest_id, problem_id, problem_slug = (
             self._contest_with_problem()
         )
-        published = config.problem_package_service.published_revision(problem_id)
+        published = runtime.problem_package_service.published_revision(problem_id)
         materialization_id = self._seed_materialization(
             problem_id=problem_id,
             source_commit=published.source_commit,
@@ -495,7 +495,7 @@ class TestContestBuilds(ContestActionBase):
         )
         actor = db_fetch_one("SELECT id FROM users WHERE username='alice'")
         self.assertIsNotNone(actor)
-        frozen = config.contest_service.freeze_build_job(
+        frozen = runtime.contest_service.freeze_build_job(
             contest_id=contest_id,
             actor_user_id=int(actor["id"]),
             job_type="build",
@@ -506,7 +506,7 @@ class TestContestBuilds(ContestActionBase):
                 revision_number=published.revision_number,
             ),
         )
-        canonical = Path(config.settings.artifacts_root) / "canonical-icpc.zip"
+        canonical = Path(runtime.settings.artifacts_root) / "canonical-icpc.zip"
         with zipfile.ZipFile(canonical, "w") as archive:
             archive.writestr("problem.yaml", "name: {en: Sample}\n")
             archive.writestr(
@@ -515,7 +515,7 @@ class TestContestBuilds(ContestActionBase):
             )
         canonical_digest = hashlib.sha256(canonical.read_bytes()).hexdigest()
 
-        materialization = config.problem_package_service.store.materialization(
+        materialization = runtime.problem_package_service.store.materialization(
             materialization_id
         )
         self.assertIsNotNone(materialization)
@@ -537,11 +537,11 @@ class TestContestBuilds(ContestActionBase):
             return "export-canonical", canonical
 
         with patch.object(
-            config.export_service,
+            runtime.export_service,
             "create_export",
             side_effect=canonical_export,
         ):
-            result = config.contest_package_service.build_bundle(
+            result = runtime.contest_package_service.build_bundle(
                 contest_id=contest_id,
                 contest_slug=contest_slug,
                 job_id=frozen["job_id"],
@@ -549,7 +549,7 @@ class TestContestBuilds(ContestActionBase):
 
         self.assertEqual(result["totals"]["success"], 1)
         package_file = str(result["results"][0]["package_file"])
-        target = config.contest_service.job_root(
+        target = runtime.contest_service.job_root(
             contest_slug,
             frozen["job_id"],
         ) / package_file
@@ -572,7 +572,7 @@ class TestContestBuilds(ContestActionBase):
         )
         actor = db_fetch_one("SELECT id FROM users WHERE username='alice'")
         self.assertIsNotNone(actor)
-        frozen = config.contest_service.freeze_build_job(
+        frozen = runtime.contest_service.freeze_build_job(
             contest_id=contest_id,
             actor_user_id=int(actor["id"]),
             job_type="build",
@@ -590,7 +590,7 @@ class TestContestBuilds(ContestActionBase):
         )
 
         with self.assertRaisesRegex(ValueError, "frozen value"):
-            config.contest_service.bind_build_item_materialization(
+            runtime.contest_service.bind_build_item_materialization(
                 job_id=frozen["job_id"],
                 contest_problem_id=int(
                     self._frozen_revisions(
@@ -614,13 +614,13 @@ class TestContestBuilds(ContestActionBase):
 
     def test_partial_output_does_not_change_the_frozen_revision(self) -> None:
         contest_slug, contest_id, problem_id, _problem_slug = self._contest_with_problem()
-        published = config.problem_package_service.published_revision(problem_id)
+        published = runtime.problem_package_service.published_revision(problem_id)
         materialization_id = self._seed_materialization(
             problem_id=problem_id,
             source_commit=published.source_commit,
             revision_number=published.revision_number,
         )
-        materialization = config.problem_package_service.store.materialization(
+        materialization = runtime.problem_package_service.store.materialization(
             materialization_id
         )
         self.assertIsNotNone(materialization)
@@ -630,17 +630,17 @@ class TestContestBuilds(ContestActionBase):
             return None, True, "queued"
 
         with (
-            patch.object(config.worker_queue_service, "submit", side_effect=submit),
+            patch.object(runtime.worker_queue_service, "submit", side_effect=submit),
             patch(
                 "app.impl.workspace.published_materialization.ensure_published_materialization",
                 return_value=materialization,
             ),
             patch.object(
-                config.contest_statement_service, "build_pdf",
+                runtime.contest_statement_service, "build_pdf",
                 return_value={"artifact_id": "ca-pdf", "error": ""},
             ),
             patch.object(
-                config.contest_package_service, "build_bundle",
+                runtime.contest_package_service, "build_bundle",
                 return_value={"artifact_id": "", "error": "conversion failed"},
             ),
         ):

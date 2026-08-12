@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from app.impl.runtime.dependency import runtime
 from app.runtime import ApplicationRuntime
 from app.service.repository.revision import workspace_verification_source
 from app.service.problem_package.service import PublishedRevision
@@ -59,6 +58,7 @@ def _requested_verification_kind(*, selected_test_names: list[str]) -> str:
         return Kind.CUSTOM.value
     return Kind.ALL.value
 def start_verification_job(
+    application_runtime: ApplicationRuntime,
     problem: str,
     user: str,
     *,
@@ -74,7 +74,6 @@ def start_verification_job(
     bypass_case_result_cache: bool = False,
     source_commit: str = "",
 ) -> bool:
-    application_runtime = runtime()
     key = _verification_workspace_key(problem_id, workspace_id)
     fingerprint = ""
     signature = ""
@@ -246,6 +245,7 @@ def _run_export_create_worker(
 
 
 def start_export_job(
+    application_runtime: ApplicationRuntime,
     problem: str,
     user: str,
     *,
@@ -254,7 +254,6 @@ def start_export_job(
     requested_export_type: str,
     export_job_id: str,
 ) -> bool:
-    application_runtime = runtime()
     if not export_job_id:
         raise ValueError("export_job_id is required")
     revision = application_runtime.problem_package_service.published_revision(problem_id)

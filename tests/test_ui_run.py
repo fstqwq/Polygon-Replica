@@ -43,7 +43,7 @@ from tests.ui_support import (
     tests_spec_payload_download,
     tests_spec_payload_upload,
     tests_spec_reindex,
-    config,
+    runtime,
     general_page,
     json,
     export_page,
@@ -108,9 +108,9 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         workspace_path: Path,
         dirty: bool = True,
     ) -> dict[str, object]:
-        workspace_row = config.workspace_service.workspace_rows(
+        workspace_row = runtime.workspace_service.workspace_rows(
             [problem_id],
-            config.workspace_service.known_user_id("alice"),
+            runtime.workspace_service.known_user_id("alice"),
         )[problem_id]
         subject: WorkspaceReadinessSubject = {
             "problem_id": problem_id,
@@ -132,12 +132,12 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             "missing_reason": "Package not built",
         }
         with patch.object(
-            config.problem_package_service,
+            runtime.problem_package_service,
             "published_readiness",
             return_value=package,
         ):
             return dict(
-                config.problem_readiness_service.readiness(
+                runtime.problem_readiness_service.readiness(
                     subject,
                     explain_verification=True,
                 )
@@ -230,7 +230,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         for task_id, run_id, judgehost_task_id in [*(queued or []), *(leased or [])]:
             planned_task = planned_by_id[task_id]
             self.assertTrue(
-                config.verification_task_store.bind_and_expose_judgehost_runtime(
+                runtime.verification_task_store.bind_and_expose_judgehost_runtime(
                     task_id,
                     expected_verification_id=verification_id,
                     expected_program_id=planned_task.program_id,
@@ -241,9 +241,9 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
                 )
             )
         for task_id, _run_id, _judgehost_task_id in leased or []:
-            config.verification_task_store.set_task_leased(task_id)
+            runtime.verification_task_store.set_task_leased(task_id)
         if canonical_completions:
-            config.verification_task_store.commit_task_completions(
+            runtime.verification_task_store.commit_task_completions(
                 canonical_completions
             )
 
@@ -287,15 +287,15 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         summary_extra: dict[str, object] | None = None,
         activate_tasks: bool = True,
     ) -> None:
-        verification_root = config.storage_layout.prepare_verification_root(verification_id).resolve()
+        verification_root = runtime.storage_layout.prepare_verification_root(verification_id).resolve()
         verification_root.mkdir(parents=True, exist_ok=True)
-        existing_row = config.verification_service.verification_record(verification_id)
+        existing_row = runtime.verification_service.verification_record(verification_id)
         existing_metadata: dict[str, object] = {}
         existing_created_at = ""
         existing_finished_at = ""
         existing_signature = ""
         if existing_row is not None:
-            payload = config.verification_service.verification_detail(verification_id)
+            payload = runtime.verification_service.verification_detail(verification_id)
             if isinstance(payload, dict):
                 existing_metadata = dict(payload)
             existing_created_at = str(existing_row["created_at"] or "").strip()
@@ -453,9 +453,9 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
                 leased=leased,
             )
             if status == "failed":
-                record = config.verification_service.verification_record(verification_id)
+                record = runtime.verification_service.verification_record(verification_id)
                 if record is not None and str(record["status"]) == "running":
-                    config.verification_service.fail_verification(
+                    runtime.verification_service.fail_verification(
                         verification_id,
                         reason=str(metadata.get("error") or "verification fixture failed"),
                     )
@@ -491,7 +491,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         root = (
             Path(str(artifact_path)).resolve()
             if artifact_path
-            else config.storage_layout.prepare_verification_root(verification_id).resolve()
+            else runtime.storage_layout.prepare_verification_root(verification_id).resolve()
         )
         root.mkdir(parents=True, exist_ok=True)
         self._admit_verification_fixture(
@@ -539,7 +539,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             leased=leased,
         )
         if status == "failed":
-            failure = config.verification_service.fail_verification(
+            failure = runtime.verification_service.fail_verification(
                 verification_id,
                 reason=str(summary_obj.get("error") or "verification fixture failed"),
             )
@@ -1022,7 +1022,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         )
         self.assertEqual(add_manual.status_code, 303)
 
-        override_config_values(self, config.config_values, UPLOAD_MAX_BYTES=1024)
+        override_config_values(self, runtime.config_values, UPLOAD_MAX_BYTES=1024)
         uploaded = asyncio.run(
             tests_spec_payload_upload(
                 problem="alice/sample",
@@ -1151,7 +1151,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             for p in generator_dir.glob("*.in"):
                 p.unlink(missing_ok=True)
 
-        override_config_values(self, config.config_values, UPLOAD_MAX_BYTES=1024)
+        override_config_values(self, runtime.config_values, UPLOAD_MAX_BYTES=1024)
         created = asyncio.run(
             tests_spec_add_manual_upload(
                 problem="alice/sample",
@@ -1230,7 +1230,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         )
         self.assertIsNotNone(verification_row)
         self.assertIn(str(verification_row["status"] or ""), {"running", "ok", "failed"})
-        metadata = config.verification_service.verification_detail(verification_id)
+        metadata = runtime.verification_service.verification_detail(verification_id)
         self.assertIsInstance(metadata, dict)
         self.assertEqual(str(metadata.get("mode") or ""), "pass-fail")
 
@@ -1382,7 +1382,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             "app.service.platform.fs.layout.StorageLayout.prepare_verification_layout",
             side_effect=RuntimeError("verification layout unavailable"),
         ):
-            config.verification_workflow.run(
+            runtime.verification_workflow.run(
                 problem,
                 user,
                 actor_user_id=int(context["user"]["id"]),
@@ -1942,7 +1942,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
                 mode="pass-fail",
                 status="ok",
                 summary=_summary(verification_id, run_ids, source),
-                artifact_path=str(config.storage_layout.prepare_verification_root(verification_id).resolve()),
+                artifact_path=str(runtime.storage_layout.prepare_verification_root(verification_id).resolve()),
                 created_at=created_at,
                 finished_at=created_at,
                 verification_id=verification_id,
@@ -2110,7 +2110,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         )
         self.assertEqual(cancel_response.status_code, 303)
         self.assertEqual(
-            config.verification_service.verification_record(foreign_id)["status"],
+            runtime.verification_service.verification_record(foreign_id)["status"],
             "running",
         )
 
@@ -2200,7 +2200,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         self.assertTrue(str(verification_row["finished_at"] or ""))
         rows = {
             str(row["id"]): row
-            for row in config.verification_task_store.list_rows(verification_id)
+            for row in runtime.verification_task_store.list_rows(verification_id)
         }
         self.assertEqual(
             str(rows[leased_task_id]["status"] or ""),
@@ -2276,7 +2276,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         verification_row = db_fetch_one("SELECT status FROM verifications WHERE id=?", [verification_id])
         self.assertIsNotNone(verification_row)
         self.assertEqual(str(verification_row["status"] or "").strip().lower(), "cancelled")
-        rows = config.verification_task_store.list_rows(verification_id)
+        rows = runtime.verification_task_store.list_rows(verification_id)
         self.assertEqual(
             [
                 str(row["status"] or "")
@@ -2347,7 +2347,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             verification_id=verification_id,
         )
         self.assertEqual(cancel_resp.status_code, 303)
-        rows = config.verification_task_store.list_rows(verification_id)
+        rows = runtime.verification_task_store.list_rows(verification_id)
         self.assertEqual(
             [
                 str(row["status"] or "")
@@ -2376,7 +2376,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         workspace_id = int(ctx["workspace"]["id"])
         verification_id = canonical_test_verification_id(f"ver-list-failed-{uuid.uuid4().hex[:8]}")
         build_id = self.random_id("b-list-failed")
-        build_root = config.storage_layout.prepare_verification_root(build_id).resolve()
+        build_root = runtime.storage_layout.prepare_verification_root(build_id).resolve()
         build_root.mkdir(parents=True, exist_ok=True)
         self._insert_verification_row(
             verification_id=verification_id,
@@ -2393,7 +2393,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
                     "status": "failed",
                     "source_label": "solutions/accepted.cpp",
                     "expected_behavior": "accepted",
-                    "artifact_path": str(config.storage_layout.prepare_verification_root(verification_id).resolve()),
+                    "artifact_path": str(runtime.storage_layout.prepare_verification_root(verification_id).resolve()),
                     "summary": {
                         "mode": "interactive",
                         "source": "solutions/accepted.cpp",
@@ -2456,7 +2456,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         verification_id = canonical_test_verification_id(f"inv-verif-task-status-{uuid.uuid4().hex[:8]}")
         run_id = f"r-verif-task-status-{uuid.uuid4().hex[:8]}"
         build_id = self.random_id("b-verif-lifecycle")
-        run_root = config.storage_layout.prepare_verification_root(verification_id).resolve()
+        run_root = runtime.storage_layout.prepare_verification_root(verification_id).resolve()
         run_root.mkdir(parents=True, exist_ok=True)
         summary = {
             "mode": "pass-fail",
@@ -3497,13 +3497,13 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         fake_worker = _FakeWorker()
         try:
             with patch.object(
-                config.worker_queue_service,
+                runtime.worker_queue_service,
                 "submit",
                 return_value=(fake_worker, True, "queued"),
             ):
                 start_resp = verification_start(problem=problem, user="alice", page="statement")
             self.assertEqual(start_resp.status_code, 303)
-            row = config.verification_service.list_visible_verification_rows(
+            row = runtime.verification_service.list_visible_verification_rows(
                 problem_id,
                 workspace_id,
                 limit=1,
@@ -3513,9 +3513,9 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             self.assertEqual(str(row[0]["status"] or ""), "queued")
         finally:
             fake_worker.stop()
-            with config.verification_lock:
-                config.verification_inflight.discard(workspace_key)
-                config.verification_workers.discard(fake_worker)
+            with runtime.verification_lock:
+                runtime.verification_inflight.discard(workspace_key)
+                runtime.verification_workers.discard(fake_worker)
 
     def test_verification_queue_rejection_is_a_failure(self) -> None:
         problem = f"alice/verify-queue-rejection-{uuid.uuid4().hex[:8]}"
@@ -3529,13 +3529,14 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
 
         with (
             patch.object(
-                config.worker_queue_service,
+                runtime.worker_queue_service,
                 "submit",
                 return_value=(None, False, "capacity"),
             ),
             self.assertRaisesRegex(RuntimeError, "queue rejected"),
         ):
             workspace_context_job.start_verification_job(
+                runtime,
                 problem,
                 "alice",
                 actor_user_id=int(ctx["user"]["id"]),
@@ -3866,7 +3867,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         )
 
         def store(role: str, payload: bytes) -> str:
-            return config.verification_service.store_verification_blob(
+            return runtime.verification_service.store_verification_blob(
                 verification_id=verification_id,
                 test_name="001.in",
                 role=role,
@@ -4006,7 +4007,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         )
 
         def store(role: str, payload: bytes) -> str:
-            return config.verification_service.store_verification_blob(
+            return runtime.verification_service.store_verification_blob(
                 verification_id=verification_id,
                 test_name="001.in",
                 role=role,
@@ -4293,21 +4294,21 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             kind=Kind.ALL,
             detail={"mode": "pass-fail"},
         )
-        input_ref = config.verification_service.store_verification_blob(
+        input_ref = runtime.verification_service.store_verification_blob(
             verification_id=verification_id,
             test_name="001.in",
             role="input",
             file_name="001.in",
             payload=b"1 2 3\n",
         )
-        answer_ref = config.verification_service.store_verification_blob(
+        answer_ref = runtime.verification_service.store_verification_blob(
             verification_id=verification_id,
             test_name="001.in",
             role="answer",
             file_name="001.ans",
             payload=b"6\n",
         )
-        output_ref = config.verification_service.store_verification_blob(
+        output_ref = runtime.verification_service.store_verification_blob(
             verification_id=verification_id,
             test_name="001.in",
             role="output",
@@ -4315,7 +4316,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             payload=b"6\n",
             extra_tags={"run_id": "tmp.cpp"},
         )
-        other_output_ref = config.verification_service.store_verification_blob(
+        other_output_ref = runtime.verification_service.store_verification_blob(
             verification_id=verification_id,
             test_name="001.in",
             role="other-output",
@@ -4459,7 +4460,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             kind=Kind.CUSTOM,
             detail={"mode": "pass-fail"},
         )
-        output_ref = config.verification_service.store_verification_blob(
+        output_ref = runtime.verification_service.store_verification_blob(
             verification_id=verification_id,
             test_name="001.in",
             role="output",
@@ -4532,7 +4533,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         problem_id = int(alice_ctx["problem"]["id"])
         alice_workspace_id = int(alice_ctx["workspace"]["id"])
         verification_id = canonical_test_verification_id(f"ver-collab-detail-{uuid.uuid4().hex[:8]}")
-        artifact_root = config.storage_layout.prepare_verification_root(verification_id).resolve()
+        artifact_root = runtime.storage_layout.prepare_verification_root(verification_id).resolve()
         artifact_root.mkdir(parents=True, exist_ok=True)
 
         self._insert_verification_row(
@@ -4577,21 +4578,21 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
                 ],
             },
         )
-        output_ref = config.verification_service.store_verification_blob(
+        output_ref = runtime.verification_service.store_verification_blob(
             verification_id=verification_id,
             test_name="001.in",
             role="output",
             file_name="001.out",
             payload=b"6\n",
         )
-        input_ref = config.verification_service.store_verification_blob(
+        input_ref = runtime.verification_service.store_verification_blob(
             verification_id=verification_id,
             test_name="001.in",
             role="input",
             file_name="001.in",
             payload=b"1 2 3\n",
         )
-        answer_ref = config.verification_service.store_verification_blob(
+        answer_ref = runtime.verification_service.store_verification_blob(
             verification_id=verification_id,
             test_name="001.in",
             role="answer",
@@ -4686,21 +4687,21 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
                 ],
             },
         )
-        input_ref = config.verification_service.store_verification_blob(
+        input_ref = runtime.verification_service.store_verification_blob(
             verification_id=verification_id,
             test_name="001.in",
             role="input",
             file_name="001.in",
             payload=b"1 2 3\n",
         )
-        answer_ref = config.verification_service.store_verification_blob(
+        answer_ref = runtime.verification_service.store_verification_blob(
             verification_id=verification_id,
             test_name="001.in",
             role="answer",
             file_name="001.ans",
             payload=b"6\n",
         )
-        output_ref = config.verification_service.store_verification_blob(
+        output_ref = runtime.verification_service.store_verification_blob(
             verification_id=verification_id,
             test_name="001.in",
             role="output",
@@ -5270,7 +5271,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         )
         self.assertEqual(page.status_code, 200)
         page_html = page.body.decode("utf-8", errors="replace")
-        self.assertEqual(config.config_values.RUN_DETAIL_TEST_LIST_LIMIT, 999)
+        self.assertEqual(runtime.config_values.RUN_DETAIL_TEST_LIST_LIMIT, 999)
         visible_rows = set(
             re.findall(
                 r'data-test-name="(20[5-9]\.in|21[0-3]\.in)" data-test-source-kind="generated" '
@@ -5861,7 +5862,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             status="failed",
             summary=run_summary,
             artifact_path=str(
-                config.storage_layout.prepare_verification_root(verification_id).resolve()
+                runtime.storage_layout.prepare_verification_root(verification_id).resolve()
             ),
             created_at="2026-02-23T00:02:00Z",
             finished_at="2026-02-23T00:02:01Z",
@@ -5880,8 +5881,8 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         marker = workspace / "notes" / f"package-nav-{uuid.uuid4().hex[:8]}.txt"
         marker.parent.mkdir(parents=True, exist_ok=True)
         marker.write_text("package nav fixture\n", encoding="utf-8")
-        with config.workspace_service.workspace_lock(workspace):
-            head_commit = config.git_service.commit(
+        with runtime.workspace_service.workspace_lock(workspace):
+            head_commit = runtime.git_service.commit(
                 workspace,
                 "Prepare package navigation fixture",
                 "alice",
@@ -5906,9 +5907,9 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             "finished_at": "2026-08-08T00:00:01Z",
         }
         with (
-            patch.object(config.export_service, "latest_source_commit", return_value=head_commit),
-            patch.object(config.export_service, "latest_succeeded_export_job", return_value=current_export),
-            patch.object(config.export_service, "export_archive_path", return_value=Path("/tmp/sample-current.zip")),
+            patch.object(runtime.export_service, "latest_source_commit", return_value=head_commit),
+            patch.object(runtime.export_service, "latest_succeeded_export_job", return_value=current_export),
+            patch.object(runtime.export_service, "export_archive_path", return_value=Path("/tmp/sample-current.zip")),
         ):
             response = run_page(_request("/problems/alice/sample/run"), "alice/sample", "alice")
         html = response.body.decode("utf-8", errors="replace")
@@ -5958,14 +5959,14 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             ],
         )
         export_job_id = f"exp-visible-{uuid.uuid4().hex[:8]}"
-        config.export_service.create_export_job(
+        runtime.export_service.create_export_job(
             job_id=export_job_id,
             problem_id=problem_id,
             actor_user_id=actor_user_id,
             export_type="icpc",
             source_commit=source_commit,
         )
-        config.export_service.mark_export_job_failed(
+        runtime.export_service.mark_export_job_failed(
             export_job_id,
             "package failed for alice",
         )
@@ -5983,14 +5984,14 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             html,
         )
         self.assertNotIn("package failed for alice", html)
-        materialization = config.problem_package_service.materialization(
+        materialization = runtime.problem_package_service.materialization(
             materialization_id
         )
         self.assertIsNotNone(materialization)
-        archive = Path(config.settings.artifacts_root) / "fixture-native.zip"
+        archive = Path(runtime.settings.artifacts_root) / "fixture-native.zip"
         archive.write_bytes(b"native package")
         with patch.object(
-            config.problem_package_service,
+            runtime.problem_package_service,
             "native_archive",
             return_value=(materialization, archive),
         ):

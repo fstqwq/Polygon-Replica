@@ -7,7 +7,7 @@ from pathlib import Path
 from app.impl.problem.compile_check import _testlib_extra_sources
 from app.service.platform.testlib_source import maintained_testlib_header, workspace_testlib_header
 from app.service.platform.runtime_blob_store import PayloadFile
-from tests.common import WorkspaceTestBase, config
+from tests.common import WorkspaceTestBase, runtime
 
 
 class TestWorkspaceTestlibSource(WorkspaceTestBase):
@@ -39,7 +39,7 @@ class TestTestlibSourceHelpers(unittest.TestCase):
             extra = payload.get("extra_source_files") if isinstance(payload, dict) else None
             self.assertIsInstance(extra, dict)
             self.assertEqual(
-                config.runtime_blob_store.read(PayloadFile.from_payload(extra["testlib.h"])),
+                runtime.runtime_blob_store.read(PayloadFile.from_payload(extra["testlib.h"])),
                 b"// workspace testlib\n",
             )
 

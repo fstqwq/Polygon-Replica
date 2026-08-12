@@ -7,6 +7,7 @@ from typing import Annotated
 from fastapi import Form, Depends
 
 from app.impl.auth.shared import redirect_response
+from app.impl.runtime.dependency import runtime
 from app.impl.tests_spec.shared import normalize_verification_target_page
 from app.impl.workspace.access import require_write_access
 from app.impl.workspace.context_job import start_verification_job
@@ -62,6 +63,7 @@ def verification_start(problem: str, user: Annotated[str, Depends(require_sessio
                 solution_index += 1
             target['program_id'] = program_id
         started = start_verification_job(
+            runtime(),
             problem,
             user,
             actor_user_id=int(ctx['user']['id']),

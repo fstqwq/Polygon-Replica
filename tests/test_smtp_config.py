@@ -12,7 +12,7 @@ from tests.ui_support import (
     UIHelpersMixin,
     _request,
     admin_mail_page,
-    config,
+    runtime,
     settings_smtp_update,
 )
 from app.service.platform.secret_box import ENCRYPTION_KEY_ENV, SecretBox, SecretBoxDecryptError
@@ -48,7 +48,7 @@ class TestSmtpConfig(UIHelpersMixin, E2ETestBase):
         actor = db_fetch_one("SELECT id FROM users WHERE username=?", [self.user])
         self.assertIsNotNone(actor)
         with patch.dict(os.environ, {ENCRYPTION_KEY_ENV: _KEY}):
-            config.smtp_config_service.save_from_form(
+            runtime.smtp_config_service.save_from_form(
                 host="smtp.example.com",
                 port="587",
                 username="mailer@example.com",
@@ -60,9 +60,9 @@ class TestSmtpConfig(UIHelpersMixin, E2ETestBase):
             self.assertIsNotNone(row)
             ciphertext = str(row["password_ciphertext"])
             self.assertNotIn("secret-token", ciphertext)
-            self.assertEqual(config.smtp_config_service.credentials().password, "secret-token")
+            self.assertEqual(runtime.smtp_config_service.credentials().password, "secret-token")
 
-            config.smtp_config_service.save_from_form(
+            runtime.smtp_config_service.save_from_form(
                 host="smtp2.example.com",
                 port="465",
                 username="mailer@example.com",
@@ -75,7 +75,7 @@ class TestSmtpConfig(UIHelpersMixin, E2ETestBase):
             self.assertEqual(str(kept["host"]), "smtp2.example.com")
             self.assertEqual(str(kept["password_ciphertext"]), ciphertext)
 
-            config.smtp_config_service.save_from_form(
+            runtime.smtp_config_service.save_from_form(
                 host="smtp2.example.com",
                 port="465",
                 username="mailer@example.com",
@@ -91,7 +91,7 @@ class TestSmtpConfig(UIHelpersMixin, E2ETestBase):
         actor = db_fetch_one("SELECT id FROM users WHERE username=?", [self.user])
         self.assertIsNotNone(actor)
         with patch.dict(os.environ, {ENCRYPTION_KEY_ENV: _KEY}):
-            config.smtp_config_service.save_from_form(
+            runtime.smtp_config_service.save_from_form(
                 host="smtp.example.com",
                 port="587",
                 username="mailer@example.com",
@@ -102,7 +102,7 @@ class TestSmtpConfig(UIHelpersMixin, E2ETestBase):
             smtp_context = MagicMock()
             smtp = smtp_context.__enter__.return_value
             with patch("app.service.mail.smtp_config.smtplib.SMTP", return_value=smtp_context):
-                config.smtp_config_service.send_test_email(recipient="admin@example.com")
+                runtime.smtp_config_service.send_test_email(recipient="admin@example.com")
 
         smtp.ehlo.assert_called()
         smtp.starttls.assert_called_once()
@@ -113,7 +113,7 @@ class TestSmtpConfig(UIHelpersMixin, E2ETestBase):
         actor = db_fetch_one("SELECT id FROM users WHERE username=?", [self.user])
         self.assertIsNotNone(actor)
         with patch.dict(os.environ, {ENCRYPTION_KEY_ENV: _KEY}):
-            config.smtp_config_service.save_from_form(
+            runtime.smtp_config_service.save_from_form(
                 host="smtp.example.com",
                 port="587",
                 username="mailer@example.com",
@@ -124,7 +124,7 @@ class TestSmtpConfig(UIHelpersMixin, E2ETestBase):
             smtp_context = MagicMock()
             smtp = smtp_context.__enter__.return_value
             with patch("app.service.mail.smtp_config.smtplib.SMTP", return_value=smtp_context):
-                config.smtp_config_service.send_registration_email(
+                runtime.smtp_config_service.send_registration_email(
                     recipient="user@example.com",
                     verification_code="8F3K-2Q7M-Z9PA",
                     expires_in_sec=1800,
@@ -153,7 +153,7 @@ class TestSmtpConfig(UIHelpersMixin, E2ETestBase):
             )
 
         db_execute("UPDATE users SET is_system_admin=1 WHERE username=?", [self.user])
-        config.workspace_service.clear_identity_caches()
+        runtime.workspace_service.clear_identity_caches()
         with patch.dict(os.environ, {ENCRYPTION_KEY_ENV: _KEY}):
             page = admin_mail_page(_request("/admin/mail"), user=self.user)
             html = page.body.decode("utf-8", errors="replace")

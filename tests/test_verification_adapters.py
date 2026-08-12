@@ -8,7 +8,7 @@ from app.service.verification.lifecycle import (
 )
 from app.service.verification.types import VerificationTaskStatus
 
-from tests.common import E2ETestBase, config
+from tests.common import E2ETestBase, runtime
 from tests.identity_helpers import canonical_test_verification_id
 from tests.verification_adapter_fixture import (
     sanity_test_plan,
@@ -21,7 +21,7 @@ class TestVerificationAdapters(E2ETestBase):
     def test_required_verification_file_waits_for_late_artifact_visibility(self) -> None:
         from app.service.verification.workflow import _verification_required_file
 
-        payload = config.runtime_blob_store.put_bytes(b"generated\n")
+        payload = runtime.runtime_blob_store.put_bytes(b"generated\n")
         calls = {"ref": 0, "descriptor": 0}
 
         def _late_ref(_verification_id: str, _test_name: str, _ref_key: str) -> str:
@@ -32,8 +32,8 @@ class TestVerificationAdapters(E2ETestBase):
             calls["descriptor"] += 1
             return payload if calls["descriptor"] >= 2 else None
 
-        with patch.object(config.verification_service, "verification_artifact_ref", side_effect=_late_ref), patch.object(
-            config.runtime_blob_store,
+        with patch.object(runtime.verification_service, "verification_artifact_ref", side_effect=_late_ref), patch.object(
+            runtime.runtime_blob_store,
             "descriptor",
             side_effect=_late_descriptor,
         ):
@@ -45,8 +45,8 @@ class TestVerificationAdapters(E2ETestBase):
                     label="verification test 026.in",
                     timeout_sec=0.2,
                     interval_sec=0.001,
-                    verification_service=config.verification_service,
-                    runtime_blob_store=config.runtime_blob_store,
+                    verification_service=runtime.verification_service,
+                    runtime_blob_store=runtime.runtime_blob_store,
                 ),
                 payload,
             )
@@ -65,8 +65,8 @@ class TestVerificationAdapters(E2ETestBase):
         verification_id = canonical_test_verification_id(
             self.random_id("ver-force-recompile")
         )
-        source_file = config.runtime_blob_store.put_bytes(b"int main(){return 0;}\n")
-        input_file = config.runtime_blob_store.put_bytes(b"1\n")
+        source_file = runtime.runtime_blob_store.put_bytes(b"int main(){return 0;}\n")
+        input_file = runtime.runtime_blob_store.put_bytes(b"1\n")
         test_plan = sanity_test_plan()
         accepted_program = verification_program(
             program_id="accepted",
@@ -105,10 +105,10 @@ class TestVerificationAdapters(E2ETestBase):
             run_verification_payload_base={},
             generate_verification_payload_base={},
             bypass_case_result_cache=True,
-            judgehost=config.judgehost_task_service,
-            runtime_blob_store=config.runtime_blob_store,
-            verification_service=config.verification_service,
-            task_store=config.verification_task_store,
+            judgehost=runtime.judgehost_task_service,
+            runtime_blob_store=runtime.runtime_blob_store,
+            verification_service=runtime.verification_service,
+            task_store=runtime.verification_task_store,
         )
         calls: list[dict[str, object]] = []
 
@@ -116,8 +116,8 @@ class TestVerificationAdapters(E2ETestBase):
             calls.append(dict(kwargs))
             return f"jt-force-{len(calls)}"
 
-        with patch.object(config.judgehost_task_service, "enqueue_task", side_effect=_fake_enqueue_task), patch.object(
-            config.judgehost_task_service,
+        with patch.object(runtime.judgehost_task_service, "enqueue_task", side_effect=_fake_enqueue_task), patch.object(
+            runtime.judgehost_task_service,
             "prepare_execution_template",
             return_value={},
         ) as prepare_template, patch(
@@ -182,7 +182,7 @@ class TestVerificationAdapters(E2ETestBase):
         verification_id = canonical_test_verification_id(
             self.random_id("ver-sanity-stable")
         )
-        logs_dir = config.storage_layout.prepare_verification_root(verification_id).resolve() / "logs"
+        logs_dir = runtime.storage_layout.prepare_verification_root(verification_id).resolve() / "logs"
         calls: list[dict[str, object]] = []
         closed_programs: list[tuple[str, list[str]]] = []
 
@@ -209,16 +209,16 @@ class TestVerificationAdapters(E2ETestBase):
         ) -> None:
             closed_programs.append((closed_verification_id, list(program_ids)))
 
-        with patch.object(config.judgehost_task_service, "enqueue_task", side_effect=_fake_enqueue_task), patch.object(
-            config.judgehost_task_service,
+        with patch.object(runtime.judgehost_task_service, "enqueue_task", side_effect=_fake_enqueue_task), patch.object(
+            runtime.judgehost_task_service,
             "wait_for_task_case_result",
             side_effect=_fake_wait_for_task_case_result,
         ), patch.object(
-            config.judgehost_task_service,
+            runtime.judgehost_task_service,
             "close_programs",
             side_effect=_fake_close_programs,
         ):
-            result = config.verification_sanity_service.run(
+            result = runtime.verification_sanity_service.run(
                 problem=self.problem,
                 user=self.user,
                 verification_id=verification_id,
@@ -257,7 +257,7 @@ class TestVerificationAdapters(E2ETestBase):
         verification_id = canonical_test_verification_id(
             self.random_id("ver-sanity-boundary")
         )
-        logs_dir = config.storage_layout.prepare_verification_root(verification_id).resolve() / "logs"
+        logs_dir = runtime.storage_layout.prepare_verification_root(verification_id).resolve() / "logs"
 
         def _fake_enqueue_task(**kwargs: object) -> str:
             return "jt-boundary"
@@ -270,12 +270,12 @@ class TestVerificationAdapters(E2ETestBase):
             'constant-bounds "n": 1 3\n'
             'variable "n"\n'
         )
-        with patch.object(config.judgehost_task_service, "enqueue_task", side_effect=_fake_enqueue_task), patch.object(
-            config.judgehost_task_service,
+        with patch.object(runtime.judgehost_task_service, "enqueue_task", side_effect=_fake_enqueue_task), patch.object(
+            runtime.judgehost_task_service,
             "wait_for_task_case_result",
             side_effect=_fake_wait_for_task_case_result,
         ):
-            result = config.verification_sanity_service.run(
+            result = runtime.verification_sanity_service.run(
                 problem=self.problem,
                 user=self.user,
                 verification_id=verification_id,
@@ -300,7 +300,7 @@ class TestVerificationAdapters(E2ETestBase):
         verification_id = canonical_test_verification_id(
             self.random_id("ver-sanity-runtime")
         )
-        logs_dir = config.storage_layout.prepare_verification_root(verification_id).resolve() / "logs"
+        logs_dir = runtime.storage_layout.prepare_verification_root(verification_id).resolve() / "logs"
 
         def _fake_enqueue_task(**kwargs: object) -> str:
             return "jt-runtime"
@@ -308,12 +308,12 @@ class TestVerificationAdapters(E2ETestBase):
         def _fake_wait_for_task_case_result(_task_id: str, test_name: str) -> dict[str, object]:
             return {"summary": {"tests": [{"test": test_name, "verdict": "WA", "message": "rejected"}]}}
 
-        with patch.object(config.judgehost_task_service, "enqueue_task", side_effect=_fake_enqueue_task), patch.object(
-            config.judgehost_task_service,
+        with patch.object(runtime.judgehost_task_service, "enqueue_task", side_effect=_fake_enqueue_task), patch.object(
+            runtime.judgehost_task_service,
             "wait_for_task_case_result",
             side_effect=_fake_wait_for_task_case_result,
         ):
-            result = config.verification_sanity_service.run(
+            result = runtime.verification_sanity_service.run(
                 problem=self.problem,
                 user=self.user,
                 verification_id=verification_id,
@@ -366,7 +366,7 @@ class TestVerificationAdapters(E2ETestBase):
         verification_id = canonical_test_verification_id(
             self.random_id("ver-sanity-ac")
         )
-        logs_dir = config.storage_layout.prepare_verification_root(verification_id).resolve() / "logs"
+        logs_dir = runtime.storage_layout.prepare_verification_root(verification_id).resolve() / "logs"
         calls: list[dict[str, object]] = []
 
         def _fake_enqueue_task(**kwargs: object) -> str:
@@ -376,12 +376,12 @@ class TestVerificationAdapters(E2ETestBase):
         def _fake_wait_for_task_case_result(_task_id: str, test_name: str) -> dict[str, object]:
             return {"summary": {"tests": [{"test": test_name, "verdict": "OK", "message": "accepted"}]}}
 
-        with patch.object(config.judgehost_task_service, "enqueue_task", side_effect=_fake_enqueue_task), patch.object(
-            config.judgehost_task_service,
+        with patch.object(runtime.judgehost_task_service, "enqueue_task", side_effect=_fake_enqueue_task), patch.object(
+            runtime.judgehost_task_service,
             "wait_for_task_case_result",
             side_effect=_fake_wait_for_task_case_result,
         ):
-            result = config.verification_sanity_service.run(
+            result = runtime.verification_sanity_service.run(
                 problem=self.problem,
                 user=self.user,
                 verification_id=verification_id,
@@ -404,7 +404,7 @@ class TestVerificationAdapters(E2ETestBase):
         verification_id = canonical_test_verification_id(
             self.random_id("ver-sanity-fl")
         )
-        logs_dir = config.storage_layout.prepare_verification_root(verification_id).resolve() / "logs"
+        logs_dir = runtime.storage_layout.prepare_verification_root(verification_id).resolve() / "logs"
         calls: list[dict[str, object]] = []
 
         def _fake_enqueue_task(**kwargs: object) -> str:
@@ -415,12 +415,12 @@ class TestVerificationAdapters(E2ETestBase):
             verdict = "WA" if task_id == "jt-1" else "FL"
             return {"summary": {"tests": [{"test": test_name, "verdict": verdict, "message": "unicode crash"}]}}
 
-        with patch.object(config.judgehost_task_service, "enqueue_task", side_effect=_fake_enqueue_task), patch.object(
-            config.judgehost_task_service,
+        with patch.object(runtime.judgehost_task_service, "enqueue_task", side_effect=_fake_enqueue_task), patch.object(
+            runtime.judgehost_task_service,
             "wait_for_task_case_result",
             side_effect=_fake_wait_for_task_case_result,
         ):
-            result = config.verification_sanity_service.run(
+            result = runtime.verification_sanity_service.run(
                 problem=self.problem,
                 user=self.user,
                 verification_id=verification_id,
@@ -451,10 +451,10 @@ class TestVerificationAdapters(E2ETestBase):
             with self.subTest(source_name=source_name):
                 accepted_path = "solutions/accepted.cpp"
                 uploaded_path = f"uploads/solution-0/{source_name}"
-                accepted_file = config.runtime_blob_store.put_bytes(
+                accepted_file = runtime.runtime_blob_store.put_bytes(
                     b"int main(){return 0;}\n"
                 )
-                uploaded_file = config.runtime_blob_store.put_bytes(
+                uploaded_file = runtime.runtime_blob_store.put_bytes(
                     source_content
                 )
                 graph = build_graph(
@@ -502,10 +502,10 @@ class TestVerificationAdapters(E2ETestBase):
                     run_verification_payload_base={},
                     generate_verification_payload_base={},
                     bypass_case_result_cache=False,
-                    judgehost=config.judgehost_task_service,
-                    runtime_blob_store=config.runtime_blob_store,
-                    verification_service=config.verification_service,
-                    task_store=config.verification_task_store,
+                    judgehost=runtime.judgehost_task_service,
+                    runtime_blob_store=runtime.runtime_blob_store,
+                    verification_service=runtime.verification_service,
+                    task_store=runtime.verification_task_store,
                 )
                 observed: dict[str, str] = {}
 
@@ -516,7 +516,7 @@ class TestVerificationAdapters(E2ETestBase):
                     return {}
 
                 with patch.object(
-                    config.judgehost_task_service,
+                    runtime.judgehost_task_service,
                     "prepare_execution_template",
                     side_effect=_prepare_template,
                 ):

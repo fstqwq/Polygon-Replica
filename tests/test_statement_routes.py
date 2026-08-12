@@ -15,7 +15,7 @@ from app.impl.preview.preview import (
     statement_tex_source,
 )
 from app.main import runtime
-from app.runtime import CONFIG_REGISTRY
+from app.config import CONFIG_REGISTRY
 from app.service.statement.render import (
     ensure_statement_language_sources,
 )

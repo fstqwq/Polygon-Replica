@@ -34,6 +34,7 @@ class TestVerificationCompileAdapter(E2ETestBase):
             patch("app.impl.problem.compile_check.workspace_testlib_header", return_value=None),
         ):
             msg = judgehost_compile_check_error(
+                application_runtime=runtime,
                 problem=self.problem,
                 user=self.user,
                 workspace=Path("."),
@@ -56,6 +57,7 @@ class TestVerificationCompileAdapter(E2ETestBase):
             patch("app.impl.problem.compile_check.workspace_testlib_header", return_value=None),
         ):
             msg = judgehost_compile_check_error(
+                application_runtime=runtime,
                 problem=self.problem,
                 user=self.user,
                 workspace=Path("."),

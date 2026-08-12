@@ -135,6 +135,7 @@ async def agent_verification_start(request: Request):
     try:
         targets, _accepted_source = build_full_verification_targets(workspace)
         started = start_verification_job(
+            runtime(),
             identity.problem_slug,
             identity.username,
             actor_user_id=int(identity.user_id),
@@ -540,6 +541,7 @@ async def agent_export_start(request: Request):
     try:
         export_job_id = f"exp-api-{new_run_id()}"
         started = start_export_job(
+            runtime(),
             identity.problem_slug,
             identity.username,
             actor_user_id=int(identity.user_id),

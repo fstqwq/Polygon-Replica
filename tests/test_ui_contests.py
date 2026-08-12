@@ -37,7 +37,7 @@ from tests.ui_support import (
     contests_root_page,
     json,
     uuid,
-    config,
+    runtime,
     workspace_service,
 )
 
@@ -65,16 +65,16 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
         return int(row["id"])
 
     def test_contest_problem_limit_serializes_the_last_slot(self) -> None:
-        previous = dict(config.config_values.snapshot())
+        previous = dict(runtime.config_values.snapshot())
         limited = dict(previous)
         limited["CONTEST_MAX_PROBLEMS"] = 1
-        config.config_values.replace(limited)
-        self.addCleanup(config.config_values.replace, previous)
+        runtime.config_values.replace(limited)
+        self.addCleanup(runtime.config_values.replace, previous)
 
         actor = db_fetch_one("SELECT id FROM users WHERE username='alice'")
         self.assertIsNotNone(actor)
         actor_id = int(actor["id"])
-        contest_id = config.contest_service.create_contest_with_owner(
+        contest_id = runtime.contest_service.create_contest_with_owner(
             slug=f"limit-{uuid.uuid4().hex[:8]}",
             title="Limit race",
             owner_user_id=actor_id,
@@ -90,7 +90,7 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
         def add(label: str, problem_id: int) -> None:
             barrier.wait()
             try:
-                config.contest_service.add_problem(
+                runtime.contest_service.add_problem(
                     contest_id,
                     label,
                     problem_id,
@@ -126,13 +126,13 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
         )
 
     def test_existing_over_limit_contest_remains_mutable_except_for_addition(self) -> None:
-        previous = dict(config.config_values.snapshot())
-        self.addCleanup(config.config_values.replace, previous)
+        previous = dict(runtime.config_values.snapshot())
+        self.addCleanup(runtime.config_values.replace, previous)
         actor = db_fetch_one("SELECT id FROM users WHERE username='alice'")
         self.assertIsNotNone(actor)
         actor_id = int(actor["id"])
         contest_slug = f"over-limit-{uuid.uuid4().hex[:8]}"
-        contest_id = config.contest_service.create_contest_with_owner(
+        contest_id = runtime.contest_service.create_contest_with_owner(
             slug=contest_slug,
             title="Existing over limit",
             owner_user_id=actor_id,
@@ -143,29 +143,29 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
         ]
         initial = dict(previous)
         initial["CONTEST_MAX_PROBLEMS"] = 2
-        config.config_values.replace(initial)
-        config.contest_service.add_problem(contest_id, "A", problem_ids[0], actor_id)
-        config.contest_service.add_problem(contest_id, "B", problem_ids[1], actor_id)
+        runtime.config_values.replace(initial)
+        runtime.contest_service.add_problem(contest_id, "A", problem_ids[0], actor_id)
+        runtime.contest_service.add_problem(contest_id, "B", problem_ids[1], actor_id)
 
         limited = dict(previous)
         limited["CONTEST_MAX_PROBLEMS"] = 1
-        config.config_values.replace(limited)
-        config.contest_service.upsert_property(
+        runtime.config_values.replace(limited)
+        runtime.contest_service.upsert_property(
             contest_id,
             actor_id,
             "location",
             "Still editable",
         )
-        self.assertEqual(len(config.contest_service.contest_problems(contest_id)), 2)
+        self.assertEqual(len(runtime.contest_service.contest_problems(contest_id)), 2)
         self.assertEqual(
-            config.contest_service.overview_properties_map(
+            runtime.contest_service.overview_properties_map(
                 contest_id,
                 contest_slug,
             )["location"],
             "Still editable",
         )
         with self.assertRaisesRegex(ValueError, "configured maximum"):
-            config.contest_service.add_problem(
+            runtime.contest_service.add_problem(
                 contest_id,
                 "C",
                 problem_ids[2],
@@ -204,10 +204,10 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
         self.assertEqual(root_page.status_code, 200)
         root_html = root_page.body.decode("utf-8", errors="replace")
         self.assertIn(contest_slug, root_html)
-        admin_access = config.access_query.contest_context(contest_id, workspace_service.known_user_id("alice"))
+        admin_access = runtime.access_query.contest_context(contest_id, workspace_service.known_user_id("alice"))
         self.assertEqual(admin_access["role"], "admin")
         self.assertTrue(admin_access["can_manage"])
-        overview_rows = config.contest_service.user_contests_overview(
+        overview_rows = runtime.contest_service.user_contests_overview(
             workspace_service.known_user_id("alice"),
             limit=20,
         )
@@ -342,7 +342,7 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
             tasks=tasks,
         )
         self.assertEqual(activation.outcome, "activated")
-        failure = config.verification_service.fail_verification(
+        failure = runtime.verification_service.fail_verification(
             verification_id,
             reason="private checker detail",
         )
@@ -501,7 +501,7 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
         self.assertIsNotNone(alice_row)
         self.assertIsNotNone(problem_row)
         problem_id = int(problem_row["id"])
-        config.contest_service.add_problem(contest_id, "A", problem_id, int(alice_row["id"]))
+        runtime.contest_service.add_problem(contest_id, "A", problem_id, int(alice_row["id"]))
         self.assertEqual(
             _register_with_password_envelope("bob", "StrongPass123", next_path="/").status_code,
             303,
@@ -519,7 +519,7 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
         self.assertIn("effective immediately", _flash_messages_from_response(grant)[0].lower())
         bob = db_fetch_one("SELECT id FROM users WHERE username='bob'")
         self.assertIsNotNone(bob)
-        self.assertTrue(config.access_query.problem_context(problem_id, int(bob["id"]))["can_write"])
+        self.assertTrue(runtime.access_query.problem_context(problem_id, int(bob["id"]))["can_write"])
         self.assertEqual(
             db_fetch_all(
                 "SELECT role FROM repo_acl WHERE problem_id=? AND user_id=?",
@@ -543,7 +543,7 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
         self.assertEqual(save_props.status_code, 303)
         alice_row = db_fetch_one("SELECT id FROM users WHERE username='alice'")
         self.assertIsNotNone(alice_row)
-        config.contest_service.set_statement_default_language(contest_id, int(alice_row["id"]), "english")
+        runtime.contest_service.set_statement_default_language(contest_id, int(alice_row["id"]), "english")
 
         contest_row = db_fetch_one("SELECT title FROM contests WHERE id=?", [contest_id])
         self.assertIsNotNone(contest_row)
@@ -575,7 +575,7 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
                 b"{1 February, 2026}%\n"
                 b"\\end{document}\n"
             )
-            config.contest_service.replace_statement_sources(
+            runtime.contest_service.replace_statement_sources(
                 contest_id=contest_id,
                 contest_slug=contest_slug,
                 actor_user_id=actor_user_id,
@@ -587,9 +587,9 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
                     }
                 ],
             )
-        config.contest_service.set_statement_default_language(contest_id, actor_user_id, "english")
+        runtime.contest_service.set_statement_default_language(contest_id, actor_user_id, "english")
 
-        properties = config.contest_service.overview_properties_map(
+        properties = runtime.contest_service.overview_properties_map(
             contest_id,
             contest_slug,
         )

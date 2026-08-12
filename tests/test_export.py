@@ -239,6 +239,7 @@ class TestPublishedRevisionExport(E2ETestBase):
                 side_effect=submit,
             ):
                 started = workspace_context_job.start_export_job(
+                    runtime,
                     self.problem,
                     self.user,
                     actor_user_id=int(actor["id"]),

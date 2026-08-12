@@ -386,6 +386,7 @@ def _start_run_verification(
     workspace_dirty = bool(ctx["workspace"].get("dirty"))
     try:
         started = start_verification_job(
+            runtime(),
             problem,
             user,
             actor_user_id=int(ctx["user"]["id"]),

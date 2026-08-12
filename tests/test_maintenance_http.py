@@ -6,7 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from app.db import SchemaRequirementsError
-from app.main import MaintenanceAdmissionMiddleware, config
+from app.main import MaintenanceAdmissionMiddleware, runtime
 from app.route.maintenance_route import maintenance_page
 from app.service.platform.maintenance.admission import MaintenanceAdmissionGate
 
@@ -61,14 +61,14 @@ class TestMaintenanceAdmissionMiddleware(unittest.IsolatedAsyncioTestCase):
             "client": ("127.0.0.1", 12345),
             "server": ("testserver", 80),
         }
-        middleware = MaintenanceAdmissionMiddleware(downstream)
+        middleware = MaintenanceAdmissionMiddleware(downstream, runtime)
         schema_error = SchemaRequirementsError(
             missing_tables=["system_config"],
             missing_columns=["exports.materialization_id"],
             missing_indexes=["idx_exports_materialization_created"],
         )
 
-        with patch.object(config, "schema_error", schema_error):
+        with patch.object(runtime, "schema_error", schema_error):
             await middleware(scope, receive, send)
 
         self.assertFalse(downstream_called)
@@ -91,11 +91,11 @@ class TestMaintenanceAdmissionMiddleware(unittest.IsolatedAsyncioTestCase):
             "started_at": "2026-08-08T00:00:00Z",
         }
         with patch.object(
-            config,
+            runtime,
             "maintenance_service",
             SimpleNamespace(snapshot=lambda: running_state),
         ):
-            running = maintenance_page()
+            running = maintenance_page(SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(runtime=runtime))))
         self.assertEqual(running.status_code, 200)
         self.assertEqual(running.headers.get("refresh"), "2")
         self.assertIn("text/plain", running.headers.get("content-type", ""))
@@ -106,11 +106,11 @@ class TestMaintenanceAdmissionMiddleware(unittest.IsolatedAsyncioTestCase):
             "operation": "artifact_cleanup",
         }
         with patch.object(
-            config,
+            runtime,
             "maintenance_service",
             SimpleNamespace(snapshot=lambda: succeeded_state),
         ):
-            succeeded = maintenance_page()
+            succeeded = maintenance_page(SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(runtime=runtime))))
         self.assertEqual(succeeded.status_code, 303)
         self.assertEqual(
             succeeded.headers.get("location"),
@@ -126,11 +126,11 @@ class TestMaintenanceAdmissionMiddleware(unittest.IsolatedAsyncioTestCase):
             "result": {"completed_stage": "runtime"},
         }
         with patch.object(
-            config,
+            runtime,
             "maintenance_service",
             SimpleNamespace(snapshot=lambda: failed_state),
         ):
-            failed = maintenance_page()
+            failed = maintenance_page(SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(runtime=runtime))))
         self.assertEqual(failed.status_code, 200)
         self.assertIn(b"completed_stage: runtime", failed.body)
         self.assertIn(b"disk full", failed.body)
@@ -140,11 +140,11 @@ class TestMaintenanceAdmissionMiddleware(unittest.IsolatedAsyncioTestCase):
             "operation": "source_backup",
         }
         with patch.object(
-            config,
+            runtime,
             "maintenance_service",
             SimpleNamespace(snapshot=lambda: backup_succeeded_state),
         ):
-            backup_succeeded = maintenance_page()
+            backup_succeeded = maintenance_page(SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(runtime=runtime))))
         self.assertEqual(backup_succeeded.status_code, 303)
         self.assertEqual(
             backup_succeeded.headers.get("location"),
@@ -160,11 +160,11 @@ class TestMaintenanceAdmissionMiddleware(unittest.IsolatedAsyncioTestCase):
             "result": {"completed_stage": "preflight"},
         }
         with patch.object(
-            config,
+            runtime,
             "maintenance_service",
             SimpleNamespace(snapshot=lambda: backup_failed_state),
         ):
-            backup_failed = maintenance_page()
+            backup_failed = maintenance_page(SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(runtime=runtime))))
         self.assertEqual(backup_failed.status_code, 200)
         self.assertIn(b"source backup failed", backup_failed.body)
         self.assertIn(b"completed_stage: preflight", backup_failed.body)
@@ -213,9 +213,9 @@ class TestMaintenanceAdmissionMiddleware(unittest.IsolatedAsyncioTestCase):
             "client": ("127.0.0.1", 12345),
             "server": ("testserver", 80),
         }
-        middleware = MaintenanceAdmissionMiddleware(downstream)
+        middleware = MaintenanceAdmissionMiddleware(downstream, runtime)
 
-        with patch.object(config, "maintenance_admission_gate", stub):
+        with patch.object(runtime, "maintenance_admission_gate", stub):
             request_task = asyncio.create_task(middleware(scope, receive, send))
             await asyncio.wait_for(body_finished.wait(), timeout=2)
             self.assertEqual(stub.active_requests, 1)
@@ -257,9 +257,9 @@ class TestMaintenanceAdmissionMiddleware(unittest.IsolatedAsyncioTestCase):
             "client": ("127.0.0.1", 12345),
             "server": ("testserver", 80),
         }
-        middleware = MaintenanceAdmissionMiddleware(downstream)
+        middleware = MaintenanceAdmissionMiddleware(downstream, runtime)
 
-        with patch.object(config, "maintenance_admission_gate", stub):
+        with patch.object(runtime, "maintenance_admission_gate", stub):
             await middleware(scope, receive, send)
 
         self.assertFalse(downstream_called)

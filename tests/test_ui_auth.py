@@ -47,7 +47,7 @@ from tests.ui_support import (
     _sudo_with_password_envelope,
     auth_middleware,
     auth_password_meta,
-    config,
+    runtime,
     json,
     login_page,
     login_submit,
@@ -71,8 +71,8 @@ from tests.ui_support import (
     uuid,
     workspace_service,
 )
-SUDO_COOKIE_NAME = config.config_values.SUDO_COOKIE_NAME
-SUDO_COOKIE_MAX_AGE = int(config.config_values.SUDO_COOKIE_MAX_AGE)
+SUDO_COOKIE_NAME = runtime.config_values.SUDO_COOKIE_NAME
+SUDO_COOKIE_MAX_AGE = int(runtime.config_values.SUDO_COOKIE_MAX_AGE)
 
 
 class TestUIAuth(UIHelpersMixin, E2ETestBase):
@@ -85,11 +85,11 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         self.assertEqual(private_key.key_size, 2048)
 
     def _replace_auth_constants(self, **overrides: object) -> None:
-        previous = dict(config.config_values.snapshot())
+        previous = dict(runtime.config_values.snapshot())
         updated = dict(previous)
         updated.update(overrides)
-        config.config_values.replace(updated)
-        self.addCleanup(config.config_values.replace, previous)
+        runtime.config_values.replace(updated)
+        self.addCleanup(runtime.config_values.replace, previous)
 
     def _valid_registration_kwargs(self, username: str, *, email: str | None = None) -> dict[str, object]:
         password = "StrongPass123"
@@ -131,8 +131,8 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         kwargs = self._valid_registration_kwargs(username, email=email)
         sent_codes: list[str] = []
 
-        with patch.object(config.smtp_config_service, "delivery_configured", return_value=True):
-            with patch.object(config.smtp_config_service, "send_registration_email") as send_mail:
+        with patch.object(runtime.smtp_config_service, "delivery_configured", return_value=True):
+            with patch.object(runtime.smtp_config_service, "send_registration_email") as send_mail:
                 def _capture_registration_email(*, recipient, verification_code, expires_in_sec):
                     del recipient, expires_in_sec
                     sent_codes.append(str(verification_code))
@@ -780,8 +780,8 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         first_kwargs = self._valid_registration_kwargs(self.random_id("mail-one"))
         second_kwargs = self._valid_registration_kwargs(self.random_id("mail-two"))
 
-        with patch.object(config.smtp_config_service, "delivery_configured", return_value=True):
-            with patch.object(config.smtp_config_service, "send_registration_email") as send_mail:
+        with patch.object(runtime.smtp_config_service, "delivery_configured", return_value=True):
+            with patch.object(runtime.smtp_config_service, "send_registration_email") as send_mail:
                 first = register_submit(request=_post_request("/register"), **first_kwargs)
                 second = register_submit(request=_post_request("/register"), **second_kwargs)
 
@@ -812,8 +812,8 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         second_kwargs = self._valid_registration_kwargs(self.random_id("cool-two"), email=target_email)
         third_kwargs = self._valid_registration_kwargs(self.random_id("cool-three"))
 
-        with patch.object(config.smtp_config_service, "delivery_configured", return_value=True):
-            with patch.object(config.smtp_config_service, "send_registration_email") as send_mail:
+        with patch.object(runtime.smtp_config_service, "delivery_configured", return_value=True):
+            with patch.object(runtime.smtp_config_service, "send_registration_email") as send_mail:
                 first = register_submit(request=_post_request("/register"), **first_kwargs)
                 second = register_submit(request=_post_request("/register"), **second_kwargs)
                 third = register_submit(request=_post_request("/register"), **third_kwargs)
@@ -1100,7 +1100,7 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         async def _next(_: Request) -> PlainTextResponse:
             raise sqlite3.OperationalError("no such table: users")
 
-        with patch.object(config.db, "init") as init_mock:
+        with patch.object(runtime.db, "init") as init_mock:
             with self.assertRaises(sqlite3.OperationalError):
                 asyncio.run(auth_middleware(req, _next))
         init_mock.assert_not_called()
@@ -1151,7 +1151,7 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         }
 
         with patch.object(
-            config.artifact_cleanup_service,
+            runtime.artifact_cleanup_service,
             "usage_snapshot",
             return_value=usage,
         ):
@@ -1197,7 +1197,7 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         workspace_service.clear_identity_caches()
 
         with patch.object(
-            config.maintenance_service,
+            runtime.maintenance_service,
             "start_cleanup",
             return_value=MaintenanceStart(True, "started", {}),
         ):
@@ -1214,7 +1214,7 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
             "inflight_requests": 0,
         }
         with patch.object(
-            config.maintenance_service,
+            runtime.maintenance_service,
             "start_cleanup",
             return_value=MaintenanceStart(False, "busy", busy_counts),
         ):
@@ -1223,7 +1223,7 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         self.assertIn(b'"worker_queued":1', busy.body)
 
         with patch.object(
-            config.maintenance_service,
+            runtime.maintenance_service,
             "start_source_backup",
             return_value=MaintenanceStart(True, "started", {}),
         ):
@@ -1354,7 +1354,7 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         self.addCleanup(settings_system_config_reset, user="alice")
         admin = db_fetch_one("SELECT id FROM users WHERE username=?", ["alice"])
         self.assertIsNotNone(admin)
-        config.system_config_service.apply_patch(
+        runtime.system_config_service.apply_patch(
             {
                 "JUDGEHOST_ENABLE": False,
                 "JUDGEHOST_API_USERNAME": "judgehost",
@@ -1362,7 +1362,7 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
             },
             actor_user_id=int(admin["id"]),
         )
-        config.reload_config()
+        runtime.reload_config()
 
         resp = admin_judgehosts_page(_request("/admin/judgehosts"), user="alice")
         self.assertEqual(resp.status_code, 200)
@@ -1376,7 +1376,7 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         self.addCleanup(settings_system_config_reset, user="alice")
         admin = db_fetch_one("SELECT id FROM users WHERE username=?", ["alice"])
         self.assertIsNotNone(admin)
-        config.system_config_service.apply_patch(
+        runtime.system_config_service.apply_patch(
             {
                 "JUDGEHOST_ENABLE": True,
                 "JUDGEHOST_API_USERNAME": "judgehost",
@@ -1384,7 +1384,7 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
             },
             actor_user_id=int(admin["id"]),
         )
-        config.reload_config()
+        runtime.reload_config()
 
         resp = admin_judgehosts_page(_request("/admin/judgehosts"), user="alice")
         self.assertEqual(resp.status_code, 200)
@@ -1440,14 +1440,14 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
                 }
             ],
         }
-        with patch.object(config.judgehost_task_service, "status", return_value=fake_status):
+        with patch.object(runtime.judgehost_task_service, "status", return_value=fake_status):
             resp = admin_judgehosts_page(_request("/admin/judgehosts"), user="alice")
         self.assertEqual(resp.status_code, 200)
         html = resp.body.decode("utf-8", errors="replace")
         self.assertIn("judgehost-lastseen-time", html)
         self.assertIn("203.0.113.10", html)
         self.assertIn("0.125 s", html)
-        self.assertIn(config.templates.env.filters["local_time"](raw_last_judging), html)
+        self.assertIn(runtime.templates.env.filters["local_time"](raw_last_judging), html)
         self.assertNotIn(raw_last_judging, html)
         self.assertIn(
             'href="/problems/alice/sample/run/details?verification_id=ver-123456789abcdef"',
@@ -1499,7 +1499,7 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
             ],
             "toolchain_mismatch": False,
         }
-        with patch.object(config.judgehost_task_service, "public_status", return_value=public_status):
+        with patch.object(runtime.judgehost_task_service, "public_status", return_value=public_status):
             resp = register_page(_request("/register"))
         self.assertEqual(resp.status_code, 200)
         html = resp.body.decode("utf-8", errors="replace")
@@ -1519,7 +1519,7 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         )
         public_status["toolchain_mismatch"] = True
         with patch.object(
-            config.judgehost_task_service,
+            runtime.judgehost_task_service,
             "public_status",
             return_value=public_status,
         ):
@@ -1560,11 +1560,11 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         self.assertEqual(update_resp.status_code, 303)
         self.assertIn("/admin/config/judging", update_resp.headers.get("location", ""))
         self.assertEqual(
-            int(config.system_config_service.get("RUN_TEST_SELECTOR_LIMIT")),
+            int(runtime.system_config_service.get("RUN_TEST_SELECTOR_LIMIT")),
             override_value,
         )
         self.assertEqual(
-            int(config.config_values.RUN_TEST_SELECTOR_LIMIT),
+            int(runtime.config_values.RUN_TEST_SELECTOR_LIMIT),
             override_value,
         )
 
@@ -1575,7 +1575,7 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         reset_resp = settings_system_config_reset(user="alice")
         self.assertEqual(reset_resp.status_code, 303)
         self.assertEqual(
-            int(config.system_config_service.get("RUN_TEST_SELECTOR_LIMIT")),
+            int(runtime.system_config_service.get("RUN_TEST_SELECTOR_LIMIT")),
             int(DEFAULT_CONFIG_VALUES["RUN_TEST_SELECTOR_LIMIT"]),
         )
         row_after = db_fetch_one("SELECT value_json FROM system_config WHERE key=?", ["RUN_TEST_SELECTOR_LIMIT"])
@@ -1596,7 +1596,7 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
                 ValueError,
                 "unknown persisted system config: JUDGEHOST_INCLUDE_BUILD_PAYLOAD",
             ):
-                config.system_config_service.refresh()
+                runtime.system_config_service.refresh()
             self.assertIsNotNone(
                 db_fetch_one("SELECT key FROM system_config WHERE key=?", [removed_key])
             )
@@ -1621,7 +1621,7 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
             )
         )
         self.assertEqual(set_override_resp.status_code, 303)
-        self.assertEqual(int(config.system_config_service.get("RUN_TEST_SELECTOR_LIMIT")), override_value)
+        self.assertEqual(int(runtime.system_config_service.get("RUN_TEST_SELECTOR_LIMIT")), override_value)
         row = db_fetch_one("SELECT value_json FROM system_config WHERE key=?", ["RUN_TEST_SELECTOR_LIMIT"])
         self.assertIsNotNone(row)
 
@@ -1640,7 +1640,7 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         )
         self.assertEqual(revert_resp.status_code, 303)
         self.assertEqual(
-            int(config.system_config_service.get("RUN_TEST_SELECTOR_LIMIT")),
+            int(runtime.system_config_service.get("RUN_TEST_SELECTOR_LIMIT")),
             int(DEFAULT_CONFIG_VALUES["RUN_TEST_SELECTOR_LIMIT"]),
         )
         row_after = db_fetch_one("SELECT value_json FROM system_config WHERE key=?", ["RUN_TEST_SELECTOR_LIMIT"])
@@ -1668,16 +1668,16 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         messages = _flash_messages_from_response(resp)
         self.assertTrue(messages)
         self.assertIn("JUDGEHOST_API_TOKEN must contain only visible ASCII characters", messages[0])
-        self.assertNotEqual(str(config.system_config_service.get("JUDGEHOST_API_TOKEN") or ""), bad_token)
+        self.assertNotEqual(str(runtime.system_config_service.get("JUDGEHOST_API_TOKEN") or ""), bad_token)
 
     def test_branding_config_escapes_values_and_allows_empty_tagline(self) -> None:
         db_execute("UPDATE users SET is_system_admin=0")
         db_execute("UPDATE users SET is_system_admin=1 WHERE username=?", ["alice"])
         workspace_service.clear_identity_caches()
-        self.addCleanup(config.reload_config, include_restart_required=True)
+        self.addCleanup(runtime.reload_config, include_restart_required=True)
         self.addCleanup(settings_system_config_reset, user="alice")
 
-        config.system_config_service.apply_patch(
+        runtime.system_config_service.apply_patch(
             {
                 "UI_BRAND_NAME": "团队 <brand>",
                 "UI_BRAND_TAGLINE": "Tagline & details",
@@ -1685,7 +1685,7 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
             },
             actor_user_id=int(db_fetch_one("SELECT id FROM users WHERE username=?", ["alice"])["id"]),
         )
-        config.reload_config()
+        runtime.reload_config()
 
         rendered = settings_page(_request("/settings"), user="alice")
         html = rendered.body.decode("utf-8", errors="replace")
@@ -1693,17 +1693,17 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         self.assertIn("团队 &lt;brand&gt;", html)
         self.assertIn("Tagline &amp; details", html)
 
-        config.system_config_service.apply_patch(
+        runtime.system_config_service.apply_patch(
             {"UI_BRAND_TAGLINE": ""},
             actor_user_id=int(db_fetch_one("SELECT id FROM users WHERE username=?", ["alice"])["id"]),
         )
-        config.reload_config()
+        runtime.reload_config()
         without_tagline = settings_page(_request("/settings"), user="alice")
         without_tagline_html = without_tagline.body.decode("utf-8", errors="replace")
         self.assertNotIn("Tagline &amp; details", without_tagline_html)
 
     def test_cookie_names_validate_distinct_http_tokens(self) -> None:
-        service = config.system_config_service
+        service = runtime.system_config_service
         with self.assertRaisesRegex(ValueError, "valid HTTP cookie token"):
             service.validate_patch({"AUTH_COOKIE_NAME": "invalid cookie"})
         with self.assertRaisesRegex(ValueError, "must be distinct"):
@@ -1738,7 +1738,7 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
                 self.assertIs(type(value), expected_type)
 
     def test_config_registry_validates_regex_and_limit_pairs(self) -> None:
-        service = config.system_config_service
+        service = runtime.system_config_service
         self.assertEqual(CONFIG_REGISTRY.normalize("CONTEST_MAX_PROBLEMS", 1), 1)
         self.assertEqual(CONFIG_REGISTRY.normalize("CONTEST_MAX_PROBLEMS", 64), 64)
         with self.assertRaisesRegex(ValueError, "must be >= 1"):
@@ -1808,11 +1808,11 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         self.assertIsNotNone(actor)
 
         def restore() -> None:
-            config.system_config_service.reset()
-            config.reload_config(include_restart_required=True)
+            runtime.system_config_service.reset()
+            runtime.reload_config(include_restart_required=True)
 
         self.addCleanup(restore)
-        config.system_config_service.apply_patch(
+        runtime.system_config_service.apply_patch(
             canonical,
             actor_user_id=int(actor["id"]),
         )
@@ -1823,7 +1823,7 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
             )
         }
         self.assertEqual(set(persisted), set(canonical))
-        loaded = config.system_config_service.refresh(include_restart_required=True)
+        loaded = runtime.system_config_service.refresh(include_restart_required=True)
         expected_types = {
             ConfigKind.BOOL: bool,
             ConfigKind.FLOAT: float,
@@ -1838,23 +1838,23 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
                 self.assertEqual(loaded[definition.key], canonical[definition.key])
 
     def test_config_values_replace_preserves_immutable_prior_snapshot(self) -> None:
-        previous = dict(config.config_values.snapshot())
-        self.addCleanup(config.config_values.replace, previous)
-        old_snapshot = config.config_values.snapshot()
+        previous = dict(runtime.config_values.snapshot())
+        self.addCleanup(runtime.config_values.replace, previous)
+        old_snapshot = runtime.config_values.snapshot()
         updated = dict(previous)
         updated_value = int(updated["RUN_TEST_SELECTOR_LIMIT"]) + 1
         updated["RUN_TEST_SELECTOR_LIMIT"] = str(updated_value)
-        config.config_values.replace(updated)
+        runtime.config_values.replace(updated)
         self.assertEqual(
             int(old_snapshot["RUN_TEST_SELECTOR_LIMIT"]),
             int(previous["RUN_TEST_SELECTOR_LIMIT"]),
         )
         self.assertEqual(
-            int(config.config_values.snapshot()["RUN_TEST_SELECTOR_LIMIT"]),
+            int(runtime.config_values.snapshot()["RUN_TEST_SELECTOR_LIMIT"]),
             updated_value,
         )
         self.assertIs(
-            type(config.config_values.snapshot()["RUN_TEST_SELECTOR_LIMIT"]),
+            type(runtime.config_values.snapshot()["RUN_TEST_SELECTOR_LIMIT"]),
             int,
         )
 
@@ -1862,28 +1862,28 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         db_execute("UPDATE users SET is_system_admin=0")
         db_execute("UPDATE users SET is_system_admin=1 WHERE username=?", ["alice"])
         workspace_service.clear_identity_caches()
-        self.addCleanup(config.reload_config, include_restart_required=True)
+        self.addCleanup(runtime.reload_config, include_restart_required=True)
         self.addCleanup(settings_system_config_reset, user="alice")
-        config.system_config_service.reset()
-        config.reload_config(include_restart_required=True)
+        runtime.system_config_service.reset()
+        runtime.reload_config(include_restart_required=True)
 
         admin = db_fetch_one("SELECT id FROM users WHERE username=?", ["alice"])
         self.assertIsNotNone(admin)
-        old_auth_name = str(config.config_values.AUTH_COOKIE_NAME)
-        old_sudo_name = str(config.config_values.SUDO_COOKIE_NAME)
-        old_flash_name = str(config.config_values.FLASH_COOKIE_NAME)
+        old_auth_name = str(runtime.config_values.AUTH_COOKIE_NAME)
+        old_sudo_name = str(runtime.config_values.SUDO_COOKIE_NAME)
+        old_flash_name = str(runtime.config_values.FLASH_COOKIE_NAME)
         custom_names = {
             "AUTH_COOKIE_NAME": "test_auth_cookie",
             "SUDO_COOKIE_NAME": "test_sudo_cookie",
             "FLASH_COOKIE_NAME": "test_flash_cookie",
         }
-        config.system_config_service.apply_patch(custom_names, actor_user_id=int(admin["id"]))
+        runtime.system_config_service.apply_patch(custom_names, actor_user_id=int(admin["id"]))
 
-        self.assertEqual(str(config.config_values.AUTH_COOKIE_NAME), old_auth_name)
-        self.assertEqual(str(config.system_config_service.get("AUTH_COOKIE_NAME")), old_auth_name)
+        self.assertEqual(str(runtime.config_values.AUTH_COOKIE_NAME), old_auth_name)
+        self.assertEqual(str(runtime.system_config_service.get("AUTH_COOKIE_NAME")), old_auth_name)
         auth_row = next(
             row
-            for section in config.system_config_service.ui_sections()
+            for section in runtime.system_config_service.ui_sections()
             for row in section["rows"]
             if row["key"] == "AUTH_COOKIE_NAME"
         )
@@ -1891,12 +1891,12 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         self.assertEqual(auth_row["effective_value"], old_auth_name)
         self.assertTrue(auth_row["pending_restart"])
 
-        config.reload_config()
-        self.assertEqual(str(config.config_values.AUTH_COOKIE_NAME), old_auth_name)
-        config.reload_config(include_restart_required=True)
-        self.assertEqual(str(config.config_values.AUTH_COOKIE_NAME), custom_names["AUTH_COOKIE_NAME"])
-        self.assertEqual(str(config.config_values.SUDO_COOKIE_NAME), custom_names["SUDO_COOKIE_NAME"])
-        self.assertEqual(str(config.config_values.FLASH_COOKIE_NAME), custom_names["FLASH_COOKIE_NAME"])
+        runtime.reload_config()
+        self.assertEqual(str(runtime.config_values.AUTH_COOKIE_NAME), old_auth_name)
+        runtime.reload_config(include_restart_required=True)
+        self.assertEqual(str(runtime.config_values.AUTH_COOKIE_NAME), custom_names["AUTH_COOKIE_NAME"])
+        self.assertEqual(str(runtime.config_values.SUDO_COOKIE_NAME), custom_names["SUDO_COOKIE_NAME"])
+        self.assertEqual(str(runtime.config_values.FLASH_COOKIE_NAME), custom_names["FLASH_COOKIE_NAME"])
 
         username = self.random_id("cookie")
         registration = _register_with_password_envelope(username, "StrongPass123")
@@ -1912,9 +1912,9 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         logout_set_cookie = _response_set_cookie_blob(logout_response)
         self.assertIn(f"{custom_names['AUTH_COOKIE_NAME']}=", logout_set_cookie)
         self.assertIn(f"{custom_names['FLASH_COOKIE_NAME']}=", logout_set_cookie)
-        self.assertNotEqual(str(config.config_values.AUTH_COOKIE_NAME), old_auth_name)
-        self.assertNotEqual(str(config.config_values.SUDO_COOKIE_NAME), old_sudo_name)
-        self.assertNotEqual(str(config.config_values.FLASH_COOKIE_NAME), old_flash_name)
+        self.assertNotEqual(str(runtime.config_values.AUTH_COOKIE_NAME), old_auth_name)
+        self.assertNotEqual(str(runtime.config_values.SUDO_COOKIE_NAME), old_sudo_name)
+        self.assertNotEqual(str(runtime.config_values.FLASH_COOKIE_NAME), old_flash_name)
 
     def test_settings_config_category_update_allows_printable_ascii_compile_flags(self) -> None:
         db_execute("UPDATE users SET is_system_admin=0")
@@ -1935,7 +1935,7 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         )
         self.assertEqual(resp.status_code, 303)
         self.assertIn("/admin/config/toolchain", resp.headers.get("location", ""))
-        self.assertEqual(str(config.system_config_service.get("TOOLCHAIN_JUDGEHOST_CPP_COMPILE_FLAGS") or ""), flags)
+        self.assertEqual(str(runtime.system_config_service.get("TOOLCHAIN_JUDGEHOST_CPP_COMPILE_FLAGS") or ""), flags)
 
     def test_settings_config_category_page_and_hot_reload(self) -> None:
         db_execute("UPDATE users SET is_system_admin=0")
@@ -1965,8 +1965,8 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         )
         self.assertEqual(update_resp.status_code, 303)
         self.assertIn("/admin/config/judging", update_resp.headers.get("location", ""))
-        self.assertEqual(int(config.system_config_service.get("RUN_EXEC_PROCESS_LIMIT")), update_value)
-        self.assertEqual(int(config.config_values.RUN_EXEC_PROCESS_LIMIT), update_value)
+        self.assertEqual(int(runtime.system_config_service.get("RUN_EXEC_PROCESS_LIMIT")), update_value)
+        self.assertEqual(int(runtime.config_values.RUN_EXEC_PROCESS_LIMIT), update_value)
 
     def test_settings_config_category_exposes_token_generation_control(self) -> None:
         db_execute("UPDATE users SET is_system_admin=0")
@@ -1993,14 +1993,14 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         db_execute("UPDATE users SET is_system_admin=0")
         db_execute("UPDATE users SET is_system_admin=1 WHERE username=?", ["alice"])
         workspace_service.clear_identity_caches()
-        future, queued, reason = config.worker_queue_service.submit(
+        future, queued, reason = runtime.worker_queue_service.submit(
             name="snapshot-probe",
             fn=lambda: None,
             queue_name="ops",
             job_type="snapshot-probe",
         )
         self.assertTrue(queued, msg=reason)
-        config.worker_queue_service.wait_for_futures([future], timeout_sec=5.0)
+        runtime.worker_queue_service.wait_for_futures([future], timeout_sec=5.0)
         resp = settings_worker_queue_snapshot(user="alice", limit=50)
         self.assertEqual(resp.status_code, 200)
         payload = json.loads(resp.body.decode("utf-8", errors="replace"))
@@ -2018,7 +2018,7 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         db_execute("UPDATE users SET is_system_admin=0")
         db_execute("UPDATE users SET is_system_admin=1 WHERE username=?", ["alice"])
         workspace_service.clear_identity_caches()
-        service = config.judgehost_task_service
+        service = runtime.judgehost_task_service
         override_config_values(
             self,
             service.state.config_values,

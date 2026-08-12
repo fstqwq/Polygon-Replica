@@ -45,8 +45,8 @@ import app.impl.tests_spec.routes as tests_spec_module
 import app.impl.tests_spec.verification as tests_spec_verification_module
 import app.impl.workspace.context_job as workspace_job_module
 import app.impl.workspace.context_ui as workspace_ui_module
+from app.config import CONFIG_REGISTRY
 from app.main import runtime
-from app.runtime import CONFIG_REGISTRY
 _API_MODULES = (
     admin_panel_module,
     auth_middleware_module,

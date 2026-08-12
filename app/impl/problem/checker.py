@@ -160,6 +160,7 @@ def checker_save_source(
             write_build_config(cfg_path, build_cfg)
             runtime().git_service.write_file(workspace, target, safe_content)
             compile_check_error = judgehost_compile_check_error(
+                application_runtime=runtime(),
                 problem=problem,
                 user=user,
                 workspace=workspace,

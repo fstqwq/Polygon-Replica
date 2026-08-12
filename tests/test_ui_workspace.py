@@ -60,7 +60,7 @@ from tests.ui_support import (
     _request_with_cookie,
     _sudo_with_password_envelope,
     access_page,
-    config,
+    runtime,
     contests_root_create,
     contests_root_import,
     contests_root_import_confirm,
@@ -93,7 +93,7 @@ from tests.ui_support import (
 
 TEXTAREA_MAX_BYTES = int(CONFIG_REGISTRY.defaults()["TEXTAREA_MAX_BYTES"])
 
-SUDO_COOKIE_NAME = config.config_values.SUDO_COOKIE_NAME
+SUDO_COOKIE_NAME = runtime.config_values.SUDO_COOKIE_NAME
 
 
 class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
@@ -145,7 +145,7 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         self.assertEqual(root_page.status_code, 200)
         root_html = root_page.body.decode("utf-8", errors="replace")
         self.assertIn(problem, root_html)
-        admin_access = config.access_query.problem_context(
+        admin_access = runtime.access_query.problem_context(
             workspace_service.known_problem_id(problem),
             workspace_service.known_user_id("alice"),
         )
@@ -234,7 +234,7 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         self.assertTrue(ws.exists())
         row_before = db_fetch_one("SELECT id,repo_name FROM problems WHERE slug=?", [problem])
         self.assertIsNotNone(row_before)
-        bare_repo = Path(config.settings.bare_root) / str(row_before["repo_name"])
+        bare_repo = Path(runtime.settings.bare_root) / str(row_before["repo_name"])
         self.assertTrue(bare_repo.exists())
 
         denied = problem_delete(
@@ -301,7 +301,7 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         ws = Path(workspace_service.ensure_workspace(problem, username))
         row_before = db_fetch_one("SELECT id,repo_name FROM problems WHERE slug=?", [problem])
         self.assertIsNotNone(row_before)
-        bare_repo = Path(config.settings.bare_root) / str(row_before["repo_name"])
+        bare_repo = Path(runtime.settings.bare_root) / str(row_before["repo_name"])
         self.assertTrue(ws.exists())
         self.assertTrue(bare_repo.exists())
         workspace_row = db_fetch_one(
@@ -344,7 +344,7 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
             tasks=tasks,
         )
         self.assertEqual(activation.outcome, "activated")
-        failure = config.verification_service.fail_verification(
+        failure = runtime.verification_service.fail_verification(
             verification_id,
             reason="delete history fixture",
         )
@@ -494,7 +494,7 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
             try:
                 barrier.wait()
                 outcomes["activate"] = (
-                    config.verification_service.activate_verification(plan).outcome
+                    runtime.verification_service.activate_verification(plan).outcome
                 )
             except BaseException as exc:  # pragma: no cover - surfaced below
                 failures.append(exc)
@@ -571,7 +571,7 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         )
         self.assertEqual(activation.outcome, "activated")
         self.assertTrue(
-            config.verification_task_store.bind_and_expose_judgehost_runtime(
+            runtime.verification_task_store.bind_and_expose_judgehost_runtime(
                 task_id,
                 expected_verification_id=verification_id,
                 expected_program_id="accepted",
@@ -581,7 +581,7 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
                 expose=lambda: None,
             )
         )
-        config.verification_task_store.commit_task_completions(
+        runtime.verification_task_store.commit_task_completions(
             (
                 TaskCompletion(
                     task_id=task_id,
@@ -600,7 +600,7 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
                 workspace_service.known_problem_id(problem)
             )
         finally:
-            config.verification_task_store.unbind_judgehost_runtime(
+            runtime.verification_task_store.unbind_judgehost_runtime(
                 task_id,
                 judgehost_task_id=f"judgehost-{self.test_id}",
             )
@@ -612,11 +612,11 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         self.assertIsNotNone(workspace_service.known_problem_id(problem))
 
         with patch.object(
-            config.judgehost_task_service,
+            runtime.judgehost_task_service,
             "forget_domjudge_runs",
             side_effect=RuntimeError("scheduler cleanup failed"),
         ) as forget_scheduler, patch.object(
-            config.judgehost_task_service,
+            runtime.judgehost_task_service,
             "forget_problem_tasks",
         ) as forget_registry:
             with self.assertRaisesRegex(RuntimeError, "scheduler cleanup failed"):
@@ -846,9 +846,9 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         resp = general_page(_request("/problems/alice/sample/statement"), "alice/sample", "alice")
         self.assertEqual(resp.status_code, 200)
         html = resp.body.decode("utf-8", errors="replace")
-        self.assertIn(f"{int(config.config_values.RUN_EXEC_OUTPUT_KB)} KiB", html)
-        self.assertIn(f"{int(config.config_values.TOOLCHAIN_COMPILE_OUTPUT_KB)} KiB", html)
-        self.assertIn(f"{int(config.config_values.JUDGEHOST_STORED_LOG_LIMIT_BYTES)} bytes", html)
+        self.assertIn(f"{int(runtime.config_values.RUN_EXEC_OUTPUT_KB)} KiB", html)
+        self.assertIn(f"{int(runtime.config_values.TOOLCHAIN_COMPILE_OUTPUT_KB)} KiB", html)
+        self.assertIn(f"{int(runtime.config_values.JUDGEHOST_STORED_LOG_LIMIT_BYTES)} bytes", html)
         self.assertNotIn('name="RUN_EXEC_OUTPUT_KB"', html)
         self.assertNotIn('name="TOOLCHAIN_COMPILE_OUTPUT_KB"', html)
         self.assertNotIn('name="JUDGEHOST_STORED_LOG_LIMIT_BYTES"', html)
@@ -1078,7 +1078,7 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
             tasks=tasks,
         )
         self.assertEqual(activation.outcome, "activated")
-        failure = config.verification_service.fail_verification(
+        failure = runtime.verification_service.fail_verification(
             verification_id,
             reason="checker exited with code 1",
         )
@@ -1241,7 +1241,7 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         self.assertTrue((alice_ws / local_marker).is_file())
         self.assertFalse((alice_ws / shared_marker).exists())
 
-        preview = config.workspace_merge_service.start_preview("alice", "alice/sample", alice_ws)
+        preview = runtime.workspace_merge_service.start_preview("alice", "alice/sample", alice_ws)
         self.assertTrue(preview.suggested_available)
 
     def test_merge_review_expands_diffs_and_applies_manual_selection(self) -> None:
@@ -1260,7 +1260,7 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         self.assertEqual(run_git(["git", "commit", "-m", "conflicting file"], cwd=bob_ws).returncode, 0)
         self.assertEqual(run_git(["git", "push", "origin", "main"], cwd=bob_ws).returncode, 0)
 
-        preview = config.workspace_merge_service.start_preview(
+        preview = runtime.workspace_merge_service.start_preview(
             "alice",
             "alice/sample",
             alice_ws,
@@ -1892,11 +1892,11 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
                 self.filename = filename
                 self.file = io.BytesIO(content)
 
-        previous = dict(config.config_values.snapshot())
+        previous = dict(runtime.config_values.snapshot())
         updated = dict(previous)
         updated["CONTEST_MAX_PROBLEMS"] = 26
-        config.config_values.replace(updated)
-        self.addCleanup(config.config_values.replace, previous)
+        runtime.config_values.replace(updated)
+        self.addCleanup(runtime.config_values.replace, previous)
         target_slug = f"contest-too-large-{uuid.uuid4().hex[:8]}"
         response = contests_root_import(
             _post_request("/contests/import"),
@@ -2002,7 +2002,7 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         attachment_keys = [str(row["key"] or "") for row in attachment_rows]
         self.assertIn("statements/english/statements.tex", attachment_keys)
         self.assertIn("statements/english/olymp.sty", attachment_keys)
-        contest_source_root = config.contest_service.contest_source_root(target_slug)
+        contest_source_root = runtime.contest_service.contest_source_root(target_slug)
         self.assertTrue((contest_source_root / "statements" / "english" / "statements.tex").is_file())
         self.assertTrue((contest_source_root / "statements" / "english" / "olymp.sty").is_file())
         imported_rows = db_fetch_all(

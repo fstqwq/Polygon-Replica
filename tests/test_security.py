@@ -51,7 +51,7 @@ from app.impl.run_export.artifact import artifact_file
 from app.service.verification.artifact import artifact_virtual_path
 from app.impl.run_export.run import run_cancel, run_execute
 from app.impl.root.auth_pages import auth_password_meta, login_page
-from app.runtime import CONFIG_REGISTRY
+from app.config import CONFIG_REGISTRY
 from app.service.verification.lifecycle import PlannedTask, verification_task_id
 from app.service.verification.types import VerificationTaskStatus
 from tests.ui_support import _register_with_password_envelope

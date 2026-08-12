@@ -5,7 +5,7 @@ from tests.db_helpers import db_fetch_one
 from tests.ui_support import (
     UIHelpersMixin,
     _request,
-    config,
+    runtime,
     contests_root_create,
     uuid,
     workspace_service,
@@ -43,7 +43,7 @@ class ContestActionBase(UIHelpersMixin, E2ETestBase):
         problem_row = db_fetch_one("SELECT id FROM problems WHERE slug=?", [problem_slug])
         self.assertIsNotNone(problem_row)
         problem_id = int(problem_row["id"])
-        config.contest_service.add_problem(contest_id, index, problem_id, actor_user_id)
+        runtime.contest_service.add_problem(contest_id, index, problem_id, actor_user_id)
         contest_problem_row = db_fetch_one(
             "SELECT id FROM contest_problems WHERE contest_id=? AND problem_id=?",
             [contest_id, problem_id],

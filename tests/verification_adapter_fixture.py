@@ -8,7 +8,7 @@ from app.service.verification.lifecycle import (
 )
 from app.service.verification.plan import VerificationTestPlan
 
-from tests.common import config
+from tests.common import runtime
 
 
 def verification_program(
@@ -24,7 +24,7 @@ def verification_program(
         source_path=source_path,
         compile_spec=VerificationCompileSpec(
             source_name=Path(source_path).name,
-            source_file=config.runtime_blob_store.put_bytes(
+            source_file=runtime.runtime_blob_store.put_bytes(
                 b"int main(){return 0;}\n"
             ),
         ),
@@ -85,10 +85,10 @@ def sanity_test_plan(
         source_kind="manual",
         display_source_path="manual_validate.cpp",
         execution_source_name="manual_validate.cpp",
-        execution_source_file=config.runtime_blob_store.put_bytes(
+        execution_source_file=runtime.runtime_blob_store.put_bytes(
             b"int main(){return 0;}\n"
         ),
-        execution_input_file=config.runtime_blob_store.put_bytes(b"1\n"),
+        execution_input_file=runtime.runtime_blob_store.put_bytes(b"1\n"),
         extra_source_files={},
         tests_meta={},
         sample=sample,
