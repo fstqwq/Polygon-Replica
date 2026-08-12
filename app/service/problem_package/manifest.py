@@ -113,7 +113,7 @@ def dumps_manifest(manifest: NativeManifest) -> str:
 
 def load_manifest(path: Path) -> NativeManifest:
     if path.is_symlink() or not path.is_file():
-        raise ValueError("Native package manifest is missing")
+        raise ValueError("Native package test_data/manifest.json is missing")
     try:
         text = path.read_text(encoding="utf-8")
     except UnicodeDecodeError as exc:

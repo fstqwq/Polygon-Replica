@@ -434,7 +434,7 @@ class TestContestWorkspaceScope(ContestActionBase):
         self.assertEqual(
             parse_qs(urlsplit(config_href).query),
             {
-                "path": ["config/problem.json"],
+                "path": ["config/build.json"],
                 "dir": ["config"],
                 "contest": [contest_slug],
             },

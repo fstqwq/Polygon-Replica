@@ -12,16 +12,12 @@ from starlette.background import BackgroundTask
 from app.impl.auth.session import require_session_user
 from app.impl.auth.shared import redirect_response, template_response
 from app.impl.contest.workspace_scope import contest_workspace_context_from_request
-from app.impl.run_export.import_source import (
-    import_package_into_workspace,
-    import_package_warnings,
-)
 from app.impl.runtime.config import config
 from app.impl.workspace.access import require_write_access
 from app.impl.workspace.context import count_label
 from app.impl.workspace.context_ui import page_ctx
 from app.service.importing.upload import spool_fileobj
-from app.service.importing.archive import ArchiveView, problem_import_policy
+from app.service.importing.archive import ArchiveView, problem_archive_policy
 
 _C = config.config_values
 _REVISION_TOKEN_RE = re.compile(r"v[1-9][0-9]*")
@@ -195,6 +191,8 @@ def history_import(
         if not package_name:
             raise ValueError("archive filename is required")
         user_context = cast(dict[str, object], ctx["user"])
+        workspace_context = cast(dict[str, object], ctx["workspace"])
+        workspace = Path(cast(str, workspace_context["path"]))
         snapshot = _C.snapshot()
         with spool_fileobj(
             package_upload.file,
@@ -202,32 +200,40 @@ def history_import(
             max_bytes=int(snapshot["UPLOAD_MAX_BYTES"]),
             label="archive file",
         ) as package_path:
-            policy = problem_import_policy(
-                int(snapshot["PROBLEM_ZIP_MAX_EXPANDED_BYTES"]),
-                int(snapshot["TEXTAREA_MAX_BYTES"]),
-                int(snapshot["STATEMENT_SAMPLE_MAX_BYTES"]),
-            )
-            with ArchiveView(package_path, policy.archive) as package:
-                imported = import_package_into_workspace(
-                    actor_user_id=cast(int, user_context["id"]),
-                    actor_user=cast(str, user_context["username"]),
-                    target_problem=problem,
-                    package_name=package_name,
-                    package=package,
-                    policy=policy,
-                    source_problem=problem,
+            with ArchiveView(
+                package_path,
+                problem_archive_policy(
+                    int(snapshot["PROBLEM_ZIP_MAX_EXPANDED_BYTES"])
+                ),
+            ) as package:
+                rooted = package.rooted_at("config/problem.json")
+
+                def apply_snapshot():
+                    return config.workspace_archive_service.merge_zip(
+                        workspace,
+                        rooted,
+                    )
+
+                applied = config.workspace_mutation_service.write_locked(
+                    workspace,
+                    apply_snapshot,
                 )
-        target_problem = cast(str, imported["target_problem"])
-        total_tests = cast(int, imported["total_tests"])
-        message = (
-            f"archive imported into your workspace for {target_problem} "
-            f"({count_label(total_tests, 'test')})"
+        config.workspace_service.record_audit_event(
+            actor_user_id=cast(int, user_context["id"]),
+            problem_id=cast(int, ctx["problem"]["id"]),
+            action="history.snapshot_restore",
+            details={
+                "package": package_name,
+                "uploads": applied.value.uploads,
+                "deletes": applied.value.deletes,
+            },
         )
-        warnings = import_package_warnings(imported)
-        if warnings:
-            message = f"{message}; warning: {'; '.join(warnings)}"
+        message = (
+            f"snapshot restored into your workspace "
+            f"({count_label(len(applied.value.uploads), 'changed file')})"
+        )
         return redirect_response(
-            f"/problems/{target_problem}/workspace",
+            f"/problems/{problem}/workspace",
             status_code=303,
             message=message,
         )

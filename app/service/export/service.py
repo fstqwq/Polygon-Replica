@@ -2,7 +2,6 @@ from __future__ import annotations
 # pylint: disable=too-many-lines
 
 import hashlib
-import json
 import os
 import re
 import shutil

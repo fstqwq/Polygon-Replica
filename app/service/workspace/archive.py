@@ -144,6 +144,19 @@ def _compare_file_maps(remote: dict[str, str], local: dict[str, str]) -> Workspa
     return WorkspaceDiff(uploads=uploads, deletes=deletes, same=same)
 
 
+def _compare_merge_file_maps(
+    remote: dict[str, str],
+    local: dict[str, str],
+) -> WorkspaceDiff:
+    uploads = sorted(
+        path for path, digest in local.items() if remote.get(path) != digest
+    )
+    same = sorted(
+        path for path, digest in local.items() if remote.get(path) == digest
+    )
+    return WorkspaceDiff(uploads=uploads, deletes=[], same=same)
+
+
 def _normalized_file_digest(path: Path) -> str:
     raw_digest = hashlib.sha256()
     text_digest = hashlib.sha256()
@@ -210,6 +223,70 @@ def _copy_safe_workspace_tree(src: Path, dst: Path) -> None:
         elif child.is_file():
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(child, target)
+
+
+def _merge_safe_workspace_tree(src: Path, dst: Path) -> None:
+    dst.mkdir(parents=True, exist_ok=True)
+    for root_name in sorted(ALLOWED_WORKSPACE_ROOT_NAMES):
+        source_root = src / root_name
+        if not source_root.exists() or source_root.is_symlink():
+            continue
+        target_root = dst / root_name
+        if source_root.is_file():
+            if target_root.exists() and target_root.is_dir():
+                raise ValueError(
+                    f"workspace path conflicts with snapshot file: {root_name}"
+                )
+            target_root.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source_root, target_root)
+            continue
+        if target_root.exists() and (
+            not target_root.is_dir() or target_root.is_symlink()
+        ):
+            raise ValueError(
+                f"workspace path conflicts with snapshot directory: {root_name}"
+            )
+        target_root.mkdir(parents=True, exist_ok=True)
+        for dirpath, dirnames, filenames in os.walk(
+            source_root,
+            topdown=True,
+            followlinks=False,
+        ):
+            source_dir = Path(dirpath)
+            target_dir = target_root / source_dir.relative_to(source_root)
+            if target_dir.exists() and (
+                not target_dir.is_dir() or target_dir.is_symlink()
+            ):
+                relative = target_dir.relative_to(dst).as_posix()
+                raise ValueError(
+                    f"workspace path conflicts with snapshot directory: {relative}"
+                )
+            target_dir.mkdir(parents=True, exist_ok=True)
+            dirnames[:] = sorted(dirnames)
+            for dirname in dirnames:
+                target_child = target_dir / dirname
+                if target_child.exists() and (
+                    not target_child.is_dir() or target_child.is_symlink()
+                ):
+                    relative = target_child.relative_to(dst).as_posix()
+                    raise ValueError(
+                        f"workspace path conflicts with snapshot directory: {relative}"
+                    )
+                target_child.mkdir(parents=True, exist_ok=True)
+            for filename in sorted(filenames):
+                source_file = source_dir / filename
+                target_file = target_dir / filename
+                if target_file.is_symlink():
+                    relative = target_file.relative_to(dst).as_posix()
+                    raise ValueError(
+                        f"workspace path conflicts with snapshot file: {relative}"
+                    )
+                if target_file.exists() and target_file.is_dir():
+                    relative = target_file.relative_to(dst).as_posix()
+                    raise ValueError(
+                        f"workspace path conflicts with snapshot file: {relative}"
+                    )
+                shutil.copy2(source_file, target_file)
 
 
 def _clear_safe_workspace_roots(workspace: Path) -> None:
@@ -297,6 +374,25 @@ class WorkspaceArchiveService:
             try:
                 _clear_safe_workspace_roots(workspace)
                 _copy_safe_workspace_tree(local_root, workspace)
+            except Exception:
+                _clear_safe_workspace_roots(workspace)
+                _copy_safe_workspace_tree(backup_root, workspace)
+                raise
+            return diff
+
+    def merge_zip(self, workspace: Path, package: ArchiveView) -> WorkspaceDiff:
+        with tempfile.TemporaryDirectory(prefix="polygon-workspace-merge-") as temp_name:
+            temp_root = Path(temp_name)
+            local_root = temp_root / "local"
+            backup_root = temp_root / "backup"
+            self.extract_zip(package, local_root)
+            diff = _compare_merge_file_maps(
+                _safe_workspace_digests(workspace),
+                _safe_workspace_digests(local_root),
+            )
+            _copy_safe_workspace_tree(workspace, backup_root)
+            try:
+                _merge_safe_workspace_tree(local_root, workspace)
             except Exception:
                 _clear_safe_workspace_roots(workspace)
                 _copy_safe_workspace_tree(backup_root, workspace)

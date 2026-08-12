@@ -21,6 +21,7 @@ from urllib.parse import parse_qs, urlparse
 from fastapi import HTTPException
 
 from app.config import CONFIG_REGISTRY
+from app.service.problem.test_spec import dumps_default_tests_spec
 from app.service.statement.render import statement_title_for_language
 from app.service.statement.signature import statement_sources_signature
 from app.service.verification.workspace_fingerprint import verification_sources_signature
@@ -619,7 +620,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         spec_path = ws / "tests" / "spec.json"
         manual_dir = ws / "tests" / "manual"
         generator_dir = ws / "tests" / "generator"
-        spec_path.unlink(missing_ok=True)
+        spec_path.write_text(dumps_default_tests_spec(), encoding="utf-8")
         if manual_dir.exists():
             for p in manual_dir.glob("*.in"):
                 p.unlink(missing_ok=True)
@@ -706,7 +707,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         spec_path = ws / "tests" / "spec.json"
         manual_dir = ws / "tests" / "manual"
         generator_dir = ws / "tests" / "generator"
-        spec_path.unlink(missing_ok=True)
+        spec_path.write_text(dumps_default_tests_spec(), encoding="utf-8")
         if manual_dir.exists():
             for p in manual_dir.glob("*.in"):
                 p.unlink(missing_ok=True)
@@ -770,7 +771,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         spec_path = ws / "tests" / "spec.json"
         manual_dir = ws / "tests" / "manual"
         generator_dir = ws / "tests" / "generator"
-        spec_path.unlink(missing_ok=True)
+        spec_path.write_text(dumps_default_tests_spec(), encoding="utf-8")
         if manual_dir.exists():
             for p in manual_dir.glob("*.in"):
                 p.unlink(missing_ok=True)
@@ -854,7 +855,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         spec_path = workspace / "tests" / "spec.json"
         manual_dir = workspace / "tests" / "manual"
         generator_dir = workspace / "tests" / "generator"
-        spec_path.unlink(missing_ok=True)
+        spec_path.write_text(dumps_default_tests_spec(), encoding="utf-8")
         if manual_dir.exists():
             for p in manual_dir.glob("*.in"):
                 p.unlink(missing_ok=True)
@@ -890,7 +891,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         spec_path = workspace / "tests" / "spec.json"
         manual_dir = workspace / "tests" / "manual"
         generator_dir = workspace / "tests" / "generator"
-        spec_path.unlink(missing_ok=True)
+        spec_path.write_text(dumps_default_tests_spec(), encoding="utf-8")
         if manual_dir.exists():
             for p in manual_dir.glob("*.in"):
                 p.unlink(missing_ok=True)
@@ -930,7 +931,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         spec_path = workspace / "tests" / "spec.json"
         manual_dir = workspace / "tests" / "manual"
         generator_dir = workspace / "tests" / "generator"
-        spec_path.unlink(missing_ok=True)
+        spec_path.write_text(dumps_default_tests_spec(), encoding="utf-8")
         if manual_dir.exists():
             for p in manual_dir.glob("*.in"):
                 p.unlink(missing_ok=True)
@@ -967,7 +968,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         spec_path = workspace / "tests" / "spec.json"
         manual_dir = workspace / "tests" / "manual"
         generator_dir = workspace / "tests" / "generator"
-        spec_path.unlink(missing_ok=True)
+        spec_path.write_text(dumps_default_tests_spec(), encoding="utf-8")
         if manual_dir.exists():
             for p in manual_dir.glob("*.in"):
                 p.unlink(missing_ok=True)
@@ -1001,7 +1002,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         spec_path = workspace / "tests" / "spec.json"
         manual_dir = workspace / "tests" / "manual"
         generator_dir = workspace / "tests" / "generator"
-        spec_path.unlink(missing_ok=True)
+        spec_path.write_text(dumps_default_tests_spec(), encoding="utf-8")
         if manual_dir.exists():
             for p in manual_dir.glob("*.in"):
                 p.unlink(missing_ok=True)
@@ -1036,7 +1037,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         spec_path = workspace / "tests" / "spec.json"
         manual_dir = workspace / "tests" / "manual"
         generator_dir = workspace / "tests" / "generator"
-        spec_path.unlink(missing_ok=True)
+        spec_path.write_text(dumps_default_tests_spec(), encoding="utf-8")
         if manual_dir.exists():
             for p in manual_dir.glob("*.in"):
                 p.unlink(missing_ok=True)
@@ -1076,7 +1077,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         spec_path = workspace / "tests" / "spec.json"
         manual_dir = workspace / "tests" / "manual"
         generator_dir = workspace / "tests" / "generator"
-        spec_path.unlink(missing_ok=True)
+        spec_path.write_text(dumps_default_tests_spec(), encoding="utf-8")
         if manual_dir.exists():
             for p in manual_dir.glob("*.in"):
                 p.unlink(missing_ok=True)
@@ -1111,7 +1112,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         spec_path = workspace / "tests" / "spec.json"
         manual_dir = workspace / "tests" / "manual"
         generator_dir = workspace / "tests" / "generator"
-        spec_path.unlink(missing_ok=True)
+        spec_path.write_text(dumps_default_tests_spec(), encoding="utf-8")
         if manual_dir.exists():
             for p in manual_dir.glob("*.in"):
                 p.unlink(missing_ok=True)
@@ -1138,7 +1139,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         spec_path = workspace / "tests" / "spec.json"
         manual_dir = workspace / "tests" / "manual"
         generator_dir = workspace / "tests" / "generator"
-        spec_path.unlink(missing_ok=True)
+        spec_path.write_text(dumps_default_tests_spec(), encoding="utf-8")
         if manual_dir.exists():
             for p in manual_dir.glob("*.in"):
                 p.unlink(missing_ok=True)
@@ -1163,8 +1164,10 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
     def test_run_execute_without_tests_triggers_implicit_tests_generation(self) -> None:
         ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
         ws = Path(str(ctx["workspace"]["path"]))
-        (ws / "solutions").mkdir(parents=True, exist_ok=True)
-        (ws / "solutions" / "accepted.cpp").write_text("int main(){return 0;}\n", encoding="utf-8")
+        self._configure_solution_fixtures(
+            ws,
+            ("accepted.cpp", "accepted"),
+        )
         problem_id = int(ctx["problem"]["id"])
         workspace_id = int(ctx["workspace"]["id"])
         db_execute("DELETE FROM verifications WHERE workspace_id=?", [workspace_id])
@@ -1229,8 +1232,10 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
 
     def test_run_execute_records_problem_mode_from_general_config(self) -> None:
         ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
-        (ws / "solutions").mkdir(parents=True, exist_ok=True)
-        (ws / "solutions" / "accepted.cpp").write_text("int main(){return 0;}\n", encoding="utf-8")
+        self._configure_solution_fixtures(
+            ws,
+            ("accepted.cpp", "accepted"),
+        )
         self._update_problem_config(ws, mode="interactive", pass_limit=2)
 
         with patch(
@@ -1265,9 +1270,11 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
 
     def test_run_execute_records_verification_audit_before_queue_start(self) -> None:
         ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
-        (ws / "solutions").mkdir(parents=True, exist_ok=True)
-        (ws / "solutions" / "accepted.cpp").write_text("int main(){return 0;}\n", encoding="utf-8")
-        (ws / "solutions" / "wa.cpp").write_text("int main(){return 1;}\n", encoding="utf-8")
+        self._configure_solution_fixtures(
+            ws,
+            ("accepted.cpp", "accepted"),
+            ("wa.cpp", "wrong_answer"),
+        )
         ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
         problem_id = int(ctx["problem"]["id"])
         actor_user_id = int(ctx["user"]["id"])
@@ -1341,8 +1348,10 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
 
     def test_run_execute_passes_selected_tests_to_runner(self) -> None:
         ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
-        (ws / "solutions").mkdir(parents=True, exist_ok=True)
-        (ws / "solutions" / "accepted.cpp").write_text("int main(){return 0;}\n", encoding="utf-8")
+        self._configure_solution_fixtures(
+            ws,
+            ("accepted.cpp", "accepted"),
+        )
         with patch("app.impl.run_export.run.start_verification_job", return_value=True) as start_batch:
             resp = run_execute(
                 problem="alice/sample",
@@ -1368,8 +1377,10 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
 
     def test_run_execute_uploaded_source_uses_task_graph_verification(self) -> None:
         ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
-        (ws / "solutions").mkdir(parents=True, exist_ok=True)
-        (ws / "solutions" / "accepted.cpp").write_text("int main(){return 0;}\n", encoding="utf-8")
+        self._configure_solution_fixtures(
+            ws,
+            ("accepted.cpp", "accepted"),
+        )
 
         class _FakeUpload:
             def __init__(self, filename: str, data: bytes):
@@ -1798,9 +1809,11 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
 
     def test_run_page_shows_multi_solution_selector_without_mode_select(self) -> None:
         ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
-        (ws / "solutions").mkdir(parents=True, exist_ok=True)
-        (ws / "solutions" / "accepted.cpp").write_text("int main(){return 0;}\n", encoding="utf-8")
-        (ws / "solutions" / "wa.cpp").write_text("int main(){return 1;}\n", encoding="utf-8")
+        self._configure_solution_fixtures(
+            ws,
+            ("accepted.cpp", "accepted"),
+            ("wa.cpp", "wrong_answer"),
+        )
 
         page = run_new_page(_request("/problems/alice/sample/run/new", "solution_paths=solutions/wa.cpp"), "alice/sample", "alice")
         self.assertEqual(page.status_code, 200)
@@ -1822,9 +1835,11 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
 
     def test_rejudge_uses_verification_id_endpoint_and_forces_recompile(self) -> None:
         ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
-        (ws / "solutions").mkdir(parents=True, exist_ok=True)
-        (ws / "solutions" / "accepted.cpp").write_text("int main(){return 0;}\n", encoding="utf-8")
-        (ws / "solutions" / "wa.cpp").write_text("int main(){return 1;}\n", encoding="utf-8")
+        self._configure_solution_fixtures(
+            ws,
+            ("accepted.cpp", "accepted"),
+            ("wa.cpp", "wrong_answer"),
+        )
         ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
         problem_id = int(ctx["problem"]["id"])
         workspace_id = int(ctx["workspace"]["id"])
@@ -2033,14 +2048,10 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
 
     def test_published_verification_can_be_rejudged_but_not_cancelled(self) -> None:
         ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
-        (ws / "solutions").mkdir(parents=True, exist_ok=True)
-        (ws / "solutions" / "accepted.cpp").write_text(
-            "int main(){return 0;}\n",
-            encoding="utf-8",
-        )
-        (ws / "solutions" / "fixture.cpp").write_text(
-            "int main(){return 0;}\n",
-            encoding="utf-8",
+        self._configure_solution_fixtures(
+            ws,
+            ("accepted.cpp", "accepted"),
+            ("fixture.cpp", "unknown"),
         )
         workspace_service.ensure_user("bob")
         workspace_service.grant_repo_access("alice/sample", "bob", "read")
@@ -2051,14 +2062,10 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
                 refresh_status=False,
             )
         )
-        (bob_ws / "solutions").mkdir(parents=True, exist_ok=True)
-        (bob_ws / "solutions" / "accepted.cpp").write_text(
-            "int main(){return 0;}\n",
-            encoding="utf-8",
-        )
-        (bob_ws / "solutions" / "fixture.cpp").write_text(
-            "int main(){return 0;}\n",
-            encoding="utf-8",
+        self._configure_solution_fixtures(
+            bob_ws,
+            ("accepted.cpp", "accepted"),
+            ("fixture.cpp", "unknown"),
         )
         ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
         problem_id = int(ctx["problem"]["id"])

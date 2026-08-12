@@ -389,7 +389,6 @@ def build_verification_execution_plan(
     sample_only: bool = False,
 ) -> VerificationExecutionPlan:
     resolved_manifest = verification_manifest(snapshot) if manifest is None else manifest
-    verification_service = config.verification_service
     limits = config.config_values.snapshot()
     source_tree = load_problem_source_tree(
         snapshot,

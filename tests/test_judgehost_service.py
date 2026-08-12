@@ -46,6 +46,7 @@ from app.service.verification.task_store import VerificationTaskStore
 from tests.common import (
     E2ETestBase,
     config,
+    configure_build_sources,
     configure_interactive_workspace,
     override_config_values,
 )
@@ -2125,10 +2126,11 @@ class TestJudgehostService(E2ETestBase):
             },
         )
         ws = Path(self._workspace_path())
-        (ws / "interactors").mkdir(parents=True, exist_ok=True)
-        (ws / "interactors" / "interactor.cpp").write_text(
-            "#include <bits/stdc++.h>\nint main(int, char**){return 0;}\n",
-            encoding="utf-8",
+        configure_interactive_workspace(
+            ws,
+            time_limit_ms=2000,
+            memory_limit_mb=1024,
+            pass_limit=7,
         )
         payload = service.prepare_enqueue_payload(
             problem=self.problem,
@@ -2203,10 +2205,11 @@ class TestJudgehostService(E2ETestBase):
         )
 
         ws = Path(self._workspace_path())
-        (ws / "interactors").mkdir(parents=True, exist_ok=True)
-        (ws / "interactors" / "interactor.cpp").write_text(
-            "#include <bits/stdc++.h>\nint main(int, char**){return 0;}\n",
-            encoding="utf-8",
+        configure_interactive_workspace(
+            ws,
+            time_limit_ms=2000,
+            memory_limit_mb=1024,
+            pass_limit=1,
         )
 
         verification_id = canonical_test_verification_id(f"b-jh-interactor-source-{uuid.uuid4().hex[:8]}")
@@ -2325,6 +2328,10 @@ class TestJudgehostService(E2ETestBase):
             "#include <bits/stdc++.h>\nint main(){return 0;}\n",
             encoding="utf-8",
         )
+        configure_build_sources(
+            ws,
+            validator_source="validators/validator.cpp",
+        )
 
         task_id = service.enqueue_task(
             problem=self.problem,
@@ -2378,6 +2385,17 @@ class TestJudgehostService(E2ETestBase):
         (ws / "validators").mkdir(parents=True, exist_ok=True)
         (ws / "validators" / "validator.cpp").write_text(
             "#include <bits/stdc++.h>\nint main(){return 0;}\n",
+            encoding="utf-8",
+        )
+        configure_build_sources(
+            ws,
+            validator_source="validators/validator.cpp",
+        )
+        problem_path = ws / "config/problem.json"
+        problem_config = json.loads(problem_path.read_text(encoding="utf-8"))
+        problem_config["mode"] = "interactive"
+        problem_path.write_text(
+            json.dumps(problem_config, indent=2) + "\n",
             encoding="utf-8",
         )
 
@@ -3954,6 +3972,7 @@ class TestJudgehostService(E2ETestBase):
             "#include <bits/stdc++.h>\nint main(int, char**){return 0;}\n",
             encoding="utf-8",
         )
+        configure_build_sources(ws, checker_source="checkers/checker.cpp")
 
         compile_mem_mb = max(
             64,
@@ -4031,6 +4050,7 @@ class TestJudgehostService(E2ETestBase):
             "#pragma once\n#define _ok 0\ninline void registerTestlibCmd(int, char**){ }\ninline void quitf(int, const char*, ...){ }\n",
             encoding="utf-8",
         )
+        configure_build_sources(ws, checker_source="checkers/checker.cpp")
 
         verification_id = canonical_test_verification_id(f"b-jh-main-correct-{uuid.uuid4().hex[:8]}")
         run_id = f"r-jh-main-correct-{uuid.uuid4().hex[:8]}"

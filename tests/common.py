@@ -51,6 +51,18 @@ def configure_interactive_workspace(
     build_path.write_text(json.dumps(build, indent=2) + "\n", encoding="utf-8")
 
 
+def configure_build_sources(
+    workspace: Path,
+    **selections: str,
+) -> None:
+    """Select sources explicitly in a canonical test workspace."""
+
+    build_path = workspace / "config/build.json"
+    build = json.loads(build_path.read_text(encoding="utf-8"))
+    build.update(selections)
+    build_path.write_text(json.dumps(build, indent=2) + "\n", encoding="utf-8")
+
+
 def _rmtree_retry(path: Path, attempts: int = 3, delay_sec: float = 0.1) -> None:
     target = Path(path)
     for _ in range(max(1, int(attempts))):

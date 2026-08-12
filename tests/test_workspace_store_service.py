@@ -33,7 +33,8 @@ class TestWorkspaceStoreService(DBTestBase):
             f"{self.user}@example.test",
         )
         git_service.push(workspace, "main")
-        problem_row = self.db.fetch_one(
+        problem_row = isolated_db_fetch_one(
+            self.db,
             "SELECT repo_name FROM problems WHERE slug=?", [self.problem]
         )
         self.assertIsNotNone(problem_row)

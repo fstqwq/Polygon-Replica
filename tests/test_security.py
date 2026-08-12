@@ -19,7 +19,12 @@ from unittest.mock import patch
 from fastapi import HTTPException
 from starlette.requests import Request
 
-from tests.common import E2ETestBase, override_config_values, suite_root
+from tests.common import (
+    E2ETestBase,
+    configure_build_sources,
+    override_config_values,
+    suite_root,
+)
 from tests.identity_helpers import canonical_test_verification_id
 from app.impl.runtime.config import config
 from app.impl.problem.checker import checker_rename_source, checker_set_standard
@@ -810,6 +815,14 @@ class TestSecurity(E2ETestBase):
         ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
         (ws / "solutions").mkdir(parents=True, exist_ok=True)
         (ws / "solutions" / "accepted.cpp").write_text("int main(){return 0;}\n", encoding="utf-8")
+        (ws / "solutions" / "accepted.cpp.desc").write_text(
+            "expected: accepted\n",
+            encoding="utf-8",
+        )
+        configure_build_sources(
+            ws,
+            accepted_solution_source="solutions/accepted.cpp",
+        )
         captured: dict[str, object] = {}
 
         def _fake_start_verification_job(*args, **kwargs):

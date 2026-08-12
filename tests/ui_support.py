@@ -683,9 +683,26 @@ class UIHelpersMixin:
         expected: str,
     ) -> None:
         source = workspace / "solutions" / filename
+        source.parent.mkdir(parents=True, exist_ok=True)
         source.write_text("int main(){return 0;}\n", encoding="utf-8")
         Path(f"{source}.desc").write_text(
             f"expected: {expected}\n", encoding="utf-8"
+        )
+
+    def _configure_solution_fixtures(
+        self,
+        workspace: Path,
+        *solutions: tuple[str, str],
+        accepted: str = "accepted.cpp",
+    ) -> None:
+        for filename, expected in solutions:
+            self._write_solution_fixture(workspace, filename, expected)
+        build_path = workspace / "config" / "build.json"
+        build = json.loads(build_path.read_text(encoding="utf-8"))
+        build["accepted_solution_source"] = f"solutions/{accepted}"
+        build_path.write_text(
+            json.dumps(build, indent=2) + "\n",
+            encoding="utf-8",
         )
 
     def _prepare_verification_workspace(self, problem: str, user: str = "alice") -> Path:

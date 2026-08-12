@@ -526,7 +526,6 @@ class TestUIComponents(UIHelpersMixin, E2ETestBase):
         target = ws / rel
         if target.exists():
             target.unlink()
-        cfg_path = ws / "config" / "build.json"
         from app.service.verification.standard_checker import copy_standard_checker
 
         copy_standard_checker("wcmp.cpp", ws)

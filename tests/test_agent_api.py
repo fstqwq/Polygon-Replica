@@ -9,7 +9,7 @@ from urllib.parse import urlparse
 
 from fastapi.testclient import TestClient
 
-from tests.common import E2ETestBase
+from tests.common import E2ETestBase, configure_build_sources
 from tests.archive_support import archive_view_from_bytes
 from tests.db_helpers import (
     activate_test_verification,
@@ -905,6 +905,14 @@ class TestAgentAPI(E2ETestBase):
         solution = workspace / "solutions" / "main.cpp"
         solution.parent.mkdir(parents=True, exist_ok=True)
         solution.write_text("#include <bits/stdc++.h>\nint main(){return 0;}\n", encoding="utf-8")
+        Path(f"{solution}.desc").write_text(
+            "expected: accepted\n",
+            encoding="utf-8",
+        )
+        configure_build_sources(
+            workspace,
+            accepted_solution_source="solutions/main.cpp",
+        )
         stale_head = str(workspace_service.read_workspace_status(workspace).get("head_commit") or "")
         workspace_ctx = workspace_service.workspace_context(self.problem, username, include_recent=False)
         workspace_id = int(workspace_ctx["workspace"]["id"])
