@@ -199,9 +199,9 @@ def _assert_artifact_refs(connection: sqlite3.Connection, verification_id: str) 
     input_ref = refs["generated-input"]
     answer_ref = refs["accepted-answer"]
     if _read_blob(input_ref) != b"7\n":
-        raise RuntimeError("generator input ref does not resolve to the mock output")
+        raise RuntimeError("generator input ref does not resolve to the expected output")
     if _read_blob(answer_ref) != b"49\n":
-        raise RuntimeError("main-correct answer ref does not resolve to the mock output")
+        raise RuntimeError("main-correct answer ref does not resolve to the expected output")
 
 
 def _assert_preview_sample_materialization(

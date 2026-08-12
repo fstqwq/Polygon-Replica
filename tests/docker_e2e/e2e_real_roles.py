@@ -563,7 +563,7 @@ def exercise_role_pages_and_collaboration(
         for client in sessions.values():
             client.close()
     print(
-        "e2e-mock role page walk and Alice/Bob conflict resolution completed "
+        "e2e-real role page walk and Alice/Bob conflict resolution completed "
         f"head={final_head}"
     )
     return final_head

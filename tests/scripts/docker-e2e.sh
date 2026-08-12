@@ -8,9 +8,10 @@ COMPOSE_FILE="$REPO_ROOT/docker-compose.e2e.yml"
 project_suffix="$(date -u +%Y%m%d%H%M%S)-$$-${RANDOM}"
 export COMPOSE_PROJECT_NAME="polygon-replica-e2e-${project_suffix}"
 export POLYGON_REPLICA_E2E_JUDGEHOST_TOKEN="e2e-${project_suffix}-judgehost-token"
-export POLYGON_REPLICA_E2E_IMAGE="polygon-replica-e2e:${project_suffix}"
+export POLYGON_REPLICA_E2E_IMAGE="${POLYGON_REPLICA_E2E_IMAGE:-polygon-replica-e2e:${project_suffix}}"
 
 compose=(docker compose --ansi never --project-name "$COMPOSE_PROJECT_NAME" --file "$COMPOSE_FILE")
+image_owned=0
 
 cleanup() {
   status=$?
@@ -21,7 +22,9 @@ cleanup() {
       tex-smoke bootstrap app mock-judgehost runner >&2 || true
   fi
   "${compose[@]}" down --volumes --remove-orphans >/dev/null 2>&1 || true
-  docker image rm --force "$POLYGON_REPLICA_E2E_IMAGE" >/dev/null 2>&1 || true
+  if (( image_owned )); then
+    docker image rm --force "$POLYGON_REPLICA_E2E_IMAGE" >/dev/null 2>&1 || true
+  fi
   exit "$status"
 }
 trap cleanup EXIT
@@ -29,7 +32,12 @@ trap cleanup EXIT
 cd -- "$REPO_ROOT"
 docker compose version >/dev/null
 
-"${compose[@]}" build app
+if [[ "${POLYGON_REPLICA_E2E_IMAGE_PREBUILT:-0}" == "1" ]]; then
+  docker image inspect "$POLYGON_REPLICA_E2E_IMAGE" >/dev/null
+else
+  image_owned=1
+  "${compose[@]}" build app
+fi
 
 # Compile a real PDF through the production TeX sandbox before starting the
 # application. The one-shot container is networkless; the smoke verifies the

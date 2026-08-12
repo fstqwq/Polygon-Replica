@@ -141,12 +141,13 @@ CI execution are documented in
 ## Judgehost Docker E2E
 
 `tests/scripts/docker-e2e.sh` creates a new Compose project, image tag, and named
-volumes for each run. It first compiles real `pdflatex` and `xelatex` PDFs
-through the production `TexCompileService` and bubblewrap backend in a
-networkless one-shot container; this checks both image formats and the
-production root-switch path rather than only the presence of packages. Network
-isolation here belongs to the one-shot container; it is not a claim that the TeX
-backend itself unshares the network.
+volumes for each run. CI passes it the already built application image; a local
+run builds and later removes its own image. It first compiles real `pdflatex`
+and `xelatex` PDFs through the production `TexCompileService` and bubblewrap
+backend in a networkless one-shot container; this checks both image formats and
+the production root-switch path rather than only the presence of packages.
+Network isolation here belongs to the one-shot container; it is not a claim
+that the TeX backend itself unshares the network.
 
 The mock exercises registration, work lease, file download,
 version report, compile report, and final-result exchange without executing
@@ -162,21 +163,31 @@ input/answer blobs, and the separate late-diagnostic snapshot through persisted
 state. The mock is a project-owned protocol fixture; the test does not clone or
 approve an upstream source tree.
 
-`tests/scripts/e2e-mock.sh` adds the deployed authoring journey. It performs
-first-run setup, Judgehost configuration, problem creation, and every fixture
-file save through public HTTP. It then runs sample preview and full verification,
-commits and publishes the exact authored files, creates a contest, adds the
-published problem, materializes that commit through another full verification,
-and exports the contest statement PDF with two `xelatex` passes. The final
-assertions compare the verified `7`/`49` sample payloads used by `problem.tex`,
-the downloaded PDF and frozen commit/materialization identities.
+`tests/scripts/e2e-real.sh` adds the deployed authoring journey. It builds the
+application image once, pulls the official `domjudge/judgehost:9.0.0` and
+`domjudge/judgehost:bleeding` images, and starts two isolated Compose projects
+in parallel. CI does not compile DOMjudge. Each project has its own application,
+database, filesystems, network, Judgehost credentials, daemon id, and run-user
+id. A result is therefore attributable to exactly one Judgehost image. The
+script logs the pulled image digests for reproducibility; `bleeding`
+intentionally remains a floating upstream compatibility target.
 
-The deployed journey then registers an outsider, a reader, and two writers. A
-role-aware page walk visits the stable HTML routes as anonymous, outsider,
-reader, writer, and owner/system-administrator actors. It checks access outcomes
-and rejects unexpected server errors without pinning sentences, CSS selectors,
-or incidental markup. Pages that require a runtime identity are exercised by
-the workflow that creates that identity.
+Both projects perform first-run setup, Judgehost configuration, problem
+creation, and every fixture file save through public HTTP and the latest
+Polygon Agent CLI checkout. They run the same generated test through a real
+Judgehost and observe generated input, accepted answer, AC, WA, CE, and public
+artifact downloads. The `bleeding` project alone continues through the more
+expensive product tail: sample preview, commit, Native and ICPC exports, contest
+creation and statement PDF export, role-aware page walk, and concurrent
+Alice/Bob conflict resolution. This avoids repeating work that does not vary by
+Judgehost implementation.
+
+The deployed journey on `bleeding` then registers an outsider, a reader, and
+two writers. A role-aware page walk visits the stable HTML routes as anonymous,
+outsider, reader, writer, and owner/system-administrator actors. It checks
+access outcomes and rejects unexpected server errors without pinning sentences,
+CSS selectors, or incidental markup. Pages that require a runtime identity are
+exercised by the workflow that creates that identity.
 
 Finally, Alice and Bob start with separate workspaces on the same published
 revision and edit the same path. Alice publishes first. Bob's stale publish must
@@ -189,5 +200,5 @@ Run the isolated E2E from the repository root:
 
 ```bash
 bash tests/scripts/docker-e2e.sh
-bash tests/scripts/e2e-mock.sh
+bash tests/scripts/e2e-real.sh
 ```

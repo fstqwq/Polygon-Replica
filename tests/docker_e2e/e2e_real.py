@@ -1,4 +1,4 @@
-"""HTTP-first deployed journey for the mock-Judgehost system E2E."""
+"""HTTP-first deployed journey backed by an official DOMjudge Judgehost."""
 
 import argparse
 import base64
@@ -7,6 +7,7 @@ import json
 import os
 import sqlite3
 import subprocess
+import time
 import zipfile
 from html.parser import HTMLParser
 from pathlib import Path
@@ -17,49 +18,32 @@ import httpx
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
 
-from e2e_mock_contest import (
+from e2e_real_contest import (
     CONTEST,
     assert_contest_pdf,
     start_contest_pdf,
     wait_for_contest_job,
 )
-from e2e_mock_roles import exercise_role_pages_and_collaboration
+from e2e_real_roles import exercise_role_pages_and_collaboration
 from runner import (
     _assert_artifact_refs,
-    _assert_mock_evidence,
     _assert_preview_sample_materialization,
     _assert_tasks,
     _connect,
     _latest_verification,
-    _wait_for_mock_evidence,
     _wait_for_verification,
 )
 
 
 USERNAME = "e2e"
 PROBLEM = "e2e/sample"
-COMMIT_MESSAGE = "e2e-mock verified journey"
+COMMIT_MESSAGE = "e2e-real verified journey"
 AGENT_ROOT = Path(os.environ["POLYGON_REPLICA_E2E_STATE_DIR"]) / "agent-cli"
 AGENT_STATE = AGENT_ROOT / "state.json"
 AGENT_REPO = AGENT_ROOT / PROBLEM
 AGENT_TEMP = AGENT_ROOT / "temp"
-AGENT_MOCK_REQUIRED_SOURCES = {
-    "gen.py",
-    "main.cpp",
-    "wa.py",
-    "ce.cpp",
-    "sanity_empty_output.py",
-    "sanity_unicode_output.py",
-}
-AGENT_MOCK_RESULTS = {
-    "gen.py": "correct",
-    "main.cpp": "correct",
-    "wa.py": "wrong-answer",
-    "sanity_empty_output.py": "wrong-answer",
-    "sanity_unicode_output.py": "wrong-answer",
-}
 AGENT_SPECIAL_VERDICTS = {
-    "solutions/wa.py": "WA",
+    "solutions/wa.cpp": "WA",
     "solutions/ce.cpp": "CE",
 }
 
@@ -76,7 +60,7 @@ def _json_text(payload: object) -> str:
 BASE_FIXTURE_FILES = {
     "config/problem.json": _json_text(
         {
-            "memory_limit_mb": 4,
+            "memory_limit_mb": 64,
             "mode": "pass-fail",
             "pass_limit": 1,
             "time_limit_ms": 2000,
@@ -113,8 +97,11 @@ BASE_FIXTURE_FILES = {
         "std::cout << value * value << '\\n'; }\n"
     ),
     "solutions/main.cpp.desc": "expected: accepted\n",
-    "solutions/wa.py": "print(0)\n",
-    "solutions/wa.py.desc": "expected: wrong_answer\n",
+    "solutions/wa.cpp": (
+        "#include <iostream>\n"
+        "int main() { std::cout << 0 << '\\n'; }\n"
+    ),
+    "solutions/wa.cpp.desc": "expected: wrong_answer\n",
     "solutions/ce.cpp": "this is intentionally not valid C++\n",
     "solutions/ce.cpp.desc": "expected: rejected\n",
     "validators/validate.cpp": (
@@ -284,7 +271,7 @@ def _client() -> httpx.Client:
         base_url=os.environ["POLYGON_REPLICA_E2E_APP_ORIGIN"].rstrip("/"),
         follow_redirects=False,
         timeout=httpx.Timeout(30.0),
-        headers={"User-Agent": "polygon-replica-e2e-mock"},
+        headers={"User-Agent": "polygon-replica-e2e-real"},
     )
 
 
@@ -535,10 +522,6 @@ def prepare() -> None:
     _assert_fixture_shape()
     AGENT_ROOT.mkdir(parents=True, exist_ok=True)
     AGENT_TEMP.mkdir(parents=True, exist_ok=True)
-    (Path(os.environ["POLYGON_REPLICA_E2E_STATE_DIR"]) / "agent-cli-mode").write_text(
-        "enabled\n",
-        encoding="utf-8",
-    )
     with _client() as client:
         _setup(client)
         _post(
@@ -738,7 +721,7 @@ def prepare() -> None:
             str(AGENT_REPO),
         )
     print(
-        "e2e-mock prepared a fresh deployment with every authoring write through "
+        "e2e-real prepared a fresh deployment with every authoring write through "
         f"Polygon Agent CLI from Skills {os.environ['POLYGON_REPLICA_E2E_SKILLS_COMMIT']}"
     )
 
@@ -765,92 +748,6 @@ def _journey_row(connection: sqlite3.Connection) -> sqlite3.Row:
     return row
 
 
-def _sha256(payload: bytes) -> str:
-    return hashlib.sha256(payload).hexdigest()
-
-
-def _assert_mock_payload_hashes(state: dict[str, object]) -> None:
-    events = state.get("events")
-    if not isinstance(events, list):
-        raise RuntimeError("mock evidence has no event list")
-    expected_sources = {
-        Path(path).name: _sha256(content.encode("utf-8"))
-        for path, content in FIXTURE_FILES.items()
-        if path in {
-            "generators/gen.py",
-            "solutions/main.cpp",
-            "solutions/wa.py",
-            "solutions/ce.cpp",
-        }
-    }
-    for source, expected_hash in expected_sources.items():
-        matching = [
-            event
-            for event in events
-            if isinstance(event, dict) and event.get("source") == source
-        ]
-        if not matching:
-            raise RuntimeError(f"mock did not receive source payload {source!r}")
-        observed = {
-            str(source_hashes.get(source) or "")
-            for event in matching
-            if isinstance(source_hashes := event.get("source_sha256s"), dict)
-        }
-        if observed != {expected_hash}:
-            raise RuntimeError(
-                f"mock received unexpected bytes for {source!r}: {observed!r}"
-            )
-
-    expected_testcases = {
-        "gen.py": {
-            "input": _sha256(b'"$SUBMISSION_BIN" 7\n'),
-            "output": _sha256(b""),
-        },
-        "main.cpp": {
-            "input": _sha256(b"7\n"),
-            "output": _sha256(b""),
-        },
-        "wa.py": {
-            "input": _sha256(b"7\n"),
-            "output": _sha256(b"49\n"),
-        },
-    }
-    for source, expected_hashes in expected_testcases.items():
-        matching = [
-            event
-            for event in events
-            if isinstance(event, dict)
-            and event.get("kind") == "completed"
-            and event.get("source") == source
-        ]
-        if not any(
-            isinstance(testcase_hashes := event.get("testcase_sha256s"), dict)
-            and {
-                "input": testcase_hashes.get("input"),
-                "output": testcase_hashes.get("output"),
-            }
-            == expected_hashes
-            for event in matching
-        ):
-            raise RuntimeError(
-                f"mock received unexpected testcase bytes for {source!r}"
-            )
-
-    expected_outputs = {
-        "gen.py": _sha256(b"7\n"),
-        "main.cpp": _sha256(b"49\n"),
-    }
-    for source, expected_hash in expected_outputs.items():
-        if not any(
-            isinstance(event, dict)
-            and event.get("kind") == "completed"
-            and event.get("source") == source
-            and event.get("output_sha256") == expected_hash
-            for event in events
-        ):
-            raise RuntimeError(f"mock output digest is wrong for {source!r}")
-
-
 def _assert_public_artifacts(
     client: httpx.Client,
     verification_id: str,
@@ -867,6 +764,28 @@ def _assert_public_artifacts(
             raise RuntimeError(
                 f"public artifact {relative_path!r} was unavailable or incorrect"
             )
+
+
+def _assert_accepted_solution(
+    connection: sqlite3.Connection,
+    verification_id: str,
+) -> None:
+    row = connection.execute(
+        """
+        SELECT final_status,result_json
+        FROM verification_tasks
+        WHERE verification_id=? AND task_kind='main-correct'
+          AND source_path='solutions/main.cpp' AND test_name='001.in'
+        """,
+        [verification_id],
+    ).fetchone()
+    if row is None or str(row["final_status"]) != "done":
+        raise RuntimeError(f"accepted solution task did not complete: {row!r}")
+    result = json.loads(str(row["result_json"]))
+    outcome = result.get("outcome") if isinstance(result, dict) else None
+    verdict = outcome.get("verdict") if isinstance(outcome, dict) else None
+    if verdict != "AC":
+        raise RuntimeError(f"accepted solution verdict is not AC: {verdict!r}")
 
 
 def _git(*args: str) -> str:
@@ -932,7 +851,7 @@ def _assert_commit(connection: sqlite3.Connection) -> str:
     if subject != COMMIT_MESSAGE:
         raise RuntimeError(f"unexpected commit subject: {subject!r}")
     if _git("-C", str(workspace), "rev-list", "--count", "HEAD") != "1":
-        raise RuntimeError("e2e-mock initial publication is not a root commit")
+        raise RuntimeError("e2e-real initial publication is not a root commit")
     commit_line = _git(
         "-C",
         str(workspace),
@@ -943,7 +862,7 @@ def _assert_commit(connection: sqlite3.Connection) -> str:
         "HEAD",
     )
     if len(commit_line.split()) != 1:
-        raise RuntimeError("e2e-mock initial publication unexpectedly has a parent")
+        raise RuntimeError("e2e-real initial publication unexpectedly has a parent")
     for relative_path, expected_text in FIXTURE_FILES.items():
         committed = _git_bytes(
             "--git-dir",
@@ -1128,16 +1047,50 @@ def _run_statement_preview(
     return verification_id
 
 
-def _mock_event_count(state: dict[str, object]) -> int:
-    events = state.get("events")
-    if not isinstance(events, list):
-        raise RuntimeError("mock evidence has no event list")
-    return len(events)
+def _real_judgehost(client: httpx.Client) -> dict[str, object] | None:
+    expected_hostname = os.environ["POLYGON_REPLICA_E2E_JUDGEHOST_HOSTNAME"]
+    response = client.get("/admin/judgehosts/snapshot")
+    response.raise_for_status()
+    payload = response.json()
+    hosts = payload.get("hosts") if isinstance(payload, dict) else None
+    if not isinstance(hosts, list):
+        raise RuntimeError(f"Judgehost snapshot omitted hosts: {payload!r}")
+    matches = [
+        host
+        for host in hosts
+        if isinstance(host, dict) and host.get("hostname") == expected_hostname
+    ]
+    if not matches:
+        return None
+    if len(matches) != 1 or len(hosts) != 1:
+        raise RuntimeError(f"Judgehost stack is not isolated: {hosts!r}")
+    return cast(dict[str, object], matches[0])
 
 
-def verify_and_commit() -> None:
+def _wait_for_real_judgehost(client: httpx.Client, timeout_sec: float = 90.0) -> None:
+    deadline = time.monotonic() + timeout_sec
+    last: dict[str, object] | None = None
+    while time.monotonic() < deadline:
+        last = _real_judgehost(client)
+        if last is not None and last.get("online") is True:
+            return
+        time.sleep(0.5)
+    raise RuntimeError(f"real Judgehost did not register online: {last!r}")
+
+
+def _assert_real_judgehost_executed(client: httpx.Client) -> None:
+    host = _real_judgehost(client)
+    if host is None:
+        raise RuntimeError("real Judgehost disappeared after verification")
+    if host.get("online") is not True or int(host.get("judged_case_count") or 0) < 1:
+        raise RuntimeError(f"real Judgehost did not execute a case: {host!r}")
+
+
+def verify_deployment() -> None:
+    product_tail = os.environ.get("POLYGON_REPLICA_E2E_PRODUCT_TAIL") == "1"
     with _client() as client:
         _login(client)
+        _wait_for_real_judgehost(client)
         with _connect() as connection:
             context = _journey_row(connection)
             problem_id = int(context["problem_id"])
@@ -1148,13 +1101,16 @@ def verify_and_commit() -> None:
                 workspace_id=workspace_id,
             )
             previous_id = "" if previous is None else str(previous["id"])
-            sample_verification_id = _run_statement_preview(
-                client,
-                connection,
-                problem_id=problem_id,
-                workspace_id=workspace_id,
-                previous_id=previous_id,
-            )
+            sample_verification_id = ""
+            if product_tail:
+                sample_verification_id = _run_statement_preview(
+                    client,
+                    connection,
+                    problem_id=problem_id,
+                    workspace_id=workspace_id,
+                    previous_id=previous_id,
+                )
+                previous_id = sample_verification_id
             started = _agent_cli(
                 "verify-start",
                 "--problem",
@@ -1180,7 +1136,7 @@ def verify_and_commit() -> None:
                 connection,
                 problem_id=problem_id,
                 workspace_id=workspace_id,
-                previous_id=sample_verification_id,
+                previous_id=previous_id,
             )
             if str(verification["id"]) != verification_id:
                 raise RuntimeError(
@@ -1205,21 +1161,18 @@ def verify_and_commit() -> None:
                 verification_id,
                 special_verdicts=AGENT_SPECIAL_VERDICTS,
             )
+            _assert_accepted_solution(connection, verification_id)
             _assert_artifact_refs(connection, verification_id)
             _assert_public_artifacts(client, verification_id)
+        _assert_real_judgehost_executed(client)
 
-        mock_state = _wait_for_mock_evidence(
-            required_sources=AGENT_MOCK_REQUIRED_SOURCES,
-        )
-        _assert_mock_evidence(
-            mock_state,
-            expected_results=AGENT_MOCK_RESULTS,
-            compile_sources={"ce.cpp"},
-            late_diagnostic_source=None,
-            active_internal_error_sources=set(),
-        )
-        _assert_mock_payload_hashes(mock_state)
-        mock_event_count_before_export = _mock_event_count(mock_state)
+        variant = os.environ["POLYGON_REPLICA_E2E_VARIANT"]
+        if not product_tail:
+            print(
+                "e2e-real completed Judgehost compatibility verification "
+                f"variant={variant} verification={verification_id}"
+            )
+            return
 
         _assert_agent_verification_detail(verification_id)
         committed = _agent_cli(
@@ -1266,18 +1219,6 @@ def verify_and_commit() -> None:
             problem=PROBLEM,
         )
         contest_job = wait_for_contest_job(client, contest_job_id)
-        final_mock_state = _wait_for_mock_evidence(
-            minimum_event_count=mock_event_count_before_export,
-            required_sources=AGENT_MOCK_REQUIRED_SOURCES,
-        )
-        _assert_mock_evidence(
-            final_mock_state,
-            expected_results=AGENT_MOCK_RESULTS,
-            compile_sources={"ce.cpp"},
-            late_diagnostic_source=None,
-            active_internal_error_sources=set(),
-        )
-        _assert_mock_payload_hashes(final_mock_state)
         with _connect() as connection:
             artifact_id, materialization_verification_id = assert_contest_pdf(
                 client,
@@ -1298,8 +1239,9 @@ def verify_and_commit() -> None:
             initial_head=head,
         )
     print(
-        "e2e-mock completed deployment, sample preview, verification, commit, "
+        "e2e-real completed deployment, sample preview, verification, commit, "
         "Native/ICPC exports, and contest PDF export "
+        f"variant={variant} "
         f"sample_verification={sample_verification_id} "
         f"verification={verification_id} head={head} "
         f"native_job={native_job_id} native_archive={native_archive} "
@@ -1312,12 +1254,12 @@ def verify_and_commit() -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("phase", choices=("prepare", "verify-commit"))
+    parser.add_argument("phase", choices=("prepare", "verify"))
     args = parser.parse_args()
     if args.phase == "prepare":
         prepare()
         return
-    verify_and_commit()
+    verify_deployment()
 
 
 if __name__ == "__main__":

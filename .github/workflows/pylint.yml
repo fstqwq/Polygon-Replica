@@ -62,13 +62,13 @@ jobs:
         path: .test-results/${{ matrix.group }}.json
         if-no-files-found: warn
 
-  e2e-mock:
+  e2e-real:
     runs-on: ubuntu-24.04
-    timeout-minutes: 35
+    timeout-minutes: 45
     permissions:
       contents: read
     env:
-      POLYGON_REPLICA_E2E_IMAGE: polygon-replica-e2e-mock:${{ github.sha }}
+      POLYGON_REPLICA_E2E_IMAGE: polygon-replica-e2e-real:${{ github.sha }}
       POLYGON_REPLICA_E2E_IMAGE_PREBUILT: "1"
     steps:
     - uses: actions/checkout@v6
@@ -90,8 +90,8 @@ jobs:
         file: ./Dockerfile
         load: true
         tags: ${{ env.POLYGON_REPLICA_E2E_IMAGE }}
-        cache-from: type=gha,scope=e2e-mock
-        cache-to: type=gha,mode=max,scope=e2e-mock
+        cache-from: type=gha,scope=e2e-real
+        cache-to: type=gha,mode=max,scope=e2e-real
     - name: Configure sandbox namespaces
       run: |
         sudo sysctl -w kernel.unprivileged_userns_clone=1 || true
@@ -99,5 +99,7 @@ jobs:
         if sysctl -n kernel.apparmor_restrict_unprivileged_userns >/dev/null 2>&1; then
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
         fi
-    - name: Run deployed mock-Judgehost E2E
-      run: bash tests/scripts/e2e-mock.sh
+    - name: Run Judgehost protocol E2E
+      run: bash tests/scripts/docker-e2e.sh
+    - name: Run official Judgehost 9.0.0 and bleeding E2E
+      run: bash tests/scripts/e2e-real.sh

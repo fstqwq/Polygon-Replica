@@ -1,4 +1,4 @@
-"""Contest PDF portion of the deployed mock-Judgehost E2E journey."""
+"""Contest PDF portion of the deployed real-Judgehost E2E journey."""
 
 import hashlib
 import json
@@ -17,8 +17,8 @@ from runner import (
 )
 
 
-CONTEST = "e2e-mock-contest"
-CONTEST_TITLE = "E2E Mock Contest"
+CONTEST = "e2e-real-contest"
+CONTEST_TITLE = "E2E Real Contest"
 PostRedirect = Callable[
     [httpx.Client, str, dict[str, str]],
     httpx.Response,
@@ -177,7 +177,7 @@ def _assert_contest_database(
         connection,
         verification_id,
         special_verdicts={
-            "solutions/wa.py": "WA",
+            "solutions/wa.cpp": "WA",
             "solutions/ce.cpp": "CE",
         },
     )
