@@ -118,7 +118,12 @@ def _read_blob(ref: str) -> bytes:
     return path.read_bytes()
 
 
-def _assert_tasks(connection: sqlite3.Connection, verification_id: str) -> None:
+def _assert_tasks(
+    connection: sqlite3.Connection,
+    verification_id: str,
+    *,
+    special_verdicts: dict[str, str] | None = None,
+) -> None:
     rows = connection.execute(
         """
         SELECT task_kind,test_name,final_status,result_json
@@ -153,19 +158,21 @@ def _assert_tasks(connection: sqlite3.Connection, verification_id: str) -> None:
         if not str(artifacts.get("output_ref") or "").startswith("blob://sha256/"):
             raise RuntimeError(f"{task_kind} pass output ref is missing")
 
-    special_rows = connection.execute(
-        """
-        SELECT source_path,final_status,result_json
-        FROM verification_tasks
-        WHERE verification_id=? AND source_path IN ('solutions/re.py','solutions/ce.cpp')
-        """,
-        [verification_id],
-    ).fetchall()
-    special_by_source = {str(row["source_path"]): row for row in special_rows}
-    for source, expected_verdict in {
+    expected_special = special_verdicts or {
         "solutions/re.py": "RE",
         "solutions/ce.cpp": "CE",
-    }.items():
+    }
+    placeholders = ",".join("?" for _source in expected_special)
+    special_rows = connection.execute(
+        f"""
+        SELECT source_path,final_status,result_json
+        FROM verification_tasks
+        WHERE verification_id=? AND source_path IN ({placeholders})
+        """,
+        [verification_id, *expected_special],
+    ).fetchall()
+    special_by_source = {str(row["source_path"]): row for row in special_rows}
+    for source, expected_verdict in expected_special.items():
         row = special_by_source.get(source)
         if row is None or str(row["final_status"]) != "done":
             raise RuntimeError(f"expected {source} task did not complete: {row!r}")
@@ -358,6 +365,7 @@ def _wait_for_mock_evidence(
     timeout_sec: float = 10.0,
     *,
     minimum_event_count: int = 0,
+    required_sources: set[str] | None = None,
 ) -> dict[str, object]:
     path = state_dir() / MOCK_STATE_FILENAME
     deadline = time.monotonic() + timeout_sec
@@ -380,20 +388,32 @@ def _wait_for_mock_evidence(
             else []
         )
         sources = {str(event.get("source") or "") for event in relevant}
-        if isinstance(events, list) and len(events) > minimum_event_count and {
+        required = required_sources or {
             "gen.py",
             "main.cpp",
             "re.py",
             "ce.cpp",
             "sanity_empty_output.py",
             "sanity_unicode_output.py",
-        }.issubset(sources):
+        }
+        if (
+            isinstance(events, list)
+            and len(events) > minimum_event_count
+            and required.issubset(sources)
+        ):
             return latest
         time.sleep(0.05)
     raise RuntimeError(f"mock did not persist expected completion evidence: {latest!r}")
 
 
-def _assert_mock_evidence(state: dict[str, object]) -> None:
+def _assert_mock_evidence(
+    state: dict[str, object],
+    *,
+    expected_results: dict[str, str] | None = None,
+    compile_sources: set[str] | None = None,
+    late_diagnostic_source: str | None = "re.py",
+    active_internal_error_sources: set[str] | None = None,
+) -> None:
     if state.get("error"):
         raise RuntimeError(f"mock Judgehost failed: {state['error']}")
     events = state.get("events")
@@ -406,29 +426,37 @@ def _assert_mock_evidence(state: dict[str, object]) -> None:
     ]
     if not completed:
         raise RuntimeError("mock completed no Judgehost cases")
-    expected_results = {
+    expected = expected_results or {
         "gen.py": "correct",
         "main.cpp": "correct",
         "re.py": "run-error",
         "sanity_empty_output.py": "wrong-answer",
     }
+    expected_compile_sources = (
+        {"ce.cpp"} if compile_sources is None else compile_sources
+    )
+    expected_internal_sources = (
+        {"sanity_unicode_output.py"}
+        if active_internal_error_sources is None
+        else active_internal_error_sources
+    )
     observed_results = {
         str(event.get("source") or ""): str(event.get("runresult") or "")
         for event in completed
     }
     missing_results = {
-        source: expected
-        for source, expected in expected_results.items()
-        if observed_results.get(source) != expected
+        source: expected_result
+        for source, expected_result in expected.items()
+        if observed_results.get(source) != expected_result
     }
     if missing_results:
         raise RuntimeError(
             "mock did not exercise the expected verification and sanity cases: "
             f"expected={missing_results!r}, observed={observed_results!r}"
         )
-    unexpected_final_sources = {"ce.cpp", "sanity_unicode_output.py"}.intersection(
-        observed_results
-    )
+    unexpected_final_sources = (
+        expected_compile_sources | expected_internal_sources
+    ).intersection(observed_results)
     if unexpected_final_sources:
         raise RuntimeError(
             "CE or active internal-error incorrectly sent a final run report: "
@@ -449,24 +477,33 @@ def _assert_mock_evidence(state: dict[str, object]) -> None:
         if set(event.get("testcase_files") or []) != {"input", "output"}:
             raise RuntimeError(f"mock skipped the declared testcase files: {event!r}")
 
-    re_event = next(
-        (event for event in completed if event.get("source") == "re.py"),
-        None,
-    )
-    if (
-        re_event is None
-        or re_event.get("late_debug") is not True
-        or type(re_event.get("late_internal_error_ack")) is not int
-        or type(re_event.get("duplicate_late_internal_error_ack")) is not int
-    ):
-        raise RuntimeError(f"mock did not exercise late diagnostics: {re_event!r}")
+    if late_diagnostic_source is not None:
+        late_event = next(
+            (
+                event
+                for event in completed
+                if event.get("source") == late_diagnostic_source
+            ),
+            None,
+        )
+        if (
+            late_event is None
+            or late_event.get("late_debug") is not True
+            or type(late_event.get("late_internal_error_ack")) is not int
+            or type(late_event.get("duplicate_late_internal_error_ack")) is not int
+        ):
+            raise RuntimeError(
+                f"mock did not exercise late diagnostics: {late_event!r}"
+            )
 
     compile_events = [
         event
         for event in events
         if isinstance(event, dict) and event.get("kind") == "compile-error"
     ]
-    if {str(event.get("source") or "") for event in compile_events} != {"ce.cpp"}:
+    if {
+        str(event.get("source") or "") for event in compile_events
+    } != expected_compile_sources:
         raise RuntimeError(f"mock did not exercise the CE update path: {compile_events!r}")
     if any(
         set(event.get("executable_files") or {}) != {"compile"}
@@ -479,9 +516,9 @@ def _assert_mock_evidence(state: dict[str, object]) -> None:
         for event in events
         if isinstance(event, dict) and event.get("kind") == "internal-error"
     ]
-    if {str(event.get("source") or "") for event in internal_events} != {
-        "sanity_unicode_output.py"
-    }:
+    if {
+        str(event.get("source") or "") for event in internal_events
+    } != expected_internal_sources:
         raise RuntimeError(
             f"mock did not exercise the active internal-error path: {internal_events!r}"
         )

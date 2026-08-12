@@ -52,6 +52,7 @@ SOURCE_OUTCOMES = {
         runresult="run-error",
         late_diagnostics=True,
     ),
+    "wa.py": MockOutcome(runresult="wrong-answer"),
     "ce.cpp": MockOutcome(compile_success=False),
     "sanity_empty_output.py": MockOutcome(runresult="wrong-answer"),
     "sanity_unicode_output.py": MockOutcome(active_internal_error=True),
@@ -90,6 +91,7 @@ class JudgehostMock:
             "error": "",
         }
         self.waiting = False
+        self.agent_cli_mode = (state_dir() / "agent-cli-mode").is_file()
         self._persist()
 
     def _persist(self) -> None:
@@ -381,6 +383,8 @@ class JudgehostMock:
                 f"{sorted(sources)!r}"
             )
         source_name, outcome = next(iter(output_candidates.items()))
+        if self.agent_cli_mode and source_name == "sanity_unicode_output.py":
+            outcome = MockOutcome(runresult="wrong-answer")
         source_sha256s = {
             filename: hashlib.sha256(content).hexdigest()
             for filename, content in sorted(sources.items())

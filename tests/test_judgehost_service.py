@@ -2387,9 +2387,15 @@ class TestJudgehostService(E2ETestBase):
             "#include <bits/stdc++.h>\nint main(){return 0;}\n",
             encoding="utf-8",
         )
+        (ws / "interactors").mkdir(parents=True, exist_ok=True)
+        (ws / "interactors" / "interactor.cpp").write_text(
+            "#include <bits/stdc++.h>\nint main(){return 0;}\n",
+            encoding="utf-8",
+        )
         configure_build_sources(
             ws,
             validator_source="validators/validator.cpp",
+            interactor_source="interactors/interactor.cpp",
         )
         problem_path = ws / "config/problem.json"
         problem_config = json.loads(problem_path.read_text(encoding="utf-8"))

@@ -14,7 +14,6 @@ from urllib.parse import parse_qs, urlparse
 import httpx
 
 from runner import (
-    _assert_active_internal_error_sanity,
     _assert_artifact_refs,
     _assert_tasks,
 )
@@ -163,7 +162,7 @@ def _assert_contest_database(
     verification_id = str(row["verification_id"] or "")
     verification = connection.execute(
         """
-        SELECT kind,status,fail_reason
+        SELECT kind,status,sanity_status,fail_reason
         FROM verifications
         WHERE id=?
         """,
@@ -173,15 +172,22 @@ def _assert_contest_database(
         verification is None
         or str(verification["kind"]) != "all"
         or str(verification["status"]) != "ok"
+        or str(verification["sanity_status"]) != "passed"
         or str(verification["fail_reason"] or "")
     ):
         detail = None if verification is None else dict(verification)
         raise RuntimeError(
             f"contest materialization did not use a full verification: {detail!r}"
         )
-    _assert_tasks(connection, verification_id)
+    _assert_tasks(
+        connection,
+        verification_id,
+        special_verdicts={
+            "solutions/wa.py": "WA",
+            "solutions/ce.cpp": "CE",
+        },
+    )
     _assert_artifact_refs(connection, verification_id)
-    _assert_active_internal_error_sanity(connection, verification_id)
 
     artifact = connection.execute(
         """

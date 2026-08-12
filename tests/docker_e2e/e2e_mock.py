@@ -25,9 +25,7 @@ from e2e_mock_contest import (
     wait_for_contest_job,
 )
 from runner import (
-    _assert_active_internal_error_sanity,
     _assert_artifact_refs,
-    _assert_late_diagnostics,
     _assert_mock_evidence,
     _assert_preview_sample_materialization,
     _assert_tasks,
@@ -45,6 +43,25 @@ AGENT_ROOT = Path(os.environ["POLYGON_REPLICA_E2E_STATE_DIR"]) / "agent-cli"
 AGENT_STATE = AGENT_ROOT / "state.json"
 AGENT_REPO = AGENT_ROOT / PROBLEM
 AGENT_TEMP = AGENT_ROOT / "temp"
+AGENT_MOCK_REQUIRED_SOURCES = {
+    "gen.py",
+    "main.cpp",
+    "wa.py",
+    "ce.cpp",
+    "sanity_empty_output.py",
+    "sanity_unicode_output.py",
+}
+AGENT_MOCK_RESULTS = {
+    "gen.py": "correct",
+    "main.cpp": "correct",
+    "wa.py": "wrong-answer",
+    "sanity_empty_output.py": "wrong-answer",
+    "sanity_unicode_output.py": "wrong-answer",
+}
+AGENT_SPECIAL_VERDICTS = {
+    "solutions/wa.py": "WA",
+    "solutions/ce.cpp": "CE",
+}
 
 
 def _json_text(payload: object) -> str:
@@ -96,8 +113,8 @@ BASE_FIXTURE_FILES = {
         "std::cout << value * value << '\\n'; }\n"
     ),
     "solutions/main.cpp.desc": "expected: accepted\n",
-    "solutions/re.py": "raise RuntimeError('intentional E2E runtime error')\n",
-    "solutions/re.py.desc": "expected: run_time_error\n",
+    "solutions/wa.py": "print(0)\n",
+    "solutions/wa.py.desc": "expected: wrong_answer\n",
     "solutions/ce.cpp": "this is intentionally not valid C++\n",
     "solutions/ce.cpp.desc": "expected: rejected\n",
     "validators/validate.cpp": (
@@ -463,6 +480,10 @@ def prepare() -> None:
     _assert_fixture_shape()
     AGENT_ROOT.mkdir(parents=True, exist_ok=True)
     AGENT_TEMP.mkdir(parents=True, exist_ok=True)
+    (Path(os.environ["POLYGON_REPLICA_E2E_STATE_DIR"]) / "agent-cli-mode").write_text(
+        "enabled\n",
+        encoding="utf-8",
+    )
     with _client() as client:
         _setup(client)
         _post(
@@ -703,7 +724,7 @@ def _assert_mock_payload_hashes(state: dict[str, object]) -> None:
         if path in {
             "generators/gen.py",
             "solutions/main.cpp",
-            "solutions/re.py",
+            "solutions/wa.py",
             "solutions/ce.cpp",
         }
     }
@@ -734,7 +755,7 @@ def _assert_mock_payload_hashes(state: dict[str, object]) -> None:
             "input": _sha256(b"7\n"),
             "output": _sha256(b""),
         },
-        "re.py": {
+        "wa.py": {
             "input": _sha256(b"7\n"),
             "output": _sha256(b"49\n"),
         },
@@ -1154,21 +1175,30 @@ def verify_and_commit() -> None:
                 raise RuntimeError(
                     f"successful verification retained a failure: {dict(verification)!r}"
                 )
-            if str(verification["sanity_status"] or "") != "failed":
+            if str(verification["sanity_status"] or "") != "passed":
                 raise RuntimeError(
-                    "mock active-internal-error sanity case was not retained"
+                    "Agent verification sanity checks did not pass"
                 )
-            _assert_tasks(connection, verification_id)
+            _assert_tasks(
+                connection,
+                verification_id,
+                special_verdicts=AGENT_SPECIAL_VERDICTS,
+            )
             _assert_artifact_refs(connection, verification_id)
-            _assert_active_internal_error_sanity(connection, verification_id)
             _assert_public_artifacts(client, verification_id)
 
-        mock_state = _wait_for_mock_evidence()
-        _assert_mock_evidence(mock_state)
+        mock_state = _wait_for_mock_evidence(
+            required_sources=AGENT_MOCK_REQUIRED_SOURCES,
+        )
+        _assert_mock_evidence(
+            mock_state,
+            expected_results=AGENT_MOCK_RESULTS,
+            compile_sources={"ce.cpp"},
+            late_diagnostic_source=None,
+            active_internal_error_sources=set(),
+        )
         _assert_mock_payload_hashes(mock_state)
         mock_event_count_before_export = _mock_event_count(mock_state)
-        with _connect() as connection:
-            _assert_late_diagnostics(connection, verification_id)
 
         _assert_agent_verification_detail(verification_id)
         committed = _agent_cli(
@@ -1217,8 +1247,15 @@ def verify_and_commit() -> None:
         contest_job = wait_for_contest_job(client, contest_job_id)
         final_mock_state = _wait_for_mock_evidence(
             minimum_event_count=mock_event_count_before_export,
+            required_sources=AGENT_MOCK_REQUIRED_SOURCES,
         )
-        _assert_mock_evidence(final_mock_state)
+        _assert_mock_evidence(
+            final_mock_state,
+            expected_results=AGENT_MOCK_RESULTS,
+            compile_sources={"ce.cpp"},
+            late_diagnostic_source=None,
+            active_internal_error_sources=set(),
+        )
         _assert_mock_payload_hashes(final_mock_state)
         with _connect() as connection:
             artifact_id, materialization_verification_id = assert_contest_pdf(

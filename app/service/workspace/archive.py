@@ -318,10 +318,10 @@ class WorkspaceArchiveService:
         cap = int(package.policy.max_expanded_bytes)
         try:
             archive = package.zip_file
-            for info in archive.infolist():
+            for logical_name, info in package.entries.items():
                 if _zipinfo_is_symlink(info):
                     raise ValueError(f"zip symlink is not allowed: {info.filename}")
-                rel = _normalize_zip_entry_name(info.filename)
+                rel = _normalize_zip_entry_name(logical_name)
                 if not rel:
                     continue
                 if info.is_dir():
