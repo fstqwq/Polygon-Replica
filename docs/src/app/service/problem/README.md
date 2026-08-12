@@ -5,7 +5,9 @@ build configuration, runtime-limit display, testcase specification parsing,
 solution metadata, content review, and readiness projection. Its primary inputs
 are workspace files and already-authorized problem/workspace metadata; its
 outputs are canonical JSON/text writers and typed read models for orchestration
-and UI code.
+and UI code. `ProblemSourceQueryService` owns solution metadata, test editor,
+and custom-run selector projections; selectors describe the current authored
+Source and never infer a new run from disposable Verification cache files.
 
 Git remains authoritative for committed source. This package does not own Git
 publication, execution, or derived outputs. Readiness combines read-only Git,

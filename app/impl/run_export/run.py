@@ -27,7 +27,6 @@ from app.impl.workspace.context_run_detail import (
     parse_verification_detail_id,
 )
 from app.impl.workspace.context_verification import (
-    latest_workspace_verification,
     normalize_program_id_token,
     normalize_run_id_token,
 )
@@ -108,10 +107,10 @@ def run_new_page(request: Request, problem: str, user: Annotated[str, Depends(re
         contest_workspace=contest_workspace_context_from_request(request),
     )
     workspace = Path(ctx['workspace']['path'])
-    workspace_id = int(ctx['workspace']['id'])
-    active_verification = latest_workspace_verification(int(ctx['problem']['id']), workspace_id, ok_only=True)
     solution_options, default_submission_path, solution_options_truncated = run_solution_options_context(workspace)
-    test_options, test_options_truncated, test_options_source = run_test_options_context(problem, workspace, active_verification)
+    test_options, test_options_truncated, test_options_source = run_test_options_context(
+        workspace
+    )
     selected_solution_paths: list[str] = []
     for raw in request.query_params.getlist('solution_paths'):
         normalized = normalize_optional_component_source_path_safe(raw, 'solutions', 'solution path')

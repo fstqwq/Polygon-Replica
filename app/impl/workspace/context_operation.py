@@ -1,48 +1,21 @@
 import app.main_constant as _K
-import json
 import os
 import time
 from pathlib import Path
 from typing import TypedDict
 from fastapi import HTTPException
 from app.impl.runtime.dependency import runtime
-from app.impl.workspace.artifact import (
-    artifact_root,
-)
-from app.impl.workspace.context import (
-    count_label,
-)
-from app.impl.workspace.solution import (
-    list_solution_sources,
-)
-from app.impl.workspace.test_spec import (
-    read_tests_spec,
-    tests_spec_payload_file_path,
-    tests_spec_payload_rel_path,
-    tests_spec_read_payload,
-)
 from app.main_util import (
     normalize_workspace_rel_path,
     safe_workspace_path,
-)
-from app.service.problem.solution_metadata import (
-    desc_rel_path_for_source,
-    expected_behavior_label,
-    normalize_expected_behavior,
-    parse_solution_desc,
 )
 from app.service.problem.build_config import (
     BuildConfig,
     dumps_build_config,
     load_build_config,
 )
-from app.service.problem.test_spec import (
-    TESTS_SPEC_REL,
-    summarize_tests_spec,
-)
 from app.service.repository.revision import workspace_upstream_revision_display
 from app.service.access.policy import access_role
-from app.service.verification.runtime import coerce_int
 
 
 _STANDARD_CHECKER_CACHE_TTL_SEC = 2.0
@@ -380,127 +353,14 @@ def workspace_rel_file_exists(workspace: Path, rel: str | None) -> bool:
     except OSError:
         return False
 
-def _text_head_by_bytes(raw: str, max_bytes: int) -> tuple[str, bool]:
-    cap = max(1, int(max_bytes))
-    encoded = raw.encode('utf-8', errors='replace')
-    clipped = len(encoded) > cap
-    head = encoded[:cap].decode('utf-8', errors='replace')
-    return (head, clipped)
-
-def _file_head_text(path: Path, max_bytes: int) -> tuple[str, bool]:
-    cap = max(1, int(max_bytes))
-    try:
-        with path.open('rb') as f:
-            head = f.read(cap + 1)
-    except OSError:
-        return ('(unreadable)', False)
-    clipped = len(head) > cap
-    text = head[:cap].decode('utf-8', errors='replace')
-    return (text, clipped)
-
 def tests_spec_editor_context(workspace: Path, limit: int) -> dict:
-    limits = runtime().config_values.snapshot()
-    entries, path = read_tests_spec(
+    return runtime().problem_source_query_service.tests_spec_editor(
         workspace,
-        document_max_bytes=int(limits["TEXTAREA_MAX_BYTES"]),
-        sample_max_bytes=int(limits["STATEMENT_SAMPLE_MAX_BYTES"]),
+        limit,
     )
-    summary = summarize_tests_spec(entries)
-    rows: list[dict] = []
-    cap = max(1, int(limit))
-    truncated = len(entries) > cap
-    for idx, entry in enumerate(entries[:cap], start=1):
-        kind = entry['kind']
-        test_id = entry['id']
-        sample = entry['sample']
-        sample_input = entry['sample_input']
-        sample_output = entry['sample_output']
-        sample_output_validate = entry['sample_output_validate']
-        payload_path = tests_spec_payload_rel_path(test_id, kind) if test_id and kind else ''
-        payload_abs: Path | None = None
-        if payload_path:
-            try:
-                payload_abs = tests_spec_payload_file_path(workspace, test_id, kind)
-            except (HTTPException, ValueError):
-                payload_abs = None
-        payload = ''
-        preview_source = ''
-        payload_size_bytes = 0
-        manual_large_payload = False
-        preview_clipped = False
-        preview_bytes_limit = 0
-        payload_file_exists = False
-        if payload_abs is not None:
-            try:
-                payload_file_exists = bool(payload_abs.exists() and payload_abs.is_file() and (not payload_abs.is_symlink()))
-            except OSError:
-                payload_file_exists = False
-        if payload_file_exists and payload_abs is not None:
-            try:
-                payload_size_bytes = max(0, int(payload_abs.stat().st_size))
-            except OSError:
-                payload_size_bytes = 0
-        if kind == 'manual' and payload_size_bytes > runtime().config_values.TESTS_SPEC_MANUAL_INLINE_EDIT_MAX_BYTES:
-            manual_large_payload = True
-            preview_bytes_limit = runtime().config_values.TESTS_SPEC_MANUAL_PREVIEW_BYTES
-            if payload_file_exists and payload_abs is not None:
-                preview_source, preview_clipped = _file_head_text(payload_abs, runtime().config_values.TESTS_SPEC_MANUAL_PREVIEW_BYTES)
-            else:
-                fallback_payload = tests_spec_read_payload(workspace, entry)
-                payload_size_bytes = len(fallback_payload.encode('utf-8', errors='replace'))
-                preview_source, preview_clipped = _text_head_by_bytes(fallback_payload, runtime().config_values.TESTS_SPEC_MANUAL_PREVIEW_BYTES)
-        else:
-            payload = tests_spec_read_payload(workspace, entry)
-            preview_source = payload
-            if payload_size_bytes <= 0:
-                payload_size_bytes = len(payload.encode('utf-8', errors='replace'))
-        if manual_large_payload:
-            preview_text = preview_source.replace('\r\n', '\n').replace('\r', '\n')
-            if not preview_text:
-                preview_text = '(empty)'
-        else:
-            preview_text = _inline_text_preview(preview_source, runtime().config_values.TESTS_SPEC_PREVIEW_CHARS, runtime().config_values.TESTS_SPEC_PREVIEW_LINES)
-        rows.append(
-            {
-                'index': idx,
-                'id': test_id,
-                'kind': kind,
-                'sample': sample,
-                'sample_input': sample_input,
-                'sample_output': sample_output,
-                'sample_output_validate': sample_output_validate,
-                'custom_sample_input': bool(sample_input),
-                'custom_sample_output': bool(sample_output),
-                'payload_path': payload_path,
-                'payload': payload,
-                'preview': preview_text,
-                'payload_size_bytes': payload_size_bytes,
-                'payload_size_human': _human_size(payload_size_bytes),
-                'manual_large_payload': manual_large_payload,
-                'preview_bytes_limit': preview_bytes_limit,
-                'preview_clipped': preview_clipped,
-            }
-        )
-    return {'path': TESTS_SPEC_REL.as_posix(), 'exists': bool(path.exists() and path.is_file() and (not path.is_symlink())), 'entries': entries, 'rows': rows, 'summary': summary, 'total': len(entries), 'shown': len(rows), 'truncated': truncated}
 
 def _tests_spec_status_context(workspace: Path) -> dict:
-    limits = runtime().config_values.snapshot()
-    try:
-        entries, _path = read_tests_spec(
-            workspace,
-            document_max_bytes=int(limits["TEXTAREA_MAX_BYTES"]),
-            sample_max_bytes=int(limits["STATEMENT_SAMPLE_MAX_BYTES"]),
-        )
-    except ValueError:
-        return {'mode': 'invalid', 'display': 'invalid', 'total': 0, 'manual': 0, 'gen': 0, 'sample': 0}
-    summary = summarize_tests_spec(entries)
-    total = summary['total']
-    manual = summary['manual']
-    gen = summary['gen']
-    sample = summary['sample']
-    if total <= 0:
-        return {'mode': 'empty', 'display': 'empty', 'total': 0, 'manual': 0, 'gen': 0, 'sample': 0}
-    return {'mode': 'ready', 'display': f'{total} ({count_label(sample, "sample")})', 'total': total, 'manual': manual, 'gen': gen, 'sample': sample}
+    return runtime().problem_source_query_service.tests_spec_status(workspace)
 
 def _list_sources_with_extensions(workspace: Path, folder: str, extensions: set[str], limit: int=64) -> tuple[list[str], bool]:
     base = workspace / folder
@@ -531,39 +391,16 @@ def _list_sources_with_extensions(workspace: Path, folder: str, extensions: set[
     return (names, truncated)
 
 def solution_metadata_entry(workspace: Path, source_rel: str) -> dict:
-    source_path = source_rel
-    desc_path = desc_rel_path_for_source(source_path)
-    desc_exists = workspace_rel_file_exists(workspace, desc_path)
-    expected = 'unknown'
-    note = ''
-    errors: list[str] = []
-    origin = 'missing'
-    if desc_exists:
-        try:
-            desc_abs = safe_workspace_path(workspace, desc_path)
-            desc_text, _ = read_text_safe_limited(desc_abs, runtime().config_values.SOLUTION_NOTE_CHAR_LIMIT * 8)
-            parsed = parse_solution_desc(desc_text)
-            expected = parsed['expected_behavior']
-            note = parsed['note']
-            origin = 'metadata'
-        except Exception as exc:
-            errors = [str(exc)]
-            origin = 'invalid'
-    else:
-        errors = [f'{desc_path}: required descriptor is missing']
-    note_preview = note
-    if len(note_preview) > 160:
-        note_preview = note_preview[:157] + '...'
-    return {'source_path': source_path, 'file_name': Path(source_path).name, 'expected_behavior': expected, 'expected_behavior_label': expected_behavior_label(expected), 'note': note, 'note_preview': note_preview, 'desc_path': desc_path, 'desc_exists': desc_exists, 'desc_origin': origin, 'desc_errors': errors, 'is_accepted': expected == 'accepted'}
+    return runtime().problem_source_query_service.solution_entry(
+        workspace,
+        source_rel,
+    )
 
 def list_solution_entries(workspace: Path) -> tuple[list[dict], bool]:
-    sources, truncated = list_solution_sources(workspace, limit=runtime().config_values.SOLUTION_LIST_LIMIT)
-    entries = [solution_metadata_entry(workspace, rel) for rel in sources]
-    return (entries, truncated)
+    return runtime().problem_source_query_service.solution_entries(workspace)
 
 def resolve_build_accepted_solution_source(workspace: Path) -> str:
-    build_cfg, _ = read_build_config(workspace)
-    return build_cfg.get('accepted_solution_source', '')
+    return runtime().problem_source_query_service.accepted_solution_source(workspace)
 
 def _solutions_status_context(workspace: Path) -> dict:
     entries, truncated = list_solution_entries(workspace)
@@ -588,164 +425,11 @@ def _solutions_status_context(workspace: Path) -> dict:
     return {'mode': mode, 'display': display, 'accepted_source': accepted_source, 'accepted_exists': accepted_exists, 'count': total, 'count_display': count_display, 'truncated': bool(truncated)}
 
 def run_solution_options_context(workspace: Path) -> tuple[list[dict], str, bool]:
-    entries, truncated = list_solution_entries(workspace)
-    default_path = resolve_build_accepted_solution_source(workspace)
-    if default_path and (not any((row['source_path'] == default_path) for row in entries)):
-        default_path = ''
-    options: list[dict] = []
-    for row in entries:
-        path = row['source_path']
-        if not path:
-            continue
-        behavior = row['expected_behavior_label']
-        label = path if not behavior else f'{path} ({behavior})'
-        expected_behavior = row['expected_behavior']
-        options.append({'path': path, 'label': label, 'is_accepted': expected_behavior == 'accepted', 'expected_behavior': normalize_expected_behavior(expected_behavior)})
-    return (options, default_path, bool(truncated))
+    return runtime().problem_source_query_service.run_solution_options(workspace)
 
-def _tests_meta_text_field(item: dict[str, object], key: str) -> str:
-    value = item.get(key, '')
-    if value is None:
-        return ''
-    return str(value)
 
-def _run_test_options_from_verification(problem: str, verification_id: str, limit: int) -> tuple[list[dict], bool]:
-    options: list[dict] = []
-    truncated = False
-    try:
-        root = artifact_root(problem, verification_id)
-    except HTTPException:
-        return (options, truncated)
-    tests_dir = root / 'tests'
-    try:
-        if not tests_dir.exists() or not tests_dir.is_dir() or tests_dir.is_symlink():
-            return (options, truncated)
-    except OSError:
-        return (options, truncated)
-    names: list[str] = []
-    try:
-        with os.scandir(tests_dir) as entries:
-            for entry in entries:
-                name = entry.name
-                if not _K.RUN_TEST_NAME_RE.fullmatch(name):
-                    continue
-                try:
-                    if not entry.is_file(follow_symlinks=False):
-                        continue
-                except OSError:
-                    continue
-                names.append(name)
-    except OSError:
-        return (options, truncated)
-    names.sort()
-    cap = max(1, int(limit))
-    truncated = len(names) > cap
-    names = names[:cap]
-    tests_meta_by_name: dict[str, dict[str, str | bool]] = {}
-    tests_meta_path = root / 'logs' / 'tests_meta.json'
-    try:
-        if tests_meta_path.exists() and tests_meta_path.is_file() and (not tests_meta_path.is_symlink()):
-            tests_meta_text, _ = read_text_safe_limited(tests_meta_path, runtime().config_values.UI_JSON_CHAR_LIMIT)
-            payload = json.loads(tests_meta_text)
-            for item in payload:
-                index = coerce_int(item.get('index'), 0, 1, 10 ** 7)
-                if index <= 0:
-                    continue
-                tests_meta_by_name[f'{index:03d}.in'] = {
-                    'id': _tests_meta_text_field(item, 'id'),
-                    'kind': _tests_meta_text_field(item, 'kind'),
-                    'sample': bool(item.get('sample')),
-                    'desc': _tests_meta_text_field(item, 'desc'),
-                }
-    except Exception:
-        tests_meta_by_name = {}
-    for name in names:
-        item = tests_meta_by_name.get(name)
-        parts: list[str] = []
-        if item is not None:
-            test_id = item['id']
-            if test_id:
-                parts.append(f'id={test_id}')
-            kind = item['kind']
-            if kind in {'manual', 'gen'}:
-                parts.append(kind)
-            if item['sample']:
-                parts.append('sample')
-            desc = item['desc']
-            if desc and desc not in {'manual', 'gen'}:
-                parts.append(desc)
-        suffix = f" ({'; '.join(parts)})" if parts else ''
-        options.append({'name': name, 'label': f'{name}{suffix}'})
-    return (options, truncated)
-
-def _run_test_options_from_spec(workspace: Path, limit: int) -> tuple[list[dict], bool]:
-    limits = runtime().config_values.snapshot()
-    options: list[dict] = []
-    try:
-        entries, _ = read_tests_spec(
-            workspace,
-            document_max_bytes=int(limits["TEXTAREA_MAX_BYTES"]),
-            sample_max_bytes=int(limits["STATEMENT_SAMPLE_MAX_BYTES"]),
-        )
-    except Exception:
-        return (options, False)
-    cap = max(1, int(limit))
-    truncated = len(entries) > cap
-    for idx, row in enumerate(entries[:cap], start=1):
-        name = f'{idx:03d}.in'
-        parts: list[str] = []
-        test_id = row['id']
-        if test_id:
-            parts.append(f'id={test_id}')
-        kind = row['kind']
-        if kind in {'manual', 'gen'}:
-            parts.append(kind)
-        if row['sample']:
-            parts.append('sample')
-        suffix = f" ({'; '.join(parts)})" if parts else ''
-        options.append({'name': name, 'label': f'{name}{suffix}'})
-    return (options, truncated)
-
-def run_test_options_context(problem: str, workspace: Path, active_verification: dict | None) -> tuple[list[dict], bool, str]:
-    verification_id = ''
-    if active_verification is not None:
-        verification_id = active_verification['id']
-    if verification_id:
-        build_options, build_truncated = _run_test_options_from_verification(problem, verification_id, limit=runtime().config_values.RUN_TEST_SELECTOR_LIMIT)
-        if build_options:
-            return (build_options, build_truncated, f'verification {verification_id}')
-    spec_options, spec_truncated = _run_test_options_from_spec(workspace, limit=runtime().config_values.RUN_TEST_SELECTOR_LIMIT)
-    if spec_options:
-        return (spec_options, spec_truncated, 'tests/spec.json')
-    return ([], False, '')
-
-def _human_size(num_bytes: int) -> str:
-    size = max(0, int(num_bytes))
-    if size < 1024:
-        return f'{size} B'
-    value = float(size)
-    for unit in ('KB', 'MB', 'GB'):
-        value /= 1024.0
-        if value < 1024.0 or unit == 'GB':
-            return f'{value:.1f} {unit}'
-    return f'{size} B'
-
-def _inline_text_preview(raw: str, max_chars: int, max_lines: int) -> str:
-    text = raw.replace('\r\n', '\n').replace('\r', '\n')
-    lines = [line.rstrip('\n\r') for line in text.splitlines()]
-    clipped_by_lines = False
-    if max_lines > 0 and len(lines) > max_lines:
-        lines = lines[:max_lines]
-        clipped_by_lines = True
-    preview = '\n'.join(lines).strip()
-    if not preview:
-        preview = '(empty)'
-    clipped_by_chars = len(preview) > max_chars
-    if clipped_by_chars:
-        preview = preview[:max_chars - 3].rstrip() + '...'
-    elif clipped_by_lines:
-        preview += ' ...'
-    return preview
+def run_test_options_context(workspace: Path) -> tuple[list[dict], bool, str]:
+    return runtime().problem_source_query_service.run_test_options(workspace)
 
 def generator_sources_from_build_cfg(build_cfg: BuildConfig) -> list[str]:
     return list(build_cfg['generator_sources'])

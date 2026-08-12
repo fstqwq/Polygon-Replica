@@ -9,6 +9,11 @@ source snapshots, statement assembly and compilation, and Contest-specific
 package construction. HTTP adapters only validate request syntax, translate
 capability failures, and construct responses.
 
+`ContestProblemQueryService` authorizes the complete roster in one batch before
+touching any workspace, then assembles workspace revision, Source review, and
+readiness rows. An unreadable problem never provisions or reads a workspace;
+one unavailable readable workspace degrades only its own row.
+
 Relational state lives in the `contest_*` tables. Statement source and
 attachments live below the contest source root; products live below the global
 `artifacts_root/contests` tree. Build jobs are frozen before asynchronous work

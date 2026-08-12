@@ -38,6 +38,10 @@ from app.service.verification.read_model import (
     solution_source_paths,
     task_counts,
 )
+from app.service.verification.detail_read_model import (
+    VerificationDetailReadModel,
+    build_verification_detail_read_model,
+)
 from app.service.verification.task_store import VerificationTaskStore
 
 from app.service.judgehost.api import Judgehost
@@ -925,3 +929,17 @@ class VerificationService:
             }
 
         return self.task_store.read_lifecycle_snapshot(_read)
+
+    def verification_detail_read_model(
+        self,
+        verification_id: str,
+    ) -> VerificationDetailReadModel | None:
+        snapshot = self.verification_snapshot(verification_id)
+        if snapshot is None:
+            return None
+        return build_verification_detail_read_model(
+            snapshot,
+            display_limit=int(
+                self._config_values.AUX_DISPLAY_TEXT_LIMIT_BYTES
+            ),
+        )

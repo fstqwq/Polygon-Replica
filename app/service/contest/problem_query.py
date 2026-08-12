@@ -1,0 +1,407 @@
+"""Contest problem read model assembled outside the HTTP layer."""
+
+from pathlib import Path
+from typing import TypedDict
+
+import app.main_constant as constants
+from app.config import ConfigValues
+from app.service.access.query import AccessQuery
+from app.service.contest.service import ContestService
+from app.service.platform.fs.layout import StorageLayout
+from app.service.problem.content_review import (
+    ProblemContentReview,
+    problem_content_review,
+)
+from app.service.problem.readiness import (
+    ProblemReadiness,
+    ProblemReadinessService,
+    WorkspaceReadinessSubject,
+)
+from app.service.problem.resource_limits import resource_limit_display
+from app.service.problem.runtime_config import problem_config_limits
+from app.service.problem.source_file import require_regular_source_file
+from app.service.problem.source_tree import ProblemSourceTree, load_problem_source_tree
+from app.service.repository.workspace import WorkspaceService
+from app.service.repository.revision import workspace_upstream_revision_display
+from app.service.statement.context import statement_languages
+from app.service.verification.standard_checker import detect_standard_checker
+from app.service.workspace.state import WorkspaceState
+
+
+class ContestProblemDisplayRow(TypedDict):
+    contest_problem_id: int
+    idx: str
+    problem_id: int
+    statement_folder: str
+    problem_slug: str
+    slug_owner: str
+    slug_leaf: str
+    time_limit_ms: int
+    memory_limit_mb: int
+    time_limit_display: str
+    time_limit_warn: bool
+    memory_limit_display: str
+    memory_limit_warn: bool
+    mode: str
+    pass_limit: int
+    test_count: int
+    solution_count: int
+    solutions_truncated: bool
+    statement_language_names: list[str]
+    statement_language_count: int
+    output_component_label: str
+    output_component_display: str
+    validator_display: str
+    details_available: bool
+    content_review: ProblemContentReview | None
+    workspace_revision_display: str
+    workspace_revision_warn: bool
+    dirty: bool
+    readiness: ProblemReadiness | None
+    can_problem_read: bool
+    can_problem_write: bool
+    created_at: str
+
+
+def _workspace_revision_display(state: WorkspaceState) -> tuple[str, bool]:
+    local = state["revision_local"]
+    upstream = state["revision_upstream"]
+    return (
+        workspace_upstream_revision_display(local, upstream),
+        local is None or upstream is None or upstream > local,
+    )
+
+
+def _component_display(
+    root: Path,
+    source_tree: ProblemSourceTree,
+    key: str,
+    default_source: str,
+) -> tuple[str, bool]:
+    source = source_tree.build.get(key, default_source)
+    try:
+        path = require_regular_source_file(root, source)
+    except ValueError:
+        return "missing", False
+    if key == "checker_source":
+        detected = detect_standard_checker(path)
+        if detected:
+            return f"std::{detected}", True
+    return Path(source).name, True
+
+
+class ContestProblemQueryService:
+    """Assemble ordered contest rows after one batched authorization query."""
+
+    def __init__(
+        self,
+        contest_service: ContestService,
+        access_query: AccessQuery,
+        workspace_service: WorkspaceService,
+        readiness_service: ProblemReadinessService,
+        storage_layout: StorageLayout,
+        config_values: ConfigValues,
+    ) -> None:
+        self._contest_service = contest_service
+        self._access_query = access_query
+        self._workspace_service = workspace_service
+        self._readiness_service = readiness_service
+        self._storage_layout = storage_layout
+        self._config_values = config_values
+
+    def _resolved_workspace(
+        self,
+        state: WorkspaceState,
+        *,
+        problem_slug: str,
+        username: str,
+    ) -> Path | None:
+        try:
+            expected = self._storage_layout.workspace(username, problem_slug)
+            workspace = Path(state["path"]).resolve()
+        except OSError:
+            return None
+        if workspace != expected:
+            return None
+        if not workspace.is_dir() or not (workspace / ".git").is_dir():
+            return None
+        return workspace
+
+    def _workspace_states(
+        self,
+        rows: list[dict],
+        access_by_problem: dict,
+        username: str,
+        user_id: int,
+    ) -> tuple[dict[int, WorkspaceState], set[int]]:
+        readable = [
+            row
+            for row in rows
+            if access_by_problem[row["problem_id"]]["can_read"]
+        ]
+        problem_ids = [row["problem_id"] for row in readable]
+        states = (
+            self._workspace_service.workspace_rows(problem_ids, user_id)
+            if problem_ids
+            else {}
+        )
+        errors: set[int] = set()
+        provisioned = False
+        for row in readable:
+            problem_id = row["problem_id"]
+            state = states.get(problem_id)
+            if state is not None and self._resolved_workspace(
+                state,
+                problem_slug=row["problem_slug"],
+                username=username,
+            ) is not None:
+                continue
+            try:
+                self._workspace_service.ensure_workspace(
+                    row["problem_slug"], username, refresh_status=True
+                )
+                provisioned = True
+            except (OSError, RuntimeError, ValueError):
+                errors.add(problem_id)
+        if provisioned:
+            states = self._workspace_service.workspace_rows(problem_ids, user_id)
+
+        refreshed = False
+        for row in readable:
+            problem_id = row["problem_id"]
+            state = states.get(problem_id)
+            if (
+                problem_id in errors
+                or state is None
+                or state["revision_local"] is not None
+            ):
+                continue
+            workspace = self._resolved_workspace(
+                state,
+                problem_slug=row["problem_slug"],
+                username=username,
+            )
+            if workspace is None:
+                errors.add(problem_id)
+                continue
+            try:
+                self._workspace_service.refresh_workspace_status_with_ids(
+                    workspace, problem_id, user_id
+                )
+                refreshed = True
+            except (OSError, RuntimeError, ValueError):
+                errors.add(problem_id)
+        if refreshed:
+            states = self._workspace_service.workspace_rows(problem_ids, user_id)
+        return states, errors
+
+    def _readiness(
+        self,
+        rows: list[dict],
+        access_by_problem: dict,
+        states: dict[int, WorkspaceState],
+        errors: set[int],
+        username: str,
+    ) -> dict[int, ProblemReadiness]:
+        subjects: list[WorkspaceReadinessSubject] = []
+        for row in rows:
+            problem_id = row["problem_id"]
+            if not access_by_problem[problem_id]["can_read"] or problem_id in errors:
+                continue
+            state = states.get(problem_id)
+            if state is None:
+                continue
+            workspace = self._resolved_workspace(
+                state,
+                problem_slug=row["problem_slug"],
+                username=username,
+            )
+            if workspace is None:
+                errors.add(problem_id)
+                continue
+            subjects.append(
+                {
+                    "problem_id": problem_id,
+                    "workspace_id": state["id"],
+                    "workspace_path": workspace,
+                    "head_commit": state["head_commit"],
+                    "dirty": bool(state["dirty"]),
+                    "local_revision": state["revision_local"],
+                    "upstream_revision": state["revision_upstream"],
+                    "needs_update": bool(
+                        state["revision_upstream_higher"]
+                        or (state["revision_behind_count"] or 0) > 0
+                    ),
+                }
+            )
+        return (
+            self._readiness_service.readiness_many(
+                subjects, explain_verification=False
+            )
+            if subjects
+            else {}
+        )
+
+    def problem_rows(
+        self,
+        contest_id: int,
+        username: str,
+        user_id: int,
+        *,
+        include_review: bool,
+    ) -> list[ContestProblemDisplayRow]:
+        rows = self._contest_service.contest_problems(contest_id)
+        access = self._access_query.problem_contexts(
+            [row["problem_id"] for row in rows], user_id
+        )
+        states, errors = self._workspace_states(rows, access, username, user_id)
+        readiness = (
+            self._readiness(rows, access, states, errors, username)
+            if include_review
+            else {}
+        )
+        return [
+            self._problem_row(
+                row,
+                access[row["problem_id"]],
+                states.get(row["problem_id"]),
+                row["problem_id"] in errors,
+                readiness.get(row["problem_id"]),
+                username,
+            )
+            for row in rows
+        ]
+
+    def _problem_row(
+        self,
+        row: dict,
+        access: dict,
+        state: WorkspaceState | None,
+        workspace_error: bool,
+        readiness: ProblemReadiness | None,
+        username: str,
+    ) -> ContestProblemDisplayRow:
+        problem_id = row["problem_id"]
+        problem_slug = row["problem_slug"]
+        slug_owner, _separator, slug_leaf = problem_slug.partition("/")
+        can_read = bool(access["can_read"])
+        can_write = bool(access["can_write"])
+        time_limit_ms = int(constants.GENERAL_CONFIG_DEFAULTS["time_limit_ms"])
+        memory_limit_mb = int(constants.GENERAL_CONFIG_DEFAULTS["memory_limit_mb"])
+        mode = str(constants.GENERAL_CONFIG_DEFAULTS["mode"])
+        pass_limit = int(constants.GENERAL_CONFIG_DEFAULTS["pass_limit"])
+        revision_display = "no problem access" if not can_read else "unavailable"
+        revision_warn = not can_read
+        dirty = False
+        test_count = 0
+        solution_count = 0
+        solutions_truncated = False
+        languages: list[str] = []
+        output_label = "Checker"
+        output_display = "missing"
+        validator_display = "missing"
+        details_available = False
+        review: ProblemContentReview | None = None
+
+        try:
+            if not can_read or workspace_error or state is None:
+                raise RuntimeError("workspace unavailable")
+            workspace = self._resolved_workspace(
+                state, problem_slug=problem_slug, username=username
+            )
+            if workspace is None:
+                raise RuntimeError("workspace unavailable")
+            revision_display, revision_warn = _workspace_revision_display(
+                state
+            )
+            dirty = bool(state["dirty"])
+            values = self._config_values.snapshot()
+            source_tree = load_problem_source_tree(
+                workspace,
+                problem_limits=problem_config_limits(self._config_values),
+                tests_spec_max_bytes=int(values["TEXTAREA_MAX_BYTES"]),
+                statement_sample_max_bytes=int(
+                    values["STATEMENT_SAMPLE_MAX_BYTES"]
+                ),
+            )
+            time_limit_ms = source_tree.problem["time_limit_ms"]
+            memory_limit_mb = source_tree.problem["memory_limit_mb"]
+            mode = source_tree.problem["mode"]
+            pass_limit = source_tree.problem["pass_limit"]
+            test_count = len(source_tree.tests)
+            all_solutions = tuple(source_tree.solution_behaviors)
+            solution_limit = int(self._config_values.SOLUTION_LIST_LIMIT)
+            solution_count = min(len(all_solutions), solution_limit)
+            solutions_truncated = len(all_solutions) > solution_limit
+            languages = statement_languages(workspace)
+            validator_display, validator_ready = _component_display(
+                workspace, source_tree, "validator_source", "validators/validator.cpp"
+            )
+            component_key = (
+                "interactor_source"
+                if mode == "interactive"
+                else "checker_source"
+            )
+            component_default = (
+                "interactors/interactor.cpp"
+                if mode == "interactive"
+                else "checkers/checker.cpp"
+            )
+            output_label = "Interactor" if mode == "interactive" else "Checker"
+            output_display, output_ready = _component_display(
+                workspace, source_tree, component_key, component_default
+            )
+            review = problem_content_review(
+                time_limit_ms=time_limit_ms,
+                memory_limit_mb=memory_limit_mb,
+                test_count=test_count,
+                tests_valid=True,
+                solution_count=solution_count,
+                solutions_truncated=solutions_truncated,
+                main_solution_ready=bool(
+                    source_tree.build.get("accepted_solution_source")
+                ),
+                output_component_label=output_label,
+                output_component_display=output_display,
+                output_component_ready=output_ready,
+                validator_display=validator_display,
+                validator_ready=validator_ready,
+                statement_language_names=languages,
+            )
+            details_available = True
+        except (OSError, RuntimeError, ValueError):
+            if can_read:
+                revision_display = "unavailable"
+                revision_warn = True
+
+        return {
+            "contest_problem_id": row["contest_problem_id"],
+            "idx": row["idx"],
+            "problem_id": problem_id,
+            "statement_folder": row["statement_folder"],
+            "problem_slug": problem_slug,
+            "slug_owner": slug_owner,
+            "slug_leaf": slug_leaf,
+            "time_limit_ms": time_limit_ms,
+            "memory_limit_mb": memory_limit_mb,
+            **resource_limit_display(time_limit_ms, memory_limit_mb),
+            "mode": mode,
+            "pass_limit": pass_limit,
+            "test_count": test_count,
+            "solution_count": solution_count,
+            "solutions_truncated": solutions_truncated,
+            "statement_language_names": languages,
+            "statement_language_count": len(languages),
+            "output_component_label": output_label,
+            "output_component_display": output_display,
+            "validator_display": validator_display,
+            "details_available": details_available,
+            "content_review": review,
+            "workspace_revision_display": revision_display,
+            "workspace_revision_warn": revision_warn,
+            "dirty": dirty,
+            "readiness": readiness,
+            "can_problem_read": can_read,
+            "can_problem_write": can_write,
+            "created_at": row["created_at"],
+        }

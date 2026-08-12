@@ -71,6 +71,12 @@ work. Cache payloads remain disposable. See the
 [execution protocol](../../../../protocol/execution.md) for graph, identity,
 result, and availability semantics.
 
+`verification_detail_read_model()` reads the parent, detail rows, tasks,
+diagnostics, and Cache locators from one SQLite snapshot, then derives program
+and testcase facts. Historical runtime limits and expected behavior come only
+from that snapshot; current workspace Source is not used to reinterpret an old
+Verification.
+
 `VerificationJudgehostAdapter` is the sole verification persistence boundary
 presented to Judgehost. It reads the selected test refs and run configuration
 as one SQLite snapshot, validates every opaque `CaseBinding` against the

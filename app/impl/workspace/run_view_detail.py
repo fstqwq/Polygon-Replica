@@ -1,15 +1,9 @@
-import app.main_constant as _K
-import json
 from pathlib import Path
 from typing import cast
 from app.impl.runtime.dependency import runtime
 from app.impl.workspace.artifact import verification_artifact_file, verification_blob_virtual_rel
 from app.impl.workspace.context import count_label
-from app.impl.workspace.problem_config import read_problem_config
-from app.impl.workspace.context_operation import (
-    solution_metadata_entry,
-    workspace_rel_file_exists,
-)
+from app.impl.workspace.context_operation import workspace_rel_file_exists
 from app.impl.workspace.context_run_detail import (
     _cap_run_test_feedback_files,
     _cap_summary_list,
@@ -24,25 +18,17 @@ from app.impl.workspace.context_run_detail import (
     _run_source_from_summary,
 )
 from app.impl.workspace.context_verification import normalize_program_id_token
-from app.service.judgehost.case_result import decode_case_test_row
 from app.service.judgehost.runpipe_transcript import parse_runpipe_transcript
 from app.service.platform.error_text import bounded_display_text
 from app.service.platform.workspace_path import (
     normalize_optional_component_source_path_safe,
     normalize_workspace_rel_path,
 )
-from app.service.verification.runtime import effective_run_timeout_ms
-from app.service.problem.solution_metadata import (
-    expected_behavior_label,
-    normalize_expected_behavior,
-)
+from app.service.problem.solution_metadata import expected_behavior_label
 from app.service.verification.task_store import VerificationTaskRow
 from app.service.verification.types import VerificationTaskStatus
 from app.service.platform.process import is_canonical_artifact_id
-from app.impl.workspace.run_view_lifecycle_card import (
-    load_verification_detail_summary,
-    _verification_tests_meta_stats,
-)
+from app.impl.workspace.run_view_lifecycle_card import _verification_tests_meta_stats
 from app.impl.workspace.run_test_generation import (
     build_test_generation_views,
     generation_warning_message,
@@ -320,262 +306,6 @@ def build_run_detail_context(
         runtime().config_values.snapshot()["AUX_DISPLAY_TEXT_LIMIT_BYTES"]
     )
 
-    def _task_graph_column_keys_from_task_rows(
-        rows: list[VerificationTaskRow],
-    ) -> list[str]:
-        values: list[str] = []
-        for row in rows:
-            task_kind = str(row['task_kind'] or '')
-            if task_kind not in {_TASK_KIND_SOLUTION_RUN, _TASK_KIND_MAIN_CORRECT}:
-                continue
-            program_id = str(row['program_id'] or '')
-            if program_id and program_id not in values:
-                values.append(program_id)
-        return values
-
-    def _program_ids_from_task_rows(rows: list[VerificationTaskRow]) -> list[str]:
-        return _task_graph_column_keys_from_task_rows(rows)
-
-    def _task_counts_from_rows(rows: list[VerificationTaskRow]) -> dict[str, object]:
-        counts = {
-            'total': 0,
-            'pending': 0,
-            'queued': 0,
-            'running': 0,
-            'done': 0,
-            'failed': 0,
-            'cancelled': 0,
-            'by_kind': {},
-        }
-        for row in rows:
-            status = str(row['status'] or '')
-            display_status = 'running' if status == VerificationTaskStatus.LEASED else status
-            counts['total'] = int(counts['total']) + 1
-            if display_status in counts:
-                counts[display_status] = int(counts[display_status]) + 1
-        return counts
-
-    def _running_tasks_from_rows(rows: list[VerificationTaskRow]) -> list[dict[str, str]]:
-        values: list[dict[str, str]] = []
-        for row in rows:
-            if row['status'] != VerificationTaskStatus.LEASED:
-                continue
-            source_path = str(row['source_path'] or '')
-            source_label = Path(source_path).name if source_path else '-'
-            test_name = str(row['test_name'] or '')
-            task_kind = str(row['task_kind'] or '')
-            kind_label = task_kind.replace('-', ' ').title()
-            label = ' / '.join(token for token in [kind_label, source_label, test_name] if token)
-            values.append(
-                {
-                    'task_id': str(row['id'] or ''),
-                    'label': label,
-                }
-            )
-        return values
-
-    def _task_graph_task_status_by_program_and_test(
-        rows: list[VerificationTaskRow],
-    ) -> dict[tuple[str, str], str]:
-        values: dict[tuple[str, str], str] = {}
-        for row in rows:
-            task_kind = str(row['task_kind'] or '')
-            if task_kind not in {_TASK_KIND_SOLUTION_RUN, _TASK_KIND_MAIN_CORRECT}:
-                continue
-            program_id = str(row['program_id'] or '')
-            test_name = normalize_run_test_name_token(str(row['test_name'] or ''))
-            if (not program_id) or (not test_name):
-                continue
-            values[(program_id, test_name)] = str(row['status'] or '')
-        return values
-
-    def _late_task_diagnostic_text(row: VerificationTaskRow) -> str:
-        rendered = str(row.get("late_diagnostic_text") or "")
-        if rendered:
-            return bounded_display_text(rendered, limit_bytes=display_limit)
-        raw_items = row.get("late_diagnostics")
-        if not isinstance(raw_items, list):
-            return ""
-        messages: list[str] = []
-        for raw_item in raw_items:
-            if not isinstance(raw_item, dict):
-                continue
-            text = str(raw_item.get("text") or "")
-            if not text:
-                continue
-            kind = str(raw_item.get("kind") or "diagnostic")
-            hostname = str(raw_item.get("hostname") or "unknown host")
-            received_at = str(raw_item.get("received_at") or "")
-            label = f"late {kind} from {hostname}"
-            if received_at:
-                label = f"{label} at {received_at}"
-            messages.append(f"[{label}]\n{text}")
-        return bounded_display_text(
-            "\n\n".join(messages),
-            limit_bytes=display_limit,
-        )
-
-    def _task_graph_fallback_rows(
-        rows: list[VerificationTaskRow],
-        *,
-        verification_record: dict[str, str] | None,
-        verification_details: dict[str, object],
-        verification_mode: str,
-    ) -> dict[str, dict[str, object]]:
-        grouped: dict[str, dict[str, object]] = {}
-        for row in rows:
-            task_kind = str(row['task_kind'] or '')
-            if task_kind not in {_TASK_KIND_SOLUTION_RUN, _TASK_KIND_MAIN_CORRECT}:
-                continue
-            source_path = str(row['source_path'] or '')
-            if not source_path:
-                continue
-            program_id = str(row['program_id'] or '')
-            if not program_id:
-                continue
-            item = grouped.setdefault(
-                program_id,
-                {
-                    'source_path': source_path,
-                    'task_kind': task_kind,
-                    'expected_behavior': str(row['expected_behavior'] or ''),
-                    'statuses': [],
-                    'tests_total': 0,
-                    'rows': [],
-                },
-            )
-            cast(list[str], item['statuses']).append(str(row['status'] or ''))
-            item['tests_total'] = int(item['tests_total']) + 1
-            cast(list[VerificationTaskRow], item['rows']).append(row)
-        values: dict[str, dict[str, object]] = {}
-        verification_status = str(verification_details.get('status') or (verification_record['status'] if verification_record is not None else '') or '')
-        verification_error = str(verification_details.get('error') or verification_record['fail_reason'] if verification_record is not None else '')
-        for program_id, item in grouped.items():
-            statuses = list(cast(list[str], item['statuses']))
-            grouped_rows = sorted(
-                cast(list[VerificationTaskRow], item['rows']),
-                key=lambda current: (_run_test_sort_key(str(current['test_name'] or '')), str(current['id'] or '')),
-            )
-            if VerificationTaskStatus.LEASED in statuses:
-                status = 'running'
-            elif VerificationTaskStatus.QUEUED in statuses:
-                status = 'queued'
-            elif VerificationTaskStatus.PENDING in statuses:
-                status = 'pending'
-            elif VerificationTaskStatus.FAILED in statuses:
-                status = 'failed'
-            elif VerificationTaskStatus.CANCELLED in statuses:
-                status = 'cancelled'
-            elif grouped_rows and all(
-                current['status'] == VerificationTaskStatus.DONE
-                for current in grouped_rows
-            ):
-                status = 'ok'
-            else:
-                status = 'pending'
-            tests: list[dict[str, object]] = []
-            compile_log = ''
-            compile_diagnostics: list[dict[str, object]] = []
-            error_text = ''
-            late_diagnostic_texts: list[str] = []
-            max_time_ms = 0
-            max_memory_kb = 0
-            for row in grouped_rows:
-                row_status = str(row['status'] or '')
-                if (
-                    row_status in {VerificationTaskStatus.DONE, VerificationTaskStatus.FAILED}
-                    and str(row['verdict'] or '').upper() != 'SK'
-                ):
-                    test_row = decode_case_test_row(
-                        row['result'],
-                        test_name=str(row['test_name'] or ''),
-                    )
-                    late_diagnostic_text = _late_task_diagnostic_text(row)
-                    if late_diagnostic_text:
-                        canonical_message = str(test_row.get('message') or '')
-                        test_row['message'] = bounded_display_text(
-                            "\n\n".join(
-                                value
-                                for value in (
-                                    canonical_message,
-                                    late_diagnostic_text,
-                                )
-                                if value
-                            ),
-                            limit_bytes=display_limit,
-                        )
-                    test_row['late_diagnostics'] = list(
-                        cast(list[object], row.get('late_diagnostics') or [])
-                    )
-                    test_row['late_diagnostic_text'] = late_diagnostic_text
-                    tests.append(test_row)
-                    runtime_ms = int(test_row.get('time_ms') or 0)
-                    cpu_ms = int(test_row.get('time_user_ms') or runtime_ms)
-                    memory_kb = int(test_row.get('memory_kb') or 0)
-                    if cpu_ms > max_time_ms:
-                        max_time_ms = cpu_ms
-                    if memory_kb > max_memory_kb:
-                        max_memory_kb = memory_kb
-                if (not compile_log) and str(row['compile_log'] or ''):
-                    compile_log = str(row['compile_log'] or '')
-                diagnostics_json = str(row['diagnostics_json'] or '[]')
-                try:
-                    task_diagnostics = cast(list[dict[str, object]], json.loads(diagnostics_json))
-                except Exception:
-                    task_diagnostics = []
-                if task_diagnostics:
-                    compile_diagnostics.extend(task_diagnostics)
-                if (not error_text) and str(row['error_text'] or ''):
-                    error_text = str(row['error_text'] or '')
-                late_diagnostic_text = _late_task_diagnostic_text(row)
-                if (
-                    late_diagnostic_text
-                    and late_diagnostic_text not in late_diagnostic_texts
-                ):
-                    late_diagnostic_texts.append(late_diagnostic_text)
-            if late_diagnostic_texts:
-                error_text = bounded_display_text(
-                    "\n\n".join(
-                        value
-                        for value in (error_text, *late_diagnostic_texts)
-                        if value
-                    ),
-                    limit_bytes=display_limit,
-                )
-            summary: dict[str, object] = {
-                'mode': verification_mode,
-                'source': str(item['source_path']),
-                'task_kind': str(item['task_kind']),
-                'expected_behavior': str(item['expected_behavior']),
-                'tests_total': int(item['tests_total']),
-                'tests': tests,
-                'compile_log': compile_log,
-                'compile_diagnostics': compile_diagnostics,
-                'error': error_text,
-                'usage': {
-                    'tests': len(tests),
-                    'time_ms_total': max_time_ms,
-                    'time_user_ms_total': max_time_ms,
-                    'time_wall_ms_total': max_time_ms,
-                    'memory_kb_peak': max_memory_kb,
-                },
-            }
-            if VerificationTaskStatus.CANCELLED in statuses:
-                summary['cancelled'] = True
-                if verification_status in {'failed', 'cancelled'} and verification_error:
-                    summary['error'] = summary['error'] or verification_error
-            values[program_id] = {
-                'id': program_id,
-                'artifact_verification_id': verification_details.get('artifact_verification_id') or requested_verification_id or '',
-                'mode': verification_mode,
-                'status': status,
-                'source_label': str(item['source_path']),
-                'summary': summary,
-                'created_at': verification_record['created_at'] if verification_record is not None else '',
-                'finished_at': _latest_iso_timestamp([str(current['finished_at'] or '') for current in grouped_rows]) or (verification_record['finished_at'] if verification_record is not None else ''),
-            }
-        return values
-
     def _missing_solution_cell(task_status: str) -> dict[str, object]:
         if task_status == VerificationTaskStatus.LEASED:
             return {
@@ -618,25 +348,6 @@ def build_run_detail_context(
     workspace_id = int(ctx['workspace']['id'])
     problem_slug = ctx['problem']['slug']
     username = ctx['user']['username']
-    fallback_time_limit_ms = 0
-    fallback_timeout_ms = 0
-    try:
-        _payload, general_cfg, _cfg_path = read_problem_config(workspace)
-        fallback_time_limit_ms = general_cfg['time_limit_ms']
-        fallback_timeout_ms = effective_run_timeout_ms(
-            fallback_time_limit_ms,
-            mode=general_cfg['mode'],
-            pass_limit=general_cfg['pass_limit'],
-            default_ms=int(_K.GENERAL_CONFIG_DEFAULTS['time_limit_ms']),
-            min_ms=int(runtime().config_values.GENERAL_TIME_LIMIT_MIN_MS),
-            max_ms=int(runtime().config_values.GENERAL_TIME_LIMIT_MAX_MS),
-            pass_fail_slack_sec=int(runtime().config_values.RUN_WALL_TIME_SLACK_PASS_FAIL_SEC),
-            multi_pass_slack_sec=int(runtime().config_values.RUN_WALL_TIME_SLACK_PASS_LIMIT_SEC),
-            interactive_slack_sec=int(runtime().config_values.RUN_WALL_TIME_SLACK_INTERACTIVE_SEC),
-        )
-    except Exception:
-        fallback_time_limit_ms = 0
-        fallback_timeout_ms = 0
     selected_program_ids: list[str] = []
     verification_program_rows: dict[str, dict[str, object]] = {}
     verification_id_hint = normalize_run_id_token(requested_verification_id)
@@ -644,14 +355,16 @@ def build_run_detail_context(
     task_rows: list[VerificationTaskRow] = []
     has_task_graph = False
     source_verification_id = verification_id_hint if is_canonical_artifact_id(verification_id_hint) else ''
-    verification_snapshot = (
-        runtime().verification_service.verification_snapshot(verification_id_hint)
+    verification_read_model = (
+        runtime().verification_service.verification_detail_read_model(
+            verification_id_hint
+        )
         if verification_id_hint
         else None
     )
     verification_record = (
-        verification_snapshot["record"]
-        if verification_snapshot is not None
+        verification_read_model["record"]
+        if verification_read_model is not None
         else None
     )
     verification_access = runtime().access_query.verification_context(
@@ -662,43 +375,17 @@ def build_run_detail_context(
     )
     verification_visible = verification_access["can_view"]
     if verification_visible and verification_record is not None:
-        task_rows = cast(
-            list[VerificationTaskRow],
-            verification_snapshot["tasks"],
-        )
-        has_task_graph = bool(task_rows)
-        verification_detail_payload = verification_snapshot["detail"]
-        verification_details = {
-            **verification_detail_payload,
-            **runtime().verification_service.verification_runtime_summary_from_tasks(
-                cast(list[dict[str, object]], verification_snapshot["tasks"])
-            ),
-            'verification_id': verification_id_hint,
-            'artifact_verification_id': verification_id_hint,
-            'status': verification_record['status'],
-            'created_at': verification_record['created_at'],
-            'finished_at': verification_record['finished_at'] or '',
-        }
-        verification_details['task_graph'] = has_task_graph
+        assert verification_read_model is not None
+        task_rows = verification_read_model["tasks"]
+        has_task_graph = verification_read_model["has_task_graph"]
+        verification_details = verification_read_model["details"]
         source_verification_id = str(verification_details.get('artifact_verification_id') or verification_id_hint or '')
         if not is_canonical_artifact_id(source_verification_id):
             source_verification_id = ''
-        verification_mode = str(verification_details.get('mode') or '')
-        if verification_mode not in {'pass-fail', 'interactive'}:
-            verification_mode = 'malformed'
+        verification_mode = verification_read_model["mode"]
         if has_task_graph:
-            verification_program_rows = _task_graph_fallback_rows(
-                task_rows,
-                verification_record=verification_record,
-                verification_details=verification_details,
-                verification_mode=verification_mode,
-            )
-            if not selected_program_ids:
-                selected_program_ids.extend(
-                    _task_graph_column_keys_from_task_rows(
-                        task_rows,
-                    )
-                )
+            verification_program_rows = verification_read_model["program_rows"]
+            selected_program_ids = verification_read_model["program_ids"]
         else:
             raw_programs = verification_details.get('programs') if isinstance(verification_details.get('programs'), dict) else {}
             raw_program_order = verification_details.get('program_order') if isinstance(verification_details.get('program_order'), list) else []
@@ -723,55 +410,18 @@ def build_run_detail_context(
                 }
     runtime_threshold_time_limit_ms = time_limit_ms_from_run_config_json(
         str(verification_details.get('run_config_json') or ''),
-        default_ms=fallback_time_limit_ms,
+        default_ms=0,
     )
     verification_created_at = ''
     if not verification_created_at and verification_record is not None:
         verification_created_at = verification_record['created_at']
-    solutions = []
-    preferred_solution_program_ids = _program_ids_from_task_rows(task_rows) if has_task_graph else []
+    preferred_solution_program_ids = (
+        verification_read_model["program_ids"]
+        if has_task_graph and verification_read_model is not None
+        else []
+    )
     if preferred_solution_program_ids:
         selected_program_ids = list(preferred_solution_program_ids)
-    expected_by_program_id: dict[str, str] = {}
-    expected_by_source: dict[str, str] = {}
-    for item in solutions:
-        expected_token = normalize_expected_behavior((item.get('expected_behavior') or 'unknown'))
-        if expected_token == 'unknown':
-            continue
-        program_token = normalize_program_id_token(item.get('program_id'))
-        if program_token and program_token not in expected_by_program_id:
-            expected_by_program_id[program_token] = expected_token
-        source_token = normalize_optional_component_source_path_safe(
-            (item.get('source_path') or ''),
-            'solutions',
-            'solution path',
-        )
-        if source_token and source_token not in expected_by_source:
-            expected_by_source[source_token] = expected_token
-    expected_by_source_cache: dict[str, str] = dict(expected_by_source)
-
-    def _expected_from_workspace_source(source_rel: str) -> str:
-        safe_source = normalize_optional_component_source_path_safe(
-            source_rel,
-            'solutions',
-            'solution path',
-        )
-        if not safe_source:
-            return ''
-        cached = normalize_expected_behavior((expected_by_source_cache.get(safe_source) or 'unknown'))
-        if cached != 'unknown':
-            return cached
-        expected_token = 'unknown'
-        try:
-            entry = solution_metadata_entry(workspace, safe_source)
-            expected_token = normalize_expected_behavior((entry.get('expected_behavior') or 'unknown'))
-        except Exception:
-            expected_token = "unknown"
-        if expected_token != 'unknown':
-            expected_by_source_cache[safe_source] = expected_token
-            return expected_token
-        return ''
-
     def _is_solution_column_source(source_value: str) -> bool:
         safe_source = normalize_optional_component_source_path_safe(
             source_value,
@@ -870,10 +520,10 @@ def build_run_detail_context(
         for test_name, view in test_generation_views.items()
     }
     task_graph_task_status_by_program_and_test: dict[tuple[str, str], str] = {}
-    if has_task_graph:
-        task_graph_task_status_by_program_and_test = _task_graph_task_status_by_program_and_test(
-            task_rows,
-        )
+    if has_task_graph and verification_read_model is not None:
+        task_graph_task_status_by_program_and_test = verification_read_model[
+            "task_status_by_program_and_test"
+        ]
         for row in task_rows:
             test_name = normalize_run_test_name_token(str(row['test_name'] or ''))
             if test_name:
@@ -945,14 +595,6 @@ def build_run_detail_context(
                 source_section = 'files'
                 source_path = source_rel
         expected_behavior = _run_expected_behavior_from_summary(summary)
-        if expected_behavior == 'unknown':
-            mapped_expected = expected_by_program_id.get(program_id)
-            if not mapped_expected and source_rel:
-                mapped_expected = expected_by_source.get(source_rel)
-            if not mapped_expected and source_rel:
-                mapped_expected = _expected_from_workspace_source(source_rel)
-            if mapped_expected:
-                expected_behavior = mapped_expected
         matched, completed, observed_pass, match_reason = verification_solution_match(expected_behavior, status, summary)
         required_codes, allowed_codes = expected_status_rule(expected_behavior)
         expected_display = status_rule_expected_display(expected_behavior)
@@ -979,8 +621,6 @@ def build_run_detail_context(
         )
         has_materialized_tests = bool(tests_raw)
         timeout_limit_ms = _run_timeout_ms_from_summary(summary)
-        if timeout_limit_ms <= 0:
-            timeout_limit_ms = fallback_timeout_ms
         for idx, item in enumerate(tests_raw, start=1):
                 test_name = (item.get('test') or idx)
                 if not test_name:
@@ -1773,16 +1413,9 @@ def build_run_detail_context(
         last_updated_candidates.append(verification_created_at)
     last_updated = _latest_iso_timestamp(last_updated_candidates)
     verification_id = verification_id_hint if verification_visible else ""
-    if (not verification_details) and verification_id:
-        detail_snapshot = load_verification_detail_summary(problem_id, verification_id)
-        detail_details = detail_snapshot.get('details')
-        if detail_details is not None:
-            verification_details = dict(detail_details)
-        if not verification_created_at:
-            verification_created_at = (detail_snapshot.get('created_at') or '')
-    if has_task_graph:
-        task_counts = _task_counts_from_rows(task_rows)
-        running_tasks = _running_tasks_from_rows(task_rows)
+    if has_task_graph and verification_read_model is not None:
+        task_counts = verification_read_model["task_counts"]
+        running_tasks = verification_read_model["running_tasks"]
     else:
         task_counts = dict(verification_details.get('task_counts') or {}) if isinstance(verification_details.get('task_counts'), dict) else {}
         running_tasks = list(verification_details.get('running_tasks') or []) if isinstance(verification_details.get('running_tasks'), list) else []

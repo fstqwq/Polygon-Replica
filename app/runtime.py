@@ -15,6 +15,7 @@ from app.service.contest.build import ContestBuildService
 from app.service.contest.package import ContestPackageService
 from app.service.contest.snapshot import ContestSourceSnapshotService
 from app.service.contest.statement import ContestStatementService
+from app.service.contest.problem_query import ContestProblemQueryService
 from app.service.platform.fs.layout import StorageLayout
 from app.service.verification.service import VerificationService
 from app.service.verification.completion import VerificationTaskCompletionService
@@ -33,6 +34,7 @@ from app.service.problem_package.service import (
 )
 from app.service.problem_package.workflow import PublishedMaterializationWorkflow
 from app.service.problem.readiness import ProblemReadinessService
+from app.service.problem.query import ProblemSourceQueryService
 from app.service.repository.git import GitService
 from app.service.repository.merge import WorkspaceMergeService
 from app.service.platform.runtime_blob_store import RuntimeBlobStore
@@ -83,6 +85,7 @@ class ApplicationRuntime:  # pylint: disable=too-many-instance-attributes
     contest_package_service: ContestPackageService = field(init=False)
     contest_snapshot_service: ContestSourceSnapshotService = field(init=False)
     contest_statement_service: ContestStatementService = field(init=False)
+    contest_problem_query_service: ContestProblemQueryService = field(init=False)
     git_service: GitService = field(init=False)
     workspace_merge_service: WorkspaceMergeService = field(init=False)
     storage_layout: StorageLayout = field(init=False)
@@ -108,6 +111,7 @@ class ApplicationRuntime:  # pylint: disable=too-many-instance-attributes
         init=False
     )
     problem_readiness_service: ProblemReadinessService = field(init=False)
+    problem_source_query_service: ProblemSourceQueryService = field(init=False)
     worker_queue_service: WorkerQueueService = field(init=False)
     artifact_cleanup_service: ArtifactCleanupService = field(init=False)
     maintenance_admission_gate: MaintenanceAdmissionGate = field(init=False)
@@ -315,6 +319,17 @@ class ApplicationRuntime:  # pylint: disable=too-many-instance-attributes
         self.problem_readiness_service = ProblemReadinessService(
             self.verification_service,
             self.problem_package_service,
+        )
+        self.problem_source_query_service = ProblemSourceQueryService(
+            self.config_values,
+        )
+        self.contest_problem_query_service = ContestProblemQueryService(
+            self.contest_service,
+            self.access_query,
+            self.workspace_service,
+            self.problem_readiness_service,
+            self.storage_layout,
+            self.config_values,
         )
         self.export_service = ExportService(
             self.db,
