@@ -1167,9 +1167,11 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         self.assertIn("Verifications", html)
 
     def test_admin_routes_do_not_keep_settings_compatibility_paths(self) -> None:
+        from fastapi.routing import iter_route_contexts
+
         from app.main import app
 
-        route_paths = {route.path for route in app.routes}
+        route_paths = {route.path for route in iter_route_contexts(app.routes)}
         self.assertTrue(
             {
                 "/admin",
