@@ -208,8 +208,8 @@ class TestSecurity(E2ETestBase):
         self.assertRegex(injected_salt, r"^[0-9a-f]{32}$")
         self.assertNotEqual(injected_salt, real_salt)
 
-    def test_artifact_download_denies_cross_workspace_access(self) -> None:
-        workspace_service.grant_repo_access("alice/sample", "bob", "owner")
+    def test_problem_reader_can_download_indexed_foreign_workspace_artifact(self) -> None:
+        workspace_service.grant_repo_access("alice/sample", "bob", "read")
         workspace_service.ensure_workspace("alice/sample", "bob")
 
         alice_ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
@@ -217,13 +217,11 @@ class TestSecurity(E2ETestBase):
         alice_workspace_id = int(alice_ctx["workspace"]["id"])
 
         verification_id = canonical_test_verification_id(f"ver-sec-artifact-{uuid.uuid4().hex[:8]}")
-        _build_ref, artifact_root = self._fixture_verification_root(
+        self._fixture_verification_root(
             problem="alice/sample",
             workspace_id=alice_workspace_id,
             verification_id=verification_id,
         )
-        (artifact_root / "logs").mkdir(parents=True, exist_ok=True)
-        (artifact_root / "logs" / "compile.log").write_text("ok\n", encoding="utf-8")
         db_execute(
             """
             INSERT INTO verifications(id,problem_id,workspace_id,signature,kind,status,fail_reason,created_at,finished_at)
@@ -241,10 +239,64 @@ class TestSecurity(E2ETestBase):
                 "2026-02-25T00:00:01Z",
             ],
         )
-        with self.assertRaises(HTTPException) as denied:
-            artifact_file("alice/sample", "bob", verification_id, "logs/compile.log")
-        self.assertEqual(denied.exception.status_code, 404)
-        self.assertIn("workspace", str(denied.exception.detail))
+        token = config.verification_service.store_verification_blob(
+            verification_id=verification_id,
+            test_name="001.in",
+            role="output",
+            file_name="001.out",
+            payload=b"visible-output\n",
+        )
+        task_id = f"task-reader-artifact-{uuid.uuid4().hex[:8]}"
+        db_execute(
+            """
+            INSERT INTO verification_tasks(
+                id,verification_id,predecessor_task_id,task_kind,source_path,
+                program_id,test_name,expected_behavior,final_status,result_json,
+                finished_at,created_at
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            [
+                task_id,
+                verification_id,
+                None,
+                "solution-run",
+                "solutions/std.cpp",
+                "solution-0",
+                "001.in",
+                "accepted",
+                "done",
+                "{}",
+                "2026-02-25T00:00:01Z",
+                "2026-02-25T00:00:00Z",
+            ],
+        )
+        db_execute(
+            """
+            INSERT INTO verification_task_artifacts(
+                verification_id,task_id,test_name,pass_number,role,
+                artifact_ref,download_filename
+            ) VALUES(?,?,?,?,?,?,?)
+            """,
+            [
+                verification_id,
+                task_id,
+                "001.in",
+                1,
+                "pass-output",
+                token,
+                "001.out",
+            ],
+        )
+
+        response = artifact_file(
+            "alice/sample",
+            "bob",
+            verification_id,
+            artifact_virtual_path(token),
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(Path(response.path).read_bytes(), b"visible-output\n")
 
     def test_artifact_download_rejects_path_traversal(self) -> None:
         alice_ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
