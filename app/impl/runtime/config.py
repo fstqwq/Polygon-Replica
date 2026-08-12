@@ -10,6 +10,10 @@ from app.service.auth.service import AuthService
 from app.service.access.query import AccessQuery
 from app.service.agent.service import AgentService
 from app.service.contest.service import ContestService
+from app.service.contest.build import ContestBuildService
+from app.service.contest.package import ContestPackageService
+from app.service.contest.snapshot import ContestSourceSnapshotService
+from app.service.contest.statement import ContestStatementService
 from app.service.platform.fs.layout import StorageLayout
 from app.service.verification.service import VerificationService
 from app.service.verification.completion import VerificationTaskCompletionService
@@ -18,7 +22,11 @@ from app.service.verification.runtime_registry import VerificationRuntimeRegistr
 from app.service.verification.task_store import VerificationTaskStore
 from app.service.verification.judgehost_adapter import VerificationJudgehostAdapter
 from app.service.export.service import ExportService
-from app.service.problem_package.service import ProblemPackageService
+from app.service.problem_package.service import (
+    MaterializationRow,
+    ProblemPackageService,
+    PublishedRevision,
+)
 from app.service.problem.readiness import ProblemReadinessService
 from app.service.repository.git import GitService
 from app.service.repository.merge import WorkspaceMergeService
@@ -61,6 +69,10 @@ class RuntimeConfig:
     auth_service: AuthService = field(init=False)
     agent_service: AgentService = field(init=False)
     contest_service: ContestService = field(init=False)
+    contest_build_service: ContestBuildService = field(init=False)
+    contest_package_service: ContestPackageService = field(init=False)
+    contest_snapshot_service: ContestSourceSnapshotService = field(init=False)
+    contest_statement_service: ContestStatementService = field(init=False)
     git_service: GitService = field(init=False)
     workspace_merge_service: WorkspaceMergeService = field(init=False)
     storage_layout: StorageLayout = field(init=False)
@@ -271,6 +283,45 @@ class RuntimeConfig:
                 self.config_values.WORKER_QUEUE_DURABLE_HISTORY_LIMIT
             ),
             durable_log_path=self.storage_layout.worker_history_path,
+        )
+        self.contest_statement_service = ContestStatementService(
+            self.contest_service,
+            self.problem_package_service,
+            self.tex_compile_service,
+            self.config_values,
+        )
+        self.contest_package_service = ContestPackageService(
+            self.contest_service,
+            self.export_service,
+        )
+        self.contest_snapshot_service = ContestSourceSnapshotService(
+            self.storage_layout,
+        )
+
+        def materialize_contest_revision(
+            revision: PublishedRevision,
+            actor_user_id: int,
+            actor_username: str,
+        ) -> MaterializationRow:
+            from app.impl.workspace.published_materialization import (
+                ensure_published_materialization,
+            )
+
+            return ensure_published_materialization(
+                revision=revision,
+                actor_user_id=actor_user_id,
+                actor_username=actor_username,
+            )
+
+        self.contest_build_service = ContestBuildService(
+            contest_service=self.contest_service,
+            access_query=self.access_query,
+            package_service=self.problem_package_service,
+            statement_service=self.contest_statement_service,
+            contest_package_service=self.contest_package_service,
+            snapshot_service=self.contest_snapshot_service,
+            worker_queue=self.worker_queue_service,
+            materialize_revision=materialize_contest_revision,
         )
         self.artifact_cleanup_service = ArtifactCleanupService(
             self.db,

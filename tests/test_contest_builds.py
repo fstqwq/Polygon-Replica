@@ -7,7 +7,6 @@ from unittest.mock import patch
 from urllib.parse import parse_qs, urlparse
 import zipfile
 
-from app.impl.contest.shared import _run_contest_package_job_worker  # pylint: disable=protected-access
 from tests.contest_support import ContestActionBase
 from tests.db_helpers import (
     db_connection,
@@ -160,8 +159,8 @@ class TestContestBuilds(ContestActionBase):
 
         self.assertEqual(len(runners), 1)
         with (
-            patch(
-                "app.impl.contest.shared._snapshot_contest_sources",
+            patch.object(
+                config.contest_snapshot_service, "create",
                 side_effect=assert_worker_boundary,
             ),
             self.assertRaisesRegex(RuntimeError, "stop after worker boundary"),
@@ -226,15 +225,15 @@ class TestContestBuilds(ContestActionBase):
         with (
             patch.object(config.worker_queue_service, "submit", side_effect=submit),
             patch(
-                "app.impl.contest.shared.ensure_published_materialization",
+                "app.impl.workspace.published_materialization.ensure_published_materialization",
                 return_value=materialization,
             ),
-            patch(
-                "app.impl.contest.shared._run_contest_pdf_job_worker",
+            patch.object(
+                config.contest_statement_service, "build_pdf",
                 return_value={"artifact_id": "ca-pdf", "error": ""},
             ) as build_pdf,
-            patch(
-                "app.impl.contest.shared._run_contest_package_job_worker",
+            patch.object(
+                config.contest_package_service, "build_bundle",
                 return_value={"artifact_id": "ca-icpc", "error": ""},
             ) as build_icpc,
         ):
@@ -315,11 +314,11 @@ class TestContestBuilds(ContestActionBase):
         with (
             patch.object(config.worker_queue_service, "submit", side_effect=submit),
             patch(
-                "app.impl.contest.shared.ensure_published_materialization",
+                "app.impl.workspace.published_materialization.ensure_published_materialization",
                 side_effect=materialize,
             ),
-            patch(
-                "app.impl.contest.shared._run_contest_package_job_worker",
+            patch.object(
+                config.contest_package_service, "build_bundle",
                 return_value={"artifact_id": "ca-icpc", "error": ""},
             ),
         ):
@@ -468,12 +467,10 @@ class TestContestBuilds(ContestActionBase):
             ["f" * 64, frozen["job_id"]],
         )
 
-        result = _run_contest_package_job_worker(
+        result = config.contest_package_service.build_bundle(
             contest_id=contest_id,
             contest_slug=contest_slug,
-            actor_user_id=int(actor["id"]),
             job_id=frozen["job_id"],
-            finalize=False,
         )
 
         self.assertEqual(result["totals"]["failed"], 1)
@@ -544,12 +541,10 @@ class TestContestBuilds(ContestActionBase):
             "create_export",
             side_effect=canonical_export,
         ):
-            result = _run_contest_package_job_worker(
+            result = config.contest_package_service.build_bundle(
                 contest_id=contest_id,
                 contest_slug=contest_slug,
-                actor_user_id=int(actor["id"]),
                 job_id=frozen["job_id"],
-                finalize=False,
             )
 
         self.assertEqual(result["totals"]["success"], 1)
@@ -637,15 +632,15 @@ class TestContestBuilds(ContestActionBase):
         with (
             patch.object(config.worker_queue_service, "submit", side_effect=submit),
             patch(
-                "app.impl.contest.shared.ensure_published_materialization",
+                "app.impl.workspace.published_materialization.ensure_published_materialization",
                 return_value=materialization,
             ),
-            patch(
-                "app.impl.contest.shared._run_contest_pdf_job_worker",
+            patch.object(
+                config.contest_statement_service, "build_pdf",
                 return_value={"artifact_id": "ca-pdf", "error": ""},
             ),
-            patch(
-                "app.impl.contest.shared._run_contest_package_job_worker",
+            patch.object(
+                config.contest_package_service, "build_bundle",
                 return_value={"artifact_id": "", "error": "conversion failed"},
             ),
         ):

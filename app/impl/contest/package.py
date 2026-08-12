@@ -17,9 +17,6 @@ from app.service.statement.context import normalize_statement_language
 from app.impl.contest.shared import (
     _contest_ctx,
     _contest_redirect,
-    _queue_contest_job,
-    _resolve_contest_statement_language,
-    contest_default_statements_tex,
 )
 
 
@@ -38,7 +35,7 @@ def _contest_packages_statement_query(
 
 
 def _contest_statement_language(contest_id: int, language: str) -> str:
-    return normalize_statement_language(language) or _resolve_contest_statement_language(int(contest_id))
+    return config.contest_statement_service.resolve_language(contest_id, language)
 
 
 def _contest_statement_source_key(*, contest_id: int, language: str, path: str, default_filename: str = "statements.tex", upload_filename: str = "") -> str:
@@ -94,7 +91,7 @@ def _contest_default_statement_source_text(contest_id: int, contest_slug: str, l
         return DEFAULT_OLYMP_STY
     if safe_display_path != "statements.tex":
         return ""
-    return contest_default_statements_tex(
+    return config.contest_statement_service.default_statements_tex(
         contest_id=int(contest_id),
         contest_slug=contest_slug,
         language=language,
@@ -151,7 +148,7 @@ def contest_packages_build_start(
     current_language = _contest_statement_language(contest_id, language)
     if config.contest_service.problem_count(contest_id) <= 0:
         return _contest_redirect(str(ctx["contest"]["slug"]), "packages", message="add at least one problem first")
-    job_id, queued, reason = _queue_contest_job(
+    job_id, queued, reason = config.contest_build_service.queue(
         contest_id=contest_id,
         contest_slug=str(ctx["contest"]["slug"]),
         actor_user_id=int(ctx["user"]["id"]),

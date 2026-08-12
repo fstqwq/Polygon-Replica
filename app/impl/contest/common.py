@@ -1,21 +1,6 @@
 from __future__ import annotations
 
-import re
-
 import app.main_constant as _K
-from app.impl.runtime.config import config
-
-_C = config.config_values
-
-
-def _contest_idx_label(seq: int) -> str:
-    value = max(1, int(seq))
-    chars: list[str] = []
-    while value > 0:
-        value -= 1
-        chars.append(chr(ord("A") + (value % 26)))
-        value //= 26
-    return "".join(reversed(chars))
 
 
 def _normalize_contest_problem_idx_required(raw: object) -> str:
@@ -39,8 +24,3 @@ def _dedupe_preserve(values: list[str]) -> list[str]:
         seen.add(token)
         result.append(token)
     return result
-
-
-def _contest_problem_slug_file_token(problem_slug: str) -> str:
-    token = re.sub(r"[^A-Za-z0-9._-]+", "-", str(problem_slug or "").strip()).strip("-")
-    return token or "problem"
