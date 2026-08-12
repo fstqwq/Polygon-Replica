@@ -32,11 +32,16 @@ require_cmd() {
 }
 
 require_cmd git
-require_cmd python3
+require_cmd python
 require_cmd pdflatex
 require_cmd openssl
 require_cmd uvicorn
 require_cmd setsid
+
+if ! python -c 'import sys; raise SystemExit(sys.implementation.name != "cpython" or sys.version_info[:2] != (3, 14))'; then
+  echo "Polygon-Replica requires CPython 3.14." >&2
+  exit 1
+fi
 
 TLS_KEY=${POLYGON_REPLICA_TLS_KEY_PATH:-/var/lib/polygon-replica/tls/dev-localhost.key}
 TLS_CERT=${POLYGON_REPLICA_TLS_CERT_PATH:-/var/lib/polygon-replica/tls/dev-localhost.crt}

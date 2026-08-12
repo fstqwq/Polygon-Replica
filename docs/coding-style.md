@@ -4,6 +4,9 @@ The [PEP 8 import guidance](https://peps.python.org/pep-0008/#imports) is the
 baseline when this repository does not define a narrower rule. Repository
 dependency boundaries take precedence over general style guidance.
 
+Application code targets CPython 3.14 exclusively and uses its native deferred
+annotation semantics.
+
 ## Import layout
 
 Imports normally stay at module scope, after the module docstring and any

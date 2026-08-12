@@ -4,7 +4,7 @@
 # apt set, TeX format build, and storage roots. Bubblewrap relies
 # on host kernel user-namespace settings; see docs/operations/runtime.md.
 
-FROM ubuntu:24.04
+FROM python:3.14-slim-bookworm
 
 ENV DEBIAN_FRONTEND=noninteractive \
     LANG=C.UTF-8 \
@@ -20,9 +20,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates \
         git \
         openssl \
-        python3 \
-        python3-venv \
-        python3-pip \
         texlive-latex-base \
         texlive-latex-recommended \
         texlive-latex-extra \

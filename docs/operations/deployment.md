@@ -7,7 +7,8 @@ shown as `<...>`. Keep runtime data outside the checkout.
 ## Before installation
 
 Prepare a DNS name, ports 80/443, and one non-root service account. The examples
-use `polygon` and `/opt/polygon-replica`:
+use `polygon` and `/opt/polygon-replica`. A host installation must already
+provide the regular GIL-enabled `python3.14` interpreter:
 
 ```bash
 sudo useradd --create-home --shell /bin/bash polygon
@@ -28,14 +29,14 @@ cd /opt/polygon-replica
 sudo POLYGON_REPLICA_RUNTIME_USER=polygon ./scripts/install_host.sh
 ```
 
-The installer installs host packages, configures user namespaces, creates
-runtime roots, probes bubblewrap and TeX as `polygon`, builds `.venv` as that
-account, writes `/etc/polygon-replica.env`, renders and verifies the systemd
-unit, and starts it. Direct root runtime is rejected. The environment file is
-owned by root with mode `0600`; rerunning the installer refreshes its managed
-paths while preserving valid operator-managed assignments and `#` or `;`
-comments. Shell-style input assignments with an optional `export` prefix are
-accepted during migration and rewritten as systemd `NAME=VALUE` records;
+The installer verifies CPython 3.14, installs host packages, configures user
+namespaces, creates runtime roots, probes bubblewrap and TeX as `polygon`, builds
+`.venv` as that account, writes `/etc/polygon-replica.env`, renders and verifies
+the systemd unit, and starts it. Direct root runtime is rejected. The environment
+file is owned by root with mode `0600`; rerunning the installer refreshes its
+managed paths while preserving valid operator-managed assignments and `#` or
+`;` comments. Shell-style input assignments with an optional `export` prefix
+are accepted during migration and rewritten as systemd `NAME=VALUE` records;
 unbalanced quotes and multiline continuations are rejected before replacement.
 
 Inspect the result:
@@ -181,6 +182,8 @@ Systemd:
 cd /opt/polygon-replica
 sudo systemctl stop polygon-replica.service
 sudo -u polygon git pull --ff-only
+sudo -u polygon python3.14 -m venv --clear .venv
+sudo -u polygon .venv/bin/python -m pip install --upgrade pip
 sudo -u polygon .venv/bin/python -m pip install -r requirements.txt
 sudo systemctl start polygon-replica.service
 sudo journalctl -u polygon-replica.service -n 200 --no-pager

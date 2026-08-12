@@ -21,7 +21,7 @@ operators therefore control image pinning and upgrades outside the application.
 ## Host installation
 
 `scripts/install_host.sh` supports Linux hosts using `apt-get`. It installs
-dependencies, configures user namespaces, creates storage roots, probes
+system dependencies, configures user namespaces, creates storage roots, probes
 bubblewrap and TeX as the runtime account, creates `.venv`, writes the bootstrap
 environment file, and installs the systemd unit. Required TeX initialization is
 fail-closed. TeX Gyre and Noto CJK fonts used by the canonical statement template
@@ -32,6 +32,10 @@ assignments are preserved as systemd `NAME=VALUE` records without executing the
 old file. An optional shell `export` prefix in an existing assignment is accepted
 only as migration input and is removed from the rendered file. Both `#` and `;`
 comment lines are preserved.
+
+The host must provide the regular GIL-enabled `python3.14` interpreter before
+the installer runs. The installer rejects any other Python minor version and
+recreates `.venv` from that interpreter.
 
 The invocation account is normally the service account. An invocation through
 `sudo` uses the original `SUDO_USER`; a direct root invocation MUST set
@@ -74,7 +78,8 @@ volume.
 Bubblewrap inside a container requires host user-namespace support. The checked-
 in Compose service disables seccomp and AppArmor confinement for the application
 container; this is part of its current deployment security boundary. The image
-installs the same TeX Gyre and Noto CJK template fonts explicitly. Required TeX
+uses the regular GIL-enabled CPython 3.14 image and installs the same TeX Gyre
+and Noto CJK template fonts explicitly. Required TeX
 database, format, and font-map initialization failures stop the image build.
 `docker-compose.e2e.yml` is test infrastructure, not a production retention
 model.

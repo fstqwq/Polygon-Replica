@@ -16,6 +16,16 @@ if ! command -v apt-get >/dev/null 2>&1; then
   exit 1
 fi
 
+PYTHON_BIN="python3.14"
+if ! command -v "$PYTHON_BIN" >/dev/null 2>&1; then
+  echo "Python 3.14 is required. Install CPython 3.14 before running this installer." >&2
+  exit 1
+fi
+if ! "$PYTHON_BIN" -c 'import sys; raise SystemExit(sys.implementation.name != "cpython" or sys.version_info[:2] != (3, 14))'; then
+  echo "The python3.14 command does not provide CPython 3.14." >&2
+  exit 1
+fi
+
 SUDO=()
 if [[ "${EUID}" -ne 0 ]]; then
   if command -v sudo >/dev/null 2>&1; then
@@ -53,9 +63,6 @@ echo "[1/6] Installing system dependencies..."
 "${SUDO[@]}" apt-get update
 "${SUDO[@]}" apt-get install -y \
   git \
-  python3 \
-  python3-venv \
-  python3-pip \
   texlive-latex-base \
   texlive-latex-recommended \
   texlive-latex-extra \
@@ -273,11 +280,11 @@ echo "  TeX vector font probe passed."
 
 echo "[4/6] Creating Python virtualenv and installing requirements..."
 if [[ "${EUID}" -eq 0 && "$RUNTIME_USER" != "$(id -un)" ]]; then
-  runuser -u "$RUNTIME_USER" -- python3 -m venv "$REPO_ROOT/.venv"
+  runuser -u "$RUNTIME_USER" -- "$PYTHON_BIN" -m venv --clear "$REPO_ROOT/.venv"
   runuser -u "$RUNTIME_USER" -- "$REPO_ROOT/.venv/bin/python" -m pip install --upgrade pip
   runuser -u "$RUNTIME_USER" -- "$REPO_ROOT/.venv/bin/python" -m pip install -r "$REPO_ROOT/requirements.txt"
 else
-  python3 -m venv "$REPO_ROOT/.venv"
+  "$PYTHON_BIN" -m venv --clear "$REPO_ROOT/.venv"
   "$REPO_ROOT/.venv/bin/python" -m pip install --upgrade pip
   "$REPO_ROOT/.venv/bin/python" -m pip install -r "$REPO_ROOT/requirements.txt"
 fi
