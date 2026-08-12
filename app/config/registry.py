@@ -25,7 +25,7 @@ class ConfigRegistry:
     @classmethod
     def from_definitions(
         cls, definitions: Iterable[ConfigDefinition]
-    ) -> ConfigRegistry:
+    ) -> "ConfigRegistry":
         """Build and validate a registry while preserving definition order."""
 
         return cls(tuple(definitions))
