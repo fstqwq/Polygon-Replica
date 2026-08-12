@@ -2,6 +2,7 @@
 .gitattributes
 .gitignore
 .github
+.e2e
 .venv
 .DS_Store
 **/__pycache__

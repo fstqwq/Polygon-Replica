@@ -14,13 +14,16 @@ services:
       POLYGON_REPLICA_E2E_WORKSPACE_ROOT: /srv/polygon-replica/workspaces
       POLYGON_REPLICA_E2E_JUDGEHOST_TOKEN: ${POLYGON_REPLICA_E2E_JUDGEHOST_TOKEN:?set by tests/scripts/e2e-mock.sh}
       POLYGON_REPLICA_E2E_ADMIN_PASSWORD: ${POLYGON_REPLICA_E2E_ADMIN_PASSWORD:?set by tests/scripts/e2e-mock.sh}
+      POLYGON_REPLICA_E2E_SKILLS_ROOT: /opt/polygon-skills
+      POLYGON_REPLICA_E2E_SKILLS_COMMIT: ${POLYGON_REPLICA_E2E_SKILLS_COMMIT:?set by tests/scripts/e2e-mock.sh}
     volumes:
       - ./tests/docker_e2e:/opt/e2e:ro
+      - ${POLYGON_REPLICA_E2E_SKILLS_HOST_ROOT:?set by tests/scripts/e2e-mock.sh}:/opt/polygon-skills:ro
       - srv:/srv/polygon-replica:ro
       # SQLite WAL readers need directory access for the shared-memory file.
       # e2e_mock.py still opens metadata.db with URI mode=ro.
       - var:/var/lib/polygon-replica
       - cache:/tmp/polygon-replica:ro
-      - state:/var/backups/polygon-replica:ro
+      - state:/var/backups/polygon-replica
     networks:
       - e2e

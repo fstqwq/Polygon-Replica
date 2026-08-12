@@ -9,6 +9,7 @@ import json
 import os
 import sqlite3
 import subprocess
+import zipfile
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import cast
@@ -40,6 +41,10 @@ from runner import (
 USERNAME = "e2e"
 PROBLEM = "e2e/sample"
 COMMIT_MESSAGE = "e2e-mock verified journey"
+AGENT_ROOT = Path(os.environ["POLYGON_REPLICA_E2E_STATE_DIR"]) / "agent-cli"
+AGENT_STATE = AGENT_ROOT / "state.json"
+AGENT_REPO = AGENT_ROOT / PROBLEM
+AGENT_TEMP = AGENT_ROOT / "temp"
 
 
 def _json_text(payload: object) -> str:
@@ -51,7 +56,7 @@ def _json_text(payload: object) -> str:
     ) + "\n"
 
 
-FIXTURE_FILES = {
+BASE_FIXTURE_FILES = {
     "config/problem.json": _json_text(
         {
             "memory_limit_mb": 4,
@@ -101,6 +106,34 @@ FIXTURE_FILES = {
         "inf.readLong(); inf.readEof(); }\n"
     ),
 }
+
+
+def _fixture_files() -> dict[str, str]:
+    skills_root = Path(os.environ["POLYGON_REPLICA_E2E_SKILLS_ROOT"])
+    template_root = skills_root / "polygon-init" / "templates"
+    files = dict(BASE_FIXTURE_FILES)
+    files.update(
+        {
+            "statement/statements.ftl": (template_root / "statements.ftl").read_text(
+                encoding="utf-8"
+            ),
+            "statement/problem.tex": (template_root / "problem.tex").read_text(
+                encoding="utf-8"
+            ),
+            "statement/olymp.sty": (template_root / "olymp.sty").read_text(
+                encoding="utf-8"
+            ),
+            "statement-sections/english/name.tex": "E2E Square\n",
+            "statement-sections/english/legend.tex": "Square the input integer.\n",
+            "statement-sections/english/input.tex": "One integer.\n",
+            "statement-sections/english/output.tex": "Its square.\n",
+            "statement-sections/english/notes.tex": "\n",
+        }
+    )
+    return files
+
+
+FIXTURE_FILES = _fixture_files()
 
 
 class _HiddenInputParser(HTMLParser):
@@ -238,6 +271,95 @@ def _client() -> httpx.Client:
     )
 
 
+def _agent_cli(*args: str, expect_ok: bool = True) -> dict[str, object]:
+    cli = (
+        Path(os.environ["POLYGON_REPLICA_E2E_SKILLS_ROOT"])
+        / "polygon-agent-cli"
+        / "scripts"
+        / "polygon_agent.py"
+    )
+    command = [
+        "python3",
+        str(cli),
+        *args,
+        "--state-file",
+        str(AGENT_STATE),
+    ]
+    completed = subprocess.run(
+        command,
+        cwd=AGENT_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    lines = [line for line in completed.stdout.splitlines() if line.strip()]
+    if len(lines) != 1:
+        raise RuntimeError(
+            f"Agent CLI did not emit exactly one JSON line: {command!r}\n"
+            f"stdout={completed.stdout!r}\nstderr={completed.stderr!r}"
+        )
+    try:
+        payload = json.loads(lines[0])
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(
+            f"Agent CLI emitted invalid JSON: {lines[0]!r}"
+        ) from exc
+    if not isinstance(payload, dict) or not isinstance(payload.get("ok"), bool):
+        raise RuntimeError(f"Agent CLI emitted an invalid envelope: {payload!r}")
+    if expect_ok:
+        if completed.returncode != 0 or payload["ok"] is not True:
+            raise RuntimeError(
+                f"Agent CLI command failed: {command!r}\n"
+                f"payload={payload!r}\nstderr={completed.stderr!r}"
+            )
+        result = payload.get("result")
+        if not isinstance(result, dict):
+            raise RuntimeError(f"Agent CLI success omitted result: {payload!r}")
+        print(f"agent-cli {args[0]} ok")
+        return cast(dict[str, object], result)
+    if completed.returncode == 0 or payload["ok"] is not False:
+        raise RuntimeError(
+            f"Agent CLI command unexpectedly succeeded: {command!r}"
+        )
+    error = payload.get("error")
+    if not isinstance(error, dict):
+        raise RuntimeError(f"Agent CLI failure omitted error: {payload!r}")
+    print(f"agent-cli {args[0]} failed as expected")
+    return cast(dict[str, object], error)
+
+
+def _agent_approve(
+    client: httpx.Client,
+    approve_url: str,
+    *,
+    scope: str,
+) -> None:
+    parsed = urlparse(approve_url)
+    response = _post(
+        client,
+        parsed.path,
+        {"decision": "approve", "scope": scope, "ttl": "86400"},
+    )
+    if response.headers.get("location") != "/agent/sessions":
+        raise RuntimeError(
+            f"Agent approval redirected unexpectedly: {response.headers!r}"
+        )
+
+
+def _agent_register_url(client: httpx.Client) -> str:
+    response = client.post(
+        "/agent/connect",
+        headers={"Origin": str(client.base_url).rstrip("/")},
+    )
+    response.raise_for_status()
+    payload = response.json()
+    if not isinstance(payload, dict) or payload.get("ok") is not True:
+        raise RuntimeError(f"Agent connect failed: {payload!r}")
+    return str(payload.get("register_url") or "")
+
+
 def _setup(client: httpx.Client) -> None:
     fields = _hidden_inputs(client.get("/setup"))
     csrf_token = _required_field(fields, "csrf_token")
@@ -339,6 +461,8 @@ def _assert_fixture_shape() -> None:
 
 def prepare() -> None:
     _assert_fixture_shape()
+    AGENT_ROOT.mkdir(parents=True, exist_ok=True)
+    AGENT_TEMP.mkdir(parents=True, exist_ok=True)
     with _client() as client:
         _setup(client)
         _post(
@@ -362,41 +486,185 @@ def prepare() -> None:
         ):
             raise RuntimeError(f"Judgehost runtime was not enabled: {snapshot_payload!r}")
 
-        response = _post(
-            client,
-            "/switch-workspace",
-            {"problem": "sample", "page": "statement"},
+        register_url = _agent_register_url(client)
+        initialized = _agent_cli(
+            "init",
+            "--register-url",
+            register_url,
+            "--agent-name",
+            "Polygon Replica E2E",
+            "--desktop-id",
+            "polygon-replica-ci",
+            "--init-ts",
+            "2026-08-12T00:00:00Z",
         )
-        if response.headers.get("location") != f"/problems/{PROBLEM}/statement":
+        if initialized.get("user") != USERNAME:
+            raise RuntimeError(f"Agent initialized for wrong user: {initialized!r}")
+        status = _agent_cli("status")
+        if status.get("user") != USERNAME or status.get("authorized_problems") != []:
+            raise RuntimeError(f"fresh Agent status is wrong: {status!r}")
+
+        created = _agent_cli("create", "--problem", PROBLEM)
+        if created.get("problem") != PROBLEM:
+            raise RuntimeError(f"Agent created the wrong problem: {created!r}")
+        duplicate = _agent_cli(
+            "create",
+            "--problem",
+            PROBLEM,
+            expect_ok=False,
+        )
+        if int(duplicate.get("http_status") or 0) != 409:
+            raise RuntimeError(f"duplicate Agent create was not rejected: {duplicate!r}")
+
+        access = _agent_cli("connect", "--problem", PROBLEM)
+        request_id = str(access.get("request_id") or "")
+        approve_url = str(access.get("approve_url") or "")
+        if not request_id or not approve_url:
+            raise RuntimeError(f"Agent connect omitted approval data: {access!r}")
+        pending = _agent_cli("poll", "--request-id", request_id)
+        if pending.get("status") != "pending":
+            raise RuntimeError(f"Agent access was not pending: {pending!r}")
+        _agent_approve(client, approve_url, scope="commit")
+        approved = _agent_cli(
+            "poll",
+            "--request-id",
+            request_id,
+            "--wait",
+            "--interval-sec",
+            "0.1",
+            "--timeout-sec",
+            "10",
+        )
+        if approved.get("status") != "approved" or approved.get("token_saved") is not True:
+            raise RuntimeError(f"Agent token was not saved: {approved!r}")
+        authorized = _agent_cli("status")
+        authorized_problems = cast(
+            list[dict[str, object]],
+            authorized.get("authorized_problems") or [],
+        )
+        if authorized_problems != [
+            {
+                "problem": PROBLEM,
+                "scope": "commit",
+                "expires_at": approved.get("expires_at"),
+            }
+        ]:
             raise RuntimeError(
-                f"problem creation redirected unexpectedly: {response.headers!r}"
+                f"Agent status omitted approved problem access: {authorized!r}"
             )
-        response = _post(
-            client,
-            f"/problems/{PROBLEM}/statement/languages/add",
-            {"language": "english", "page": "statement"},
+
+        cloned = _agent_cli(
+            "clone",
+            "--problem",
+            PROBLEM,
+            "--target-dir",
+            str(AGENT_REPO),
         )
-        expected_statement_location = (
-            f"/problems/{PROBLEM}/statement?language=english"
+        if cloned.get("created_repo") is not True or not (AGENT_REPO / ".git").is_dir():
+            raise RuntimeError(f"Agent clone did not create a local Git repo: {cloned!r}")
+        workspace_status = _agent_cli("workspace-status", "--problem", PROBLEM)
+        if workspace_status.get("problem") != PROBLEM:
+            raise RuntimeError(f"Agent workspace status is wrong: {workspace_status!r}")
+        listed = _agent_cli("list-files", "--problem", PROBLEM, "--path", "config")
+        listed_paths = {
+            str(entry.get("path") or "")
+            for entry in cast(list[dict[str, object]], listed.get("entries") or [])
+        }
+        if "config/problem.json" not in listed_paths:
+            raise RuntimeError(f"Agent list-files omitted problem.json: {listed!r}")
+        problem_file = _agent_cli(
+            "read-file",
+            "--problem",
+            PROBLEM,
+            "--path",
+            "config/problem.json",
         )
-        if response.headers.get("location") != expected_statement_location:
-            raise RuntimeError(
-                "statement language creation redirected unexpectedly: "
-                f"{response.headers!r}"
-            )
+        if '"mode": "pass-fail"' not in str(problem_file.get("content") or ""):
+            raise RuntimeError(f"Agent read-file returned wrong content: {problem_file!r}")
+        saved_problem = AGENT_TEMP / "problem.json"
+        _agent_cli(
+            "read-file",
+            "--problem",
+            PROBLEM,
+            "--path",
+            "config/problem.json",
+            "--save-to",
+            str(saved_problem),
+        )
+        if not saved_problem.is_file():
+            raise RuntimeError("Agent read-file --save-to did not create a file")
+
+        upload_source = AGENT_TEMP / "pull.txt"
+        upload_source.write_text("pulled through Agent CLI\n", encoding="utf-8")
+        _agent_cli(
+            "upload",
+            "--problem",
+            PROBLEM,
+            "--workspace-path",
+            "attachments/pull.txt",
+            "--local-file",
+            str(upload_source),
+        )
+        pulled = _agent_cli(
+            "pull",
+            "--problem",
+            PROBLEM,
+            "--target-dir",
+            str(AGENT_REPO),
+        )
+        if pulled.get("changed") is not True or not (AGENT_REPO / "attachments/pull.txt").is_file():
+            raise RuntimeError(f"Agent pull did not synchronize upload: {pulled!r}")
+        _agent_cli(
+            "delete",
+            "--problem",
+            PROBLEM,
+            "--workspace-path",
+            "attachments/pull.txt",
+        )
+        deleted_read = _agent_cli(
+            "read-file",
+            "--problem",
+            PROBLEM,
+            "--path",
+            "attachments/pull.txt",
+            expect_ok=False,
+        )
+        if int(deleted_read.get("http_status") or 0) != 404:
+            raise RuntimeError(f"Agent delete did not remove the file: {deleted_read!r}")
+        _agent_cli(
+            "pull",
+            "--problem",
+            PROBLEM,
+            "--target-dir",
+            str(AGENT_REPO),
+        )
+        if (AGENT_REPO / "attachments/pull.txt").exists():
+            raise RuntimeError("Agent pull retained a remotely deleted file")
+
         for path, content in FIXTURE_FILES.items():
-            _post(
-                client,
-                f"/problems/{PROBLEM}/files/save",
-                {"path": path, "content": content, "dir": str(Path(path).parent)},
-            )
-            saved = client.get(
-                f"/problems/{PROBLEM}/files/download",
-                params={"path": path},
-            )
-            if saved.status_code != 200 or saved.content != content.encode("utf-8"):
-                raise RuntimeError(f"HTTP save did not round-trip fixture file {path!r}")
-    print("e2e-mock prepared a fresh deployment and authored the fixture over HTTP")
+            target = AGENT_REPO / path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(content, encoding="utf-8", newline="\n")
+        pushed = _agent_cli(
+            "push",
+            "--problem",
+            PROBLEM,
+            "--target-dir",
+            str(AGENT_REPO),
+        )
+        if pushed.get("applied") is not True or pushed.get("changed") is not True:
+            raise RuntimeError(f"Agent push did not apply fixture: {pushed!r}")
+        _agent_cli(
+            "pull",
+            "--problem",
+            PROBLEM,
+            "--target-dir",
+            str(AGENT_REPO),
+        )
+    print(
+        "e2e-mock prepared a fresh deployment with every authoring write through "
+        f"Polygon Agent CLI from Skills {os.environ['POLYGON_REPLICA_E2E_SKILLS_COMMIT']}"
+    )
 
 
 def _journey_row(connection: sqlite3.Connection) -> sqlite3.Row:
@@ -625,9 +893,10 @@ def _assert_commit(connection: sqlite3.Connection) -> str:
     required_actions = {
         "system.setup",
         "system_config.update_judgehost_runtime_controls",
-        "statement.language.add",
-        "verification.start",
-        "revision.commit",
+        "agent.problem.create",
+        "agent.workspace.apply",
+        "agent.verification.start",
+        "agent.commit",
     }
     missing_actions = required_actions.difference(actions)
     if missing_actions:
@@ -636,27 +905,140 @@ def _assert_commit(connection: sqlite3.Connection) -> str:
         """
         SELECT details_json
         FROM audit_log
-        WHERE action='revision.commit'
+        WHERE action='agent.commit'
         ORDER BY id DESC
         LIMIT 1
         """
     ).fetchone()
     if commit_audit is None:
-        raise RuntimeError("journey audit omitted revision.commit details")
+        raise RuntimeError("journey audit omitted agent.commit details")
     commit_details = json.loads(str(commit_audit["details_json"]))
     if not isinstance(commit_details, dict) or commit_details != {
         "message": COMMIT_MESSAGE,
         "head": workspace_head,
     }:
-        raise RuntimeError(f"revision.commit audit details are wrong: {commit_details!r}")
-    save_count = connection.execute(
-        "SELECT COUNT(*) FROM audit_log WHERE action='files.save'"
-    ).fetchone()[0]
-    if int(save_count) != len(FIXTURE_FILES):
-        raise RuntimeError(
-            f"journey audit recorded {save_count} saves, expected {len(FIXTURE_FILES)}"
-        )
+        raise RuntimeError(f"agent.commit audit details are wrong: {commit_details!r}")
     return workspace_head
+
+
+def _assert_agent_verification_detail(verification_id: str) -> None:
+    detail = _agent_cli(
+        "verify-detail",
+        "--problem",
+        PROBLEM,
+        "--verification-id",
+        verification_id,
+    )
+    detail_text = str(detail.get("detail_text") or "")
+    if (
+        f"verification: {verification_id}" not in detail_text
+        or "status: ok" not in detail_text
+        or "solutions/main.cpp" not in detail_text
+    ):
+        raise RuntimeError(f"Agent verification detail is incomplete: {detail_text!r}")
+
+    saved_detail = AGENT_TEMP / f"{verification_id}.yaml"
+    saved = _agent_cli(
+        "verify-detail",
+        "--problem",
+        PROBLEM,
+        "--verification-id",
+        verification_id,
+        "--save-to",
+        str(saved_detail),
+    )
+    if saved.get("saved_to") != str(saved_detail) or not saved_detail.is_file():
+        raise RuntimeError(f"Agent verification detail was not saved: {saved!r}")
+    if saved_detail.read_text(encoding="utf-8") != detail_text:
+        raise RuntimeError("saved Agent verification detail differs from inline output")
+
+    test_detail = _agent_cli(
+        "verify-detail",
+        "--problem",
+        PROBLEM,
+        "--verification-id",
+        verification_id,
+        "--test-name",
+        "001.in",
+    )
+    test_text = str(test_detail.get("detail_text") or "")
+    if "test: 001.in" not in test_text or "solutions/main.cpp" not in test_text:
+        raise RuntimeError(f"Agent testcase detail is incomplete: {test_text!r}")
+
+    cell_detail = _agent_cli(
+        "verify-detail",
+        "--problem",
+        PROBLEM,
+        "--verification-id",
+        verification_id,
+        "--test-name",
+        "001.in",
+        "--source",
+        "solutions/main.cpp",
+    )
+    cell_text = str(cell_detail.get("detail_text") or "")
+    if (
+        "test: 001.in" not in cell_text
+        or "cell:" not in cell_text
+        or "source: solutions/main.cpp" not in cell_text
+    ):
+        raise RuntimeError(f"Agent result-cell detail is incomplete: {cell_text!r}")
+
+
+def _agent_export(export_type: str) -> tuple[str, Path]:
+    started = _agent_cli(
+        "export-start",
+        "--problem",
+        PROBLEM,
+        "--export-type",
+        export_type,
+    )
+    job_id = str(started.get("job_id") or "")
+    if not job_id or started.get("status") != "queued":
+        raise RuntimeError(f"Agent {export_type} export did not start: {started!r}")
+    waited = _agent_cli(
+        "export-wait",
+        "--problem",
+        PROBLEM,
+        "--job-id",
+        job_id,
+        "--interval-sec",
+        "0.1",
+        "--timeout-sec",
+        "300",
+    )
+    if waited.get("job_id") != job_id or waited.get("status") != "succeeded":
+        raise RuntimeError(f"Agent {export_type} export failed: {waited!r}")
+    filename = str(waited.get("filename") or "")
+    if Path(filename).name != filename or not filename.endswith(".zip"):
+        raise RuntimeError(f"Agent {export_type} export filename is wrong: {waited!r}")
+
+    output = AGENT_TEMP / f"{job_id}-{filename}"
+    downloaded = _agent_cli(
+        "export-download",
+        "--problem",
+        PROBLEM,
+        "--job-id",
+        job_id,
+        "--output",
+        str(output),
+    )
+    if (
+        downloaded.get("job_id") != job_id
+        or downloaded.get("output") != str(output)
+        or int(downloaded.get("bytes_written") or 0) != output.stat().st_size
+    ):
+        raise RuntimeError(f"Agent {export_type} download is inconsistent: {downloaded!r}")
+    with zipfile.ZipFile(output) as archive:
+        members = set(archive.namelist())
+        required_member = "config/problem.json" if export_type == "native" else "problem.yaml"
+        if required_member not in members:
+            raise RuntimeError(
+                f"Agent {export_type} archive omitted {required_member}: {sorted(members)!r}"
+            )
+        if archive.testzip() is not None:
+            raise RuntimeError(f"Agent {export_type} archive contains a corrupt member")
+    return job_id, output
 
 
 def _run_statement_preview(
@@ -731,17 +1113,37 @@ def verify_and_commit() -> None:
                 workspace_id=workspace_id,
                 previous_id=previous_id,
             )
-            _post(
-                client,
-                f"/problems/{PROBLEM}/verification/start",
-                {"page": "tests"},
+            started = _agent_cli(
+                "verify-start",
+                "--problem",
+                PROBLEM,
             )
+            verification_id = str(started.get("verification_id") or "")
+            if not verification_id or started.get("status") != "queued":
+                raise RuntimeError(f"Agent verification did not start: {started!r}")
+            waited = _agent_cli(
+                "verify-wait",
+                "--problem",
+                PROBLEM,
+                "--verification-id",
+                verification_id,
+                "--interval-sec",
+                "0.1",
+                "--timeout-sec",
+                "300",
+            )
+            if waited != {"verification_id": verification_id, "status": "ok"}:
+                raise RuntimeError(f"Agent verification failed: {waited!r}")
             verification = _wait_for_verification(
                 connection,
                 problem_id=problem_id,
                 workspace_id=workspace_id,
                 previous_id=sample_verification_id,
             )
+            if str(verification["id"]) != verification_id:
+                raise RuntimeError(
+                    "Agent verification ID does not match the persisted verification"
+                )
             if str(verification["kind"]) != "all":
                 raise RuntimeError(
                     f"verification did not cover the full test set: {dict(verification)!r}"
@@ -756,7 +1158,6 @@ def verify_and_commit() -> None:
                 raise RuntimeError(
                     "mock active-internal-error sanity case was not retained"
                 )
-            verification_id = str(verification["id"])
             _assert_tasks(connection, verification_id)
             _assert_artifact_refs(connection, verification_id)
             _assert_active_internal_error_sanity(connection, verification_id)
@@ -769,11 +1170,31 @@ def verify_and_commit() -> None:
         with _connect() as connection:
             _assert_late_diagnostics(connection, verification_id)
 
-        _post(
-            client,
-            f"/problems/{PROBLEM}/revision/commit",
-            {"message": COMMIT_MESSAGE},
+        _assert_agent_verification_detail(verification_id)
+        committed = _agent_cli(
+            "commit",
+            "--problem",
+            PROBLEM,
+            "--message",
+            COMMIT_MESSAGE,
         )
+        head = str(committed.get("head") or "")
+        if committed.get("status") != "ok" or not head:
+            raise RuntimeError(f"Agent commit failed: {committed!r}")
+        commit_status = _agent_cli(
+            "commit-status",
+            "--problem",
+            PROBLEM,
+            "--ref",
+            head,
+        )
+        if commit_status != {
+            "ref": head,
+            "status": "published",
+            "head": head,
+            "remote_head": head,
+        }:
+            raise RuntimeError(f"Agent commit status is wrong: {commit_status!r}")
         refreshed = client.get(f"/problems/{PROBLEM}/workspace")
         if refreshed.status_code != 200:
             raise RuntimeError(
@@ -781,7 +1202,12 @@ def verify_and_commit() -> None:
             )
 
         with _connect() as connection:
-            head = _assert_commit(connection)
+            persisted_head = _assert_commit(connection)
+        if persisted_head != head:
+            raise RuntimeError("Agent commit response differs from the persisted head")
+
+        native_job_id, native_archive = _agent_export("native")
+        icpc_job_id, icpc_archive = _agent_export("icpc")
 
         contest_job_id = start_contest_pdf(
             client,
@@ -805,9 +1231,11 @@ def verify_and_commit() -> None:
             )
     print(
         "e2e-mock completed deployment, sample preview, verification, commit, "
-        "and contest PDF export "
+        "Native/ICPC exports, and contest PDF export "
         f"sample_verification={sample_verification_id} "
         f"verification={verification_id} head={head} "
+        f"native_job={native_job_id} native_archive={native_archive} "
+        f"icpc_job={icpc_job_id} icpc_archive={icpc_archive} "
         f"materialization_verification={materialization_verification_id} "
         f"contest_job={contest_job_id} artifact={artifact_id}"
     )

@@ -149,6 +149,65 @@ class TestAgentAPI(E2ETestBase):
                 archive.writestr(rel, data)
         return buffer.getvalue()
 
+    def test_registered_agent_creates_one_owned_problem(self) -> None:
+        username = self.random_id("agent-create").lower()
+        _password, auth_cookie = self._issue_auth_cookie(username)
+        problem = f"{username}/created"
+
+        with TestClient(app, raise_server_exceptions=False) as client:
+            connect = self._connect_agent(client, auth_cookie)
+            register = self._register_agent(client, str(connect["register_url"]))
+            create_payload = {
+                "agent_session_id": str(register["agent_session_id"]),
+                "identity_hash": str(register["identity_hash"]),
+                "problem": problem,
+            }
+
+            created = client.post("/agent/v1/problems", json=create_payload)
+            self.assertEqual(created.status_code, 200, created.text)
+            self.assertEqual(created.json(), {"problem": problem})
+
+            problem_id = workspace_service.known_problem_id(problem)
+            user_id = workspace_service.known_user_id(username)
+            self.assertIsNotNone(problem_id)
+            self.assertIsNotNone(user_id)
+            access = workspace_service.access_context(int(problem_id), int(user_id))
+            self.assertEqual(str(access["role"]), "owner")
+            workspace = workspace_service.workspace_context(
+                problem,
+                username,
+                include_recent=False,
+            )
+            self.assertTrue(Path(str(workspace["workspace"]["path"])).is_dir())
+
+            duplicate = client.post("/agent/v1/problems", json=create_payload)
+            self.assertEqual(duplicate.status_code, 409, duplicate.text)
+            foreign = client.post(
+                "/agent/v1/problems",
+                json={**create_payload, "problem": "someone-else/created"},
+            )
+            self.assertEqual(foreign.status_code, 422, foreign.text)
+            bad_identity = client.post(
+                "/agent/v1/problems",
+                json={**create_payload, "identity_hash": "bad"},
+            )
+            self.assertEqual(bad_identity.status_code, 401, bad_identity.text)
+
+            audit_row = db_fetch_one(
+                """
+                SELECT details_json FROM audit_log
+                WHERE problem_id=? AND action='agent.problem.create'
+                """,
+                [problem_id],
+            )
+            self.assertIsNotNone(audit_row)
+            details = json.loads(str(audit_row["details_json"]))
+            self.assertEqual(str(details["problem"]), problem)
+            self.assertEqual(
+                str(details["agent_session_id"]),
+                str(register["agent_session_id"]),
+            )
+
     def test_export_status_and_download_resolve_export_job_directly(self) -> None:
         username = self.random_id("agent-export-job")
         _password, auth_cookie = self._issue_auth_cookie(username)

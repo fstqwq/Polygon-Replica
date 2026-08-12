@@ -11,6 +11,7 @@ from app.impl.agent.api import (
     agent_export_start,
     agent_export_status,
     agent_poll_access,
+    agent_problem_create,
     agent_register,
     agent_request_access,
     agent_verification_detail,
@@ -47,6 +48,7 @@ router.add_api_route("/agent/v1/register/{code}", agent_register, methods=["POST
 router.add_api_route("/agent/v1/auth/status", agent_auth_status, methods=["GET"])
 router.add_api_route("/agent/v1/auth/request-access", agent_request_access, methods=["POST"])
 router.add_api_route("/agent/v1/auth/poll/{request_id}", agent_poll_access, methods=["GET"])
+router.add_api_route("/agent/v1/problems", agent_problem_create, methods=["POST"])
 router.add_api_route("/agent/v1/verification/start", agent_verification_start, methods=["POST"])
 router.add_api_route("/agent/v1/verification/{verification_id}/status", agent_verification_status, methods=["GET"])
 router.add_api_route("/agent/v1/verification/{verification_id}/detail", agent_verification_detail, methods=["GET"])

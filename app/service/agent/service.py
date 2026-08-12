@@ -347,6 +347,52 @@ class AgentService:
             ),
         }
 
+    def create_problem(
+        self,
+        *,
+        agent_session_id: str,
+        identity_hash: str,
+        problem: str,
+    ) -> dict[str, object]:
+        session = self._require_active_session(
+            agent_session_id=agent_session_id,
+            identity_hash=identity_hash,
+        )
+        safe_problem = self._require_problem_slug(problem)
+        expected_owner = str(session["username"]).lower()
+        if not safe_problem.startswith(f"{expected_owner}/"):
+            raise ValueError(
+                f"new problem must be owned by {expected_owner}"
+            )
+        if self.workspace_service.known_problem_id(safe_problem) is not None:
+            raise FileExistsError("problem already exists")
+
+        self.workspace_service.ensure_problem(safe_problem)
+        self.workspace_service.grant_repo_access(
+            safe_problem,
+            str(session["username"]),
+            "owner",
+        )
+        self.workspace_service.ensure_workspace(
+            safe_problem,
+            str(session["username"]),
+        )
+        problem_id, _user_id = self.workspace_service.page_identity(
+            safe_problem,
+            str(session["username"]),
+        )
+        self.workspace_service.record_audit_event(
+            actor_user_id=int(session["user_id"]),
+            problem_id=problem_id,
+            action="agent.problem.create",
+            details={
+                "agent_session_id": str(session["id"]),
+                "problem": safe_problem,
+            },
+        )
+        self._touch_session(str(session["id"]))
+        return {"problem": safe_problem}
+
     def _token_expires_at(self, token_id: str) -> str | None:
         if not token_id:
             return None

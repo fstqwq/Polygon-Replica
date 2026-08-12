@@ -110,6 +110,23 @@ async def agent_auth_status(request: Request):
         return json_error_response(str(exc), status_code=401)
 
 
+async def agent_problem_create(request: Request):
+    payload = await _read_json(request)
+    try:
+        result = config.agent_service.create_problem(
+            agent_session_id=str(payload.get("agent_session_id") or ""),
+            identity_hash=str(payload.get("identity_hash") or ""),
+            problem=str(payload.get("problem") or ""),
+        )
+        return _json_body(result)
+    except PermissionError as exc:
+        return json_error_response(str(exc), status_code=401)
+    except FileExistsError as exc:
+        return json_error_response(str(exc), status_code=409)
+    except ValueError as exc:
+        return json_error_response(str(exc), status_code=422)
+
+
 async def agent_verification_start(request: Request):
     identity = require_agent_token(request, min_scope="readonly")
     ctx = _agent_problem_ctx(identity)

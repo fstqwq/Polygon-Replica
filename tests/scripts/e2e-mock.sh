@@ -11,6 +11,15 @@ export COMPOSE_PROJECT_NAME="polygon-replica-e2e-mock-${project_suffix}"
 export POLYGON_REPLICA_E2E_JUDGEHOST_TOKEN="e2e-${project_suffix}-judgehost-token"
 export POLYGON_REPLICA_E2E_ADMIN_PASSWORD="e2e-${project_suffix}-Password-9"
 export POLYGON_REPLICA_E2E_IMAGE="${POLYGON_REPLICA_E2E_IMAGE:-polygon-replica-e2e-mock:${project_suffix}}"
+export POLYGON_REPLICA_E2E_SKILLS_HOST_ROOT="${POLYGON_REPLICA_E2E_SKILLS_HOST_ROOT:-$REPO_ROOT/.e2e/polygon-skills}"
+
+if [[ ! -f "$POLYGON_REPLICA_E2E_SKILLS_HOST_ROOT/polygon-agent-cli/scripts/polygon_agent.py" ]]; then
+  echo "Polygon-Skills checkout is missing: $POLYGON_REPLICA_E2E_SKILLS_HOST_ROOT" >&2
+  exit 1
+fi
+export POLYGON_REPLICA_E2E_SKILLS_COMMIT
+POLYGON_REPLICA_E2E_SKILLS_COMMIT=$(git -C "$POLYGON_REPLICA_E2E_SKILLS_HOST_ROOT" rev-parse HEAD)
+echo "Testing Polygon-Skills commit $POLYGON_REPLICA_E2E_SKILLS_COMMIT"
 
 compose=(
   docker compose
