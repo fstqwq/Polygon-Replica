@@ -18,12 +18,18 @@ class RuntimeStateStore:
         limit = aux_display_text_limit_bytes(self.db.config_values.snapshot())
         return bounded_display_text(value, limit_bytes=limit)
 
-    def cancel_inflight_summary_rows(self, table_name: str, reason: str, *, now_text: str) -> list[str]:
+    def fail_inflight_summary_rows(
+        self,
+        table_name: str,
+        reason: str,
+        *,
+        now_text: str,
+    ) -> list[str]:
         safe_table = table_name.strip()
         if safe_table not in self._ALLOWED_SUMMARY_TABLES:
             return []
         if safe_table == "previews":
-            return self._cancel_inflight_previews(reason, now_text=now_text)
+            return self._fail_inflight_previews(reason, now_text=now_text)
         try:
             rows = self.db.fetch_all(f"SELECT id FROM {safe_table} WHERE status IN ('running','queued','pending')")
         except Exception as exc:
@@ -43,10 +49,13 @@ class RuntimeStateStore:
                     [now_text, row_id],
                 )
             except Exception as exc:
-                warnings.append(f"startup {safe_table} inflight cancel failed for {row_id}: {exc}")
+                warnings.append(
+                    f"startup {safe_table} inflight failure update failed "
+                    f"for {row_id}: {exc}"
+                )
         return warnings
 
-    def _cancel_inflight_previews(self, reason: str, *, now_text: str) -> list[str]:
+    def _fail_inflight_previews(self, reason: str, *, now_text: str) -> list[str]:
         safe_reason = self._bounded_text(reason)
         rows = self.db.fetch_all(
             """
@@ -70,8 +79,6 @@ class RuntimeStateStore:
                     [
                         json.dumps(
                             {
-                                "cancelled": True,
-                                "cancel_reason": safe_reason,
                                 "status": "failed",
                                 "finished_at": now_text,
                                 "error": safe_reason,
@@ -84,5 +91,8 @@ class RuntimeStateStore:
                     ],
                 )
             except Exception as exc:
-                warnings.append(f"startup previews inflight cancel failed for {preview_id}: {exc}")
+                warnings.append(
+                    "startup previews inflight failure update failed for "
+                    f"{preview_id}: {exc}"
+                )
         return warnings

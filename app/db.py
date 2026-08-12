@@ -310,7 +310,7 @@ CREATE TABLE IF NOT EXISTS verifications (
     signature TEXT NOT NULL DEFAULT '',
     source_commit TEXT NOT NULL DEFAULT '',
     kind TEXT NOT NULL,
-    status TEXT NOT NULL,
+    status TEXT NOT NULL CHECK(status IN ('queued','running','ok','failed','cancelled')),
     fail_reason TEXT NOT NULL DEFAULT '',
     mode TEXT NOT NULL DEFAULT 'pass-fail',
     pass_limit INTEGER NOT NULL DEFAULT 1,
@@ -1024,9 +1024,8 @@ class DB:
             apply_shape_upgrades(
                 conn,
                 exports_create_statement=_CURRENT_TABLE_STATEMENTS["exports"],
-                contest_items_create_statement=_CURRENT_TABLE_STATEMENTS[
-                    "contest_build_items"
-                ],
+                contest_items_create_statement=_CURRENT_TABLE_STATEMENTS["contest_build_items"],
+                verifications_create_statement=_CURRENT_TABLE_STATEMENTS["verifications"],
             )
             conn.executescript(SCHEMA)
             self._validate_existing_schema(conn)

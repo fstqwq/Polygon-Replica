@@ -46,6 +46,7 @@ from app.service.verification.task_completion import (
     TaskCompletion,
 )
 from app.service.verification.task_metadata import canonical_diagnostics
+from app.service.verification.types import VerificationStatus, VerificationTaskStatus
 
 
 class VerificationTaskRow(TypedDict):
@@ -58,7 +59,7 @@ class VerificationTaskRow(TypedDict):
     test_name: str
     expected_behavior: str
     queue_index: int
-    status: str
+    status: VerificationTaskStatus
     result: ExecutionResult
     result_json: str
     verdict: str
@@ -88,7 +89,7 @@ class VerificationTaskListRow(TypedDict):
     program_id: str
     test_name: str
     expected_behavior: str
-    status: str
+    status: VerificationTaskStatus
     verdict: str
 
 
@@ -98,12 +99,12 @@ class VerificationTaskReadRow(TypedDict):
     source_path: str
     program_id: str
     test_name: str
-    status: str
+    status: VerificationTaskStatus
 
 
 @dataclass
 class _RuntimeTaskState:
-    status: str
+    status: VerificationTaskStatus
     run_id: str
     judgehost_task_id: str
     started_at: str
@@ -167,12 +168,6 @@ def _bounded_result(result: ExecutionResult, *, limit_bytes: int) -> ExecutionRe
 
 
 class VerificationTaskStore:
-    TASK_PENDING = "pending"
-    TASK_QUEUED = "queued"
-    TASK_LEASED = "leased"
-    TASK_DONE = "done"
-    TASK_FAILED = "failed"
-    TASK_CANCELLED = "cancelled"
 
     def __init__(self, db: DB) -> None:
         self.db = db
@@ -345,11 +340,11 @@ class VerificationTaskStore:
         verification_id = str(row["verification_id"] or "")
         final_status = str(row["final_status"] or "")
         if final_status:
-            status = final_status
+            status = VerificationTaskStatus(final_status)
         elif runtime is not None:
             status = runtime.status
         else:
-            status = self.TASK_PENDING
+            status = VerificationTaskStatus.PENDING
         created_at = str(row["created_at"] or "")
         started_at = runtime.started_at if runtime is not None and runtime.started_at else None
         finished_at = str(row["finished_at"] or "") or None
@@ -400,11 +395,11 @@ class VerificationTaskStore:
         runtime = self._runtime_status(row)
         final_status = str(row["final_status"] or "")
         if final_status:
-            status = final_status
+            status = VerificationTaskStatus(final_status)
         elif runtime is not None:
             status = runtime.status
         else:
-            status = self.TASK_PENDING
+            status = VerificationTaskStatus.PENDING
         task_id = str(row["id"] or "")
         result = execution_result_from_json(str(row["result_json"] or "{}"))
         return {
@@ -557,7 +552,7 @@ class VerificationTaskStore:
                 expose()
                 return True
             runtime = _RuntimeTaskState(
-                status=self.TASK_QUEUED,
+                status=VerificationTaskStatus.QUEUED,
                 run_id=run_id,
                 judgehost_task_id=judgehost_task_id,
                 started_at="",
@@ -608,7 +603,7 @@ class VerificationTaskStore:
             ):
                 return False
             self._runtime_by_task_id[task_id] = _RuntimeTaskState(
-                status=self.TASK_LEASED,
+                status=VerificationTaskStatus.LEASED,
                 run_id=current.run_id,
                 judgehost_task_id=current.judgehost_task_id,
                 started_at=current.started_at or now_iso(),
@@ -628,7 +623,7 @@ class VerificationTaskStore:
             candidates = [
                 (task_id, runtime)
                 for task_id, runtime in self._runtime_by_task_id.items()
-                if runtime.status == self.TASK_LEASED
+                if runtime.status == VerificationTaskStatus.LEASED
                 and runtime.judgehost_task_id in allowed
             ]
             with self.db.conn() as conn:
@@ -653,7 +648,7 @@ class VerificationTaskStore:
                     ):
                         continue
                     self._runtime_by_task_id[task_id] = _RuntimeTaskState(
-                        status=self.TASK_QUEUED,
+                        status=VerificationTaskStatus.QUEUED,
                         run_id=runtime.run_id,
                         judgehost_task_id=runtime.judgehost_task_id,
                         started_at="",
@@ -704,7 +699,7 @@ class VerificationTaskStore:
                     WHERE id=? AND final_status=''
                     """,
                     [
-                        self.TASK_DONE,
+                        VerificationTaskStatus.DONE.value,
                         execution_result_json(
                             normalize_execution_result(
                                 verdict="SK",
@@ -717,7 +712,7 @@ class VerificationTaskStore:
                 )
                 if conn.execute("SELECT changes()").fetchone()[0] > 0:
                     skipped.add(child_id)
-                    final_status_by_id[child_id] = self.TASK_DONE
+                    final_status_by_id[child_id] = VerificationTaskStatus.DONE.value
         return skipped
 
     def _cancel_open_tasks(
@@ -748,7 +743,7 @@ class VerificationTaskStore:
             WHERE verification_id=? AND final_status=''
             """,
             [
-                self.TASK_CANCELLED,
+                VerificationTaskStatus.CANCELLED.value,
                 execution_result_json(cancelled_task_result(reason)),
                 finished_at,
                 verification_id,
@@ -793,7 +788,7 @@ class VerificationTaskStore:
             }
             if "" in final_statuses:
                 continue
-            if final_statuses != {self.TASK_DONE}:
+            if final_statuses != {VerificationTaskStatus.DONE.value}:
                 continue
             source_paths = {str(row["source_path"] or "") for row in program_rows}
             expected_behaviors = {
@@ -838,7 +833,11 @@ class VerificationTaskStore:
             raise ValueError("task completion id is required")
         if len(set(task_ids)) != len(task_ids):
             raise ValueError("task completion batch contains a duplicate task id")
-        terminal_statuses = {self.TASK_DONE, self.TASK_FAILED, self.TASK_CANCELLED}
+        terminal_statuses = {
+            VerificationTaskStatus.DONE,
+            VerificationTaskStatus.FAILED,
+            VerificationTaskStatus.CANCELLED,
+        }
         if any(completion.status not in terminal_statuses for completion in completions):
             raise ValueError("task completion status must be terminal")
         normalized_by_id = {
@@ -853,7 +852,7 @@ class VerificationTaskStore:
             for completion in completions
         }
         if any(
-            completion.status in {self.TASK_FAILED, self.TASK_CANCELLED}
+            completion.status in {VerificationTaskStatus.FAILED, VerificationTaskStatus.CANCELLED}
             and not completion.fail_reason
             for completion in normalized_by_id.values()
         ):
@@ -898,7 +897,7 @@ class VerificationTaskStore:
                       AND final_status=?
                     ORDER BY finished_at ASC,id ASC
                     """,
-                    [verification_id, self.TASK_DONE],
+                    [verification_id, VerificationTaskStatus.DONE.value],
                 ).fetchall()
                 for owner_row in owner_rows:
                     owner_result = execution_result_from_json(
@@ -937,7 +936,7 @@ class VerificationTaskStore:
                         effective.append(
                             TaskCompletion(
                                 task_id=task_id,
-                                status=current_status,
+                                status=VerificationTaskStatus(current_status),
                                 run_id=(
                                     incoming.run_id
                                     if runtime is None
@@ -954,7 +953,7 @@ class VerificationTaskStore:
                             )
                         )
                         if (
-                            current_status == self.TASK_DONE
+                            current_status == VerificationTaskStatus.DONE.value
                             and current_result.verdict.upper() == "SK"
                         ):
                             skipped_task_ids.add(task_id)
@@ -967,7 +966,7 @@ class VerificationTaskStore:
                     output_ref = result.output_run_ref
                     if (
                         task_kind == "generate-input"
-                        and incoming.status == self.TASK_DONE
+                        and incoming.status == VerificationTaskStatus.DONE
                         and result.verdict.upper() != "SK"
                         and output_ref
                     ):
@@ -994,7 +993,7 @@ class VerificationTaskStore:
                         WHERE id=? AND final_status=''
                         """,
                         [
-                            effective_completion.status,
+                            effective_completion.status.value,
                             execution_result_json(effective_completion.result),
                             now_iso(),
                             task_id,
@@ -1017,7 +1016,7 @@ class VerificationTaskStore:
                         effective_completion.fail_reason
                         and not hard_failure_reason
                         and (
-                            effective_completion.status == self.TASK_CANCELLED
+                            effective_completion.status == VerificationTaskStatus.CANCELLED
                             or task_kind in _HARD_FAILURE_TASK_KINDS
                         )
                     ):
@@ -1050,7 +1049,7 @@ class VerificationTaskStore:
                         )
                     if (
                         task_kind == "generate-input"
-                        and effective_completion.status == self.TASK_DONE
+                        and effective_completion.status == VerificationTaskStatus.DONE
                         and effective_completion.result.verdict.upper() == "SK"
                     ):
                         skipped_task_ids.add(task_id)
@@ -1086,7 +1085,7 @@ class VerificationTaskStore:
                             root_task_id,
                             verification_id,
                             root_task_id,
-                            self.TASK_DONE,
+                            VerificationTaskStatus.DONE.value,
                         ],
                     ).fetchall()
                     skipped_task_ids.update(
@@ -1251,14 +1250,15 @@ class VerificationTaskStore:
 
             return self.db.write_transaction(_tx)
 
-    def transition_verification_failed(
+    def transition_verification_terminal(
         self,
         verification_id: str,
         *,
+        status: VerificationStatus,
         reason: str,
     ) -> VerificationTransitionCommit:
         safe_reason = self._normalize_display_text(
-            reason or "verification cancelled by user"
+            reason or f"verification {status.value}"
         )
         finished_at = now_iso()
         with self._runtime_lock.write_lock():
@@ -1271,19 +1271,19 @@ class VerificationTaskStore:
                     return VerificationTransitionCommit(
                         verification_id=verification_id,
                         outcome="missing",
-                        status="",
+                        status=None,
                     )
                 current_status = str(row["status"] or "")
                 if current_status not in {"queued", "running"}:
                     return VerificationTransitionCommit(
                         verification_id=verification_id,
                         outcome="closed",
-                        status=current_status,
+                        status=VerificationStatus(current_status),
                     )
                 cursor = conn.execute(
                     """
                     UPDATE verifications
-                    SET status='failed',
+                    SET status=?,
                         fail_reason=CASE
                             WHEN fail_reason='' THEN ? ELSE fail_reason
                         END,
@@ -1294,11 +1294,11 @@ class VerificationTaskStore:
                         finished_at=COALESCE(finished_at,?)
                     WHERE id=? AND status IN ('queued','running')
                     """,
-                    [safe_reason, finished_at, verification_id],
+                    [status.value, safe_reason, finished_at, verification_id],
                 )
                 if int(cursor.rowcount or 0) != 1:
                     raise RuntimeError(
-                        f"verification {verification_id} failure transition was lost"
+                        f"verification {verification_id} terminal transition was lost"
                     )
                 reason_row = conn.execute(
                     "SELECT fail_reason FROM verifications WHERE id=?",
@@ -1318,7 +1318,7 @@ class VerificationTaskStore:
                 return VerificationTransitionCommit(
                     verification_id=verification_id,
                     outcome="transitioned",
-                    status="failed",
+                    status=status,
                     cancelled_task_ids=frozenset(cancelled),
                 )
 
@@ -1358,7 +1358,7 @@ class VerificationTaskStore:
                     return VerificationTransitionCommit(
                         verification_id=finish.verification_id,
                         outcome="transitioned",
-                        status="ok",
+                        status=VerificationStatus.OK,
                     )
                 row = conn.execute(
                     "SELECT status FROM verifications WHERE id=?",
@@ -1368,12 +1368,12 @@ class VerificationTaskStore:
                     return VerificationTransitionCommit(
                         verification_id=finish.verification_id,
                         outcome="missing",
-                        status="",
+                        status=None,
                     )
                 return VerificationTransitionCommit(
                     verification_id=finish.verification_id,
                     outcome="closed",
-                    status=str(row["status"] or ""),
+                    status=VerificationStatus(str(row["status"])),
                 )
 
             return self.db.write_transaction(_tx)
@@ -1448,7 +1448,7 @@ class VerificationTaskStore:
 
     def recover_startup(self, *, reason: str) -> StartupRecoverySummary:
         safe_reason = self._normalize_display_text(
-            reason or "cancelled on service startup"
+            reason or "interrupted by application restart"
         )
         finished_at = now_iso()
         with self._runtime_lock.write_lock():
@@ -1492,7 +1492,7 @@ class VerificationTaskStore:
                       )
                     """,
                     [
-                        self.TASK_CANCELLED,
+                        VerificationTaskStatus.CANCELLED.value,
                         execution_result_json(cancelled_task_result(safe_reason)),
                         finished_at,
                     ],

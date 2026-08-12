@@ -8,6 +8,7 @@ from typing import Callable, cast
 from app.service.verification.completion import VerificationTaskCompletionService
 from app.service.verification.task_completion import CompletionCommit, TaskCompletion
 from app.service.verification.task_store import VerificationTaskRow, VerificationTaskStore
+from app.service.verification.types import VerificationTaskStatus
 
 
 _PUBLISH_SLICE_SIZE = 256
@@ -41,9 +42,9 @@ class _VerificationEvent:
 
 _TERMINAL_TASK_STATUSES = frozenset(
     {
-        VerificationTaskStore.TASK_DONE,
-        VerificationTaskStore.TASK_FAILED,
-        VerificationTaskStore.TASK_CANCELLED,
+        VerificationTaskStatus.DONE,
+        VerificationTaskStatus.FAILED,
+        VerificationTaskStatus.CANCELLED,
     }
 )
 
@@ -60,7 +61,7 @@ class _IncrementalDagState:
             for row in ordered_rows
         }
         self.status_by_id = {
-            task_id: str(row["status"])
+            task_id: row["status"]
             for task_id, row in self.rows_by_id.items()
         }
         self.program_id_by_task_id: dict[str, str] = {}
@@ -80,7 +81,7 @@ class _IncrementalDagState:
         for parent_id, child_id in edges:
             if child_id not in self.rows_by_id:
                 continue
-            if self.status_by_id.get(parent_id) != VerificationTaskStore.TASK_DONE:
+            if self.status_by_id.get(parent_id) != VerificationTaskStatus.DONE:
                 self.remaining_parents[child_id] += 1
             if parent_id in self.rows_by_id:
                 self.dependents_by_parent.setdefault(parent_id, []).append(child_id)
@@ -90,7 +91,7 @@ class _IncrementalDagState:
         self.ready: deque[str] = deque()
         self.ready_ids: set[str] = set()
         for task_id, row in self.rows_by_id.items():
-            if self.status_by_id[task_id] == VerificationTaskStore.TASK_PENDING:
+            if self.status_by_id[task_id] == VerificationTaskStatus.PENDING:
                 self._enqueue_if_ready(task_id)
 
         self.terminal_count = sum(
@@ -108,7 +109,7 @@ class _IncrementalDagState:
         while self.ready:
             task_id = self.ready.popleft()
             self.ready_ids.discard(task_id)
-            if self.status_by_id[task_id] != VerificationTaskStore.TASK_PENDING:
+            if self.status_by_id[task_id] != VerificationTaskStatus.PENDING:
                 continue
             if self.remaining_parents[task_id] != 0:
                 continue
@@ -120,7 +121,11 @@ class _IncrementalDagState:
         row["run_id"] = run_id
         row["judgehost_task_id"] = judgehost_task_id
 
-    def transition(self, task_id: str, status: str) -> bool:
+    def transition(
+        self,
+        task_id: str,
+        status: VerificationTaskStatus,
+    ) -> bool:
         previous = self.status_by_id[task_id]
         if previous == status or previous in _TERMINAL_TASK_STATUSES:
             return False
@@ -138,14 +143,14 @@ class _IncrementalDagState:
             self.completed_program_ids.append(program_id)
         else:
             self.remaining_tasks_by_program[program_id] = remaining
-        if status != VerificationTaskStore.TASK_DONE:
+        if status != VerificationTaskStatus.DONE:
             return True
         for child_id in self.dependents_by_parent.get(task_id, []):
             remaining = self.remaining_parents[child_id]
             if remaining <= 0:
                 continue
             self.remaining_parents[child_id] = remaining - 1
-            if self.status_by_id[child_id] == VerificationTaskStore.TASK_PENDING:
+            if self.status_by_id[child_id] == VerificationTaskStatus.PENDING:
                 self._enqueue_if_ready(child_id)
         return True
 
@@ -153,9 +158,9 @@ class _IncrementalDagState:
         previous = self.status_by_id[task_id]
         if previous in _TERMINAL_TASK_STATUSES:
             return False
-        self.status_by_id[task_id] = VerificationTaskStore.TASK_DONE
+        self.status_by_id[task_id] = VerificationTaskStatus.DONE
         row = self.rows_by_id[task_id]
-        row["status"] = VerificationTaskStore.TASK_DONE
+        row["status"] = VerificationTaskStatus.DONE
         row["verdict"] = "SK"
         row["feedback_text"] = feedback_text
         self.terminal_count += 1
@@ -176,10 +181,10 @@ class _IncrementalDagState:
         row["feedback_text"] = feedback_text
 
     def requeue(self, task_id: str) -> bool:
-        if self.status_by_id[task_id] != VerificationTaskStore.TASK_LEASED:
+        if self.status_by_id[task_id] != VerificationTaskStatus.LEASED:
             return False
-        self.status_by_id[task_id] = VerificationTaskStore.TASK_QUEUED
-        self.rows_by_id[task_id]["status"] = VerificationTaskStore.TASK_QUEUED
+        self.status_by_id[task_id] = VerificationTaskStatus.QUEUED
+        self.rows_by_id[task_id]["status"] = VerificationTaskStatus.QUEUED
         return True
 
     def take_completed_programs(self) -> list[str]:
@@ -300,7 +305,7 @@ class VerificationRuntimeCoordinator:
         changed = False
         for row in self._task_store.list_rows(self.verification_id):
             task_id = str(row["id"])
-            status = str(row["status"])
+            status = row["status"]
             if (
                 task_id not in self._dag.rows_by_id
                 or status not in _TERMINAL_TASK_STATUSES
@@ -366,7 +371,7 @@ class VerificationRuntimeCoordinator:
             changed = (
                 self._dag.transition(
                     task_id,
-                    VerificationTaskStore.TASK_CANCELLED,
+                    VerificationTaskStatus.CANCELLED,
                 )
                 or changed
             )
@@ -405,7 +410,7 @@ class VerificationRuntimeCoordinator:
                 for row in self._task_store.list_rows(self.verification_id)
             }
             for task_id, row in rows_by_id.items():
-                status = str(row["status"])
+                status = row["status"]
                 if status in _TERMINAL_TASK_STATUSES:
                     self._dag.set_result_metadata(
                         task_id,
@@ -445,7 +450,7 @@ class VerificationRuntimeCoordinator:
                     run_id=published.run_id,
                     judgehost_task_id=published.judgehost_task_id,
                 )
-                self._dag.transition(task_id, VerificationTaskStore.TASK_QUEUED)
+                self._dag.transition(task_id, VerificationTaskStatus.QUEUED)
                 self._cache_probe_task_ids[published.judgehost_task_id] = None
             else:
                 commit = self._completion_service.commit(
@@ -489,12 +494,12 @@ class VerificationRuntimeCoordinator:
         row = self._dag.rows_by_id.get(verification_task_id)
         if row is None:
             return False
-        if str(row["status"]) != VerificationTaskStore.TASK_QUEUED:
+        if row["status"] != VerificationTaskStatus.QUEUED:
             return False
         if not self._task_store.set_task_leased(verification_task_id):
             return False
         self._dag.transition(
             verification_task_id,
-            VerificationTaskStore.TASK_LEASED,
+            VerificationTaskStatus.LEASED,
         )
         return True

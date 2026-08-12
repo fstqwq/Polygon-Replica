@@ -785,7 +785,7 @@ class ContestDiskStore:
                     int(contest_id),
                     int(actor_user_id),
                     job_type,
-                    "running",
+                    "queued",
                     int(contest["source_generation"]),
                     created_at,
                     None,
@@ -864,15 +864,19 @@ class ContestDiskStore:
         job_id: str,
         status: str,
         finished_at: str | None,
-    ) -> None:
-        self.db.execute(
-            """
-            UPDATE contest_jobs
-            SET status=?, finished_at=?
-            WHERE contest_id=? AND id=?
-            """,
-            [status, finished_at, int(contest_id), job_id],
-        )
+    ) -> bool:
+        def transaction(connection) -> bool:
+            allowed = ("queued",) if status == "running" else ("queued", "running")
+            cursor = connection.execute(
+                """UPDATE contest_jobs SET status=?, finished_at=?
+                   WHERE contest_id=? AND id=? AND status IN (?,?)""",
+                [
+                    status, finished_at, int(contest_id), job_id,
+                    allowed[0], allowed[-1],
+                ],
+            )
+            return int(cursor.rowcount or 0) == 1
+        return self.db.write_transaction(transaction)
 
     def job_row(self, contest_id: int, job_id: str) -> ContestJobRecord | None:
         row = self.db.fetch_one(
@@ -913,10 +917,6 @@ class ContestDiskStore:
             [int(contest_id), max(1, int(limit))],
         )
         return [dict(row) for row in rows]
-
-    def job_status(self, contest_id: int, job_id: str) -> str:
-        row = self.db.fetch_one("SELECT status FROM contest_jobs WHERE contest_id=? AND id=?", [int(contest_id), job_id])
-        return "" if row is None else str(row["status"] or "")
 
     def insert_artifact(
         self,

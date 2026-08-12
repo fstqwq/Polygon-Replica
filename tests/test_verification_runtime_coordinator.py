@@ -20,7 +20,7 @@ from app.service.verification.task_scheduler import (
     VerificationRuntimeCoordinator,
 )
 from app.service.verification.runtime_registry import VerificationRuntimeRegistry
-from app.service.verification.task_store import VerificationTaskStore
+from app.service.verification.types import VerificationTaskStatus
 
 
 class _RegistryHandle:
@@ -87,7 +87,7 @@ def _task_row(
     task_id: str,
     *,
     task_kind: str,
-    status: str,
+    status: VerificationTaskStatus,
     queue_index: int,
     source_path: str = "solutions/a.cpp",
     program_id: str = "",
@@ -177,8 +177,11 @@ class _InMemoryTaskStore:
     def set_task_queued(self, task_id: str, *, run_id: str, judgehost_task_id: str) -> None:
         with self._lock:
             for row in self._rows:
-                if str(row["id"]) == task_id and str(row["status"]) == VerificationTaskStore.TASK_PENDING:
-                    row["status"] = VerificationTaskStore.TASK_QUEUED
+                if (
+                    str(row["id"]) == task_id
+                    and str(row["status"]) == VerificationTaskStatus.PENDING
+                ):
+                    row["status"] = VerificationTaskStatus.QUEUED
                     row["run_id"] = run_id
                     row["judgehost_task_id"] = judgehost_task_id
                     return
@@ -186,8 +189,11 @@ class _InMemoryTaskStore:
     def set_task_leased(self, task_id: str) -> bool:
         with self._lock:
             for row in self._rows:
-                if str(row["id"]) == task_id and str(row["status"]) == VerificationTaskStore.TASK_QUEUED:
-                    row["status"] = VerificationTaskStore.TASK_LEASED
+                if (
+                    str(row["id"]) == task_id
+                    and str(row["status"]) == VerificationTaskStatus.QUEUED
+                ):
+                    row["status"] = VerificationTaskStatus.LEASED
                     return True
         return False
 
@@ -198,10 +204,10 @@ class _InMemoryTaskStore:
             for row in self._rows:
                 if (
                     str(row.get("verification_id") or "") == verification_id
-                    and str(row.get("status") or "") == VerificationTaskStore.TASK_LEASED
+                    and str(row.get("status") or "") == VerificationTaskStatus.LEASED
                     and str(row.get("judgehost_task_id") or "") in allowed
                 ):
-                    row["status"] = VerificationTaskStore.TASK_QUEUED
+                    row["status"] = VerificationTaskStatus.QUEUED
                     row["started_at"] = ""
                     changed.append(str(row["id"]))
         return changed
@@ -217,9 +223,9 @@ class _InMemoryTaskStore:
         cancelled_task_ids: set[str] = set()
         failure_reason = ""
         terminal_statuses = {
-            VerificationTaskStore.TASK_DONE,
-            VerificationTaskStore.TASK_FAILED,
-            VerificationTaskStore.TASK_CANCELLED,
+            VerificationTaskStatus.DONE,
+            VerificationTaskStatus.FAILED,
+            VerificationTaskStatus.CANCELLED,
         }
         with self._lock:
             rows_by_id = {str(row["id"]): row for row in self._rows}
@@ -251,7 +257,7 @@ class _InMemoryTaskStore:
                     self._fail_reason = completion.fail_reason
                     failure_reason = completion.fail_reason
                 if (
-                    completion.status == VerificationTaskStore.TASK_DONE
+                    completion.status == VerificationTaskStatus.DONE
                     and result.verdict.upper() == "SK"
                 ):
                     skipped_task_ids.add(completion.task_id)
@@ -263,13 +269,13 @@ class _InMemoryTaskStore:
                                 continue
                             stack.append(child_id)
                             child = rows_by_id[child_id]
-                            if str(child["status"]) != VerificationTaskStore.TASK_PENDING:
+                            if str(child["status"]) != VerificationTaskStatus.PENDING:
                                 continue
                             skipped = _execution_result(
                                 "SK",
                                 feedback="skipped because generate-input was skipped",
                             )
-                            child["status"] = VerificationTaskStore.TASK_DONE
+                            child["status"] = VerificationTaskStatus.DONE
                             child["verdict"] = skipped.verdict
                             child["feedback_text"] = skipped.outcome.feedback
                             child["result"] = skipped
@@ -277,11 +283,11 @@ class _InMemoryTaskStore:
             if failure_reason:
                 for row in self._rows:
                     if str(row["status"]) not in {
-                        VerificationTaskStore.TASK_PENDING,
-                        VerificationTaskStore.TASK_QUEUED,
+                        VerificationTaskStatus.PENDING,
+                        VerificationTaskStatus.QUEUED,
                     }:
                         continue
-                    row["status"] = VerificationTaskStore.TASK_CANCELLED
+                    row["status"] = VerificationTaskStatus.CANCELLED
                     row["cancel_reason"] = failure_reason
                     cancelled_task_ids.add(str(row["id"]))
         return CompletionCommit(
@@ -299,10 +305,10 @@ class _InMemoryTaskStore:
         with self._lock:
             for row in self._rows:
                 if str(row["status"]) in {
-                    VerificationTaskStore.TASK_PENDING,
-                    VerificationTaskStore.TASK_QUEUED,
+                    VerificationTaskStatus.PENDING,
+                    VerificationTaskStatus.QUEUED,
                 }:
-                    row["status"] = VerificationTaskStore.TASK_CANCELLED
+                    row["status"] = VerificationTaskStatus.CANCELLED
                     row["cancel_reason"] = reason
 
     def failure_snapshot(self) -> tuple[bool, str]:
@@ -331,7 +337,7 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
                 _task_row(
                     "vt-generate",
                     task_kind="generate-input",
-                    status=VerificationTaskStore.TASK_PENDING,
+                    status=VerificationTaskStatus.PENDING,
                     queue_index=1,
                     source_path="generators/gen.cpp",
                     program_id="generator-0",
@@ -339,7 +345,7 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
                 _task_row(
                     "vt-main",
                     task_kind="main-correct",
-                    status=VerificationTaskStore.TASK_PENDING,
+                    status=VerificationTaskStatus.PENDING,
                     queue_index=2,
                     source_path="solutions/main.cpp",
                     program_id="accepted",
@@ -351,7 +357,7 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
         closed_programs: list[str] = []
         completion = TaskCompletion(
             task_id="vt-generate",
-            status=VerificationTaskStore.TASK_DONE,
+            status=VerificationTaskStatus.DONE,
             run_id="r-vt-generate",
             judgehost_task_id="jt-vt-generate",
             result=_execution_result("OK"),
@@ -394,7 +400,10 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
                 interval=0.01,
                 message="initial ready task was not published",
             )
-            self.assertEqual(store.list_rows("ver-runtime")[0]["status"], VerificationTaskStore.TASK_QUEUED)
+            self.assertEqual(
+                store.list_rows("ver-runtime")[0]["status"],
+                VerificationTaskStatus.QUEUED,
+            )
             coordinator.enqueue_completion_committed(
                 completion_service.commit([completion], notify=False)
             )
@@ -405,8 +414,8 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
                 message="successor task was not published after case result event",
             )
             rows = {str(row["id"]): row for row in store.list_rows("ver-runtime")}
-            self.assertEqual(str(rows["vt-generate"]["status"]), VerificationTaskStore.TASK_DONE)
-            self.assertEqual(str(rows["vt-main"]["status"]), VerificationTaskStore.TASK_QUEUED)
+            self.assertEqual(str(rows["vt-generate"]["status"]), VerificationTaskStatus.DONE)
+            self.assertEqual(str(rows["vt-main"]["status"]), VerificationTaskStatus.QUEUED)
             self._wait_until(
                 lambda: closed_programs == ["generator-0"],
                 timeout=2.0,
@@ -428,7 +437,7 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
                     **_task_row(
                         "vt-parent",
                         task_kind="generate-input",
-                        status=VerificationTaskStore.TASK_PENDING,
+                        status=VerificationTaskStatus.PENDING,
                         queue_index=1,
                     ),
                     "verification_id": verification_id,
@@ -437,7 +446,7 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
                     **_task_row(
                         "vt-child",
                         task_kind="main-correct",
-                        status=VerificationTaskStore.TASK_PENDING,
+                        status=VerificationTaskStatus.PENDING,
                         queue_index=2,
                     ),
                     "verification_id": verification_id,
@@ -501,7 +510,7 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
                 [
                     TaskCompletion(
                         task_id="vt-parent",
-                        status=VerificationTaskStore.TASK_DONE,
+                        status=VerificationTaskStatus.DONE,
                         run_id="run-vt-parent",
                         judgehost_task_id="judgehost-vt-parent",
                         result=_execution_result("OK"),
@@ -531,7 +540,7 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
                     **_task_row(
                         "vt-parent",
                         task_kind="generate-input",
-                        status=VerificationTaskStore.TASK_PENDING,
+                        status=VerificationTaskStatus.PENDING,
                         queue_index=1,
                     ),
                     "verification_id": verification_id,
@@ -540,7 +549,7 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
                     **_task_row(
                         "vt-child",
                         task_kind="main-correct",
-                        status=VerificationTaskStore.TASK_PENDING,
+                        status=VerificationTaskStatus.PENDING,
                         queue_index=2,
                     ),
                     "verification_id": verification_id,
@@ -609,7 +618,7 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
                 coordinator.enqueue_case_leased("vt-parent")
                 self._wait_until(
                     lambda: str(store.list_rows(verification_id)[0]["status"])
-                    == VerificationTaskStore.TASK_LEASED,
+                    == VerificationTaskStatus.LEASED,
                     timeout=2.0,
                     interval=0.01,
                     message="parent task was not leased before terminal failure",
@@ -618,7 +627,7 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
                     [
                         TaskCompletion(
                             task_id="vt-parent",
-                            status=VerificationTaskStore.TASK_FAILED,
+                            status=VerificationTaskStatus.FAILED,
                             run_id="run-vt-parent",
                             judgehost_task_id="judgehost-vt-parent",
                             result=_execution_result(
@@ -660,7 +669,7 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
                 _task_row(
                     "vt-generate",
                     task_kind="generate-input",
-                    status=VerificationTaskStore.TASK_PENDING,
+                    status=VerificationTaskStatus.PENDING,
                     queue_index=1,
                     source_path="generators/gen.cpp",
                     program_id="generator-0",
@@ -668,7 +677,7 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
                 _task_row(
                     "vt-main",
                     task_kind="main-correct",
-                    status=VerificationTaskStore.TASK_PENDING,
+                    status=VerificationTaskStatus.PENDING,
                     queue_index=2,
                     source_path="solutions/main.cpp",
                     program_id="accepted",
@@ -676,7 +685,7 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
                 _task_row(
                     "vt-solution",
                     task_kind="solution-run",
-                    status=VerificationTaskStore.TASK_PENDING,
+                    status=VerificationTaskStatus.PENDING,
                     queue_index=3,
                     source_path="solutions/other.cpp",
                     program_id="solution-0",
@@ -695,7 +704,7 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
                 judgehost_task_id="",
                 terminal_result=TaskCompletion(
                     task_id=task_id,
-                    status=VerificationTaskStore.TASK_DONE,
+                    status=VerificationTaskStatus.DONE,
                     run_id="",
                     judgehost_task_id="",
                     result=_execution_result(
@@ -723,7 +732,7 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
         self.assertEqual(publish_order, ["vt-generate"])
         rows = {str(row["id"]): row for row in store.list_rows("ver-runtime-skip-subtree")}
         for task_id in ("vt-generate", "vt-main", "vt-solution"):
-            self.assertEqual(str(rows[task_id]["status"]), VerificationTaskStore.TASK_DONE)
+            self.assertEqual(str(rows[task_id]["status"]), VerificationTaskStatus.DONE)
             self.assertEqual(str(rows[task_id]["verdict"]), "SK")
 
     def test_runtime_coordinator_actively_probes_cached_cases_after_identity_registration(self) -> None:
@@ -733,7 +742,7 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
                 _task_row(
                     f"vt-{index:03}",
                     task_kind="generate-input",
-                    status=VerificationTaskStore.TASK_PENDING,
+                    status=VerificationTaskStatus.PENDING,
                     queue_index=index + 1,
                     source_path="generators/gen.cpp",
                     test_name=f"{index + 1:03}.in",
@@ -775,7 +784,7 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
                 and all(
                     task_id in rows_by_judgehost_id
                     and str(rows_by_judgehost_id[task_id]["status"])
-                    == VerificationTaskStore.TASK_QUEUED
+                    == VerificationTaskStatus.QUEUED
                     for task_id in task_ids
                 )
             )
@@ -785,7 +794,7 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
                     [
                         TaskCompletion(
                             task_id=task_id,
-                            status=VerificationTaskStore.TASK_DONE,
+                            status=VerificationTaskStatus.DONE,
                             run_id=f"r-{task_id}",
                             judgehost_task_id=judgehost_task_id,
                             result=_execution_result("OK"),
@@ -819,7 +828,7 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
             self.assertTrue(all(identity_registered))
             self.assertTrue(
                 all(
-                    str(row["status"]) == VerificationTaskStore.TASK_DONE
+                    str(row["status"]) == VerificationTaskStatus.DONE
                     for row in store.list_rows("ver-large-batch")
                 )
             )
@@ -836,7 +845,7 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
                     **_task_row(
                         "vt-expired",
                         task_kind="solution-run",
-                        status=VerificationTaskStore.TASK_LEASED,
+                        status=VerificationTaskStatus.LEASED,
                         queue_index=1,
                         program_id="solution-0",
                     ),
@@ -872,7 +881,7 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
         try:
             self._wait_until(
                 lambda: str(store.list_rows("verification")[0]["status"])
-                == VerificationTaskStore.TASK_QUEUED,
+                == VerificationTaskStatus.QUEUED,
                 timeout=2.0,
                 interval=0.01,
                 message="expired lease was not requeued",
@@ -889,14 +898,14 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
                 _task_row(
                     "vt-generate",
                     task_kind="generate-input",
-                    status=VerificationTaskStore.TASK_PENDING,
+                    status=VerificationTaskStatus.PENDING,
                     queue_index=1,
                     source_path="generators/gen.cpp",
                 ),
                 _task_row(
                     "vt-solution",
                     task_kind="solution-run",
-                    status=VerificationTaskStore.TASK_PENDING,
+                    status=VerificationTaskStatus.PENDING,
                     queue_index=2,
                     source_path="solutions/ok.cpp",
                     program_id="solution-0",
@@ -907,7 +916,7 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
         publish_order: list[str] = []
         completion = TaskCompletion(
             task_id="vt-generate",
-            status=VerificationTaskStore.TASK_FAILED,
+            status=VerificationTaskStatus.FAILED,
             run_id="r-generate",
             judgehost_task_id="jt-vt-generate",
             result=_execution_result(
@@ -970,14 +979,14 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
                         for row in store.list_rows("ver-validator-stop")
                     }["vt-solution"]["status"]
                 )
-                == VerificationTaskStore.TASK_CANCELLED,
+                == VerificationTaskStatus.CANCELLED,
                 timeout=2.0,
                 interval=0.01,
                 message="successor task was not cancelled after validator rejection",
             )
             rows = {str(row["id"]): row for row in store.list_rows("ver-validator-stop")}
-            self.assertEqual(str(rows["vt-generate"]["status"]), VerificationTaskStore.TASK_FAILED)
-            self.assertEqual(str(rows["vt-solution"]["status"]), VerificationTaskStore.TASK_CANCELLED)
+            self.assertEqual(str(rows["vt-generate"]["status"]), VerificationTaskStatus.FAILED)
+            self.assertEqual(str(rows["vt-solution"]["status"]), VerificationTaskStatus.CANCELLED)
             self.assertEqual(publish_order, ["vt-generate"])
             self.assertEqual(
                 store.failure_snapshot(),
@@ -997,7 +1006,7 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
                     **_task_row(
                         task_id,
                         task_kind="solution-run",
-                        status=VerificationTaskStore.TASK_PENDING,
+                        status=VerificationTaskStatus.PENDING,
                         queue_index=index,
                         program_id=f"solution-{index}",
                         test_name="001.in",
@@ -1023,7 +1032,7 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
                 judgehost_task_id=f"judgehost-{task_id}",
                 terminal_result=TaskCompletion(
                     task_id=task_id,
-                    status=VerificationTaskStore.TASK_FAILED,
+                    status=VerificationTaskStatus.FAILED,
                     run_id=f"run-{task_id}",
                     judgehost_task_id=f"judgehost-{task_id}",
                     result=_execution_result(
@@ -1057,7 +1066,7 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
         self.assertEqual(drain_reasons, ["source payload is unavailable"])
         self.assertEqual(
             str(rows["vt-independent"]["status"]),
-            VerificationTaskStore.TASK_CANCELLED,
+            VerificationTaskStatus.CANCELLED,
         )
 
     def test_runtime_coordinator_cancel_releases_worker_without_finalizing_leased_rows(self) -> None:
@@ -1067,7 +1076,7 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
                     **_task_row(
                         "vt-leased",
                         task_kind="solution-run",
-                        status=VerificationTaskStore.TASK_LEASED,
+                        status=VerificationTaskStatus.LEASED,
                         queue_index=1,
                         program_id="solution-0",
                         test_name="001.in",
@@ -1079,7 +1088,7 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
                     **_task_row(
                         "vt-queued",
                         task_kind="solution-run",
-                        status=VerificationTaskStore.TASK_QUEUED,
+                        status=VerificationTaskStatus.QUEUED,
                         queue_index=2,
                         program_id="solution-0",
                         test_name="002.in",
@@ -1120,14 +1129,14 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
                         for row in store.list_rows("ver-runtime-cancel")
                     }["vt-queued"]["status"]
                 )
-                == VerificationTaskStore.TASK_CANCELLED,
+                == VerificationTaskStatus.CANCELLED,
                 timeout=2.0,
                 interval=0.01,
                 message="queued row was not cancelled",
             )
             rows = {str(row["id"]): row for row in store.list_rows("ver-runtime-cancel")}
-            self.assertEqual(str(rows["vt-leased"]["status"]), VerificationTaskStore.TASK_LEASED)
-            self.assertEqual(str(rows["vt-queued"]["status"]), VerificationTaskStore.TASK_CANCELLED)
+            self.assertEqual(str(rows["vt-leased"]["status"]), VerificationTaskStatus.LEASED)
+            self.assertEqual(str(rows["vt-queued"]["status"]), VerificationTaskStatus.CANCELLED)
         finally:
             if thread.is_alive():
                 coordinator.enqueue_cancel("test shutdown")
@@ -1142,7 +1151,7 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
                 _task_row(
                     task_id,
                     task_kind="solution-run",
-                    status=VerificationTaskStore.TASK_PENDING,
+                    status=VerificationTaskStatus.PENDING,
                     queue_index=index,
                     test_name=f"{index:03}.in",
                 )
@@ -1161,7 +1170,7 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
                 judgehost_task_id=f"judgehost-{task_id}",
                 terminal_result=TaskCompletion(
                     task_id=task_id,
-                    status=VerificationTaskStore.TASK_DONE,
+                    status=VerificationTaskStatus.DONE,
                     run_id=f"run-{task_id}",
                     judgehost_task_id=f"judgehost-{task_id}",
                     result=_execution_result("AC"),
@@ -1186,7 +1195,7 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
         self.assertEqual(publish_order, task_ids)
         self.assertTrue(
             all(
-                str(row["status"]) == VerificationTaskStore.TASK_DONE
+                str(row["status"]) == VerificationTaskStatus.DONE
                 for row in store.list_rows("ver-incremental-chain")
             )
         )
@@ -1198,7 +1207,7 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
                 **_task_row(
                     task_id,
                     task_kind="solution-run",
-                    status=VerificationTaskStore.TASK_QUEUED,
+                    status=VerificationTaskStatus.QUEUED,
                     queue_index=index,
                     test_name=f"{index:03}.in",
                 ),
@@ -1213,7 +1222,7 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
                 **_task_row(
                     "vt-child",
                     task_kind="solution-run",
-                    status=VerificationTaskStore.TASK_PENDING,
+                    status=VerificationTaskStatus.PENDING,
                     queue_index=3,
                     test_name="003.in",
                 ),
@@ -1229,7 +1238,7 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
         completions = [
             TaskCompletion(
                 task_id=task_id,
-                status=VerificationTaskStore.TASK_DONE,
+                status=VerificationTaskStatus.DONE,
                 run_id="run-shared",
                 judgehost_task_id="judgehost-shared",
                 result=_execution_result("AC"),
@@ -1282,11 +1291,11 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
         }
         self.assertEqual(
             str(rows_by_id["vt-parent-a"]["status"]),
-            VerificationTaskStore.TASK_DONE,
+            VerificationTaskStatus.DONE,
         )
         self.assertEqual(
             str(rows_by_id["vt-parent-b"]["status"]),
-            VerificationTaskStore.TASK_DONE,
+            VerificationTaskStatus.DONE,
         )
         self.assertEqual(published, ["vt-child"])
 

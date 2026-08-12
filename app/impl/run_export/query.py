@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TypedDict, cast
 
 from app.impl.runtime.config import config
 from app.impl.workspace.context_operation import dedupe_preserve_order
@@ -9,156 +8,12 @@ from app.impl.workspace.context_verification import normalize_run_id_token
 from app.main_util import normalize_optional_component_source_path_safe
 from app.service.platform.git_process import run_git
 from app.service.platform.process import is_canonical_artifact_id
-from app.service.verification.task_store import VerificationTaskStore
-
-
-class RuntimeProgress(TypedDict):
-    detail: str
 
 
 def _count_label(count: int, singular: str, plural: str | None = None) -> str:
     count_value = max(0, int(count))
     token = singular if count_value == 1 else (plural if plural is not None else f"{singular}s")
     return f"{count_value} {token}"
-
-def _verification_tests_total(details: dict[str, object]) -> int:
-    selected_test_names = cast(list[object], details.get("selected_test_names") or [])
-    return len([token for token in selected_test_names if str(token or "")])
-
-def _build_validated_count_from_log(validate_log: Path) -> int:
-    try:
-        if (not validate_log.exists()) or (not validate_log.is_file()) or validate_log.is_symlink():
-            return 0
-    except OSError:
-        return 0
-    seen: set[str] = set()
-    try:
-        with validate_log.open("r", encoding="utf-8", errors="replace") as fh:
-            for raw in fh:
-                line = raw.strip()
-                if ": " not in line:
-                    continue
-                test_name, _rest = line.split(": ", 1)
-                token = test_name.strip()
-                if not token.lower().endswith(".in"):
-                    continue
-                seen.add(token)
-    except Exception:
-        return 0
-    return max(0, int(len(seen)))
-
-def _verification_runtime_progress(
-    *,
-    problem_id: int,
-    verification_id: str,
-    event_status: str,
-) -> RuntimeProgress:
-    result: RuntimeProgress = {
-        "detail": "",
-    }
-    if (not verification_id) or (not is_canonical_artifact_id(verification_id)):
-        return result
-    snapshot = config.verification_service.verification_snapshot(verification_id)
-    verification_status = ""
-    verification_detail: dict[str, object] = {}
-    verification_rows: list[dict[str, object]] = []
-    if (
-        snapshot is not None
-        and int(snapshot["record"]["problem_id"]) == int(problem_id)
-    ):
-        verification_status = snapshot["record"]["status"]
-        verification_detail = dict(snapshot["detail"])
-        verification_rows = snapshot["tasks"]
-    artifact_root = None
-    if verification_id:
-        try:
-            root = config.fs_manager.resolve_verification_root(verification_id).resolve()
-            base = config.fs_manager.cache_artifacts_root.resolve()
-            if (root == base or base in root.parents) and root.exists() and root.is_dir() and (not root.is_symlink()):
-                artifact_root = root
-        except Exception:
-            artifact_root = None
-    if artifact_root is None:
-        if event_status == "running":
-            if verification_status in {"queued", "pending"}:
-                result["detail"] = "verification queued"
-            elif verification_status == "running":
-                result["detail"] = "verification running"
-            elif verification_status == "ok":
-                result["detail"] = "packaging export bundle"
-        return result
-
-    logs_dir = artifact_root / "logs"
-    generate_log = logs_dir / "generate.log"
-    validate_log = logs_dir / "validate.log"
-    solve_log = logs_dir / "solve.log"
-    compile_log = logs_dir / "compile.log"
-    tests_total = _verification_tests_total(verification_detail)
-    outputs_generated = len(
-        [
-            row
-            for row in verification_rows
-            if str(row["task_kind"] or "") == "main-correct" and str(row["status"] or "") == VerificationTaskStore.TASK_DONE
-        ]
-    )
-    validated_count = _build_validated_count_from_log(validate_log)
-
-    if event_status == "running":
-        if verification_status in {"queued", "pending"}:
-            result["detail"] = "verification queued"
-            return result
-        if verification_status == "ok":
-            result["detail"] = "packaging export bundle"
-            return result
-        sanity_status = str(verification_detail.get("sanity_status") or "")
-        if sanity_status in {"pending", "running"}:
-            result["detail"] = "sanity checks running"
-            return result
-        if solve_log.exists() and solve_log.is_file() and (not solve_log.is_symlink()):
-            if tests_total > 0:
-                completed_outputs = min(outputs_generated, tests_total)
-                if completed_outputs >= tests_total:
-                    result["detail"] = f"generated outputs {completed_outputs}/{tests_total}"
-                else:
-                    result["detail"] = f"generate outputs {completed_outputs}/{tests_total}"
-            else:
-                result["detail"] = "generate outputs running"
-            return result
-        if validate_log.exists() and validate_log.is_file() and (not validate_log.is_symlink()):
-            if tests_total > 0:
-                result["detail"] = f"validate inputs {min(validated_count, tests_total)}/{tests_total}"
-            else:
-                result["detail"] = "validate inputs running"
-            return result
-        if generate_log.exists() and generate_log.is_file() and (not generate_log.is_symlink()):
-            if tests_total > 0:
-                result["detail"] = f"generate inputs {tests_total} prepared"
-            else:
-                result["detail"] = "generate inputs running"
-            return result
-        if compile_log.exists() and compile_log.is_file() and (not compile_log.is_symlink()):
-            result["detail"] = "compile running"
-            return result
-        result["detail"] = "verification running"
-        return result
-
-    if event_status == "failed":
-        record = None if snapshot is None else snapshot["record"]
-        detail = str((record or {}).get("fail_reason") or verification_detail.get("error") or "").strip()
-        if not detail:
-            failed_step = cast(str | None, verification_detail.get("failed_step"))
-            if failed_step is None:
-                failed_step = ""
-            failed_test = cast(str | None, verification_detail.get("failed_test"))
-            if failed_test is None:
-                failed_test = ""
-            if failed_step and failed_test:
-                detail = f"{failed_step} failed on {failed_test}"
-            elif failed_step:
-                detail = f"{failed_step} failed"
-        if detail:
-            result["detail"] = detail
-    return result
 
 def _verification_detail_available(
     *,

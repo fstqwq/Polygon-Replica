@@ -12,7 +12,7 @@ from app.impl.workspace.verification_dag import run_workspace_verification_dag
 from app.service.problem.solution_metadata import normalize_expected_behavior
 from app.service.problem_package.service import MaterializationRow, PublishedRevision
 from app.service.verification.lifecycle import VerificationAdmission
-from app.service.verification.types import Kind, Status
+from app.service.verification.types import Kind, VerificationStatus
 
 
 def build_full_verification_targets(
@@ -106,7 +106,7 @@ def ensure_published_materialization(
             retain_snapshot_override=True,
         )
         record = config.verification_service.verification_record(verification_id) or {}
-        if str(record.get("status") or "") != Status.OK.value:
+        if str(record.get("status") or "") != VerificationStatus.OK.value:
             error = str(record.get("fail_reason") or "full verification failed")
             raise ValueError(f"Native materialization verification failed: {error}")
         return verification_id

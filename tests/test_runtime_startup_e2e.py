@@ -66,7 +66,7 @@ class TestRuntimeStartupE2E(BackendE2ETestBase):
         install_startup_recovery_abort_fault()
         try:
             with patch(
-                "app.impl.runtime.lifecycle._startup_cancel_summary_rows"
+                "app.impl.runtime.lifecycle._startup_fail_summary_rows"
             ), patch(
                 "app.impl.runtime.lifecycle._startup_cancel_judgehost_inflight"
             ) as cancel_judgehost, patch(

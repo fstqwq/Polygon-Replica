@@ -43,8 +43,9 @@ writes the terminal status, bounded canonical result, finish time, non-empty
 input or answer locator, and the verification's first non-empty failure reason.
 Generator content deduplication, skipped-generator results, and pending
 descendant skips are included in the transaction. Generator, `main-correct`,
-and cancellation failures are hard: they also change the parent to `failed`
-and cancel remaining open tasks in that transaction. A solution mismatch is
+and unexpected task cancellation failures are hard: they also change the
+parent to `failed` and cancel remaining open tasks in that transaction. An
+explicit user cancellation instead changes the parent to `cancelled`. A solution mismatch is
 soft: its first reason is persisted while other solution tasks continue; the
 last task transaction changes the parent to `failed` if that reason is present.
 A normal last completion otherwise finishes the parent or durably claims
@@ -73,10 +74,11 @@ This table is not a second completion store: appending diagnostics cannot update
 `result_json`, terminal status, artifact refs, parent status, or `fail_reason`.
 
 Cancellation and failure compare-and-set a `queued` or `running` parent to
-`failed`, preserve its first non-empty reason, and cancel every open task in one
-transaction. Startup recovery performs the equivalent bulk parent/task
-transition before runtime blobs and Judgehost state are cleared. Recovery
-failure aborts application startup.
+`cancelled` and `failed`, respectively. Both preserve the first non-empty reason
+and cancel every open task in one transaction. Startup recovery always uses
+`failed`, because a process interruption is not a user cancellation, before
+runtime blobs and Judgehost state are cleared. Recovery failure aborts
+application startup.
 
 Verification detail is read as one SQLite snapshot containing parent, detail,
 tasks, refs, and late diagnostics. A process-local runtime overlay is applied
@@ -104,8 +106,8 @@ column. This separation makes a late diagnostic incapable of reopening
 execution even when it arrives concurrently with completion or cancellation.
 
 Preview, export, package-build, and contest-job rows survive normal restarts.
-Unfinished rows are moved to a terminal failure/cancellation state because their
-process-local work cannot resume. Administrative artifact cleanup removes the
+Unfinished rows are moved to `failed` because their process-local work cannot
+resume. Administrative artifact cleanup removes the
 execution/package/export/build subset described by the
 [storage protocol](storage.md#maintenance-cleanup), while identity, authoring,
 contest source, attachment, and configuration rows remain.

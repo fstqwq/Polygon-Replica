@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Callable
 from pathlib import Path
 from unittest.mock import patch
 from urllib.parse import parse_qs, urlparse
@@ -108,8 +109,10 @@ class TestContestBuilds(ContestActionBase):
     def test_build_freezes_current_revision_without_requiring_native(self) -> None:
         contest_slug, contest_id, problem_id, _problem_slug = self._contest_with_problem()
         published = config.problem_package_service.published_revision(problem_id)
+        runners: list[Callable[[], None]] = []
 
-        def submit(**_kwargs):
+        def submit(*, fn, **_kwargs):
+            runners.append(fn)
             return None, True, "queued"
 
         with (
@@ -126,7 +129,17 @@ class TestContestBuilds(ContestActionBase):
         job_id = parse_qs(urlparse(str(response.headers["location"])).query)["job_id"][0]
         job = db_fetch_one("SELECT status FROM contest_jobs WHERE id=?", [job_id])
         self.assertIsNotNone(job)
-        self.assertEqual(str(job["status"]), "running")
+        self.assertEqual(str(job["status"]), "queued")
+        self.assertFalse(
+            (
+                config.contest_service.job_root(
+                    contest_slug,
+                    job_id,
+                    create=False,
+                )
+                / "contest-sources"
+            ).exists()
+        )
         item = db_fetch_one(
             """SELECT source_commit,revision_number,materialization_id,archive_sha256
                FROM contest_build_items WHERE job_id=?""",
@@ -138,6 +151,59 @@ class TestContestBuilds(ContestActionBase):
         self.assertIsNone(item["materialization_id"])
         self.assertIsNone(item["archive_sha256"])
         create_export.assert_not_called()
+
+        def assert_worker_boundary(**_kwargs) -> None:
+            running = db_fetch_one("SELECT status FROM contest_jobs WHERE id=?", [job_id])
+            self.assertIsNotNone(running)
+            self.assertEqual(str(running["status"]), "running")
+            raise RuntimeError("stop after worker boundary")
+
+        self.assertEqual(len(runners), 1)
+        with (
+            patch(
+                "app.impl.contest.shared._snapshot_contest_sources",
+                side_effect=assert_worker_boundary,
+            ),
+            self.assertRaisesRegex(RuntimeError, "stop after worker boundary"),
+        ):
+            runners[0]()
+        terminal = db_fetch_one("SELECT status FROM contest_jobs WHERE id=?", [job_id])
+        self.assertIsNotNone(terminal)
+        self.assertEqual(str(terminal["status"]), "failed")
+
+    def test_queue_rejection_fails_job_without_snapshotting_sources(self) -> None:
+        contest_slug, contest_id, _problem_id, _problem_slug = self._contest_with_problem()
+
+        with patch.object(
+            config.worker_queue_service,
+            "submit",
+            return_value=(None, False, "capacity"),
+        ):
+            response = contest_packages_build_start(
+                contest=contest_slug,
+                user="alice",
+                outputs=["icpc_bundle"],
+            )
+
+        self.assertEqual(response.status_code, 303)
+        job = db_fetch_one(
+            """SELECT id,status,finished_at FROM contest_jobs
+               WHERE contest_id=? ORDER BY created_at DESC,id DESC LIMIT 1""",
+            [contest_id],
+        )
+        self.assertIsNotNone(job)
+        self.assertEqual(str(job["status"]), "failed")
+        self.assertTrue(str(job["finished_at"] or ""))
+        self.assertFalse(
+            (
+                config.contest_service.job_root(
+                    contest_slug,
+                    str(job["id"]),
+                    create=False,
+                )
+                / "contest-sources"
+            ).exists()
+        )
 
     def test_requested_outputs_share_one_frozen_revision_mapping(self) -> None:
         contest_slug, contest_id, problem_id, _problem_slug = self._contest_with_problem()

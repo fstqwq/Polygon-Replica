@@ -15,14 +15,14 @@ from app.service.problem_package.service import (
 )
 from app.service.verification.service import VerificationService
 from app.service.verification.task_store import VerificationTaskStore
-from app.service.verification.types import WorkspaceVerificationRow
+from app.service.verification.types import VerificationStatus, WorkspaceVerificationRow
 
 
 def _verification_row(
     verification_id: str,
     *,
     source_commit: str,
-    status: str,
+    status: VerificationStatus,
     fail_reason: str = "",
 ) -> WorkspaceVerificationRow:
     return {
@@ -138,7 +138,7 @@ class TestProblemReadinessService(unittest.TestCase):
                 _verification_row(
                     "ver-readiness-batch",
                     source_commit=self.subject["head_commit"],
-                    status="failed",
+                    status=VerificationStatus.FAILED,
                     fail_reason="checker exited with code 1",
                 )
             ]
@@ -161,7 +161,7 @@ class TestProblemReadinessService(unittest.TestCase):
                 _verification_row(
                     verification_id,
                     source_commit=self.subject["head_commit"],
-                    status="failed",
+                    status=VerificationStatus.FAILED,
                     fail_reason="checker exited with code 1",
                 )
             ]
@@ -182,12 +182,12 @@ class TestProblemReadinessService(unittest.TestCase):
                 _verification_row(
                     "ver-readiness-newer-stale",
                     source_commit="c" * 40,
-                    status="failed",
+                    status=VerificationStatus.FAILED,
                 ),
                 _verification_row(
                     published_id,
                     source_commit=self.subject["head_commit"],
-                    status="ok",
+                    status=VerificationStatus.OK,
                 ),
             ]
         )

@@ -258,12 +258,17 @@ class ProblemPackageStore:
         return self.db.write_transaction(transaction)
 
     def mark_build_running(self, build_id: str, *, phase: str) -> None:
-        self.db.execute(
-            """UPDATE problem_package_builds
-               SET status='running',phase=?,started_at=COALESCE(started_at,?)
-               WHERE id=? AND status IN ('queued','running')""",
-            [phase, now_iso(), build_id],
-        )
+        def transaction(connection) -> None:
+            cursor = connection.execute(
+                """UPDATE problem_package_builds
+                   SET status='running',phase=?,started_at=?
+                   WHERE id=? AND status='queued'""",
+                [phase, now_iso(), build_id],
+            )
+            if int(cursor.rowcount or 0) != 1:
+                raise RuntimeError(f"problem package build is not queued: {build_id}")
+
+        self.db.write_transaction(transaction)
 
     def mark_build_phase(self, build_id: str, phase: str) -> None:
         self.db.execute("UPDATE problem_package_builds SET phase=? WHERE id=? AND status='running'", [phase, build_id])

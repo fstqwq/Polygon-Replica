@@ -766,9 +766,6 @@ def _finalize_contest_job_failure_if_running(
     job_type: str,
     error_text: str,
 ) -> None:
-    current_status = config.contest_service.job_status(contest_id, str(job_id or "").strip())
-    if current_status != "running":
-        return
     config.contest_service.update_job(
         contest_id,
         str(job_id or "").strip(),
@@ -1200,7 +1197,6 @@ def _queue_contest_job(
     initial_summary = {
         "job_type": _CONTEST_JOB_TYPE_BUILD,
         "contest_slug": str(contest_slug or "").strip(),
-        "status": "running",
         "requested_outputs": list(requested_outputs),
         "outputs": {},
     }
@@ -1249,25 +1245,21 @@ def _queue_contest_job(
     if frozen["outcome"] == "not_ready":
         detail = ",".join(frozen["blocked_problems"])
         return ("", False, f"not_ready:{detail}")
-    try:
-        _snapshot_contest_sources(
-            contest_id=contest_id,
-            contest_slug=contest_slug,
-            job_id=job_id,
-            language=job_language,
-        )
-    except Exception as exc:
-        config.contest_service.update_job(
-            contest_id,
-            job_id,
-            "failed",
-            {**initial_summary, "error": f"contest source snapshot failed: {exc}"},
-            finished=True,
-        )
-        return (job_id, False, "source_snapshot_failed")
-
     def _runner() -> None:
         try:
+            config.contest_service.update_job(
+                contest_id,
+                job_id,
+                "running",
+                initial_summary,
+                finished=False,
+            )
+            _snapshot_contest_sources(
+                contest_id=contest_id,
+                contest_slug=contest_slug,
+                job_id=job_id,
+                language=job_language,
+            )
             materialization_results: list[dict[str, object]] = []
             for entry in config.contest_service.build_items(job_id):
                 result: dict[str, object] = {
@@ -1315,7 +1307,6 @@ def _queue_contest_job(
                     "failed",
                     {
                         **initial_summary,
-                        "status": "failed",
                         "phase": "materialization",
                         "materializations": materialization_results,
                         "error": "; ".join(
@@ -1362,7 +1353,6 @@ def _queue_contest_job(
                 status = "failed"
             final_summary: dict[str, object] = {
                 **initial_summary,
-                "status": status,
                 "materializations": materialization_results,
                 "outputs": output_results,
                 "successful_outputs": successful,

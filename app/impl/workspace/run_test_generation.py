@@ -5,7 +5,8 @@ from typing import TypedDict
 
 from app.impl.workspace.run_display import generation_status_text
 from app.service.platform.error_text import bounded_display_text
-from app.service.verification.task_store import VerificationTaskRow, VerificationTaskStore
+from app.service.verification.task_store import VerificationTaskRow
+from app.service.verification.types import VerificationTaskStatus
 
 
 class TestGenerationView(TypedDict):
@@ -39,7 +40,7 @@ def _duplicate_owner_by_task_id(
     rows_by_id = {str(row["id"]): row for row in generate_rows}
     owner_by_output_ref: dict[str, VerificationTaskRow] = {}
     for row in sorted(generate_rows, key=_owner_order):
-        if str(row["status"]) != VerificationTaskStore.TASK_DONE:
+        if row["status"] != VerificationTaskStatus.DONE:
             continue
         if str(row["verdict"]).upper() == "SK":
             continue
@@ -49,7 +50,7 @@ def _duplicate_owner_by_task_id(
 
     owner_test_by_task_id: dict[str, str] = {}
     for row in generate_rows:
-        if str(row["status"]) != VerificationTaskStore.TASK_DONE:
+        if row["status"] != VerificationTaskStatus.DONE:
             continue
         if str(row["verdict"]).upper() != "SK":
             continue
@@ -59,7 +60,7 @@ def _duplicate_owner_by_task_id(
             candidate = rows_by_id.get(predecessor_task_id)
             if (
                 candidate is not None
-                and str(candidate["status"]) == VerificationTaskStore.TASK_DONE
+                and candidate["status"] == VerificationTaskStatus.DONE
                 and str(candidate["verdict"]).upper() != "SK"
             ):
                 owner = candidate
@@ -88,17 +89,17 @@ def _source_kind_and_command(
 
 
 def _status_presentation(status: str, verdict: str) -> tuple[str, str, str]:
-    if status == VerificationTaskStore.TASK_LEASED:
+    if status == VerificationTaskStatus.LEASED:
         return ("running", "running", ".. generating")
-    if status in {VerificationTaskStore.TASK_PENDING, VerificationTaskStore.TASK_QUEUED}:
+    if status in {VerificationTaskStatus.PENDING, VerificationTaskStatus.QUEUED}:
         return ("pending", "pending", "")
-    if status == VerificationTaskStore.TASK_FAILED:
+    if status == VerificationTaskStatus.FAILED:
         return ("fail", "failed", "failed")
-    if status == VerificationTaskStore.TASK_CANCELLED:
+    if status == VerificationTaskStatus.CANCELLED:
         return ("neutral", "cancelled", "cancelled")
-    if status == VerificationTaskStore.TASK_DONE and verdict.upper() == "SK":
+    if status == VerificationTaskStatus.DONE and verdict.upper() == "SK":
         return ("warn", "skipped", "skipped")
-    if status == VerificationTaskStore.TASK_DONE:
+    if status == VerificationTaskStatus.DONE:
         return ("ok", "ok", "ready")
     return ("pending", "pending", "")
 
@@ -119,9 +120,9 @@ def build_test_generation_views(
     test_names = set(tests_meta_by_test_name) | set(generate_row_by_test_name)
     views: dict[str, TestGenerationView] = {}
     terminal_statuses = {
-        VerificationTaskStore.TASK_DONE,
-        VerificationTaskStore.TASK_FAILED,
-        VerificationTaskStore.TASK_CANCELLED,
+        VerificationTaskStatus.DONE,
+        VerificationTaskStatus.FAILED,
+        VerificationTaskStatus.CANCELLED,
     }
     for test_name in test_names:
         row = generate_row_by_test_name.get(test_name)
@@ -134,7 +135,7 @@ def build_test_generation_views(
         error_text = ""
         feedback_text = ""
         duplicate_of = ""
-        skipped = bool(status == VerificationTaskStore.TASK_DONE and verdict.upper() == "SK")
+        skipped = bool(status == VerificationTaskStatus.DONE and verdict.upper() == "SK")
         alert_severity = ""
         alert_message = ""
         if row is not None:
@@ -176,10 +177,10 @@ def build_test_generation_views(
                 else "skipped (duplicate owner unavailable)"
             )
             table_text = alert_message
-        elif status == VerificationTaskStore.TASK_CANCELLED:
+        elif status == VerificationTaskStatus.CANCELLED:
             alert_severity = "warning"
             alert_message = detail or "generation cancelled"
-        elif status == VerificationTaskStore.TASK_FAILED:
+        elif status == VerificationTaskStatus.FAILED:
             alert_severity = "error"
             alert_message = detail or "generation failed"
         views[test_name] = {

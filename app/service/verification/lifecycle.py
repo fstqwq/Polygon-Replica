@@ -10,6 +10,7 @@ from app.service.platform.hashing import canonical_json
 from app.service.platform.runtime_blob_store import PayloadFile
 from app.service.execution.model import ExecutionResult
 from app.service.execution.policy import normalize_execution_result
+from app.service.verification.types import VerificationStatus
 
 
 AdmissionOutcome = Literal["admitted", "already-exists"]
@@ -317,7 +318,7 @@ class ActivationCommit:
 class VerificationTransitionCommit:
     verification_id: str
     outcome: TransitionOutcome
-    status: str
+    status: VerificationStatus | None
     cancelled_task_ids: frozenset[str] = frozenset()
 
 
@@ -358,7 +359,7 @@ class VerificationSnapshotRecord(TypedDict):
     signature: str
     source_commit: str
     kind: str
-    status: str
+    status: VerificationStatus
     fail_reason: str
     created_at: str
     finished_at: str

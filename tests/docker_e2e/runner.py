@@ -18,7 +18,7 @@ from judgehost_protocol import (
 )
 
 
-TERMINAL_VERIFICATION_STATUSES = frozenset({"ok", "failed"})
+TERMINAL_VERIFICATION_STATUSES = frozenset({"ok", "failed", "cancelled"})
 BLOB_REF = re.compile(r"^blob://sha256/([0-9a-f]{64})$")
 
 

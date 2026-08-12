@@ -923,13 +923,16 @@ class ContestService:
         contest_row = self._store.contest_context_by_id(int(contest_id))
         if contest_row is None:
             return
-        self._store.update_job(
+        changed = self._store.update_job(
             contest_id=int(contest_id),
             job_id=safe_job_id,
             status=str(status).strip().lower() or "failed",
             finished_at=now_iso() if finished else None,
         )
-        self._write_job_summary(str(contest_row["slug"]), safe_job_id, summary)
+        if not changed and status == "running":
+            raise RuntimeError(f"contest job is not queued: {safe_job_id}")
+        if changed:
+            self._write_job_summary(str(contest_row["slug"]), safe_job_id, summary)
 
     def load_job(self, contest_id: int, job_id: str) -> ContestJob | None:
         safe_job_id = str(job_id).strip()
@@ -948,9 +951,6 @@ class ContestService:
 
     def list_jobs(self, contest_id: int, *, limit: int) -> list[ContestJob]:
         return [self._job_payload(row) for row in self._store.job_rows(int(contest_id), limit=max(1, int(limit)))]
-
-    def job_status(self, contest_id: int, job_id: str) -> str:
-        return str(self._store.job_status(int(contest_id), str(job_id).strip())).strip().lower()
 
     def record_artifact(
         self,

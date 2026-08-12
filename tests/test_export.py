@@ -12,6 +12,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from app.impl.runtime.config import config
+import app.impl.workspace.context_job as workspace_context_job
 from app.service.export.icpc_package import SUBMISSION_RULES
 from app.service.importing.native import NativePackageImportService
 from app.service.platform.git_process import run_git
@@ -19,7 +20,7 @@ from app.service.problem.build_config import default_build_config, dumps_build_c
 from app.service.problem_package.manifest import load_manifest, validate_manifest_files
 from app.service.verification.lifecycle import PlannedTask, verification_task_id
 from app.service.verification.task_completion import TaskCompletion
-from app.service.verification.task_store import VerificationTaskStore
+from app.service.verification.types import VerificationTaskStatus
 from tests.archive_support import import_problem_package
 from tests.common import E2ETestBase
 from tests.db_helpers import (
@@ -134,6 +135,15 @@ class TestPublishedRevisionExport(E2ETestBase):
     @staticmethod
     def _verification_builder(problem_id: int, *, input_bytes: bytes = b"1\n", answer_bytes: bytes = b"2\n"):
         def build(_snapshot: Path, commit: str, _revision_number: int, verification_id: str) -> str:
+            build_row = db_fetch_one(
+                """SELECT status,phase FROM problem_package_builds
+                   WHERE verification_id=?""",
+                [verification_id],
+            )
+            if build_row is None or (
+                str(build_row["status"]), str(build_row["phase"])
+            ) != ("running", "verification"):
+                raise AssertionError("materialization worker did not mark the build running")
             admission = admit_test_verification(
                 verification_id=verification_id,
                 problem_id=problem_id,
@@ -185,7 +195,7 @@ class TestPublishedRevisionExport(E2ETestBase):
                 [
                     TaskCompletion(
                         task_id=task_id,
-                        status=VerificationTaskStore.TASK_DONE,
+                        status=VerificationTaskStatus.DONE,
                         run_id="",
                         judgehost_task_id="",
                         result=execution_result("OK"),
@@ -201,6 +211,56 @@ class TestPublishedRevisionExport(E2ETestBase):
             return verification_id
 
         return build
+
+    def test_export_job_stays_queued_until_worker_callable_starts(self) -> None:
+        _workspace, problem_id, commit = self._publish_problem()
+        actor = db_fetch_one("SELECT id FROM users WHERE username=?", [self.user])
+        self.assertIsNotNone(actor)
+        job_id = "export-queued-worker-boundary"
+        captured_runner: list[object] = []
+
+        class FakeWorker:
+            alive = True
+
+            def is_alive(self) -> bool:
+                return self.alive
+
+        worker = FakeWorker()
+
+        def submit(*, fn, **_kwargs):
+            captured_runner.append(fn)
+            return worker, True, "queued"
+
+        key = f"{problem_id}:{commit}:native:{job_id}"
+        try:
+            with patch.object(
+                config.worker_queue_service,
+                "submit",
+                side_effect=submit,
+            ):
+                started = workspace_context_job.start_export_job(
+                    self.problem,
+                    self.user,
+                    actor_user_id=int(actor["id"]),
+                    problem_id=problem_id,
+                    requested_export_type="native",
+                    export_job_id=job_id,
+                )
+
+            self.assertTrue(started)
+            self.assertEqual(len(captured_runner), 1)
+            row = db_fetch_one(
+                "SELECT status,started_at FROM export_jobs WHERE id=?",
+                [job_id],
+            )
+            self.assertIsNotNone(row)
+            self.assertEqual(str(row["status"]), "queued")
+            self.assertIsNone(row["started_at"])
+        finally:
+            worker.alive = False
+            with config.export_lock:
+                config.export_inflight.discard(key)
+                config.export_workers.discard(worker)
 
     def _materialize(self):
         _workspace, problem_id, commit = self._publish_problem()

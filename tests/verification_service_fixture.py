@@ -29,7 +29,7 @@ from app.service.verification.lifecycle import (
 )
 from app.service.verification.service import VerificationService
 from app.service.verification.task_completion import TaskCompletion
-from app.service.verification.task_store import VerificationTaskStore
+from app.service.verification.types import VerificationTaskStatus
 
 from tests.db_fixture import DBTestBase
 
@@ -367,7 +367,7 @@ class VerificationServiceTestBase(DBTestBase):
             )
             accepted_completion = TaskCompletion(
                 task_id=accepted_task_id,
-                status=VerificationTaskStore.TASK_DONE,
+                status=VerificationTaskStatus.DONE,
                 run_id="",
                 judgehost_task_id="",
                 result=normalize_execution_result(verdict="OK"),
@@ -387,11 +387,11 @@ class VerificationServiceTestBase(DBTestBase):
             )
         for task_index, item in enumerate(tasks):
             initial_status = str(
-                item.get("status") or VerificationTaskStore.TASK_PENDING
+                item.get("status") or VerificationTaskStatus.PENDING
             )
             if initial_status not in {
-                VerificationTaskStore.TASK_QUEUED,
-                VerificationTaskStore.TASK_LEASED,
+                VerificationTaskStatus.QUEUED,
+                VerificationTaskStatus.LEASED,
             }:
                 continue
             task_id = str(item["id"])
@@ -404,7 +404,7 @@ class VerificationServiceTestBase(DBTestBase):
                 expose=lambda: None,
             )
             self.assertTrue(bound)
-            if initial_status == VerificationTaskStore.TASK_LEASED:
+            if initial_status == VerificationTaskStatus.LEASED:
                 self.verification_task_store.set_task_leased(task_id)
 
     def _install_activation_abort(self) -> None:
@@ -444,7 +444,7 @@ class VerificationServiceTestBase(DBTestBase):
             f"""
             CREATE TRIGGER {_VERIFICATION_CANCEL_ABORT_TRIGGER}
             BEFORE UPDATE OF status ON verifications
-            WHEN NEW.id='{verification_id}' AND NEW.status='failed'
+            WHEN NEW.id='{verification_id}' AND NEW.status='cancelled'
             BEGIN
                 SELECT RAISE(ABORT, 'forced cancellation failure');
             END

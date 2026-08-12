@@ -123,8 +123,8 @@ def _normalized_verification_status(status: str) -> str:
     token = status
     if token in {"queued", "pending", "running"}:
         return "running"
-    if token == "failed":
-        return "failed"
+    if token in {"failed", "cancelled"}:
+        return token
     if token == "ok":
         return "ok"
     return token
@@ -177,6 +177,7 @@ def _verification_row_to_list_item(row: dict[str, object]) -> dict[str, object] 
         "fail_reason_title": fail_reason_title,
         "has_running": status == "running",
         "is_failed": status == "failed",
+        "is_cancelled": status == "cancelled",
         "published": published,
         "owns_verification": not published,
         "cancel_disabled_reason": (

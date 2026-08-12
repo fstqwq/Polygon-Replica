@@ -6,7 +6,7 @@ from app.service.verification.lifecycle import (
     VerificationCompileSpec,
     VerificationProgram,
 )
-from app.service.verification.task_store import VerificationTaskStore
+from app.service.verification.types import VerificationTaskStatus
 
 from tests.common import E2ETestBase, config
 from tests.identity_helpers import canonical_test_verification_id
@@ -123,7 +123,7 @@ class TestVerificationAdapters(E2ETestBase):
                 task_row(
                     "vt-generate",
                     task_kind=TASK_GENERATE_INPUT,
-                    status=VerificationTaskStore.TASK_PENDING,
+                    status=VerificationTaskStatus.PENDING,
                     queue_index=1,
                     source_path=test_plan.display_source_path,
                     program_id="generator-0",
@@ -135,7 +135,7 @@ class TestVerificationAdapters(E2ETestBase):
                 task_row(
                     "vt-main",
                     task_kind=TASK_MAIN_CORRECT,
-                    status=VerificationTaskStore.TASK_PENDING,
+                    status=VerificationTaskStatus.PENDING,
                     queue_index=2,
                     source_path="solutions/std.cpp",
                     program_id="accepted",
@@ -146,7 +146,7 @@ class TestVerificationAdapters(E2ETestBase):
                 task_row(
                     "vt-main-repeat",
                     task_kind=TASK_MAIN_CORRECT,
-                    status=VerificationTaskStore.TASK_PENDING,
+                    status=VerificationTaskStatus.PENDING,
                     queue_index=3,
                     source_path="solutions/std.cpp",
                     program_id="accepted",
@@ -156,7 +156,7 @@ class TestVerificationAdapters(E2ETestBase):
             skipped_row = task_row(
                 "vt-main-skipped",
                 task_kind=TASK_MAIN_CORRECT,
-                status=VerificationTaskStore.TASK_PENDING,
+                status=VerificationTaskStatus.PENDING,
                 queue_index=4,
                 source_path="solutions/std.cpp",
                 program_id="accepted",

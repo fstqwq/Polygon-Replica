@@ -6,15 +6,11 @@ from app.db import DB, now_iso
 from app.service.verification.lifecycle import AdmissionCommit, VerificationAdmission
 from app.service.verification.types import (
     Kind,
-    Status,
+    VerificationStatus,
     WorkspaceVerificationKey,
     WorkspaceVerificationRow,
 )
 
-
-class VerificationStatusRow(TypedDict):
-    id: str
-    status: str
 
 class VerificationRecordRow(TypedDict):
     id: str
@@ -23,7 +19,7 @@ class VerificationRecordRow(TypedDict):
     signature: str
     source_commit: str
     kind: str
-    status: str
+    status: VerificationStatus
     fail_reason: str
     error: str
     sanity_status: str
@@ -44,7 +40,7 @@ class VerificationStore:
             "signature": str(row["signature"] or ""),
             "source_commit": str(row["source_commit"] or ""),
             "kind": str(row["kind"] or ""),
-            "status": str(row["status"] or ""),
+            "status": VerificationStatus(str(row["status"])),
             "fail_reason": str(row["fail_reason"] or ""),
             "error": str(row.get("error") or ""),
             "sanity_status": str(row.get("sanity_status") or ""),
@@ -52,27 +48,16 @@ class VerificationStore:
             "finished_at": str(row["finished_at"] or ""),
         }
 
-    def get_status_row(self, problem_id: int, verification_id: str) -> VerificationStatusRow | None:
+    def exists_for_problem(self, problem_id: int, verification_id: str) -> bool:
         row = self.db.fetch_one(
             """
-            SELECT id,status
+            SELECT 1
             FROM verifications
             WHERE id=? AND problem_id=?
             """,
             [verification_id, problem_id],
         )
-        if row is None:
-            return None
-        return {
-            "id": str(row["id"]),
-            "status": str(row["status"]),
-        }
-
-    def status(self, verification_id: str) -> str:
-        row = self.db.fetch_one("SELECT status FROM verifications WHERE id=?", [verification_id])
-        if row is None:
-            return ""
-        return str(row["status"] or "")
+        return row is not None
 
     def record_row(self, verification_id: str) -> VerificationRecordRow | None:
         row = self.db.fetch_one(
@@ -108,7 +93,7 @@ class VerificationStore:
                     request.signature,
                     request.source_commit,
                     request.kind or Kind.ALL.value,
-                    Status.QUEUED.value,
+                    VerificationStatus.QUEUED.value,
                     "",
                     now_text,
                     None,
@@ -222,7 +207,7 @@ class VerificationStore:
     def _workspace_row(row: Mapping[str, object]) -> WorkspaceVerificationRow:
         return {
             "id": str(row["id"]),
-            "status": str(row["status"] or ""),
+            "status": VerificationStatus(str(row["status"])),
             "signature": str(row["signature"] or ""),
             "source_commit": str(row["source_commit"] or ""),
             "kind": str(row["kind"] or ""),
@@ -343,7 +328,7 @@ class VerificationStore:
             result[key].append(
                 {
                     "id": str(row["id"]),
-                    "status": str(row["status"] or ""),
+                    "status": VerificationStatus(str(row["status"])),
                     "signature": str(row["signature"] or ""),
                     "source_commit": str(row["source_commit"] or ""),
                     "kind": str(row["kind"] or ""),
@@ -383,7 +368,7 @@ class VerificationStore:
             return None
         return {
             "id": str(row["id"]),
-            "status": str(row["status"] or ""),
+            "status": VerificationStatus(str(row["status"])),
             "signature": str(row["signature"] or ""),
             "source_commit": str(row["source_commit"] or ""),
             "kind": str(row["kind"] or ""),
@@ -410,18 +395,7 @@ class VerificationStore:
         )
         if row is None:
             return None
-        return {
-            "id": str(row["id"]),
-            "status": str(row["status"] or ""),
-            "signature": str(row["signature"] or ""),
-            "source_commit": str(row["source_commit"] or ""),
-            "kind": str(row["kind"] or ""),
-            "fail_reason": str(row["fail_reason"] or ""),
-            "error": str(row["error"] or ""),
-            "sanity_status": str(row["sanity_status"] or ""),
-            "created_at": str(row["created_at"] or ""),
-            "finished_at": str(row["finished_at"] or ""),
-        }
+        return self._workspace_row(row)
 
     def workspace_verification_exists(self, problem_id: int, workspace_id: int, verification_id: str) -> bool:
         row = self.db.fetch_one(

@@ -7,8 +7,12 @@ from app.db import now_iso
 from app.impl.runtime.config import config
 
 
-def _startup_cancel_summary_rows(table_name: str, reason: str, *, now_text: str) -> None:
-    warning_rows = config.runtime_state_service.cancel_inflight_summary_rows(table_name, reason, now_text=now_text)
+def _startup_fail_summary_rows(table_name: str, reason: str, *, now_text: str) -> None:
+    warning_rows = config.runtime_state_service.fail_inflight_summary_rows(
+        table_name,
+        reason,
+        now_text=now_text,
+    )
     for message in warning_rows:
         warnings.warn(message, RuntimeWarning)
 
@@ -53,11 +57,11 @@ def _startup_clear_all_caches() -> None:
 
 def _startup_reset_runtime_state() -> None:
     now_text = now_iso()
-    cancel_reason = "cancelled on service startup"
-    _startup_cancel_summary_rows("previews", cancel_reason, now_text=now_text)
-    _startup_cancel_summary_rows("contest_jobs", cancel_reason, now_text=now_text)
-    config.verification_service.recover_startup(reason=cancel_reason)
-    _startup_cancel_judgehost_inflight(cancel_reason)
+    failure_reason = "interrupted by application restart"
+    _startup_fail_summary_rows("previews", failure_reason, now_text=now_text)
+    _startup_fail_summary_rows("contest_jobs", failure_reason, now_text=now_text)
+    config.verification_service.recover_startup(reason=failure_reason)
+    _startup_cancel_judgehost_inflight(failure_reason)
     _startup_clear_all_caches()
 
 

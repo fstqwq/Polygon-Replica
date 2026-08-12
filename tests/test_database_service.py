@@ -5,6 +5,7 @@ from contextlib import contextmanager
 from unittest.mock import patch
 
 from app.db import CURRENT_SCHEMA_COLUMNS
+from app.sqlite_shape_upgrade import IncompatibleSchemaError
 
 from tests.db_fixture import DBTestBase
 from tests.isolated_db_helpers import (
@@ -16,6 +17,33 @@ from tests.isolated_db_helpers import (
 
 
 class TestDatabaseService(DBTestBase):
+    _OLD_VERIFICATIONS_DDL = """
+        CREATE TABLE verifications (
+            id TEXT PRIMARY KEY,
+            problem_id INTEGER NOT NULL,
+            workspace_id INTEGER,
+            signature TEXT NOT NULL DEFAULT '',
+            source_commit TEXT NOT NULL DEFAULT '',
+            kind TEXT NOT NULL,
+            status TEXT NOT NULL,
+            fail_reason TEXT NOT NULL DEFAULT '',
+            mode TEXT NOT NULL DEFAULT 'pass-fail',
+            pass_limit INTEGER NOT NULL DEFAULT 1,
+            run_config_json TEXT NOT NULL DEFAULT '',
+            error TEXT NOT NULL DEFAULT '',
+            failed_step TEXT NOT NULL DEFAULT '',
+            failed_check TEXT NOT NULL DEFAULT '',
+            failed_test TEXT NOT NULL DEFAULT '',
+            sanity_status TEXT NOT NULL DEFAULT '',
+            sanity_checked_count INTEGER NOT NULL DEFAULT 0,
+            validation_status TEXT NOT NULL DEFAULT '',
+            validated_count INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            finished_at TEXT,
+            FOREIGN KEY(problem_id) REFERENCES problems(id),
+            FOREIGN KEY(workspace_id) REFERENCES workspaces(id)
+        )
+    """
     _OLD_EXPORTS_DDL = """
         CREATE TABLE exports (
             id TEXT PRIMARY KEY,
@@ -95,6 +123,42 @@ class TestDatabaseService(DBTestBase):
                 'job-old',1,1,'icpc',?,'succeeded','pm-old','export-old','',?,?,?)
             """,
             ["a" * 40, timestamp, timestamp, timestamp],
+        )
+
+    def _install_unconstrained_verification_shape(
+        self,
+        *,
+        status: str = "failed",
+    ) -> None:
+        timestamp = "2026-08-12T00:00:00+00:00"
+        isolated_db_execute(
+            self.db,
+            """
+            INSERT INTO problems(id,slug,repo_name,created_at)
+            VALUES(1,'owner/status','status.git',?)
+            """,
+            [timestamp],
+        )
+
+        def replace_verifications(connection: sqlite3.Connection) -> None:
+            connection.execute("DROP TABLE verifications")
+            connection.execute(self._OLD_VERIFICATIONS_DDL)
+
+        self.db.write_schema_reset_transaction(replace_verifications)
+        isolated_db_execute(
+            self.db,
+            """
+            INSERT INTO verifications(
+                id,problem_id,workspace_id,signature,source_commit,kind,status,
+                fail_reason,created_at,finished_at
+            ) VALUES('ver-status-old',1,NULL,'','','all',?, ?, ?, ?)
+            """,
+            [
+                status,
+                "cancelled by operator in an old release",
+                timestamp,
+                timestamp,
+            ],
         )
 
     def test_current_problem_schema_has_no_name_column(self) -> None:
@@ -222,6 +286,67 @@ class TestDatabaseService(DBTestBase):
                 "output_ref",
             }.isdisjoint(columns)
         )
+
+    def test_verification_status_shape_upgrade_preserves_historical_failure(self) -> None:
+        self._install_unconstrained_verification_shape()
+
+        self.db.init()
+
+        row = isolated_db_fetch_one(
+            self.db,
+            "SELECT status,fail_reason FROM verifications WHERE id='ver-status-old'",
+        )
+        self.assertIsNotNone(row)
+        self.assertEqual(str(row["status"]), "failed")
+        self.assertEqual(
+            str(row["fail_reason"]),
+            "cancelled by operator in an old release",
+        )
+        with self.assertRaises(sqlite3.IntegrityError):
+            isolated_db_execute(
+                self.db,
+                "UPDATE verifications SET status='unknown' WHERE id='ver-status-old'",
+            )
+
+    def test_verification_status_shape_upgrade_rolls_back_on_failure(self) -> None:
+        self._install_unconstrained_verification_shape()
+
+        with patch(
+            "app.sqlite_shape_upgrade._rebuild_verifications",
+            side_effect=RuntimeError("forced verification status replacement failure"),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "forced verification status"):
+                self.db.init()
+
+        with isolated_db_connection(self.db) as connection:
+            sql_row = connection.execute(
+                "SELECT sql FROM sqlite_master WHERE type='table' AND name='verifications'"
+            ).fetchone()
+            row = connection.execute(
+                "SELECT status,fail_reason FROM verifications WHERE id='ver-status-old'"
+            ).fetchone()
+            violations = connection.execute("PRAGMA foreign_key_check").fetchall()
+        self.assertIsNotNone(sql_row)
+        self.assertNotIn("CHECK(status IN", str(sql_row["sql"] or ""))
+        self.assertIsNotNone(row)
+        self.assertEqual(str(row["status"]), "failed")
+        self.assertEqual(violations, [])
+
+    def test_verification_status_shape_upgrade_rejects_unknown_status(self) -> None:
+        self._install_unconstrained_verification_shape(status="unknown")
+
+        with self.assertRaisesRegex(
+            IncompatibleSchemaError,
+            "unsupported status 'unknown'",
+        ):
+            self.db.init()
+
+        row = isolated_db_fetch_one(
+            self.db,
+            "SELECT status FROM verifications WHERE id='ver-status-old'",
+        )
+        self.assertIsNotNone(row)
+        self.assertEqual(str(row["status"]), "unknown")
 
     def test_current_sanity_schema_has_per_check_messages(self) -> None:
         self.assertIn("status", CURRENT_SCHEMA_COLUMNS["verification_sanity_checks"])

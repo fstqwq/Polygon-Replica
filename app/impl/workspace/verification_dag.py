@@ -54,7 +54,7 @@ from app.service.verification.task_completion import TaskCompletion
 from app.service.verification.task_scheduler import TaskPublishResult
 from app.service.verification.task_store import VerificationTaskRow, VerificationTaskStore
 from app.service.verification.test_rows import build_verification_test_row
-from app.service.verification.types import Kind, Status
+from app.service.verification.types import Kind, VerificationStatus, VerificationTaskStatus
 
 _C = config.config_values
 
@@ -403,7 +403,7 @@ def _task_counts(rows: list[VerificationTaskRow]) -> dict[str, object]:
     for row in rows:
         status = str(row["status"])
         display_status = status
-        if status == VerificationTaskStore.TASK_LEASED:
+        if status == VerificationTaskStatus.LEASED:
             display_status = "running"
         task_kind = str(row["task_kind"])
         counts["total"] = int(counts["total"]) + 1
@@ -418,21 +418,13 @@ def _task_counts(rows: list[VerificationTaskRow]) -> dict[str, object]:
 def _visible_programs(
     programs: tuple[VerificationProgram, ...],
 ) -> list[VerificationProgram]:
-    return [
-        program
-        for program in programs
-        if program.kind == TASK_SOLUTION_RUN
-    ]
+    return [program for program in programs if program.kind == TASK_SOLUTION_RUN]
 
 
 def _runtime_programs(
     programs: tuple[VerificationProgram, ...],
 ) -> list[VerificationProgram]:
-    return [
-        program
-        for program in programs
-        if program.kind != TASK_GENERATE_INPUT
-    ]
+    return [program for program in programs if program.kind != TASK_GENERATE_INPUT]
 
 
 def _task_row_to_test_row(row: VerificationTaskRow) -> dict[str, object]:
@@ -460,7 +452,7 @@ def _generate_feedback_by_test(rows: list[VerificationTaskRow]) -> dict[str, str
     for row in rows:
         if str(row["task_kind"] or "") != TASK_GENERATE_INPUT:
             continue
-        if str(row["status"] or "") != VerificationTaskStore.TASK_DONE:
+        if row["status"] != VerificationTaskStatus.DONE:
             continue
         test_name = str(row["test_name"] or "")
         if not test_name:
@@ -510,22 +502,22 @@ def _program_summary(
     skipped_test_count = 0
     for row in ordered_rows:
         status = str(row["status"])
-        if status == VerificationTaskStore.TASK_PENDING:
+        if status == VerificationTaskStatus.PENDING:
             saw_pending = True
-        elif status == VerificationTaskStore.TASK_QUEUED:
+        elif status == VerificationTaskStatus.QUEUED:
             saw_queued = True
-        elif status == VerificationTaskStore.TASK_LEASED:
+        elif status == VerificationTaskStatus.LEASED:
             saw_running = True
-        elif status == VerificationTaskStore.TASK_FAILED:
+        elif status == VerificationTaskStatus.FAILED:
             saw_failed = True
-        elif status == VerificationTaskStore.TASK_CANCELLED:
+        elif status == VerificationTaskStatus.CANCELLED:
             saw_cancelled = True
-        elif status == VerificationTaskStore.TASK_DONE:
+        elif status == VerificationTaskStatus.DONE:
             saw_done = True
         is_skipped = str(row["verdict"] or "").upper() == "SK"
-        if is_skipped and status == VerificationTaskStore.TASK_DONE:
+        if is_skipped and status == VerificationTaskStatus.DONE:
             skipped_test_count += 1
-        elif status in {VerificationTaskStore.TASK_DONE, VerificationTaskStore.TASK_FAILED}:
+        elif status in {VerificationTaskStatus.DONE, VerificationTaskStatus.FAILED}:
             test_row = _task_row_to_test_row(row)
             tests.append(test_row)
             max_time_ms = max(max_time_ms, int(test_row.get("time_user_ms") or 0))
@@ -546,17 +538,17 @@ def _program_summary(
     if fail_flag and (saw_cancelled or saw_pending) and (not saw_failed):
         saw_failed = True
     if saw_running:
-        run_status = Status.RUNNING.value
+        run_status = VerificationStatus.RUNNING.value
     elif saw_queued:
-        run_status = Status.QUEUED.value
+        run_status = VerificationStatus.QUEUED.value
     elif saw_pending:
         run_status = "pending"
     elif saw_failed or saw_cancelled:
-        run_status = Status.FAILED.value
+        run_status = VerificationStatus.FAILED.value
     elif saw_done and len(tests) + skipped_test_count >= len(test_names):
-        run_status = Status.OK.value
+        run_status = VerificationStatus.OK.value
     elif saw_done:
-        run_status = Status.RUNNING.value
+        run_status = VerificationStatus.RUNNING.value
     else:
         run_status = "pending"
     summary = {
@@ -581,8 +573,8 @@ def _program_summary(
             "memory_kb_peak": max_memory_kb,
         },
     }
-    completed = run_status in {Status.OK.value, Status.FAILED.value}
-    matched = completed and run_status == Status.OK.value
+    completed = run_status in {VerificationStatus.OK.value, VerificationStatus.FAILED.value}
+    matched = completed and run_status == VerificationStatus.OK.value
     observed_pass = bool(
         matched
         and tests
@@ -601,18 +593,21 @@ def _verification_summary_from_tasks(
     programs: tuple[VerificationProgram, ...],
     rows: list[VerificationTaskRow],
     test_names: list[str],
-    fail_flag: bool,
+    parent_status: VerificationStatus,
     fail_reason: str,
 ) -> tuple[str, dict[str, object], dict[str, object]]:
     display_limit = int(_C.snapshot()["AUX_DISPLAY_TEXT_LIMIT_BYTES"])
     visible_programs = _visible_programs(programs)
-    all_programs = _visible_programs(programs)
     counts = _task_counts(rows)
-    running_tasks = [_task_running_entry(row) for row in rows if str(row["status"]) == VerificationTaskStore.TASK_LEASED]
+    running_tasks = [
+        _task_running_entry(row)
+        for row in rows
+        if row["status"] == VerificationTaskStatus.LEASED
+    ]
     first_solution_error = ""
     has_pending_or_running = bool(int(counts["pending"]) or int(counts["queued"]) or int(counts["running"]))
     all_matched = True
-    for program in all_programs:
+    for program in visible_programs:
         grouped_rows = [row for row in rows if str(row["program_id"] or "") == program.program_id]
         run_summary, run_status, matched, completed, observed_pass, reason = _program_summary(
             program=program,
@@ -621,7 +616,7 @@ def _verification_summary_from_tasks(
             mode=mode,
             pass_limit=pass_limit,
             artifact_verification_id=artifact_verification_id,
-            fail_flag=fail_flag,
+            fail_flag=parent_status == VerificationStatus.FAILED,
         )
         reason_text = reason
         if (not matched) and completed and (not reason_text):
@@ -639,23 +634,27 @@ def _verification_summary_from_tasks(
                 limit_bytes=display_limit,
             )
         all_matched = all_matched and bool(matched)
-    if fail_flag:
-        verification_status = Status.FAILED.value
-        verification_error = fail_reason or first_solution_error or "verification failed"
+    if parent_status in {VerificationStatus.FAILED, VerificationStatus.CANCELLED}:
+        verification_status = parent_status.value
+        verification_error = (
+            fail_reason
+            or first_solution_error
+            or f"verification {parent_status.value}"
+        )
     elif has_pending_or_running:
-        verification_status = Status.RUNNING.value
+        verification_status = VerificationStatus.RUNNING.value
         verification_error = ""
     elif int(counts["cancelled"]) > 0:
-        verification_status = Status.FAILED.value
-        verification_error = fail_reason or "verification cancelled"
+        verification_status = VerificationStatus.FAILED.value
+        verification_error = fail_reason or "verification task cancelled"
     elif visible_programs and all_matched:
-        verification_status = Status.OK.value
+        verification_status = VerificationStatus.OK.value
         verification_error = ""
     elif (not visible_programs) and int(counts["total"]) > 0:
-        verification_status = Status.OK.value
+        verification_status = VerificationStatus.OK.value
         verification_error = ""
     else:
-        verification_status = Status.FAILED.value
+        verification_status = VerificationStatus.FAILED.value
         verification_error = first_solution_error or "verification failed"
     summary = {
         "verification_id": verification_id,
@@ -665,17 +664,16 @@ def _verification_summary_from_tasks(
         "error": verification_error,
         "task_counts": counts,
         "running_tasks": running_tasks,
-        "fail_flag": bool(fail_flag),
+        "fail_flag": parent_status == VerificationStatus.FAILED,
         "fail_reason": fail_reason,
         "source_paths": [item.source_path for item in visible_programs],
         "test_names": list(test_names),
         "mode": mode,
         "pass_limit": pass_limit,
         "updated_at": now_iso(),
-        "finished_at": now_iso()
-        if verification_status in {Status.OK.value, Status.FAILED.value}
-        and not has_pending_or_running
-        else "",
+        "finished_at": now_iso() if parent_status not in {
+            VerificationStatus.QUEUED, VerificationStatus.RUNNING
+        } and not has_pending_or_running else "",
     }
     return (verification_status, summary, counts)
 
@@ -771,7 +769,7 @@ def _execution_template(
 def _empty_task_result(
     *,
     task_id: str,
-    status: str,
+    status: VerificationTaskStatus,
     verdict: str,
     run_id: str,
     judgehost_task_id: str,
@@ -796,7 +794,7 @@ def _skipped_downstream_task_result(task_row: VerificationTaskRow) -> TaskPublis
         judgehost_task_id="",
         terminal_result=TaskCompletion(
             task_id=task_id,
-            status=VerificationTaskStore.TASK_DONE,
+            status=VerificationTaskStatus.DONE,
             run_id="",
             judgehost_task_id="",
             result=normalize_execution_result(
@@ -830,11 +828,11 @@ def _publish_generate_task(task_row: VerificationTaskRow, *, execution: TaskExec
                     ),
                     None,
                 )
-            if owner is None or str(owner["status"] or "") != VerificationTaskStore.TASK_DONE:
+            if owner is None or owner["status"] != VerificationTaskStatus.DONE:
                 reason = "duplicate generator owner result is unavailable"
                 result = _empty_task_result(
                     task_id=task_id,
-                    status=VerificationTaskStore.TASK_FAILED,
+                    status=VerificationTaskStatus.FAILED,
                     verdict="FL",
                     run_id=run_id,
                     judgehost_task_id="",
@@ -860,7 +858,7 @@ def _publish_generate_task(task_row: VerificationTaskRow, *, execution: TaskExec
                 judgehost_task_id="",
                 terminal_result=TaskCompletion(
                     task_id=task_id,
-                    status=VerificationTaskStore.TASK_DONE,
+                    status=VerificationTaskStatus.DONE,
                     run_id=run_id,
                     judgehost_task_id="",
                     result=normalize_execution_result(
@@ -916,7 +914,7 @@ def _publish_generate_task(task_row: VerificationTaskRow, *, execution: TaskExec
     except Exception as exc:
         result = _empty_task_result(
             task_id=task_id,
-            status=VerificationTaskStore.TASK_FAILED,
+            status=VerificationTaskStatus.FAILED,
             verdict="FL",
             run_id=run_id,
             judgehost_task_id="",
@@ -1013,7 +1011,7 @@ def _publish_run_task(task_row: VerificationTaskRow, *, execution: TaskExecution
         )
         result = _empty_task_result(
             task_id=task_id,
-            status=VerificationTaskStore.TASK_FAILED,
+            status=VerificationTaskStatus.FAILED,
             verdict="FL",
             run_id=run_id,
             judgehost_task_id="",
@@ -1043,7 +1041,7 @@ def _publish_task(task_row: VerificationTaskRow, *, execution: TaskExecutionCont
         )
         result = _empty_task_result(
             task_id=str(task_row["id"]),
-            status=VerificationTaskStore.TASK_FAILED,
+            status=VerificationTaskStatus.FAILED,
             verdict="FL",
             run_id="",
             judgehost_task_id="",
@@ -1259,9 +1257,10 @@ def run_workspace_verification_dag(
                 raise RuntimeError("verification disappeared while running")
             rows = cast(list[VerificationTaskRow], snapshot["tasks"])
             record = snapshot["record"]
-            status = str(record["status"])
+            parent_status = VerificationStatus(record["status"])
+            status = parent_status.value
             fail_reason = str(record["fail_reason"])
-            fail_flag = status == Status.FAILED.value
+            fail_flag = parent_status == VerificationStatus.FAILED
             _task_status, summary, counts = _verification_summary_from_tasks(
                 verification_id=verification_id,
                 artifact_verification_id=verification_id,
@@ -1270,7 +1269,7 @@ def run_workspace_verification_dag(
                 programs=graph.programs,
                 rows=rows,
                 test_names=test_names,
-                fail_flag=fail_flag,
+                parent_status=parent_status,
                 fail_reason=fail_reason,
             )
             if rows and int(counts["total"]) <= 0:
@@ -1304,7 +1303,7 @@ def run_workspace_verification_dag(
         record = snapshot["record"]
         detail = snapshot["detail"]
         if (
-            _status == Status.RUNNING.value
+            _status == VerificationStatus.RUNNING.value
             and str(detail.get("sanity_status") or "") == SANITY_RUNNING
             and sanity_checks
         ):

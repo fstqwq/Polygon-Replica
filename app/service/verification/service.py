@@ -17,6 +17,7 @@ from app.service.problem.build_config import BuildConfig
 from app.service.repository.workspace import WorkspaceService
 from app.service.verification.types import (
     Kind,
+    VerificationStatus,
     WorkspaceVerificationKey,
     WorkspaceVerificationRow,
 )
@@ -100,10 +101,7 @@ class VerificationService:
         }
 
     def has_export_detail_verification(self, problem_id: int, verification_id: str) -> bool:
-        row = self._verification_store.get_status_row(int(problem_id), verification_id)
-        if row is None:
-            return False
-        return row["status"] in {"queued", "running", "ok", "failed"}
+        return self._verification_store.exists_for_problem(int(problem_id), verification_id)
 
     def artifact_path_for_problem_artifact(self, problem_id: int, artifact_id: str) -> str:
         if artifact_id.startswith("p-"):
@@ -892,9 +890,8 @@ class VerificationService:
         reason: str,
     ) -> VerificationTransitionCommit:
         canonical_verification_id(verification_id)
-        return self.task_store.transition_verification_failed(
-            verification_id,
-            reason=reason,
+        return self.task_store.transition_verification_terminal(
+            verification_id, status=VerificationStatus.FAILED, reason=reason
         )
 
     def cancel_verification(
@@ -903,7 +900,10 @@ class VerificationService:
         *,
         reason: str,
     ) -> VerificationTransitionCommit:
-        return self.fail_verification(verification_id, reason=reason)
+        canonical_verification_id(verification_id)
+        return self.task_store.transition_verification_terminal(
+            verification_id, status=VerificationStatus.CANCELLED, reason=reason
+        )
 
     def finish_sanity(
         self,
@@ -918,7 +918,7 @@ class VerificationService:
     def recover_startup(
         self,
         *,
-        reason: str = "cancelled on service startup",
+        reason: str = "interrupted by application restart",
     ) -> StartupRecoverySummary:
         return self.task_store.recover_startup(reason=reason)
 
@@ -953,7 +953,7 @@ class VerificationService:
                 "signature": str(row["signature"] or ""),
                 "source_commit": str(row["source_commit"] or ""),
                 "kind": str(row["kind"] or ""),
-                "status": str(row["status"] or ""),
+                "status": VerificationStatus(str(row["status"])),
                 "fail_reason": str(row["fail_reason"] or ""),
                 "created_at": str(row["created_at"] or ""),
                 "finished_at": str(row["finished_at"] or ""),

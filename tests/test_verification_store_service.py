@@ -7,7 +7,7 @@ from app.service.disk.verification_store import VerificationStore
 from app.service.execution.policy import normalize_execution_result
 from app.service.verification.lifecycle import VerificationAdmission
 from app.service.verification.task_completion import TaskCompletion
-from app.service.verification.task_store import VerificationTaskStore
+from app.service.verification.types import VerificationTaskStatus
 
 from tests.identity_helpers import canonical_test_verification_id
 from tests.isolated_db_helpers import isolated_db_fetch_one
@@ -214,7 +214,7 @@ class TestVerificationStoreService(VerificationServiceTestBase):
             (
                 TaskCompletion(
                     task_id=task_id,
-                    status=VerificationTaskStore.TASK_DONE,
+                    status=VerificationTaskStatus.DONE,
                     run_id="r-backend-fixture",
                     judgehost_task_id="",
                     result=normalize_execution_result(verdict="AC"),

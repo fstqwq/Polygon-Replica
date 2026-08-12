@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from app.impl.runtime.config import config
-from app.service.verification.types import Status
+from app.service.verification.types import VerificationStatus
 
 from app.impl.workspace.boundary_coverage import (
     BOUNDARY_COVERAGE_CHECK,
@@ -93,15 +93,23 @@ def effective_verification_status(
     has_pending_or_running = bool(int(counts["pending"]) or int(counts["queued"]) or int(counts["running"]))
     if has_pending_or_running:
         return (task_status, False)
-    if task_status != Status.OK.value:
-        return (task_status, task_status in {Status.OK.value, Status.FAILED.value})
+    if task_status != VerificationStatus.OK.value:
+        return (
+            task_status,
+            task_status
+            in {
+                VerificationStatus.OK.value,
+                VerificationStatus.FAILED.value,
+                VerificationStatus.CANCELLED.value,
+            },
+        )
     if not sanity_checks:
-        return (Status.OK.value, True)
+        return (VerificationStatus.OK.value, True)
     if sanity_status in {SANITY_PENDING, SANITY_RUNNING}:
-        return (Status.RUNNING.value, False)
+        return (VerificationStatus.RUNNING.value, False)
     if sanity_status in {SANITY_FAILED, SANITY_WARNING}:
-        return (Status.OK.value, True)
-    return (Status.OK.value, True)
+        return (VerificationStatus.OK.value, True)
+    return (VerificationStatus.OK.value, True)
 
 
 def _stability_run_id(*, verification_id: str, test_name: str, check_name: str) -> str:

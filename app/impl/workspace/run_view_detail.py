@@ -28,21 +28,18 @@ from app.impl.workspace.context_run_detail import (
 from app.impl.workspace.context_verification import normalize_program_id_token
 from app.service.judgehost.case_result import decode_case_test_row
 from app.service.judgehost.runpipe_transcript import parse_runpipe_transcript
-from app.service.platform.error_text import (
-    bounded_display_text,
-)
+from app.service.platform.error_text import bounded_display_text
 from app.service.platform.workspace_path import (
     normalize_optional_component_source_path_safe,
     normalize_workspace_rel_path,
 )
-from app.service.verification.runtime import (
-    effective_run_timeout_ms,
-)
+from app.service.verification.runtime import effective_run_timeout_ms
 from app.service.problem.solution_metadata import (
     expected_behavior_label,
     normalize_expected_behavior,
 )
-from app.service.verification.task_store import VerificationTaskRow, VerificationTaskStore
+from app.service.verification.task_store import VerificationTaskRow
+from app.service.verification.types import VerificationTaskStatus
 from app.service.platform.process import is_canonical_artifact_id
 from app.impl.workspace.run_view_lifecycle_card import (
     load_verification_detail_summary,
@@ -355,7 +352,7 @@ def build_run_detail_context(
         }
         for row in rows:
             status = str(row['status'] or '')
-            display_status = 'running' if status == VerificationTaskStore.TASK_LEASED else status
+            display_status = 'running' if status == VerificationTaskStatus.LEASED else status
             counts['total'] = int(counts['total']) + 1
             if display_status in counts:
                 counts[display_status] = int(counts[display_status]) + 1
@@ -364,7 +361,7 @@ def build_run_detail_context(
     def _running_tasks_from_rows(rows: list[VerificationTaskRow]) -> list[dict[str, str]]:
         values: list[dict[str, str]] = []
         for row in rows:
-            if str(row['status'] or '') != VerificationTaskStore.TASK_LEASED:
+            if row['status'] != VerificationTaskStatus.LEASED:
                 continue
             source_path = str(row['source_path'] or '')
             source_label = Path(source_path).name if source_path else '-'
@@ -462,17 +459,20 @@ def build_run_detail_context(
                 cast(list[VerificationTaskRow], item['rows']),
                 key=lambda current: (_run_test_sort_key(str(current['test_name'] or '')), str(current['id'] or '')),
             )
-            if VerificationTaskStore.TASK_LEASED in statuses:
+            if VerificationTaskStatus.LEASED in statuses:
                 status = 'running'
-            elif VerificationTaskStore.TASK_QUEUED in statuses:
+            elif VerificationTaskStatus.QUEUED in statuses:
                 status = 'queued'
-            elif VerificationTaskStore.TASK_PENDING in statuses:
+            elif VerificationTaskStatus.PENDING in statuses:
                 status = 'pending'
-            elif VerificationTaskStore.TASK_FAILED in statuses:
+            elif VerificationTaskStatus.FAILED in statuses:
                 status = 'failed'
-            elif VerificationTaskStore.TASK_CANCELLED in statuses:
+            elif VerificationTaskStatus.CANCELLED in statuses:
                 status = 'cancelled'
-            elif grouped_rows and all(str(current['status'] or '') == VerificationTaskStore.TASK_DONE for current in grouped_rows):
+            elif grouped_rows and all(
+                current['status'] == VerificationTaskStatus.DONE
+                for current in grouped_rows
+            ):
                 status = 'ok'
             else:
                 status = 'pending'
@@ -486,7 +486,7 @@ def build_run_detail_context(
             for row in grouped_rows:
                 row_status = str(row['status'] or '')
                 if (
-                    row_status in {VerificationTaskStore.TASK_DONE, VerificationTaskStore.TASK_FAILED}
+                    row_status in {VerificationTaskStatus.DONE, VerificationTaskStatus.FAILED}
                     and str(row['verdict'] or '').upper() != 'SK'
                 ):
                     test_row = decode_case_test_row(
@@ -563,10 +563,10 @@ def build_run_detail_context(
                     'memory_kb_peak': max_memory_kb,
                 },
             }
-            if VerificationTaskStore.TASK_CANCELLED in statuses:
+            if VerificationTaskStatus.CANCELLED in statuses:
                 summary['cancelled'] = True
-                if verification_status == 'failed' and verification_error and (not summary['error']):
-                    summary['error'] = verification_error
+                if verification_status in {'failed', 'cancelled'} and verification_error:
+                    summary['error'] = summary['error'] or verification_error
             values[program_id] = {
                 'id': program_id,
                 'artifact_verification_id': verification_details.get('artifact_verification_id') or requested_verification_id or '',
@@ -580,7 +580,7 @@ def build_run_detail_context(
         return values
 
     def _missing_solution_cell(task_status: str) -> dict[str, object]:
-        if task_status == VerificationTaskStore.TASK_LEASED:
+        if task_status == VerificationTaskStatus.LEASED:
             return {
                 'text': '..',
                 'short': '..',
@@ -589,7 +589,7 @@ def build_run_detail_context(
                 'text_tone': '',
                 'detail': None,
             }
-        if task_status == VerificationTaskStore.TASK_FAILED:
+        if task_status == VerificationTaskStatus.FAILED:
             return {
                 'text': 'FL',
                 'short': 'FL',
@@ -598,7 +598,7 @@ def build_run_detail_context(
                 'text_tone': '',
                 'detail': None,
             }
-        if task_status == VerificationTaskStore.TASK_CANCELLED:
+        if task_status == VerificationTaskStatus.CANCELLED:
             return {
                 'text': '--',
                 'short': '--',
@@ -1751,7 +1751,7 @@ def build_run_detail_context(
                     'generate_detail': (
                         generation_view
                         if generation_view is not None
-                        and generation_view['status'] == VerificationTaskStore.TASK_FAILED
+                        and generation_view['status'] == VerificationTaskStatus.FAILED
                         else None
                     ),
                     'generation_alert': generation_alert,

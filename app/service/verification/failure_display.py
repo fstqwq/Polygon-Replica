@@ -5,6 +5,7 @@ from pathlib import Path
 from app.service.platform.error_text import bounded_display_text
 from app.service.verification.result_match import verification_solution_match
 from app.service.verification.task_store import VerificationTaskRow, VerificationTaskStore
+from app.service.verification.types import VerificationTaskStatus
 
 
 def verification_solution_failure_hint(
@@ -35,14 +36,14 @@ def verification_solution_failure_hint(
 def _task_status(rows: list[VerificationTaskRow]) -> str:
     statuses = {row["status"] for row in rows}
     if statuses & {
-        VerificationTaskStore.TASK_PENDING,
-        VerificationTaskStore.TASK_QUEUED,
-        VerificationTaskStore.TASK_LEASED,
+        VerificationTaskStatus.PENDING,
+        VerificationTaskStatus.QUEUED,
+        VerificationTaskStatus.LEASED,
     }:
         return "running"
     if statuses & {
-        VerificationTaskStore.TASK_FAILED,
-        VerificationTaskStore.TASK_CANCELLED,
+        VerificationTaskStatus.FAILED,
+        VerificationTaskStatus.CANCELLED,
     }:
         return "failed"
     return "ok"

@@ -22,7 +22,7 @@ from app.service.verification.runtime_registry import (
     VerificationRuntimeHandle,
     VerificationRuntimeRegistry,
 )
-from app.service.verification.task_store import VerificationTaskStore
+from app.service.verification.types import VerificationTaskStatus
 
 from tests.identity_helpers import canonical_test_verification_id
 from tests.isolated_db_helpers import isolated_db_fetch_all
@@ -348,13 +348,13 @@ class TestVerificationLifecycleService(VerificationServiceTestBase):
         self.assertIn(outcomes["activate"], {"activated", "closed"})
         row = self.verification_service.verification_record(verification_id)
         assert row is not None
-        self.assertEqual(str(row["status"]), "failed")
+        self.assertEqual(str(row["status"]), "cancelled")
         task_rows = self.verification_task_store.list_rows(verification_id)
         if outcomes["activate"] == "activated":
             self.assertEqual(len(task_rows), 1)
             self.assertEqual(
                 str(task_rows[0]["status"]),
-                VerificationTaskStore.TASK_CANCELLED,
+                VerificationTaskStatus.CANCELLED,
             )
         else:
             self.assertEqual(task_rows, [])
@@ -386,7 +386,7 @@ class TestVerificationLifecycleService(VerificationServiceTestBase):
         )
         completion = TaskCompletion(
             task_id=task_id,
-            status=VerificationTaskStore.TASK_DONE,
+            status=VerificationTaskStatus.DONE,
             run_id="run-completion-cancel",
             judgehost_task_id="judgehost-completion-cancel",
             result=normalize_execution_result(verdict="OK"),
@@ -439,24 +439,24 @@ class TestVerificationLifecycleService(VerificationServiceTestBase):
                 "completion": "committed",
                 "cancel": "closed",
             })
-            self.assertEqual(task["status"], VerificationTaskStore.TASK_DONE)
+            self.assertEqual(task["status"], VerificationTaskStatus.DONE)
         else:
-            self.assertEqual(str(parent["status"]), "failed")
+            self.assertEqual(str(parent["status"]), "cancelled")
             self.assertEqual(outcomes, {
                 "completion": "already-terminal",
                 "cancel": "transitioned",
             })
             self.assertEqual(
                 task["status"],
-                VerificationTaskStore.TASK_CANCELLED,
+                VerificationTaskStatus.CANCELLED,
             )
         self.assertTrue(
             all(
                 row["status"]
                 in {
-                    VerificationTaskStore.TASK_DONE,
-                    VerificationTaskStore.TASK_FAILED,
-                    VerificationTaskStore.TASK_CANCELLED,
+                    VerificationTaskStatus.DONE,
+                    VerificationTaskStatus.FAILED,
+                    VerificationTaskStatus.CANCELLED,
                 }
                 for row in self.verification_task_store.list_rows(
                     verification_id
@@ -493,7 +493,7 @@ class TestVerificationLifecycleService(VerificationServiceTestBase):
             (
                 TaskCompletion(
                     task_id=task_id,
-                    status=VerificationTaskStore.TASK_DONE,
+                    status=VerificationTaskStatus.DONE,
                     run_id="run-sanity-cancel",
                     judgehost_task_id="judgehost-sanity-cancel",
                     result=normalize_execution_result(verdict="OK"),
@@ -554,7 +554,7 @@ class TestVerificationLifecycleService(VerificationServiceTestBase):
             })
             self.assertEqual(str(parent["sanity_status"]), "passed")
         else:
-            self.assertEqual(str(parent["status"]), "failed")
+            self.assertEqual(str(parent["status"]), "cancelled")
             self.assertEqual(outcomes, {
                 "finish": "closed",
                 "cancel": "transitioned",
@@ -564,9 +564,9 @@ class TestVerificationLifecycleService(VerificationServiceTestBase):
             all(
                 row["status"]
                 in {
-                    VerificationTaskStore.TASK_DONE,
-                    VerificationTaskStore.TASK_FAILED,
-                    VerificationTaskStore.TASK_CANCELLED,
+                    VerificationTaskStatus.DONE,
+                    VerificationTaskStatus.FAILED,
+                    VerificationTaskStatus.CANCELLED,
                 }
                 for row in self.verification_task_store.list_rows(
                     verification_id
@@ -582,10 +582,10 @@ class TestVerificationLifecycleService(VerificationServiceTestBase):
             f"invariant-running:{self.test_id}"
         )
         ok_id = canonical_test_verification_id(f"invariant-ok:{self.test_id}")
-        failed_id = canonical_test_verification_id(
-            f"invariant-failed:{self.test_id}"
+        cancelled_id = canonical_test_verification_id(
+            f"invariant-cancelled:{self.test_id}"
         )
-        for verification_id in (queued_id, running_id, ok_id, failed_id):
+        for verification_id in (queued_id, running_id, ok_id, cancelled_id):
             self._insert_verification_row(verification_id)
 
         def _accepted_task(verification_id: str) -> dict[str, object]:
@@ -614,18 +614,18 @@ class TestVerificationLifecycleService(VerificationServiceTestBase):
             (
                 TaskCompletion(
                     task_id=str(ok_task["id"]),
-                    status=VerificationTaskStore.TASK_DONE,
+                    status=VerificationTaskStatus.DONE,
                     run_id="run-invariant-ok",
                     judgehost_task_id="judgehost-invariant-ok",
                     result=normalize_execution_result(verdict="OK"),
                 ),
             )
         )
-        failed = self.verification_service.cancel_verification(
-            failed_id,
+        cancelled = self.verification_service.cancel_verification(
+            cancelled_id,
             reason="invariant terminal fixture",
         )
-        self.assertEqual(failed.outcome, "transitioned")
+        self.assertEqual(cancelled.outcome, "transitioned")
 
         violations = isolated_db_fetch_all(
             self.db,
@@ -648,7 +648,7 @@ class TestVerificationLifecycleService(VerificationServiceTestBase):
             UNION ALL
             SELECT id,'terminal-has-open-task'
             FROM verifications verification
-            WHERE status IN ('ok','failed')
+            WHERE status IN ('ok','failed','cancelled')
               AND EXISTS (
                   SELECT 1 FROM verification_tasks task
                   WHERE task.verification_id=verification.id
@@ -722,7 +722,7 @@ class TestVerificationLifecycleService(VerificationServiceTestBase):
                     "program_id": "solution-0",
                     "test_name": "001.in",
                     "expected_behavior": "rejected",
-                    "status": VerificationTaskStore.TASK_QUEUED,
+                    "status": VerificationTaskStatus.QUEUED,
                 },
                 {
                     "id": second_task_id,
@@ -731,7 +731,7 @@ class TestVerificationLifecycleService(VerificationServiceTestBase):
                     "program_id": "solution-0",
                     "test_name": "002.in",
                     "expected_behavior": "rejected",
-                    "status": VerificationTaskStore.TASK_QUEUED,
+                    "status": VerificationTaskStatus.QUEUED,
                 },
             ],
             edges=[],
@@ -742,7 +742,7 @@ class TestVerificationLifecycleService(VerificationServiceTestBase):
             first_task_id,
             "WA",
         )
-        self.assertEqual(first_completion.status, VerificationTaskStore.TASK_DONE)
+        self.assertEqual(first_completion.status, VerificationTaskStatus.DONE)
         self.assertEqual(first_completion.fail_reason, "")
         self.assertEqual(first_commit.parent_transition, "")
         parent = self.verification_service.verification_record(verification_id)
@@ -755,7 +755,7 @@ class TestVerificationLifecycleService(VerificationServiceTestBase):
             second_task_id,
             "AC",
         )
-        self.assertEqual(second_completion.status, VerificationTaskStore.TASK_DONE)
+        self.assertEqual(second_completion.status, VerificationTaskStatus.DONE)
         self.assertEqual(second_completion.fail_reason, "")
         self.assertEqual(second_commit.parent_transition, "ok")
         parent = self.verification_service.verification_record(verification_id)
@@ -782,7 +782,7 @@ class TestVerificationLifecycleService(VerificationServiceTestBase):
                     "program_id": "solution-0",
                     "test_name": test_name,
                     "expected_behavior": "rejected",
-                    "status": VerificationTaskStore.TASK_QUEUED,
+                    "status": VerificationTaskStatus.QUEUED,
                 }
                 for task_id, test_name in zip(
                     task_ids,
@@ -798,7 +798,7 @@ class TestVerificationLifecycleService(VerificationServiceTestBase):
             task_ids[0],
             "AC",
         )
-        self.assertEqual(first_completion.status, VerificationTaskStore.TASK_DONE)
+        self.assertEqual(first_completion.status, VerificationTaskStatus.DONE)
         self.assertEqual(first_commit.parent_transition, "")
         self.assertEqual(first_commit.failure_reason, "")
 
@@ -807,7 +807,7 @@ class TestVerificationLifecycleService(VerificationServiceTestBase):
             task_ids[1],
             "AC",
         )
-        self.assertEqual(second_completion.status, VerificationTaskStore.TASK_DONE)
+        self.assertEqual(second_completion.status, VerificationTaskStatus.DONE)
         self.assertEqual(second_completion.fail_reason, "")
         self.assertEqual(second_commit.parent_transition, "failed")
         self.assertIn(
@@ -822,7 +822,7 @@ class TestVerificationLifecycleService(VerificationServiceTestBase):
         for task_id in task_ids:
             self.assertEqual(
                 str(rows[task_id]["status"]),
-                VerificationTaskStore.TASK_DONE,
+                VerificationTaskStatus.DONE,
             )
 
     def test_solution_mismatch_waits_for_graph_then_fails_parent(self) -> None:
@@ -892,7 +892,7 @@ class TestVerificationLifecycleService(VerificationServiceTestBase):
             (mismatch,),
             notify=False,
         )
-        self.assertEqual(mismatch.status, VerificationTaskStore.TASK_FAILED)
+        self.assertEqual(mismatch.status, VerificationTaskStatus.FAILED)
         self.assertIn("allowed=[AC]", mismatch.fail_reason)
         self.assertEqual(first_commit.parent_transition, "")
         parent = self.verification_service.verification_record(verification_id)
@@ -916,7 +916,7 @@ class TestVerificationLifecycleService(VerificationServiceTestBase):
             (matched,),
             notify=False,
         )
-        self.assertEqual(matched.status, VerificationTaskStore.TASK_DONE)
+        self.assertEqual(matched.status, VerificationTaskStatus.DONE)
         self.assertEqual(matched.fail_reason, "")
         self.assertEqual(final_commit.parent_transition, "failed")
         parent = self.verification_service.verification_record(verification_id)
@@ -951,7 +951,7 @@ class TestVerificationLifecycleService(VerificationServiceTestBase):
                     "test_name": "001.in",
                     "expected_behavior": "accepted",
                     "queue_index": 1,
-                    "status": VerificationTaskStore.TASK_LEASED,
+                    "status": VerificationTaskStatus.LEASED,
                     "started_at": "2026-03-23T00:00:00Z",
                 },
                 {
@@ -962,7 +962,7 @@ class TestVerificationLifecycleService(VerificationServiceTestBase):
                     "test_name": "002.in",
                     "expected_behavior": "accepted",
                     "queue_index": 2,
-                    "status": VerificationTaskStore.TASK_PENDING,
+                    "status": VerificationTaskStatus.PENDING,
                 },
             ],
             edges=[],
@@ -976,7 +976,7 @@ class TestVerificationLifecycleService(VerificationServiceTestBase):
             (
                 TaskCompletion(
                     task_id=running_id,
-                    status=VerificationTaskStore.TASK_DONE,
+                    status=VerificationTaskStatus.DONE,
                     run_id="r-a",
                     judgehost_task_id="jt-a",
                     result=make_execution_result(verdict="AC"),
@@ -990,14 +990,14 @@ class TestVerificationLifecycleService(VerificationServiceTestBase):
         self.assertEqual(retry.already_terminal_task_ids, frozenset({running_id}))
         self.assertEqual(
             str(rows[running_id]["status"]),
-            VerificationTaskStore.TASK_CANCELLED,
+            VerificationTaskStatus.CANCELLED,
         )
         self.assertEqual(
             str(rows[pending_id]["status"]),
-            VerificationTaskStore.TASK_CANCELLED,
+            VerificationTaskStatus.CANCELLED,
         )
 
-    def test_cancel_persists_first_failure_and_terminalizes_task(self) -> None:
+    def test_cancel_persists_reason_and_terminalizes_task(self) -> None:
         verification_id = canonical_test_verification_id(
             f"completion-cancel-reason:{self.test_id}"
         )
@@ -1019,7 +1019,7 @@ class TestVerificationLifecycleService(VerificationServiceTestBase):
                     "test_name": "001.in",
                     "expected_behavior": "accepted",
                     "queue_index": 1,
-                    "status": VerificationTaskStore.TASK_PENDING,
+                    "status": VerificationTaskStatus.PENDING,
                 }
             ],
             edges=[],
@@ -1031,7 +1031,7 @@ class TestVerificationLifecycleService(VerificationServiceTestBase):
         self.assertEqual(transition.outcome, "transitioned")
         row = self.verification_service.verification_record(verification_id)
         assert row is not None
-        self.assertEqual(str(row["status"]), "failed")
+        self.assertEqual(str(row["status"]), "cancelled")
         self.assertEqual(
             str(row["fail_reason"] or ""),
             "verification cancelled by user",
@@ -1043,7 +1043,7 @@ class TestVerificationLifecycleService(VerificationServiceTestBase):
         )
         self.assertEqual(
             str(task_row["status"]),
-            VerificationTaskStore.TASK_CANCELLED,
+            VerificationTaskStatus.CANCELLED,
         )
 
     def test_startup_recovery_terminalizes_running_graph(self) -> None:
@@ -1071,7 +1071,7 @@ class TestVerificationLifecycleService(VerificationServiceTestBase):
                     "test_name": "001.in",
                     "expected_behavior": "accepted",
                     "queue_index": 1,
-                    "status": VerificationTaskStore.TASK_LEASED,
+                    "status": VerificationTaskStatus.LEASED,
                     "started_at": "2026-03-23T00:00:00Z",
                 },
                 {
@@ -1082,7 +1082,7 @@ class TestVerificationLifecycleService(VerificationServiceTestBase):
                     "test_name": "002.in",
                     "expected_behavior": "accepted",
                     "queue_index": 2,
-                    "status": VerificationTaskStore.TASK_PENDING,
+                    "status": VerificationTaskStatus.PENDING,
                 },
             ],
             edges=[],
@@ -1090,18 +1090,18 @@ class TestVerificationLifecycleService(VerificationServiceTestBase):
         )
 
         summary = self.verification_service.recover_startup(
-            reason="cancelled on service startup"
+            reason="interrupted by application restart"
         )
 
         rows = {str(row["id"]): row for row in task_store.list_rows(verification_id)}
         self.assertEqual(summary.verification_ids, (verification_id,))
         self.assertEqual(
             str(rows[running_id]["status"]),
-            VerificationTaskStore.TASK_CANCELLED,
+            VerificationTaskStatus.CANCELLED,
         )
         self.assertEqual(
             str(rows[pending_id]["status"]),
-            VerificationTaskStore.TASK_CANCELLED,
+            VerificationTaskStatus.CANCELLED,
         )
         verification_row = self.verification_service.verification_record(
             verification_id
@@ -1114,7 +1114,7 @@ class TestVerificationLifecycleService(VerificationServiceTestBase):
         self._insert_verification_row(verification_id)
 
         summary = self.verification_service.recover_startup(
-            reason="cancelled on service startup"
+            reason="interrupted by application restart"
         )
 
         self.assertEqual(summary.verification_ids, (verification_id,))
@@ -1126,7 +1126,7 @@ class TestVerificationLifecycleService(VerificationServiceTestBase):
         self.assertEqual(str(verification_row["status"] or ""), "failed")
         self.assertEqual(
             str(verification_row["fail_reason"] or ""),
-            "cancelled on service startup",
+            "interrupted by application restart",
         )
         self.assertTrue(str(verification_row["finished_at"] or ""))
 
@@ -1150,9 +1150,35 @@ class TestVerificationLifecycleService(VerificationServiceTestBase):
         self.assertEqual(second.outcome, "closed")
         row = self.verification_service.verification_record(verification_id)
         assert row is not None
+        self.assertEqual(str(row["status"]), "failed")
         self.assertEqual(
             str(row["fail_reason"]),
             "generate-input / generators/gen.cpp / 001.in: validator failed",
+        )
+
+    def test_cancelled_transition_wins_over_later_failure(self) -> None:
+        verification_id = canonical_test_verification_id(
+            f"cancel-first:{self.test_id}"
+        )
+        self._insert_verification_row(verification_id)
+
+        first = self.verification_service.cancel_verification(
+            verification_id,
+            reason="infrastructure failure words do not change this status",
+        )
+        second = self.verification_service.fail_verification(
+            verification_id,
+            reason="late scheduler failure",
+        )
+
+        self.assertEqual(first.outcome, "transitioned")
+        self.assertEqual(second.outcome, "closed")
+        row = self.verification_service.verification_record(verification_id)
+        assert row is not None
+        self.assertEqual(str(row["status"]), "cancelled")
+        self.assertEqual(
+            str(row["fail_reason"]),
+            "infrastructure failure words do not change this status",
         )
 
     def test_execution_cancel_persists_before_event_and_drain(self) -> None:
@@ -1172,11 +1198,11 @@ class TestVerificationLifecycleService(VerificationServiceTestBase):
                 verification_id
             )
             assert snapshot is not None
-            self.assertEqual(snapshot["record"]["status"], "failed")
+            self.assertEqual(snapshot["record"]["status"], "cancelled")
             rows = {str(row["id"]): row for row in snapshot["tasks"]}
             self.assertEqual(
                 str(rows[task_id]["status"]),
-                VerificationTaskStore.TASK_CANCELLED,
+                VerificationTaskStatus.CANCELLED,
             )
             event_order.append(stage)
 
@@ -1289,7 +1315,7 @@ class TestVerificationLifecycleService(VerificationServiceTestBase):
         task_rows = self.verification_task_store.list_rows(verification_id)
         self.assertEqual(
             [str(row["status"]) for row in task_rows],
-            [VerificationTaskStore.TASK_PENDING],
+            [VerificationTaskStatus.PENDING],
         )
 
     def test_execution_cancel_falls_back_to_closed_event_and_drains(self) -> None:
@@ -1512,7 +1538,7 @@ class TestVerificationLifecycleService(VerificationServiceTestBase):
             verification_id
         )
         assert snapshot is not None
-        self.assertEqual(snapshot["record"]["status"], "failed")
+        self.assertEqual(snapshot["record"]["status"], "cancelled")
 
     def test_scheduler_failure_persists_before_judgehost_drain(self) -> None:
         verification_id = canonical_test_verification_id(
@@ -1533,7 +1559,7 @@ class TestVerificationLifecycleService(VerificationServiceTestBase):
             rows = {str(row["id"]): row for row in snapshot["tasks"]}
             self.assertEqual(
                 str(rows[task_id]["status"]),
-                VerificationTaskStore.TASK_CANCELLED,
+                VerificationTaskStatus.CANCELLED,
             )
 
         drainer = _RecordingDrainer(_assert_failed_before_drain)
@@ -1607,7 +1633,7 @@ class TestVerificationLifecycleService(VerificationServiceTestBase):
                 judgehost_task_id="judgehost-failed",
                 terminal_result=TaskCompletion(
                     task_id=task_id,
-                    status=VerificationTaskStore.TASK_FAILED,
+                    status=VerificationTaskStatus.FAILED,
                     run_id="run-failed",
                     judgehost_task_id="judgehost-failed",
                     result=make_execution_result(

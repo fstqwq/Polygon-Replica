@@ -10,19 +10,31 @@ class Kind(StrEnum):
     CUSTOM = "custom"
 
 
-class Status(StrEnum):
+class VerificationStatus(StrEnum):
     QUEUED = "queued"
     RUNNING = "running"
     OK = "ok"
     FAILED = "failed"
+    CANCELLED = "cancelled"
 
 
-ACTIVE = frozenset((Status.QUEUED.value, Status.RUNNING.value))
+class VerificationTaskStatus(StrEnum):
+    PENDING = "pending"
+    QUEUED = "queued"
+    LEASED = "leased"
+    DONE = "done"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+ACTIVE = frozenset(
+    (VerificationStatus.QUEUED.value, VerificationStatus.RUNNING.value)
+)
 
 
 class WorkspaceVerificationRow(TypedDict):
     id: str
-    status: str
+    status: VerificationStatus
     signature: str
     source_commit: str
     kind: str

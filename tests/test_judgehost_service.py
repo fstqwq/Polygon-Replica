@@ -42,7 +42,7 @@ from app.service.verification.task_scheduler import (
     VerificationRuntimeCallbacks,
     VerificationRuntimeCoordinator,
 )
-from app.service.verification.task_store import VerificationTaskStore
+from app.service.verification.types import VerificationTaskStatus
 from tests.common import (
     E2ETestBase,
     config,
@@ -204,11 +204,11 @@ class TestJudgehostService(E2ETestBase):
                     }
                 )
             statuses = {str(row["status"] or "") for row in matched_rows}
-            if statuses == {VerificationTaskStore.TASK_DONE}:
+            if statuses == {VerificationTaskStatus.DONE}:
                 run_status = "ok"
-            elif VerificationTaskStore.TASK_FAILED in statuses:
+            elif VerificationTaskStatus.FAILED in statuses:
                 run_status = "failed"
-            elif VerificationTaskStore.TASK_CANCELLED in statuses:
+            elif VerificationTaskStatus.CANCELLED in statuses:
                 run_status = "cancelled"
             else:
                 run_status = "running"
@@ -357,13 +357,13 @@ class TestJudgehostService(E2ETestBase):
             deadline = time.monotonic() + 2.0
             while time.monotonic() < deadline:
                 rows = {str(row["id"]): row for row in task_store.list_rows(verification_id)}
-                if str(rows[task_id]["status"] or "") == VerificationTaskStore.TASK_DONE:
+                if str(rows[task_id]["status"] or "") == VerificationTaskStatus.DONE:
                     break
                 time.sleep(0.01)
             rows = {str(row["id"]): row for row in task_store.list_rows(verification_id)}
             self.assertEqual(
                 str(rows[task_id]["status"] or ""),
-                VerificationTaskStore.TASK_DONE,
+                VerificationTaskStatus.DONE,
             )
             host = next(
                 row
@@ -462,7 +462,7 @@ class TestJudgehostService(E2ETestBase):
             (
                 TaskCompletion(
                     task_id=accepted_task_id,
-                    status=VerificationTaskStore.TASK_DONE,
+                    status=VerificationTaskStatus.DONE,
                     run_id="",
                     judgehost_task_id="",
                     result=normalize_execution_result(verdict="OK"),
@@ -504,7 +504,7 @@ class TestJudgehostService(E2ETestBase):
                 },
             )
             expected_verdict = "CE"
-            expected_task_status = VerificationTaskStore.TASK_DONE
+            expected_task_status = VerificationTaskStatus.DONE
         elif failure_kind == "internal-error":
             service.domjudge_update_judging(
                 host,
@@ -520,7 +520,7 @@ class TestJudgehostService(E2ETestBase):
                 judgetask_id=first_case_id,
             )
             expected_verdict = "FL"
-            expected_task_status = VerificationTaskStore.TASK_FAILED
+            expected_task_status = VerificationTaskStatus.FAILED
         else:  # pragma: no cover - helper contract
             raise AssertionError(f"unknown failure kind: {failure_kind}")
 
@@ -658,7 +658,7 @@ class TestJudgehostService(E2ETestBase):
             completions.append(
                 TaskCompletion(
                     task_id=task_id,
-                    status=VerificationTaskStore.TASK_DONE,
+                    status=VerificationTaskStatus.DONE,
                     run_id=f"r-fixture-{verification_id[4:16]}-{index}",
                     judgehost_task_id="",
                     result=normalize_execution_result(verdict="OK"),

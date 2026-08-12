@@ -34,7 +34,7 @@ from app.service.verification.lifecycle import (
     verification_task_id,
 )
 from app.service.verification.task_completion import TaskCompletion
-from app.service.verification.task_store import VerificationTaskStore
+from app.service.verification.types import VerificationTaskStatus
 from app.service.statement.constant import (
     DEFAULT_OLYMP_STY,
     DEFAULT_STATEMENT_PROBLEM_TEMPLATE,
@@ -582,7 +582,7 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
             (
                 TaskCompletion(
                     task_id=task_id,
-                    status=VerificationTaskStore.TASK_DONE,
+                    status=VerificationTaskStatus.DONE,
                     run_id=f"run-{self.test_id}",
                     judgehost_task_id=f"judgehost-{self.test_id}",
                     result=normalize_execution_result(verdict="OK"),

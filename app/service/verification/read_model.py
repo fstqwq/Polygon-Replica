@@ -2,11 +2,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from app.service.verification.task_store import VerificationTaskReadRow, VerificationTaskStore
+from app.service.verification.task_store import VerificationTaskReadRow
+from app.service.verification.types import VerificationTaskStatus
 
 
-def task_display_status(status: str) -> str:
-    if status == VerificationTaskStore.TASK_LEASED:
+def task_display_status(status: VerificationTaskStatus) -> str:
+    if status == VerificationTaskStatus.LEASED:
         return "running"
     return status
 
@@ -26,7 +27,7 @@ def task_counts(rows: list[VerificationTaskReadRow]) -> dict[str, object]:
     assert isinstance(by_kind, dict)
     for row in rows:
         task_kind = str(row["task_kind"] or "")
-        status = task_display_status(str(row["status"] or ""))
+        status = task_display_status(row["status"])
         counts["total"] = int(counts["total"]) + 1
         if status in counts:
             counts[status] = int(counts[status]) + 1
@@ -49,7 +50,7 @@ def task_counts(rows: list[VerificationTaskReadRow]) -> dict[str, object]:
 def running_tasks(rows: list[VerificationTaskReadRow]) -> list[dict[str, str]]:
     values: list[dict[str, str]] = []
     for row in rows:
-        if str(row["status"] or "") != VerificationTaskStore.TASK_LEASED:
+        if row["status"] != VerificationTaskStatus.LEASED:
             continue
         source_path = str(row["source_path"] or "")
         source_label = Path(source_path).name if source_path else "-"

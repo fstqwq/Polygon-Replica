@@ -12,5 +12,15 @@ class RuntimeStateService:
     def initialize_metadata(self) -> None:
         self._db.init()
 
-    def cancel_inflight_summary_rows(self, table_name: str, reason: str, *, now_text: str) -> list[str]:
-        return self._store.cancel_inflight_summary_rows(table_name, reason, now_text=now_text)
+    def fail_inflight_summary_rows(
+        self,
+        table_name: str,
+        reason: str,
+        *,
+        now_text: str,
+    ) -> list[str]:
+        return self._store.fail_inflight_summary_rows(
+            table_name,
+            reason,
+            now_text=now_text,
+        )

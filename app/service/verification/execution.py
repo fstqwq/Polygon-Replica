@@ -21,7 +21,7 @@ from app.service.verification.task_scheduler import (
     VerificationRuntimeCoordinator,
 )
 from app.service.verification.task_store import VerificationTaskRow, VerificationTaskStore
-from app.service.verification.types import Status
+from app.service.verification.types import VerificationStatus
 
 
 class VerificationDrainSummary(TypedDict):
@@ -143,6 +143,7 @@ class VerificationExecutionService:
         transition: VerificationTransitionCommit,
         *,
         reason: str,
+        cancellation: bool,
         drain_closed: bool = False,
     ) -> VerificationExecutionTransition:
         if transition.outcome == "missing" or (
@@ -153,7 +154,7 @@ class VerificationExecutionService:
                 drain=_empty_drain_summary(),
             )
         event_error: Exception | None = None
-        if transition.outcome == "transitioned":
+        if transition.outcome == "transitioned" and cancellation:
             try:
                 self._registry.cancelled(transition.verification_id, reason)
             except Exception as exc:
@@ -208,6 +209,7 @@ class VerificationExecutionService:
         return self._transition_runtime(
             transition,
             reason=reason,
+            cancellation=True,
             drain_closed=True,
         )
 
@@ -224,6 +226,7 @@ class VerificationExecutionService:
         return self._transition_runtime(
             transition,
             reason=reason,
+            cancellation=False,
             drain_closed=True,
         )
 
@@ -272,7 +275,7 @@ class VerificationExecutionService:
             snapshot = self._lifecycle.verification_snapshot(verification_id)
             if snapshot is None:
                 raise RuntimeError("verification disappeared before execution")
-            if str(snapshot["record"]["status"]) != Status.RUNNING.value:
+            if str(snapshot["record"]["status"]) != VerificationStatus.RUNNING.value:
                 coordinator.enqueue_closed()
             coordinator.run()
         except Exception as exc:
@@ -289,6 +292,7 @@ class VerificationExecutionService:
                 self._transition_runtime(
                     transition,
                     reason=reason,
+                    cancellation=False,
                     drain_closed=True,
                 )
             except Exception as cleanup_exc:

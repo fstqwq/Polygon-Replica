@@ -52,7 +52,7 @@ from app.impl.run_export.run import run_cancel, run_execute
 from app.impl.root.auth_pages import auth_password_meta, login_page
 from app.config import CONFIG_REGISTRY
 from app.service.verification.lifecycle import PlannedTask, verification_task_id
-from app.service.verification.task_store import VerificationTaskStore
+from app.service.verification.types import VerificationTaskStatus
 from tests.ui_support import _register_with_password_envelope
 
 db = config.db
@@ -354,7 +354,7 @@ class TestSecurity(E2ETestBase):
         self.assertFalse(str(verification_row["finished_at"] or "").strip())
         task_rows = config.verification_task_store.list_rows(verification_id)
         self.assertEqual(len(task_rows), 1)
-        self.assertEqual(str(task_rows[0]["status"] or ""), VerificationTaskStore.TASK_QUEUED)
+        self.assertEqual(str(task_rows[0]["status"] or ""), VerificationTaskStatus.QUEUED)
 
     def test_artifact_blob_download_rejects_foreign_cache_token(self) -> None:
         workspace_service.grant_repo_access("alice/sample", "bob", "owner")

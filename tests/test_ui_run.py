@@ -78,7 +78,7 @@ from app.service.execution.model import (
 from app.service.execution.policy import normalize_execution_result
 from app.service.verification.lifecycle import PlannedTask, verification_task_id
 from app.service.verification.task_completion import TaskCompletion
-from app.service.verification.task_store import VerificationTaskStore
+from app.service.verification.types import VerificationTaskStatus
 from app.service.verification.types import Kind
 
 TEXTAREA_MAX_BYTES = int(CONFIG_REGISTRY.defaults()["TEXTAREA_MAX_BYTES"])
@@ -214,7 +214,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
                 0,
                 TaskCompletion(
                     task_id=accepted_task_id,
-                    status=VerificationTaskStore.TASK_DONE,
+                    status=VerificationTaskStatus.DONE,
                     run_id="",
                     judgehost_task_id="",
                     result=execution_result("OK"),
@@ -434,7 +434,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
                 completions.append(
                     TaskCompletion(
                         task_id=task_id,
-                        status=VerificationTaskStore.TASK_DONE,
+                        status=VerificationTaskStatus.DONE,
                         run_id=run_id,
                         judgehost_task_id="",
                         result=self._fixture_result(summary_obj, status=item_status),
@@ -519,7 +519,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             completions.append(
                 TaskCompletion(
                     task_id=task_id,
-                    status=VerificationTaskStore.TASK_DONE,
+                    status=VerificationTaskStatus.DONE,
                     run_id="",
                     judgehost_task_id="",
                     result=execution_result("OK"),
@@ -1927,14 +1927,14 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             completions=[
                 TaskCompletion(
                     task_id=rerun_ok_task_id,
-                    status=VerificationTaskStore.TASK_DONE,
+                    status=VerificationTaskStatus.DONE,
                     run_id=run_ok,
                     judgehost_task_id="",
                     result=execution_result("OK"),
                 ),
                 TaskCompletion(
                     task_id=rerun_wa_task_id,
-                    status=VerificationTaskStore.TASK_DONE,
+                    status=VerificationTaskStatus.DONE,
                     run_id=run_wa,
                     judgehost_task_id="",
                     result=execution_result("WA"),
@@ -2204,7 +2204,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             "running",
         )
 
-    def test_run_cancel_marks_running_verification_failed(self) -> None:
+    def test_run_cancel_marks_running_verification_cancelled(self) -> None:
         ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
         (ws / "solutions").mkdir(parents=True, exist_ok=True)
         (ws / "solutions" / "accepted.cpp").write_text("int main(){return 0;}\n", encoding="utf-8")
@@ -2286,14 +2286,20 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
 
         verification_row = db_fetch_one("SELECT status,finished_at FROM verifications WHERE id=?", [verification_id])
         self.assertIsNotNone(verification_row)
-        self.assertEqual(str(verification_row["status"] or "").lower(), "failed")
+        self.assertEqual(str(verification_row["status"] or "").lower(), "cancelled")
         self.assertTrue(str(verification_row["finished_at"] or ""))
         rows = {
             str(row["id"]): row
             for row in config.verification_task_store.list_rows(verification_id)
         }
-        self.assertEqual(str(rows[leased_task_id]["status"] or ""), VerificationTaskStore.TASK_CANCELLED)
-        self.assertEqual(str(rows[pending_task_id]["status"] or ""), VerificationTaskStore.TASK_CANCELLED)
+        self.assertEqual(
+            str(rows[leased_task_id]["status"] or ""),
+            VerificationTaskStatus.CANCELLED,
+        )
+        self.assertEqual(
+            str(rows[pending_task_id]["status"] or ""),
+            VerificationTaskStatus.CANCELLED,
+        )
 
         details_after = run_details_page(
             _request("/problems/alice/sample/run/details", f"verification_id={verification_id}"),
@@ -2359,7 +2365,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         self.assertIn("verification cancelled", cancel_messages[0])
         verification_row = db_fetch_one("SELECT status FROM verifications WHERE id=?", [verification_id])
         self.assertIsNotNone(verification_row)
-        self.assertEqual(str(verification_row["status"] or "").strip().lower(), "failed")
+        self.assertEqual(str(verification_row["status"] or "").strip().lower(), "cancelled")
         rows = config.verification_task_store.list_rows(verification_id)
         self.assertEqual(
             [
@@ -2367,7 +2373,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
                 for row in rows
                 if str(row["program_id"] or "") == "solution-0"
             ],
-            [VerificationTaskStore.TASK_CANCELLED, VerificationTaskStore.TASK_CANCELLED],
+            [VerificationTaskStatus.CANCELLED, VerificationTaskStatus.CANCELLED],
         )
         self.assertEqual(
             [
@@ -2375,7 +2381,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
                 for row in rows
                 if str(row["program_id"] or "") == "accepted"
             ],
-            [VerificationTaskStore.TASK_DONE],
+            [VerificationTaskStatus.DONE],
         )
 
     def test_run_cancel_cancels_queued_rows_when_domjudge_has_only_pending_cases(self) -> None:
@@ -2438,7 +2444,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
                 for row in rows
                 if str(row["program_id"] or "") == "solution-0"
             ],
-            [VerificationTaskStore.TASK_CANCELLED, VerificationTaskStore.TASK_CANCELLED],
+            [VerificationTaskStatus.CANCELLED, VerificationTaskStatus.CANCELLED],
         )
         self.assertEqual(
             [
@@ -2446,7 +2452,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
                 for row in rows
                 if str(row["program_id"] or "") == "accepted"
             ],
-            [VerificationTaskStore.TASK_DONE],
+            [VerificationTaskStatus.DONE],
         )
 
 
@@ -2656,7 +2662,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             completions=[
                 TaskCompletion(
                     task_id=done_task_id,
-                    status=VerificationTaskStore.TASK_DONE,
+                    status=VerificationTaskStatus.DONE,
                     run_id="",
                     judgehost_task_id="",
                     result=execution_result("OK"),
@@ -2881,7 +2887,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             completions=[
                 TaskCompletion(
                     task_id=task_id,
-                    status=VerificationTaskStore.TASK_DONE,
+                    status=VerificationTaskStatus.DONE,
                     run_id="",
                     judgehost_task_id="",
                     result=execution_result("OK"),
@@ -3003,7 +3009,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
                 *[
                     TaskCompletion(
                         task_id=task_id,
-                        status=VerificationTaskStore.TASK_DONE,
+                        status=VerificationTaskStatus.DONE,
                         run_id="",
                         judgehost_task_id="",
                         result=execution_result("OK"),
@@ -3012,7 +3018,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
                 ],
                 TaskCompletion(
                     task_id=solution_task_ids["001.in"],
-                    status=VerificationTaskStore.TASK_DONE,
+                    status=VerificationTaskStatus.DONE,
                     run_id=solution_run_id,
                     judgehost_task_id="",
                     result=execution_result(
@@ -3237,7 +3243,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             completions=[
                 TaskCompletion(
                     task_id=task_id,
-                    status=VerificationTaskStore.TASK_DONE,
+                    status=VerificationTaskStatus.DONE,
                     run_id="",
                     judgehost_task_id="",
                     result=execution_result("OK"),
@@ -3383,7 +3389,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
                 *[
                     TaskCompletion(
                         task_id=task_id,
-                        status=VerificationTaskStore.TASK_DONE,
+                        status=VerificationTaskStatus.DONE,
                         run_id="",
                         judgehost_task_id="",
                         result=execution_result("OK"),
@@ -3392,7 +3398,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
                 ],
                 TaskCompletion(
                     task_id=accepted_task_ids["001.in"],
-                    status=VerificationTaskStore.TASK_DONE,
+                    status=VerificationTaskStatus.DONE,
                     run_id=accepted_run_id,
                     judgehost_task_id="",
                     result=execution_result("AC"),
@@ -3400,7 +3406,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
                 *[
                     TaskCompletion(
                         task_id=task_id,
-                        status=VerificationTaskStore.TASK_CANCELLED,
+                        status=VerificationTaskStatus.CANCELLED,
                         run_id="",
                         judgehost_task_id="",
                         result=normalize_execution_result(
@@ -3522,7 +3528,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
                 *[
                     TaskCompletion(
                         task_id=task_id,
-                        status=VerificationTaskStore.TASK_DONE,
+                        status=VerificationTaskStatus.DONE,
                         run_id="",
                         judgehost_task_id="",
                         result=execution_result("OK"),
@@ -3532,7 +3538,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
                 *[
                     TaskCompletion(
                         task_id=task_id,
-                        status=VerificationTaskStore.TASK_CANCELLED,
+                        status=VerificationTaskStatus.CANCELLED,
                         run_id="",
                         judgehost_task_id="",
                         result=normalize_execution_result(
@@ -3600,6 +3606,45 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             with config.verification_lock:
                 config.verification_inflight.discard(workspace_key)
                 config.verification_workers.discard(fake_worker)
+
+    def test_verification_queue_rejection_is_a_failure(self) -> None:
+        problem = f"alice/verify-queue-rejection-{uuid.uuid4().hex[:8]}"
+        workspace = self._prepare_verification_workspace(problem)
+        ctx = workspace_service.workspace_context(problem, "alice", include_recent=False)
+        problem_id = int(ctx["problem"]["id"])
+        workspace_id = int(ctx["workspace"]["id"])
+        verification_id = canonical_test_verification_id(
+            f"queue-rejection-{uuid.uuid4().hex}"
+        )
+
+        with (
+            patch.object(
+                config.worker_queue_service,
+                "submit",
+                return_value=(None, False, "capacity"),
+            ),
+            self.assertRaisesRegex(RuntimeError, "queue rejected"),
+        ):
+            workspace_context_job.start_verification_job(
+                problem,
+                "alice",
+                actor_user_id=int(ctx["user"]["id"]),
+                problem_id=problem_id,
+                workspace_id=workspace_id,
+                workspace_head=str(ctx["workspace"].get("head_commit") or ""),
+                workspace_dirty=bool(ctx["workspace"].get("dirty")),
+                targets=[],
+                verification_id=verification_id,
+                workspace_path=workspace,
+            )
+
+        row = db_fetch_one(
+            "SELECT status,fail_reason FROM verifications WHERE id=?",
+            [verification_id],
+        )
+        self.assertIsNotNone(row)
+        self.assertEqual(str(row["status"]), "failed")
+        self.assertIn("queue rejected", str(row["fail_reason"]))
 
     def test_run_details_uses_top_level_error_when_verification_fails_before_any_stage_starts(self) -> None:
         ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
@@ -4011,7 +4056,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             completions=[
                 TaskCompletion(
                     task_id=task_id,
-                    status=VerificationTaskStore.TASK_DONE,
+                    status=VerificationTaskStatus.DONE,
                     run_id="two-pass.cpp",
                     judgehost_task_id="",
                     input_ref=original_input_ref,
@@ -4255,7 +4300,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             completions=[
                 TaskCompletion(
                     task_id=interactive_task_id,
-                    status=VerificationTaskStore.TASK_DONE,
+                    status=VerificationTaskStatus.DONE,
                     run_id="interactive.cpp",
                     judgehost_task_id="",
                     result=normalize_execution_result(passes=passes),
@@ -4264,7 +4309,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
                 ),
                 TaskCompletion(
                     task_id=other_task_id,
-                    status=VerificationTaskStore.TASK_DONE,
+                    status=VerificationTaskStatus.DONE,
                     run_id="other.cpp",
                     judgehost_task_id="",
                     result=other_result,
@@ -4467,7 +4512,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             completions=[
                 TaskCompletion(
                     task_id=task_id,
-                    status=VerificationTaskStore.TASK_DONE,
+                    status=VerificationTaskStatus.DONE,
                     run_id="tmp.cpp",
                     judgehost_task_id="",
                     input_ref=input_ref,
@@ -4483,7 +4528,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
                 ),
                 TaskCompletion(
                     task_id=other_task_id,
-                    status=VerificationTaskStore.TASK_DONE,
+                    status=VerificationTaskStatus.DONE,
                     run_id="other.cpp",
                     judgehost_task_id="",
                     result=execution_result(
@@ -4596,7 +4641,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             completions=[
                 TaskCompletion(
                     task_id=task_id,
-                    status=VerificationTaskStore.TASK_DONE,
+                    status=VerificationTaskStatus.DONE,
                     run_id="uploaded-foo",
                     judgehost_task_id="",
                     result=execution_result("OK", output_ref=output_ref),
@@ -4728,7 +4773,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             completions=[
                 TaskCompletion(
                     task_id=task_id,
-                    status=VerificationTaskStore.TASK_DONE,
+                    status=VerificationTaskStatus.DONE,
                     run_id="std.cpp",
                     judgehost_task_id="",
                     result=execution_result(
@@ -4852,14 +4897,14 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             completions=[
                 TaskCompletion(
                     task_id=generate_task_id,
-                    status=VerificationTaskStore.TASK_DONE,
+                    status=VerificationTaskStatus.DONE,
                     run_id="",
                     judgehost_task_id="",
                     result=execution_result("AC", feedback="tree is valid"),
                 ),
                 TaskCompletion(
                     task_id=solution_task_id,
-                    status=VerificationTaskStore.TASK_DONE,
+                    status=VerificationTaskStatus.DONE,
                     run_id="tmp.cpp",
                     judgehost_task_id="",
                     input_ref=input_ref,
@@ -4949,7 +4994,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             completions=[
                 TaskCompletion(
                     task_id=generate_task_id,
-                    status=VerificationTaskStore.TASK_FAILED,
+                    status=VerificationTaskStatus.FAILED,
                     run_id="",
                     judgehost_task_id="",
                     result=execution_result(
@@ -5042,7 +5087,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             completions=[
                 TaskCompletion(
                     task_id=generate_task_id,
-                    status=VerificationTaskStore.TASK_DONE,
+                    status=VerificationTaskStatus.DONE,
                     run_id="",
                     judgehost_task_id="",
                     result=execution_result(
@@ -5106,7 +5151,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         def generation_fixture(
             test_name: str,
             *,
-            status: str,
+            status: VerificationTaskStatus,
             verdict: str,
             output_ref: str = "",
             error_text: str = "",
@@ -5142,8 +5187,8 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
                         error_text or feedback_text
                         if status
                         in {
-                            VerificationTaskStore.TASK_FAILED,
-                            VerificationTaskStore.TASK_CANCELLED,
+                            VerificationTaskStatus.FAILED,
+                            VerificationTaskStatus.CANCELLED,
                         }
                         else ""
                     ),
@@ -5153,39 +5198,39 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         generation_fixtures = [
             generation_fixture(
                 "001.in",
-                status=VerificationTaskStore.TASK_DONE,
+                status=VerificationTaskStatus.DONE,
                 verdict="AC",
                 output_ref="blob://exact",
             ),
             generation_fixture(
                 "002.in",
-                status=VerificationTaskStore.TASK_DONE,
+                status=VerificationTaskStatus.DONE,
                 verdict="SK",
                 output_ref="blob://exact",
                 feedback_text="duplicate generator invocation; skipped, same as 001.in",
             ),
             generation_fixture(
                 "003.in",
-                status=VerificationTaskStore.TASK_DONE,
+                status=VerificationTaskStatus.DONE,
                 verdict="AC",
                 output_ref="blob://content",
             ),
             generation_fixture(
                 "004.in",
-                status=VerificationTaskStore.TASK_DONE,
+                status=VerificationTaskStatus.DONE,
                 verdict="SK",
                 output_ref="blob://content",
                 feedback_text="duplicate generated input; skipped, same as 003.in",
             ),
             generation_fixture(
                 "005.in",
-                status=VerificationTaskStore.TASK_DONE,
+                status=VerificationTaskStatus.DONE,
                 verdict="SK",
                 output_ref="blob://unresolved",
             ),
             generation_fixture(
                 "006.in",
-                status=VerificationTaskStore.TASK_CANCELLED,
+                status=VerificationTaskStatus.CANCELLED,
                 verdict="",
                 error_text="generation cancelled by operator",
             ),
@@ -5215,9 +5260,9 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
                 TaskCompletion(
                     task_id=task_id,
                     status=(
-                        VerificationTaskStore.TASK_CANCELLED
+                        VerificationTaskStatus.CANCELLED
                         if index == 6
-                        else VerificationTaskStore.TASK_DONE
+                        else VerificationTaskStatus.DONE
                     ),
                     run_id="tmp-solution",
                     judgehost_task_id="",
@@ -5342,7 +5387,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
                 [
                     TaskCompletion(
                         task_id=generate_task_id,
-                        status=VerificationTaskStore.TASK_DONE,
+                        status=VerificationTaskStatus.DONE,
                         run_id="bulk-generator",
                         judgehost_task_id="",
                         result=execution_result(
@@ -5352,7 +5397,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
                     ),
                     TaskCompletion(
                         task_id=solution_task_id,
-                        status=VerificationTaskStore.TASK_DONE,
+                        status=VerificationTaskStatus.DONE,
                         run_id="bulk-solution",
                         judgehost_task_id="",
                         result=execution_result(
@@ -5449,7 +5494,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             completions=[
                 TaskCompletion(
                     task_id=task_id,
-                    status=VerificationTaskStore.TASK_FAILED,
+                    status=VerificationTaskStatus.FAILED,
                     run_id="r-main-correct-diag",
                     judgehost_task_id="",
                     result=normalize_execution_result(
@@ -5541,7 +5586,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             completions=[
                 TaskCompletion(
                     task_id=task_id,
-                    status=VerificationTaskStore.TASK_DONE,
+                    status=VerificationTaskStatus.DONE,
                     run_id=run_id,
                     judgehost_task_id="",
                     result=execution_result(
@@ -5630,7 +5675,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             completions=[
                 TaskCompletion(
                     task_id=task_id,
-                    status=VerificationTaskStore.TASK_DONE,
+                    status=VerificationTaskStatus.DONE,
                     run_id=run_id,
                     judgehost_task_id="",
                     result=execution_result(
@@ -5721,7 +5766,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             completions=[
                 TaskCompletion(
                     task_id=task_id,
-                    status=VerificationTaskStore.TASK_DONE,
+                    status=VerificationTaskStatus.DONE,
                     run_id=run_id,
                     judgehost_task_id="",
                     result=execution_result(
@@ -5834,7 +5879,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             completions.append(
                 TaskCompletion(
                     task_id=task_id,
-                    status=VerificationTaskStore.TASK_DONE,
+                    status=VerificationTaskStatus.DONE,
                     run_id=run_id,
                     judgehost_task_id="",
                     result=execution_result(

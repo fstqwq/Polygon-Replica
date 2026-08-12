@@ -14,7 +14,7 @@ from app.service.verification.task_metadata import (
     canonical_truncated_text,
     diagnostics_json_text,
 )
-from app.service.verification.task_store import VerificationTaskStore
+from app.service.verification.types import VerificationStatus, VerificationTaskStatus
 
 from tests.identity_helpers import canonical_test_verification_id
 from tests.verification_policy_fixture import VerificationPolicyTestBase
@@ -177,7 +177,7 @@ class TestVerificationPolicy(VerificationPolicyTestBase):
                 "test_name": "001.in",
                 "expected_behavior": "accepted",
                 "queue_index": 1,
-                "status": VerificationTaskStore.TASK_DONE,
+                "status": VerificationTaskStatus.DONE,
                 "verdict": "OK",
                 "run_id": "",
                 "judgehost_task_id": "",
@@ -402,7 +402,7 @@ class TestVerificationPolicy(VerificationPolicyTestBase):
 
         self.assertTrue(task_id.endswith(f"~accepted~{test_name}"))
 
-    def test_verification_summary_from_tasks_marks_cancelled_terminal_failed(self) -> None:
+    def test_verification_summary_from_tasks_preserves_cancelled_parent(self) -> None:
         from app.impl.workspace.verification_dag import _verification_summary_from_tasks
 
         rows = [
@@ -415,7 +415,7 @@ class TestVerificationPolicy(VerificationPolicyTestBase):
                 "test_name": "001.in",
                 "expected_behavior": "accepted",
                 "queue_index": 1,
-                "status": VerificationTaskStore.TASK_CANCELLED,
+                "status": VerificationTaskStatus.CANCELLED,
                 "verdict": "",
                 "run_id": "",
                 "judgehost_task_id": "",
@@ -450,11 +450,11 @@ class TestVerificationPolicy(VerificationPolicyTestBase):
             ],
             rows=rows,
             test_names=["001.in"],
-            fail_flag=False,
+            parent_status=VerificationStatus.CANCELLED,
             fail_reason="",
         )
-        self.assertEqual(status, "failed")
-        self.assertEqual(str(summary["status"]), "failed")
+        self.assertEqual(status, "cancelled")
+        self.assertEqual(str(summary["status"]), "cancelled")
         self.assertEqual(int(counts["cancelled"]), 1)
 
     def test_verification_summary_from_tasks_excludes_main_correct_runs_from_solution_columns(self) -> None:
@@ -470,7 +470,7 @@ class TestVerificationPolicy(VerificationPolicyTestBase):
                 "test_name": "001.in",
                 "expected_behavior": "accepted",
                 "queue_index": 1,
-                "status": VerificationTaskStore.TASK_DONE,
+                "status": VerificationTaskStatus.DONE,
                 "verdict": "AC",
                 "run_id": "r-main-task",
                 "judgehost_task_id": "jt-main",
@@ -498,7 +498,7 @@ class TestVerificationPolicy(VerificationPolicyTestBase):
                 "test_name": "001.in",
                 "expected_behavior": "wrong_answer",
                 "queue_index": 2,
-                    "status": VerificationTaskStore.TASK_LEASED,
+                    "status": VerificationTaskStatus.LEASED,
                 "verdict": "",
                 "run_id": "",
                 "judgehost_task_id": "",
@@ -539,7 +539,7 @@ class TestVerificationPolicy(VerificationPolicyTestBase):
             ],
             rows=rows,
             test_names=["001.in"],
-            fail_flag=False,
+            parent_status=VerificationStatus.RUNNING,
             fail_reason="",
         )
         self.assertEqual(status, "running")

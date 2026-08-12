@@ -24,7 +24,7 @@ from app.impl.runtime.config import config
 from app.main import app
 from app.service.verification.lifecycle import PlannedTask, verification_task_id
 from app.service.verification.task_completion import TaskCompletion
-from app.service.verification.task_store import VerificationTaskStore
+from app.service.verification.types import VerificationTaskStatus
 
 workspace_service = config.workspace_service
 
@@ -302,7 +302,7 @@ class TestAgentAPI(E2ETestBase):
                 [
                     TaskCompletion(
                         task_id=task_id,
-                        status=VerificationTaskStore.TASK_DONE,
+                        status=VerificationTaskStatus.DONE,
                         run_id="",
                         judgehost_task_id="",
                         result=execution_result("OK"),
@@ -1015,7 +1015,10 @@ class TestAgentAPI(E2ETestBase):
 
             verify_status = client.get(f"/agent/v1/verification/{verification_id}/status", headers=self._bearer(readonly_token))
             self.assertEqual(verify_status.status_code, 200, verify_status.text)
-            self.assertIn(str(verify_status.json().get("status") or ""), {"running", "queued", "failed", "ok"})
+            self.assertIn(
+                str(verify_status.json().get("status") or ""),
+                {"running", "queued", "failed", "ok", "cancelled"},
+            )
 
             native_export = client.post(
                 "/agent/v1/export/start",
@@ -1231,14 +1234,14 @@ class TestAgentAPI(E2ETestBase):
                 [
                     TaskCompletion(
                         task_id=accepted_task_id,
-                        status=VerificationTaskStore.TASK_DONE,
+                        status=VerificationTaskStatus.DONE,
                         run_id="run-main-correct",
                         judgehost_task_id="",
                         result=execution_result("OK"),
                     ),
                     TaskCompletion(
                         task_id=task_id,
-                        status=VerificationTaskStore.TASK_DONE,
+                        status=VerificationTaskStatus.DONE,
                         run_id="run-ac-python",
                         judgehost_task_id="",
                         result=execution_result(

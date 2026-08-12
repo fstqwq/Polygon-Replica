@@ -21,7 +21,7 @@ from app.service.verification.task_completion import (
     TaskCompletion,
 )
 from app.service.verification.task_store import VerificationTaskRow, VerificationTaskStore
-from app.service.verification.types import Status
+from app.service.verification.types import VerificationStatus, VerificationTaskStatus
 
 
 TASK_GENERATE_INPUT = "generate-input"
@@ -109,7 +109,7 @@ class VerificationTaskCompletionService:
         normalized_error = normalize_display_text(error_text)
         return TaskCompletion(
             task_id=task_row["id"],
-            status=VerificationTaskStore.TASK_FAILED,
+            status=VerificationTaskStatus.FAILED,
             run_id=run_id,
             judgehost_task_id=task_row["judgehost_task_id"],
             result=execution_result_with_outcome(
@@ -196,7 +196,7 @@ class VerificationTaskCompletionService:
             )
         return TaskCompletion(
             task_id=task_row["id"],
-            status=VerificationTaskStore.TASK_DONE,
+            status=VerificationTaskStatus.DONE,
             run_id=run_id,
             judgehost_task_id=task_row["judgehost_task_id"],
             result=result,
@@ -237,7 +237,7 @@ class VerificationTaskCompletionService:
             )
         return TaskCompletion(
             task_id=task_row["id"],
-            status=VerificationTaskStore.TASK_DONE,
+            status=VerificationTaskStatus.DONE,
             run_id=run_id,
             judgehost_task_id=task_row["judgehost_task_id"],
             result=result,
@@ -253,7 +253,7 @@ class VerificationTaskCompletionService:
         test_name = task_row["test_name"]
         run_id = report["run_id"] or task_row["run_id"]
         result = report["execution_result"]
-        report_ok = report["status"] == Status.OK.value
+        report_ok = report["status"] == VerificationStatus.OK.value
 
         if report["missing_case_result"]:
             error_text = _final_error(
@@ -291,7 +291,7 @@ class VerificationTaskCompletionService:
         if matched:
             return TaskCompletion(
                 task_id=task_row["id"],
-                status=VerificationTaskStore.TASK_DONE,
+                status=VerificationTaskStatus.DONE,
                 run_id=run_id,
                 judgehost_task_id=task_row["judgehost_task_id"],
                 result=result,
@@ -386,7 +386,7 @@ class VerificationTaskCompletionService:
             (
                 TaskCompletion(
                     task_id=task_row["id"],
-                    status=VerificationTaskStore.TASK_CANCELLED,
+                    status=VerificationTaskStatus.CANCELLED,
                     run_id=task_row["run_id"],
                     judgehost_task_id=task_row["judgehost_task_id"],
                     result=normalize_execution_result(error=cancel_reason),

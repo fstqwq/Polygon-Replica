@@ -6,7 +6,7 @@ import sqlite3
 from app.service.execution.policy import normalize_execution_result
 from app.service.verification.lifecycle import verification_task_id
 from app.service.verification.task_completion import TaskCompletion
-from app.service.verification.task_store import VerificationTaskStore
+from app.service.verification.types import VerificationTaskStatus
 
 from tests.identity_helpers import canonical_test_verification_id
 from tests.verification_service_fixture import (
@@ -45,7 +45,7 @@ class TestVerificationCompletionService(VerificationServiceTestBase):
             ),
         )
 
-        self.assertEqual(final_result.status, VerificationTaskStore.TASK_FAILED)
+        self.assertEqual(final_result.status, VerificationTaskStatus.FAILED)
         self.assertEqual(final_result.verdict, "WA")
         self.assertEqual(
             final_result.fail_reason,
@@ -85,7 +85,7 @@ class TestVerificationCompletionService(VerificationServiceTestBase):
             ),
         )
 
-        self.assertEqual(final_result.status, VerificationTaskStore.TASK_FAILED)
+        self.assertEqual(final_result.status, VerificationTaskStatus.FAILED)
         self.assertEqual(final_result.verdict, "FL")
         self.assertEqual(final_result.error_text, "generated input output was truncated for 020.in")
         self.assertEqual(final_result.feedback_text, "generated input output was truncated for 020.in")
@@ -128,7 +128,7 @@ class TestVerificationCompletionService(VerificationServiceTestBase):
             ),
         )
 
-        self.assertEqual(final_result.status, VerificationTaskStore.TASK_FAILED)
+        self.assertEqual(final_result.status, VerificationTaskStatus.FAILED)
         self.assertEqual(final_result.verdict, "CE")
         self.assertEqual(final_result.error_text, detailed_error)
         self.assertEqual(final_result.compile_log, detailed_error)
@@ -165,7 +165,7 @@ class TestVerificationCompletionService(VerificationServiceTestBase):
             ),
         )
 
-        self.assertEqual(final_result.status, VerificationTaskStore.TASK_FAILED)
+        self.assertEqual(final_result.status, VerificationTaskStatus.FAILED)
         self.assertEqual(final_result.verdict, "RE")
         self.assertIn("accepted solution crashed", final_result.fail_reason)
 
@@ -199,7 +199,7 @@ class TestVerificationCompletionService(VerificationServiceTestBase):
             ),
         )
 
-        self.assertEqual(completion.status, VerificationTaskStore.TASK_DONE)
+        self.assertEqual(completion.status, VerificationTaskStatus.DONE)
         self.assertEqual(completion.verdict, "CE")
         self.assertEqual(completion.compile_log, "compiler rejected the source")
         self.assertEqual(completion.fail_reason, "")
@@ -233,7 +233,7 @@ class TestVerificationCompletionService(VerificationServiceTestBase):
             ),
         )
 
-        self.assertEqual(completion.status, VerificationTaskStore.TASK_DONE)
+        self.assertEqual(completion.status, VerificationTaskStatus.DONE)
         self.assertEqual(completion.verdict, "RE")
         self.assertEqual(completion.error_text, "process exited with status 1")
         self.assertEqual(completion.fail_reason, "")
@@ -260,7 +260,7 @@ class TestVerificationCompletionService(VerificationServiceTestBase):
                     "test_name": "001.in",
                     "expected_behavior": "accepted",
                     "queue_index": 1,
-                    "status": VerificationTaskStore.TASK_PENDING,
+                    "status": VerificationTaskStatus.PENDING,
                 }
             ],
             edges=[],
@@ -269,7 +269,7 @@ class TestVerificationCompletionService(VerificationServiceTestBase):
         diagnostics_json = json.dumps([{"level": "error", "message": "y" * 5000}], separators=(",", ":"))
         task_store.commit_task_completions((TaskCompletion(
             task_id=task_id,
-            status=VerificationTaskStore.TASK_FAILED,
+            status=VerificationTaskStatus.FAILED,
             run_id="r-cap",
             judgehost_task_id="jt-cap",
             result=normalize_execution_result(
@@ -335,7 +335,7 @@ class TestVerificationCompletionService(VerificationServiceTestBase):
                     "test_name": "001.in",
                     "expected_behavior": "accepted",
                     "queue_index": 1,
-                    "status": VerificationTaskStore.TASK_PENDING,
+                    "status": VerificationTaskStatus.PENDING,
                 },
                 {
                     "id": duplicate_id,
@@ -345,7 +345,7 @@ class TestVerificationCompletionService(VerificationServiceTestBase):
                     "test_name": "002.in",
                     "expected_behavior": "accepted",
                     "queue_index": 2,
-                    "status": VerificationTaskStore.TASK_PENDING,
+                    "status": VerificationTaskStatus.PENDING,
                 },
                 {
                     "id": main_id,
@@ -355,7 +355,7 @@ class TestVerificationCompletionService(VerificationServiceTestBase):
                     "test_name": "002.in",
                     "expected_behavior": "accepted",
                     "queue_index": 3,
-                    "status": VerificationTaskStore.TASK_PENDING,
+                    "status": VerificationTaskStatus.PENDING,
                 },
                 {
                     "id": solution_id,
@@ -365,7 +365,7 @@ class TestVerificationCompletionService(VerificationServiceTestBase):
                     "test_name": "002.in",
                     "expected_behavior": "wrong_answer",
                     "queue_index": 4,
-                    "status": VerificationTaskStore.TASK_PENDING,
+                    "status": VerificationTaskStatus.PENDING,
                 },
             ],
             edges=[
@@ -375,7 +375,7 @@ class TestVerificationCompletionService(VerificationServiceTestBase):
         )
         task_store.commit_task_completions((TaskCompletion(
             task_id=owner_id,
-            status=VerificationTaskStore.TASK_DONE,
+            status=VerificationTaskStatus.DONE,
             run_id="r-owner",
             judgehost_task_id="jt-owner",
             result=make_execution_result(
@@ -386,7 +386,7 @@ class TestVerificationCompletionService(VerificationServiceTestBase):
         ),))
         task_store.commit_task_completions((TaskCompletion(
             task_id=duplicate_id,
-            status=VerificationTaskStore.TASK_DONE,
+            status=VerificationTaskStatus.DONE,
             run_id="r-duplicate",
             judgehost_task_id="jt-duplicate",
             result=make_execution_result(
@@ -403,7 +403,7 @@ class TestVerificationCompletionService(VerificationServiceTestBase):
             str(rows[duplicate_id]["feedback_text"]),
         )
         for task_id in (main_id, solution_id):
-            self.assertEqual(str(rows[task_id]["status"]), VerificationTaskStore.TASK_DONE)
+            self.assertEqual(str(rows[task_id]["status"]), VerificationTaskStatus.DONE)
             self.assertEqual(str(rows[task_id]["verdict"]), "SK")
             self.assertEqual(
                 str(rows[task_id]["feedback_text"]),
@@ -437,7 +437,7 @@ class TestVerificationCompletionService(VerificationServiceTestBase):
                     "test_name": "001.in",
                     "expected_behavior": "accepted",
                     "queue_index": 1,
-                    "status": VerificationTaskStore.TASK_PENDING,
+                    "status": VerificationTaskStatus.PENDING,
                 },
                 {
                     "id": main_id,
@@ -447,7 +447,7 @@ class TestVerificationCompletionService(VerificationServiceTestBase):
                     "test_name": "001.in",
                     "expected_behavior": "accepted",
                     "queue_index": 2,
-                    "status": VerificationTaskStore.TASK_PENDING,
+                    "status": VerificationTaskStatus.PENDING,
                 },
             ],
             edges=[],
@@ -460,7 +460,7 @@ class TestVerificationCompletionService(VerificationServiceTestBase):
             (
                 TaskCompletion(
                     task_id=generate_id,
-                    status=VerificationTaskStore.TASK_DONE,
+                    status=VerificationTaskStatus.DONE,
                     run_id="r-generate-evidence",
                     judgehost_task_id="jt-generate-evidence",
                     result=make_execution_result(
@@ -471,7 +471,7 @@ class TestVerificationCompletionService(VerificationServiceTestBase):
                 ),
                 TaskCompletion(
                     task_id=main_id,
-                    status=VerificationTaskStore.TASK_DONE,
+                    status=VerificationTaskStatus.DONE,
                     run_id="r-main-evidence",
                     judgehost_task_id="jt-main-evidence",
                     result=main_result,
@@ -536,7 +536,7 @@ class TestVerificationCompletionService(VerificationServiceTestBase):
                     "test_name": "001.in",
                     "expected_behavior": "accepted",
                     "queue_index": 1,
-                    "status": VerificationTaskStore.TASK_PENDING,
+                    "status": VerificationTaskStatus.PENDING,
                 }
             ],
             edges=[],
@@ -552,7 +552,7 @@ class TestVerificationCompletionService(VerificationServiceTestBase):
                     (
                         TaskCompletion(
                             task_id=task_id,
-                            status=VerificationTaskStore.TASK_FAILED,
+                            status=VerificationTaskStatus.FAILED,
                             run_id="r-rollback",
                             judgehost_task_id="jt-rollback",
                             result=make_execution_result(
@@ -573,7 +573,7 @@ class TestVerificationCompletionService(VerificationServiceTestBase):
             for row in task_store.list_rows(verification_id)
             if str(row["id"]) == task_id
         )
-        self.assertEqual(row["status"], VerificationTaskStore.TASK_PENDING)
+        self.assertEqual(row["status"], VerificationTaskStatus.PENDING)
         self.assertEqual(row["result"].verdict, "")
         self.assertEqual(
             self.verification_service.verification_artifact_refs(verification_id),
@@ -607,14 +607,14 @@ class TestVerificationCompletionService(VerificationServiceTestBase):
                     "test_name": "001.in",
                     "expected_behavior": "accepted",
                     "queue_index": 1,
-                    "status": VerificationTaskStore.TASK_PENDING,
+                    "status": VerificationTaskStatus.PENDING,
                 }
             ],
             edges=[],
         )
         first = TaskCompletion(
             task_id=task_id,
-            status=VerificationTaskStore.TASK_DONE,
+            status=VerificationTaskStatus.DONE,
             run_id="r-first",
             judgehost_task_id="jt-first",
             result=make_execution_result(
@@ -630,7 +630,7 @@ class TestVerificationCompletionService(VerificationServiceTestBase):
             (
                 TaskCompletion(
                     task_id=task_id,
-                    status=VerificationTaskStore.TASK_FAILED,
+                    status=VerificationTaskStatus.FAILED,
                     run_id="r-conflict",
                     judgehost_task_id="jt-conflict",
                     result=make_execution_result(
@@ -655,7 +655,7 @@ class TestVerificationCompletionService(VerificationServiceTestBase):
             for row in task_store.list_rows(verification_id)
             if str(row["id"]) == task_id
         )
-        self.assertEqual(row["status"], VerificationTaskStore.TASK_DONE)
+        self.assertEqual(row["status"], VerificationTaskStatus.DONE)
         self.assertEqual(row["verdict"], "OK")
         refs = self.verification_service.verification_artifact_refs(
             verification_id
@@ -698,7 +698,7 @@ class TestVerificationCompletionService(VerificationServiceTestBase):
                     "test_name": "001.in",
                     "expected_behavior": "accepted",
                     "queue_index": 1,
-                    "status": VerificationTaskStore.TASK_PENDING,
+                    "status": VerificationTaskStatus.PENDING,
                 },
                 {
                     "id": diagnostic_task_id,
@@ -708,7 +708,7 @@ class TestVerificationCompletionService(VerificationServiceTestBase):
                     "test_name": "002.in",
                     "expected_behavior": "accepted",
                     "queue_index": 2,
-                    "status": VerificationTaskStore.TASK_PENDING,
+                    "status": VerificationTaskStatus.PENDING,
                 },
             ],
             edges=[],
@@ -733,7 +733,7 @@ class TestVerificationCompletionService(VerificationServiceTestBase):
             (
                 TaskCompletion(
                     task_id=first_failure_id,
-                    status=VerificationTaskStore.TASK_FAILED,
+                    status=VerificationTaskStatus.FAILED,
                     run_id="r-first-failure",
                     judgehost_task_id="jt-first-failure",
                     result=make_execution_result(
@@ -747,7 +747,7 @@ class TestVerificationCompletionService(VerificationServiceTestBase):
                 ),
                 TaskCompletion(
                     task_id=diagnostic_task_id,
-                    status=VerificationTaskStore.TASK_DONE,
+                    status=VerificationTaskStatus.DONE,
                     run_id="r-amended",
                     judgehost_task_id="jt-amended",
                     result=original_result,
@@ -770,7 +770,7 @@ class TestVerificationCompletionService(VerificationServiceTestBase):
             for row in task_store.list_rows(verification_id)
         }
         persisted = rows[diagnostic_task_id]
-        self.assertEqual(persisted["status"], VerificationTaskStore.TASK_DONE)
+        self.assertEqual(persisted["status"], VerificationTaskStatus.DONE)
         self.assertEqual(persisted["verdict"], "OK")
         self.assertEqual(persisted["result"].passes, original_result.passes)
         self.assertEqual(

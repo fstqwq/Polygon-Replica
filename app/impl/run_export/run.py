@@ -43,7 +43,7 @@ from app.impl.run_export.query import (
     _rerun_solution_paths_from_verification,
     _run_detail_use_compact_layout,
 )
-from app.service.verification.types import ACTIVE, Status
+from app.service.verification.types import ACTIVE, VerificationStatus
 
 _C = config.config_values
 logger = logging.getLogger(__name__)
@@ -407,7 +407,7 @@ def _start_run_verification(
         "mode": run_mode,
         "execution_model": "task-dag",
         "async": True,
-        "status": Status.QUEUED.value,
+        "status": VerificationStatus.QUEUED.value,
         "bypass_case_result_cache": bypass_case_result_cache_flag,
         "task_graph": True,
         "verification_source": verification_source,
@@ -433,13 +433,13 @@ def _start_run_verification(
         )
     except Exception as exc:
         failed_details = dict(details)
-        failed_details["status"] = Status.FAILED.value
+        failed_details["status"] = VerificationStatus.FAILED.value
         failed_details["error"] = str(exc)
         audit(ctx["user"]["id"], ctx["problem"]["id"], audit_action, failed_details)
         return redirect_response(f"/problems/{problem}/run", status_code=303, message=str(exc))
     if not started:
         failed_details = dict(details)
-        failed_details["status"] = Status.FAILED.value
+        failed_details["status"] = VerificationStatus.FAILED.value
         failed_details["error"] = "verification already running"
         audit(ctx["user"]["id"], ctx["problem"]["id"], audit_action, failed_details)
         return redirect_response(f"/problems/{problem}/run", status_code=303, message="verification already running")

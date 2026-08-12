@@ -6,12 +6,13 @@ from app.service.execution.codec import compile_diagnostics_payload
 from app.service.execution.model import ExecutionResult
 from app.service.platform.hashing import canonical_json
 from app.service.verification.lifecycle import ParentTransition
+from app.service.verification.types import VerificationTaskStatus
 
 
 @dataclass(frozen=True)
 class TaskCompletion:
     task_id: str
-    status: str
+    status: VerificationTaskStatus
     run_id: str
     judgehost_task_id: str
     result: ExecutionResult

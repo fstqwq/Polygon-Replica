@@ -670,10 +670,10 @@ class ProblemPackageService:
         )
         build_id = build["id"]
         verification_id = build["verification_id"] or verification_id
-        self.store.mark_build_running(build_id, phase="snapshot")
         snapshot_parent = self.settings.artifacts_root / ".staging" / f"snapshot-{uuid.uuid4().hex}"
         snapshot = snapshot_parent / "source"
         try:
+            self.store.mark_build_running(build_id, phase="snapshot")
             extract_git_archive(revision.bare_repo, revision.source_commit, snapshot, timeout=120)
             config_snapshot = self.db.config_values.snapshot()
             source_tree = load_problem_source_tree(

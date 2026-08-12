@@ -6,8 +6,7 @@ Preview compilation is synchronous in the HTTP request. Verification, custom
 run, export, and contest build jobs are submitted to one bounded process-local
 worker queue. Queue records and `worker-queue-events.jsonl` are runtime
 diagnostics; they are cleared at startup and do not recover work after restart.
-Durable job summary rows are reconciled to failed or cancelled states during
-startup.
+Durable job summary rows are reconciled to failed states during startup.
 
 A custom run is represented as a verification with the custom kind. It uses the
 same task storage, Judgehost dispatch, results, and artifact model rather than a
@@ -19,24 +18,27 @@ Verification kinds are `all`, `sample`, and `custom`. Their reachable durable
 state transitions are:
 
 ```text
-absent -> queued -> running -> ok | failed
-                 \-----------> failed
+absent -> queued -> running -> ok | failed | cancelled
+          |  \---------------> failed | cancelled
 ```
 
 Admission inserts a `queued` verification with its request identity and no task
 rows. Planning uses a frozen workspace snapshot. Activation changes that row
 from `queued` to `running` and writes the complete detail and complete task graph
 in one transaction. A plan is installed once: it is never deleted, replaced, or
-partially extended. Cancellation or planning/queue failure may instead change a
-`queued` verification directly to `failed`.
+partially extended. Explicit user cancellation changes an active verification
+to `cancelled`; planning, queue, infrastructure, and startup interruption
+change it to `failed`. Reason text never determines the lifecycle state.
 
 `pending` is a task-derived display state, not a persisted verification
 lifecycle state. An `ok` verification has a complete graph, terminal tasks, and
 completed sanity processing. A sanity warning or failure remains attention
 detail on an `ok` verification; it does not reopen or fail the task decision.
 A `failed` verification may have no graph when it failed before activation. A
-terminal verification has no open task rows and cannot return to an active
-state. Startup fails all verification work left in `queued` or `running`;
+`cancelled` verification records an explicit user action. Either terminal
+transition atomically cancels remaining open tasks without rewriting completed
+task evidence. A terminal verification cannot return to an active state.
+Startup fails all verification work left in `queued` or `running`;
 coordinators and leases are not reconstructed.
 
 A verification plan has two related identities:
@@ -159,16 +161,17 @@ does not rewrite the completed testcase tasks, but it stores the verification's
 first failure reason. Independent solution tasks continue, and once no task
 remains open that stored mismatch makes the parent `failed`. Thus an expected CE
 is a successful task and can satisfy a program requirement even when Judgehost
-reports the batch as failed. Generator, `main-correct`, and cancellation
-failures are hard failures: they fail the parent and cancel all remaining open
-tasks immediately in the same transaction.
+reports the batch as failed. Generator, `main-correct`, and unexpected task
+cancellation failures are hard failures: they fail the parent and cancel all
+remaining open tasks immediately in the same transaction.
 
-Cancellation atomically changes the parent to `failed` and every open task to
-`cancelled`. Already leased or reporting cases then drain in process-local
+Explicit user cancellation atomically changes the parent to `cancelled` and
+every open task to `cancelled`. Already leased or reporting cases then drain in process-local
 Judgehost state, but their late ordinary results cannot change the durable
-decision. Cancellation and scheduler failure always order their side effects as
-the SQLite parent/task transition, then the coordinator event, then Judgehost
-drain. Drain is attempted even when the in-memory cancellation notification
+decision. User cancellation and scheduler failure always order their side
+effects as the SQLite parent/task transition, then the coordinator event, then
+Judgehost drain. Scheduler failure uses `failed`; user cancellation uses
+`cancelled`. Drain is attempted even when the in-memory cancellation notification
 fails; a failed cancel notification falls back to a closed event, and idle
 coordinators reconcile task rows and compare the durable parent state. Drain
 has one immediate
