@@ -79,12 +79,12 @@ Before the worker queue starts, the application:
 3. cancels unfinished preview, contest-job, and Judgehost runtime work;
 4. resets worker history in memory and removes its JSONL;
 5. clears the process-local runtime cache index;
-6. deletes and recreates `cache_root/artifacts` and `cache_root/runtime`.
+6. deletes every child of `cache_root` and recreates the empty root.
 
 Preview/verification cache payloads, runtime snapshots/blobs, JudgeFS data,
-Judgehost workdirs, and worker history do not survive startup. Other cache-root
-children are not part of this general startup deletion. Durable terminal summary
-rows can survive after their cache payloads are cleared.
+Judgehost workdirs, worker history, uploads, and import drafts do not survive
+startup. Durable terminal summary rows can survive after their cache payloads
+are cleared. Cache deletion failure aborts startup before workers begin.
 
 ## Maintenance cleanup
 

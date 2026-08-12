@@ -17,16 +17,22 @@ from tests.identity_helpers import canonical_test_verification_id
 
 
 class TestRuntimeStartupE2E(BackendE2ETestBase):
-    def test_startup_clear_all_caches_wipes_cache_root_artifacts_and_runtime(self) -> None:
+    def test_startup_clear_all_caches_wipes_entire_cache_root(self) -> None:
         artifact_file = runtime.storage_layout.cache_artifacts_root / "verifications" / "ver-test" / "logs" / "compile.log"
         runtime_file = runtime.storage_layout.runtime_root / "blobs" / "aa" / ("a" * 64)
         durable_log = runtime.storage_layout.runtime_root / "worker-queue-events.jsonl"
+        upload_file = runtime.storage_layout.archive_upload_root / "upload.zip"
+        contest_draft = runtime.storage_layout.contest_import_draft_root / "draft.zip"
         artifact_file.parent.mkdir(parents=True, exist_ok=True)
         runtime_file.parent.mkdir(parents=True, exist_ok=True)
         durable_log.parent.mkdir(parents=True, exist_ok=True)
+        upload_file.parent.mkdir(parents=True, exist_ok=True)
+        contest_draft.parent.mkdir(parents=True, exist_ok=True)
         artifact_file.write_text("{}", encoding="utf-8")
         runtime_file.write_text("ok\n", encoding="utf-8")
         durable_log.write_text("event\n", encoding="utf-8")
+        upload_file.write_bytes(b"upload")
+        contest_draft.write_bytes(b"draft")
 
         with patch.object(runtime.runtime_cache_index, "clear_all", return_value=None), patch.object(
             runtime.worker_queue_service,
@@ -37,11 +43,25 @@ class TestRuntimeStartupE2E(BackendE2ETestBase):
 
         reset_history.assert_called_once_with()
 
-        self.assertTrue(runtime.storage_layout.cache_artifacts_root.exists())
-        self.assertTrue(runtime.storage_layout.runtime_root.exists())
+        self.assertTrue(runtime.storage_layout.cache_root.exists())
         self.assertFalse(artifact_file.exists())
         self.assertFalse(runtime_file.exists())
         self.assertFalse(durable_log.exists())
+        self.assertFalse(upload_file.exists())
+        self.assertFalse(contest_draft.exists())
+
+    def test_startup_cache_clear_failure_is_fatal(self) -> None:
+        with patch.object(
+            runtime.worker_queue_service,
+            "reset_runtime_history",
+            return_value=None,
+        ), patch.object(
+            runtime.runtime_cache_index,
+            "clear_all",
+            side_effect=RuntimeError("cache is busy"),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "cache is busy"):
+                _startup_clear_all_caches(runtime)
 
     def test_startup_recovery_failure_preserves_runtime_storage(self) -> None:
         context = runtime.workspace_service.workspace_context(

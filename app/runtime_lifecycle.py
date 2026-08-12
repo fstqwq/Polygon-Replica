@@ -1,10 +1,10 @@
 """Startup and shutdown operations for an explicit application runtime."""
 
-import shutil
 import warnings
 
 from app.db import now_iso
 from app.runtime import ApplicationRuntime
+from app.service.platform.maintenance.filesystem import ArtifactCleanupFilesystem
 
 
 def _startup_fail_summary_rows(
@@ -41,27 +41,9 @@ def _startup_cancel_judgehost_inflight(
 
 
 def _startup_clear_all_caches(runtime: ApplicationRuntime) -> None:
-    try:
-        runtime.worker_queue_service.reset_runtime_history()
-    except Exception as exc:  # pylint: disable=broad-exception-caught
-        warnings.warn(f"startup worker queue history clear failed: {exc}", RuntimeWarning)
-    try:
-        runtime.runtime_cache_index.clear_all()
-    except Exception as exc:  # pylint: disable=broad-exception-caught
-        warnings.warn(f"startup runtime cache index clear failed: {exc}", RuntimeWarning)
-    for root, label in (
-        (runtime.storage_layout.cache_artifacts_root.resolve(), "artifact cache"),
-        (runtime.storage_layout.runtime_root.resolve(), "runtime cache"),
-    ):
-        try:
-            if root.exists() and root.is_dir() and (not root.is_symlink()):
-                shutil.rmtree(root, ignore_errors=True)
-        except Exception as exc:  # pylint: disable=broad-exception-caught
-            warnings.warn(f"startup {label} clear failed: {exc}", RuntimeWarning)
-        try:
-            root.mkdir(parents=True, exist_ok=True)
-        except Exception as exc:  # pylint: disable=broad-exception-caught
-            warnings.warn(f"startup {label} recreate failed: {exc}", RuntimeWarning)
+    runtime.worker_queue_service.reset_runtime_history()
+    runtime.runtime_cache_index.clear_all()
+    ArtifactCleanupFilesystem.clear_root(runtime.storage_layout.cache_root.resolve())
 
 
 def _startup_reset_runtime_state(runtime: ApplicationRuntime) -> None:
