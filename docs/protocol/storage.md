@@ -78,6 +78,9 @@ state; and vacuums SQLite. Recreating those explicitly registered cleanup-safe
 tables removes every row and any extra local columns in that domain. Unknown
 tables and durable problem, user, workspace, contest, membership, contest
 attachment, configuration, and backup data are not guessed at or removed.
+The database stage also drops the explicitly registered redundant indexes that
+are already covered by current `UNIQUE` or composite primary-key constraints.
+It does not infer or remove other operator-created indexes.
 Current-process status is held by the in-memory maintenance snapshot; after a
 restart, the recovery operation is a safe rerun.
 

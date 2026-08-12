@@ -34,6 +34,34 @@ themselves to add a test. An uncovered branch can be dead code that should be
 deleted. A completed fix does not automatically need a permanent regression
 test.
 
+## Keeping and retiring tests
+
+A permanent test must have an owner, an observable contract, and a distinct
+failure that it detects. State all three without referring to the commit that
+introduced the test:
+
+- the product, protocol, or service document that owns the behavior;
+- the externally visible or durable outcome being observed; and
+- the credible implementation regression that can break this test while the
+  other retained tests still pass.
+
+If one of these cannot be identified, delete the test. A test is also a removal
+candidate when it duplicates an owning scenario, only detects a helper rewrite,
+asserts presentation that has no defined contract, or needs disproportionate
+fixture setup to observe an incidental detail. Fixing a bug explains why a test
+was introduced; it does not give that test permanent status.
+
+When a contract changes, replace the old expectation instead of preserving both
+histories. Do not assert that a removed table, column, route, field, compatibility
+shape, or implementation symbol remains absent. Assert the current behavior that
+would be wrong if the obsolete shape were accidentally used. Deleted history is
+not a second public contract.
+
+During a suite audit, review tests individually rather than retaining an entire
+module by category. Keep the smallest scenario that owns each behavior, move a
+shared domain invariant to its service test, and delete the weaker duplicates.
+Do not rewrite a test into a tautology merely to preserve its name or count.
+
 ## UI assertions
 
 Most UI changes do not require a new assertion. A UI test performs a meaningful
@@ -60,6 +88,21 @@ Shared domain behavior belongs in its owning service or protocol test instead
 of being repeated on every page. When a UI fix changes an existing scenario,
 replace its obsolete expectation or simplify the scenario; do not append one
 assertion per fix or restate setup facts after the outcome is demonstrated.
+
+Resource classification does not establish test value. A test may belong to the
+`e2e` resource group because it loads the global application or invokes a public
+route, while still being a low-value presentation assertion that should be
+deleted. Conversely, an end-to-end scenario is justified when crossing the real
+boundary is essential evidence: routing and authorization reach the intended
+service, a submitted operation changes durable state, an asynchronous workflow
+reaches its terminal result, or an artifact can be retrieved through its public
+contract.
+
+For a user capability, normally keep one representative successful journey and
+only the failure cases that protect distinct authorization, atomicity, security,
+or recovery behavior. Do not create one E2E test per page, control, status label,
+historical bug, or rendering branch. Loading a page and finding a sentence is not
+an end-to-end product outcome.
 
 ## Assertion discipline
 
@@ -127,6 +170,20 @@ published problem, materializes that commit through another full verification,
 and exports the contest statement PDF with two `xelatex` passes. The final
 assertions compare the verified `7`/`49` sample payloads used by `problem.tex`,
 the downloaded PDF and frozen commit/materialization identities.
+
+The deployed journey then registers an outsider, a reader, and two writers. A
+role-aware page walk visits the stable HTML routes as anonymous, outsider,
+reader, writer, and owner/system-administrator actors. It checks access outcomes
+and rejects unexpected server errors without pinning sentences, CSS selectors,
+or incidental markup. Pages that require a runtime identity are exercised by
+the workflow that creates that identity.
+
+Finally, Alice and Bob start with separate workspaces on the same published
+revision and edit the same path. Alice publishes first. Bob's stale publish must
+leave published Git and his local edit unchanged; Bob then resolves the conflict
+through the public merge review and apply endpoints and publishes a linear child
+of Alice's revision. The assertions cover Git ancestry, workspace isolation,
+and selected file bytes rather than merge-page presentation.
 
 Run the isolated E2E from the repository root:
 

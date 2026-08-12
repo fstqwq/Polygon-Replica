@@ -18,10 +18,12 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
 
 from e2e_mock_contest import (
+    CONTEST,
     assert_contest_pdf,
     start_contest_pdf,
     wait_for_contest_job,
 )
+from e2e_mock_roles import exercise_role_pages_and_collaboration
 from runner import (
     _assert_artifact_refs,
     _assert_mock_evidence,
@@ -352,6 +354,11 @@ def _agent_approve(
     scope: str,
 ) -> None:
     parsed = urlparse(approve_url)
+    review = client.get(parsed.path)
+    if review.status_code != 200:
+        raise RuntimeError(
+            f"Agent approval page returned {review.status_code}: {review.text[:500]}"
+        )
     response = _post(
         client,
         parsed.path,
@@ -456,6 +463,56 @@ def _login(client: httpx.Client) -> None:
         raise RuntimeError(
             f"login did not grant access to /problems: {response.status_code}"
         )
+
+
+def _register_user(username: str, password: str) -> httpx.Client:
+    client = _client()
+    try:
+        fields = _hidden_inputs(client.get("/register"))
+        csrf_token = _required_field(fields, "csrf_token")
+        salt = _required_field(fields, "password_salt")
+        iterations = int(_required_field(fields, "password_iters"))
+        verifier = _password_verifier(password, salt, iterations)
+        envelope = _password_envelope(
+            client,
+            scope="register-password",
+            purpose="register",
+            username=username,
+            csrf_token=csrf_token,
+            verifier=verifier,
+        )
+        response = _post(
+            client,
+            "/register",
+            {
+                "username": username,
+                "email": f"{username}@gmail.com",
+                "password": "",
+                "password_confirm": "",
+                "csrf_token": csrf_token,
+                "password_salt": salt,
+                "password_iters": str(iterations),
+                "next": "/problems",
+                "terms_accepted": "yes",
+                **envelope,
+            },
+        )
+        _install_auth_cookie(client, response)
+        if response.headers.get("location") != "/problems":
+            raise RuntimeError(
+                f"registration for {username!r} redirected unexpectedly: "
+                f"{response.headers!r}"
+            )
+        session_check = client.get("/problems")
+        if session_check.status_code != 200:
+            raise RuntimeError(
+                f"registration for {username!r} did not establish a session: "
+                f"{session_check.status_code}"
+            )
+        return client
+    except Exception:
+        client.close()
+        raise
 
 
 def _assert_fixture_shape() -> None:
@@ -1230,6 +1287,16 @@ def verify_and_commit() -> None:
                 job=contest_job,
                 expected_head=head,
             )
+        collaboration_head = exercise_role_pages_and_collaboration(
+            admin=client,
+            client_factory=_client,
+            register_user=_register_user,
+            post_redirect=_post,
+            problem=PROBLEM,
+            contest=CONTEST,
+            verification_id=verification_id,
+            initial_head=head,
+        )
     print(
         "e2e-mock completed deployment, sample preview, verification, commit, "
         "Native/ICPC exports, and contest PDF export "
@@ -1238,7 +1305,8 @@ def verify_and_commit() -> None:
         f"native_job={native_job_id} native_archive={native_archive} "
         f"icpc_job={icpc_job_id} icpc_archive={icpc_archive} "
         f"materialization_verification={materialization_verification_id} "
-        f"contest_job={contest_job_id} artifact={artifact_id}"
+        f"contest_job={contest_job_id} artifact={artifact_id} "
+        f"collaboration_head={collaboration_head}"
     )
 
 

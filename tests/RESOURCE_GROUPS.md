@@ -22,13 +22,18 @@ does not load or execute tests.
 | `unit` | Pure Python and small temporary files; no runtime config, SQLite, Git, workers, or subprocesses |
 | `service` | One owning component with explicit dependencies; SQLite, local files, Git, threads, and workers are allowed, but the global runtime and public HTTP/UI entry points are not |
 | `executor` | One owning component using compilers, shell scripts, bwrap, systemd checks, or TeX tools; the global runtime and public HTTP/UI entry points are not allowed |
-| `e2e` | A public HTTP, UI, agent, or Judgehost boundary, or a complete background workflow through workers and durable completion |
+| `e2e` | A public HTTP, UI, agent, or Judgehost boundary, or a complete background workflow through workers and durable completion. Classification describes resources, not whether a test deserves to exist. |
 
 Reference-package compatibility canaries belong to `service`; fixture size does
 not by itself define an execution boundary. A service test may use Git as its
 storage adapter, but host compilers, sandbox tools, and TeX belong to
 `executor`. Tests that load `app.main`, the global runtime config, TestClient,
 or the shared full-runtime fixture belong to `e2e`.
+
+An `e2e` assignment is not permission to pin incidental HTML. Retain a test in
+this group only when the public entry path is necessary to observe the behavior;
+otherwise move the invariant to its owning service test or delete a duplicate.
+The selection and retirement rules remain those in the testing policy.
 
 Run one group:
 

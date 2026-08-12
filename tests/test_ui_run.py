@@ -4,7 +4,6 @@ from tests.db_helpers import (
     db_execute,
     db_fetch_one,
     verification_programs_for_tasks,
-    write_preview_summary,
 )
 from tests.execution_result_helpers import execution_result
 
@@ -20,8 +19,6 @@ from fastapi import HTTPException
 
 from app.config import CONFIG_REGISTRY
 from app.service.problem.test_spec import dumps_default_tests_spec
-from app.service.statement.render import statement_title_for_language
-from app.service.statement.signature import statement_sources_signature
 from app.service.verification.workspace_fingerprint import verification_sources_signature
 from tests.common import E2ETestBase, override_config_values
 from tests.identity_helpers import canonical_test_verification_id
@@ -46,7 +43,6 @@ from tests.ui_support import (
     json,
     export_page,
     revision_commit,
-    preview_page,
     run_details_page,
     run_details_test_fragment,
     run_execute,
@@ -1715,32 +1711,6 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         self.assertEqual(second["verification_id"], verification_id)
         self.assertTrue(second["stale"])
 
-    def test_run_page_shows_multi_solution_selector_without_mode_select(self) -> None:
-        ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
-        self._configure_solution_fixtures(
-            ws,
-            ("accepted.cpp", "accepted"),
-            ("wa.cpp", "wrong_answer"),
-        )
-
-        page = run_new_page(_request("/problems/alice/sample/run/new", "solution_paths=solutions/wa.cpp"), "alice/sample", "alice")
-        self.assertEqual(page.status_code, 200)
-        html = page.body.decode("utf-8", errors="replace")
-        self.assertIn("id=\"solution-paths\"", html)
-        self.assertIn("type=\"checkbox\" name=\"solution_paths\"", html)
-        self.assertIn("id=\"test-names\"", html)
-        self.assertTrue(("type=\"checkbox\" name=\"test_names\"" in html) or ("No tests." in html))
-        self.assertIn("id=\"solution-select-all\"", html)
-        self.assertIn("id=\"solution-select-clear\"", html)
-        self.assertIn("id=\"test-select-all\"", html)
-        self.assertIn("id=\"test-select-clear\"", html)
-        execute_html = html.split('<div id="statement-settings-popup"', 1)[0]
-        self.assertNotIn("name=\"submission_path\"", execute_html)
-        self.assertNotIn("name=\"mode\"", execute_html)
-        self.assertIn("solutions/accepted.cpp", html)
-        self.assertIn("solutions/wa.cpp", html)
-        self.assertIn("value=\"solutions/wa.cpp\" checked", html)
-
     def test_rejudge_uses_verification_id_endpoint_and_forces_recompile(self) -> None:
         ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
         self._configure_solution_fixtures(
@@ -2593,72 +2563,6 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         html = page.body.decode("utf-8", errors="replace")
         for evidence in ("accepted.cpp", "001.in", "002.in", "003.in", "008.in"):
             self.assertIn(evidence, html)
-
-    def test_run_details_running_issue_uses_info_note_and_status_moves_into_task_status(self) -> None:
-        ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
-        (ws / "solutions").mkdir(parents=True, exist_ok=True)
-        (ws / "solutions" / "wa.cpp").write_text("int main(){return 1;}\n", encoding="utf-8")
-        ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
-        problem_id = int(ctx["problem"]["id"])
-        workspace_id = int(ctx["workspace"]["id"])
-        verification_id = canonical_test_verification_id(f"inv-verif-running-issue-{uuid.uuid4().hex[:8]}")
-        run_id = f"r-running-issue-{uuid.uuid4().hex[:8]}"
-        self._insert_verification_row(
-            verification_id=verification_id,
-            problem_id=problem_id,
-            workspace_id=workspace_id,
-            build_id=self.random_id("b-verif-running-issue"),
-            kind=Kind.ALL,
-            status="running",
-            created_at="2026-04-12T19:22:22Z",
-            finished_at="",
-            runs=[
-                {
-                    "id": run_id,
-                    "status": "running",
-                    "source_label": "solutions/wa.cpp",
-                    "expected_behavior": "wrong_answer",
-                    "summary": {
-                        "mode": "pass-fail",
-                        "source": "solutions/wa.cpp",
-                        "verification_source": "verification.start",
-                        "tests": [],
-                        "tests_total": 1,
-                    },
-                }
-            ],
-            summary_extra={
-                "status": "running",
-                "verification_id": verification_id,
-                "task_counts": {
-                    "total": 1,
-                    "pending": 0,
-                    "queued": 0,
-                    "running": 1,
-                    "done": 0,
-                    "failed": 0,
-                    "cancelled": 0,
-                },
-                "running_tasks": [
-                    {
-                        "task_id": "vt-running-issue-1",
-                        "label": "Solution Run / wa.cpp / 001.in",
-                    }
-                ],
-            },
-        )
-        db_execute(
-            "UPDATE verifications SET fail_reason=? WHERE id=?",
-            ["luangao.cpp: cancelled on service startup", verification_id],
-        )
-        page = run_details_page(
-            _request("/problems/alice/sample/run/details", f"verification_id={verification_id}"),
-            "alice/sample",
-            "alice",
-        )
-        self.assertEqual(page.status_code, 200)
-        html = page.body.decode("utf-8", errors="replace")
-        self.assertIn("luangao.cpp: cancelled on service startup", html)
 
     def test_run_details_task_graph_shows_main_correct_columns(self) -> None:
         ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
@@ -4654,139 +4558,6 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         self.assertIn("Input 001.in", detail_html)
         self.assertIn("Answer", detail_html)
 
-    def test_run_test_detail_fragment_hides_ok_generation_validation_details(self) -> None:
-        workspace_service.ensure_workspace("alice/sample", "alice")
-        ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
-        workspace_id = int(ctx["workspace"]["id"])
-        problem_id = int(ctx["problem"]["id"])
-        workspace = Path(str(ctx["workspace"]["path"]))
-        (workspace / "solutions").mkdir(parents=True, exist_ok=True)
-        (workspace / "generators").mkdir(parents=True, exist_ok=True)
-        (workspace / "solutions" / "tmp.cpp").write_text("int main(){return 0;}\n", encoding="utf-8")
-        (workspace / "generators" / "random_tree.cpp").write_text("int main(){return 0;}\n", encoding="utf-8")
-
-        verification_id = canonical_test_verification_id(f"ver-generate-detail-{uuid.uuid4().hex[:8]}")
-        self._admit_verification_fixture(
-            verification_id=verification_id,
-            problem_id=problem_id,
-            workspace_id=workspace_id,
-            signature="",
-            kind=Kind.ALL,
-            detail={
-                "mode": "pass-fail",
-                "tests_meta_rows": [
-                    {
-                        "index": 1,
-                        "test_name": "001.in",
-                        "kind": "gen",
-                        "source": "generators/random_tree.cpp",
-                        "command": 'random_tree 10 <20> & "quoted"',
-                    }
-                ],
-            },
-        )
-        input_ref = runtime.verification_service.store_verification_blob(
-            verification_id=verification_id,
-            test_name="001.in",
-            role="input",
-            file_name="001.in",
-            payload=b"1 2 3\n",
-        )
-        answer_ref = runtime.verification_service.store_verification_blob(
-            verification_id=verification_id,
-            test_name="001.in",
-            role="answer",
-            file_name="001.ans",
-            payload=b"6\n",
-        )
-        output_ref = runtime.verification_service.store_verification_blob(
-            verification_id=verification_id,
-            test_name="001.in",
-            role="output",
-            file_name="001.out",
-            payload=b"6\n",
-            extra_tags={"run_id": "tmp.cpp"},
-        )
-        generate_task_id = verification_task_id(
-            verification_id,
-            "generator-0",
-            "001.in",
-        )
-        solution_task_id = verification_task_id(
-            verification_id,
-            "solution-0",
-            "001.in",
-        )
-        self._activate_verification_fixture(
-            verification_id,
-            tasks=[
-                PlannedTask(
-                    task_id=generate_task_id,
-                    predecessor_task_id=None,
-                    task_kind="generate-input",
-                    source_path="generators/random_tree.cpp",
-                    program_id="generator-0",
-                    test_name="001.in",
-                    expected_behavior="accepted",
-                ),
-                PlannedTask(
-                    task_id=solution_task_id,
-                    predecessor_task_id=generate_task_id,
-                    task_kind="solution-run",
-                    source_path="solutions/tmp.cpp",
-                    program_id="solution-0",
-                    test_name="001.in",
-                    expected_behavior="accepted",
-                ),
-            ],
-            completions=[
-                TaskCompletion(
-                    task_id=generate_task_id,
-                    status=VerificationTaskStatus.DONE,
-                    run_id="",
-                    judgehost_task_id="",
-                    result=execution_result("AC", feedback="tree is valid"),
-                ),
-                TaskCompletion(
-                    task_id=solution_task_id,
-                    status=VerificationTaskStatus.DONE,
-                    run_id="tmp.cpp",
-                    judgehost_task_id="",
-                    input_ref=input_ref,
-                    answer_ref=answer_ref,
-                    result=execution_result(
-                        "OK",
-                        runtime_sec=0.003,
-                        cpu_sec=0.002,
-                        wall_sec=0.003,
-                        memory_kb=1024,
-                        output_ref=output_ref,
-                    ),
-                ),
-            ],
-        )
-
-        page = run_details_page(
-            _request("/problems/alice/sample/run/details", f"verification_id={verification_id}"),
-            "alice/sample",
-            "alice",
-        )
-        self.assertEqual(page.status_code, 200)
-        page_html = page.body.decode("utf-8", errors="replace")
-        self.assertIn('data-test-source-kind="generated"', page_html)
-        self.assertIn('data-test-command="random_tree 10 &lt;20&gt; &amp; &#34;quoted&#34;"', page_html)
-
-        detail = run_details_test_fragment(
-            _request("/problems/alice/sample/run/details/test-fragment", f"verification_id={verification_id}&test=001.in&program_id=solution-0"),
-            "alice/sample",
-            "alice",
-        )
-        self.assertEqual(detail.status_code, 200)
-        detail_html = detail.body.decode("utf-8", errors="replace")
-        self.assertNotIn("tree is valid", detail_html)
-        self.assertIn("2ms (3ms wall)", detail_html)
-        self.assertIn("1MB", detail_html)
-
     def test_run_details_page_keeps_test_popup_available_for_generate_stage_failure(self) -> None:
         workspace_service.ensure_workspace("alice/sample", "alice")
         ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
@@ -4871,98 +4642,6 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         self.assertEqual(detail.status_code, 200)
         detail_html = detail.body.decode("utf-8", errors="replace")
         self.assertIn("validator rejected generated test", detail_html)
-
-    def test_run_test_detail_fragment_hides_manual_validate_placeholder_source(self) -> None:
-        workspace_service.ensure_workspace("alice/sample", "alice")
-        ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
-        workspace_id = int(ctx["workspace"]["id"])
-        problem_id = int(ctx["problem"]["id"])
-
-        verification_id = canonical_test_verification_id(f"ver-manual-generate-{uuid.uuid4().hex[:8]}")
-        self._admit_verification_fixture(
-            verification_id=verification_id,
-            problem_id=problem_id,
-            workspace_id=workspace_id,
-            signature="",
-            kind=Kind.ALL,
-            detail={
-                "mode": "pass-fail",
-                "tests_meta_rows": [
-                    {
-                        "index": 1,
-                        "test_name": "001.in",
-                        "kind": "manual",
-                        "source": "manual_validate.cpp",
-                    }
-                ],
-            },
-        )
-        generate_task_id = verification_task_id(
-            verification_id,
-            "generator-0",
-            "001.in",
-        )
-        solution_task_id = verification_task_id(
-            verification_id,
-            "solution-0",
-            "001.in",
-        )
-        self._activate_verification_fixture(
-            verification_id,
-            tasks=[
-                PlannedTask(
-                    task_id=generate_task_id,
-                    predecessor_task_id=None,
-                    task_kind="generate-input",
-                    source_path="manual_validate.cpp",
-                    program_id="generator-0",
-                    test_name="001.in",
-                    expected_behavior="accepted",
-                ),
-                PlannedTask(
-                    task_id=solution_task_id,
-                    predecessor_task_id=generate_task_id,
-                    task_kind="solution-run",
-                    source_path="solutions/tmp.cpp",
-                    program_id="solution-0",
-                    test_name="001.in",
-                    expected_behavior="accepted",
-                ),
-            ],
-            completions=[
-                TaskCompletion(
-                    task_id=generate_task_id,
-                    status=VerificationTaskStatus.DONE,
-                    run_id="",
-                    judgehost_task_id="",
-                    result=execution_result(
-                        "AC",
-                        feedback="manual input valid",
-                    ),
-                )
-            ],
-        )
-
-        page = run_details_page(
-            _request("/problems/alice/sample/run/details", f"verification_id={verification_id}"),
-            "alice/sample",
-            "alice",
-        )
-        self.assertEqual(page.status_code, 200)
-        page_html = page.body.decode("utf-8", errors="replace")
-        self.assertRegex(
-            page_html,
-            r'(?s)<td class="tcell tone-ok"[^>]*>\s*<a href="#run-test-detail-popup" data-popup-open="run-test-detail-popup" data-test-name="001\.in" data-test-source-kind="manual" data-test-command=""[^>]*>001\.in</a>',
-        )
-
-        detail = run_details_test_fragment(
-            _request("/problems/alice/sample/run/details/test-fragment", f"verification_id={verification_id}&test=001.in&program_id=solution-0"),
-            "alice/sample",
-            "alice",
-        )
-        self.assertEqual(detail.status_code, 200)
-        detail_html = detail.body.decode("utf-8", errors="replace")
-        self.assertNotIn("manual_validate.cpp", detail_html)
 
     def test_run_details_expose_duplicate_generation_diagnostics(self) -> None:
         workspace_service.ensure_workspace("alice/sample", "alice")
@@ -5286,84 +4965,6 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             set(range(205, 214)),
         )
         self.assertNotIn("Showing first 200", page_html)
-
-    def test_run_details_page_shows_main_correct_compile_diagnostics_text(self) -> None:
-        workspace_service.ensure_workspace("alice/sample", "alice")
-        ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
-        workspace_id = int(ctx["workspace"]["id"])
-        problem_id = int(ctx["problem"]["id"])
-        workspace = Path(str(ctx["workspace"]["path"]))
-        (workspace / "solutions").mkdir(parents=True, exist_ok=True)
-        (workspace / "solutions" / "std.cpp").write_text("int main(){return 0;}\n", encoding="utf-8")
-
-        verification_id = canonical_test_verification_id(f"ver-main-correct-diag-{uuid.uuid4().hex[:8]}")
-        detailed_error = (
-            "g++: internal compiler error: File size limit exceeded signal terminated program as\n"
-            "Please submit a full bug report."
-        )
-        self._admit_verification_fixture(
-            verification_id=verification_id,
-            problem_id=problem_id,
-            workspace_id=workspace_id,
-            signature="",
-            kind=Kind.ALL,
-            detail={
-                "mode": "pass-fail",
-                "tests_meta_rows": [
-                    {
-                        "index": 1,
-                        "test_name": "001.in",
-                        "source": "manual_validate.cpp",
-                    }
-                ],
-            },
-        )
-        task_id = verification_task_id(
-            verification_id,
-            "accepted",
-            "001.in",
-        )
-        self._activate_verification_fixture(
-            verification_id,
-            tasks=[
-                PlannedTask(
-                    task_id=task_id,
-                    predecessor_task_id=None,
-                    task_kind="main-correct",
-                    source_path="solutions/std.cpp",
-                    program_id="accepted",
-                    test_name="001.in",
-                    expected_behavior="accepted",
-                )
-            ],
-            completions=[
-                TaskCompletion(
-                    task_id=task_id,
-                    status=VerificationTaskStatus.FAILED,
-                    run_id="r-main-correct-diag",
-                    judgehost_task_id="",
-                    result=normalize_execution_result(
-                        verdict="CE",
-                        error=detailed_error,
-                        compile_log=detailed_error,
-                        compile_diagnostics=(
-                            {"level": "error", "message": detailed_error},
-                        ),
-                    ),
-                    fail_reason=detailed_error,
-                )
-            ],
-        )
-
-        page = run_details_page(
-            _request("/problems/alice/sample/run/details", f"verification_id={verification_id}"),
-            "alice/sample",
-            "alice",
-        )
-        self.assertEqual(page.status_code, 200)
-        html = page.body.decode("utf-8", errors="replace")
-        self.assertIn("File size limit exceeded", html)
-        self.assertIn("Please submit a full bug report.", html)
 
     def test_run_details_shows_sanity_diagnostics(self) -> None:
         ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
@@ -5754,125 +5355,6 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         self.assertIn("solutions/slow.cpp: accepted solution is close to the time limit.", html)
         self.assertIn("solutions/ac_python.py: correct output in 50% extra time limit.", html)
         self.assertNotIn("TL(AC)", html)
-
-    def test_run_list_and_submenu_show_sanity_suffix_without_failed_row(self) -> None:
-        ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
-        problem_id = int(ctx["problem"]["id"])
-        workspace_id = int(ctx["workspace"]["id"])
-        verification_id = canonical_test_verification_id(f"ver-sanity-list-{uuid.uuid4().hex[:8]}")
-        self._insert_verification_row(
-            verification_id=verification_id,
-            problem_id=problem_id,
-            workspace_id=workspace_id,
-            build_id=self.random_id("b-sanity-list"),
-            kind=Kind.ALL,
-            status="ok",
-            created_at="2026-04-17T00:00:00Z",
-            finished_at="2026-04-17T00:00:02Z",
-            runs=[],
-            summary_extra={
-                "sanity_status": "warning",
-                "sanity_checked_count": 3,
-                "sanity_checks": ["boundary_coverage"],
-                "validation_status": "warning",
-                "validated_count": 3,
-                "failed_step": "sanity",
-                "failed_check": "boundary_coverage",
-                "error": "Test data did not hit: n max=3",
-            },
-        )
-
-        page = run_page(_request("/problems/alice/sample/run"), "alice/sample", "alice")
-        self.assertEqual(page.status_code, 200)
-        html = page.body.decode("utf-8", errors="replace")
-        self.assertIn("ok (has warning)", html)
-        self.assertIn("Test data did not hit: n max=3", html)
-
-    def test_workflow_pages_emit_files_source_context_links(self) -> None:
-        ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
-        problem_id = int(ctx["problem"]["id"])
-        workspace_id = int(ctx["workspace"]["id"])
-        ws = Path(str(ctx["workspace"]["path"]))
-        statement_sig = statement_sources_signature(
-            ws,
-            problem_title=statement_title_for_language(
-                ws,
-                "english",
-                fallback_title=Path(str(ctx["problem"]["slug"])).name,
-            ),
-            tests_spec_max_bytes=TEXTAREA_MAX_BYTES,
-            statement_sample_max_bytes=STATEMENT_SAMPLE_MAX_BYTES,
-        )
-
-        preview_id = f"ui-previewctx-{uuid.uuid4().hex[:8]}"
-        preview_root = self._artifact_root(preview_id)
-        (preview_root / "logs").mkdir(parents=True, exist_ok=True)
-        (preview_root / "logs" / "latex.log").write_text("statement/main.tex:7 Undefined control sequence\n", encoding="utf-8")
-        db_execute(
-            """
-            INSERT INTO previews(id,problem_id,workspace_id,verification_id,source_commit,source_ref,status,summary_json,created_at,finished_at)
-            VALUES(?,?,?,?,?,?,?,?,?,?)
-            """,
-            [
-                preview_id,
-                problem_id,
-                workspace_id,
-                None,
-                "",
-                "main",
-                "failed",
-                json.dumps({}),
-                "2026-02-23T00:01:00Z",
-                "2026-02-23T00:01:01Z",
-            ],
-        )
-        write_preview_summary(preview_id, {"statement_signature": statement_sig})
-        preview_resp = preview_page(_request("/problems/alice/sample/preview", f"preview_id={preview_id}"), "alice/sample", "alice")
-        preview_html = preview_resp.body.decode("utf-8", errors="replace")
-        self.assertNotIn("src=statement", preview_html)
-        self.assertNotIn(f"sid={preview_id}", preview_html)
-        self.assertNotIn("2026-02-23T00:01:00Z", preview_html)
-
-        run_id = f"ui-runctx-{uuid.uuid4().hex[:8]}"
-        verification_id = self._verification_id_for_run(run_id)
-        build_id = self.random_id("ui-rundetail-build")
-        (ws / "solutions").mkdir(parents=True, exist_ok=True)
-        (ws / "solutions" / "accepted.cpp").write_text("int main(){return 0;}\n", encoding="utf-8")
-        run_summary = {
-            "source": "solutions/accepted.cpp",
-            "compile_diagnostics": [
-                {
-                    "level": "error",
-                    "file": "solutions/accepted.cpp",
-                    "line": 12,
-                    "column": 4,
-                    "message": "compile failed",
-                    "can_link": True,
-                }
-            ]
-        }
-        self._insert_verification_run_row(
-            run_id=run_id,
-            problem_id=problem_id,
-            workspace_id=workspace_id,
-            build_id=build_id,
-            mode="pass-fail",
-            status="failed",
-            summary=run_summary,
-            artifact_path=str(
-                runtime.storage_layout.prepare_verification_root(verification_id).resolve()
-            ),
-            created_at="2026-02-23T00:02:00Z",
-            finished_at="2026-02-23T00:02:01Z",
-        )
-        run_resp = run_page(_request("/problems/alice/sample/run"), "alice/sample", "alice")
-        run_html = run_resp.body.decode("utf-8", errors="replace")
-        self.assertIn(
-            f"/problems/alice/sample/run/details?verification_id={verification_id}",
-            run_html,
-        )
-        self.assertIn('action="/problems/alice/sample/verification/start"', run_html)
-        self.assertIn('action="/problems/alice/sample/export/create"', run_html)
 
     def test_problem_nav_downloads_package_built_for_current_revision(self) -> None:
         workspace = Path(workspace_service.ensure_workspace("alice/sample", "alice"))

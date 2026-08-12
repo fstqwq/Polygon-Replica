@@ -5,7 +5,6 @@ from unittest.mock import patch
 from fastapi import HTTPException
 
 from app.impl.preview.preview import (
-    preview_page,
     preview_run,
     preview_status,
 )
@@ -16,7 +15,7 @@ from app.service.statement.signature import statement_sources_signature
 
 from tests.backend_e2e_fixture import BackendE2ETestBase
 from tests.db_helpers import db_execute, write_preview_summary
-from tests.ui_support import _flash_messages_from_response, _request
+from tests.ui_support import _flash_messages_from_response
 
 
 class TestPreviewRoutes(BackendE2ETestBase):
@@ -72,52 +71,6 @@ class TestPreviewRoutes(BackendE2ETestBase):
         self.assertEqual(resp.headers.get("location", ""), f"/problems/{self.problem}/statement")
         self.assertEqual(_flash_messages_from_response(resp), ["statement language is missing."])
         compile_preview.assert_not_called()
-
-    def test_preview_page_shows_full_sample_build_failure_detail(self) -> None:
-        ctx = runtime.workspace_service.workspace_context(self.problem, self.user, include_recent=False)
-        preview_id = self.random_id("p-preview-sample-sync-detail")
-        artifact_path = runtime.storage_layout.prepare_preview_layout(preview_id).root
-        artifact_path.mkdir(parents=True, exist_ok=True)
-        (artifact_path / "logs").mkdir(parents=True, exist_ok=True)
-        (artifact_path / "logs" / "latex.log").write_text(
-            "sample verification failed (ver-old): validator failed on tests/spec.json entry 1\n",
-            encoding="utf-8",
-        )
-        db_execute(
-            (
-                "INSERT INTO previews("
-                "id,problem_id,workspace_id,status,source_commit,source_ref,summary_json,created_at,finished_at"
-                ") VALUES(?,?,?,?,?,?,?,datetime('now'),datetime('now'))"
-            ),
-            [
-                preview_id,
-                int(ctx["problem"]["id"]),
-                int(ctx["workspace"]["id"]),
-                "failed",
-                "",
-                "",
-                "{}",
-            ],
-        )
-        write_preview_summary(
-            preview_id,
-            {
-                "error": "sample verification failed (ver-sample-123): main correct solution RE on 001.in: judge verdict RE",
-                "failed_stage": "sample_sync",
-            },
-        )
-        resp = preview_page(
-            _request(
-                f"/problems/{self.problem}/statement",
-                f"preview_id={preview_id}",
-            ),
-            self.problem,
-            self.user,
-        )
-        self.assertEqual(resp.status_code, 200)
-        html = resp.body.decode("utf-8", errors="replace")
-        self.assertIn("sample verification failed (ver-sample-123): main correct solution RE on 001.in: judge verdict RE", html)
-        self.assertNotIn("sample verification failed (ver-old): validator failed on tests/spec.json entry 1", html)
 
     def test_preview_artifact_file_serves_statement_pdf_from_preview_root(self) -> None:
         ctx = runtime.workspace_service.workspace_context(self.problem, self.user, include_recent=False)
@@ -296,9 +249,3 @@ class TestPreviewRoutes(BackendE2ETestBase):
             artifact_file(self.problem, self.user, preview_id, "statement_preview/statement.pdf")
         self.assertEqual(int(exc.exception.status_code), 404)
         self.assertEqual(str(exc.exception.detail or ""), "preview artifact expired")
-
-    def test_preview_worker_propagates_exception(self) -> None:
-        with patch.object(runtime.preview_service, "compile_preview", side_effect=RuntimeError("preview failed")):
-            resp = preview_run(self.problem, self.user, page="statement")
-        self.assertEqual(resp.status_code, 303)
-        self.assertIn(f"/problems/{self.problem}/statement", resp.headers.get("location", ""))

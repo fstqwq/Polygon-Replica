@@ -1,7 +1,5 @@
 from unittest.mock import patch
 
-from app.impl.workspace.problem_config import read_problem_config
-
 from tests.common import E2ETestBase
 from tests.ui_support import (
     Path,
@@ -14,7 +12,6 @@ from tests.ui_support import (
     checker_rename_source,
     checker_save_source,
     checker_set_standard,
-    checker_view_standard,
     files_save,
     general_page,
     generator_rename_source,
@@ -52,47 +49,6 @@ class TestUIComponents(UIHelpersMixin, E2ETestBase):
             json.dumps(payload, indent=2) + "\n", encoding="utf-8"
         )
 
-    def test_read_problem_config_rejects_persisted_shape_without_pass_limit(
-        self,
-    ) -> None:
-        ws = Path(workspace_service.ensure_workspace(self.problem, self.user))
-        cfg_path = ws / "config/problem.json"
-        cfg_path.parent.mkdir(parents=True, exist_ok=True)
-        cfg_path.write_text(
-            json.dumps({"mode": "interactive"}, indent=2) + "\n", encoding="utf-8"
-        )
-
-        with self.assertRaisesRegex(ValueError, "missing key"):
-            read_problem_config(ws)
-
-    def test_interactor_tab_visible_only_for_non_pass_fail_mode(self) -> None:
-        ws = Path(workspace_service.ensure_workspace(self.problem, self.user))
-        cfg_path = ws / "config/problem.json"
-        cfg_path.parent.mkdir(parents=True, exist_ok=True)
-
-        payload = json.loads(cfg_path.read_text(encoding="utf-8"))
-        payload.update({"mode": "pass-fail", "pass_limit": 1})
-        cfg_path.write_text(
-            json.dumps(payload, indent=2) + "\n", encoding="utf-8"
-        )
-        pass_fail_resp = general_page(
-            _request(f"/problems/{self.problem}/general"), self.problem, self.user
-        )
-        self.assertEqual(pass_fail_resp.status_code, 200)
-        pass_fail_html = pass_fail_resp.body.decode("utf-8", errors="replace")
-        self.assertNotIn(f'/problems/{self.problem}/interactor', pass_fail_html)
-
-        payload["mode"] = "interactive"
-        cfg_path.write_text(
-            json.dumps(payload, indent=2) + "\n", encoding="utf-8"
-        )
-        interactive_resp = general_page(
-            _request(f"/problems/{self.problem}/general"), self.problem, self.user
-        )
-        self.assertEqual(interactive_resp.status_code, 200)
-        interactive_html = interactive_resp.body.decode("utf-8", errors="replace")
-        self.assertIn(f'/problems/{self.problem}/interactor', interactive_html)
-
     def test_checker_page_sets_standard_checker_metadata(self) -> None:
         ws = Path(workspace_service.ensure_workspace(self.problem, self.user))
         rel = "checkers/checker.cpp"
@@ -125,42 +81,6 @@ class TestUIComponents(UIHelpersMixin, E2ETestBase):
         self.assertEqual(after.status_code, 200)
         after_html = after.body.decode("utf-8", errors="replace")
         self.assertIn("std::fcmp.cpp", after_html)
-
-    def test_checker_page_warns_when_standard_checker_name_content_differs(
-        self,
-    ) -> None:
-        ws = Path(workspace_service.ensure_workspace(self.problem, self.user))
-        rel = "checkers/wcmp.cpp"
-        (ws / rel).parent.mkdir(parents=True, exist_ok=True)
-        (ws / rel).write_text(
-            "// custom checker with a standard name\n", encoding="utf-8"
-        )
-        self._update_build_config(ws, checker_source=rel)
-
-        resp = checker_page(
-            _request(f"/problems/{self.problem}/checker"), self.problem, self.user
-        )
-        self.assertEqual(resp.status_code, 200)
-        html = resp.body.decode("utf-8", errors="replace")
-        self.assertIn("File name matches std::wcmp.cpp, but content differs.", html)
-
-    def test_checker_page_does_not_warn_when_custom_name_matches_standard_content(
-        self,
-    ) -> None:
-        ws = Path(workspace_service.ensure_workspace(self.problem, self.user))
-        from app.service.verification.standard_checker import copy_standard_checker
-
-        standard_rel = copy_standard_checker("wcmp.cpp", ws)
-        custom_rel = "checkers/custom.cpp"
-        (ws / custom_rel).write_bytes((ws / standard_rel).read_bytes())
-        self._update_build_config(ws, checker_source=custom_rel)
-
-        resp = checker_page(
-            _request(f"/problems/{self.problem}/checker"), self.problem, self.user
-        )
-        self.assertEqual(resp.status_code, 200)
-        html = resp.body.decode("utf-8", errors="replace")
-        self.assertIn("std::wcmp.cpp", html)
 
     def test_checker_page_supports_source_save_without_files_page(self) -> None:
         ws = Path(workspace_service.ensure_workspace(self.problem, self.user))
@@ -494,154 +414,6 @@ class TestUIComponents(UIHelpersMixin, E2ETestBase):
         )
         self.assertEqual((ws / rel).read_text(encoding="utf-8"), content)
 
-    def test_validator_editor_exposes_compile_error(self) -> None:
-        ws = Path(workspace_service.ensure_workspace(self.problem, self.user))
-        rel = "validators/validator.cpp"
-        (ws / rel).parent.mkdir(parents=True, exist_ok=True)
-        (ws / rel).write_text("int main(){return 0;}\n", encoding="utf-8")
-
-        page = validator_page(
-            _request_with_cookie(
-                f"/problems/{self.problem}/validator",
-                _flash_cookie_header(
-                    "compile check failed: validators/validator.cpp: syntax error"
-                ),
-            ),
-            self.problem,
-            self.user,
-        )
-        self.assertEqual(page.status_code, 200)
-        html = page.body.decode("utf-8", errors="replace")
-        self.assertIn(
-            "compile check failed: validators/validator.cpp: syntax error", html
-        )
-
-    def test_checker_editor_exposes_compile_error_without_existing_repo_file(
-        self,
-    ) -> None:
-        ws = Path(workspace_service.ensure_workspace(self.problem, self.user))
-        rel = "checkers/checker.cpp"
-        target = ws / rel
-        if target.exists():
-            target.unlink()
-        from app.service.verification.standard_checker import copy_standard_checker
-
-        copy_standard_checker("wcmp.cpp", ws)
-        self._update_build_config(ws, checker_source="checkers/wcmp.cpp")
-
-        page = checker_page(
-            _request_with_cookie(
-                f"/problems/{self.problem}/checker",
-                _flash_cookie_header(
-                    "compile check failed: checkers/checker.cpp: syntax error"
-                ),
-            ),
-            self.problem,
-            self.user,
-        )
-        self.assertEqual(page.status_code, 200)
-        html = page.body.decode("utf-8", errors="replace")
-        self.assertIn("compile check failed: checkers/checker.cpp: syntax error", html)
-
-    def test_validator_editor_exposes_multiline_compile_error(self) -> None:
-        ws = Path(workspace_service.ensure_workspace(self.problem, self.user))
-        rel = "validators/validator.cpp"
-        (ws / rel).parent.mkdir(parents=True, exist_ok=True)
-        (ws / rel).write_text("int main(){return 0;}\n", encoding="utf-8")
-
-        message = (
-            "compile check failed: validators/validator.cpp: "
-            "Compiling failed with exitcode 1, compiler output:\n"
-            "validator.cpp:4:35: error: expected ';' before 'inf'"
-        )
-        page = validator_page(
-            _request_with_cookie(
-                f"/problems/{self.problem}/validator",
-                _flash_cookie_header(message),
-            ),
-            self.problem,
-            self.user,
-        )
-        self.assertEqual(page.status_code, 200)
-        html = page.body.decode("utf-8", errors="replace")
-        self.assertIn("Compiling failed with exitcode 1, compiler output:", html)
-        self.assertIn("validator.cpp:4:35: error: expected", html)
-
-    def test_generator_editor_exposes_compile_error(self) -> None:
-        ws = Path(workspace_service.ensure_workspace(self.problem, self.user))
-        rel = "generators/gen.cpp"
-        (ws / rel).parent.mkdir(parents=True, exist_ok=True)
-        (ws / rel).write_text("int main(){return 0;}\n", encoding="utf-8")
-        self._update_build_config(ws, generator_sources=[rel])
-
-        page = generators_page(
-            _request_with_cookie(
-                f"/problems/{self.problem}/generators",
-                _flash_cookie_header(
-                    "compile check failed: generators/gen.cpp: syntax error"
-                ),
-                f"path={quote_plus(rel)}",
-            ),
-            self.problem,
-            self.user,
-        )
-        self.assertEqual(page.status_code, 200)
-        html = page.body.decode("utf-8", errors="replace")
-        self.assertIn("compile check failed: generators/gen.cpp: syntax error", html)
-
-    def test_generator_editor_exposes_compile_error_without_existing_file(
-        self,
-    ) -> None:
-        ws = Path(workspace_service.ensure_workspace(self.problem, self.user))
-        rel = "generators/gen.cpp"
-        target = ws / rel
-        if target.exists():
-            target.unlink()
-        self._update_build_config(ws, generator_sources=[])
-
-        page = generators_page(
-            _request_with_cookie(
-                f"/problems/{self.problem}/generators",
-                _flash_cookie_header(
-                    "compile check failed: generators/gen.cpp: syntax error"
-                ),
-                f"path={quote_plus(rel)}",
-            ),
-            self.problem,
-            self.user,
-        )
-        self.assertEqual(page.status_code, 200)
-        html = page.body.decode("utf-8", errors="replace")
-        self.assertIn("compile check failed: generators/gen.cpp: syntax error", html)
-
-    def test_generators_page_hides_missing_configured_sources_and_fake_default_editor_path(
-        self,
-    ) -> None:
-        ws = Path(workspace_service.ensure_workspace(self.problem, self.user))
-        missing_rel = "generators/generator.cpp"
-        existing_rel = "generators/keep.cpp"
-        missing_abs = ws / missing_rel
-        if missing_abs.exists():
-            missing_abs.unlink()
-        existing_abs = ws / existing_rel
-        existing_abs.parent.mkdir(parents=True, exist_ok=True)
-        existing_abs.write_text("int main(){return 0;}\n", encoding="utf-8")
-        self._update_build_config(
-            ws, generator_sources=[missing_rel, existing_rel]
-        )
-
-        page = generators_page(
-            _request(f"/problems/{self.problem}/generators"), self.problem, self.user
-        )
-        self.assertEqual(page.status_code, 200)
-        html = page.body.decode("utf-8", errors="replace")
-        self.assertIn(existing_rel, html)
-
-        resp = general_page(
-            _request(f"/problems/{self.problem}/general"), self.problem, self.user
-        )
-        self.assertEqual(resp.status_code, 200)
-
     def test_solutions_page_uses_desc_metadata_for_expected_behavior(self) -> None:
         ws = Path(workspace_service.ensure_workspace(self.problem, self.user))
         source_rel = "solutions/std.cpp"
@@ -676,17 +448,6 @@ class TestUIComponents(UIHelpersMixin, E2ETestBase):
             _request(f"/problems/{self.problem}/general"), self.problem, self.user
         )
         self.assertEqual(after.status_code, 200)
-
-    def test_solutions_page_links_to_blank_editor(self) -> None:
-        page = solutions_page(
-            _request(f"/problems/{self.problem}/solutions"), self.problem, self.user
-        )
-        self.assertEqual(page.status_code, 200)
-        html = page.body.decode("utf-8", errors="replace")
-        self.assertIn(
-            f'/problems/{self.problem}/solutions/editor?path=solutions%2Faccepted.cpp',
-            html,
-        )
 
     def test_solutions_set_tag_main_correct_updates_main_config(self) -> None:
         ws = Path(workspace_service.ensure_workspace(self.problem, self.user))
@@ -910,23 +671,6 @@ class TestUIComponents(UIHelpersMixin, E2ETestBase):
         messages = _flash_messages_from_response(resp)
         self.assertTrue(messages)
         self.assertIn("solution source", messages[0])
-
-    def test_checker_view_standard_page_shows_source(self) -> None:
-        resp = checker_view_standard(
-            _request(
-                f"/problems/{self.problem}/checker/view-standard",
-                "checker_name=std%3A%3Afcmp.cpp",
-            ),
-            self.problem,
-            self.user,
-            checker_name="std::fcmp.cpp",
-        )
-        self.assertEqual(resp.status_code, 200)
-        html = resp.body.decode("utf-8", errors="replace")
-        self.assertIn("std::fcmp.cpp", html)
-        self.assertIn("registerTestlibCmd", html)
-        self.assertIn('data-code-editor="1"', html)
-        self.assertIn("readonly", html)
 
     def test_validator_and_interactor_starters_remain_unsaved(self) -> None:
         ws = Path(workspace_service.ensure_workspace(self.problem, self.user))

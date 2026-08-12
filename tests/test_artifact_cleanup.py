@@ -21,6 +21,7 @@ from app.service.platform.maintenance.filesystem import ArtifactCleanupFilesyste
 from app.service.platform.maintenance.plan import (
     ARTIFACT_TABLES,
     CLEANUP_FILESYSTEM_CLASSES,
+    REDUNDANT_DATABASE_INDEXES,
 )
 from app.service.platform.runtime_blob_store import RuntimeBlobStore
 from app.service.platform.runtime_cache_index import RuntimeCacheIndex
@@ -450,6 +451,30 @@ class TestArtifactCleanup(unittest.TestCase):
     def test_cleanup_deletes_derived_epoch_and_preserves_durable_data(self) -> None:
         durable_files = self._seed_generated_data()
         with isolated_db_connection(self.db) as connection:
+            redundant_index_statements = (
+                "CREATE INDEX idx_workspaces_problem_user "
+                "ON workspaces(problem_id,user_id)",
+                "CREATE INDEX idx_contests_slug ON contests(slug)",
+                "CREATE INDEX idx_contest_members_contest "
+                "ON contest_members(contest_id,user_id)",
+                "CREATE INDEX idx_contest_problems_contest "
+                "ON contest_problems(contest_id,position)",
+                "CREATE INDEX idx_verification_selected_tests_verification_ordinal "
+                "ON verification_selected_tests(verification_id,ordinal)",
+                "CREATE INDEX idx_verification_source_paths_verification_ordinal "
+                "ON verification_source_paths(verification_id,ordinal)",
+                "CREATE INDEX idx_verification_sanity_checks_verification_ordinal "
+                "ON verification_sanity_checks(verification_id,ordinal)",
+                "CREATE INDEX idx_verification_sanity_check_messages_verification_check "
+                "ON verification_sanity_check_messages(verification_id,check_name,ordinal)",
+                "CREATE INDEX idx_verification_tests_meta_verification_ordinal "
+                "ON verification_tests_meta(verification_id,ordinal)",
+                "CREATE INDEX idx_pending_registrations_token "
+                "ON pending_registrations(token_hash)",
+            )
+            for statement in redundant_index_statements:
+                connection.execute(statement)
+            connection.commit()
             connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
         coordinator = self._coordinator()
 
@@ -494,6 +519,16 @@ class TestArtifactCleanup(unittest.TestCase):
         self.assertEqual(self._count("contest_members"), 1)
         self.assertEqual(self._count("contest_problems"), 1)
         self.assertEqual(self._count("contest_attachments"), 1)
+        with isolated_db_connection(self.db) as connection:
+            remaining_indexes = {
+                str(row[0])
+                for row in connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type='index'"
+                ).fetchall()
+            }
+        self.assertTrue(
+            set(REDUNDANT_DATABASE_INDEXES).isdisjoint(remaining_indexes)
+        )
         system_config = isolated_db_fetch_one(
             self.db,
             "SELECT value_json FROM system_config WHERE key='cleanup-test-setting'"
@@ -539,7 +574,10 @@ class TestArtifactCleanup(unittest.TestCase):
             "_install_sql_trace",
             side_effect=install_trace,
         ):
-            counts = self.cleanup_database.reset_tables(ARTIFACT_TABLES)
+            counts = self.cleanup_database.reset_tables(
+                ARTIFACT_TABLES,
+                drop_indexes=REDUNDANT_DATABASE_INDEXES,
+            )
 
         statements = [" ".join(sql.upper().split()) for sql in traced_sql]
         self.assertIn("PRAGMA FOREIGN_KEYS=OFF", statements)
@@ -584,7 +622,10 @@ class TestArtifactCleanup(unittest.TestCase):
             return_value=("CREATE TABLE invalid schema",),
         ):
             with self.assertRaisesRegex(sqlite3.OperationalError, "syntax"):
-                self.cleanup_database.reset_tables(ARTIFACT_TABLES)
+                self.cleanup_database.reset_tables(
+                    ARTIFACT_TABLES,
+                    drop_indexes=REDUNDANT_DATABASE_INDEXES,
+                )
 
         self.assertEqual(self._count("verification_tasks"), 1)
         self.assertEqual(self._count("verifications"), 1)

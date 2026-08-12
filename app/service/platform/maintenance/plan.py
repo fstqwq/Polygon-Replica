@@ -23,6 +23,19 @@ ARTIFACT_TABLES = (
     "verifications",
 )
 
+REDUNDANT_DATABASE_INDEXES = (
+    "idx_workspaces_problem_user",
+    "idx_contests_slug",
+    "idx_contest_members_contest",
+    "idx_contest_problems_contest",
+    "idx_verification_selected_tests_verification_ordinal",
+    "idx_verification_source_paths_verification_ordinal",
+    "idx_verification_sanity_checks_verification_ordinal",
+    "idx_verification_sanity_check_messages_verification_check",
+    "idx_verification_tests_meta_verification_ordinal",
+    "idx_pending_registrations_token",
+)
+
 CleanupFilesystemClass = Literal["artifacts_root", "cache_root"]
 CLEANUP_FILESYSTEM_CLASSES: tuple[CleanupFilesystemClass, ...] = (
     "artifacts_root",

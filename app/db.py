@@ -533,14 +533,10 @@ CREATE TABLE IF NOT EXISTS smtp_config (
 """
 
 SCHEMA_INDEXES = """
-CREATE INDEX IF NOT EXISTS idx_workspaces_problem_user ON workspaces(problem_id, user_id);
 CREATE INDEX IF NOT EXISTS idx_repo_acl_user_problem ON repo_acl(user_id, problem_id);
-CREATE INDEX IF NOT EXISTS idx_contests_slug ON contests(slug);
 CREATE INDEX IF NOT EXISTS idx_contests_owner ON contests(owner_user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_contest_members_user ON contest_members(user_id, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_contest_members_contest ON contest_members(contest_id, user_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_contest_members_single_owner ON contest_members(contest_id) WHERE role='owner';
-CREATE INDEX IF NOT EXISTS idx_contest_problems_contest ON contest_problems(contest_id, position);
 CREATE INDEX IF NOT EXISTS idx_contest_problems_problem ON contest_problems(problem_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_contest_jobs_contest_created ON contest_jobs(contest_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_contest_jobs_actor_created ON contest_jobs(actor_user_id, created_at DESC);
@@ -560,11 +556,6 @@ CREATE INDEX IF NOT EXISTS idx_verifications_problem_signature_created ON verifi
 CREATE INDEX IF NOT EXISTS idx_verifications_problem_workspace_signature_created ON verifications(problem_id, workspace_id, signature, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_verifications_kind_status ON verifications(kind, status);
 CREATE INDEX IF NOT EXISTS idx_verifications_workspace_kind_created ON verifications(workspace_id, kind, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_verification_selected_tests_verification_ordinal ON verification_selected_tests(verification_id, ordinal);
-CREATE INDEX IF NOT EXISTS idx_verification_source_paths_verification_ordinal ON verification_source_paths(verification_id, ordinal);
-CREATE INDEX IF NOT EXISTS idx_verification_sanity_checks_verification_ordinal ON verification_sanity_checks(verification_id, ordinal);
-CREATE INDEX IF NOT EXISTS idx_verification_sanity_check_messages_verification_check ON verification_sanity_check_messages(verification_id, check_name, ordinal);
-CREATE INDEX IF NOT EXISTS idx_verification_tests_meta_verification_ordinal ON verification_tests_meta(verification_id, ordinal);
 CREATE INDEX IF NOT EXISTS idx_verification_tasks_verification_task ON verification_tasks(verification_id, task_kind, source_path, test_name, id);
 CREATE INDEX IF NOT EXISTS idx_verification_tasks_verification_predecessor ON verification_tasks(verification_id, predecessor_task_id);
 CREATE INDEX IF NOT EXISTS idx_verification_tasks_predecessor ON verification_tasks(predecessor_task_id);
@@ -586,7 +577,6 @@ CREATE INDEX IF NOT EXISTS idx_auth_sessions_user_created ON auth_sessions(user_
 CREATE INDEX IF NOT EXISTS idx_auth_sessions_expires ON auth_sessions(expires_at);
 CREATE INDEX IF NOT EXISTS idx_sudo_sessions_user_created ON sudo_sessions(user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_sudo_sessions_expires ON sudo_sessions(expires_at);
-CREATE INDEX IF NOT EXISTS idx_pending_registrations_token ON pending_registrations(token_hash);
 CREATE INDEX IF NOT EXISTS idx_pending_registrations_expires ON pending_registrations(expires_at);
 CREATE INDEX IF NOT EXISTS idx_auth_rate_limits_expires ON auth_rate_limits(window_expires_at);
 CREATE INDEX IF NOT EXISTS idx_agent_registration_codes_expires ON agent_registration_codes(expires_at);

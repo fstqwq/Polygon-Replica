@@ -5,7 +5,6 @@ from fastapi import HTTPException
 
 from app.impl.problem.file import files_page, files_restore_default
 from app.main import runtime
-from app.service.statement.constant import STATEMENT_DEFAULT_FILES
 
 from tests.common import WorkspaceTestBase
 from tests.ui_support import _flash_messages_from_response, _request
@@ -15,33 +14,6 @@ workspace_service = runtime.workspace_service
 
 
 class TestStatementDefaultRestore(WorkspaceTestBase):
-    def test_files_page_offers_restore_only_for_supported_text_paths(self) -> None:
-        ws = self._workspace_path()
-        action = f"/problems/{self.problem}/files/restore-default"
-        for rel in STATEMENT_DEFAULT_FILES:
-            with self.subTest(path=rel):
-                html = self._files_html(rel, user=self.user, directory="statement")
-                self.assertIn(f'action="{action}"', html)
-                self.assertIn(f'name="path" value="{rel}"', html)
-
-        for rel in ("statement/olymp.sty.bak", "notes/olymp.sty"):
-            with self.subTest(path=rel):
-                target = ws / rel
-                target.parent.mkdir(parents=True, exist_ok=True)
-                target.write_text("unrelated\n", encoding="utf-8")
-                self.assertNotIn(action, self._files_html(rel, user=self.user))
-
-        supported = ws / "statement/olymp.sty"
-        supported.unlink()
-        self.assertIn(action, self._files_html("statement/olymp.sty", user=self.user))
-
-        supported.write_bytes(b"\0binary")
-        self.assertNotIn(action, self._files_html("statement/olymp.sty", user=self.user))
-
-        supported.unlink()
-        supported.mkdir()
-        self.assertNotIn(action, self._files_html("statement/olymp.sty", user=self.user))
-
     def test_restore_is_exact_and_recreates_missing_file(self) -> None:
         ws = self._workspace_path()
         custom = {

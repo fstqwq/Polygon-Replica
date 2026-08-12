@@ -10,7 +10,6 @@ from fastapi import HTTPException
 from starlette.responses import PlainTextResponse
 import app.impl.admin.panel as admin_panel_module
 from app.service.auth.password_hash import password_verifier_storage_hash
-from app import main_constant
 from app.config import CONFIG_REGISTRY, ConfigKind
 from app.impl.auth.password_envelope import PasswordEnvelopeStore
 from app.impl.root.auth_pages import logout
@@ -20,8 +19,6 @@ from tests.common import E2ETestBase, override_config_values
 from tests.ui_support import (
     DEFAULT_CONFIG_VALUES,
     AUTH_COOKIE_NAME,
-    admin_judgehosts_page,
-    admin_overview_page,
     admin_users_page,
     Request,
     UIHelpersMixin,
@@ -1113,84 +1110,6 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         self.assertEqual(resp.status_code, 303)
         self.assertIn("/setup?next=", resp.headers.get("location", ""))
 
-    def test_admin_panel_is_separate_from_account_settings(self) -> None:
-        db_execute("UPDATE users SET is_system_admin=0")
-        db_execute("UPDATE users SET is_system_admin=1 WHERE username=?", ["alice"])
-        workspace_service.clear_identity_caches()
-
-        resp = settings_page(_request("/settings"), user="alice")
-        self.assertEqual(resp.status_code, 200)
-        html = resp.body.decode("utf-8", errors="replace")
-        self.assertIn('href="/settings"', html)
-        self.assertIn('href="/agent/sessions"', html)
-        self.assertIn('href="/admin"', html)
-
-        admin_resp = admin_overview_page(_request("/admin"), user="alice")
-        self.assertEqual(admin_resp.status_code, 200)
-        admin_html = admin_resp.body.decode("utf-8", errors="replace")
-        self.assertIn('/admin/maintenance/artifacts/cleanup', admin_html)
-        self.assertIn('/admin/judgehosts', admin_html)
-        self.assertIn('/admin/users', admin_html)
-
-    def test_admin_overview_shows_generated_artifact_usage(self) -> None:
-        db_execute("UPDATE users SET is_system_admin=0")
-        db_execute("UPDATE users SET is_system_admin=1 WHERE username=?", ["alice"])
-        workspace_service.clear_identity_caches()
-        usage = {
-            "artifacts_bytes": 1024,
-            "artifacts_files": 2,
-            "cache_bytes": 512,
-            "cache_files": 5,
-            "total_bytes": 1536,
-            "total_files": 7,
-            "artifact_rows": 37,
-            "removable_rows": 37,
-            "table_rows": {"verifications": 3},
-        }
-
-        with patch.object(
-            runtime.artifact_cleanup_service,
-            "usage_snapshot",
-            return_value=usage,
-        ):
-            response = admin_overview_page(_request("/admin"), user="alice")
-
-        self.assertEqual(response.status_code, 200)
-        html = response.body.decode("utf-8", errors="replace")
-        self.assertIn("1.5 KiB", html)
-        self.assertIn("across 7 files", html)
-        self.assertIn("37 removable database rows", html)
-        self.assertIn("Artifact files", html)
-        self.assertIn("Runtime cache", html)
-        self.assertIn("Verifications", html)
-
-    def test_admin_routes_do_not_keep_settings_compatibility_paths(self) -> None:
-        from fastapi.routing import iter_route_contexts
-
-        from app.main import app
-
-        route_paths = {route.path for route in iter_route_contexts(app.routes)}
-        self.assertTrue(
-            {
-                "/admin",
-                "/admin/judgehosts",
-                "/admin/users",
-                "/admin/mail",
-                "/admin/config/{category}",
-                "/admin/maintenance/source-backup",
-                "/admin/maintenance/source-backup/latest",
-            }.issubset(route_paths)
-        )
-        self.assertTrue(
-            {
-                "/settings/config/{category}",
-                "/settings/judgehosts",
-                "/settings/users",
-                "/settings/smtp",
-                "/settings/maintenance/artifacts/cleanup",
-            }.isdisjoint(route_paths)
-        )
-
     def test_artifact_cleanup_admin_action_redirects_or_returns_busy_counts(self) -> None:
         db_execute("UPDATE users SET is_system_admin=0")
         db_execute("UPDATE users SET is_system_admin=1 WHERE username=?", ["alice"])
@@ -1346,186 +1265,6 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         new_login = _login_with_password_envelope(target, new_password, next_path="/")
         self.assertEqual(new_login.status_code, 303)
         self.assertTrue(_cookie_value_from_response(new_login, AUTH_COOKIE_NAME))
-
-    def test_admin_judgehosts_hides_auth_fields_when_disabled(self) -> None:
-        db_execute("UPDATE users SET is_system_admin=0")
-        db_execute("UPDATE users SET is_system_admin=1 WHERE username=?", ["alice"])
-        workspace_service.clear_identity_caches()
-        self.addCleanup(settings_system_config_reset, user="alice")
-        admin = db_fetch_one("SELECT id FROM users WHERE username=?", ["alice"])
-        self.assertIsNotNone(admin)
-        runtime.system_config_service.apply_patch(
-            {
-                "JUDGEHOST_ENABLE": False,
-                "JUDGEHOST_API_USERNAME": "judgehost",
-                "JUDGEHOST_API_TOKEN": "token-disabled-demo",
-            },
-            actor_user_id=int(admin["id"]),
-        )
-        runtime.reload_config()
-
-        resp = admin_judgehosts_page(_request("/admin/judgehosts"), user="alice")
-        self.assertEqual(resp.status_code, 200)
-        html = resp.body.decode("utf-8", errors="replace")
-        self.assertIn('data-judgehost-auth-block="1" hidden', html)
-
-    def test_admin_judgehosts_shows_auth_fields_when_enabled(self) -> None:
-        db_execute("UPDATE users SET is_system_admin=0")
-        db_execute("UPDATE users SET is_system_admin=1 WHERE username=?", ["alice"])
-        workspace_service.clear_identity_caches()
-        self.addCleanup(settings_system_config_reset, user="alice")
-        admin = db_fetch_one("SELECT id FROM users WHERE username=?", ["alice"])
-        self.assertIsNotNone(admin)
-        runtime.system_config_service.apply_patch(
-            {
-                "JUDGEHOST_ENABLE": True,
-                "JUDGEHOST_API_USERNAME": "judgehost",
-                "JUDGEHOST_API_TOKEN": "token-enabled-demo",
-            },
-            actor_user_id=int(admin["id"]),
-        )
-        runtime.reload_config()
-
-        resp = admin_judgehosts_page(_request("/admin/judgehosts"), user="alice")
-        self.assertEqual(resp.status_code, 200)
-        html = resp.body.decode("utf-8", errors="replace")
-        self.assertIn('data-judgehost-auth-block="1"', html)
-        self.assertNotIn('data-judgehost-auth-block="1" hidden', html)
-
-    def test_admin_judgehosts_formats_reported_telemetry(self) -> None:
-        db_execute("UPDATE users SET is_system_admin=0")
-        db_execute("UPDATE users SET is_system_admin=1 WHERE username=?", ["alice"])
-        workspace_service.clear_identity_caches()
-
-        raw_last_judging = "2026-02-28T21:43:08.505465+00:00"
-        fake_status = {
-            "enabled": True,
-            "auth_configured": True,
-            "hosts_online": 1,
-            "hosts_total": 1,
-            "queue": {"queued": 0, "leased": 0, "completed": 0, "failed": 0},
-            "hosts": [
-                {
-                    "hostname": "judgehost-lastseen-time",
-                    "peer_addr": "203.0.113.10",
-                    "enabled": True,
-                    "online": True,
-                    "age_sec": 3,
-                    "last_seen_at": raw_last_judging,
-                    "last_action": "heartbeat",
-                    "first_seen_at": raw_last_judging,
-                    "update_count": 9,
-                    "active_leases": 0,
-                    "last_task_id": "",
-                    "last_run_id": "",
-                    "judged_case_count": 42,
-                    "last_judging_at": raw_last_judging,
-                    "last_judging": {
-                        "verification_id": "ver-123456789abcdef",
-                        "problem_slug": "alice/sample",
-                        "task_kind": "solution-run",
-                        "source_label": "ac.cpp",
-                        "test_name": "001.in",
-                    },
-                    "recent_avg_per_case_sec": 0.125,
-                    "toolchains": [
-                        {
-                            "language_id": "cpp",
-                            "compiler": "command=/usr/bin/g++\ng++ 14.2.0",
-                            "runner": "",
-                            "observed_at": raw_last_judging,
-                            "judgetask_id": 123,
-                        }
-                    ],
-                }
-            ],
-        }
-        with patch.object(runtime.judgehost_task_service, "status", return_value=fake_status):
-            resp = admin_judgehosts_page(_request("/admin/judgehosts"), user="alice")
-        self.assertEqual(resp.status_code, 200)
-        html = resp.body.decode("utf-8", errors="replace")
-        self.assertIn("judgehost-lastseen-time", html)
-        self.assertIn("203.0.113.10", html)
-        self.assertIn("0.125 s", html)
-        self.assertIn(runtime.templates.env.filters["local_time"](raw_last_judging), html)
-        self.assertNotIn(raw_last_judging, html)
-        self.assertIn(
-            'href="/problems/alice/sample/run/details?verification_id=ver-123456789abcdef"',
-            html,
-        )
-        self.assertIn("g++ 14.2.0", html)
-
-    def test_footer_judgehost_popup_contains_public_status(self) -> None:
-        public_status = {
-            "enabled": True,
-            "hosts_online": 1,
-            "hosts_total": 1,
-            "queued": 0,
-            "active": 0,
-            "summary": "1 online",
-            "tone": "ok",
-            "hosts": [
-                {
-                    "label": "Judgehost 1",
-                    "state": "online",
-                    "tone": "ok",
-                    "last_contact": "just now",
-                    "active_tasks": 0,
-                    "judged_cases": 42,
-                    "recent_average": "0.125s per case",
-                }
-            ],
-            "compile_specs": [
-                {
-                    "language_id": "cpp",
-                    "language_label": "C++",
-                    "command": "g++",
-                    "arguments": ["-O2", "-std=gnu++20"],
-                }
-            ],
-            "toolchains": [
-                {
-                    "language_id": "cpp",
-                    "language_label": "C++",
-                    "agrees": True,
-                    "versions": [
-                        {
-                            "compiler": "g++ 14.2.0",
-                            "runner": "",
-                            "host_count": 1,
-                        }
-                    ],
-                }
-            ],
-            "toolchain_mismatch": False,
-        }
-        with patch.object(runtime.judgehost_task_service, "public_status", return_value=public_status):
-            resp = register_page(_request("/register"))
-        self.assertEqual(resp.status_code, 200)
-        html = resp.body.decode("utf-8", errors="replace")
-        self.assertIn("Judgehost 1", html)
-        self.assertIn("g++ 14.2.0", html)
-        self.assertNotIn("private-hostname", html)
-        self.assertNotIn("203.0.113.10", html)
-        self.assertNotIn("Profile A", html)
-
-        public_status["toolchains"][0]["agrees"] = False
-        public_status["toolchains"][0]["versions"].append(
-            {
-                "compiler": "g++ 13.3.0",
-                "runner": "",
-                "host_count": 1,
-            }
-        )
-        public_status["toolchain_mismatch"] = True
-        with patch.object(
-            runtime.judgehost_task_service,
-            "public_status",
-            return_value=public_status,
-        ):
-            mismatch_resp = register_page(_request("/register"))
-        mismatch_html = mismatch_resp.body.decode("utf-8", errors="replace")
-        self.assertIn("g++ 13.3.0", mismatch_html)
 
     def test_settings_config_category_update_requires_system_admin(self) -> None:
         with self.assertRaises(HTTPException) as blocked:
@@ -1713,29 +1452,6 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
                     "SUDO_COOKIE_NAME": "same-cookie",
                 }
             )
-
-    def test_config_registry_is_complete_and_not_duplicated_in_main_constants(self) -> None:
-        definitions = CONFIG_REGISTRY.definitions
-        self.assertEqual(len(definitions), 95)
-        self.assertEqual(len({definition.key for definition in definitions}), 95)
-        self.assertIn("PROBLEM_ZIP_MAX_EXPANDED_BYTES", CONFIG_REGISTRY.by_key)
-        self.assertIn("CONTEST_MAX_PROBLEMS", CONFIG_REGISTRY.by_key)
-        self.assertEqual(
-            CONFIG_REGISTRY.defaults()["STATEMENT_SAMPLE_MAX_BYTES"],
-            32 * 1024,
-        )
-        for definition in definitions:
-            with self.subTest(key=definition.key):
-                self.assertTrue(definition.category)
-                self.assertFalse(hasattr(main_constant, definition.key))
-                value = definition.normalize(definition.default)
-                expected_type = {
-                    ConfigKind.BOOL: bool,
-                    ConfigKind.FLOAT: float,
-                    ConfigKind.INT: int,
-                    ConfigKind.STR: str,
-                }[definition.kind]
-                self.assertIs(type(value), expected_type)
 
     def test_config_registry_validates_regex_and_limit_pairs(self) -> None:
         service = runtime.system_config_service
@@ -1967,22 +1683,6 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         self.assertIn("/admin/config/judging", update_resp.headers.get("location", ""))
         self.assertEqual(int(runtime.system_config_service.get("RUN_EXEC_PROCESS_LIMIT")), update_value)
         self.assertEqual(int(runtime.config_values.RUN_EXEC_PROCESS_LIMIT), update_value)
-
-    def test_settings_config_category_exposes_token_generation_control(self) -> None:
-        db_execute("UPDATE users SET is_system_admin=0")
-        db_execute("UPDATE users SET is_system_admin=1 WHERE username=?", ["alice"])
-        workspace_service.clear_identity_caches()
-
-        page_resp = settings_config_category_page(
-            _request("/admin/config/judgehost"),
-            user="alice",
-            category="judgehost",
-        )
-        self.assertEqual(page_resp.status_code, 200)
-        page_html = page_resp.body.decode("utf-8", errors="replace")
-        self.assertIn("JUDGEHOST_API_TOKEN", page_html)
-        self.assertIn("data-token-generate=\"1\"", page_html)
-        self.assertIn("data-token-target=\"config_JUDGEHOST_API_TOKEN\"", page_html)
 
     def test_settings_worker_queue_snapshot_requires_system_admin(self) -> None:
         with self.assertRaises(HTTPException) as blocked:

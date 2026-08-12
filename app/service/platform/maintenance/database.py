@@ -23,7 +23,12 @@ class ArtifactCleanupDatabase:
             raise RuntimeError("artifact usage query returned no row")
         return {table: int(row[table]) for table in tables}
 
-    def reset_tables(self, tables: tuple[str, ...]) -> dict[str, int]:
+    def reset_tables(
+        self,
+        tables: tuple[str, ...],
+        *,
+        drop_indexes: tuple[str, ...],
+    ) -> dict[str, int]:
         def transaction(connection) -> dict[str, int]:
             counts = {
                 table: int(
@@ -33,6 +38,8 @@ class ArtifactCleanupDatabase:
                 )
                 for table in tables
             }
+            for index_name in drop_indexes:
+                connection.execute(f"DROP INDEX IF EXISTS {index_name}")
             for table in tables:
                 connection.execute(f"DROP TABLE {table}")
             for statement in current_schema_statements_for_tables(tables):

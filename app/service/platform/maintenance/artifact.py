@@ -10,6 +10,7 @@ from app.service.platform.maintenance.filesystem import ArtifactCleanupFilesyste
 from app.service.platform.maintenance.plan import (
     ARTIFACT_TABLES,
     CLEANUP_FILESYSTEM_CLASSES,
+    REDUNDANT_DATABASE_INDEXES,
     ArtifactUsageSnapshot,
 )
 from app.service.platform.runtime_blob_store import RuntimeBlobStore
@@ -114,7 +115,10 @@ class ArtifactCleanupService:
             )
             result["completed_stage"] = "preflight"
             move("database")
-            deleted_rows = self._database.reset_tables(ARTIFACT_TABLES)
+            deleted_rows = self._database.reset_tables(
+                ARTIFACT_TABLES,
+                drop_indexes=REDUNDANT_DATABASE_INDEXES,
+            )
             result["deleted_rows"] = deleted_rows
             result["deleted_row_total"] = sum(deleted_rows.values())
             result["affected_row_total"] = result["deleted_row_total"]

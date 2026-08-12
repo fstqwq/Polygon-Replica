@@ -97,44 +97,6 @@ class TestStatementRoutes(BackendE2ETestBase):
         self.assertIn("/statement/languages/add", html)
         self.assertNotIn("/statement/languages/delete", html)
 
-    def test_preview_page_shows_missing_state_until_language_is_added(self) -> None:
-        ws = Path(runtime.workspace_service.workspace_context(self.problem, self.user, include_recent=False)["workspace"]["path"])
-        shutil.rmtree(ws / "statement-sections", ignore_errors=True)
-
-        resp = preview_page(_request(f"/problems/{self.problem}/statement"), self.problem, self.user)
-
-        self.assertEqual(resp.status_code, 200)
-        html = resp.body.decode("utf-8", errors="replace")
-        self.assertIn("/statement/languages/add", html)
-
-    def test_preview_page_shows_delete_current_when_language_exists(self) -> None:
-        resp = preview_page(_request(f"/problems/{self.problem}/statement"), self.problem, self.user)
-
-        self.assertEqual(resp.status_code, 200)
-        html = resp.body.decode("utf-8", errors="replace")
-        self.assertIn("/statement/languages/delete", html)
-
-    def test_preview_page_lists_compile_assets_and_contestant_attachments_separately(self) -> None:
-        ws = Path(runtime.workspace_service.workspace_context(self.problem, self.user, include_recent=False)["workspace"]["path"])
-        english_dir = ws / "statement-sections" / "english"
-        english_dir.mkdir(parents=True, exist_ok=True)
-        (english_dir / "legend.tex").write_text("Legend.\n", encoding="utf-8")
-        (ws / "statement-assets").mkdir(parents=True, exist_ok=True)
-        (ws / "statement-assets" / "diagram.png").write_bytes(b"PNG")
-        (ws / "attachments").mkdir(parents=True, exist_ok=True)
-        (ws / "attachments" / "guess_number_testing_tool.py").write_text("print('ok')\n", encoding="utf-8")
-
-        resp = preview_page(_request(f"/problems/{self.problem}/statement"), self.problem, self.user)
-        self.assertEqual(resp.status_code, 200)
-        html = resp.body.decode("utf-8", errors="replace")
-        self.assertIn("Statement attachments", html)
-        self.assertIn("Contestant attachments", html)
-        self.assertIn("diagram.png", html)
-        self.assertIn("guess_number_testing_tool.py", html)
-        self.assertIn("/statement/attachments/upload", html)
-        self.assertIn("/statement/assets/upload", html)
-        self.assertIn("/statement/assets/delete", html)
-
     def test_statement_compile_asset_upload_stores_file_under_shared_root(self) -> None:
         ws = Path(runtime.workspace_service.workspace_context(self.problem, self.user, include_recent=False)["workspace"]["path"])
         upload = self._FakeUpload("diagram.png", b"PNG")

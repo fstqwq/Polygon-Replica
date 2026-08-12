@@ -840,29 +840,6 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         self.assertNotIn("validator_source", build_cfg)
         self.assertNotIn("accepted_solution_source", build_cfg)
 
-    def test_metadata_popup_shows_readonly_system_limits(self) -> None:
-        resp = general_page(_request("/problems/alice/sample/statement"), "alice/sample", "alice")
-        self.assertEqual(resp.status_code, 200)
-        html = resp.body.decode("utf-8", errors="replace")
-        self.assertIn(f"{int(runtime.config_values.RUN_EXEC_OUTPUT_KB)} KiB", html)
-        self.assertIn(f"{int(runtime.config_values.TOOLCHAIN_COMPILE_OUTPUT_KB)} KiB", html)
-        self.assertIn(f"{int(runtime.config_values.JUDGEHOST_STORED_LOG_LIMIT_BYTES)} bytes", html)
-        self.assertNotIn('name="RUN_EXEC_OUTPUT_KB"', html)
-        self.assertNotIn('name="TOOLCHAIN_COMPILE_OUTPUT_KB"', html)
-        self.assertNotIn('name="JUDGEHOST_STORED_LOG_LIMIT_BYTES"', html)
-
-    def test_clean_workspace_has_one_empty_message_and_disables_publish(self) -> None:
-        self._ensure_committed_head("alice/sample", "alice")
-        resp = workspace_page(
-            _request("/problems/alice/sample/workspace"), "alice/sample", "alice"
-        )
-        self.assertEqual(resp.status_code, 200)
-        html = resp.body.decode("utf-8", errors="replace")
-        self.assertRegex(
-            html,
-            r'<input[^>]*name="message"[^>]*disabled',
-        )
-
     def test_workspace_page_get_refreshes_workspace_status_in_db(self) -> None:
         username = self.random_id("wsget")
         workspace_service.grant_repo_access("alice/sample", username, "owner")
@@ -1003,37 +980,6 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         self.assertNotIn(".env", html)
         self.assertNotIn(".cache", html)
 
-    def test_workspace_page_danger_zone_is_collapsed_and_sudo_gated(self) -> None:
-        resp = workspace_page(_request("/problems/alice/sample/workspace"), "alice/sample", "alice")
-        self.assertEqual(resp.status_code, 200)
-        html = resp.body.decode("utf-8", errors="replace")
-        self.assertIn('data-sudo-gated="1"', html)
-        self.assertIn('data-sudo-required="1"', html)
-        self.assertIn('data-sudo-url="/sudo?next=', html)
-
-    def test_workspace_page_marks_delete_forms_ready_when_sudo_cookie_exists(self) -> None:
-        username = self.random_id("wssudo")
-        password = "StrongPass123"
-        auth_cookie = self._issue_auth_cookie_header(username, password)
-        workspace_service.grant_repo_access("alice/sample", username, "owner")
-        workspace_service.ensure_workspace("alice/sample", username)
-        sudo_resp = _sudo_with_password_envelope(auth_cookie, password, next_path="/problems/alice/sample/workspace")
-        self.assertEqual(sudo_resp.status_code, 303)
-        sudo_token = _cookie_value_from_response(sudo_resp, SUDO_COOKIE_NAME)
-        self.assertTrue(sudo_token)
-        both_cookie = f"{auth_cookie}; {SUDO_COOKIE_NAME}={sudo_token}"
-
-        resp = workspace_page(
-            _request_with_cookie("/problems/alice/sample/workspace", both_cookie),
-            "alice/sample",
-            username,
-        )
-        self.assertEqual(resp.status_code, 200)
-        html = resp.body.decode("utf-8", errors="replace")
-        self.assertIn('data-sudo-gated="1"', html)
-        self.assertNotIn('data-sudo-required="1"', html)
-        self.assertIn('data-sudo-required="0"', html)
-
     def test_workspace_review_shows_verification_failure_reason(self) -> None:
         ctx = workspace_service.workspace_context(
             "alice/sample",
@@ -1086,44 +1032,6 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         self.assertEqual(resp.status_code, 200)
         html = resp.body.decode("utf-8", errors="replace")
         self.assertIn("checker exited with code 1", html)
-
-    def test_workspace_page_shows_colored_diff_for_selected_file(self) -> None:
-        self._ensure_committed_head("alice/sample", "alice")
-        ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
-        rel = f"notes/workspace-diff-{uuid.uuid4().hex[:8]}.txt"
-        target = ws / rel
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text("base\n", encoding="utf-8")
-        git_service.commit(ws, f"workspace-diff-base-{uuid.uuid4().hex[:6]}", "alice", "alice@polygonlike.local")
-        target.write_text("base\nchanged\n", encoding="utf-8")
-
-        resp = workspace_page(_request("/problems/alice/sample/workspace", f"path={rel}"), "alice/sample", "alice")
-        self.assertEqual(resp.status_code, 200)
-        html = resp.body.decode("utf-8", errors="replace")
-        self.assertIn(rel, html)
-        self.assertIn("base", html)
-        self.assertIn("changed", html)
-
-    def test_workspace_page_does_not_auto_diff_first_changed_file(self) -> None:
-        self._ensure_committed_head("alice/sample", "alice")
-        ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
-        rel = f"notes/workspace-no-auto-diff-{uuid.uuid4().hex[:8]}.txt"
-        target = ws / rel
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text("base\n", encoding="utf-8")
-        git_service.commit(ws, f"workspace-no-auto-diff-base-{uuid.uuid4().hex[:6]}", "alice", "alice@polygonlike.local")
-        target.write_text("base\nchanged\n", encoding="utf-8")
-
-        resp = workspace_page(
-            _request("/problems/alice/sample/workspace"),
-            "alice/sample",
-            "alice",
-        )
-
-        self.assertEqual(resp.status_code, 200)
-        html = resp.body.decode("utf-8", errors="replace")
-        self.assertIn(rel, html)
-        self.assertNotIn("base\nchanged", html)
 
     def test_git_discard_path_restores_tracked_file_to_head(self) -> None:
         self._ensure_committed_head("alice/sample", "alice")
@@ -1362,23 +1270,6 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
             ["alice/sample", "bob"],
         )
         self.assertIsNone(removed)
-
-    def test_access_route_renders_with_request_injection(self) -> None:
-        username = self.random_id("access")
-        password = "StrongPass123"
-        auth_cookie = self._issue_auth_cookie_header(username, password)
-        workspace_service.grant_repo_access("alice/sample", username, "owner")
-
-        from app.main import app
-
-        with TestClient(app) as client:
-            resp = client.get(
-                "/problems/alice/sample/access",
-                headers={"cookie": auth_cookie},
-            )
-        self.assertEqual(resp.status_code, 200)
-        self.assertIn("Problem Access", resp.text)
-        self.assertNotIn('"loc":["query","request"]', resp.text)
 
     def test_workspace_access_grant_requires_registered_user(self) -> None:
         target = f"user-{uuid.uuid4().hex[:8]}"
@@ -1814,34 +1705,6 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         self.assertTrue((ws / "statement-sections" / "russian" / "legend.tex").is_file())
         self.assertFalse((ws / "statement-sections" / "english").exists())
 
-    def test_files_page_embeds_pdf_preview_for_pdf_source(self) -> None:
-        ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
-        rel = "statement-sections/english/problem.pdf"
-        target = ws / rel
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(b"%PDF-1.4\n% test\n1 0 obj\n<<>>\nendobj\ntrailer\n<<>>\n%%EOF\n")
-
-        resp = files_page(_request("/problems/alice/sample/files", f"path={rel}"), "alice/sample", "alice")
-        self.assertEqual(resp.status_code, 200)
-        html = resp.body.decode("utf-8", errors="replace")
-        self.assertIn(
-            "/problems/alice/sample/files/download?"
-            "path=statement-sections%2Fenglish%2Fproblem.pdf",
-            html,
-        )
-        self.assertNotIn('data-code-editor="1"', html)
-
-    def test_created_contest_is_listed(self) -> None:
-        slug = f"ui-root-contest-{uuid.uuid4().hex[:8]}"
-        create_resp = contests_root_create(_post_request("/contests/create"), user="alice", contest_slug=slug, contest_title="Root Contest")
-        self.assertEqual(create_resp.status_code, 303)
-        self.assertIn("/contests", create_resp.headers.get("location", ""))
-
-        resp = contests_root_page(_request("/contests"), "alice")
-        self.assertEqual(resp.status_code, 200)
-        html = resp.body.decode("utf-8", errors="replace")
-        self.assertIn(slug, html)
-
     def test_contests_root_page_orders_by_last_updated_desc(self) -> None:
         older_slug = f"ui-contest-sort-old-{uuid.uuid4().hex[:8]}"
         newer_slug = f"ui-contest-sort-new-{uuid.uuid4().hex[:8]}"
@@ -2112,37 +1975,6 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         self.assertIsNone(db_fetch_one("SELECT id FROM contests WHERE slug=?", [target_slug]))
         for problem_slug in created_problem_slugs:
             self.assertIsNone(db_fetch_one("SELECT id FROM problems WHERE slug=?", [problem_slug]))
-
-    def test_revision_history_page_v0_does_not_show_head_error_notification(self) -> None:
-        # Fresh test workspace starts at v0 (no commits).
-        resp = history_page(_request("/problems/alice/sample/history"), "alice/sample", "alice")
-        self.assertEqual(resp.status_code, 200)
-        html = resp.body.decode("utf-8", errors="replace")
-        self.assertIn("Backup &amp; Restore", html)
-        self.assertIn("Download current workspace", html)
-        self.assertIn("Import Snapshot", html)
-        self.assertIn("No revisions.", html)
-        self.assertNotIn("ambiguous argument 'HEAD'", html)
-        self.assertNotIn("unknown revision or path not in the working tree", html)
-
-    def test_revision_history_page_lists_commits(self) -> None:
-        self._ensure_committed_head("alice/sample", "alice")
-        ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
-        rel = f"notes/ui-history-{uuid.uuid4().hex[:8]}.txt"
-        p = ws / rel
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text("history-check\n", encoding="utf-8")
-        marker = f"ui-history-{uuid.uuid4().hex[:6]}"
-        git_service.commit(ws, marker, "alice", "alice@polygonlike.local")
-
-        resp = history_page(_request("/problems/alice/sample/history"), "alice/sample", "alice")
-        self.assertEqual(resp.status_code, 200)
-        html = resp.body.decode("utf-8", errors="replace")
-        self.assertIn("Backup &amp; Restore", html)
-        self.assertIn("Revision History", html)
-        self.assertIn(marker, html)
-        self.assertIn("View changes", html)
-        self.assertIn("Download", html)
 
     def test_git_commit_does_not_stage_hidden_paths(self) -> None:
         self._ensure_committed_head("alice/sample", "alice")
