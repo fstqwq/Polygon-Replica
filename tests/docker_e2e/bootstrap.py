@@ -10,6 +10,7 @@ sys.path.insert(
     os.environ.get("POLYGON_REPLICA_E2E_REPO_ROOT", "/opt/polygon-replica"),
 )
 
+from app.config.registry import build_config_values  # noqa: E402
 from app.db import DB, now_iso  # noqa: E402
 from app.service.statement.render import seed_statement_sources  # noqa: E402
 
@@ -29,7 +30,10 @@ def _write_json(path: Path, payload: object) -> None:
 
 
 def _configure_database() -> None:
-    db = DB(Path(os.environ["POLYGON_REPLICA_DB"]))
+    db = DB(
+        Path(os.environ["POLYGON_REPLICA_DB"]),
+        config_values=build_config_values(),
+    )
     db.init()
     values: dict[str, object] = {
         "JUDGEHOST_ENABLE": True,
