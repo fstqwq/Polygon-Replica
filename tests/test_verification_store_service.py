@@ -11,7 +11,11 @@ from app.service.verification.task_completion import TaskCompletion
 from app.service.verification.types import VerificationTaskStatus
 
 from tests.identity_helpers import canonical_test_verification_id
-from tests.isolated_db_helpers import isolated_db_fetch_all, isolated_db_fetch_one
+from tests.isolated_db_helpers import (
+    isolated_db_execute,
+    isolated_db_fetch_all,
+    isolated_db_fetch_one,
+)
 from tests.verification_service_fixture import VerificationServiceTestBase
 
 
@@ -296,7 +300,8 @@ class TestVerificationStoreService(VerificationServiceTestBase):
                 ),
             )
         )
-        self.db.execute(
+        isolated_db_execute(
+            self.db,
             "UPDATE verification_tasks SET result_json='{malformed' WHERE id=?",
             [task_id],
         )

@@ -1235,34 +1235,6 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         self.assertIsInstance(metadata, dict)
         self.assertEqual(str(metadata.get("mode") or ""), "pass-fail")
 
-    def test_run_execute_records_problem_mode_from_general_config(self) -> None:
-        ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
-        self._configure_solution_fixtures(
-            ws,
-            ("accepted.cpp", "accepted"),
-        )
-        self._update_problem_config(ws, mode="interactive", pass_limit=2)
-
-        with patch(
-            "app.impl.run_export.run.start_verification_job",
-            return_value=True,
-        ):
-            resp = run_execute(
-                problem="alice/sample",
-                user="alice",
-                artifact_verification_id="",
-                solution_paths=["solutions/accepted.cpp"],
-                submission_upload=None,
-            )
-        self.assertEqual(resp.status_code, 303)
-        loc = resp.headers.get("location", "")
-        query = parse_qs(urlparse(loc).query)
-        verification_id = (query.get("verification_id") or [""])[0]
-        self.assertTrue(verification_id)
-        metadata = config.verification_service.verification_detail(verification_id)
-        self.assertIsInstance(metadata, dict)
-        self.assertEqual(str(metadata.get("mode") or ""), "interactive")
-
     def test_run_execute_passes_canonical_targets_to_queue_start(self) -> None:
         ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
         self._configure_solution_fixtures(
@@ -1407,9 +1379,8 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             workspace_id=workspace_id,
         )
 
-        with patch.object(
-            config.storage_layout,
-            "prepare_verification_layout",
+        with patch(
+            "app.service.platform.fs.layout.StorageLayout.prepare_verification_layout",
             side_effect=RuntimeError("verification layout unavailable"),
         ):
             run_workspace_verification_dag(

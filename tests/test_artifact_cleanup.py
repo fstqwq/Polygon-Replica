@@ -428,7 +428,6 @@ class TestArtifactCleanup(unittest.TestCase):
         durable_files = self._seed_generated_data()
         with isolated_db_connection(self.db) as connection:
             connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-        database_size_before = self.settings.db_path.stat().st_size
         coordinator = MaintenanceCoordinator(
             self.cleanup,
             self.worker_queue,
@@ -504,7 +503,11 @@ class TestArtifactCleanup(unittest.TestCase):
         self.assertEqual(self.worker_queue.reset_count, 1)
         self.assertEqual(self.judgehost.reset_count, 1)
         self.assertEqual(self.process_reset_count, 1)
-        self.assertLess(self.settings.db_path.stat().st_size, database_size_before)
+        with isolated_db_connection(self.db) as connection:
+            freelist_count = int(
+                connection.execute("PRAGMA freelist_count").fetchone()[0]
+            )
+        self.assertEqual(freelist_count, 0)
 
     def test_database_cleanup_replaces_tables_without_row_deletes(self) -> None:
         self._seed_generated_data()

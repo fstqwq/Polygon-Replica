@@ -2089,7 +2089,7 @@ class TestJudgehostScheduler(unittest.TestCase):
             def __init__(self) -> None:
                 self.unbound: list[tuple[str, str]] = []
 
-            def unbind_judgehost_runtime(
+            def unbind(
                 self,
                 verification_task_id: str,
                 *,

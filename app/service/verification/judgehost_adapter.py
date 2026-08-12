@@ -73,7 +73,6 @@ class VerificationJudgehostAdapter:
                         [execution_scope_id, max(1, int(limit))],
                     ).fetchall()
                 )
-            bounded_names = tuple(test_names[: max(1, int(limit))])
             refs_by_name: dict[str, dict[str, str]] = {}
             for row in connection.execute(
                 """
@@ -102,7 +101,7 @@ class VerificationJudgehostAdapter:
                     input_ref=refs_by_name[test_name]["input_ref"],
                     answer_ref=refs_by_name[test_name]["answer_ref"],
                 )
-                for test_name in bounded_names
+                for test_name in test_names
                 if test_name in refs_by_name
             )
             return CaseArtifactSet(
