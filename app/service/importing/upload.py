@@ -1,7 +1,5 @@
 """Bounded upload spooling for archive import entry points."""
 
-from __future__ import annotations
-
 from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager, contextmanager
 import os

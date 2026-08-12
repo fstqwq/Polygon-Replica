@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 from pathlib import Path
 
 from app.service.statement.context import pick_statement_language

@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 from app.service.statement.ftl.parser import _split_default_expr
 from app.service.statement.ftl.tokenizer import _tokenize_expr
 

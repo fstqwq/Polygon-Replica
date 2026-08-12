@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 from typing import Mapping, TypedDict
 
 from app.db import DB, now_iso

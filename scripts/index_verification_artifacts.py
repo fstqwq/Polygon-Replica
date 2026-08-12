@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
 """Offline replacement of verification_artifact_refs with the owner index."""
 
-from __future__ import annotations
-
 import argparse
 import sqlite3
 from pathlib import Path

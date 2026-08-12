@@ -1,7 +1,5 @@
 """Durable overrides and active snapshots for typed system configuration."""
 
-from __future__ import annotations
-
 import json
 import threading
 from typing import TypedDict

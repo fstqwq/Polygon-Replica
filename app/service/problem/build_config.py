@@ -1,7 +1,5 @@
 """Canonical ``config/build.json`` model and codec."""
 
-from __future__ import annotations
-
 import json
 from pathlib import Path, PurePosixPath
 from typing import NotRequired, TypedDict

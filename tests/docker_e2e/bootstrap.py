@@ -1,7 +1,5 @@
 """Create a fresh, dirty authoring workspace for the Docker black-box run."""
 
-from __future__ import annotations
-
 import json
 import os
 import sys

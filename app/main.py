@@ -1,7 +1,5 @@
 """ASGI entry point for the Polygon Replica web application."""
 
-from __future__ import annotations
-
 from contextlib import asynccontextmanager
 from time import monotonic
 

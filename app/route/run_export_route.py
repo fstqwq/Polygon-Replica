@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 from fastapi.responses import HTMLResponse
 
 from app.impl.run_export.artifact import artifact_file, export_file, materialization_file

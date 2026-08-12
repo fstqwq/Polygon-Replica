@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import mimetypes
 from dataclasses import asdict
 from datetime import datetime, timezone

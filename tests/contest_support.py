@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 from tests.common import E2ETestBase
 from tests.db_helpers import db_fetch_one
 from tests.ui_support import (

@@ -1,7 +1,5 @@
 """Polygon contest-package metadata and bounded archive views."""
 
-from __future__ import annotations
-
 import re
 import shutil
 import zipfile

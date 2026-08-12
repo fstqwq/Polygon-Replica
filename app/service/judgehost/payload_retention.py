@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 
 _HEAVY_PAYLOAD_KEYS = {
     "domjudge_precomputed",

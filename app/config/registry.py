@@ -1,7 +1,5 @@
 """Authoritative registry and cross-field validation for system config."""
 
-from __future__ import annotations
-
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 

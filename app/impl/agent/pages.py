@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 from fastapi import Form, HTTPException, Request
 
 from app.impl.agent.shared import current_web_user

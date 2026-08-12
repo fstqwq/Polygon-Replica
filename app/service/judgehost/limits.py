@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 from collections.abc import Mapping
 
 from app.service.platform.truncation import STORED_LOG_TRUNCATED_MARKER

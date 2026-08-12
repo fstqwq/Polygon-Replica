@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 from app.service.access.model import AccessDecision
 
 

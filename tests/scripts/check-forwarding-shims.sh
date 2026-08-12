@@ -10,8 +10,6 @@ if ! command -v "$PYTHON_BIN" >/dev/null 2>&1; then
 fi
 
 "$PYTHON_BIN" - <<'PY'
-from __future__ import annotations
-
 import ast
 from pathlib import Path
 import sys

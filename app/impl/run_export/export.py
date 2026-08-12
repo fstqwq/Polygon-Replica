@@ -1,4 +1,3 @@
-from __future__ import annotations
 from app.impl.auth.session import require_session_user
 
 import json

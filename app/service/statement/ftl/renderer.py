@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import re
 
 from app.service.statement.ftl.evaluator import (

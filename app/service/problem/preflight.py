@@ -1,7 +1,5 @@
 """Read-only validation of canonical sources at published Git revisions."""
 
-from __future__ import annotations
-
 import tempfile
 from pathlib import Path
 from typing import TypedDict

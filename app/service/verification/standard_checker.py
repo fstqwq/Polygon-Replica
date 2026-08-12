@@ -4,8 +4,6 @@ Provides hash-based detection of whether a checker source file matches
 a known standard testlib checker, and a utility to copy standard checkers
 into a problem repository.
 """
-from __future__ import annotations
-
 import hashlib
 import os
 from pathlib import Path

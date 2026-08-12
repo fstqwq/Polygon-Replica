@@ -6,8 +6,6 @@ ACKs and late diagnostics.  It returns deterministic case outcomes for the E2E
 fixture instead of executing authored source code.
 """
 
-from __future__ import annotations
-
 import base64
 import binascii
 import hashlib

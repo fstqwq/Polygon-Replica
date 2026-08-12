@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 _SCRIPT_ID_MODULUS = 1048576
 
 

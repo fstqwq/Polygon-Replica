@@ -1,7 +1,5 @@
 """SQLite persistence for the system SMTP configuration."""
 
-from __future__ import annotations
-
 from dataclasses import dataclass
 
 from app.db import DB, now_iso

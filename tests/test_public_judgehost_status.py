@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import unittest
 
 from app.service.judgehost.public_status import project_public_status

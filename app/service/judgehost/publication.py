@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 from app.db import now_iso
 from app.service.judgehost.batch_scheduler_models import ProgramTerminalClaim
 from app.service.judgehost.case_binding import CaseBinding

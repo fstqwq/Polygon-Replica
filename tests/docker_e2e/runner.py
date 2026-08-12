@@ -1,7 +1,5 @@
 """Black-box assertions for the isolated app + mock-Judgehost Compose stack."""
 
-from __future__ import annotations
-
 import json
 import os
 import re

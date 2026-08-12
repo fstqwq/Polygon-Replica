@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 from typing import Protocol
 
 from app.service.judgehost.case_binding import CaseBindingPort

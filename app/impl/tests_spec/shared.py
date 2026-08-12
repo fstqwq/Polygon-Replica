@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 from pathlib import Path
 
 from app.impl.runtime.dependency import runtime

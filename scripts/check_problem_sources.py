@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
 """Report published problem repositories that are not canonical source trees."""
 
-from __future__ import annotations
-
 import argparse
 import json
 import sqlite3

@@ -1,7 +1,5 @@
 """Small authenticated encryption helper for database-stored secrets."""
 
-from __future__ import annotations
-
 import base64
 import os
 import secrets

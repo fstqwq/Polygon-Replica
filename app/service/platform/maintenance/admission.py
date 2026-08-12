@@ -1,7 +1,5 @@
 """Process-local admission boundary shared by requests and runtime work."""
 
-from __future__ import annotations
-
 import threading
 from contextlib import contextmanager
 from typing import Iterator

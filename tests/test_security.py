@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 from tests.db_helpers import (
     activate_test_verification,
     admit_test_verification,

@@ -1,7 +1,5 @@
 """SQLite persistence for immutable problem packages and builds."""
 
-from __future__ import annotations
-
 from typing import TypedDict
 
 from app.db import DB, now_iso

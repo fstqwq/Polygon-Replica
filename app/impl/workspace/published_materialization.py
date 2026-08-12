@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 from app.impl.runtime.dependency import runtime
 from app.service.problem_package.service import MaterializationRow, PublishedRevision
 

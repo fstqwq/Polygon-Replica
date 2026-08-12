@@ -1,7 +1,5 @@
 """Strict JSON decoding shared by authored problem-source codecs."""
 
-from __future__ import annotations
-
 import json
 from collections.abc import Iterable
 from typing import NoReturn

@@ -1,7 +1,5 @@
 """Canonical Native package manifest creation and validation."""
 
-from __future__ import annotations
-
 import hashlib
 import json
 import os

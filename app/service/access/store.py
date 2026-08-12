@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 from app.db import DB
 from app.service.access.model import AccessRole, ProblemParticipationRow
 from app.service.access.policy import access_role, derived_problem_role, stronger_role

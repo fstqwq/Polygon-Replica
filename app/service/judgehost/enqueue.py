@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 from app.main_constant import GENERAL_CONFIG_DEFAULTS
 
 import json

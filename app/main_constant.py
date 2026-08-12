@@ -1,7 +1,5 @@
 """Fixed application invariants, paths, regular expressions, and templates."""
 
-from __future__ import annotations
-
 import re
 from pathlib import Path
 

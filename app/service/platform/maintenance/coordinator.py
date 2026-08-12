@@ -1,7 +1,5 @@
 """Single-process coordination for exclusive maintenance operations."""
 
-from __future__ import annotations
-
 import logging
 import threading
 import uuid

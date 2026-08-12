@@ -1,7 +1,5 @@
 """SQLite mechanics for resetting and compacting derived state."""
 
-from __future__ import annotations
-
 from pathlib import Path
 
 from app.db import (

@@ -1,7 +1,5 @@
 """Site-wide source-state backup for bare repositories and workspaces."""
 
-from __future__ import annotations
-
 import hashlib
 import io
 import json

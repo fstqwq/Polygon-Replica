@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 from pathlib import Path
 
 from app.service.platform.hashing import quick_fp_digest, sha256_hex_bytes

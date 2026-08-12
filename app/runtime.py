@@ -1,6 +1,5 @@
 """Composition root for one Polygon Replica application process."""
 
-from __future__ import annotations
 import secrets
 import threading
 from dataclasses import dataclass, field

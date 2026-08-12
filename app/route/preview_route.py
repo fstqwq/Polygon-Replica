@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 from fastapi.responses import HTMLResponse
 
 from app.impl.preview.preview import (

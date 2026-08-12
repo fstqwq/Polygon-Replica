@@ -1,7 +1,5 @@
 """Export job and converted artifact persistence."""
 
-from __future__ import annotations
-
 from typing import TypedDict
 
 from app.db import DB, now_iso

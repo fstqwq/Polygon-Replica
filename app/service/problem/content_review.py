@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 from typing import Literal, TypedDict
 
 from app.service.problem.resource_limits import resource_limit_display

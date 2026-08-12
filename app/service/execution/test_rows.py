@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 ExecutionTestPassRow = dict[str, object]
 ExecutionTestRow = dict[str, object]
 

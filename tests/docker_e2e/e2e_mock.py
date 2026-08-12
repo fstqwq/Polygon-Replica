@@ -1,7 +1,5 @@
 """HTTP-first deployed journey for the mock-Judgehost system E2E."""
 
-from __future__ import annotations
-
 import argparse
 import base64
 import hashlib

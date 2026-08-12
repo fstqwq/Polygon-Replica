@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import re
 
 from app.service.platform.hashing import sha256_hex_text

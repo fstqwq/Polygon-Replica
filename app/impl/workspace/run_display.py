@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 from app.service.verification.failure_display import verification_solution_failure_hint
 from app.service.verification.result_match import (
     run_actual_failed_codes,

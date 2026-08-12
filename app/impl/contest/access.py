@@ -4,8 +4,6 @@ Problem access is derived dynamically from membership and roster rows; these
 handlers never copy contest roles into ``repo_acl``.
 """
 
-from __future__ import annotations
-
 from typing import Annotated
 
 from fastapi import Depends, Form, HTTPException, Request

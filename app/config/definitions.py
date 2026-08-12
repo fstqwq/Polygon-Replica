@@ -1,7 +1,5 @@
 """Complete definitions for admin-editable system configuration."""
 
-from __future__ import annotations
-
 from app.config.model import ConfigDefinition, ConfigKind, ConfigPolicy, TextPolicy
 
 _DEFAULT_POLICY = ConfigPolicy()

@@ -3,8 +3,6 @@
 # The canonical DDL and its validation manifest must remain reviewable together.
 # pylint: disable=too-many-lines
 
-from __future__ import annotations
-
 import logging
 import os
 import sqlite3

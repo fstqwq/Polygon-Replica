@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 from pathlib import Path
 
 from app.service.platform.runtime_blob_store import PayloadFile

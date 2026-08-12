@@ -1,7 +1,5 @@
 """HTTP logging policy for high-frequency service endpoints."""
 
-from __future__ import annotations
-
 import logging
 
 

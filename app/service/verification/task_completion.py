@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 from dataclasses import dataclass
 
 from app.service.execution.codec import compile_diagnostics_payload

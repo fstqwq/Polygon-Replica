@@ -1,7 +1,5 @@
 """Artifact-cleanup policy orchestration over explicit mechanics."""
 
-from __future__ import annotations
-
 import logging
 import time
 from typing import Callable, Protocol

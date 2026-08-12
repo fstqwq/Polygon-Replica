@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 from collections.abc import Callable, Iterable
 
 from app.service.judgehost.case_result import CaseTerminalReport

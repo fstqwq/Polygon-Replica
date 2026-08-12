@@ -1,7 +1,5 @@
 """Bounded ZIP structure validation and consumed-byte accounting."""
 
-from __future__ import annotations
-
 import codecs
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath

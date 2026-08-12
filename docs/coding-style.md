@@ -9,11 +9,10 @@ annotation semantics.
 
 ## Import layout
 
-Imports normally stay at module scope, after the module docstring and any
-`from __future__` imports. Separate them into standard-library, third-party,
-and repository-local groups with one blank line between groups. Put separate
-`import module` statements on separate lines; a parenthesized `from` import may
-list several names vertically.
+Imports normally stay at module scope after the module docstring. Separate them
+into standard-library, third-party, and repository-local groups with one blank
+line between groups. Put separate `import module` statements on separate lines;
+a parenthesized `from` import may list several names vertically.
 
 Use absolute imports for repository modules. A function-local import is
 reserved for a real initialization cycle, an optional dependency, or behavior

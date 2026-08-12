@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 from app.db import DB
 from app.service.disk.runtime_state_store import RuntimeStateStore
 

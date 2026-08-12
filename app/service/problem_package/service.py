@@ -5,8 +5,6 @@ Consumers receive a validated package reader and never a workspace, Git handle, 
 verification artifact reference.
 """
 
-from __future__ import annotations
-
 import os
 import shutil
 import stat

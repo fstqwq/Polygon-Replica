@@ -1,7 +1,5 @@
 """Filesystem safety, measurement, and deletion mechanics for maintenance."""
 
-from __future__ import annotations
-
 import os
 import shutil
 from pathlib import Path

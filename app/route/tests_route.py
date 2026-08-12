@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 from fastapi.responses import HTMLResponse
 
 from app.impl.tests_spec.routes import (

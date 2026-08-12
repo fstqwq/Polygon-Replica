@@ -1,7 +1,5 @@
 """Request-bound access to the application composition object."""
 
-from __future__ import annotations
-
 from contextlib import contextmanager
 from contextvars import ContextVar, Token
 from typing import Iterator, cast

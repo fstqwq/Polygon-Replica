@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 from tests.contest_support import ContestActionBase
 from tests.db_helpers import db_fetch_one
 from tests.ui_support import (

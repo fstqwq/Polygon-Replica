@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import secrets
 from typing import Annotated, TypedDict
 from urllib.parse import quote, quote_plus, urlencode

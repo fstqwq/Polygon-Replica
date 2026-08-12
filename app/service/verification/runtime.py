@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 
 def coerce_int(raw: object, default: int, min_value: int, max_value: int) -> int:
     try:

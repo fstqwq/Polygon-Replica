@@ -1,7 +1,5 @@
 """Persistence boundary for tests that own a private SQLite database."""
 
-from __future__ import annotations
-
 import sqlite3
 from contextlib import AbstractContextManager
 from typing import Callable, TypeVar

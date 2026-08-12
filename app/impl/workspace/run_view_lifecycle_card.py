@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 from typing import TypedDict
 
 from app.impl.runtime.dependency import runtime

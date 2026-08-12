@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 # ascii-lint: allow; reason=chinese-test
 
 from tests.db_helpers import db_execute, db_fetch_all, db_fetch_one

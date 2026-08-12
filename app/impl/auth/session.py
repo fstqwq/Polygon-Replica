@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 from fastapi import HTTPException, Request
 
 from app.impl.runtime.dependency import runtime

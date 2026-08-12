@@ -1,7 +1,5 @@
 """Canonical expected-behavior parsing for ICPC package submissions."""
 
-from __future__ import annotations
-
 import re
 import os
 from pathlib import Path, PurePosixPath

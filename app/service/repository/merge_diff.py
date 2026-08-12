@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 from itertools import zip_longest

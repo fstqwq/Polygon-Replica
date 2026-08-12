@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import json
 from app.db import DB
 from app.service.platform.error_text import (

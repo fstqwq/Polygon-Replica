@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import unittest
 
 from app.service.problem.content_review import problem_content_review

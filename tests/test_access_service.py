@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 from app.db import now_iso
 from app.service.access.policy import agent_scope, contest_role, repo_role
 

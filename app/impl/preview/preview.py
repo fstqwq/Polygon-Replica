@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import app.main_constant as _K
 from app.impl.auth.session import require_session_user
 

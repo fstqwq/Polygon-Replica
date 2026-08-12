@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 
 def _skip_tex_space_and_comments(text: str, index: int) -> int:
     length = len(text)

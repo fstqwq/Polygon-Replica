@@ -1,7 +1,5 @@
 """Startup and shutdown operations for an explicit application runtime."""
 
-from __future__ import annotations
-
 import shutil
 import warnings
 

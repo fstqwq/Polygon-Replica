@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 from collections.abc import Iterable
 
 from app.service.problem.solution_metadata import normalize_expected_behavior

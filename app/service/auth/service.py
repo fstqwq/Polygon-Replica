@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 from app.config import ConfigValues
 from app.service.disk.auth_store import AuthStore
 from app.service.auth.password_hash import password_verifier_storage_hash

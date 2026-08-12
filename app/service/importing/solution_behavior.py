@@ -1,7 +1,5 @@
 """Best-effort solution behavior inference for external package imports."""
 
-from __future__ import annotations
-
 from pathlib import Path
 from typing import cast
 

@@ -20,8 +20,6 @@ deterministic, but it does not promise strict Case completion order or exclusive
 execution of a Batch by one host.
 """
 
-from __future__ import annotations
-
 import heapq
 import itertools
 import statistics

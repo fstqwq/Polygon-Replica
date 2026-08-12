@@ -6,8 +6,6 @@ samples are rendered from the exact input and answer recorded by verification.
 The persisted archive is never modified.
 """
 
-from __future__ import annotations
-
 from app.service.problem.test_spec import (
     dumps_tests_spec,
     load_tests_spec,

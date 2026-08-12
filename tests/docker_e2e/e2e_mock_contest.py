@@ -1,7 +1,5 @@
 """Contest PDF portion of the deployed mock-Judgehost E2E journey."""
 
-from __future__ import annotations
-
 import hashlib
 import json
 import os

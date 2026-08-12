@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import unittest
 
 from app.impl.workspace.run_display import (

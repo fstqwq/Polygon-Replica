@@ -1,7 +1,5 @@
 """Declarative inventory of cleanup-safe derived database state."""
 
-from __future__ import annotations
-
 from typing import Literal, TypedDict
 
 

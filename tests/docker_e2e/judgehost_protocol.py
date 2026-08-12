@@ -1,7 +1,5 @@
 """Judgehost API wire shapes shared by the Docker E2E client and assertions."""
 
-from __future__ import annotations
-
 import os
 from pathlib import Path
 

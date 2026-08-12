@@ -1,7 +1,5 @@
 """Load and validate the canonical authored problem source tree."""
 
-from __future__ import annotations
-
 from dataclasses import dataclass
 from pathlib import Path
 
