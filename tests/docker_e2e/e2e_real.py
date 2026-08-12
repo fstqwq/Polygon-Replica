@@ -107,7 +107,7 @@ BASE_FIXTURE_FILES = {
     "validators/validate.cpp": (
         '#include "testlib.h"\n'
         "int main(int argc, char **argv) { registerValidation(argc, argv); "
-        "inf.readLong(); inf.readEof(); }\n"
+        "inf.readLong(); inf.readEoln(); inf.readEof(); }\n"
     ),
 }
 
