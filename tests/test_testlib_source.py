@@ -34,7 +34,11 @@ class TestTestlibSourceHelpers(unittest.TestCase):
             header.parent.mkdir(parents=True, exist_ok=True)
             header.write_text("// workspace testlib\n", encoding="utf-8")
 
-            payload = _testlib_extra_sources(workspace, "validators/validator.cpp")
+            payload = _testlib_extra_sources(
+                runtime,
+                workspace,
+                "validators/validator.cpp",
+            )
             self.assertIsInstance(payload, dict)
             extra = payload.get("extra_source_files") if isinstance(payload, dict) else None
             self.assertIsInstance(extra, dict)
@@ -46,7 +50,13 @@ class TestTestlibSourceHelpers(unittest.TestCase):
     def test_compile_check_extra_sources_do_not_replace_missing_workspace_header(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             workspace = Path(tmp)
-            self.assertIsNone(_testlib_extra_sources(workspace, "validators/validator.cpp"))
+            self.assertIsNone(
+                _testlib_extra_sources(
+                    runtime,
+                    workspace,
+                    "validators/validator.cpp",
+                )
+            )
 
 
 if __name__ == "__main__":

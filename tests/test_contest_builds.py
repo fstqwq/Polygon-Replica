@@ -224,8 +224,9 @@ class TestContestBuilds(ContestActionBase):
 
         with (
             patch.object(runtime.worker_queue_service, "submit", side_effect=submit),
-            patch(
-                "app.impl.workspace.published_materialization.ensure_published_materialization",
+            patch.object(
+                runtime.contest_build_service,
+                "_materialize_revision",
                 return_value=materialization,
             ),
             patch.object(
@@ -313,8 +314,9 @@ class TestContestBuilds(ContestActionBase):
 
         with (
             patch.object(runtime.worker_queue_service, "submit", side_effect=submit),
-            patch(
-                "app.impl.workspace.published_materialization.ensure_published_materialization",
+            patch.object(
+                runtime.contest_build_service,
+                "_materialize_revision",
                 side_effect=materialize,
             ),
             patch.object(
@@ -631,8 +633,9 @@ class TestContestBuilds(ContestActionBase):
 
         with (
             patch.object(runtime.worker_queue_service, "submit", side_effect=submit),
-            patch(
-                "app.impl.workspace.published_materialization.ensure_published_materialization",
+            patch.object(
+                runtime.contest_build_service,
+                "_materialize_revision",
                 return_value=materialization,
             ),
             patch.object(

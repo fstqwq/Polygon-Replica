@@ -141,6 +141,19 @@ def ensure_local_env() -> None:
 
 ensure_local_env()
 
+import app.impl.auth.password_envelope as password_envelope_module  # noqa: E402
+from app.impl.auth.password_envelope import PasswordEnvelopeStore  # noqa: E402
+from cryptography.hazmat.primitives.asymmetric import rsa  # noqa: E402
+
+
+# Full-runtime tests exercise the envelope protocol, not RSA key generation cost.
+# Install the test store before importing app.main, which imports every HTTP
+# implementation module that consumes this process-owned store.
+_TEST_PASSWORD_KEY = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+password_envelope_module.password_envelope_store = PasswordEnvelopeStore(
+    key_factory=lambda: _TEST_PASSWORD_KEY
+)
+
 from app.main import runtime  # noqa: E402
 
 
@@ -214,13 +227,10 @@ def clear_startup_recovery_abort_fault() -> None:
     runtime.db.execute(
         f"DROP TRIGGER IF EXISTS {_STARTUP_RECOVERY_ABORT_TRIGGER}"
     )
-import app.impl.auth.password_envelope as password_envelope_module  # noqa: E402
 from app.config import ConfigValues  # noqa: E402
-from app.impl.auth.password_envelope import PasswordEnvelopeStore  # noqa: E402
 from app.impl.runtime.dependency import bind_application  # noqa: E402
 from app.main import app  # noqa: E402
 from app.service.platform.testlib_source import maintained_testlib_header  # noqa: E402
-from cryptography.hazmat.primitives.asymmetric import rsa  # noqa: E402
 
 
 def _expected_test_db_path() -> Path:
@@ -240,12 +250,6 @@ def _assert_test_runtime_paths() -> None:
 
 _assert_test_runtime_paths()
 
-# Full-runtime tests exercise the envelope protocol, not RSA key generation cost.
-# The production defaults remain covered separately by an explicit contract test.
-_TEST_PASSWORD_KEY = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-password_envelope_module.password_envelope_store = PasswordEnvelopeStore(
-    key_factory=lambda: _TEST_PASSWORD_KEY
-)
 _test_config_values = dict(runtime.config_values.snapshot())
 _test_config_values["PASSWORD_HASH_ITERS"] = 10_000
 runtime.config_values.replace(_test_config_values)
