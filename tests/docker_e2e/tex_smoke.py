@@ -10,6 +10,7 @@ sys.path.insert(
     os.environ.get("POLYGON_REPLICA_E2E_REPO_ROOT", "/opt/polygon-replica"),
 )
 
+from app.config.registry import build_config_values  # noqa: E402
 from app.service.statement.tex_compile import TexCompileService  # noqa: E402
 
 
@@ -62,7 +63,7 @@ def _compile(service: TexCompileService, root: Path, engine: str, source_text: s
 
 def main() -> None:
     with tempfile.TemporaryDirectory(prefix="polygon-replica-tex-smoke-") as raw:
-        service = TexCompileService()
+        service = TexCompileService(config_values=build_config_values())
         for engine, source_text in SOURCES:
             _compile(service, Path(raw), engine, source_text)
     print("Docker pdflatex/xelatex sandbox smoke passed.")
