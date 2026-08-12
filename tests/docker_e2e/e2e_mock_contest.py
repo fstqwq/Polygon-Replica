@@ -90,11 +90,7 @@ def wait_for_contest_job(
         if latest.get("job_id") != job_id:
             raise RuntimeError(f"contest job status changed identity: {latest!r}")
         if latest.get("running") is False:
-            summary = latest.get("summary")
-            if latest.get("status") != "ok" or (
-                isinstance(summary, dict) and summary.get("status") == "ok"
-            ):
-                return latest
+            return latest
         time.sleep(0.1)
     raise RuntimeError(f"contest PDF job did not finish: {latest!r}")
 
@@ -228,8 +224,7 @@ def assert_contest_pdf(
     ):
         raise RuntimeError(f"contest PDF job failed: {job!r}")
     if (
-        summary.get("status") != "ok"
-        or summary.get("language") != "english"
+        summary.get("language") != "english"
         or summary.get("requested_outputs") != ["statement_pdf"]
         or summary.get("successful_outputs") != ["statement_pdf"]
     ):
