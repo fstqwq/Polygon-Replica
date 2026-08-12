@@ -5,22 +5,26 @@ import hashlib
 from dataclasses import dataclass
 from pathlib import Path
 
-from app.impl.runtime.config import config
+from app.service.judgehost.api import Judgehost
+from app.service.platform.runtime_blob_store import PayloadFile, RuntimeBlobStore
 from app.service.verification.types import VerificationStatus
 
-from app.impl.workspace.boundary_coverage import (
+from app.service.verification.boundary_coverage import (
     BOUNDARY_COVERAGE_CHECK,
     boundary_coverage_missing_message,
     boundary_coverage_from_feedback,
 )
-from app.impl.workspace.sample_output_validation import _result_verdict, validate_custom_sample_outputs
-from app.impl.workspace.runtime_threshold import (
+from app.service.verification.sample_output import (
+    SampleOutputValidationResult,
+    VerificationSampleOutputService,
+    _result_verdict,
+)
+from app.service.verification.runtime_threshold import (
     SUMMARY_RUNTIME_THRESHOLD_CHECK,
     evaluate_summary_runtime_threshold,
     runtime_threshold_reason,
 )
 from app.service.verification.plan import VerificationTestPlan
-from app.service.platform.runtime_blob_store import PayloadFile
 
 SANITY_PENDING = "pending"
 SANITY_RUNNING = "running"
@@ -158,6 +162,7 @@ def _run_stability_probe(
     plan: VerificationTestPlan,
     probe: _StabilityProbe,
     bypass_case_result_cache: bool,
+    judgehost: Judgehost,
 ) -> tuple[str, str]:
     run_id = _stability_run_id(
         verification_id=verification_id,
@@ -165,7 +170,7 @@ def _run_stability_probe(
         check_name=probe.check_name,
     )
     program_id = f"sanity-{probe.check_name}"
-    task_id = config.judgehost_task_service.enqueue_task(
+    task_id = judgehost.enqueue_task(
         problem=problem,
         username=user,
         artifact_verification_id=verification_id,
@@ -184,9 +189,11 @@ def _run_stability_probe(
         persist_verification_run=False,
     )
     try:
-        return _result_verdict(config.judgehost_task_service.wait_for_task_case_result(task_id, plan.test_name))
+        return _result_verdict(
+            judgehost.wait_for_task_case_result(task_id, plan.test_name)
+        )
     finally:
-        config.judgehost_task_service.close_programs(
+        judgehost.close_programs(
             verification_id,
             [program_id],
         )
@@ -201,6 +208,7 @@ def _run_stability_checks(
     logs_dir: Path,
     test_plans: list[VerificationTestPlan],
     bypass_case_result_cache: bool,
+    judgehost: Judgehost,
 ) -> list[VerificationSanityCheckResult]:
     probe_plan = next((plan for plan in test_plans if plan.test_name), None)
     if probe_plan is None:
@@ -222,6 +230,7 @@ def _run_stability_checks(
                 plan=probe_plan,
                 probe=probe,
                 bypass_case_result_cache=bypass_case_result_cache,
+                judgehost=judgehost,
             )
         except Exception as exc:
             detail = str(exc) or "judgehost stability probe failed"
@@ -326,6 +335,8 @@ def run_verification_sanity_checks(
     runtime_columns: list[dict[str, object]] | None = None,
     time_limit_ms: int = 0,
     bypass_case_result_cache: bool = False,
+    judgehost: Judgehost,
+    sample_output_service: VerificationSampleOutputService,
 ) -> VerificationSanityResult:
     checks = planned_sanity_checks(test_plans)
     if not checks:
@@ -344,6 +355,7 @@ def run_verification_sanity_checks(
         logs_dir=logs_dir,
         test_plans=test_plans,
         bypass_case_result_cache=bypass_case_result_cache,
+        judgehost=judgehost,
     )
     if SUMMARY_RUNTIME_THRESHOLD_CHECK in checks:
         runtime_checked_count = 0
@@ -406,7 +418,7 @@ def run_verification_sanity_checks(
         )
     )
     if CUSTOM_SAMPLE_OUTPUT_CHECK in checks:
-        result = validate_custom_sample_outputs(
+        result = sample_output_service.validate(
             problem=problem,
             user=user,
             verification_id=verification_id,
@@ -437,3 +449,31 @@ def run_verification_sanity_checks(
             )
         )
     return _aggregate_sanity_results(check_results)
+
+
+class VerificationSanityService:
+    """Own verification post-execution checks and their Judgehost probes."""
+
+    def __init__(
+        self,
+        judgehost: Judgehost,
+        runtime_blob_store: RuntimeBlobStore,
+    ) -> None:
+        self._judgehost = judgehost
+        self._sample_outputs = VerificationSampleOutputService(
+            judgehost,
+            runtime_blob_store,
+        )
+
+    def run(self, **kwargs: object) -> VerificationSanityResult:
+        return run_verification_sanity_checks(
+            **kwargs,
+            judgehost=self._judgehost,
+            sample_output_service=self._sample_outputs,
+        )
+
+    def validate_sample_outputs(
+        self,
+        **kwargs: object,
+    ) -> SampleOutputValidationResult:
+        return self._sample_outputs.validate(**kwargs)

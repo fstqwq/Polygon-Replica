@@ -27,7 +27,7 @@ from unittest.mock import patch
 from fastapi.testclient import TestClient
 from starlette.formparsers import MultiPartParser
 
-from app.impl.workspace.verification_payload import prepared_payload_for_uploaded_source
+from app.service.verification.payload import prepared_payload_for_uploaded_source
 from app.service.verification.plan import VerificationTestPlan
 from app.service.judgehost.case_result import build_case_result
 from app.service.judgehost.batch_scheduler_models import CompileSubmission, ExecutionBatchSpec

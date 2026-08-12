@@ -4,8 +4,8 @@ import unittest
 import hashlib
 from pathlib import Path
 
-from app.impl.workspace.boundary_coverage import boundary_coverage_from_feedback
-from app.impl.workspace.runtime_threshold import evaluate_summary_runtime_threshold
+from app.service.verification.boundary_coverage import boundary_coverage_from_feedback
+from app.service.verification.runtime_threshold import evaluate_summary_runtime_threshold
 from app.service.verification.plan import VerificationTestPlan
 from app.service.verification.result_match import verification_solution_match
 from app.service.platform.runtime_blob_store import PayloadFile

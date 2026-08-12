@@ -74,7 +74,7 @@ from app.impl.workspace.run_display import (
     run_error_display,
     run_memory_mb_text,
 )
-from app.impl.workspace.runtime_threshold import (
+from app.service.verification.runtime_threshold import (
     SUMMARY_RUNTIME_THRESHOLD_CHECK,
     evaluate_summary_runtime_threshold,
     time_limit_ms_from_run_config_json,

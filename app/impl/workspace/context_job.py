@@ -14,7 +14,6 @@ from app.service.verification.workspace_fingerprint import (
     verification_sources_signature,
 )
 from app.impl.workspace.published_materialization import ensure_published_materialization
-from app.impl.workspace.verification_dag import run_workspace_verification_dag
 
 def _verification_workspace_key(problem_id: int, workspace_id: int) -> str:
     return f"{int(problem_id)}:{int(workspace_id)}"
@@ -36,7 +35,7 @@ def _run_verification_start_worker(
     selected_test_names: list[str] | None=None,
     bypass_case_result_cache: bool = False,
 ) -> None:
-    run_workspace_verification_dag(
+    config.verification_workflow.run(
         problem,
         user,
         actor_user_id=actor_user_id,

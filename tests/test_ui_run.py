@@ -63,7 +63,6 @@ from tests.ui_support import (
 )
 
 import app.impl.workspace.context_job as workspace_context_job
-from app.impl.workspace.verification_dag import run_workspace_verification_dag
 import app.service.problem.readiness as problem_readiness_module
 import app.service.verification.workspace_fingerprint as workspace_fingerprint_module
 from app.service.problem.readiness import WorkspaceReadinessSubject
@@ -1383,7 +1382,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             "app.service.platform.fs.layout.StorageLayout.prepare_verification_layout",
             side_effect=RuntimeError("verification layout unavailable"),
         ):
-            run_workspace_verification_dag(
+            config.verification_workflow.run(
                 problem,
                 user,
                 actor_user_id=int(context["user"]["id"]),

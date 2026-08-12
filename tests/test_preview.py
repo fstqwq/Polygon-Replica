@@ -3,7 +3,6 @@ from __future__ import annotations
 from unittest.mock import patch
 
 from app.impl.runtime.config import config
-from app.impl.workspace.sample_output_validation import validate_custom_sample_outputs
 from app.service.platform.runtime_blob_store import PayloadFile
 from app.service.verification.plan import VerificationTestPlan
 from tests.common import E2ETestBase
@@ -71,7 +70,7 @@ class TestPreview(E2ETestBase):
             config.judgehost_task_service,
             "close_programs",
         ):
-            result = validate_custom_sample_outputs(
+            result = config.verification_sanity_service.validate_sample_outputs(
                 problem="alice/sample",
                 user="alice",
                 verification_id=verification_id,
@@ -175,7 +174,7 @@ class TestPreview(E2ETestBase):
             config.judgehost_task_service,
             "close_programs",
         ):
-            result = validate_custom_sample_outputs(
+            result = config.verification_sanity_service.validate_sample_outputs(
                 problem="alice/sample",
                 user="alice",
                 verification_id=verification_id,
@@ -312,7 +311,7 @@ class TestPreview(E2ETestBase):
             config.judgehost_task_service,
             "close_programs",
         ):
-            result = validate_custom_sample_outputs(
+            result = config.verification_sanity_service.validate_sample_outputs(
                 problem="alice/sample",
                 user="alice",
                 verification_id=verification_id,

@@ -43,9 +43,7 @@
         "app.db",
         "app.main_constant",
         "app.main_util",
-        "app.setting",
-        "app.impl.runtime.config",
-        "app.impl.workspace.verification_dag"
+        "app.setting"
       ]
     }
   ],
@@ -54,7 +52,8 @@
       "app.impl.auth",
       "app.impl.run_export",
       "app.impl.workspace",
-      "app.service.statement"
+      "app.service.statement",
+      "app.service.verification"
     ]
   }
 }

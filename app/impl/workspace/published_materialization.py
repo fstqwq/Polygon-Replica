@@ -8,7 +8,6 @@ from app.impl.workspace.context_operation import (
     workspace_rel_file_exists,
 )
 from app.service.verification.workspace_fingerprint import verification_sources_signature
-from app.impl.workspace.verification_dag import run_workspace_verification_dag
 from app.service.problem.solution_metadata import normalize_expected_behavior
 from app.service.problem_package.service import MaterializationRow, PublishedRevision
 from app.service.verification.lifecycle import VerificationAdmission
@@ -89,7 +88,7 @@ def ensure_published_materialization(
         )
         if admission.outcome != "admitted":
             raise RuntimeError("materialization verification id already exists")
-        run_workspace_verification_dag(
+        config.verification_workflow.run(
             problem_slug,
             actor_username,
             actor_user_id=int(actor_user_id),

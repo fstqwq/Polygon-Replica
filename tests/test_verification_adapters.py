@@ -19,7 +19,7 @@ from tests.verification_adapter_fixture import (
 
 class TestVerificationAdapters(E2ETestBase):
     def test_required_verification_file_waits_for_late_artifact_visibility(self) -> None:
-        from app.impl.workspace.verification_dag import _verification_required_file
+        from app.service.verification.workflow import _verification_required_file
 
         payload = config.runtime_blob_store.put_bytes(b"generated\n")
         calls = {"ref": 0, "descriptor": 0}
@@ -45,6 +45,8 @@ class TestVerificationAdapters(E2ETestBase):
                     label="verification test 026.in",
                     timeout_sec=0.2,
                     interval_sec=0.001,
+                    verification_service=config.verification_service,
+                    runtime_blob_store=config.runtime_blob_store,
                 ),
                 payload,
             )
@@ -53,9 +55,8 @@ class TestVerificationAdapters(E2ETestBase):
         self.assertGreaterEqual(calls["descriptor"], 2)
 
     def test_task_publish_forwards_bypass_case_result_cache_to_judgehost(self) -> None:
-        from app.impl.workspace.verification_dag import (
-            TASK_GENERATE_INPUT,
-            TASK_MAIN_CORRECT,
+        from app.service.verification.lifecycle import TASK_GENERATE_INPUT, TASK_MAIN_CORRECT
+        from app.service.verification.workflow import (
             TaskExecutionContext,
             _publish_generate_task,
             _publish_run_task,
@@ -104,6 +105,10 @@ class TestVerificationAdapters(E2ETestBase):
             run_verification_payload_base={},
             generate_verification_payload_base={},
             bypass_case_result_cache=True,
+            judgehost=config.judgehost_task_service,
+            runtime_blob_store=config.runtime_blob_store,
+            verification_service=config.verification_service,
+            task_store=config.verification_task_store,
         )
         calls: list[dict[str, object]] = []
 
@@ -116,7 +121,7 @@ class TestVerificationAdapters(E2ETestBase):
             "prepare_execution_template",
             return_value={},
         ) as prepare_template, patch(
-            "app.impl.workspace.verification_dag._verification_required_file",
+            "app.service.verification.workflow._verification_required_file",
             return_value=input_file,
         ):
             _publish_generate_task(
@@ -172,7 +177,7 @@ class TestVerificationAdapters(E2ETestBase):
         self.assertEqual(len(calls), 3)
 
     def test_sanity_stability_probes_pass_on_non_ac_non_fl(self) -> None:
-        from app.impl.workspace.sanity_checks import run_verification_sanity_checks
+
 
         verification_id = canonical_test_verification_id(
             self.random_id("ver-sanity-stable")
@@ -213,7 +218,7 @@ class TestVerificationAdapters(E2ETestBase):
             "close_programs",
             side_effect=_fake_close_programs,
         ):
-            result = run_verification_sanity_checks(
+            result = config.verification_sanity_service.run(
                 problem=self.problem,
                 user=self.user,
                 verification_id=verification_id,
@@ -247,7 +252,7 @@ class TestVerificationAdapters(E2ETestBase):
         self.assertIn("empty_output_stability 001.in: ok - WA", (logs_dir / "stability.log").read_text(encoding="utf-8"))
 
     def test_sanity_boundary_coverage_warning_keeps_verification_ok(self) -> None:
-        from app.impl.workspace.sanity_checks import BOUNDARY_COVERAGE_CHECK, run_verification_sanity_checks
+        from app.service.verification.sanity import BOUNDARY_COVERAGE_CHECK
 
         verification_id = canonical_test_verification_id(
             self.random_id("ver-sanity-boundary")
@@ -270,7 +275,7 @@ class TestVerificationAdapters(E2ETestBase):
             "wait_for_task_case_result",
             side_effect=_fake_wait_for_task_case_result,
         ):
-            result = run_verification_sanity_checks(
+            result = config.verification_sanity_service.run(
                 problem=self.problem,
                 user=self.user,
                 verification_id=verification_id,
@@ -290,7 +295,7 @@ class TestVerificationAdapters(E2ETestBase):
         self.assertIn("Test data did not hit: n max=3", (logs_dir / "boundary.log").read_text(encoding="utf-8"))
 
     def test_sanity_runtime_threshold_warning_uses_answer_correct_summary(self) -> None:
-        from app.impl.workspace.sanity_checks import BOUNDARY_COVERAGE_CHECK, SUMMARY_RUNTIME_THRESHOLD_CHECK, run_verification_sanity_checks
+        from app.service.verification.sanity import BOUNDARY_COVERAGE_CHECK, SUMMARY_RUNTIME_THRESHOLD_CHECK
 
         verification_id = canonical_test_verification_id(
             self.random_id("ver-sanity-runtime")
@@ -308,7 +313,7 @@ class TestVerificationAdapters(E2ETestBase):
             "wait_for_task_case_result",
             side_effect=_fake_wait_for_task_case_result,
         ):
-            result = run_verification_sanity_checks(
+            result = config.verification_sanity_service.run(
                 problem=self.problem,
                 user=self.user,
                 verification_id=verification_id,
@@ -356,7 +361,7 @@ class TestVerificationAdapters(E2ETestBase):
         self.assertEqual(boundary_result.status, "passed")
 
     def test_sanity_stability_probe_failure_does_not_skip_later_checks(self) -> None:
-        from app.impl.workspace.sanity_checks import EMPTY_OUTPUT_STABILITY_CHECK, UNICODE_OUTPUT_STABILITY_CHECK, run_verification_sanity_checks
+        from app.service.verification.sanity import EMPTY_OUTPUT_STABILITY_CHECK, UNICODE_OUTPUT_STABILITY_CHECK
 
         verification_id = canonical_test_verification_id(
             self.random_id("ver-sanity-ac")
@@ -376,7 +381,7 @@ class TestVerificationAdapters(E2ETestBase):
             "wait_for_task_case_result",
             side_effect=_fake_wait_for_task_case_result,
         ):
-            result = run_verification_sanity_checks(
+            result = config.verification_sanity_service.run(
                 problem=self.problem,
                 user=self.user,
                 verification_id=verification_id,
@@ -394,7 +399,7 @@ class TestVerificationAdapters(E2ETestBase):
         self.assertEqual([item.status for item in result.check_results[:2]], ["failed", "failed"])
 
     def test_sanity_stability_probe_fails_on_unicode_fl(self) -> None:
-        from app.impl.workspace.sanity_checks import UNICODE_OUTPUT_STABILITY_CHECK, run_verification_sanity_checks
+        from app.service.verification.sanity import UNICODE_OUTPUT_STABILITY_CHECK
 
         verification_id = canonical_test_verification_id(
             self.random_id("ver-sanity-fl")
@@ -415,7 +420,7 @@ class TestVerificationAdapters(E2ETestBase):
             "wait_for_task_case_result",
             side_effect=_fake_wait_for_task_case_result,
         ):
-            result = run_verification_sanity_checks(
+            result = config.verification_sanity_service.run(
                 problem=self.problem,
                 user=self.user,
                 verification_id=verification_id,
@@ -433,11 +438,11 @@ class TestVerificationAdapters(E2ETestBase):
     def test_custom_run_upload_preserves_source_extension_for_compile_template(
         self,
     ) -> None:
-        from app.impl.workspace.verification_dag import (
+        from app.service.verification.workflow import (
             TaskExecutionContext,
-            _build_graph,
             _execution_template,
         )
+        from app.service.verification.workflow_policy import build_graph
 
         for source_name, source_content in (
             ("foo.cpp", b"int main(){return 0;}\n"),
@@ -452,7 +457,7 @@ class TestVerificationAdapters(E2ETestBase):
                 uploaded_file = config.runtime_blob_store.put_bytes(
                     source_content
                 )
-                graph = _build_graph(
+                graph = build_graph(
                     verification_id=canonical_test_verification_id(
                         f"custom-upload-{source_name}"
                     ),
@@ -497,6 +502,10 @@ class TestVerificationAdapters(E2ETestBase):
                     run_verification_payload_base={},
                     generate_verification_payload_base={},
                     bypass_case_result_cache=False,
+                    judgehost=config.judgehost_task_service,
+                    runtime_blob_store=config.runtime_blob_store,
+                    verification_service=config.verification_service,
+                    task_store=config.verification_task_store,
                 )
                 observed: dict[str, str] = {}
 

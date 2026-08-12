@@ -5,11 +5,11 @@ import hashlib
 from dataclasses import dataclass
 from pathlib import Path
 
-from app.impl.runtime.config import config
-
+from app.service.judgehost.api import Judgehost
 from app.service.platform.runtime_blob_store import PayloadFile
+from app.service.platform.runtime_blob_store import RuntimeBlobStore
 from app.service.verification.plan import VerificationTestPlan
-from app.impl.workspace.verification_payload import prepared_payload_for_uploaded_source
+from app.service.verification.payload import prepared_payload_for_uploaded_source
 
 
 _SANITY_ACCEPTED_PROGRAM_ID = "sanity-accepted"
@@ -92,11 +92,13 @@ def _custom_input_expected_answer(
     accepted_source_file: PayloadFile | None,
     run_verification_payload_base: dict[str, object],
     bypass_case_result_cache: bool,
+    judgehost: Judgehost,
+    runtime_blob_store: RuntimeBlobStore,
 ) -> PayloadFile:
     if not accepted_source_label or not accepted_source_name or accepted_source_file is None:
         raise RuntimeError("accepted solution source is required for custom sample input validation")
-    input_file = config.runtime_blob_store.put_bytes(plan.sample_input_text.encode("utf-8"))
-    empty_file = config.runtime_blob_store.put_bytes(b"")
+    input_file = runtime_blob_store.put_bytes(plan.sample_input_text.encode("utf-8"))
+    empty_file = runtime_blob_store.put_bytes(b"")
     run_id = _validation_run_id(
         verification_id=verification_id,
         test_name=plan.test_name,
@@ -110,7 +112,7 @@ def _custom_input_expected_answer(
         answer_file=empty_file,
         verification_payload_base=run_verification_payload_base,
     )
-    task_id = config.judgehost_task_service.enqueue_task(
+    task_id = judgehost.enqueue_task(
         problem=problem,
         username=user,
         artifact_verification_id=verification_id,
@@ -131,20 +133,20 @@ def _custom_input_expected_answer(
         persist_verification_run=False,
         prepared_payload=prepared,
     )
-    case_result = config.judgehost_task_service.wait_for_task_case_result(
+    case_result = judgehost.wait_for_task_case_result(
         task_id,
         plan.test_name,
     )
     verdict, message = _result_verdict(case_result)
     if verdict != "OK":
         raise RuntimeError(message or "accepted solution failed on custom sample input")
-    output_ref, _case_id = config.judgehost_task_service.domjudge_case_output_for_task(
+    output_ref, _case_id = judgehost.domjudge_case_output_for_task(
         task_id,
         plan.test_name,
     )
     if not output_ref:
         output_ref = _result_output_ref(case_result)
-    answer_file = config.runtime_blob_store.descriptor(output_ref)
+    answer_file = runtime_blob_store.descriptor(output_ref)
     if answer_file is None:
         raise RuntimeError("accepted solution output is unavailable for custom sample input")
     return answer_file
@@ -163,6 +165,8 @@ def validate_custom_sample_outputs(
     accepted_source_file: PayloadFile | None = None,
     run_verification_payload_base: dict[str, object] | None = None,
     bypass_case_result_cache: bool = False,
+    judgehost: Judgehost,
+    runtime_blob_store: RuntimeBlobStore,
 ) -> SampleOutputValidationResult:
     log_path = logs_dir / "validate.log"
     lines: list[str] = []
@@ -177,7 +181,7 @@ def validate_custom_sample_outputs(
     def _close_programs() -> None:
         if not opened_program_ids:
             return
-        config.judgehost_task_service.close_programs(
+        judgehost.close_programs(
             verification_id,
             list(dict.fromkeys(opened_program_ids)),
         )
@@ -201,7 +205,9 @@ def validate_custom_sample_outputs(
                 if run_verification_payload_base is None:
                     raise RuntimeError("verification payload is required for custom sample input validation")
                 opened_program_ids.append(_SANITY_ACCEPTED_PROGRAM_ID)
-                input_file = config.runtime_blob_store.put_bytes(plan.sample_input_text.encode("utf-8"))
+                input_file = runtime_blob_store.put_bytes(
+                    plan.sample_input_text.encode("utf-8")
+                )
                 answer_file = _custom_input_expected_answer(
                     problem=problem,
                     user=user,
@@ -213,6 +219,8 @@ def validate_custom_sample_outputs(
                     accepted_source_file=accepted_source_file,
                     run_verification_payload_base=run_verification_payload_base,
                     bypass_case_result_cache=bypass_case_result_cache,
+                    judgehost=judgehost,
+                    runtime_blob_store=runtime_blob_store,
                 )
                 prepared_payload = prepared_payload_for_uploaded_source(
                     source_label="custom_sample_output.py",
@@ -222,10 +230,10 @@ def validate_custom_sample_outputs(
                     answer_file=answer_file,
                     verification_payload_base=run_verification_payload_base,
                 )
-            validation_source_file = config.runtime_blob_store.put_bytes(
+            validation_source_file = runtime_blob_store.put_bytes(
                 _validation_source_bytes(plan.sample_output_text)
             )
-            task_id = config.judgehost_task_service.enqueue_task(
+            task_id = judgehost.enqueue_task(
                 problem=problem,
                 username=user,
                 artifact_verification_id=verification_id,
@@ -246,7 +254,7 @@ def validate_custom_sample_outputs(
                 prepared_payload=prepared_payload,
             )
             opened_program_ids.append(validation_program_id)
-            case_result = config.judgehost_task_service.wait_for_task_case_result(
+            case_result = judgehost.wait_for_task_case_result(
                 task_id,
                 plan.test_name,
             )
@@ -291,3 +299,22 @@ def validate_custom_sample_outputs(
             error="",
         )
     )
+
+
+class VerificationSampleOutputService:
+    """Validate authored sample output through the injected execution runtime."""
+
+    def __init__(
+        self,
+        judgehost: Judgehost,
+        runtime_blob_store: RuntimeBlobStore,
+    ) -> None:
+        self._judgehost = judgehost
+        self._runtime_blob_store = runtime_blob_store
+
+    def validate(self, **kwargs: object) -> SampleOutputValidationResult:
+        return validate_custom_sample_outputs(
+            **kwargs,
+            judgehost=self._judgehost,
+            runtime_blob_store=self._runtime_blob_store,
+        )

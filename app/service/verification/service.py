@@ -1,19 +1,13 @@
 from __future__ import annotations
 
-import re
 from pathlib import Path
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 from app.config import ConfigValues
 from app.db import DB
 from app.service.disk.verification_store import VerificationStore
 from app.service.platform.runtime_blob_store import PayloadFile, RuntimeBlobStore
 from app.service.platform.fs.layout import StorageLayout
-from app.service.problem.test_spec import (
-    TestSpecEntry,
-    parse_gen_command_tokens,
-)
-from app.service.problem.build_config import BuildConfig
 from app.service.repository.workspace import WorkspaceService
 from app.service.verification.types import (
     Kind,
@@ -48,17 +42,14 @@ from app.service.verification.read_model import (
     task_counts,
 )
 from app.service.verification.signature import verification_manifest
-from app.service.verification.source import select_source
 from app.service.verification.task_store import VerificationTaskStore
-from app.service.verification.test_spec import manual_test_sources, prepare_tests_spec_runtime
+
+if TYPE_CHECKING:
+    from app.service.verification.workflow import VerificationWorkflow
 
 from app.service.judgehost.api import Judgehost
 
 
-CPP_EXTENSIONS = (".cpp", ".cc", ".cxx", ".c++")
-SOLUTION_SOURCE_EXTENSIONS = (*CPP_EXTENSIONS, ".py", ".java")
-GENERATOR_SOURCE_EXTENSIONS = (*CPP_EXTENSIONS, ".py", ".java")
-RUN_TEST_NAME_RE = re.compile(r"^[0-9]{3}\.in$")
 _DETAIL_SCALAR_DEFAULTS: dict[str, object] = {
     "mode": "pass-fail",
     "pass_limit": 1,
@@ -93,6 +84,10 @@ class VerificationService:
         self._config_values = config_values
         self._verification_store = VerificationStore(db)
         self._artifact_query = VerificationArtifactQuery(db, runtime_blob_store)
+        self._workflow: VerificationWorkflow | None = None
+
+    def set_workflow(self, workflow: VerificationWorkflow) -> None:
+        self._workflow = workflow
 
     def export_runtime_verification(self, problem_id: int, verification_id: str) -> dict[str, object] | None:
         row = self.verification_record(verification_id)
@@ -943,56 +938,6 @@ class VerificationService:
 
         return self.task_store.read_lifecycle_snapshot(_read)
 
-    def _select_checker_source(
-        self,
-        snapshot: Path,
-        build_cfg: BuildConfig,
-        snapshot_resolved: Path | None = None,
-    ) -> Path | None:
-        return select_source(
-            snapshot,
-            build_cfg,
-            "checker_source",
-            "checkers",
-            cpp_extensions=CPP_EXTENSIONS,
-            snapshot_resolved=snapshot_resolved,
-        )
-
-    def _select_source(
-        self,
-        snapshot: Path,
-        build_cfg: BuildConfig,
-        config_key: str,
-        folder: str,
-        snapshot_resolved: Path | None = None,
-    ) -> Path | None:
-        return select_source(
-            snapshot=snapshot,
-            build_cfg=build_cfg,
-            config_key=config_key,
-            folder=folder,
-            cpp_extensions=CPP_EXTENSIONS,
-            snapshot_resolved=snapshot_resolved,
-        )
-
-    def _manual_test_sources(self, snapshot: Path) -> list[Path]:
-        return manual_test_sources(snapshot)
-
-    def _prepare_tests_spec_runtime(
-        self,
-        snapshot: Path,
-        tests_spec_entries: list[TestSpecEntry],
-        *,
-        generator_sources: list[str],
-    ) -> tuple[list[dict], list[tuple[str, Path]]]:
-        return prepare_tests_spec_runtime(
-            snapshot,
-            tests_spec_entries,
-            generator_sources=generator_sources,
-            generator_source_extensions=GENERATOR_SOURCE_EXTENSIONS,
-            parse_gen_command_tokens_fn=parse_gen_command_tokens,
-        )
-
     def run_verification(
         self,
         problem: str,
@@ -1002,8 +947,6 @@ class VerificationService:
         sample_only: bool = False,
         verification_id: str = "",
     ) -> str:
-        from app.impl.workspace.verification_dag import run_workspace_verification_dag
-
         ctx = self.workspace_service.workspace_context(problem, username, include_recent=False)
         workspace_path = Path(str(ctx["workspace"]["path"])).resolve()
         problem_id = int(ctx["problem"]["id"])
@@ -1047,7 +990,10 @@ class VerificationService:
             raise RuntimeError(
                 f"verification already exists: {target_verification_id}"
             )
-        run_workspace_verification_dag(
+        workflow = self._workflow
+        if workflow is None:
+            raise RuntimeError("verification workflow is not configured")
+        workflow.run(
             problem,
             username,
             actor_user_id=actor_user_id,

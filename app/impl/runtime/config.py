@@ -18,6 +18,9 @@ from app.service.platform.fs.layout import StorageLayout
 from app.service.verification.service import VerificationService
 from app.service.verification.completion import VerificationTaskCompletionService
 from app.service.verification.execution import VerificationExecutionService
+from app.service.verification.execution_plan import VerificationExecutionPlanner
+from app.service.verification.sanity import VerificationSanityService
+from app.service.verification.workflow import VerificationWorkflow
 from app.service.verification.runtime_registry import VerificationRuntimeRegistry
 from app.service.verification.task_store import VerificationTaskStore
 from app.service.verification.judgehost_adapter import VerificationJudgehostAdapter
@@ -90,6 +93,9 @@ class RuntimeConfig:
     )
     verification_runtime_registry: VerificationRuntimeRegistry = field(init=False)
     verification_execution_service: VerificationExecutionService = field(init=False)
+    verification_planner: VerificationExecutionPlanner = field(init=False)
+    verification_sanity_service: VerificationSanityService = field(init=False)
+    verification_workflow: VerificationWorkflow = field(init=False)
     preview_service: PreviewService = field(init=False)
     judgehost_task_service: Judgehost = field(init=False)
     export_service: ExportService = field(init=False)
@@ -255,6 +261,27 @@ class RuntimeConfig:
             self.verification_runtime_registry,
             self.judgehost_task_service,
         )
+        self.verification_planner = VerificationExecutionPlanner(
+            self.config_values,
+            self.runtime_blob_store,
+        )
+        self.verification_sanity_service = VerificationSanityService(
+            self.judgehost_task_service,
+            self.runtime_blob_store,
+        )
+        self.verification_workflow = VerificationWorkflow(
+            planner=self.verification_planner,
+            sanity_service=self.verification_sanity_service,
+            verification_service=self.verification_service,
+            execution_service=self.verification_execution_service,
+            judgehost=self.judgehost_task_service,
+            workspace_service=self.workspace_service,
+            storage_layout=self.storage_layout,
+            runtime_blob_store=self.runtime_blob_store,
+            task_store=self.verification_task_store,
+            config_values=self.config_values,
+        )
+        self.verification_service.set_workflow(self.verification_workflow)
         self.preview_service = PreviewService(
             self.db,
             self.workspace_service,

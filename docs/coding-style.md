@@ -71,9 +71,10 @@ enforce the normal `route` to `impl` to `service` direction and prevent those
 layers from importing templates or static assets. The dependency-light
 `app.config` package owns typed configuration definitions and immutable active
 snapshots; implementation and service modules may depend on that foundation.
-The service layer has two bounded placement exceptions:
-`app.impl.runtime.config` and `app.impl.workspace.verification_dag`. They are
-current debt, not permission to add other service-to-implementation imports.
+The application composition root remains in `app.impl.runtime.config` until it
+is moved to its top-level owner. Verification workflow policy and execution are
+owned by `app.service.verification`; service code must not import implementation
+modules.
 
 Cycle and naming checks use a staged module set because the complete current
 application graph still contains known reverse dependencies. The checked set is

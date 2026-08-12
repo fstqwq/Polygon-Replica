@@ -22,7 +22,7 @@ from tests.verification_policy_fixture import VerificationPolicyTestBase
 
 class TestVerificationPolicy(VerificationPolicyTestBase):
     def test_memory_limit_is_canonical_before_verification_payloads(self) -> None:
-        from app.impl.workspace.verification_dag_plan import (
+        from app.service.verification.execution_plan import (
             _generate_payload_base,
             _problem_limits,
             _run_payload_base,
@@ -79,7 +79,7 @@ class TestVerificationPolicy(VerificationPolicyTestBase):
         )
 
     def test_effective_verification_status_waits_for_pending_sanity_checks(self) -> None:
-        from app.impl.workspace.sanity_checks import effective_verification_status
+        from app.service.verification.sanity import effective_verification_status
 
         counts = {
             "pending": 0,
@@ -123,7 +123,7 @@ class TestVerificationPolicy(VerificationPolicyTestBase):
         self.assertTrue(finished)
 
     def test_planned_sanity_checks_include_stability_probes(self) -> None:
-        from app.impl.workspace.sanity_checks import (
+        from app.service.verification.sanity import (
             BOUNDARY_COVERAGE_CHECK,
             CUSTOM_SAMPLE_OUTPUT_CHECK,
             EMPTY_OUTPUT_STABILITY_CHECK,
@@ -153,11 +153,10 @@ class TestVerificationPolicy(VerificationPolicyTestBase):
         )
 
     def test_runtime_threshold_columns_include_main_correct_source(self) -> None:
-        from app.impl.workspace.runtime_threshold import evaluate_summary_runtime_threshold
-        from app.impl.workspace.verification_dag import (
-            TASK_MAIN_CORRECT,
-            TASK_SOLUTION_RUN,
-            _runtime_threshold_columns_from_tasks,
+        from app.service.verification.runtime_threshold import evaluate_summary_runtime_threshold
+        from app.service.verification.lifecycle import TASK_MAIN_CORRECT, TASK_SOLUTION_RUN
+        from app.service.verification.workflow_policy import (
+            runtime_threshold_columns_from_tasks,
         )
 
         def row(
@@ -197,7 +196,7 @@ class TestVerificationPolicy(VerificationPolicyTestBase):
                 "updated_at": "",
             }
 
-        columns = _runtime_threshold_columns_from_tasks(
+        columns = runtime_threshold_columns_from_tasks(
             artifact_verification_id="ver-runtime-columns",
             mode="pass-fail",
             pass_limit=1,
@@ -243,11 +242,11 @@ class TestVerificationPolicy(VerificationPolicyTestBase):
         self.assertIsNotNone(report.warning_hit)
 
     def test_effective_verification_kind_uses_full_available_test_set(self) -> None:
-        from app.impl.workspace.verification_dag import _effective_verification_kind
+        from app.service.verification.workflow_policy import effective_verification_kind
         from app.service.verification.types import Kind
 
         self.assertEqual(
-            _effective_verification_kind(
+            effective_verification_kind(
                 sample_only=True,
                 requested_test_names=["001.in"],
                 available_test_names=["001.in", "002.in"],
@@ -255,7 +254,7 @@ class TestVerificationPolicy(VerificationPolicyTestBase):
             Kind.SAMPLE.value,
         )
         self.assertEqual(
-            _effective_verification_kind(
+            effective_verification_kind(
                 sample_only=False,
                 requested_test_names=["001.in", "002.in"],
                 available_test_names=["001.in", "002.in", "003.in"],
@@ -263,7 +262,7 @@ class TestVerificationPolicy(VerificationPolicyTestBase):
             Kind.CUSTOM.value,
         )
         self.assertEqual(
-            _effective_verification_kind(
+            effective_verification_kind(
                 sample_only=False,
                 requested_test_names=["001.in", "002.in", "003.in"],
                 available_test_names=["001.in", "002.in", "003.in"],
@@ -272,26 +271,26 @@ class TestVerificationPolicy(VerificationPolicyTestBase):
         )
 
     def test_non_all_verification_skips_sanity_plan(self) -> None:
-        from app.impl.workspace.verification_dag import _sanity_plan_for_verification_kind
+        from app.service.verification.workflow_policy import sanity_plan_for_verification_kind
         from app.service.verification.types import Kind
 
         test_plans = [self._sanity_test_plan(sample=True, sample_output_text="ok\n")]
 
-        checks, status = _sanity_plan_for_verification_kind(Kind.SAMPLE.value, test_plans)
+        checks, status = sanity_plan_for_verification_kind(Kind.SAMPLE.value, test_plans)
         self.assertEqual(checks, [])
         self.assertEqual(status, "skipped")
 
-        checks, status = _sanity_plan_for_verification_kind(Kind.CUSTOM.value, test_plans)
+        checks, status = sanity_plan_for_verification_kind(Kind.CUSTOM.value, test_plans)
         self.assertEqual(checks, [])
         self.assertEqual(status, "skipped")
 
-        checks, status = _sanity_plan_for_verification_kind(Kind.ALL.value, test_plans)
+        checks, status = sanity_plan_for_verification_kind(Kind.ALL.value, test_plans)
         self.assertEqual(status, "pending")
         self.assertIn("empty_output_stability", checks)
         self.assertIn("custom_sample_output", checks)
 
     def test_build_graph_creates_per_source_per_test_nodes(self) -> None:
-        from app.impl.workspace.verification_dag import _build_graph
+        from app.service.verification.workflow_policy import build_graph
         from app.service.verification.plan import VerificationTestPlan
 
         verification_id = canonical_test_verification_id("graph-natural-keys")
@@ -303,7 +302,7 @@ class TestVerificationPolicy(VerificationPolicyTestBase):
                 b"int main(){return 1;}\n"
             ),
         }
-        graph = _build_graph(
+        graph = build_graph(
             verification_id=verification_id,
             accepted_source_path="solutions/accepted.cpp",
             source_file_by_path=source_file_by_path,
@@ -403,7 +402,7 @@ class TestVerificationPolicy(VerificationPolicyTestBase):
         self.assertTrue(task_id.endswith(f"~accepted~{test_name}"))
 
     def test_verification_summary_from_tasks_preserves_cancelled_parent(self) -> None:
-        from app.impl.workspace.verification_dag import _verification_summary_from_tasks
+        from app.service.verification.workflow_policy import verification_summary_from_tasks
 
         rows = [
             {
@@ -435,7 +434,7 @@ class TestVerificationPolicy(VerificationPolicyTestBase):
                 "updated_at": "2026-03-23T00:00:01Z",
             }
         ]
-        status, summary, counts = _verification_summary_from_tasks(
+        status, summary, counts = verification_summary_from_tasks(
             verification_id="ver-cancel-summary",
             artifact_verification_id="ver-cancel-summary",
             mode="pass-fail",
@@ -458,7 +457,7 @@ class TestVerificationPolicy(VerificationPolicyTestBase):
         self.assertEqual(int(counts["cancelled"]), 1)
 
     def test_verification_summary_from_tasks_excludes_main_correct_runs_from_solution_columns(self) -> None:
-        from app.impl.workspace.verification_dag import _verification_summary_from_tasks
+        from app.service.verification.workflow_policy import verification_summary_from_tasks
 
         rows = [
             {
@@ -518,7 +517,7 @@ class TestVerificationPolicy(VerificationPolicyTestBase):
                 "updated_at": "",
             },
         ]
-        status, summary, counts = _verification_summary_from_tasks(
+        status, summary, counts = verification_summary_from_tasks(
             verification_id="ver-graph-summary",
             artifact_verification_id="ver-artifact-summary",
             mode="pass-fail",

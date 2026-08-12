@@ -12,6 +12,14 @@ filesystem. Artifact authorization and virtual-path resolution query that
 owner index and then require a currently available runtime blob descriptor;
 they never reconstruct ownership by scanning result JSON.
 
+`VerificationExecutionPlanner` turns a frozen source snapshot into the one
+canonical execution plan. `VerificationWorkflow` owns activation, task
+publication, coordinator execution, sanity finalization, and process-local
+cleanup through injected Judgehost, workspace, storage, configuration, and blob
+ports. Pure graph construction and result summarization live in
+`workflow_policy`; HTTP implementation modules do not own or import these
+policies.
+
 The lifecycle service admits a verification once, atomically activates one
 immutable execution plan, commits first-wins task decisions, finalizes sanity,
 and terminalizes cancellation or restart interruption. The completion boundary

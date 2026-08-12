@@ -4,17 +4,26 @@ import json
 import shlex
 from pathlib import Path
 
-from app.impl.runtime.config import config
+from app.config import ConfigValues
 from app.service.platform.testlib_source import workspace_testlib_header
-from app.service.platform.runtime_blob_store import PayloadFile
+from app.service.platform.runtime_blob_store import PayloadFile, RuntimeBlobStore
 from app.service.problem.build_config import BuildConfig
 from app.service.problem.runtime_config import ProblemConfig, problem_config_limits
 from app.service.problem.source_tree import load_problem_source_tree
 from app.service.problem.test_spec import TestSpecEntry
-from app.service.verification.service import CPP_EXTENSIONS, SOLUTION_SOURCE_EXTENSIONS
+from app.service.problem.test_spec import parse_gen_command_tokens
 from app.service.verification.plan import VerificationExecutionPlan, VerificationTestPlan
 from app.service.verification.signature import VerificationManifest, verification_manifest
 from app.service.problem.source_file import resolve_source
+from app.service.verification.source import select_source
+from app.service.verification.test_spec import (
+    manual_test_sources,
+    prepare_tests_spec_runtime,
+)
+
+CPP_EXTENSIONS = (".cpp", ".cc", ".cxx", ".c++")
+SOLUTION_SOURCE_EXTENSIONS = (*CPP_EXTENSIONS, ".py", ".java")
+GENERATOR_SOURCE_EXTENSIONS = SOLUTION_SOURCE_EXTENSIONS
 
 
 def _problem_limits(runtime_cfg: ProblemConfig) -> dict[str, int]:
@@ -83,29 +92,33 @@ def _shared_source_payloads(
     mode: str,
 ) -> dict[str, object]:
     snapshot_resolved = snapshot.resolve()
-    verification_service = config.verification_service
-    validator_source = verification_service._select_source(
+    validator_source = select_source(
         snapshot,
         build_cfg,
         "validator_source",
         "validators",
+        cpp_extensions=CPP_EXTENSIONS,
         snapshot_resolved=snapshot_resolved,
     )
     if mode == "interactive":
         checker_source = None
-        interactor_source = verification_service._select_source(
+        interactor_source = select_source(
             snapshot,
             build_cfg,
             "interactor_source",
             "interactors",
+            cpp_extensions=CPP_EXTENSIONS,
             snapshot_resolved=snapshot_resolved,
         )
         if interactor_source is None:
             raise RuntimeError("interactor source is required for interactive mode")
     else:
-        checker_source = verification_service._select_checker_source(
+        checker_source = select_source(
             snapshot,
             build_cfg,
+            "checker_source",
+            "checkers",
+            cpp_extensions=CPP_EXTENSIONS,
             snapshot_resolved=snapshot_resolved,
         )
         interactor_source = None
@@ -156,16 +169,19 @@ def _manual_plan(
     uses_custom_sample_input: bool = False,
     sample_output_text: str = "",
     sample_output_validate: bool = True,
+    runtime_blob_store: RuntimeBlobStore,
 ) -> VerificationTestPlan:
     execution_input = input_file
     if execution_input is None:
-        execution_input = config.runtime_blob_store.put_bytes(input_bytes or b"")
+        execution_input = runtime_blob_store.put_bytes(input_bytes or b"")
     return VerificationTestPlan(
         test_name=test_name,
         source_kind="manual",
         display_source_path="manual_validate.cpp",
         execution_source_name="manual_validate.cpp",
-        execution_source_file=config.runtime_blob_store.put_bytes(b"int main(){return 0;}\n"),
+        execution_source_file=runtime_blob_store.put_bytes(
+            b"int main(){return 0;}\n"
+        ),
         execution_input_file=execution_input,
         extra_source_files={},
         tests_meta=tests_meta,
@@ -194,6 +210,7 @@ def _generated_plan(
     uses_custom_sample_input: bool = False,
     sample_output_text: str = "",
     sample_output_validate: bool = True,
+    runtime_blob_store: RuntimeBlobStore,
 ) -> VerificationTestPlan:
     extra_source_files: dict[str, PayloadFile] = {}
     if generator_source.suffix.lower() in CPP_EXTENSIONS and testlib_header is not None:
@@ -206,7 +223,9 @@ def _generated_plan(
         display_source_path=display_source_path,
         execution_source_name=generator_source.name,
         execution_source_file=manifest.require(generator_source.relative_to(snapshot).as_posix()),
-        execution_input_file=config.runtime_blob_store.put_bytes((command_payload + "\n").encode("utf-8")),
+        execution_input_file=runtime_blob_store.put_bytes(
+            (command_payload + "\n").encode("utf-8")
+        ),
         extra_source_files=extra_source_files,
         tests_meta=tests_meta,
         sample=sample,
@@ -226,12 +245,14 @@ def _tests_from_spec(
     sample_only: bool,
     build_cfg: BuildConfig,
     entries: tuple[TestSpecEntry, ...],
+    runtime_blob_store: RuntimeBlobStore,
 ) -> tuple[list[VerificationTestPlan], list[dict[str, object]]]:
-    verification_service = config.verification_service
-    runtime_rows, generator_targets = verification_service._prepare_tests_spec_runtime(
+    runtime_rows, generator_targets = prepare_tests_spec_runtime(
         snapshot,
         list(entries),
         generator_sources=build_cfg["generator_sources"],
+        generator_source_extensions=GENERATOR_SOURCE_EXTENSIONS,
+        parse_gen_command_tokens_fn=parse_gen_command_tokens,
     )
     generator_source_by_name = {
         str(target_name): source_path
@@ -273,6 +294,7 @@ def _tests_from_spec(
                 uses_custom_sample_input=use_custom_sample_input,
                 sample_output_text=sample_output,
                 sample_output_validate=sample_output_validate,
+                runtime_blob_store=runtime_blob_store,
             )
         else:
             target_name = str(row["target_name"])
@@ -308,6 +330,7 @@ def _tests_from_spec(
                 uses_custom_sample_input=False,
                 sample_output_text=sample_output,
                 sample_output_validate=sample_output_validate,
+                runtime_blob_store=runtime_blob_store,
             )
         plans.append(plan)
         tests_meta_rows.append(dict(plan.tests_meta))
@@ -321,12 +344,12 @@ def _tests_without_spec(
     manifest: VerificationManifest,
     build_cfg: BuildConfig,
     testlib_header: Path | None,
+    runtime_blob_store: RuntimeBlobStore,
 ) -> tuple[list[VerificationTestPlan], list[dict[str, object]]]:
-    verification_service = config.verification_service
     plans: list[VerificationTestPlan] = []
     tests_meta_rows: list[dict[str, object]] = []
     counter = 1
-    for manual_source in verification_service._manual_test_sources(snapshot):
+    for manual_source in manual_test_sources(snapshot):
         try:
             source_rel = manual_source.relative_to(snapshot).as_posix()
         except ValueError:
@@ -342,6 +365,7 @@ def _tests_without_spec(
             test_name=f"{counter:03d}.in",
             input_file=manifest.require(manual_source.relative_to(snapshot).as_posix()),
             tests_meta=tests_meta,
+            runtime_blob_store=runtime_blob_store,
         )
         plans.append(plan)
         tests_meta_rows.append(dict(tests_meta))
@@ -374,6 +398,7 @@ def _tests_without_spec(
                 command_payload=_generator_command_payload(generator_args),
                 tests_meta=tests_meta,
                 testlib_header=testlib_header,
+                runtime_blob_store=runtime_blob_store,
             )
             plans.append(plan)
             tests_meta_rows.append(dict(tests_meta))
@@ -381,75 +406,91 @@ def _tests_without_spec(
     return (plans, tests_meta_rows)
 
 
-def build_verification_execution_plan(
-    snapshot: Path,
-    *,
-    manifest: VerificationManifest | None = None,
-    sample_only: bool = False,
-) -> VerificationExecutionPlan:
-    resolved_manifest = verification_manifest(snapshot) if manifest is None else manifest
-    limits = config.config_values.snapshot()
-    source_tree = load_problem_source_tree(
-        snapshot,
-        problem_limits=problem_config_limits(config.config_values),
-        tests_spec_max_bytes=int(limits["TEXTAREA_MAX_BYTES"]),
-        statement_sample_max_bytes=int(
-            limits["STATEMENT_SAMPLE_MAX_BYTES"]
-        ),
-    )
-    build_cfg = source_tree.build
-    runtime_cfg = source_tree.problem
-    mode = runtime_cfg["mode"]
-    pass_limit = runtime_cfg["pass_limit"]
-    shared_sources = _shared_source_payloads(
-        snapshot=snapshot,
-        manifest=resolved_manifest,
-        build_cfg=build_cfg,
-        mode=mode,
-    )
-    problem_limits = _problem_limits(runtime_cfg)
-    plans, tests_meta_rows = _tests_from_spec(
-        snapshot=snapshot,
-        manifest=resolved_manifest,
-        testlib_header=shared_sources["testlib_header"],
-        sample_only=bool(sample_only),
-        build_cfg=build_cfg,
-        entries=source_tree.tests,
-    )
-    if not plans:
-        plans, tests_meta_rows = _tests_without_spec(
+class VerificationExecutionPlanner:
+    """Build one canonical execution plan from a verified source snapshot."""
+
+    def __init__(
+        self,
+        config_values: ConfigValues,
+        runtime_blob_store: RuntimeBlobStore,
+    ) -> None:
+        self._config_values = config_values
+        self._runtime_blob_store = runtime_blob_store
+
+    def build(
+        self,
+        snapshot: Path,
+        *,
+        manifest: VerificationManifest | None = None,
+        sample_only: bool = False,
+    ) -> VerificationExecutionPlan:
+        resolved_manifest = (
+            verification_manifest(snapshot) if manifest is None else manifest
+        )
+        limits = self._config_values.snapshot()
+        source_tree = load_problem_source_tree(
+            snapshot,
+            problem_limits=problem_config_limits(self._config_values),
+            tests_spec_max_bytes=int(limits["TEXTAREA_MAX_BYTES"]),
+            statement_sample_max_bytes=int(
+                limits["STATEMENT_SAMPLE_MAX_BYTES"]
+            ),
+        )
+        build_cfg = source_tree.build
+        runtime_cfg = source_tree.problem
+        mode = runtime_cfg["mode"]
+        pass_limit = runtime_cfg["pass_limit"]
+        shared_sources = _shared_source_payloads(
+            snapshot=snapshot,
+            manifest=resolved_manifest,
+            build_cfg=build_cfg,
+            mode=mode,
+        )
+        problem_limits = _problem_limits(runtime_cfg)
+        plans, tests_meta_rows = _tests_from_spec(
+            snapshot=snapshot,
+            manifest=resolved_manifest,
+            testlib_header=shared_sources["testlib_header"],
+            sample_only=bool(sample_only),
+            build_cfg=build_cfg,
+            entries=source_tree.tests,
+            runtime_blob_store=self._runtime_blob_store,
+        )
+        if not plans:
+            plans, tests_meta_rows = _tests_without_spec(
             snapshot=snapshot,
             manifest=resolved_manifest,
             build_cfg=build_cfg,
             testlib_header=shared_sources["testlib_header"],
+            runtime_blob_store=self._runtime_blob_store,
         )
-    if sample_only:
-        filtered_pairs = [
-            (plan, meta)
-            for plan, meta in zip(plans, tests_meta_rows, strict=False)
-            if bool(meta.get("sample"))
-        ]
-        plans = [plan for plan, _meta in filtered_pairs]
-        tests_meta_rows = [meta for _plan, meta in filtered_pairs]
-    if not plans:
-        raise RuntimeError("verification build produced no tests")
-    test_plan_by_name = {plan.test_name: plan for plan in plans}
-    return VerificationExecutionPlan(
-        snapshot_root=snapshot,
-        accepted_source_path=str(shared_sources["accepted_source_path"]),
-        mode=mode,
-        pass_limit=pass_limit,
-        run_verification_payload_base=_run_payload_base(
-            build_cfg=build_cfg,
-            problem_limits=problem_limits,
-            source_files=dict(shared_sources["source_files"]),
-        ),
-        generate_verification_payload_base=_generate_payload_base(
-            problem_limits=problem_limits,
-            source_files=dict(shared_sources["source_files"]),
-        ),
-        source_file_by_path=dict(shared_sources["source_file_by_path"]),
-        test_names=[plan.test_name for plan in plans],
-        test_plan_by_name=test_plan_by_name,
-        tests_meta_rows=tests_meta_rows,
-    )
+        if sample_only:
+            filtered_pairs = [
+                (plan, meta)
+                for plan, meta in zip(plans, tests_meta_rows, strict=False)
+                if bool(meta.get("sample"))
+            ]
+            plans = [plan for plan, _meta in filtered_pairs]
+            tests_meta_rows = [meta for _plan, meta in filtered_pairs]
+        if not plans:
+            raise RuntimeError("verification build produced no tests")
+        test_plan_by_name = {plan.test_name: plan for plan in plans}
+        return VerificationExecutionPlan(
+            snapshot_root=snapshot,
+            accepted_source_path=str(shared_sources["accepted_source_path"]),
+            mode=mode,
+            pass_limit=pass_limit,
+            run_verification_payload_base=_run_payload_base(
+                build_cfg=build_cfg,
+                problem_limits=problem_limits,
+                source_files=dict(shared_sources["source_files"]),
+            ),
+            generate_verification_payload_base=_generate_payload_base(
+                problem_limits=problem_limits,
+                source_files=dict(shared_sources["source_files"]),
+            ),
+            source_file_by_path=dict(shared_sources["source_file_by_path"]),
+            test_names=[plan.test_name for plan in plans],
+            test_plan_by_name=test_plan_by_name,
+            tests_meta_rows=tests_meta_rows,
+        )
