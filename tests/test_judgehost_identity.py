@@ -4,6 +4,7 @@ import hashlib
 import unittest
 from pathlib import Path
 
+from app.service.execution.identity import canonical_run_id, new_run_id
 from app.service.judgehost.batch_scheduler import BatchScheduler
 from app.service.judgehost.batch_scheduler_models import (
     CompileSubmission,
@@ -19,6 +20,17 @@ from app.service.verification.identity import canonical_verification_id
 
 
 class TestJudgehostIdentity(unittest.TestCase):
+    def test_execution_run_identity_is_canonical_and_path_safe(self) -> None:
+        generated = new_run_id()
+        self.assertEqual(canonical_run_id(generated), generated)
+        self.assertRegex(generated, r"^r-[0-9a-f]{12}$")
+        for token in ("", " run", "run/1", "run:1", "x" * 81):
+            with self.subTest(token=token), self.assertRaisesRegex(
+                ValueError,
+                "invalid execution run id",
+            ):
+                canonical_run_id(token)
+
     def test_verification_id_maps_directly_to_signed_64_bit_domain(self) -> None:
         self.assertEqual(domjudge_job_id("ver-1"), 1)
         self.assertEqual(domjudge_job_id("ver-7fffffffffffffff"), (1 << 63) - 1)

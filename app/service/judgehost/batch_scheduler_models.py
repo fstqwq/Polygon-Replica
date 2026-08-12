@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from typing import Literal, TypedDict
 
 from app.service.platform.runtime_blob_store import PayloadFile
-from app.service.verification.execution_result import ExecutionResult
+from app.service.execution.model import ExecutionResult
 
 
 @dataclass(frozen=True)

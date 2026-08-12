@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 
 from app.service.disk.verification_store import VerificationStore
-from app.service.verification.execution_result import normalize_execution_result
+from app.service.execution.policy import normalize_execution_result
 from app.service.verification.lifecycle import VerificationAdmission
 from app.service.verification.task_completion import TaskCompletion
 from app.service.verification.task_store import VerificationTaskStore

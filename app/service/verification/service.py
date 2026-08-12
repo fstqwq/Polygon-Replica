@@ -45,9 +45,7 @@ from app.service.verification.read_model import (
 from app.service.verification.signature import verification_manifest
 from app.service.verification.source import select_source
 from app.service.verification.task_store import VerificationTaskStore
-from app.service.verification.execution_result import (
-    execution_result_from_json,
-)
+from app.service.execution.codec import execution_result_from_json
 from app.service.verification.test_spec import manual_test_sources, prepare_tests_spec_runtime
 
 from app.service.judgehost.api import Judgehost

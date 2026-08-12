@@ -3,6 +3,7 @@ from __future__ import annotations
 import secrets
 from pathlib import Path
 
+from app.service.execution.identity import canonical_run_id
 from app.service.judgehost.shared import _HOSTNAME_RE, _SCHEDULING_TOKEN_RE
 
 from app.service.judgehost.state import JudgehostState
@@ -55,10 +56,10 @@ class JudgehostCore:
         return self.check_api_token(provided_pass)
 
     def normalize_run_id(self, run_id: str) -> str:
-        token = str(run_id or "").strip()
-        if not _SCHEDULING_TOKEN_RE.fullmatch(token):
-            raise RuntimeError("invalid run id for judgehost task")
-        return token
+        try:
+            return canonical_run_id(run_id)
+        except ValueError as exc:
+            raise RuntimeError("invalid run id for judgehost task") from exc
 
     def normalize_verification_program_id(
         self,

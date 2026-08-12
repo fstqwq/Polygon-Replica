@@ -54,7 +54,7 @@ from app.service.judgehost.toolchain_versions import (
 from app.service.judgehost.toolkit import DomjudgeToolkit
 from app.service.platform.error_text import aux_display_text_limit_bytes
 from app.service.platform.runtime_blob_store import PayloadFile
-from app.service.verification.execution_result import execution_result_json
+from app.service.execution.codec import execution_result_json
 
 logger = logging.getLogger(__name__)
 

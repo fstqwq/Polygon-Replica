@@ -11,14 +11,14 @@ from app.service.judgehost.case_result import (
 from app.service.verification.completion import (
     VerificationTaskCompletionService,
 )
-from app.service.verification.execution_result import (
+from app.service.execution.model import (
     CAPTURE_COMPLETE,
     ExecutionPassResult,
     ExecutionResult,
     ExecutionUsage,
     PassArtifacts,
-    normalize_execution_result,
 )
+from app.service.execution.policy import normalize_execution_result
 from app.service.verification.lifecycle import (
     ActivationPlan,
     PlannedTask,

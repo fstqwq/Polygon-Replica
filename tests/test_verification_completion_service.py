@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import sqlite3
 
-from app.service.verification.execution_result import normalize_execution_result
+from app.service.execution.policy import normalize_execution_result
 from app.service.verification.lifecycle import verification_task_id
 from app.service.verification.task_completion import TaskCompletion
 from app.service.verification.task_store import VerificationTaskStore

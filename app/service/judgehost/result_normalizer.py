@@ -16,7 +16,7 @@ from app.service.judgehost.runtime import (
     domjudge_verdict_from_runresult,
 )
 from app.service.judgehost.shared import domjudge_lower_text, domjudge_text
-from app.service.verification.execution_result import (
+from app.service.execution.model import (
     ExecutionPassResult,
     ExecutionUsage,
     PassArtifacts,

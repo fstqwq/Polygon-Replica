@@ -172,7 +172,7 @@ class TestJudgehostPayload(unittest.TestCase):
         self.assertEqual(normalized.verdict, "RE")
         self.assertEqual(normalized.runtime_sec, 0.125)
         self.assertEqual(
-            normalized.result.warnings,
+            tuple(warning.message for warning in normalized.result.warnings),
             ("final artifact metadata is incomplete",),
         )
         self.assertEqual(normalized.result.passes, ())

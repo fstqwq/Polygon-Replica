@@ -24,10 +24,8 @@ from app.service.platform.runtime_blob_store import RuntimeBlobStore
 from app.service.platform.runtime_cache_index import RuntimeCacheIndex
 from app.service.platform.source_backup import SourceBackupService
 from app.service.repository.workspace import WorkspaceService
-from app.service.verification.execution_result import (
-    execution_result_json,
-    normalize_execution_result,
-)
+from app.service.execution.codec import execution_result_json
+from app.service.execution.policy import normalize_execution_result
 from app.service.verification.task_store import VerificationTaskStore
 from app.setting import Settings
 from tests.isolated_db_helpers import (

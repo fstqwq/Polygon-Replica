@@ -22,7 +22,7 @@ from app.service.judgehost.batch_scheduler_models import (
     ExecutionBatchRow,
     JudgehostCaseRow,
 )
-from app.service.verification.execution_result import execution_result_from_json
+from app.service.execution.codec import execution_result_from_json
 
 logger = logging.getLogger(__name__)
 _DomjudgeCacheEntry = TypedDict(

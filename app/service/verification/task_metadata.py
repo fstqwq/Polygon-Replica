@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from typing import TypedDict, cast
 
 from app.service.platform.error_text import truncate_display_text
@@ -28,11 +29,14 @@ def canonical_truncated_text(value: str, *, limit: int) -> TruncatedText:
     }
 
 
-def _normalize_diagnostics_for_db(entries: list[dict[str, object]] | list[object], message_limit: int) -> list[dict[str, object]]:
+def _normalize_diagnostics_for_db(
+    entries: list[Mapping[str, object]] | list[object],
+    message_limit: int,
+) -> list[dict[str, object]]:
     normalized: list[dict[str, object]] = []
     cap = max(1, int(message_limit))
     for raw in entries:
-        item = raw if isinstance(raw, dict) else {"message": str(raw)}
+        item = dict(raw) if isinstance(raw, Mapping) else {"message": str(raw)}
         message = item.get("message")
         safe_message = message if isinstance(message, str) else str(message or "")
         msg, msg_truncated = truncate_display_text(safe_message, limit_bytes=cap)
@@ -40,7 +44,11 @@ def _normalize_diagnostics_for_db(entries: list[dict[str, object]] | list[object
         row["message"] = msg
         row["message_truncated"] = bool(msg_truncated)
         row["message_limit"] = cap
-        row["level"] = row.get("level") if isinstance(row.get("level"), str) and str(row.get("level")).strip() else "error"
+        row["level"] = (
+            row.get("level")
+            if isinstance(row.get("level"), str) and str(row.get("level")).strip()
+            else "error"
+        )
         row["file"] = row.get("file") if isinstance(row.get("file"), str) else ""
         row["line"] = row["line"] if isinstance(row.get("line"), int) else 0
         row["column"] = row["column"] if isinstance(row.get("column"), int) else 0
@@ -50,7 +58,7 @@ def _normalize_diagnostics_for_db(entries: list[dict[str, object]] | list[object
 
 
 def canonical_diagnostics(
-    entries: list[dict[str, object]] | list[object] | None,
+    entries: list[Mapping[str, object]] | list[object] | None,
     *,
     list_limit: int,
     message_limit: int,

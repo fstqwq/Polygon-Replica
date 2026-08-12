@@ -3,18 +3,22 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import TypedDict, cast
 
-from app.service.verification.test_rows import (
-    build_verification_test_pass_row,
-    build_verification_test_row,
-)
-from app.service.verification.execution_result import (
+from app.service.execution.model import (
     CAPTURE_COMPLETE,
     CompileResult,
     ExecutionPassResult,
     ExecutionResult,
     ExecutionUsage,
     PassArtifacts,
+)
+from app.service.execution.policy import (
+    canonical_compile_diagnostics,
+    canonical_execution_result,
     normalize_execution_result,
+)
+from app.service.verification.test_rows import (
+    build_verification_test_pass_row,
+    build_verification_test_row,
 )
 
 
@@ -45,17 +49,19 @@ def execution_result_with_terminal_context(
     diagnostics = (
         result.compile.diagnostics
         if result.compile.diagnostics
-        else tuple(dict(item) for item in summary_diagnostics)
+        else canonical_compile_diagnostics(summary_diagnostics)
     )
     summary_error = str(summary.get("error") or "")
     compile_log = result.compile.log
     if not compile_log and diagnostics:
         compile_log = str(summary.get("compile_log") or summary_error or error_text)
     resolved_error = result.outcome.error or error_text or summary_error
-    return replace(
-        result,
-        outcome=replace(result.outcome, error=resolved_error),
-        compile=CompileResult(log=compile_log, diagnostics=diagnostics),
+    return canonical_execution_result(
+        replace(
+            result,
+            outcome=replace(result.outcome, error=resolved_error),
+            compile=CompileResult(log=compile_log, diagnostics=diagnostics),
+        )
     )
 
 

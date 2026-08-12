@@ -5,14 +5,14 @@ import time
 import unittest
 from unittest.mock import patch
 
-from app.service.verification.execution_result import (
+from app.service.execution.model import (
     CAPTURE_COMPLETE,
     ExecutionPassResult,
     ExecutionResult,
     ExecutionUsage,
     PassArtifacts,
-    normalize_execution_result,
 )
+from app.service.execution.policy import normalize_execution_result
 from app.service.verification.task_completion import CompletionCommit, TaskCompletion
 from app.service.verification.task_scheduler import (
     TaskPublishResult,

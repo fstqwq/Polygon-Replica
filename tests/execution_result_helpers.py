@@ -2,14 +2,14 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
-from app.service.verification.execution_result import (
+from app.service.execution.model import (
     CAPTURE_COMPLETE,
     ExecutionPassResult,
     ExecutionResult,
     ExecutionUsage,
     PassArtifacts,
-    normalize_execution_result,
 )
+from app.service.execution.policy import normalize_execution_result
 
 
 def execution_result(

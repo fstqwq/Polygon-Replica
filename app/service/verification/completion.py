@@ -7,14 +7,14 @@ from app.service.judgehost.completion import (
     CaseCompletionReport,
     DiagnosticAppendResult,
 )
-from app.service.platform.error_text import normalize_display_text
-from app.service.platform.runtime_blob_store import RuntimeBlobStore
-from app.service.platform.truncation import STORED_LOG_TRUNCATED_MARKER
-from app.service.verification.execution_result import (
-    ExecutionResult,
+from app.service.execution.model import ExecutionResult
+from app.service.execution.policy import (
     execution_result_with_outcome,
     normalize_execution_result,
 )
+from app.service.platform.error_text import normalize_display_text
+from app.service.platform.runtime_blob_store import RuntimeBlobStore
+from app.service.platform.truncation import STORED_LOG_TRUNCATED_MARKER
 from app.service.verification.result_match import verification_case_result_match
 from app.service.verification.task_completion import (
     CompletionCommit,

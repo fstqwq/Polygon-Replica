@@ -8,41 +8,6 @@ from typing import cast
 
 from app.db import now_iso
 from app.impl.runtime.config import config
-from app.service.problem.solution_metadata import normalize_expected_behavior
-from app.service.platform.runtime_blob_store import PayloadFile, RuntimeBlobStore
-from app.service.verification.source import resolve_source
-from app.service.verification.completion import verification_task_fail_reason
-from app.service.verification.task_completion import TaskCompletion
-from app.service.verification.task_scheduler import TaskPublishResult
-from app.service.verification.execution import (
-    VerificationCoordinatorFailure,
-    VerificationExecutionCallbacks,
-)
-from app.service.verification.execution_result import normalize_execution_result
-from app.service.verification.lifecycle import (
-    ActivationPlan,
-    PlannedTask,
-    SanityFinish,
-    TASK_GENERATE_INPUT,
-    TASK_MAIN_CORRECT,
-    TASK_SOLUTION_RUN,
-    VerificationCompileSpec,
-    VerificationProgram,
-    verification_task_id,
-)
-from app.service.verification.task_store import VerificationTaskRow, VerificationTaskStore
-from app.service.verification.test_rows import build_verification_test_row
-from app.service.verification.types import Kind, Status
-from app.service.verification.signature import (
-    VerificationManifest,
-    verification_manifest,
-)
-from app.service.verification.failure_display import verification_solution_failure_hint
-from app.service.verification.result_match import (
-    run_actual_failed_codes,
-)
-
-from app.impl.workspace.context_job_helper import allocate_run_id
 from app.impl.workspace.context_operation import audit
 from app.impl.workspace.sanity_checks import (
     SANITY_FAILED,
@@ -55,9 +20,41 @@ from app.impl.workspace.sanity_checks import (
     run_verification_sanity_checks,
 )
 from app.impl.workspace.runtime_threshold import time_limit_ms_from_run_config_json
-from app.service.verification.plan import VerificationTestPlan
 from app.impl.workspace.verification_dag_plan import build_verification_execution_plan
 from app.impl.workspace.verification_payload import prepared_payload_for_uploaded_source
+from app.service.execution.identity import new_run_id
+from app.service.execution.policy import normalize_execution_result
+from app.service.platform.runtime_blob_store import PayloadFile, RuntimeBlobStore
+from app.service.problem.solution_metadata import normalize_expected_behavior
+from app.service.verification.completion import verification_task_fail_reason
+from app.service.verification.execution import (
+    VerificationCoordinatorFailure,
+    VerificationExecutionCallbacks,
+)
+from app.service.verification.failure_display import verification_solution_failure_hint
+from app.service.verification.lifecycle import (
+    ActivationPlan,
+    PlannedTask,
+    SanityFinish,
+    TASK_GENERATE_INPUT,
+    TASK_MAIN_CORRECT,
+    TASK_SOLUTION_RUN,
+    VerificationCompileSpec,
+    VerificationProgram,
+    verification_task_id,
+)
+from app.service.verification.plan import VerificationTestPlan
+from app.service.verification.result_match import run_actual_failed_codes
+from app.service.verification.signature import (
+    VerificationManifest,
+    verification_manifest,
+)
+from app.service.verification.source import resolve_source
+from app.service.verification.task_completion import TaskCompletion
+from app.service.verification.task_scheduler import TaskPublishResult
+from app.service.verification.task_store import VerificationTaskRow, VerificationTaskStore
+from app.service.verification.test_rows import build_verification_test_row
+from app.service.verification.types import Kind, Status
 
 _C = config.config_values
 
@@ -814,7 +811,7 @@ def _publish_generate_task(task_row: VerificationTaskRow, *, execution: TaskExec
     task_id = str(task_row["id"])
     test_name = str(task_row["test_name"])
     program_id = str(task_row["program_id"])
-    run_id = allocate_run_id()
+    run_id = new_run_id()
     try:
         program = execution.program_by_id.get(program_id)
         if program is None or program.kind != TASK_GENERATE_INPUT:
@@ -942,7 +939,7 @@ def _publish_run_task(task_row: VerificationTaskRow, *, execution: TaskExecution
     source_path = str(task_row["source_path"])
     test_name = str(task_row["test_name"])
     program_id = str(task_row["program_id"] or "")
-    run_id = allocate_run_id()
+    run_id = new_run_id()
     try:
         program = execution.program_by_id.get(program_id)
         if (

@@ -10,18 +10,21 @@ from app.service.judgehost.pass_bundle import (
     parse_pass_bundle,
     split_pass_feedback,
 )
-from app.service.verification.execution_result import (
-    CAPTURE_COMPLETE,
-    CAPTURE_METADATA_ONLY,
-    ExecutionPassResult,
-    ExecutionUsage,
-    PassArtifacts,
+from app.service.execution.codec import (
     execution_result_dict,
     execution_result_from_dict,
     execution_result_from_json,
     execution_result_json,
-    normalize_execution_result,
 )
+from app.service.execution.model import (
+    CAPTURE_COMPLETE,
+    CAPTURE_METADATA_ONLY,
+    ExecutionWarning,
+    ExecutionPassResult,
+    ExecutionUsage,
+    PassArtifacts,
+)
+from app.service.execution.policy import normalize_execution_result
 
 
 def _artifacts(number: int, *, interactive: bool = False) -> PassArtifacts:
@@ -124,6 +127,20 @@ class TestExecutionResult(unittest.TestCase):
         self.assertEqual(result.outcome.usage.wall_sec, 0.5)
         self.assertEqual(result.outcome.usage.memory_kb, 200)
 
+    def test_warnings_and_nested_diagnostics_are_immutable(self) -> None:
+        source = {"message": "compile failed", "notes": [{"line": 3}]}
+        result = normalize_execution_result(
+            compile_diagnostics=(source,),
+            warnings=("capture unavailable",),
+        )
+        source["message"] = "changed"
+        self.assertEqual(
+            result.warnings,
+            (ExecutionWarning(message="capture unavailable"),),
+        )
+        self.assertEqual(result.compile.diagnostics[0]["message"], "compile failed")
+        self.assertEqual(execution_result_from_json(execution_result_json(result)), result)
+
     def test_ordinary_and_interactive_single_and_multi_pass_shapes(self) -> None:
         ordinary = normalize_execution_result(
             passes=(_pass(1, usage=ExecutionUsage()),)
@@ -193,6 +210,63 @@ class TestExecutionResult(unittest.TestCase):
         passes[0]["number"] = "01"
         with self.assertRaisesRegex(ValueError, "positive integer"):
             execution_result_from_dict(raw)
+
+    def test_result_decoder_requires_the_exact_persisted_shape(self) -> None:
+        raw = execution_result_dict(normalize_execution_result(verdict="AC"))
+        with self.subTest(case="unknown field"):
+            invalid = dict(raw)
+            invalid["legacy"] = True
+            with self.assertRaisesRegex(ValueError, "unsupported legacy"):
+                execution_result_from_dict(invalid)
+        with self.subTest(case="missing field"):
+            invalid = dict(raw)
+            del invalid["warnings"]
+            with self.assertRaisesRegex(ValueError, "missing warnings"):
+                execution_result_from_dict(invalid)
+        with self.subTest(case="wrong scalar type"):
+            invalid = dict(raw)
+            outcome = dict(invalid["outcome"])
+            outcome["verdict"] = 42
+            invalid["outcome"] = outcome
+            with self.assertRaisesRegex(ValueError, "verdict must be a string"):
+                execution_result_from_dict(invalid)
+        with self.subTest(case="empty legacy object"):
+            with self.assertRaisesRegex(ValueError, "invalid fields"):
+                execution_result_from_json("{}")
+
+    def test_result_decoder_rejects_noncanonical_usage_and_pass_order(self) -> None:
+        result = normalize_execution_result(
+            passes=(
+                _pass(1, usage=ExecutionUsage(0.1, 0.1, 0.1, 1)),
+                _pass(2, usage=ExecutionUsage(0.2, 0.2, 0.2, 2)),
+            )
+        )
+        raw = execution_result_dict(result)
+        passes = raw["passes"]
+        assert isinstance(passes, list)
+        with self.subTest(case="pass order"):
+            invalid = dict(raw)
+            invalid["passes"] = list(reversed(passes))
+            with self.assertRaisesRegex(ValueError, "ordered, contiguous"):
+                execution_result_from_dict(invalid)
+        with self.subTest(case="negative usage"):
+            invalid = dict(raw)
+            outcome = dict(invalid["outcome"])
+            usage = dict(outcome["usage"])
+            usage["runtime_sec"] = -1
+            outcome["usage"] = usage
+            invalid["outcome"] = outcome
+            with self.assertRaisesRegex(ValueError, "non-negative"):
+                execution_result_from_dict(invalid)
+        with self.subTest(case="non-finite usage"):
+            invalid = dict(raw)
+            outcome = dict(invalid["outcome"])
+            usage = dict(outcome["usage"])
+            usage["runtime_sec"] = float("nan")
+            outcome["usage"] = usage
+            invalid["outcome"] = outcome
+            with self.assertRaisesRegex(ValueError, "finite"):
+                execution_result_from_dict(invalid)
 
 
 class TestPassBundle(unittest.TestCase):

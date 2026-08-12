@@ -8,10 +8,8 @@ from typing import Literal, TypedDict, cast
 
 from app.service.platform.hashing import canonical_json
 from app.service.platform.runtime_blob_store import PayloadFile
-from app.service.verification.execution_result import (
-    ExecutionResult,
-    normalize_execution_result,
-)
+from app.service.execution.model import ExecutionResult
+from app.service.execution.policy import normalize_execution_result
 
 
 AdmissionOutcome = Literal["admitted", "already-exists"]

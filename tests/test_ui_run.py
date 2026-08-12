@@ -67,15 +67,15 @@ from app.impl.workspace.verification_dag import run_workspace_verification_dag
 import app.service.problem.readiness as problem_readiness_module
 import app.service.verification.workspace_fingerprint as workspace_fingerprint_module
 from app.service.problem.readiness import WorkspaceReadinessSubject
-from app.service.verification.execution_result import (
+from app.service.execution.model import (
     CAPTURE_COMPLETE,
     CAPTURE_METADATA_ONLY,
     ExecutionPassResult,
     ExecutionResult,
     ExecutionUsage,
     PassArtifacts,
-    normalize_execution_result,
 )
+from app.service.execution.policy import normalize_execution_result
 from app.service.verification.lifecycle import PlannedTask, verification_task_id
 from app.service.verification.task_completion import TaskCompletion
 from app.service.verification.task_store import VerificationTaskStore

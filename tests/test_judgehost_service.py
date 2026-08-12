@@ -35,7 +35,7 @@ from app.service.judgehost.identity import domjudge_job_id, domjudge_submit_id
 from app.service.judgehost.api import Judgehost
 from app.service.platform.runtime_blob_store import PayloadFile
 from app.service.verification.diagnostic import compose_task_diagnostic_display
-from app.service.verification.execution_result import normalize_execution_result
+from app.service.execution.policy import normalize_execution_result
 from app.service.verification.lifecycle import PlannedTask, verification_task_id
 from app.service.verification.task_completion import TaskCompletion
 from app.service.verification.task_scheduler import (

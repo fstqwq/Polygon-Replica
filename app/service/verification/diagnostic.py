@@ -8,7 +8,7 @@ from app.service.platform.error_text import (
     bounded_display_text,
 )
 from app.service.platform.hashing import canonical_json, sha256_hex_json
-from app.service.verification.execution_result import ExecutionResult
+from app.service.execution.model import ExecutionResult
 
 
 DiagnosticKind = Literal["debug-info", "internal-error"]

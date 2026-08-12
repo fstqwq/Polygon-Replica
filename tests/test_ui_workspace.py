@@ -27,7 +27,7 @@ from app.config import CONFIG_REGISTRY
 from app.service.problem.test_spec import normalize_file_manual_input, normalize_manual_input
 from app.service.platform.git_process import GitCommandResult, run_git
 from app.service.repository.revision import workspace_revision_info
-from app.service.verification.execution_result import normalize_execution_result
+from app.service.execution.policy import normalize_execution_result
 from app.service.verification.lifecycle import (
     ActivationPlan,
     PlannedTask,

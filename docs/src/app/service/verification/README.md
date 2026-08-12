@@ -1,10 +1,11 @@
 # `app/service/verification`
 
 Owns verification and custom-run identities, source manifests and signatures,
-execution plans, task persistence, DAG scheduling, result normalization,
+execution plans, task persistence, DAG scheduling, result evaluation,
 expected-behavior matching, and read models. It consumes a frozen workspace
 snapshot, selected solutions/tests, canonical runtime configuration, and typed
-Judgehost terminal reports containing a canonical `ExecutionResult`. It
+Judgehost terminal reports containing an
+[`ExecutionResult`](../execution/README.md). It
 produces durable verification/task rows and runtime blob locators; it does not
 own the Judgehost wire protocol or blob filesystem.
 

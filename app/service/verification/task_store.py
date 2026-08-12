@@ -7,16 +7,19 @@ from dataclasses import dataclass, replace
 from typing import TypeVar, TypedDict, cast
 
 from app.db import DB, now_iso
-from app.service.platform.error_text import aux_display_text_limit_bytes, bounded_display_text
-from app.service.platform.hashing import canonical_json
-from app.service.platform.rwlock import WriterPriorityRWLock
-from app.service.verification.execution_result import (
-    ExecutionResult,
+from app.service.execution.codec import (
+    compile_diagnostics_payload,
     execution_result_from_json,
     execution_result_json,
+)
+from app.service.execution.model import ExecutionResult
+from app.service.execution.policy import (
     execution_result_with_outcome,
     normalize_execution_result,
 )
+from app.service.platform.error_text import aux_display_text_limit_bytes, bounded_display_text
+from app.service.platform.hashing import canonical_json
+from app.service.platform.rwlock import WriterPriorityRWLock
 from app.service.verification.diagnostic import (
     DiagnosticMergeOutcome,
     TaskDiagnosticSnapshot,
@@ -157,7 +160,7 @@ def _bounded_result(result: ExecutionResult, *, limit_bytes: int) -> ExecutionRe
         compile_log=bounded_display_text(result.compile.log, limit_bytes=limit_bytes),
         compile_diagnostics=diagnostics,
         warnings=(
-            bounded_display_text(warning, limit_bytes=limit_bytes)
+            bounded_display_text(warning.message, limit_bytes=limit_bytes)
             for warning in result.warnings
         ),
     )
@@ -381,7 +384,7 @@ class VerificationTaskStore:
             "answer_correct": result.answer_correct,
             "compile_log": result.compile.log,
             "diagnostics_json": canonical_json(
-                list(result.compile.diagnostics),
+                compile_diagnostics_payload(result.compile.diagnostics),
                 ensure_ascii=False,
             ),
             "error_text": result.outcome.error,

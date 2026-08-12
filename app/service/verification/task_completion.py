@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from app.service.execution.codec import compile_diagnostics_payload
+from app.service.execution.model import ExecutionResult
 from app.service.platform.hashing import canonical_json
-from app.service.verification.execution_result import ExecutionResult
 from app.service.verification.lifecycle import ParentTransition
 
 
@@ -45,7 +46,7 @@ class TaskCompletion:
     @property
     def diagnostics_json(self) -> str:
         return canonical_json(
-            list(self.result.compile.diagnostics),
+            compile_diagnostics_payload(self.result.compile.diagnostics),
             ensure_ascii=False,
         )
 

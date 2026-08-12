@@ -11,12 +11,13 @@ from app.impl.agent.shared import require_agent_token, workspace_context_for_ide
 from app.impl.auth.shared import json_error_response
 from app.impl.runtime.config import config
 from app.impl.workspace.context_job import start_export_job, start_verification_job
-from app.impl.workspace.published_materialization import build_full_verification_targets
-from app.impl.workspace.context_job_helper import allocate_run_id, allocate_verification_id
+from app.impl.workspace.context_job_helper import allocate_verification_id
 from app.impl.workspace.context_operation import audit
 from app.impl.workspace.context_run_detail import normalize_run_test_name_token
 from app.impl.workspace.problem_config import read_problem_config
+from app.impl.workspace.published_materialization import build_full_verification_targets
 from app.impl.workspace.run_view_detail import build_run_detail_context
+from app.service.execution.identity import new_run_id
 from app.service.importing.archive import (
     ArchiveView,
     problem_archive_policy,
@@ -554,7 +555,7 @@ async def agent_export_start(request: Request):
     if export_type not in {"icpc", "native"}:
         return json_error_response("unsupported package type", status_code=400)
     try:
-        export_job_id = f"exp-api-{allocate_run_id()}"
+        export_job_id = f"exp-api-{new_run_id()}"
         started = start_export_job(
             identity.problem_slug,
             identity.username,

@@ -208,7 +208,8 @@ availability is checked separately from durable verification status.
 
 For a final `add-judging-run` callback, Judgehost first captures artifact bytes
 and refs, then a dependency-light normalizer produces the canonical case
-`ExecutionResult`. Compile failure arrives through `update-judging`, and a
+`ExecutionResult` owned by `app.service.execution`. Compile failure arrives
+through `update-judging`, and a
 missing case has no complete final callback. Canonical scheduler and task-queue
 helpers construct those failure results from stored compile/case evidence; the
 batch finalizer publishes and aggregates terminal case results into the task
@@ -216,8 +217,10 @@ report. Verification preserves
 that report instead of rebuilding compile data, passes, warnings, or artifact
 evidence from summary fields.
 
-Task results are serialized in `verification_tasks.result_json`. The canonical
-shape has `outcome`, `compile`, ordered `passes`, and `warnings`. Each pass
+Task results are serialized in `verification_tasks.result_json` only through
+the strict execution codec. The canonical shape has `outcome`, `compile`,
+ordered `passes`, and `warnings`; missing, additional, or incorrectly typed
+fields are invalid. Each pass
 records its number, capture status, run result, verdict, score, answer flag,
 resource usage, feedback, and artifact locators. Pass numbers are contiguous
 from one; an output locator and transcript locator are mutually exclusive.

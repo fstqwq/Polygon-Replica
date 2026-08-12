@@ -9,7 +9,7 @@ from app.service.verification.execution import (
     VerificationExecutionCallbacks,
     VerificationExecutionService,
 )
-from app.service.verification.execution_result import normalize_execution_result
+from app.service.execution.policy import normalize_execution_result
 from app.service.verification.lifecycle import (
     ActivationPlan,
     PlannedTask,
