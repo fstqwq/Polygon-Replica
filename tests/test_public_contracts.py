@@ -243,7 +243,7 @@ class TestPublicContracts(unittest.TestCase):
 
     def test_only_allowed_modules_import_private_persistence(self) -> None:
         allowed = {
-            ROOT / "app" / "impl" / "runtime" / "config.py",
+            ROOT / "app" / "runtime.py",
             ROOT / "app" / "service" / "auth" / "service.py",
             ROOT / "app" / "service" / "contest" / "service.py",
             ROOT / "app" / "service" / "export" / "service.py",

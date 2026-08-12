@@ -4,7 +4,7 @@ import app.main_constant as _K
 import json
 from pathlib import Path
 from typing import cast
-from app.impl.runtime.config import config
+from app.impl.runtime.dependency import runtime
 from app.impl.workspace.artifact import verification_artifact_file, verification_blob_virtual_rel
 from app.impl.workspace.context import count_label
 from app.impl.workspace.problem_config import read_problem_config
@@ -80,7 +80,6 @@ from app.service.verification.runtime_threshold import (
     time_limit_ms_from_run_config_json,
 )
 
-_C = config.config_values
 _TASK_KIND_GENERATE_INPUT = "generate-input"
 _TASK_KIND_MAIN_CORRECT = "main-correct"
 _TASK_KIND_SOLUTION_RUN = "solution-run"
@@ -162,7 +161,7 @@ def _sanity_status_tone(status: str) -> str:
 def _sanity_reason(payload: dict[str, object]) -> str:
     error = bounded_display_text(
         str(payload.get("error") or ""),
-        limit_bytes=int(_C.AUX_DISPLAY_TEXT_LIMIT_BYTES),
+        limit_bytes=int(runtime().config_values.AUX_DISPLAY_TEXT_LIMIT_BYTES),
     )
     if error:
         return error
@@ -182,7 +181,7 @@ def _sanity_messages(raw_messages: object) -> list[dict[str, object]]:
             continue
         message = bounded_display_text(
             str(raw.get("message") or ""),
-            limit_bytes=int(_C.AUX_DISPLAY_TEXT_LIMIT_BYTES),
+            limit_bytes=int(runtime().config_values.AUX_DISPLAY_TEXT_LIMIT_BYTES),
         )
         if not message:
             continue
@@ -208,7 +207,7 @@ def _sanity_task_rows_from_results(payload: dict[str, object]) -> list[dict[str,
         if failed_check and status in {"warning", "failed"}:
             message = bounded_display_text(
                 str(payload.get("error") or _sanity_reason(payload)),
-                limit_bytes=int(_C.AUX_DISPLAY_TEXT_LIMIT_BYTES),
+                limit_bytes=int(runtime().config_values.AUX_DISPLAY_TEXT_LIMIT_BYTES),
             )
             messages = (
                 [
@@ -229,7 +228,7 @@ def _sanity_task_rows_from_results(payload: dict[str, object]) -> list[dict[str,
                     "tone": _sanity_status_tone(status),
                     "detail": "" if messages else bounded_display_text(
                         _sanity_reason(payload),
-                        limit_bytes=int(_C.AUX_DISPLAY_TEXT_LIMIT_BYTES),
+                        limit_bytes=int(runtime().config_values.AUX_DISPLAY_TEXT_LIMIT_BYTES),
                     ),
                     "messages": messages,
                 }
@@ -262,7 +261,7 @@ def _sanity_task_rows_from_results(payload: dict[str, object]) -> list[dict[str,
                 "tone": _sanity_status_tone(row_status),
                 "detail": bounded_display_text(
                     detail,
-                    limit_bytes=int(_C.AUX_DISPLAY_TEXT_LIMIT_BYTES),
+                    limit_bytes=int(runtime().config_values.AUX_DISPLAY_TEXT_LIMIT_BYTES),
                 ),
                 "messages": messages,
             }
@@ -320,7 +319,7 @@ def build_run_detail_context(
     detail_program_id: str = '',
 ) -> dict:
     display_limit = int(
-        _C.snapshot()["AUX_DISPLAY_TEXT_LIMIT_BYTES"]
+        runtime().config_values.snapshot()["AUX_DISPLAY_TEXT_LIMIT_BYTES"]
     )
 
     def _task_graph_column_keys_from_task_rows(
@@ -631,11 +630,11 @@ def build_run_detail_context(
             mode=general_cfg['mode'],
             pass_limit=general_cfg['pass_limit'],
             default_ms=int(_K.GENERAL_CONFIG_DEFAULTS['time_limit_ms']),
-            min_ms=int(_C.GENERAL_TIME_LIMIT_MIN_MS),
-            max_ms=int(_C.GENERAL_TIME_LIMIT_MAX_MS),
-            pass_fail_slack_sec=int(_C.RUN_WALL_TIME_SLACK_PASS_FAIL_SEC),
-            multi_pass_slack_sec=int(_C.RUN_WALL_TIME_SLACK_PASS_LIMIT_SEC),
-            interactive_slack_sec=int(_C.RUN_WALL_TIME_SLACK_INTERACTIVE_SEC),
+            min_ms=int(runtime().config_values.GENERAL_TIME_LIMIT_MIN_MS),
+            max_ms=int(runtime().config_values.GENERAL_TIME_LIMIT_MAX_MS),
+            pass_fail_slack_sec=int(runtime().config_values.RUN_WALL_TIME_SLACK_PASS_FAIL_SEC),
+            multi_pass_slack_sec=int(runtime().config_values.RUN_WALL_TIME_SLACK_PASS_LIMIT_SEC),
+            interactive_slack_sec=int(runtime().config_values.RUN_WALL_TIME_SLACK_INTERACTIVE_SEC),
         )
     except Exception:
         fallback_time_limit_ms = 0
@@ -648,7 +647,7 @@ def build_run_detail_context(
     has_task_graph = False
     source_verification_id = verification_id_hint if is_canonical_artifact_id(verification_id_hint) else ''
     verification_snapshot = (
-        config.verification_service.verification_snapshot(verification_id_hint)
+        runtime().verification_service.verification_snapshot(verification_id_hint)
         if verification_id_hint
         else None
     )
@@ -657,7 +656,7 @@ def build_run_detail_context(
         if verification_snapshot is not None
         else None
     )
-    verification_access = config.access_query.verification_context(
+    verification_access = runtime().access_query.verification_context(
         actor_user_id=int(ctx["user"]["id"]),
         actor_workspace_id=workspace_id,
         expected_problem_id=problem_id,
@@ -673,7 +672,7 @@ def build_run_detail_context(
         verification_detail_payload = verification_snapshot["detail"]
         verification_details = {
             **verification_detail_payload,
-            **config.verification_service.verification_runtime_summary_from_tasks(
+            **runtime().verification_service.verification_runtime_summary_from_tasks(
                 cast(list[dict[str, object]], verification_snapshot["tasks"])
             ),
             'verification_id': verification_id_hint,
@@ -906,20 +905,20 @@ def build_run_detail_context(
             source_label = row['source_label']
         if mode not in {'pass-fail', 'interactive'}:
             mode = 'malformed'
-        _cap_summary_list(summary, 'tests', _C.RUN_DETAIL_TEST_LIST_LIMIT, 'tests_truncated', 'tests_total', 'tests_limit')
+        _cap_summary_list(summary, 'tests', runtime().config_values.RUN_DETAIL_TEST_LIST_LIMIT, 'tests_truncated', 'tests_total', 'tests_limit')
         raw_compile_diags = list(cast(list[object], summary.get('compile_diagnostics') or []))
         if raw_compile_diags:
-            summary['compile_diagnostics'] = raw_compile_diags[: _C.RUN_DETAIL_DIAGNOSTIC_LIST_LIMIT]
+            summary['compile_diagnostics'] = raw_compile_diags[: runtime().config_values.RUN_DETAIL_DIAGNOSTIC_LIST_LIMIT]
         if include_row_details:
-            _cap_run_test_feedback_files(summary, _C.RUN_TEST_FEEDBACK_FILE_LIST_LIMIT)
+            _cap_run_test_feedback_files(summary, runtime().config_values.RUN_TEST_FEEDBACK_FILE_LIST_LIMIT)
         compile_diags = summary.get('compile_diagnostics') or []
         if compile_diags:
-            normalized_diags = _normalize_diagnostics(compile_diags, _C.DIAGNOSTIC_MESSAGE_CHAR_LIMIT)
+            normalized_diags = _normalize_diagnostics(compile_diags, runtime().config_values.DIAGNOSTIC_MESSAGE_CHAR_LIMIT)
             summary['compile_diagnostics'] = _decorate_compile_diagnostics(normalized_diags)
         detail_compile_diagnostics = list(cast(list[dict[str, object]], summary.get('compile_diagnostics') or []))
         detail_compile_error = bounded_display_text(
             summary.get('error') or '',
-            limit_bytes=int(_C.AUX_DISPLAY_TEXT_LIMIT_BYTES),
+            limit_bytes=int(runtime().config_values.AUX_DISPLAY_TEXT_LIMIT_BYTES),
         )
         if (not detail_compile_error) and detail_compile_diagnostics:
             first_diag = detail_compile_diagnostics[0]
@@ -1030,7 +1029,7 @@ def build_run_detail_context(
                     feedback_display = '-'
                     inline_feedback = bounded_display_text(
                         item.get('message') or item.get('error') or '',
-                        limit_bytes=int(_C.AUX_DISPLAY_TEXT_LIMIT_BYTES),
+                        limit_bytes=int(runtime().config_values.AUX_DISPLAY_TEXT_LIMIT_BYTES),
                     )
                     feedback_files = item.get('feedback_files') or []
                     feedback_items: list[str] = []
@@ -1077,7 +1076,7 @@ def build_run_detail_context(
                                 pass_memory_kb = 0
                             pass_feedback = bounded_display_text(
                                 pass_item.get('feedback') or '',
-                                limit_bytes=int(_C.AUX_DISPLAY_TEXT_LIMIT_BYTES),
+                                limit_bytes=int(runtime().config_values.AUX_DISPLAY_TEXT_LIMIT_BYTES),
                             )
                             row_feedback_display = pass_feedback or feedback_display
                             output_rel = (pass_item.get('output_ref') or '')
@@ -1199,7 +1198,7 @@ def build_run_detail_context(
         execution_skipped = bool(execution_skipped_from_summary and (not has_materialized_tests))
         execution_skipped_reason = bounded_display_text(
             (summary.get('execution_skipped_reason') or summary.get('error') or ''),
-            limit_bytes=int(_C.AUX_DISPLAY_TEXT_LIMIT_BYTES),
+            limit_bytes=int(runtime().config_values.AUX_DISPLAY_TEXT_LIMIT_BYTES),
         )
         if (not has_task_graph) and (not execution_skipped):
             case_cells = domjudge_case_cells_by_program.get(program_id) or {}
@@ -1289,7 +1288,7 @@ def build_run_detail_context(
                 source_for_display,
                 match_reason,
                 str(summary.get('error') or ''),
-                limit_bytes=int(_C.AUX_DISPLAY_TEXT_LIMIT_BYTES),
+                limit_bytes=int(runtime().config_values.AUX_DISPLAY_TEXT_LIMIT_BYTES),
             )
             if (match_reason or summary.get('error'))
             else ''
@@ -1507,7 +1506,7 @@ def build_run_detail_context(
                 return _run_detail_preview_unavailable('missing')
             payload_file, _filename = resolved
             with payload_file.path.open('rb') as stream:
-                blob = stream.read(int(_C.RUN_DETAIL_PREVIEW_MAX_BYTES) + 1)
+                blob = stream.read(int(runtime().config_values.RUN_DETAIL_PREVIEW_MAX_BYTES) + 1)
             return _run_detail_preview_from_bytes(
                 blob,
                 verification_id=safe_verification_id,
@@ -1794,7 +1793,7 @@ def build_run_detail_context(
     detail_fail_reason = rewrite_failure_reason_with_source(
         detail_fail_reason,
         columns,
-        limit_bytes=int(_C.AUX_DISPLAY_TEXT_LIMIT_BYTES),
+        limit_bytes=int(runtime().config_values.AUX_DISPLAY_TEXT_LIMIT_BYTES),
     )
     detail_fail_flag = bool(detail_fail_reason)
     detail_sanity = _detail_sanity_context(verification_id, verification_details)
@@ -1828,7 +1827,7 @@ def build_run_detail_context(
             raw_diags = col.get('compile_diagnostics') or []
             if not raw_diags:
                 continue
-            normalized_diags = _normalize_diagnostics(raw_diags, _C.DIAGNOSTIC_MESSAGE_CHAR_LIMIT)
+            normalized_diags = _normalize_diagnostics(raw_diags, runtime().config_values.DIAGNOSTIC_MESSAGE_CHAR_LIMIT)
             diagnostics_rows = _decorate_compile_diagnostics(normalized_diags)
             diagnostics_title = str(col.get('title') or 'Verification')
             break
@@ -1838,7 +1837,7 @@ def build_run_detail_context(
             if not verification_diags:
                 verification_diags = stage_generate.get('compile_diagnostics') or []
             if verification_diags:
-                normalized_diags = _normalize_diagnostics(list(verification_diags), _C.DIAGNOSTIC_MESSAGE_CHAR_LIMIT)
+                normalized_diags = _normalize_diagnostics(list(verification_diags), runtime().config_values.DIAGNOSTIC_MESSAGE_CHAR_LIMIT)
                 diagnostics_rows = _decorate_compile_diagnostics(normalized_diags)
                 diagnostics_title = 'Verification'
         if diagnostics_rows and (
@@ -1855,12 +1854,12 @@ def build_run_detail_context(
         source_aware_column_reason = rewrite_failure_reason_with_source(
             "",
             columns,
-            limit_bytes=int(_C.AUX_DISPLAY_TEXT_LIMIT_BYTES),
+            limit_bytes=int(runtime().config_values.AUX_DISPLAY_TEXT_LIMIT_BYTES),
         )
         artifact_verification_error = rewrite_failure_reason_with_source(
             artifact_verification_error,
             columns,
-            limit_bytes=int(_C.AUX_DISPLAY_TEXT_LIMIT_BYTES),
+            limit_bytes=int(runtime().config_values.AUX_DISPLAY_TEXT_LIMIT_BYTES),
         )
         generic_column_reasons = {
             str(col.get('match_reason') or '').strip()

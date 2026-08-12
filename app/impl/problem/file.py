@@ -12,7 +12,7 @@ from app.impl.contest.workspace_scope import (
     contest_workspace_context_from_request,
     problem_href_builder,
 )
-from app.impl.runtime.config import config
+from app.impl.runtime.dependency import runtime
 from app.impl.workspace.access import require_write_access
 from app.impl.workspace.context_operation import (
     build_line_focus_context,
@@ -30,7 +30,6 @@ from app.main_util import (
 )
 from app.service.statement.constant import STATEMENT_DEFAULT_FILES
 
-_C = config.config_values
 
 
 def _files_redirect_href(
@@ -87,9 +86,9 @@ def files_page(request: Request, problem: str, user: Annotated[str, Depends(requ
     selected_is_pdf = False
     selected_media_type = ''
     auto_message = ''
-    files, files_truncated = config.workspace_file_service.list_paths(
+    files, files_truncated = runtime().workspace_file_service.list_paths(
         workspace,
-        limit=_C.WORKSPACE_FILE_LIST_LIMIT,
+        limit=runtime().config_values.WORKSPACE_FILE_LIST_LIMIT,
         require_allowed_root=False,
     )
     if requested_dir is None and selected:
@@ -102,7 +101,7 @@ def files_page(request: Request, problem: str, user: Annotated[str, Depends(requ
     )
     if selected:
         try:
-            selected = config.workspace_file_service.normalize_path(
+            selected = runtime().workspace_file_service.normalize_path(
                 selected,
                 require_allowed_root=False,
             )
@@ -112,10 +111,10 @@ def files_page(request: Request, problem: str, user: Annotated[str, Depends(requ
     if selected and _repository_parent(selected) != browser['directory']:
         selected = ''
     if selected:
-        selected_view = config.workspace_file_service.file_view(
+        selected_view = runtime().workspace_file_service.file_view(
             workspace,
             selected,
-            char_limit=_C.WORKSPACE_FILE_VIEW_CHAR_LIMIT,
+            char_limit=runtime().config_values.WORKSPACE_FILE_VIEW_CHAR_LIMIT,
             require_allowed_root=False,
         )
         if selected_view.is_dir:
@@ -143,12 +142,12 @@ def files_page(request: Request, problem: str, user: Annotated[str, Depends(requ
         'ctx': ctx,
         'files': files,
         'files_truncated': files_truncated,
-        'file_limit': _C.WORKSPACE_FILE_LIST_LIMIT,
+        'file_limit': runtime().config_values.WORKSPACE_FILE_LIST_LIMIT,
         'selected': selected,
         'selected_name': PurePosixPath(selected).name if selected else '',
         'content': content,
         'content_truncated': content_truncated,
-        'content_char_limit': _C.WORKSPACE_FILE_VIEW_CHAR_LIMIT,
+        'content_char_limit': runtime().config_values.WORKSPACE_FILE_VIEW_CHAR_LIMIT,
         'selected_line': selected_line,
         'browser': browser,
         'line_focus': line_focus,
@@ -176,7 +175,7 @@ def files_save(
     workspace = Path(ctx['workspace']['path'])
     msg = 'saved'
     try:
-        config.workspace_file_service.write_text(workspace, path, content, require_allowed_root=False)
+        runtime().workspace_file_service.write_text(workspace, path, content, require_allowed_root=False)
     except ValueError as exc:
         msg = str(exc)
     return redirect_response(
@@ -198,13 +197,13 @@ def files_new(
     msg = 'created'
     selected_path = selected
     try:
-        path = config.workspace_file_service.child_path(
+        path = runtime().workspace_file_service.child_path(
             workspace,
             dir,
             name,
             require_allowed_root=False,
         )
-        created_path = config.workspace_file_service.create_empty(
+        created_path = runtime().workspace_file_service.create_empty(
             workspace,
             path,
             require_allowed_root=False,
@@ -236,13 +235,13 @@ def files_new_directory(
     msg = 'directory created'
     browse_dir = dir
     try:
-        path = config.workspace_file_service.child_path(
+        path = runtime().workspace_file_service.child_path(
             workspace,
             dir,
             name,
             require_allowed_root=False,
         )
-        browse_dir = config.workspace_file_service.create_directory(
+        browse_dir = runtime().workspace_file_service.create_directory(
             workspace,
             path,
             require_allowed_root=False,
@@ -273,14 +272,14 @@ def files_create_template(
         if expected_kind != kind:
             raise ValueError('template kind/path mismatch')
         content = template_for_kind(kind)
-        with config.workspace_service.workspace_lock(workspace):
+        with runtime().workspace_service.workspace_lock(workspace):
             abs_path = safe_workspace_path(workspace, path)
             if abs_path.exists() and abs_path.is_dir():
                 raise ValueError('template target must be a file path')
             if abs_path.exists() and abs_path.is_file() and (abs_path.stat().st_size > 0):
                 msg = 'file already exists; not overwritten'
             else:
-                config.git_service.write_file(workspace, path, content)
+                runtime().git_service.write_file(workspace, path, content)
                 if expected_kind == 'solution' and ensure_solution_metadata_for_source(workspace, path):
                     msg = 'template and metadata created'
     except ValueError as exc:
@@ -304,15 +303,15 @@ def files_restore_default(
     selected = path
     message = 'default statement file restored'
     try:
-        selected = config.workspace_file_service.normalize_path(
+        selected = runtime().workspace_file_service.normalize_path(
             path,
             require_allowed_root=False,
         )
         content = STATEMENT_DEFAULT_FILES.get(selected)
         if content is None:
             raise ValueError('default restore is not available for this path')
-        with config.workspace_service.workspace_lock(workspace):
-            config.git_service.write_file(workspace, selected, content)
+        with runtime().workspace_service.workspace_lock(workspace):
+            runtime().git_service.write_file(workspace, selected, content)
     except (ValueError, OSError) as exc:
         message = str(exc)
     return redirect_response(
@@ -345,7 +344,7 @@ async def files_upload(
             if not upload_name or upload_name in {'.', '..'}:
                 raise ValueError('uploaded file name is required')
             selected = f'{dir}/{upload_name}' if dir else upload_name
-        uploaded_path, total_bytes = await config.workspace_file_service.upload_file(
+        uploaded_path, total_bytes = await runtime().workspace_file_service.upload_file(
             workspace,
             selected,
             upload,
@@ -374,24 +373,24 @@ def files_rename(
     selected = old_path
     msg = 'renamed'
     try:
-        normalized_old_path = config.workspace_file_service.normalize_path(
+        normalized_old_path = runtime().workspace_file_service.normalize_path(
             old_path,
             require_allowed_root=False,
         )
-        normalized_dir = config.workspace_file_service.normalize_path(
+        normalized_dir = runtime().workspace_file_service.normalize_path(
             dir,
             allow_empty=True,
             require_allowed_root=False,
         )
         if _repository_parent(normalized_old_path) != normalized_dir:
             raise ValueError('selected file is not in the current folder')
-        new_path = config.workspace_file_service.child_path(
+        new_path = runtime().workspace_file_service.child_path(
             workspace,
             normalized_dir,
             new_name,
             require_allowed_root=False,
         )
-        old_path, selected = config.workspace_file_service.rename_path(
+        old_path, selected = runtime().workspace_file_service.rename_path(
             workspace,
             normalized_old_path,
             new_path,
@@ -417,7 +416,7 @@ def files_delete(
     workspace = Path(ctx['workspace']['path'])
     msg = 'deleted'
     try:
-        config.workspace_file_service.delete_path(workspace, path, require_allowed_root=False)
+        runtime().workspace_file_service.delete_path(workspace, path, require_allowed_root=False)
     except ValueError as exc:
         msg = str(exc)
     return redirect_response(
@@ -430,7 +429,7 @@ def files_download(problem: str, user: Annotated[str, Depends(require_session_us
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
     workspace = Path(ctx['workspace']['path'])
     try:
-        file_path = config.workspace_file_service.download_path(workspace, path, require_allowed_root=False)
+        file_path = runtime().workspace_file_service.download_path(workspace, path, require_allowed_root=False)
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail='file not found')
     except ValueError as exc:

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from app.impl.runtime.config import config
+from app.impl.runtime.dependency import runtime
 from app.impl.workspace.context_operation import dedupe_preserve_order
 from app.impl.workspace.context_verification import normalize_run_id_token
 from app.main_util import normalize_optional_component_source_path_safe
@@ -22,7 +22,7 @@ def _verification_detail_available(
 ) -> bool:
     if (not verification_id) or (not is_canonical_artifact_id(verification_id)):
         return False
-    return config.verification_service.has_export_detail_verification(
+    return runtime().verification_service.has_export_detail_verification(
         int(problem_id),
         verification_id,
     )
@@ -39,7 +39,7 @@ def _rerun_solution_paths_from_verification(
     if not verification_id:
         return []
     out: list[str] = []
-    for source_rel in config.verification_service.verification_source_paths(verification_id):
+    for source_rel in runtime().verification_service.verification_source_paths(verification_id):
         solution_path = normalize_optional_component_source_path_safe(
             source_rel,
             "solutions",

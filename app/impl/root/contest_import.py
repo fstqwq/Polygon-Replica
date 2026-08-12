@@ -10,7 +10,7 @@ import uuid
 from pathlib import Path
 
 from app.db import now_iso
-from app.impl.runtime.config import config
+from app.impl.runtime.dependency import runtime
 from app.impl.workspace.context_operation import normalize_contest_slug_required
 
 """
@@ -23,7 +23,6 @@ Invariants:
 - Keep draft file layout/TTL/path-safety checks unchanged.
 """
 
-_C = config.config_values
 _CONTEST_IMPORT_SUFFIX_RE = re.compile(r"-\d+$")
 _CONTEST_IMPORT_DRAFT_ID_RE = re.compile(r"^[a-f0-9]{24}$")
 _CONTEST_IMPORT_DRAFT_TTL_SEC = 6 * 60 * 60
@@ -57,7 +56,7 @@ def _next_available_contest_slug(base: str) -> str:
     token = base.strip() or "imported-contest"
     candidate = token
     idx = 2
-    while config.contest_service.contest_slug_exists(candidate):
+    while runtime().contest_service.contest_slug_exists(candidate):
         suffix = f"-{idx}"
         prefix_len = max(1, 64 - len(suffix))
         prefix = token[:prefix_len].rstrip("-") or "c"
@@ -70,7 +69,7 @@ def _resolve_import_contest_slug(requested_slug: str, package_name: str) -> str:
     requested = requested_slug.strip()
     if requested:
         slug = normalize_contest_slug_required(requested)
-        if config.contest_service.contest_slug_exists(slug):
+        if runtime().contest_service.contest_slug_exists(slug):
             suggestion = _next_available_contest_slug(slug)
             raise ValueError(f"contest slug already exists: {slug} (try: {suggestion})")
         return slug
@@ -103,7 +102,7 @@ def _normalize_import_contest_idx(raw: object, seq: int, used: set[str]) -> str:
 
 
 def _contest_import_draft_root() -> Path:
-    root = config.storage_layout.contest_import_draft_root.resolve()
+    root = runtime().storage_layout.contest_import_draft_root.resolve()
     root.mkdir(parents=True, exist_ok=True)
     return root
 
@@ -193,7 +192,7 @@ def _next_available_problem_slug(owner: str, base: str, reserved: set[str] | Non
     candidate = token
     idx = 2
     while (candidate in seen) or (
-        config.workspace_service.known_problem_id(_problem_full_slug(owner, candidate)) is not None
+        runtime().workspace_service.known_problem_id(_problem_full_slug(owner, candidate)) is not None
     ):
         suffix = f"-{idx}"
         prefix_len = max(1, max_len - len(suffix))
@@ -318,12 +317,12 @@ def _rollback_imported_problem(problem_slug: str) -> None:
     if not safe_slug:
         return
     try:
-        config.workspace_service.delete_problem(safe_slug)
+        runtime().workspace_service.delete_problem(safe_slug)
         return
     except Exception:
         pass
 
-    config.workspace_service.delete_problem(safe_slug)
+    runtime().workspace_service.delete_problem(safe_slug)
 
 
 def _rollback_imported_contest(contest_slug: str, imported_problem_slugs: list[str]) -> None:
@@ -331,7 +330,7 @@ def _rollback_imported_contest(contest_slug: str, imported_problem_slugs: list[s
     for problem_slug in reversed(imported_problem_slugs):
         _rollback_imported_problem(problem_slug)
     if safe_slug:
-        config.contest_service.delete_contest(safe_slug)
+        runtime().contest_service.delete_contest(safe_slug)
 
 
 def _build_problem_slug_review_rows(
@@ -364,7 +363,7 @@ def _build_problem_slug_review_rows(
         requested = requested_tokens[idx]
         valid = bool(requested and _PROBLEM_SEGMENT_RE.fullmatch(requested))
         full_requested = _problem_full_slug(owner, requested) if valid else ""
-        exists = bool(full_requested and (config.workspace_service.known_problem_id(full_requested) is not None))
+        exists = bool(full_requested and (runtime().workspace_service.known_problem_id(full_requested) is not None))
         duplicate = bool(requested and int(duplicate_counts.get(requested, 0)) > 1)
         message = ""
         if not requested:
@@ -429,7 +428,7 @@ def _contest_slug_review_state(raw_slug: str, package_name: str) -> dict[str, ob
             "suggested": _next_available_contest_slug(_import_contest_slug_base_from_package_name(package_name)),
             "message": str(exc),
         }
-    exists = config.contest_service.contest_slug_exists(normalized)
+    exists = runtime().contest_service.contest_slug_exists(normalized)
     suggested = _next_available_contest_slug(normalized) if exists else normalized
     return {
         "requested": normalized,

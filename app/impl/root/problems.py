@@ -13,20 +13,19 @@ from app.impl.run_export.import_source import (
     import_package_as_new_problem,
     import_package_warnings,
 )
-from app.impl.runtime.config import config
+from app.impl.runtime.dependency import runtime
 from app.impl.workspace.context import global_user_ctx
 from app.impl.workspace.context_operation import user_participating_problems
 from app.impl.root.shared import _active_root_user, _count_label
 from app.service.importing.upload import spool_fileobj
 from app.service.importing.archive import ArchiveView, problem_import_policy
 
-_C = config.config_values
 
 
 def problems_root_page(request: Request, user: str = ""):
     active_user = _active_root_user(request, user)
     gctx = global_user_ctx(active_user)
-    raw_entries = user_participating_problems(int(gctx['user']['id']), limit=_C.API_PROBLEMS_LIST_LIMIT)
+    raw_entries = user_participating_problems(int(gctx['user']['id']), limit=runtime().config_values.API_PROBLEMS_LIST_LIMIT)
     entries: list[dict[str, object]] = []
     owner_prefix_chars = 0
     for row in raw_entries:
@@ -44,7 +43,7 @@ def problems_root_page(request: Request, user: str = ""):
             'user': gctx['user'],
             'default_problem': gctx['default_problem'],
             'entries': entries,
-            'entries_limit': _C.API_PROBLEMS_LIST_LIMIT,
+            'entries_limit': runtime().config_values.API_PROBLEMS_LIST_LIMIT,
             'active_main': 'problems',
             'owner_prefix_chars': owner_prefix_chars,
         },
@@ -69,8 +68,8 @@ def problems_root_import(request: Request, user: str = "", package_upload: Uploa
         package_name = str(package_upload.filename or "").strip()
         if not package_name:
             raise ValueError("package filename is required")
-        snapshot = _C.snapshot()
-        upload_root = config.storage_layout.archive_upload_root
+        snapshot = runtime().config_values.snapshot()
+        upload_root = runtime().storage_layout.archive_upload_root
         with spool_fileobj(
             package_upload.file,
             root=upload_root,

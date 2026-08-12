@@ -11,7 +11,7 @@ from fastapi.responses import RedirectResponse
 
 from app.impl.auth.session import has_sudo_session
 from app.impl.auth.shared import redirect_response, safe_next_path
-from app.impl.runtime.config import config
+from app.impl.runtime.dependency import runtime
 from app.impl.workspace.access import require_write_access
 from app.impl.workspace.context import global_user_ctx
 from app.impl.workspace.context_operation import (
@@ -23,7 +23,6 @@ from app.impl.workspace.context_ui import page_ctx
 from app.main_util import normalize_component_source_path, normalize_workspace_rel_path
 from app.service.platform.workspace_path import safe_workspace_path
 
-_C = config.config_values
 MAIN_CORRECT_EXPECTED_VALUE = "main_correct"
 MAIN_CORRECT_EXPECTED_LABEL = "main correct solution (AC)"
 
@@ -80,10 +79,10 @@ def single_source_editor_context(
         try:
             source_abs = safe_workspace_path(workspace, source_path)
             if source_abs.exists() and source_abs.is_file() and not source_abs.is_symlink():
-                content, content_truncated = config.git_service.read_file_limited(
+                content, content_truncated = runtime().git_service.read_file_limited(
                     workspace,
                     source_path,
-                    _C.WORKSPACE_FILE_VIEW_CHAR_LIMIT,
+                    runtime().config_values.WORKSPACE_FILE_VIEW_CHAR_LIMIT,
                 )
         except HTTPException:
             content = ""
@@ -143,7 +142,7 @@ def rename_component_source(
         if old_source == new_source:
             msg = f"{component_label} source rename skipped"
         else:
-            with config.workspace_service.workspace_lock(workspace):
+            with runtime().workspace_service.workspace_lock(workspace):
                 old_abs = safe_workspace_path(workspace, old_source)
                 if old_abs.is_symlink() or (not old_abs.exists()) or (not old_abs.is_file()):
                     raise ValueError(f"{component_label} source does not exist")
@@ -152,7 +151,7 @@ def rename_component_source(
                     raise ValueError("destination source already exists")
                 if new_abs.parent.exists() and (not new_abs.parent.is_dir()):
                     raise ValueError("destination parent is not a directory")
-                config.git_service.rename_path(workspace, old_source, new_source)
+                runtime().git_service.rename_path(workspace, old_source, new_source)
                 build_cfg, cfg_path = read_build_config(workspace)
                 if config_key == "generator_sources":
                     generator_sources = generator_sources_from_build_cfg(build_cfg)

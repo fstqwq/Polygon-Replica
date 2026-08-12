@@ -14,7 +14,7 @@ from app.impl.contest.workspace_scope import (
     ContestWorkspaceContext,
     contest_workspace_context_from_request,
 )
-from app.impl.runtime.config import config
+from app.impl.runtime.dependency import runtime
 
 from app.main_util import normalize_workspace_rel_path
 from app.service.statement.constant import (
@@ -48,7 +48,6 @@ from app.service.problem.readiness import WorkspaceReadinessSubject
 from app.service.repository.revision import workspace_revision_info
 from app.service.problem.resource_limits import resource_limit_display
 
-_C = config.config_values
 logger = logging.getLogger(__name__)
 
 
@@ -68,9 +67,9 @@ def _system_limit_info() -> SystemLimitInfo:
         'title': 'System limits',
         'description': 'Contact an administrator to change these limits if needed.',
         'rows': [
-            {'label': 'Program input/output limit', 'value': f'{int(_C.RUN_EXEC_OUTPUT_KB)} KiB'},
-            {'label': 'Compilation size limit', 'value': f'{int(_C.TOOLCHAIN_COMPILE_OUTPUT_KB)} KiB'},
-            {'label': 'Saved judging log limit', 'value': f'{int(_C.JUDGEHOST_STORED_LOG_LIMIT_BYTES)} bytes'},
+            {'label': 'Program input/output limit', 'value': f'{int(runtime().config_values.RUN_EXEC_OUTPUT_KB)} KiB'},
+            {'label': 'Compilation size limit', 'value': f'{int(runtime().config_values.TOOLCHAIN_COMPILE_OUTPUT_KB)} KiB'},
+            {'label': 'Saved judging log limit', 'value': f'{int(runtime().config_values.JUDGEHOST_STORED_LOG_LIMIT_BYTES)} bytes'},
         ],
     }
 
@@ -86,19 +85,19 @@ def page_ctx(
 ) -> dict:
     _ = include_branches
     try:
-        problem_id, user_id = config.workspace_service.page_identity(problem, user)
+        problem_id, user_id = runtime().workspace_service.page_identity(problem, user)
         access = workspace_access_context(problem_id, user_id)
         require_read_access({'access': access})
         if refresh_status:
             # Provision without the lock-side refresh; the explicit refresh below updates DB once.
-            config.workspace_service.ensure_workspace(problem, user, refresh_status=False)
-        ctx = config.workspace_service.workspace_context(problem, user, include_recent=include_recent)
+            runtime().workspace_service.ensure_workspace(problem, user, refresh_status=False)
+        ctx = runtime().workspace_service.workspace_context(problem, user, include_recent=include_recent)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=str(exc))
     ctx['access'] = access
-    ctx['workspace_access'] = config.access_query.workspace_context(
+    ctx['workspace_access'] = runtime().access_query.workspace_context(
         problem_id=problem_id,
         actor_user_id=user_id,
         workspace_id=int(ctx['workspace']['id']),
@@ -110,13 +109,13 @@ def page_ctx(
     auto_updated = False
     if refresh_status:
         try:
-            auto_updated = config.workspace_merge_service.advance_clean_workspace(workspace_path)
+            auto_updated = runtime().workspace_merge_service.advance_clean_workspace(workspace_path)
         except Exception:
             logger.exception("clean workspace auto-update failed for %s", problem)
     ctx['workspace_auto_update_message'] = (
         'Workspace updated to the published revision.' if auto_updated else ''
     )
-    undo_context = config.workspace_merge_service.undo_context(workspace_path)
+    undo_context = runtime().workspace_merge_service.undo_context(workspace_path)
     ctx['workspace_merge_result'] = undo_context or {}
     ctx['workspace_has_merge_undo'] = undo_context is not None
     if refresh_status:
@@ -124,7 +123,7 @@ def page_ctx(
         try:
             live_status = cast(
                 dict[str, object],
-                config.workspace_service.refresh_workspace_status_with_ids(
+                runtime().workspace_service.refresh_workspace_status_with_ids(
                     workspace_path,
                     int(ctx['problem']['id']),
                     int(ctx['user']['id']),
@@ -229,7 +228,7 @@ def page_ctx(
     empty_changes = {'counts': {'added': 0, 'modified': 0, 'deleted': 0, 'renamed': 0, 'untracked': 0, 'conflicted': 0, 'typechange': 0, 'other': 0}, 'rows': [], 'total': 0, 'truncated': False, 'limit': None}
     if include_workspace_changes:
         try:
-            ctx['workspace_changes'] = config.git_service.status_change_summary(workspace_path)
+            ctx['workspace_changes'] = runtime().git_service.status_change_summary(workspace_path)
         except Exception:
             ctx['workspace_changes'] = empty_changes
     else:
@@ -245,13 +244,13 @@ def page_ctx(
         'needs_update': bool(ctx['workspace_needs_update']),
     }
     try:
-        ctx['readiness'] = config.problem_readiness_service.readiness(
+        ctx['readiness'] = runtime().problem_readiness_service.readiness(
             readiness_subject,
             explain_verification=True,
         )
     except Exception:
         logger.exception("problem readiness projection failed for %s", problem)
-        ctx['readiness'] = config.problem_readiness_service.unavailable(
+        ctx['readiness'] = runtime().problem_readiness_service.unavailable(
             readiness_subject
         )
     latest_verification = ctx.get('latest_artifact_verification')
@@ -461,9 +460,9 @@ def _build_problem_nav_status(ctx: dict) -> dict[str, dict[str, object]]:
         'danger': package_state == 'none',
         'warn': package_state == 'stale',
     }
-    export_source_commit = config.export_service.latest_source_commit(problem_id)
+    export_source_commit = runtime().export_service.latest_source_commit(problem_id)
     if export_source_commit and problem_id > 0:
-        current_export = config.export_service.latest_succeeded_export_job(
+        current_export = runtime().export_service.latest_succeeded_export_job(
             problem_id,
             export_source_commit,
             'icpc',
@@ -475,7 +474,7 @@ def _build_problem_nav_status(ctx: dict) -> dict[str, dict[str, object]]:
         ):
             export_id = current_export['export_id']
             export_filename = Path(current_export['filename']).name
-            if config.export_service.export_archive_path(
+            if runtime().export_service.export_archive_path(
                 problem_id,
                 export_id,
                 export_filename,
@@ -519,7 +518,7 @@ def render_workspace_page(request: Request, problem: str, user: Annotated[str, D
     selected_diff_lines: list[dict[str, str]] = []
     if selected_path:
         try:
-            selected_diff, selected_diff_truncated = config.git_service.diff_for_path(workspace, selected_path)
+            selected_diff, selected_diff_truncated = runtime().git_service.diff_for_path(workspace, selected_path)
         except (ValueError, RuntimeError):
             selected_diff = ''
             selected_diff_truncated = False

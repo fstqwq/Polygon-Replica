@@ -55,13 +55,13 @@ def _configure_database() -> None:
 
 
 def _seed_workspace() -> tuple[Path, int, int, int, str]:
-    # RuntimeConfig must be imported only after the persisted Judgehost settings
+    # The runtime must be imported only after the persisted Judgehost settings
     # exist; its service graph reads restart-required values during construction.
-    from app.impl.runtime.config import config
+    from app.main import runtime
 
-    config.workspace_service.ensure_problem(PROBLEM)
-    workspace = Path(config.workspace_service.ensure_workspace(PROBLEM, USERNAME))
-    config.workspace_service.grant_repo_access(PROBLEM, USERNAME, "owner")
+    runtime.workspace_service.ensure_problem(PROBLEM)
+    workspace = Path(runtime.workspace_service.ensure_workspace(PROBLEM, USERNAME))
+    runtime.workspace_service.grant_repo_access(PROBLEM, USERNAME, "owner")
 
     for relative in (
         "config",
@@ -143,16 +143,16 @@ def _seed_workspace() -> tuple[Path, int, int, int, str]:
         encoding="utf-8",
     )
 
-    user = config.workspace_service.ensure_user(USERNAME)
+    user = runtime.workspace_service.ensure_user(USERNAME)
     user_id = int(user["id"])
-    context = config.workspace_service.workspace_context(
+    context = runtime.workspace_service.workspace_context(
         PROBLEM,
         USERNAME,
         include_recent=False,
     )
     problem_id = int(context["problem"]["id"])
     workspace_id = int(context["workspace"]["id"])
-    session_token = config.auth_service.create_session_for_user(user_id)
+    session_token = runtime.auth_service.create_session_for_user(user_id)
     return workspace, user_id, problem_id, workspace_id, session_token
 
 
@@ -160,7 +160,7 @@ def main() -> None:
     _configure_database()
     workspace, user_id, problem_id, workspace_id, session_token = _seed_workspace()
 
-    from app.impl.runtime.config import config
+    from app.main import runtime
 
     state = state_dir()
     state.mkdir(parents=True, exist_ok=True)
@@ -173,7 +173,7 @@ def main() -> None:
             "problem_id": problem_id,
             "workspace_id": workspace_id,
             "workspace": str(workspace),
-            "session_cookie_name": str(config.config_values.AUTH_COOKIE_NAME),
+            "session_cookie_name": str(runtime.config_values.AUTH_COOKIE_NAME),
             "session_token": session_token,
         },
     )

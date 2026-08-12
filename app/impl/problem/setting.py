@@ -23,12 +23,11 @@ from app.impl.auth.shared import (
     template_response,
 )
 from app.impl.problem.shared import _settings_user_ctx
-from app.impl.runtime.config import config
+from app.impl.runtime.dependency import runtime
 from app.main_util import form_text
 from app.service.auth.password_hash import password_verifier_storage_hash
 
 
-_C = config.config_values
 
 
 def settings_page(
@@ -43,14 +42,14 @@ def settings_page(
         current_iters = (
             int(auth_row["password_iters"] or 0)
             if auth_row is not None
-            else int(_C.PASSWORD_HASH_ITERS)
+            else int(runtime().config_values.PASSWORD_HASH_ITERS)
         )
     except (TypeError, ValueError):
-        current_iters = int(_C.PASSWORD_HASH_ITERS)
+        current_iters = int(runtime().config_values.PASSWORD_HASH_ITERS)
     if not _K.HEX_32_RE.fullmatch(current_salt):
         current_salt = dummy_password_salt_hex(str(user_row["username"]))
     if current_iters <= 0:
-        current_iters = int(_C.PASSWORD_HASH_ITERS)
+        current_iters = int(runtime().config_values.PASSWORD_HASH_ITERS)
     return template_response(
         request,
         "settings.html",
@@ -61,7 +60,7 @@ def settings_page(
             "current_password_salt": current_salt,
             "current_password_iters": current_iters,
             "new_password_salt": secrets.token_hex(16),
-            "new_password_iters": int(_C.PASSWORD_HASH_ITERS),
+            "new_password_iters": int(runtime().config_values.PASSWORD_HASH_ITERS),
         },
     )
 
@@ -122,20 +121,20 @@ def settings_password_update(
             raise ValueError("invalid new password envelope") from exc
         new_salt = normalize_password_salt_hex(form_text(new_password_salt))
         new_iters = normalize_password_iters(form_text(new_password_iters))
-        if new_iters != int(_C.PASSWORD_HASH_ITERS):
+        if new_iters != int(runtime().config_values.PASSWORD_HASH_ITERS):
             raise ValueError("invalid password iterations")
         set_user_password_verifier(int(row["id"]), new_verifier, new_salt, new_iters)
-        config.auth_service.revoke_auth_sessions_for_user(int(row["id"]))
+        runtime().auth_service.revoke_auth_sessions_for_user(int(row["id"]))
         revoke_sudo_sessions_for_user(int(row["id"]))
         token = create_session_for_user(int(row["id"]))
         response = redirect_response("/settings", status_code=303, message=message)
         response.set_cookie(
-            _C.AUTH_COOKIE_NAME,
+            runtime().config_values.AUTH_COOKIE_NAME,
             token,
             httponly=True,
             samesite="lax",
-            secure=_C.AUTH_COOKIE_SECURE,
-            max_age=_C.AUTH_COOKIE_MAX_AGE,
+            secure=runtime().config_values.AUTH_COOKIE_SECURE,
+            max_age=runtime().config_values.AUTH_COOKIE_MAX_AGE,
             path="/",
         )
         return response

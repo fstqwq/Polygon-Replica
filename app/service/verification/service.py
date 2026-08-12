@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING, cast
+from typing import cast
 
 from app.config import ConfigValues
 from app.db import DB
@@ -44,9 +44,6 @@ from app.service.verification.read_model import (
 from app.service.verification.signature import verification_manifest
 from app.service.verification.task_store import VerificationTaskStore
 
-if TYPE_CHECKING:
-    from app.service.verification.workflow import VerificationWorkflow
-
 from app.service.judgehost.api import Judgehost
 
 
@@ -84,11 +81,6 @@ class VerificationService:
         self._config_values = config_values
         self._verification_store = VerificationStore(db)
         self._artifact_query = VerificationArtifactQuery(db, runtime_blob_store)
-        self._workflow: VerificationWorkflow | None = None
-
-    def set_workflow(self, workflow: VerificationWorkflow) -> None:
-        self._workflow = workflow
-
     def export_runtime_verification(self, problem_id: int, verification_id: str) -> dict[str, object] | None:
         row = self.verification_record(verification_id)
         if row is None or int(row["problem_id"]) != int(problem_id):

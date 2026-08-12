@@ -10,7 +10,7 @@ from app.impl.auth.shared import json_error_response, json_redirect_response, re
 from app.impl.contest.workspace_scope import contest_workspace_context_from_request
 from app.impl.problem.compile_check import judgehost_compile_check_error
 from app.impl.problem.shared import rename_component_source, single_source_editor_context
-from app.impl.runtime.config import config
+from app.impl.runtime.dependency import runtime
 from app.impl.workspace.context_operation import read_build_config, template_for_kind, write_build_config
 from app.impl.workspace.access import require_write_access
 from app.impl.workspace.context_component_status import validator_status_context
@@ -18,7 +18,6 @@ from app.impl.workspace.context_ui import page_ctx
 from app.main_util import enforce_textarea_max_bytes
 from app.service.platform.workspace_path import normalize_component_source_path, safe_workspace_path
 
-_C = config.config_values
 
 
 def validator_page(request: Request, problem: str, user: Annotated[str, Depends(require_session_user)]):
@@ -40,7 +39,7 @@ def validator_page(request: Request, problem: str, user: Annotated[str, Depends(
         default_filename='validator.cpp',
         starter_content=template_for_kind('validator'),
     )
-    return template_response(request, 'validator.html', {'ctx': ctx, 'validator_status': validator_status, 'editor': editor, 'content_char_limit': _C.WORKSPACE_FILE_VIEW_CHAR_LIMIT})
+    return template_response(request, 'validator.html', {'ctx': ctx, 'validator_status': validator_status, 'editor': editor, 'content_char_limit': runtime().config_values.WORKSPACE_FILE_VIEW_CHAR_LIMIT})
 
 def validator_rename_source(
     problem: str,
@@ -79,9 +78,9 @@ def validator_save_source(
         safe_content = enforce_textarea_max_bytes(
             content,
             label='validator source',
-            max_bytes=int(_C.TEXTAREA_MAX_BYTES),
+            max_bytes=int(runtime().config_values.TEXTAREA_MAX_BYTES),
         )
-        with config.workspace_service.workspace_lock(workspace):
+        with runtime().workspace_service.workspace_lock(workspace):
             target_abs = safe_workspace_path(workspace, target)
             target_existed_before = bool(target_abs.exists() and target_abs.is_file() and (not target_abs.is_symlink()))
             target_previous_bytes = target_abs.read_bytes() if target_existed_before else b''
@@ -90,7 +89,7 @@ def validator_save_source(
             cfg_previous_text = cfg_path.read_text(encoding='utf-8') if cfg_existed_before else ''
             build_cfg['validator_source'] = target
             write_build_config(cfg_path, build_cfg)
-            config.git_service.write_file(workspace, target, safe_content)
+            runtime().git_service.write_file(workspace, target, safe_content)
             compile_check_error = judgehost_compile_check_error(
                 problem=problem,
                 user=user,
@@ -103,7 +102,7 @@ def validator_save_source(
                 if target_existed_before:
                     target_abs.write_bytes(target_previous_bytes)
                 else:
-                    config.git_service.delete_path(workspace, target)
+                    runtime().git_service.delete_path(workspace, target)
                 if cfg_existed_before:
                     cfg_path.write_text(cfg_previous_text, encoding='utf-8')
                 else:

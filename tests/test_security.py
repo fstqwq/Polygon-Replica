@@ -26,7 +26,7 @@ from tests.common import (
     suite_root,
 )
 from tests.identity_helpers import canonical_test_verification_id
-from app.impl.runtime.config import config
+from app.main import runtime
 from app.impl.problem.checker import checker_rename_source, checker_set_standard
 from app.impl.problem.file import (
     files_create_template,
@@ -51,16 +51,16 @@ from app.impl.run_export.artifact import artifact_file
 from app.service.verification.artifact import artifact_virtual_path
 from app.impl.run_export.run import run_cancel, run_execute
 from app.impl.root.auth_pages import auth_password_meta, login_page
-from app.config import CONFIG_REGISTRY
+from app.runtime import CONFIG_REGISTRY
 from app.service.verification.lifecycle import PlannedTask, verification_task_id
 from app.service.verification.types import VerificationTaskStatus
 from tests.ui_support import _register_with_password_envelope
 
-db = config.db
-workspace_service = config.workspace_service
+db = runtime.db
+workspace_service = runtime.workspace_service
 
 TEXTAREA_MAX_BYTES = int(CONFIG_REGISTRY.defaults()["TEXTAREA_MAX_BYTES"])
-FLASH_COOKIE_NAME = config.config_values.FLASH_COOKIE_NAME
+FLASH_COOKIE_NAME = runtime.config_values.FLASH_COOKIE_NAME
 
 
 def _request(
@@ -179,7 +179,7 @@ class TestSecurity(E2ETestBase):
         return str(messages[0] or "")
 
     def _fixture_verification_root(self, *, problem: str, workspace_id: int, verification_id: str) -> tuple[str, Path]:
-        artifact_root = config.storage_layout.prepare_verification_root(str(verification_id or "").strip()).resolve()
+        artifact_root = runtime.storage_layout.prepare_verification_root(str(verification_id or "").strip()).resolve()
         return "", artifact_root
 
     def test_auth_password_meta_ignores_sql_injection_style_username(self) -> None:
@@ -239,7 +239,7 @@ class TestSecurity(E2ETestBase):
                 "2026-02-25T00:00:01Z",
             ],
         )
-        token = config.verification_service.store_verification_blob(
+        token = runtime.verification_service.store_verification_blob(
             verification_id=verification_id,
             test_name="001.in",
             role="output",
@@ -375,7 +375,7 @@ class TestSecurity(E2ETestBase):
         )
         self.assertEqual(activation.outcome, "activated")
         self.assertTrue(
-            config.verification_task_store.bind_and_expose_judgehost_runtime(
+            runtime.verification_task_store.bind_and_expose_judgehost_runtime(
                 task_id,
                 expected_verification_id=verification_id,
                 expected_program_id="accepted",
@@ -387,7 +387,7 @@ class TestSecurity(E2ETestBase):
         )
 
         with patch.object(
-            config.judgehost_task_service,
+            runtime.judgehost_task_service,
             "request_verification_cancel",
             return_value={
                 "cancelled_cases": 0,
@@ -408,7 +408,7 @@ class TestSecurity(E2ETestBase):
         self.assertIsNotNone(verification_row)
         self.assertEqual(str(verification_row["status"] or "").lower(), "running")
         self.assertFalse(str(verification_row["finished_at"] or "").strip())
-        task_rows = config.verification_task_store.list_rows(verification_id)
+        task_rows = runtime.verification_task_store.list_rows(verification_id)
         self.assertEqual(len(task_rows), 1)
         self.assertEqual(str(task_rows[0]["status"] or ""), VerificationTaskStatus.QUEUED)
 
@@ -446,7 +446,7 @@ class TestSecurity(E2ETestBase):
                 ],
             )
 
-        token = config.verification_service.store_verification_blob(
+        token = runtime.verification_service.store_verification_blob(
             verification_id=foreign_verification_id,
             test_name="001.in",
             role="output",
@@ -554,7 +554,7 @@ class TestSecurity(E2ETestBase):
         upload = self._FakeUpload(b"x" * 1025)
         override_config_values(
             self,
-            config.config_values,
+            runtime.config_values,
             UPLOAD_MAX_BYTES=1024,
         )
         response = asyncio.run(

@@ -6,7 +6,7 @@ from typing import cast
 from fastapi import HTTPException, Request
 
 from app.impl.auth.session import session_identity
-from app.impl.runtime.config import config
+from app.impl.runtime.dependency import runtime
 
 
 def current_web_user(request: Request) -> dict[str, object]:
@@ -28,7 +28,7 @@ def require_agent_token(request: Request, *, min_scope: str):
     if not token:
         raise HTTPException(status_code=401, detail="missing bearer token")
     try:
-        return config.agent_service.require_token(token, min_scope=min_scope)
+        return runtime().agent_service.require_token(token, min_scope=min_scope)
     except PermissionError as exc:
         raise HTTPException(status_code=401, detail=str(exc)) from exc
     except RuntimeError as exc:
@@ -36,7 +36,7 @@ def require_agent_token(request: Request, *, min_scope: str):
 
 
 def workspace_context_for_identity(identity) -> dict[str, object]:
-    ctx = config.workspace_service.workspace_context(identity.problem_slug, identity.username, include_recent=False)
+    ctx = runtime().workspace_service.workspace_context(identity.problem_slug, identity.username, include_recent=False)
     if int(ctx["problem"]["id"]) != int(identity.problem_id):
         raise HTTPException(status_code=403, detail="problem context mismatch")
     if int(ctx["user"]["id"]) != int(identity.user_id):
@@ -44,8 +44,8 @@ def workspace_context_for_identity(identity) -> dict[str, object]:
     workspace_row = cast(dict[str, object], ctx["workspace"])
     workspace = Path(str(workspace_row["path"])).resolve()
     try:
-        with config.workspace_service.workspace_lock(workspace):
-            status = config.workspace_service.read_workspace_status(workspace)
+        with runtime().workspace_service.workspace_lock(workspace):
+            status = runtime().workspace_service.read_workspace_status(workspace)
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     workspace_row["branch"] = str(status.get("branch") or "main")

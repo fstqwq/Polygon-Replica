@@ -12,7 +12,7 @@ from app.impl.preview.preview import (
     preview_status,
 )
 from app.impl.run_export.artifact import artifact_file
-from app.impl.runtime.config import config
+from app.main import runtime
 from app.impl.workspace.context_ui import page_ctx
 from app.service.statement.signature import statement_sources_signature
 
@@ -23,7 +23,7 @@ from tests.ui_support import _flash_messages_from_response, _request
 
 class TestPreviewRoutes(BackendE2ETestBase):
     def test_preview_run_uses_sample_build_failed_flash_for_sample_sync_failure(self) -> None:
-        ctx = config.workspace_service.workspace_context(self.problem, self.user, include_recent=False)
+        ctx = runtime.workspace_service.workspace_context(self.problem, self.user, include_recent=False)
         preview_id = self.random_id("p-preview-sample-sync-failed")
         db_execute(
             (
@@ -48,7 +48,7 @@ class TestPreviewRoutes(BackendE2ETestBase):
                 "failed_stage": "sample_sync",
             },
         )
-        with patch.object(config.preview_service, "compile_preview", return_value=preview_id):
+        with patch.object(runtime.preview_service, "compile_preview", return_value=preview_id):
             resp = preview_run(self.problem, self.user, page="statement")
         self.assertEqual(resp.status_code, 303)
         self.assertIn(
@@ -58,7 +58,7 @@ class TestPreviewRoutes(BackendE2ETestBase):
         self.assertIn("sample verification failed.", _flash_messages_from_response(resp))
 
     def test_preview_run_rejects_missing_language_directories(self) -> None:
-        ws = Path(config.workspace_service.workspace_context(self.problem, self.user, include_recent=False)["workspace"]["path"])
+        ws = Path(runtime.workspace_service.workspace_context(self.problem, self.user, include_recent=False)["workspace"]["path"])
         sections_root = ws / "statement-sections"
         if sections_root.exists():
             for path in sorted(sections_root.rglob("*"), reverse=True):
@@ -68,7 +68,7 @@ class TestPreviewRoutes(BackendE2ETestBase):
                     path.rmdir()
             sections_root.rmdir()
         preview_id = self.random_id("p-preview-no-language-dirs")
-        with patch.object(config.preview_service, "compile_preview", return_value=preview_id) as compile_preview:
+        with patch.object(runtime.preview_service, "compile_preview", return_value=preview_id) as compile_preview:
             resp = preview_run(self.problem, self.user, page="statement", language="english")
         self.assertEqual(resp.status_code, 303)
         self.assertEqual(resp.headers.get("location", ""), f"/problems/{self.problem}/statement")
@@ -76,9 +76,9 @@ class TestPreviewRoutes(BackendE2ETestBase):
         compile_preview.assert_not_called()
 
     def test_preview_page_shows_full_sample_build_failure_detail(self) -> None:
-        ctx = config.workspace_service.workspace_context(self.problem, self.user, include_recent=False)
+        ctx = runtime.workspace_service.workspace_context(self.problem, self.user, include_recent=False)
         preview_id = self.random_id("p-preview-sample-sync-detail")
-        artifact_path = config.storage_layout.prepare_preview_layout(preview_id).root
+        artifact_path = runtime.storage_layout.prepare_preview_layout(preview_id).root
         artifact_path.mkdir(parents=True, exist_ok=True)
         (artifact_path / "logs").mkdir(parents=True, exist_ok=True)
         (artifact_path / "logs" / "latex.log").write_text(
@@ -122,9 +122,9 @@ class TestPreviewRoutes(BackendE2ETestBase):
         self.assertNotIn("sample verification failed (ver-old): validator failed on tests/spec.json entry 1", html)
 
     def test_preview_artifact_file_serves_statement_pdf_from_preview_root(self) -> None:
-        ctx = config.workspace_service.workspace_context(self.problem, self.user, include_recent=False)
+        ctx = runtime.workspace_service.workspace_context(self.problem, self.user, include_recent=False)
         preview_id = self.random_id("p-preview-artifact-pdf")
-        preview_root = config.storage_layout.prepare_preview_layout(preview_id).root
+        preview_root = runtime.storage_layout.prepare_preview_layout(preview_id).root
         pdf_path = preview_root / "statement_preview" / "statement.pdf"
         pdf_bytes = b"%PDF-1.4\n%preview\n"
         pdf_path.write_bytes(pdf_bytes)
@@ -148,7 +148,7 @@ class TestPreviewRoutes(BackendE2ETestBase):
         self.assertEqual(Path(response.path).resolve(), pdf_path.resolve())
 
     def test_preview_status_projects_missing_when_ok_preview_pdf_is_gone(self) -> None:
-        ctx = config.workspace_service.workspace_context(self.problem, self.user, include_recent=False)
+        ctx = runtime.workspace_service.workspace_context(self.problem, self.user, include_recent=False)
         ws = Path(str(ctx["workspace"]["path"]))
         preview_id = self.random_id("p-preview-status-missing")
         db_execute(
@@ -171,10 +171,10 @@ class TestPreviewRoutes(BackendE2ETestBase):
                             ws,
                             problem_title=self._statement_title(ws),
                             tests_spec_max_bytes=int(
-                                config.config_values.TEXTAREA_MAX_BYTES
+                                runtime.config_values.TEXTAREA_MAX_BYTES
                             ),
                             statement_sample_max_bytes=int(
-                                config.config_values.STATEMENT_SAMPLE_MAX_BYTES
+                                runtime.config_values.STATEMENT_SAMPLE_MAX_BYTES
                             ),
                         ),
                     }
@@ -188,12 +188,12 @@ class TestPreviewRoutes(BackendE2ETestBase):
         self.assertEqual(str(payload.get("latest_status") or ""), "missing")
 
     def test_preview_status_can_target_explicit_language(self) -> None:
-        ctx = config.workspace_service.workspace_context(self.problem, self.user, include_recent=False)
+        ctx = runtime.workspace_service.workspace_context(self.problem, self.user, include_recent=False)
         ws = Path(str(ctx["workspace"]["path"]))
         chinese_dir = ws / "statement-sections" / "chinese"
         chinese_dir.mkdir(parents=True, exist_ok=True)
         preview_id = self.random_id("p-preview-status-chinese")
-        preview_root = config.storage_layout.prepare_preview_layout(preview_id).root
+        preview_root = runtime.storage_layout.prepare_preview_layout(preview_id).root
         (preview_root / "statement_preview").mkdir(parents=True, exist_ok=True)
         (preview_root / "statement_preview" / "statement.pdf").write_bytes(b"%PDF-1.4\n%zh\n")
         (preview_root / "logs").mkdir(parents=True, exist_ok=True)
@@ -219,10 +219,10 @@ class TestPreviewRoutes(BackendE2ETestBase):
                             ws,
                             problem_title=self._statement_title(ws, "chinese"),
                             tests_spec_max_bytes=int(
-                                config.config_values.TEXTAREA_MAX_BYTES
+                                runtime.config_values.TEXTAREA_MAX_BYTES
                             ),
                             statement_sample_max_bytes=int(
-                                config.config_values.STATEMENT_SAMPLE_MAX_BYTES
+                                runtime.config_values.STATEMENT_SAMPLE_MAX_BYTES
                             ),
                         ),
                     }
@@ -237,7 +237,7 @@ class TestPreviewRoutes(BackendE2ETestBase):
         self.assertEqual(str(payload.get("latest_status") or ""), "ok")
 
     def test_page_ctx_does_not_project_preview_state_from_latest_preview_row(self) -> None:
-        ctx = config.workspace_service.workspace_context(self.problem, self.user, include_recent=False)
+        ctx = runtime.workspace_service.workspace_context(self.problem, self.user, include_recent=False)
         ws = Path(str(ctx["workspace"]["path"]))
         preview_id = self.random_id("p-preview-nav-missing")
         db_execute(
@@ -260,10 +260,10 @@ class TestPreviewRoutes(BackendE2ETestBase):
                             ws,
                             problem_title=self._statement_title(ws),
                             tests_spec_max_bytes=int(
-                                config.config_values.TEXTAREA_MAX_BYTES
+                                runtime.config_values.TEXTAREA_MAX_BYTES
                             ),
                             statement_sample_max_bytes=int(
-                                config.config_values.STATEMENT_SAMPLE_MAX_BYTES
+                                runtime.config_values.STATEMENT_SAMPLE_MAX_BYTES
                             ),
                         ),
                     }
@@ -271,12 +271,12 @@ class TestPreviewRoutes(BackendE2ETestBase):
             ],
         )
 
-        with patch.object(config.preview_service, "get_workspace_preview_state", side_effect=AssertionError("preview state lookup should stay local to statement page")):
+        with patch.object(runtime.preview_service, "get_workspace_preview_state", side_effect=AssertionError("preview state lookup should stay local to statement page")):
             page = page_ctx(self.problem, self.user)
         self.assertNotIn("preview", page["nav_status"])
 
     def test_preview_artifact_file_reports_expired_for_missing_preview_pdf(self) -> None:
-        ctx = config.workspace_service.workspace_context(self.problem, self.user, include_recent=False)
+        ctx = runtime.workspace_service.workspace_context(self.problem, self.user, include_recent=False)
         preview_id = self.random_id("p-preview-artifact-expired")
         db_execute(
             (
@@ -300,7 +300,7 @@ class TestPreviewRoutes(BackendE2ETestBase):
         self.assertEqual(str(exc.exception.detail or ""), "preview artifact expired")
 
     def test_preview_worker_propagates_exception(self) -> None:
-        with patch.object(config.preview_service, "compile_preview", side_effect=RuntimeError("preview failed")):
+        with patch.object(runtime.preview_service, "compile_preview", side_effect=RuntimeError("preview failed")):
             resp = preview_run(self.problem, self.user, page="statement")
         self.assertEqual(resp.status_code, 303)
         self.assertIn(f"/problems/{self.problem}/statement", resp.headers.get("location", ""))

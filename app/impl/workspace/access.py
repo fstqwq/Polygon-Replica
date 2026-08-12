@@ -4,7 +4,7 @@ from typing import TypedDict
 
 from fastapi import HTTPException
 
-from app.impl.runtime.config import config
+from app.impl.runtime.dependency import runtime
 from app.service.access.model import ProblemAccessContext
 
 
@@ -36,14 +36,14 @@ PageContext = TypedDict(
 
 
 def workspace_access_context(problem_id: int, user_id: int) -> ProblemAccessContext:
-    return config.access_query.problem_context(problem_id, user_id)
+    return runtime().access_query.problem_context(problem_id, user_id)
 
 def problem_owner_count(problem_id: int) -> int:
-    return config.workspace_service.owner_count(problem_id)
+    return runtime().workspace_service.owner_count(problem_id)
 
 
 def problem_acl_entries(problem_id: int) -> list[ProblemAclEntry]:
-    return config.workspace_service.access_entries(problem_id)
+    return runtime().workspace_service.access_entries(problem_id)
 
 
 def require_read_access(ctx: PageContext) -> None:
@@ -70,7 +70,7 @@ def require_manage_access(ctx: PageContext) -> None:
 def is_system_admin_user_id(user_id: int) -> bool:
     if user_id <= 0:
         return False
-    return config.access_query.is_system_admin(user_id)
+    return runtime().access_query.is_system_admin(user_id)
 
 
 def require_system_admin(ctx: PageContext) -> None:

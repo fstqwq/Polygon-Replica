@@ -13,7 +13,7 @@ from app.impl.contest.workspace_scope import (
     contest_workspace_context_from_request,
     problem_template_navigation,
 )
-from app.impl.runtime.config import config
+from app.impl.runtime.dependency import runtime
 from app.impl.workspace.access import require_write_access
 from app.impl.workspace.context_job import start_verification_job
 from app.impl.workspace.context_ui import page_ctx
@@ -44,7 +44,6 @@ from app.impl.run_export.query import (
 )
 from app.service.verification.types import ACTIVE
 
-_C = config.config_values
 logger = logging.getLogger(__name__)
 
 
@@ -225,7 +224,7 @@ def run_details_test_fragment(request: Request, problem: str, user: Annotated[st
         'detail_columns': detail_columns,
     }
     fragment_context.update(problem_template_navigation(request, problem))
-    response = config.templates.TemplateResponse(
+    response = runtime().templates.TemplateResponse(
         request,
         '_run_test_detail_fragment.html',
         fragment_context,
@@ -244,10 +243,10 @@ def run_cancel(problem: str, user: Annotated[str, Depends(require_session_user)]
     problem_id = int(ctx["problem"]["id"])
     workspace_id = int(ctx["workspace"]["id"])
     details_url = f"/problems/{problem}/run/details?verification_id={quote_plus(safe_verification_id)}"
-    record = config.verification_service.verification_record(safe_verification_id)
+    record = runtime().verification_service.verification_record(safe_verification_id)
     if record is None:
         return redirect_response(details_url, status_code=303, message="verification not found")
-    access = config.access_query.verification_context(
+    access = runtime().access_query.verification_context(
         actor_user_id=int(ctx["user"]["id"]),
         actor_workspace_id=workspace_id,
         expected_problem_id=problem_id,
@@ -264,7 +263,7 @@ def run_cancel(problem: str, user: Annotated[str, Depends(require_session_user)]
     reason = "verification cancelled by user"
     try:
         cancellation_result = (
-            config.verification_execution_service.cancel_verification(
+            runtime().verification_execution_service.cancel_verification(
                 safe_verification_id,
                 reason=reason,
             )
@@ -428,12 +427,12 @@ def run_rejudge(
     if not safe_verification_id:
         return redirect_response(f"/problems/{problem}/run", status_code=303, message="verification id is required")
     details_url = f"/problems/{problem}/run/details?verification_id={quote_plus(safe_verification_id)}"
-    record = config.verification_service.verification_record(safe_verification_id)
+    record = runtime().verification_service.verification_record(safe_verification_id)
     if record is None:
         return redirect_response(details_url, status_code=303, message="verification not found")
     problem_id = int(ctx["problem"]["id"])
     workspace_id = int(ctx["workspace"]["id"])
-    access = config.access_query.verification_context(
+    access = runtime().access_query.verification_context(
         actor_user_id=int(ctx["user"]["id"]),
         actor_workspace_id=workspace_id,
         expected_problem_id=problem_id,
@@ -494,7 +493,7 @@ def run_execute(
                 upload_content = read_fileobj_bytes_limited(
                     submission_upload.file,
                     label='submission upload',
-                    max_bytes=int(config.config_values.UPLOAD_MAX_BYTES),
+                    max_bytes=int(runtime().config_values.UPLOAD_MAX_BYTES),
                 )
                 uploaded = True
         selected_solution_paths = dedupe_preserve_order(

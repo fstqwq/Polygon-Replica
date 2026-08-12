@@ -4,7 +4,7 @@ from pathlib import Path
 from fastapi import HTTPException
 from fastapi.responses import FileResponse
 
-from app.impl.runtime.config import config
+from app.impl.runtime.dependency import runtime
 from app.main_util import contains_symlink_component
 from app.service.platform.process import is_canonical_artifact_id
 from app.service.platform.runtime_blob_store import PayloadFile
@@ -30,14 +30,14 @@ def artifact_root(problem: str, artifact_id: str) -> Path:
     problem_slug = problem
     if not problem_slug:
         raise HTTPException(status_code=404, detail="artifact not found")
-    problem_id = config.workspace_service.known_problem_id(problem_slug)
+    problem_id = runtime().workspace_service.known_problem_id(problem_slug)
     if problem_id is None:
         raise HTTPException(status_code=404, detail="artifact not found")
-    artifact_path = config.verification_service.artifact_path_for_problem_artifact(problem_id, artifact_id)
+    artifact_path = runtime().verification_service.artifact_path_for_problem_artifact(problem_id, artifact_id)
     if not artifact_path:
         raise HTTPException(status_code=404, detail="artifact not found")
     try:
-        base = config.storage_layout.cache_artifacts_root.resolve()
+        base = runtime().storage_layout.cache_artifacts_root.resolve()
         root = Path(artifact_path).resolve()
     except OSError:
         raise HTTPException(status_code=404, detail="artifact not found")
@@ -66,7 +66,7 @@ def verification_artifact_file(verification_id: str, rel: str) -> tuple[PayloadF
     rel_norm = rel.lstrip("/")
     if not safe_verification_id or not rel_norm:
         return None
-    artifact = config.verification_service.verification_artifact(
+    artifact = runtime().verification_service.verification_artifact(
         safe_verification_id,
         rel_norm,
     )
@@ -101,7 +101,7 @@ def browser_file_response(file_path: Path) -> FileResponse:
 
 
 def workspace_verification_id_for_run(ctx: dict, run_id: str) -> str:
-    return config.verification_service.workspace_verification_id_for_run(
+    return runtime().verification_service.workspace_verification_id_for_run(
         int(ctx["problem"]["id"]),
         int(ctx["workspace"]["id"]),
         run_id,
@@ -112,17 +112,17 @@ def assert_workspace_artifact_access(ctx: dict, artifact_id: str) -> None:
     problem_id = int(ctx["problem"]["id"])
     workspace_id = int(ctx["workspace"]["id"])
     if str(artifact_id or "").startswith("p-"):
-        if config.verification_service.workspace_artifact_exists(
+        if runtime().verification_service.workspace_artifact_exists(
             problem_id,
             workspace_id,
             artifact_id,
         ):
             return
         raise HTTPException(status_code=404, detail="artifact not found in workspace")
-    verification_row = config.verification_service.verification_record(str(artifact_id or "").strip())
+    verification_row = runtime().verification_service.verification_record(str(artifact_id or "").strip())
     if verification_row is None:
         raise HTTPException(status_code=404, detail="artifact not found in workspace")
-    access = config.access_query.verification_context(
+    access = runtime().access_query.verification_context(
         actor_user_id=int(ctx["user"]["id"]),
         actor_workspace_id=workspace_id,
         expected_problem_id=problem_id,

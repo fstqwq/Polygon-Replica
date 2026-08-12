@@ -16,7 +16,7 @@ from starlette.concurrency import run_in_threadpool
 from starlette.datastructures import UploadFile
 from starlette.formparsers import MultiPartParser
 
-from app.impl.runtime.config import config
+from app.impl.runtime.dependency import runtime
 from app.main_util import read_upload_bytes_limited
 from app.service.judgehost.batch_scheduler_models import CaseClaimBusy
 from app.service.judgehost.core import InvalidJudgehostHostname, normalize_judgehost_hostname
@@ -111,7 +111,7 @@ _logger = logging.getLogger(__name__)
 
 
 def _judgehost_form_part_limit_bytes() -> int:
-    values = config.config_values.snapshot()
+    values = runtime().config_values.snapshot()
     return judgehost_form_part_limit_bytes(
         values,
         upload_max_bytes=int(values["UPLOAD_MAX_BYTES"]),
@@ -216,7 +216,7 @@ async def _request_payload(request: Request) -> JudgehostPayload:
 
 
 def _require_judgehost_auth(request: Request):
-    service = config.judgehost_task_service
+    service = runtime().judgehost_task_service
     if not service.enabled():
         raise HTTPException(status_code=404, detail="judgehost API is disabled")
     if not service.auth_token_configured():

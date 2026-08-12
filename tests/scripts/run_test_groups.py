@@ -58,20 +58,20 @@ def _direct_imports(path: Path) -> set[str]:
 
 def validate_resource_contracts(groups: dict[str, list[str]]) -> None:
     unit_forbidden = {
-        "app.impl.runtime.config",
+        "app.runtime",
         "subprocess",
         "tests.common",
         "tests.db_fixture",
     }
     service_forbidden = {
-        "app.impl.runtime.config",
+        "app.runtime",
         "app.main",
         "fastapi.testclient",
         "tests.common",
         "tests.ui_support",
     }
     executor_forbidden = {
-        "app.impl.runtime.config",
+        "app.runtime",
         "app.main",
         "fastapi.testclient",
         "tests.common",
@@ -154,7 +154,7 @@ def run_group(group: str, filenames: list[str]) -> bool:
     def _assert_no_full_runtime_loaded() -> None:
         loaded_runtime_modules = sorted(
             module_name
-            for module_name in ("app.impl.runtime.config", "app.main")
+            for module_name in ("app.runtime", "app.main")
             if module_name in sys.modules
         )
         if loaded_runtime_modules:

@@ -10,7 +10,7 @@ from fastapi import Form, HTTPException, Request, Depends
 from app.impl.auth.shared import json_error_response, json_redirect_response, redirect_response, template_response
 from app.impl.contest.workspace_scope import contest_workspace_context_from_request
 from app.impl.problem.compile_check import judgehost_compile_check_error
-from app.impl.runtime.config import config
+from app.impl.runtime.dependency import runtime
 from app.impl.problem.shared import _normalize_component_create_path, rename_component_source
 from app.impl.workspace.context_operation import (
     generator_sources_from_build_cfg,
@@ -29,7 +29,6 @@ from app.service.platform.workspace_path import (
     safe_workspace_path,
 )
 
-_C = config.config_values
 
 
 def _generator_template_for_target(path: str) -> str:
@@ -86,13 +85,13 @@ def generators_page(request: Request, problem: str, user: Annotated[str, Depends
     try:
         repo_abs = safe_workspace_path(workspace, selected_source)
         if repo_abs.exists() and repo_abs.is_file() and (not repo_abs.is_symlink()):
-            repo_content, repo_content_truncated = config.git_service.read_file_limited(workspace, selected_source, _C.WORKSPACE_FILE_VIEW_CHAR_LIMIT)
+            repo_content, repo_content_truncated = runtime().git_service.read_file_limited(workspace, selected_source, runtime().config_values.WORKSPACE_FILE_VIEW_CHAR_LIMIT)
     except HTTPException:
         repo_content = ''
         repo_content_truncated = False
     starter_content = _generator_template_for_target(selected_source) if not selected_exists else ''
     show_editor = bool(selected_exists or new_source)
-    return template_response(request, 'generators.html', {'ctx': ctx, 'generator_status': generator_status, 'repo_source': selected_source, 'selected_source': selected_source, 'selected_exists': selected_exists, 'new_source': bool(new_source), 'show_editor': show_editor, 'source_rows': source_rows, 'source_rows_truncated': bool(generator_status.get('source_rows_truncated')), 'repo_content': repo_content, 'starter_content': starter_content, 'repo_content_truncated': repo_content_truncated, 'content_char_limit': _C.WORKSPACE_FILE_VIEW_CHAR_LIMIT})
+    return template_response(request, 'generators.html', {'ctx': ctx, 'generator_status': generator_status, 'repo_source': selected_source, 'selected_source': selected_source, 'selected_exists': selected_exists, 'new_source': bool(new_source), 'show_editor': show_editor, 'source_rows': source_rows, 'source_rows_truncated': bool(generator_status.get('source_rows_truncated')), 'repo_content': repo_content, 'starter_content': starter_content, 'repo_content_truncated': repo_content_truncated, 'content_char_limit': runtime().config_values.WORKSPACE_FILE_VIEW_CHAR_LIMIT})
 
 def generator_rename_source(
     problem: str,
@@ -131,9 +130,9 @@ def generator_save_source(
         safe_content = enforce_textarea_max_bytes(
             content,
             label='generator source',
-            max_bytes=int(_C.TEXTAREA_MAX_BYTES),
+            max_bytes=int(runtime().config_values.TEXTAREA_MAX_BYTES),
         )
-        with config.workspace_service.workspace_lock(workspace):
+        with runtime().workspace_service.workspace_lock(workspace):
             target_abs = safe_workspace_path(workspace, target)
             target_existed_before = bool(target_abs.exists() and target_abs.is_file() and (not target_abs.is_symlink()))
             target_previous_bytes = target_abs.read_bytes() if target_existed_before else b''
@@ -145,7 +144,7 @@ def generator_save_source(
                 generator_sources.append(target)
             build_cfg['generator_sources'] = generator_sources
             write_build_config(cfg_path, build_cfg)
-            config.git_service.write_file(workspace, target, safe_content)
+            runtime().git_service.write_file(workspace, target, safe_content)
             compile_check_error = judgehost_compile_check_error(
                 problem=problem,
                 user=user,
@@ -158,7 +157,7 @@ def generator_save_source(
                 if target_existed_before:
                     target_abs.write_bytes(target_previous_bytes)
                 else:
-                    config.git_service.delete_path(workspace, target)
+                    runtime().git_service.delete_path(workspace, target)
                 if cfg_existed_before:
                     cfg_path.write_text(cfg_previous_text, encoding='utf-8')
                 else:

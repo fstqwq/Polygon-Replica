@@ -60,6 +60,7 @@
     "test_maintenance_http.py",
     "test_preview.py",
     "test_preview_routes.py",
+    "test_runtime_composition.py",
     "test_runtime_startup_e2e.py",
     "test_security.py",
     "test_smtp_config.py",

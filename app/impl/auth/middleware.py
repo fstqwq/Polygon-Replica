@@ -5,7 +5,6 @@ import app.main_constant as _K
 from fastapi import Request
 
 from app.impl.auth.csrf import issue_password_form_csrf_token
-from app.impl.runtime.config import config
 from app.impl.auth.session import session_user
 from app.impl.auth.shared import (
     _apply_security_headers,
@@ -13,7 +12,6 @@ from app.impl.auth.shared import (
     login_redirect,
 )
 
-_C = config.config_values
 
 _ = (issue_password_form_csrf_token,)
 

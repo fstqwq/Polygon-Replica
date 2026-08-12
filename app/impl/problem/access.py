@@ -7,7 +7,7 @@ from app.impl.auth.session import require_session_user
 from fastapi import Form, Depends
 
 from app.impl.auth.shared import normalize_username_required, redirect_response
-from app.impl.runtime.config import config
+from app.impl.runtime.dependency import runtime
 from app.impl.workspace.access import require_manage_access
 from app.service.access.policy import transferable_repo_role
 from app.impl.workspace.context_ui import page_ctx
@@ -21,7 +21,7 @@ def workspace_access_grant(problem: str, user: Annotated[str, Depends(require_se
         safe_target = normalize_username_required(target_user)
         safe_role = transferable_repo_role(role)
         problem_id = int(ctx["problem"]["id"])
-        config.workspace_service.set_repo_access_for_problem_id(problem_id, safe_target, safe_role)
+        runtime().workspace_service.set_repo_access_for_problem_id(problem_id, safe_target, safe_role)
         msg = f"access updated: {safe_target} -> {safe_role}"
     except ValueError as exc:
         msg = str(exc)
@@ -36,7 +36,7 @@ def workspace_access_revoke(problem: str, user: Annotated[str, Depends(require_s
     try:
         safe_target = normalize_username_required(target_user)
         problem_id = int(ctx["problem"]["id"])
-        result = config.workspace_service.revoke_repo_access_for_problem_id(problem_id, safe_target)
+        result = runtime().workspace_service.revoke_repo_access_for_problem_id(problem_id, safe_target)
         redirect_to_problems = int(result["target_user_id"]) == int(ctx["user"]["id"])
         msg = f"access removed: {safe_target}"
     except ValueError as exc:

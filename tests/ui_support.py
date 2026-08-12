@@ -45,8 +45,8 @@ import app.impl.tests_spec.routes as tests_spec_module
 import app.impl.tests_spec.verification as tests_spec_verification_module
 import app.impl.workspace.context_job as workspace_job_module
 import app.impl.workspace.context_ui as workspace_ui_module
-from app.impl.runtime.config import config
-from app.config import CONFIG_REGISTRY
+from app.main import runtime
+from app.runtime import CONFIG_REGISTRY
 _API_MODULES = (
     admin_panel_module,
     auth_middleware_module,
@@ -87,8 +87,8 @@ def _api_attr(name: str):
             return getattr(module, name)
     raise AttributeError(f"api symbol not found: {name}")
 
-AUTH_COOKIE_NAME = config.config_values.AUTH_COOKIE_NAME
-FLASH_COOKIE_NAME = config.config_values.FLASH_COOKIE_NAME
+AUTH_COOKIE_NAME = runtime.config_values.AUTH_COOKIE_NAME
+FLASH_COOKIE_NAME = runtime.config_values.FLASH_COOKIE_NAME
 DEFAULT_CONFIG_VALUES = CONFIG_REGISTRY.defaults()
 issue_password_form_csrf_token = _api_attr("issue_password_form_csrf_token")
 session_user = _api_attr("session_user")
@@ -112,10 +112,10 @@ checker_rename_source = _api_attr("checker_rename_source")
 checker_save_source = _api_attr("checker_save_source")
 checker_set_standard = _api_attr("checker_set_standard")
 checker_view_standard = _api_attr("checker_view_standard")
-db = config.db
+db = runtime.db
 export_create = _api_attr("export_create")
 export_page = _api_attr("export_page")
-export_service = config.export_service
+export_service = runtime.export_service
 files_create_template = _api_attr("files_create_template")
 files_page = _api_attr("files_page")
 files_save = _api_attr("files_save")
@@ -126,7 +126,7 @@ general_page = _api_attr("preview_page")
 general_save = _api_attr("general_save")
 revision_commit = _api_attr("revision_commit")
 git_discard_path = _api_attr("git_discard_path")
-git_service = config.git_service
+git_service = runtime.git_service
 history_page = _api_attr("history_page")
 history_import = _api_attr("history_import")
 history_snapshot = _api_attr("history_snapshot")
@@ -217,7 +217,7 @@ workspace_page = _api_attr("render_workspace_page")
 access_page = lambda request, problem, user: workspace_page(request, problem, user, show_access_admin=True)
 workspace_access_grant = _api_attr("workspace_access_grant")
 workspace_access_revoke = _api_attr("workspace_access_revoke")
-workspace_service = config.workspace_service
+workspace_service = runtime.workspace_service
 
 
 def _request(
@@ -633,7 +633,7 @@ def _settings_password_update_with_envelope(user: str, current_password: str, ne
 def _settings_admin_password_update_with_envelope(actor_user: str, target_user: str, new_password: str):
     csrf = issue_password_form_csrf_token("admin-password")
     new_salt = uuid.uuid4().hex
-    new_iters = int(config.config_values.PASSWORD_HASH_ITERS)
+    new_iters = int(runtime.config_values.PASSWORD_HASH_ITERS)
     new_verifier = _password_verifier_hex(new_password, new_salt, new_iters)
     new_envelope = _password_envelope_fields_direct(
         scope="admin-password",

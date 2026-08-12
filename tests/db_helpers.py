@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Callable
 
 from tests.common import db
-from app.impl.runtime.config import config
+from app.main import runtime
 from app.service.verification.lifecycle import (
     ActivationCommit,
     ActivationPlan,
@@ -49,7 +49,7 @@ def admit_test_verification(
     source_commit: str = "",
     kind: str = "all",
 ) -> AdmissionCommit:
-    return config.verification_service.admit_verification(
+    return runtime.verification_service.admit_verification(
         VerificationAdmission(
             verification_id=verification_id,
             problem_id=problem_id,
@@ -68,7 +68,7 @@ def activate_test_verification(
     tasks: list[PlannedTask] | tuple[PlannedTask, ...],
     detail: dict[str, object] | None = None,
 ) -> ActivationCommit:
-    return config.verification_service.activate_verification(
+    return runtime.verification_service.activate_verification(
         ActivationPlan.build(
             verification_id,
             detail=(
@@ -109,7 +109,7 @@ def verification_programs_for_tasks(
                 source_path=task.source_path,
                 compile_spec=VerificationCompileSpec(
                     source_name=Path(task.source_path).name,
-                    source_file=config.runtime_blob_store.put_bytes(
+                    source_file=runtime.runtime_blob_store.put_bytes(
                         b"test verification program fixture\n"
                     ),
                 ),
@@ -162,7 +162,7 @@ def read_contest_job_summary(contest_id: int, job_id: str) -> dict[str, object]:
     contest_row = db_fetch_one("SELECT slug FROM contests WHERE id=?", [int(contest_id)])
     if contest_row is None:
         return {}
-    path = config.contest_service.job_root(str(contest_row["slug"]), str(job_id).strip()) / "summary.json"
+    path = runtime.contest_service.job_root(str(contest_row["slug"]), str(job_id).strip()) / "summary.json"
     try:
         text = path.read_text(encoding="utf-8")
     except OSError:
@@ -180,7 +180,7 @@ def write_contest_job_summary(contest_id: int, job_id: str, summary: dict[str, o
     contest_row = db_fetch_one("SELECT slug FROM contests WHERE id=?", [int(contest_id)])
     if contest_row is None:
         raise AssertionError(f"contest missing: {contest_id}")
-    path = config.contest_service.job_root(str(contest_row["slug"]), str(job_id).strip()) / "summary.json"
+    path = runtime.contest_service.job_root(str(contest_row["slug"]), str(job_id).strip()) / "summary.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         json.dumps(summary, ensure_ascii=True, separators=(",", ":")),

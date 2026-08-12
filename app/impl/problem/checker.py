@@ -9,7 +9,7 @@ from fastapi import Form, HTTPException, Request, Depends
 from app.impl.auth.shared import json_error_response, json_redirect_response, redirect_response, template_response
 from app.impl.contest.workspace_scope import contest_workspace_context_from_request
 from app.impl.problem.compile_check import judgehost_compile_check_error
-from app.impl.runtime.config import config
+from app.impl.runtime.dependency import runtime
 from app.impl.problem.shared import rename_component_source, single_source_editor_context
 from app.impl.workspace.context_operation import read_build_config, resolve_standard_checker_path, standard_checker_catalog, template_for_kind, write_build_config
 from app.impl.workspace.context_component_status import checker_status_context
@@ -19,7 +19,6 @@ from app.main_util import enforce_textarea_max_bytes
 from app.service.platform.workspace_path import normalize_component_source_path, safe_workspace_path
 from app.service.verification.standard_checker import copy_standard_checker
 
-_C = config.config_values
 
 
 def checker_page(request: Request, problem: str, user: Annotated[str, Depends(require_session_user)]):
@@ -50,7 +49,7 @@ def checker_page(request: Request, problem: str, user: Annotated[str, Depends(re
             or request.query_params.get('edit') == 'source'
         )
     )
-    return template_response(request, 'checker.html', {'ctx': ctx, 'checker_status': checker_status, 'standard_checker_options': standard_checker_options, 'selected_standard_checker': selected_standard, 'show_custom_editor': show_custom_editor, 'editor': editor, 'content_char_limit': _C.WORKSPACE_FILE_VIEW_CHAR_LIMIT})
+    return template_response(request, 'checker.html', {'ctx': ctx, 'checker_status': checker_status, 'standard_checker_options': standard_checker_options, 'selected_standard_checker': selected_standard, 'show_custom_editor': show_custom_editor, 'editor': editor, 'content_char_limit': runtime().config_values.WORKSPACE_FILE_VIEW_CHAR_LIMIT})
 
 def checker_view_standard(request: Request, problem: str, user: Annotated[str, Depends(require_session_user)], checker_name: str=''):
     ctx = page_ctx(
@@ -91,7 +90,7 @@ def checker_set_standard(problem: str, user: Annotated[str, Depends(require_sess
     try:
         normalized_name, _ = resolve_standard_checker_path(checker_name)
         canonical = f'std::{normalized_name}'
-        with config.workspace_service.workspace_lock(workspace):
+        with runtime().workspace_service.workspace_lock(workspace):
             checker_rel = copy_standard_checker(normalized_name, workspace)
             build_cfg, cfg_path = read_build_config(workspace)
             build_cfg['checker_source'] = checker_rel
@@ -148,9 +147,9 @@ def checker_save_source(
         safe_content = enforce_textarea_max_bytes(
             content,
             label='checker source',
-            max_bytes=int(_C.TEXTAREA_MAX_BYTES),
+            max_bytes=int(runtime().config_values.TEXTAREA_MAX_BYTES),
         )
-        with config.workspace_service.workspace_lock(workspace):
+        with runtime().workspace_service.workspace_lock(workspace):
             target_abs = safe_workspace_path(workspace, target)
             target_existed_before = bool(target_abs.exists() and target_abs.is_file() and (not target_abs.is_symlink()))
             target_previous_bytes = target_abs.read_bytes() if target_existed_before else b''
@@ -159,7 +158,7 @@ def checker_save_source(
             cfg_previous_text = cfg_path.read_text(encoding='utf-8') if cfg_existed_before else ''
             build_cfg['checker_source'] = target
             write_build_config(cfg_path, build_cfg)
-            config.git_service.write_file(workspace, target, safe_content)
+            runtime().git_service.write_file(workspace, target, safe_content)
             compile_check_error = judgehost_compile_check_error(
                 problem=problem,
                 user=user,
@@ -172,7 +171,7 @@ def checker_save_source(
                 if target_existed_before:
                     target_abs.write_bytes(target_previous_bytes)
                 else:
-                    config.git_service.delete_path(workspace, target)
+                    runtime().git_service.delete_path(workspace, target)
                 if cfg_existed_before:
                     cfg_path.write_text(cfg_previous_text, encoding='utf-8')
                 else:

@@ -11,7 +11,7 @@ from fastapi import Form, HTTPException, Request, Depends
 from app.impl.auth.shared import template_response
 from app.impl.contest.problem_rows import contest_management_problem_rows
 from app.impl.contest.workspace_scope import add_contest_problem_hrefs
-from app.impl.runtime.config import config
+from app.impl.runtime.dependency import runtime
 from app.main_util import form_text
 
 from app.impl.contest.common import (
@@ -25,7 +25,6 @@ from app.impl.contest.shared import (
     _run_problem_general_update,
 )
 
-_C = config.config_values
 
 
 def contest_problems_page(request: Request, contest: str, user: Annotated[str, Depends(require_session_user)], q: str = "", job_id: str = ""):
@@ -42,10 +41,10 @@ def contest_problems_page(request: Request, contest: str, user: Annotated[str, D
         ),
     )
     query = q.strip()
-    available_rows = config.contest_service.available_problems(
+    available_rows = runtime().contest_service.available_problems(
         contest_id,
         user_id,
-        limit=int(_C.API_PROBLEMS_LIST_LIMIT),
+        limit=int(runtime().config_values.API_PROBLEMS_LIST_LIMIT),
         query=query,
     )
     available_display_rows: list[dict[str, object]] = []
@@ -67,7 +66,7 @@ def contest_problems_page(request: Request, contest: str, user: Annotated[str, D
         (len(str(row["slug_owner"])) + 1 for row in available_display_rows),
         default=0,
     )
-    latest_job = config.contest_service.load_job(contest_id, job_id)
+    latest_job = runtime().contest_service.load_job(contest_id, job_id)
     return template_response(
         request,
         "contest_problems.html",
@@ -101,21 +100,21 @@ def contest_problems_add(contest: str, user: Annotated[str, Depends(require_sess
     added = 0
     failed: list[str] = []
     for slug in safe_slugs:
-        problem_row = config.contest_service.problem_by_slug(slug)
+        problem_row = runtime().contest_service.problem_by_slug(slug)
         if problem_row is None:
             failed.append(f"{slug}: problem not found")
             continue
         problem_id = int(problem_row["id"])
-        problem_access = config.access_query.direct_problem_context(problem_id, user_id)
+        problem_access = runtime().access_query.direct_problem_context(problem_id, user_id)
         if not problem_access["can_manage"]:
             failed.append(f"{slug}: direct problem manage access required")
             continue
-        if config.contest_service.contest_has_problem(contest_id, problem_id):
+        if runtime().contest_service.contest_has_problem(contest_id, problem_id):
             failed.append(f"{slug}: already in contest")
             continue
         try:
-            idx = config.contest_service.next_problem_index(contest_id)
-            config.contest_service.add_problem(contest_id, idx, problem_id, user_id)
+            idx = runtime().contest_service.next_problem_index(contest_id)
+            runtime().contest_service.add_problem(contest_id, idx, problem_id, user_id)
             added += 1
         except Exception as exc:
             failed.append(f"{slug}: {exc}")
@@ -141,7 +140,7 @@ def contest_problems_remove(contest: str, user: Annotated[str, Depends(require_s
     if pid <= 0:
         msg = "invalid problem id"
     else:
-        config.contest_service.remove_problem(int(ctx["contest"]["id"]), pid)
+        runtime().contest_service.remove_problem(int(ctx["contest"]["id"]), pid)
     return _contest_redirect(str(ctx["contest"]["slug"]), "problems", message=msg)
 
 
@@ -159,7 +158,7 @@ def contest_problems_remove_selected(contest: str, user: Annotated[str, Depends(
             ids.append(value)
     if not ids:
         return _contest_redirect(str(ctx["contest"]["slug"]), "problems", message="select at least one problem to remove")
-    removed = config.contest_service.remove_problems(int(ctx["contest"]["id"]), ids)
+    removed = runtime().contest_service.remove_problems(int(ctx["contest"]["id"]), ids)
     return _contest_redirect(str(ctx["contest"]["slug"]), "problems", message=f"removed {removed} problem(s)")
 
 
@@ -201,7 +200,7 @@ def contest_problems_reorder(
         pairs = _contest_problem_index_pairs(contest_problem_ids, contest_problem_indices)
     except ValueError as exc:
         return _contest_redirect(str(ctx["contest"]["slug"]), "problems", message=str(exc))
-    if not config.contest_service.reorder_problem_indices(int(ctx["contest"]["id"]), pairs):
+    if not runtime().contest_service.reorder_problem_indices(int(ctx["contest"]["id"]), pairs):
         return _contest_redirect(
             str(ctx["contest"]["slug"]),
             "problems",
@@ -227,7 +226,7 @@ def contest_problems_renumber(
         contest_problem_id
         for contest_problem_id, _ in sorted(pairs, key=lambda pair: pair[1])
     ]
-    if not config.contest_service.renumber_problem_indices(int(ctx["contest"]["id"]), ordered_ids):
+    if not runtime().contest_service.renumber_problem_indices(int(ctx["contest"]["id"]), ordered_ids):
         return _contest_redirect(
             str(ctx["contest"]["slug"]),
             "problems",
@@ -256,7 +255,7 @@ def _failed_general_job_payload(
     contest_id: int,
     retry_job_id: str,
 ) -> tuple[list[int], dict[int, dict[str, object]]]:
-    retry_job = config.contest_service.load_job(contest_id, retry_job_id)
+    retry_job = runtime().contest_service.load_job(contest_id, retry_job_id)
     if retry_job is None:
         raise ValueError("retry job not found")
     if retry_job["job_type"] != "change-general":
@@ -304,7 +303,7 @@ def _apply_general_changes(
             "problems",
             message="select at least one problem to update",
         )
-    rows = config.contest_service.selected_problems(contest_id, selected_ids)
+    rows = runtime().contest_service.selected_problems(contest_id, selected_ids)
     if len(rows) != len(selected_ids):
         return _contest_redirect(
             str(contest_ctx["slug"]),
@@ -344,7 +343,7 @@ def _apply_general_changes(
         },
     }
     job_status = "ok" if failed_count == 0 else "failed"
-    job_id = config.contest_service.create_job(contest_id, actor_user_id, "change-general", job_status, summary)
+    job_id = runtime().contest_service.create_job(contest_id, actor_user_id, "change-general", job_status, summary)
     return _contest_redirect(
         str(contest_ctx["slug"]),
         "problems",

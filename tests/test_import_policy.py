@@ -8,9 +8,9 @@ import unittest
 from pathlib import Path
 
 from tests.scripts import import_policy
+
 ROOT = Path(__file__).resolve().parents[1]
 IMPORT_POLICY_SCRIPT = ROOT / "tests" / "scripts" / "import_policy.py"
-IMPORT_BOUNDARIES = ROOT / "import-policy" / "import-boundaries.json"
 
 
 class TestImportPolicy(unittest.TestCase):
@@ -21,101 +21,86 @@ def _export_public(namespace, module):
         namespace.setdefault(name, getattr(module, name))
 _export_public(globals(), module)
 """
-        self.assertTrue(import_policy._dynamic_reexport_detected("app.impl.workspace.context_ui", source))
-        self.assertFalse(import_policy._dynamic_reexport_detected("tests.scripts.import_policy", source))
+        self.assertTrue(
+            import_policy._dynamic_reexport_detected(
+                "app.impl.workspace.context_ui",
+                source,
+            )
+        )
+        self.assertFalse(
+            import_policy._dynamic_reexport_detected(
+                "tests.scripts.import_policy",
+                source,
+            )
+        )
 
-    def test_plural_segment_naming_detector(self) -> None:
+    def test_layer_policy_is_derived_from_application_topology(self) -> None:
+        self.assertIsNone(
+            import_policy._layer_violation(
+                "app.route.problem_route",
+                "app.impl.problem",
+            )
+        )
         self.assertEqual(
-            import_policy._plural_name_violations_for_module(
-                "app.service.process.api",
-                plural_exceptions=["process"],
+            import_policy._layer_violation(
+                "app.service.problem.readiness",
+                "app.impl.problem",
             ),
-            [],
-        )
-        self.assertEqual(
-            import_policy._plural_name_violations_for_module("app.impl.workspace.access"),
-            [],
-        )
-        self.assertEqual(
-            import_policy._plural_name_violations_for_module("app.service.problem.readiness"),
-            [],
-        )
-        self.assertEqual(
-            import_policy._plural_name_violations_for_module("app.service.workspace.files"),
-            ["files"],
-        )
-        self.assertEqual(import_policy._plural_name_violations_for_module("app.impl.auth.middleware"), [])
-
-    def test_affix_cluster_detector(self) -> None:
-        offenders = import_policy._affix_cluster_modules(
-            "statement",
-            [
-                "statement_render",
-                "statement_parse",
-                "statement_tokenize",
-                "context",
-            ],
-        )
-        self.assertEqual(
-            offenders,
-            {"statement_render", "statement_parse", "statement_tokenize"},
+            "layer `service` cannot import `app.impl.problem`",
         )
 
-    def test_import_policy_audit_emits_machine_readable_inventory(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="import-import_policy-audit-") as tmp:
-            out_path = Path(tmp) / "audit.json"
-            proc = subprocess.run(
+    def test_cycle_detector_covers_arbitrary_application_modules(self) -> None:
+        self.assertEqual(
+            import_policy._cycle_signatures(
+                {
+                    "app.new.alpha": {"app.new.beta"},
+                    "app.new.beta": {"app.new.alpha"},
+                    "app.unrelated": set(),
+                }
+            ),
+            [["app.new.alpha", "app.new.beta"]],
+        )
+
+    def test_import_policy_audit_emits_complete_inventory(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="import-policy-audit-") as temporary:
+            output_path = Path(temporary) / "audit.json"
+            process = subprocess.run(
                 [
                     sys.executable,
                     str(IMPORT_POLICY_SCRIPT),
-                    "--boundaries",
-                    str(IMPORT_BOUNDARIES),
                     "audit",
                     "--format",
                     "json",
                     "--output",
-                    str(out_path),
+                    str(output_path),
                 ],
                 cwd=ROOT,
                 capture_output=True,
                 text=True,
                 check=False,
             )
-            self.assertEqual(proc.returncode, 0, msg=proc.stderr or proc.stdout)
-            self.assertTrue(out_path.exists())
-            payload = json.loads(out_path.read_text(encoding="utf-8"))
+            self.assertEqual(process.returncode, 0, msg=process.stderr or process.stdout)
+            payload = json.loads(output_path.read_text(encoding="utf-8"))
             self.assertIn("violations", payload)
             self.assertIn("cycles", payload)
             self.assertIn("summary", payload)
-            self.assertIsInstance(payload["violations"], list)
-            self.assertIsInstance(payload["cycles"], list)
-            self.assertGreater(int(payload["meta"]["firstWaveModuleCount"]), 0)
-            first_wave_blockers = [
-                row
-                for row in payload["violations"]
-                if bool(row.get("firstWave"))
-                and str(row.get("rule") or "")
-                in {"ALIAS_FROM_IMPORT", "MESH_RELATIVE_IMPORT", "WILDCARD_IMPORT", "REEXPORT_DYNAMIC"}
-            ]
-            self.assertEqual(first_wave_blockers, [])
+            self.assertNotIn("firstWave", payload)
+            self.assertNotIn("boundaries", payload)
+            self.assertEqual(
+                int(payload["meta"]["applicationModuleCount"]),
+                len(list((ROOT / "app").rglob("*.py"))),
+            )
 
-    def test_import_policy_check_needs_no_baseline(self) -> None:
-        proc = subprocess.run(
-            [
-                sys.executable,
-                str(IMPORT_POLICY_SCRIPT),
-                "--boundaries",
-                str(IMPORT_BOUNDARIES),
-                "check",
-            ],
+    def test_import_policy_check_needs_no_configuration(self) -> None:
+        process = subprocess.run(
+            [sys.executable, str(IMPORT_POLICY_SCRIPT), "check"],
             cwd=ROOT,
             capture_output=True,
             text=True,
             check=False,
         )
-
-        self.assertEqual(proc.returncode, 0, msg=proc.stderr or proc.stdout)
-        self.assertIn("no violations/cycles", proc.stdout)
+        self.assertEqual(process.returncode, 0, msg=process.stderr or process.stdout)
+        self.assertIn("complete app graph is cycle-free", process.stdout)
 
 
 if __name__ == "__main__":

@@ -24,7 +24,6 @@ based on present impact, not on an imagined future architecture.
 
 | ID | Class | Finding and current impact | Suggested owner |
 | --- | --- | --- | --- |
-| PLC-001 | refactor | Process lifecycle has a dedicated runtime owner, but the process-wide `RuntimeConfig` composition root remains under `app.impl` and directly aggregates service construction and storage roots. | runtime |
 | PLC-002 | refactor | Verification locator ownership is centralized on the refactor branch but remains open until Linux storage and HTTP artifact acceptance complete. | verification storage |
 | PLC-003 | refactor | Several HTTP implementation modules construct large read models and contain domain aggregation. | domain services |
 | PLC-004 | refactor | The canonical execution result model is nested under verification although Judgehost and custom run also consume it. | execution model |

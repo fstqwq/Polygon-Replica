@@ -20,13 +20,13 @@ from tests.db_helpers import (
 )
 from tests.execution_result_helpers import execution_result
 from tests.ui_support import AUTH_COOKIE_NAME, _cookie_value_from_response, _register_with_password_envelope
-from app.impl.runtime.config import config
+from app.main import runtime
 from app.main import app
 from app.service.verification.lifecycle import PlannedTask, verification_task_id
 from app.service.verification.task_completion import TaskCompletion
 from app.service.verification.types import VerificationTaskStatus
 
-workspace_service = config.workspace_service
+workspace_service = runtime.workspace_service
 
 
 class TestAgentAPI(E2ETestBase):
@@ -171,7 +171,7 @@ class TestAgentAPI(E2ETestBase):
             user_id = workspace_service.known_user_id(username)
             self.assertIsNotNone(problem_id)
             self.assertIsNotNone(user_id)
-            access = config.access_query.problem_context(int(problem_id), int(user_id))
+            access = runtime.access_query.problem_context(int(problem_id), int(user_id))
             self.assertEqual(str(access["role"]), "owner")
             workspace = workspace_service.workspace_context(
                 problem,
@@ -212,13 +212,13 @@ class TestAgentAPI(E2ETestBase):
             + "\n",
             encoding="utf-8",
         )
-        source_commit = config.git_service.commit(
+        source_commit = runtime.git_service.commit(
             workspace,
             "publish agent export fixture",
             username,
             f"{username}@polygonlike.local",
         )
-        config.git_service.push(workspace, "main")
+        runtime.git_service.push(workspace, "main")
         ctx = workspace_service.workspace_context(
             self.problem,
             username,
@@ -229,7 +229,7 @@ class TestAgentAPI(E2ETestBase):
         job_id = "agent-export-job-direct"
         export_id = "e-agent-export-direct"
         filename = "agent-package.zip"
-        archive = config.export_service._export_path(
+        archive = runtime.export_service._export_path(
             self.problem,
             export_id,
             filename,
@@ -247,14 +247,14 @@ class TestAgentAPI(E2ETestBase):
                 kind="all",
             )
             self.assertEqual(admission.outcome, "admitted")
-            input_ref = config.verification_service.store_verification_blob(
+            input_ref = runtime.verification_service.store_verification_blob(
                 verification_id=verification_id,
                 test_name="001.in",
                 role="input",
                 file_name="001.in",
                 payload=b"1\n",
             )
-            answer_ref = config.verification_service.store_verification_blob(
+            answer_ref = runtime.verification_service.store_verification_blob(
                 verification_id=verification_id,
                 test_name="001.in",
                 role="answer",
@@ -283,7 +283,7 @@ class TestAgentAPI(E2ETestBase):
                 tasks=tasks,
             )
             self.assertEqual(activation.outcome, "activated")
-            completion = config.verification_task_store.commit_task_completions(
+            completion = runtime.verification_task_store.commit_task_completions(
                 [
                     TaskCompletion(
                         task_id=task_id,
@@ -299,8 +299,8 @@ class TestAgentAPI(E2ETestBase):
             self.assertEqual(completion.parent_transition, "ok")
             return verification_id
 
-        revision = config.problem_package_service.published_revision(problem_id)
-        materialization = config.problem_package_service.ensure_materialization(
+        revision = runtime.problem_package_service.published_revision(problem_id)
+        materialization = runtime.problem_package_service.ensure_materialization(
             revision,
             materialize,
         )
@@ -317,25 +317,25 @@ class TestAgentAPI(E2ETestBase):
                 materialization["id"],
                 "icpc",
                 filename,
-                archive.relative_to(config.settings.artifacts_root).as_posix(),
+                archive.relative_to(runtime.settings.artifacts_root).as_posix(),
                 hashlib.sha256(archive.read_bytes()).hexdigest(),
                 archive.stat().st_size,
                 source_commit,
                 "2026-08-08T00:00:00Z",
             ],
         )
-        config.export_service.create_export_job(
+        runtime.export_service.create_export_job(
             job_id=job_id,
             problem_id=problem_id,
             actor_user_id=actor_user_id,
             export_type="icpc",
             source_commit=source_commit,
         )
-        config.export_service.mark_export_job_running(
+        runtime.export_service.mark_export_job_running(
             job_id,
             source_commit=source_commit,
         )
-        config.export_service.mark_export_job_succeeded(
+        runtime.export_service.mark_export_job_succeeded(
             job_id,
             materialization_id=materialization["id"],
             export_id=export_id,
@@ -439,7 +439,7 @@ class TestAgentAPI(E2ETestBase):
             session_id = str(register["agent_session_id"])
             identity_hash = str(register["identity_hash"])
 
-            config.agent_service.store.touch_session(session_id, last_seen_at=stale_seen)
+            runtime.agent_service.store.touch_session(session_id, last_seen_at=stale_seen)
             empty_status = client.get(
                 "/agent/v1/auth/status",
                 params={"agent_session_id": session_id, "identity_hash": identity_hash},
@@ -450,11 +450,11 @@ class TestAgentAPI(E2ETestBase):
             self.assertEqual(str(empty_payload.get("agent_session_id") or ""), session_id)
             self.assertEqual(str(empty_payload.get("user") or ""), username)
             self.assertEqual(list(empty_payload.get("authorized_problems") or []), [])
-            touched_after_status = str(config.agent_service.store.session_by_id(session_id)["last_seen_at"])
+            touched_after_status = str(runtime.agent_service.store.session_by_id(session_id)["last_seen_at"])
             self.assertNotEqual(touched_after_status, stale_seen)
             self.assertEqual(touched_after_status, str(empty_payload.get("last_seen_at") or ""))
 
-            config.agent_service.store.touch_session(session_id, last_seen_at=stale_seen)
+            runtime.agent_service.store.touch_session(session_id, last_seen_at=stale_seen)
             request_resp = client.post(
                 "/agent/v1/auth/request-access",
                 json={
@@ -467,16 +467,16 @@ class TestAgentAPI(E2ETestBase):
             request_id = str(request_resp.json().get("request_id") or "")
             self.assertRegex(request_id, r"^ar-[0-9a-f]{16}$")
             self.assertEqual(int(request_resp.json().get("expires_in") or 0), 900)
-            self.assertNotEqual(str(config.agent_service.store.session_by_id(session_id)["last_seen_at"]), stale_seen)
+            self.assertNotEqual(str(runtime.agent_service.store.session_by_id(session_id)["last_seen_at"]), stale_seen)
 
-            config.agent_service.store.touch_session(session_id, last_seen_at=stale_seen)
+            runtime.agent_service.store.touch_session(session_id, last_seen_at=stale_seen)
             pending_poll = client.get(
                 f"/agent/v1/auth/poll/{request_id}",
                 params={"agent_session_id": session_id, "identity_hash": identity_hash},
             )
             self.assertEqual(pending_poll.status_code, 200, pending_poll.text)
             self.assertEqual(str(pending_poll.json().get("status") or ""), "pending")
-            self.assertNotEqual(str(config.agent_service.store.session_by_id(session_id)["last_seen_at"]), stale_seen)
+            self.assertNotEqual(str(runtime.agent_service.store.session_by_id(session_id)["last_seen_at"]), stale_seen)
 
             approve = client.post(
                 f"/agent/approve/{request_id}",
@@ -533,8 +533,8 @@ class TestAgentAPI(E2ETestBase):
             self.assertEqual(str(downgraded_items[0].get("scope") or ""), "readonly")
 
             workspace_service.grant_repo_access(self.problem, username, "owner")
-            readonly_identity = config.agent_service.token_identity(readonly_token)
-            workspace_identity = config.agent_service.token_identity(workspace_token)
+            readonly_identity = runtime.agent_service.token_identity(readonly_token)
+            workspace_identity = runtime.agent_service.token_identity(workspace_token)
             self.assertIsNotNone(readonly_identity)
             self.assertIsNotNone(workspace_identity)
 
@@ -576,7 +576,7 @@ class TestAgentAPI(E2ETestBase):
                 follow_redirects=False,
             )
             self.assertEqual(disconnect.status_code, 303)
-            self.assertIsNone(config.agent_service.store.session_by_id(session_id))
+            self.assertIsNone(runtime.agent_service.store.session_by_id(session_id))
             token_count_row = db_fetch_one(
                 "SELECT COUNT(*) AS n FROM agent_tokens WHERE agent_session_id=?",
                 [session_id],
@@ -632,7 +632,7 @@ class TestAgentAPI(E2ETestBase):
             before = client.get("/agent/v1/workspace/status", headers=self._bearer(raw_token))
             self.assertEqual(before.status_code, 200, before.text)
 
-            token_identity = config.agent_service.token_identity(raw_token)
+            token_identity = runtime.agent_service.token_identity(raw_token)
             self.assertIsNotNone(token_identity)
             revoke = client.post(
                 f"/agent/revoke/{token_identity.token_id}",
@@ -660,7 +660,7 @@ class TestAgentAPI(E2ETestBase):
                 follow_redirects=False,
             )
             self.assertEqual(disconnect.status_code, 303)
-            self.assertIsNone(config.agent_service.store.session_by_id(session_id))
+            self.assertIsNone(runtime.agent_service.store.session_by_id(session_id))
 
             after_disconnect = client.get("/agent/v1/workspace/status", headers=self._bearer(raw_token2))
             self.assertEqual(after_disconnect.status_code, 401)
@@ -918,13 +918,13 @@ class TestAgentAPI(E2ETestBase):
         oversized_total_zip = self._workspace_zip({"solutions/a.txt": "1234567890", "solutions/b.txt": "abcdefghij"})
         with archive_view_from_bytes(oversized_entry_zip, max_expanded_bytes=16) as archive:
             with self.assertRaisesRegex(ValueError, "expanded zip payload is too large"):
-                config.workspace_archive_service.compare_zip(workspace, archive)
+                runtime.workspace_archive_service.compare_zip(workspace, archive)
         with archive_view_from_bytes(oversized_total_zip, max_expanded_bytes=16) as archive:
             with self.assertRaisesRegex(ValueError, "expanded zip payload is too large"):
-                config.workspace_archive_service.compare_zip(workspace, archive)
+                runtime.workspace_archive_service.compare_zip(workspace, archive)
         with archive_view_from_bytes(oversized_total_zip, max_expanded_bytes=16) as archive:
             with self.assertRaisesRegex(ValueError, "expanded zip payload is too large"):
-                config.workspace_archive_service.apply_zip(workspace, archive)
+                runtime.workspace_archive_service.apply_zip(workspace, archive)
         self.assertEqual(sentinel.read_text(encoding="utf-8"), "keep\n")
 
     def test_agent_verification_export_workspace_and_commit_endpoints(self) -> None:
@@ -1128,7 +1128,7 @@ class TestAgentAPI(E2ETestBase):
             ctx = workspace_service.workspace_context(self.problem, username, include_recent=False)
             problem_id = int(ctx["problem"]["id"])
             workspace_id = int(ctx["workspace"]["id"])
-            verification_id = config.verification_service.allocate_verification_id()
+            verification_id = runtime.verification_service.allocate_verification_id()
             admission = admit_test_verification(
                 verification_id=verification_id,
                 problem_id=problem_id,
@@ -1200,7 +1200,7 @@ class TestAgentAPI(E2ETestBase):
                 tasks=tasks,
             )
             self.assertEqual(activation.outcome, "activated")
-            completion = config.verification_task_store.commit_task_completions(
+            completion = runtime.verification_task_store.commit_task_completions(
                 [
                     TaskCompletion(
                         task_id=accepted_task_id,

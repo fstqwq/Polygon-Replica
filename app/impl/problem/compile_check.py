@@ -3,17 +3,17 @@ from __future__ import annotations
 import uuid
 from pathlib import Path
 
-from app.impl.runtime.config import config
+import app.main_constant as _K
+from app.impl.runtime.dependency import runtime
 from app.service.platform.error_text import bounded_display_text, normalize_display_text
 from app.service.platform.testlib_source import workspace_testlib_header
 from app.service.platform.runtime_blob_store import RuntimeBlobStore
 
-_C = config.config_values
 _CPP_EXTENSIONS = {".cpp", ".cc", ".cxx", ".c++", ".c"}
 
 
 def _bounded_text(value: str) -> str:
-    snapshot = _C.snapshot()
+    snapshot = runtime().config_values.snapshot()
     return bounded_display_text(
         value,
         limit_bytes=int(snapshot["AUX_DISPLAY_TEXT_LIMIT_BYTES"]),
@@ -123,7 +123,7 @@ def _testlib_extra_sources(workspace: Path, source_path: str) -> dict[str, objec
         return None
     testlib_header = workspace_testlib_header(workspace)
     if testlib_header is not None:
-        descriptor = config.runtime_blob_store.put_file(
+        descriptor = runtime().runtime_blob_store.put_file(
             RuntimeBlobStore.describe_file(testlib_header)
         )
         return {"extra_source_files": {"testlib.h": descriptor.to_payload()}}
@@ -149,7 +149,7 @@ def judgehost_compile_check_error(
             return f"{safe_source_path}: {message}"
         return message
 
-    backend = config.judgehost_task_service
+    backend = runtime().judgehost_task_service
     try:
         if (not backend.enabled()) or (not backend.auth_token_configured()):
             return _with_path("judge backend unavailable for compile check")
@@ -163,15 +163,15 @@ def judgehost_compile_check_error(
     source_bytes = source_content.encode("utf-8")
     source_name = Path(safe_source_path).name or "submission.cpp"
     run_id = f"r-cchk-{uuid.uuid4().hex[:12]}"
-    verification_id = config.verification_service.allocate_verification_id()
+    verification_id = runtime().verification_service.allocate_verification_id()
     prepared_payload = _testlib_extra_sources(workspace, safe_source_path)
     backend_error = ""
     result_obj: dict[str, object] = {}
     try:
-        returned = config.judgehost_task_service.compile_only_submission(
+        returned = runtime().judgehost_task_service.compile_only_submission(
             problem=problem,
             username=user,
-            artifact_verification_id=str(getattr(_C, "RUN_PLACEHOLDER_VERIFICATION_ID", "pending")),
+            artifact_verification_id=_K.RUN_PLACEHOLDER_VERIFICATION_ID,
             upload_content=source_bytes,
             upload_filename=source_name,
             run_id=run_id,

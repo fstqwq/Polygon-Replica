@@ -7,7 +7,7 @@ from typing import Annotated
 from fastapi import HTTPException, Depends
 from fastapi.responses import FileResponse
 
-from app.impl.runtime.config import config
+from app.impl.runtime.dependency import runtime
 from app.impl.workspace.artifact import (
     assert_workspace_artifact_access,
     browser_file_response,
@@ -56,14 +56,14 @@ def artifact_file(problem: str, user: Annotated[str, Depends(require_session_use
 
 def export_file(problem: str, user: Annotated[str, Depends(require_session_user)], export_id: str, filename: str):
     user_ctx = global_user_ctx(user)
-    problem_row = config.contest_service.problem_by_slug(problem)
+    problem_row = runtime().contest_service.problem_by_slug(problem)
     if problem_row is None:
         raise HTTPException(status_code=404, detail="problem not found")
     problem_id = int(problem_row["id"])
     actor_user_id = int(user_ctx["user"]["id"])
     access = workspace_access_context(problem_id, actor_user_id)
-    export = config.export_service.export_problem(export_id)
-    export_access = config.access_query.package_export_context(
+    export = runtime().export_service.export_problem(export_id)
+    export_access = runtime().access_query.package_export_context(
         actor_user_id=actor_user_id,
         expected_problem_id=problem_id,
         export=export,
@@ -71,7 +71,7 @@ def export_file(problem: str, user: Annotated[str, Depends(require_session_user)
     )
     if not export_access["can_download"]:
         raise HTTPException(status_code=404, detail="artifact file not found")
-    file_path = config.export_service.export_archive_path(
+    file_path = runtime().export_service.export_archive_path(
         problem_id,
         export_id,
         filename,
@@ -88,14 +88,14 @@ def materialization_file(
     materialization_id: str,
 ):
     user_ctx = global_user_ctx(user)
-    problem_row = config.contest_service.problem_by_slug(problem)
+    problem_row = runtime().contest_service.problem_by_slug(problem)
     if problem_row is None:
         raise HTTPException(status_code=404, detail="problem not found")
     problem_id = int(problem_row["id"])
-    materialization = config.problem_package_service.materialization(
+    materialization = runtime().problem_package_service.materialization(
         materialization_id
     )
-    materialization_access = config.access_query.package_materialization_context(
+    materialization_access = runtime().access_query.package_materialization_context(
         actor_user_id=int(user_ctx["user"]["id"]),
         expected_problem_id=problem_id,
         materialization=materialization,
@@ -103,7 +103,7 @@ def materialization_file(
     if not materialization_access["can_download"]:
         raise HTTPException(status_code=404, detail="package not found")
     try:
-        materialization, file_path = config.problem_package_service.native_archive(
+        materialization, file_path = runtime().problem_package_service.native_archive(
             materialization_id
         )
     except ValueError as exc:

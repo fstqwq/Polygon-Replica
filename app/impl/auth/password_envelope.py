@@ -12,7 +12,7 @@ from cryptography.hazmat.primitives.asymmetric import padding, rsa
 
 from app.impl.auth.csrf import verify_password_form_csrf_token
 from app.impl.auth.shared import normalize_password_verifier_hex
-from app.impl.runtime.config import config
+from app.impl.runtime.dependency import runtime
 from app.service.platform.hashing import hmac_sha256_hex, sha256_hex_bytes
 
 
@@ -98,7 +98,7 @@ def _envelope_signature(
         "password-envelope-v2|"
         f"{scope}|{purpose}|{csrf_token}|{username}|{key_id}|{public_key_hash}|{int(expires_at)}"
     ).encode("utf-8")
-    return hmac_sha256_hex(config.password_form_csrf_secret, payload)
+    return hmac_sha256_hex(runtime().password_form_csrf_secret, payload)
 
 
 class PasswordEnvelopeStore:

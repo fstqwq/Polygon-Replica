@@ -7,7 +7,7 @@ import time
 from pathlib import Path
 from typing import TypedDict
 from fastapi import HTTPException
-from app.impl.runtime.config import config
+from app.impl.runtime.dependency import runtime
 from app.impl.workspace.artifact import (
     artifact_root,
 )
@@ -46,7 +46,6 @@ from app.service.repository.revision import workspace_upstream_revision_display
 from app.service.access.policy import access_role
 from app.service.verification.runtime import coerce_int
 
-_C = config.config_values
 
 _STANDARD_CHECKER_CACHE_TTL_SEC = 2.0
 _STANDARD_CHECKER_CACHE_TS = 0.0
@@ -61,7 +60,7 @@ def _db_revision_display(local: int | None, upstream: int | None) -> str:
 def user_participating_problems(user_id: int, limit: int) -> list[dict]:
     uid = int(user_id)
     cap = max(1, int(limit))
-    rows = config.workspace_service.participating_problem_rows(uid, limit=cap)
+    rows = runtime().workspace_service.participating_problem_rows(uid, limit=cap)
     items: list[dict] = []
     for row in rows:
         role = access_role(row['role'])
@@ -95,14 +94,14 @@ def normalize_contest_title_required(value: str) -> str:
     title = value.strip()
     if not title:
         raise ValueError('contest title is required')
-    if len(title) > _C.CONTEST_TITLE_MAX_LEN:
-        raise ValueError(f'contest title is too long (max {_C.CONTEST_TITLE_MAX_LEN})')
+    if len(title) > runtime().config_values.CONTEST_TITLE_MAX_LEN:
+        raise ValueError(f'contest title is too long (max {runtime().config_values.CONTEST_TITLE_MAX_LEN})')
     return title
 
 def user_contests_overview(user_id: int, limit: int) -> list[dict]:
     uid = int(user_id)
     cap = max(1, int(limit))
-    return config.contest_service.user_contests_overview(uid, limit=cap)
+    return runtime().contest_service.user_contests_overview(uid, limit=cap)
 
 def normalize_page_target(page: str) -> str:
     raw = page.strip().lower()
@@ -147,7 +146,7 @@ def read_workspace_source_with_default(workspace: Path, rel: Path, default_text:
         return (default_text, False)
     if not file_path.exists() or not file_path.is_file() or file_path.is_symlink():
         return (default_text, False)
-    return read_text_safe_limited(file_path, _C.TEXTAREA_MAX_BYTES)
+    return read_text_safe_limited(file_path, runtime().config_values.TEXTAREA_MAX_BYTES)
 
 def parse_line_param(raw: str | None, default: int=1) -> int:
     if raw is None:
@@ -402,7 +401,7 @@ def _file_head_text(path: Path, max_bytes: int) -> tuple[str, bool]:
     return (text, clipped)
 
 def tests_spec_editor_context(workspace: Path, limit: int) -> dict:
-    limits = _C.snapshot()
+    limits = runtime().config_values.snapshot()
     entries, path = read_tests_spec(
         workspace,
         document_max_bytes=int(limits["TEXTAREA_MAX_BYTES"]),
@@ -443,15 +442,15 @@ def tests_spec_editor_context(workspace: Path, limit: int) -> dict:
                 payload_size_bytes = max(0, int(payload_abs.stat().st_size))
             except OSError:
                 payload_size_bytes = 0
-        if kind == 'manual' and payload_size_bytes > _C.TESTS_SPEC_MANUAL_INLINE_EDIT_MAX_BYTES:
+        if kind == 'manual' and payload_size_bytes > runtime().config_values.TESTS_SPEC_MANUAL_INLINE_EDIT_MAX_BYTES:
             manual_large_payload = True
-            preview_bytes_limit = _C.TESTS_SPEC_MANUAL_PREVIEW_BYTES
+            preview_bytes_limit = runtime().config_values.TESTS_SPEC_MANUAL_PREVIEW_BYTES
             if payload_file_exists and payload_abs is not None:
-                preview_source, preview_clipped = _file_head_text(payload_abs, _C.TESTS_SPEC_MANUAL_PREVIEW_BYTES)
+                preview_source, preview_clipped = _file_head_text(payload_abs, runtime().config_values.TESTS_SPEC_MANUAL_PREVIEW_BYTES)
             else:
                 fallback_payload = tests_spec_read_payload(workspace, entry)
                 payload_size_bytes = len(fallback_payload.encode('utf-8', errors='replace'))
-                preview_source, preview_clipped = _text_head_by_bytes(fallback_payload, _C.TESTS_SPEC_MANUAL_PREVIEW_BYTES)
+                preview_source, preview_clipped = _text_head_by_bytes(fallback_payload, runtime().config_values.TESTS_SPEC_MANUAL_PREVIEW_BYTES)
         else:
             payload = tests_spec_read_payload(workspace, entry)
             preview_source = payload
@@ -462,7 +461,7 @@ def tests_spec_editor_context(workspace: Path, limit: int) -> dict:
             if not preview_text:
                 preview_text = '(empty)'
         else:
-            preview_text = _inline_text_preview(preview_source, _C.TESTS_SPEC_PREVIEW_CHARS, _C.TESTS_SPEC_PREVIEW_LINES)
+            preview_text = _inline_text_preview(preview_source, runtime().config_values.TESTS_SPEC_PREVIEW_CHARS, runtime().config_values.TESTS_SPEC_PREVIEW_LINES)
         rows.append(
             {
                 'index': idx,
@@ -487,7 +486,7 @@ def tests_spec_editor_context(workspace: Path, limit: int) -> dict:
     return {'path': TESTS_SPEC_REL.as_posix(), 'exists': bool(path.exists() and path.is_file() and (not path.is_symlink())), 'entries': entries, 'rows': rows, 'summary': summary, 'total': len(entries), 'shown': len(rows), 'truncated': truncated}
 
 def _tests_spec_status_context(workspace: Path) -> dict:
-    limits = _C.snapshot()
+    limits = runtime().config_values.snapshot()
     try:
         entries, _path = read_tests_spec(
             workspace,
@@ -544,7 +543,7 @@ def solution_metadata_entry(workspace: Path, source_rel: str) -> dict:
     if desc_exists:
         try:
             desc_abs = safe_workspace_path(workspace, desc_path)
-            desc_text, _ = read_text_safe_limited(desc_abs, _C.SOLUTION_NOTE_CHAR_LIMIT * 8)
+            desc_text, _ = read_text_safe_limited(desc_abs, runtime().config_values.SOLUTION_NOTE_CHAR_LIMIT * 8)
             parsed = parse_solution_desc(desc_text)
             expected = parsed['expected_behavior']
             note = parsed['note']
@@ -560,7 +559,7 @@ def solution_metadata_entry(workspace: Path, source_rel: str) -> dict:
     return {'source_path': source_path, 'file_name': Path(source_path).name, 'expected_behavior': expected, 'expected_behavior_label': expected_behavior_label(expected), 'note': note, 'note_preview': note_preview, 'desc_path': desc_path, 'desc_exists': desc_exists, 'desc_origin': origin, 'desc_errors': errors, 'is_accepted': expected == 'accepted'}
 
 def list_solution_entries(workspace: Path) -> tuple[list[dict], bool]:
-    sources, truncated = list_solution_sources(workspace, limit=_C.SOLUTION_LIST_LIMIT)
+    sources, truncated = list_solution_sources(workspace, limit=runtime().config_values.SOLUTION_LIST_LIMIT)
     entries = [solution_metadata_entry(workspace, rel) for rel in sources]
     return (entries, truncated)
 
@@ -648,7 +647,7 @@ def _run_test_options_from_verification(problem: str, verification_id: str, limi
     tests_meta_path = root / 'logs' / 'tests_meta.json'
     try:
         if tests_meta_path.exists() and tests_meta_path.is_file() and (not tests_meta_path.is_symlink()):
-            tests_meta_text, _ = read_text_safe_limited(tests_meta_path, _C.UI_JSON_CHAR_LIMIT)
+            tests_meta_text, _ = read_text_safe_limited(tests_meta_path, runtime().config_values.UI_JSON_CHAR_LIMIT)
             payload = json.loads(tests_meta_text)
             for item in payload:
                 index = coerce_int(item.get('index'), 0, 1, 10 ** 7)
@@ -682,7 +681,7 @@ def _run_test_options_from_verification(problem: str, verification_id: str, limi
     return (options, truncated)
 
 def _run_test_options_from_spec(workspace: Path, limit: int) -> tuple[list[dict], bool]:
-    limits = _C.snapshot()
+    limits = runtime().config_values.snapshot()
     options: list[dict] = []
     try:
         entries, _ = read_tests_spec(
@@ -714,10 +713,10 @@ def run_test_options_context(problem: str, workspace: Path, active_verification:
     if active_verification is not None:
         verification_id = active_verification['id']
     if verification_id:
-        build_options, build_truncated = _run_test_options_from_verification(problem, verification_id, limit=_C.RUN_TEST_SELECTOR_LIMIT)
+        build_options, build_truncated = _run_test_options_from_verification(problem, verification_id, limit=runtime().config_values.RUN_TEST_SELECTOR_LIMIT)
         if build_options:
             return (build_options, build_truncated, f'verification {verification_id}')
-    spec_options, spec_truncated = _run_test_options_from_spec(workspace, limit=_C.RUN_TEST_SELECTOR_LIMIT)
+    spec_options, spec_truncated = _run_test_options_from_spec(workspace, limit=runtime().config_values.RUN_TEST_SELECTOR_LIMIT)
     if spec_options:
         return (spec_options, spec_truncated, 'tests/spec.json')
     return ([], False, '')

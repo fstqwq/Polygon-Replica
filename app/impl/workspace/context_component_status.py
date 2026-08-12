@@ -4,7 +4,7 @@ import app.main_constant as _K
 
 from pathlib import Path
 
-from app.impl.runtime.config import config
+from app.impl.runtime.dependency import runtime
 from app.service.problem.build_config import BuildConfig
 from app.service.problem.test_spec import (
     parse_gen_command_tokens,
@@ -20,7 +20,6 @@ from app.impl.workspace.context_operation import (
 )
 from app.impl.workspace.test_spec import read_tests_spec, tests_spec_read_payload
 
-_C = config.config_values
 
 
 def _configured_component_source(
@@ -42,7 +41,7 @@ def _source_basename_label(path: str) -> str:
     return name or raw
 
 def _generator_reference_counts(workspace: Path, source_paths: list[str]) -> dict[str, int]:
-    limits = _C.snapshot()
+    limits = runtime().config_values.snapshot()
     source_catalog = dedupe_preserve_order(
         [path.strip().replace('\\', '/') for path in source_paths if path.strip()]
     )

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from app.impl.runtime.config import config
+from app.impl.runtime.dependency import runtime
 from app.impl.workspace.context_operation import normalize_page_target
 from app.impl.workspace.test_spec import (
     read_tests_spec,
@@ -21,13 +21,12 @@ from app.service.problem.test_spec import (
     normalize_test_kind,
     normalize_tests_spec_entry,
 )
-_C = config.config_values
 
 
 def tests_spec_gen_script_context(workspace: Path) -> dict[str, object]:
-    limits = _C.snapshot()
+    limits = runtime().config_values.snapshot()
     lines: list[str] = []
-    with config.workspace_service.workspace_lock(workspace):
+    with runtime().workspace_service.workspace_lock(workspace):
         entries, _spec_path = read_tests_spec(
             workspace,
             document_max_bytes=int(limits["TEXTAREA_MAX_BYTES"]),
@@ -59,7 +58,7 @@ def tests_spec_sample_input_value(raw: object | None, fallback: object = "") -> 
     value = fallback if raw is None else tests_spec_form_text(raw)
     return normalize_sample_input(
         value,
-        max_bytes=int(_C.STATEMENT_SAMPLE_MAX_BYTES),
+        max_bytes=int(runtime().config_values.STATEMENT_SAMPLE_MAX_BYTES),
     )
 
 
@@ -67,7 +66,7 @@ def tests_spec_sample_output_value(raw: object | None, fallback: object = "") ->
     value = fallback if raw is None else tests_spec_form_text(raw)
     return normalize_sample_output(
         value,
-        max_bytes=int(_C.STATEMENT_SAMPLE_MAX_BYTES),
+        max_bytes=int(runtime().config_values.STATEMENT_SAMPLE_MAX_BYTES),
     )
 
 
@@ -107,7 +106,7 @@ def tests_spec_row(
     return normalize_tests_spec_entry(
         payload,
         index=index,
-        sample_max_bytes=int(_C.STATEMENT_SAMPLE_MAX_BYTES),
+        sample_max_bytes=int(runtime().config_values.STATEMENT_SAMPLE_MAX_BYTES),
     )
 
 
@@ -122,7 +121,7 @@ def tests_spec_add_single_entry(
     sample_output: str,
     sample_output_validate: bool,
 ) -> tuple[int, str]:
-    limits = _C.snapshot()
+    limits = runtime().config_values.snapshot()
     entries, spec_path = read_tests_spec(
         workspace,
         document_max_bytes=int(limits["TEXTAREA_MAX_BYTES"]),

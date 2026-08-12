@@ -8,7 +8,7 @@ from fastapi import Depends, Form
 
 from app.impl.auth.session import require_session_user
 from app.impl.auth.shared import redirect_response
-from app.impl.runtime.config import config
+from app.impl.runtime.dependency import runtime
 from app.impl.workspace.access import require_write_access
 from app.impl.workspace.context_ui import page_ctx
 
@@ -30,21 +30,21 @@ def revision_commit(
     workspace = Path(ctx["workspace"]["path"])
     commit_head = ""
     try:
-        with config.workspace_service.workspace_lock(workspace):
-            if config.workspace_merge_service.published_revision_advanced(workspace):
+        with runtime().workspace_service.workspace_lock(workspace):
+            if runtime().workspace_merge_service.published_revision_advanced(workspace):
                 raise RuntimeError("a newer published revision is available; update the workspace before publishing")
-            commit_head = config.git_service.commit(
+            commit_head = runtime().git_service.commit(
                 workspace, message, user, f"{user}@polygon-replica.local"
             )
             try:
-                config.git_service.push(workspace, "main")
+                runtime().git_service.push(workspace, "main")
             except Exception as push_exc:
                 try:
-                    config.git_service.rollback_last_commit(workspace, expected_head=commit_head)
+                    runtime().git_service.rollback_last_commit(workspace, expected_head=commit_head)
                 except Exception as rollback_exc:
                     raise RuntimeError(f"{push_exc}; commit rollback failed: {rollback_exc}") from rollback_exc
                 raise
-            config.workspace_merge_service.clear_undo(workspace)
+            runtime().workspace_merge_service.clear_undo(workspace)
         msg = "revision published"
     except Exception as exc:
         err = str(exc)
@@ -67,9 +67,9 @@ def git_discard_path(
     next_path = selected_path
     msg = "discarded file changes"
     try:
-        with config.workspace_service.workspace_lock(workspace):
-            config.git_service.discard_path(workspace, selected_path)
-            changes = config.git_service.status_change_summary(workspace)
+        with runtime().workspace_service.workspace_lock(workspace):
+            runtime().git_service.discard_path(workspace, selected_path)
+            changes = runtime().git_service.status_change_summary(workspace)
         rows = changes["rows"]
         link_paths = [str(row["link_path"]) for row in rows if row["link_path"]]
         if selected_path not in link_paths:

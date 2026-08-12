@@ -19,7 +19,7 @@ from app.impl.auth.shared import (
     set_user_password_verifier,
     template_response,
 )
-from app.impl.runtime.config import config
+from app.impl.runtime.dependency import runtime
 from app.impl.workspace.access import require_system_admin
 from app.impl.workspace.context import global_user_ctx
 from app.main_util import form_text
@@ -27,7 +27,6 @@ from app.service.platform.source_backup import SOURCE_BACKUP_DOWNLOAD_NAME
 from app.service.verification.runtime import coerce_int
 
 
-_C = config.config_values
 
 
 class JudgehostToolchainView(TypedDict):
@@ -102,8 +101,8 @@ def _admin_user_context(user: str) -> tuple[dict[str, object], int]:
 
 
 def _config_sections() -> list[dict[str, object]]:
-    config.system_config_service.refresh()
-    sections = config.system_config_service.ui_sections()
+    runtime().system_config_service.refresh()
+    sections = runtime().system_config_service.ui_sections()
     for section in sections:
         slug = section.get("slug")
         if isinstance(slug, str):
@@ -190,7 +189,7 @@ def _storage_size_label(num_bytes: int) -> str:
 
 
 def _artifact_usage_view() -> ArtifactUsageView:
-    usage = config.artifact_cleanup_service.usage_snapshot()
+    usage = runtime().artifact_cleanup_service.usage_snapshot()
     return {
         "total_size_label": _storage_size_label(usage["total_bytes"]),
         "total_files_label": f"{usage['total_files']:,}",
@@ -202,7 +201,7 @@ def _artifact_usage_view() -> ArtifactUsageView:
 
 
 def _source_backup_view() -> dict[str, object]:
-    summary = config.source_backup_service.latest_summary()
+    summary = runtime().source_backup_service.latest_summary()
     return {
         **summary,
         "size_label": _storage_size_label(int(summary["size_bytes"])),
@@ -273,7 +272,7 @@ def _last_judging_href(last_judging: dict[str, object] | None) -> str:
 
 
 def _judgehost_status_view() -> dict[str, object]:
-    raw_status = config.judgehost_task_service.status()
+    raw_status = runtime().judgehost_task_service.status()
     raw_hosts = raw_status.get("hosts")
     hosts: list[JudgehostView] = []
     action_labels = {
@@ -352,14 +351,14 @@ def admin_overview_page(
     page.update(
         {
             "judgehost": _judgehost_status_view(),
-            "active_system_admin_count": config.auth_service.active_system_admin_count(),
+            "active_system_admin_count": runtime().auth_service.active_system_admin_count(),
             "admin_config_changed_total": sum(
                 int(section["changed_count"])
                 for section in sections
                 if isinstance(section.get("changed_count"), (int, float))
             ),
-            "smtp": config.smtp_config_service.snapshot().__dict__,
-            "maintenance_status": config.maintenance_service.snapshot(),
+            "smtp": runtime().smtp_config_service.snapshot().__dict__,
+            "maintenance_status": runtime().maintenance_service.snapshot(),
             "artifact_usage": _artifact_usage_view(),
             "source_backup": _source_backup_view(),
         }
@@ -392,9 +391,9 @@ def admin_users_page(
     page.update(
         {
             "admin_users_query": query,
-            "admin_user_rows": config.auth_service.admin_user_rows(query=query, limit=50),
+            "admin_user_rows": runtime().auth_service.admin_user_rows(query=query, limit=50),
             "admin_password_csrf_token": issue_password_form_csrf_token("admin-password"),
-            "admin_password_iters": int(_C.PASSWORD_HASH_ITERS),
+            "admin_password_iters": int(runtime().config_values.PASSWORD_HASH_ITERS),
             "admin_password_salt": secrets.token_hex(16),
         }
     )
@@ -407,7 +406,7 @@ def admin_mail_page(
 ):
     sections = _config_sections()
     page, _actor_user_id = _admin_page_context(user, "mail", config_sections=sections)
-    page["smtp"] = config.smtp_config_service.snapshot().__dict__
+    page["smtp"] = runtime().smtp_config_service.snapshot().__dict__
     return template_response(request, "admin_mail.html", page)
 
 
@@ -429,7 +428,7 @@ def admin_config_category_page(
 ):
     sections = _config_sections()
     page, _actor_user_id = _admin_page_context(user, "config", config_sections=sections)
-    requested_slug = config.system_config_service.category_slug(category)
+    requested_slug = runtime().system_config_service.category_slug(category)
     selected_section = next(
         (
             section
@@ -463,7 +462,7 @@ def admin_config_category_page(
 
 def admin_artifacts_cleanup(user: Annotated[str, Depends(require_session_user)]):
     _ctx, actor_user_id = _admin_user_context(user)
-    started = config.maintenance_service.start_cleanup(actor_user_id=actor_user_id)
+    started = runtime().maintenance_service.start_cleanup(actor_user_id=actor_user_id)
     if started.accepted or started.reason == "already_running":
         return RedirectResponse(
             "/maintenance",
@@ -483,7 +482,7 @@ def admin_source_backup(
     """Take the site offline and create the single latest source backup."""
 
     _ctx, actor_user_id = _admin_user_context(user)
-    started = config.maintenance_service.start_source_backup(
+    started = runtime().maintenance_service.start_source_backup(
         actor_user_id=actor_user_id
     )
     if started.accepted or started.reason == "already_running":
@@ -505,7 +504,7 @@ def admin_source_backup_download(
     """Stream the single latest source backup to a system administrator."""
 
     _admin_user_context(user)
-    archive = config.source_backup_service.latest_archive_path()
+    archive = runtime().source_backup_service.latest_archive_path()
     if archive is None:
         raise HTTPException(status_code=404, detail="source backup not found")
     return FileResponse(
@@ -526,7 +525,7 @@ def admin_smtp_update(
 ):
     ctx, actor_user_id = _admin_user_context(user)
     try:
-        config.smtp_config_service.save_from_form(
+        runtime().smtp_config_service.save_from_form(
             host=smtp_host,
             port=smtp_port,
             username=smtp_username,
@@ -547,7 +546,7 @@ def admin_smtp_test(
     ctx, _actor_user_id = _admin_user_context(user)
     recipient = form_text(smtp_test_recipient).strip()
     try:
-        config.smtp_config_service.send_test_email(recipient=recipient)
+        runtime().smtp_config_service.send_test_email(recipient=recipient)
         message = "SMTP test email sent"
     except ValueError as exc:
         message = str(exc)
@@ -568,8 +567,8 @@ def admin_judgehost_runtime_update(
             "JUDGEHOST_API_TOKEN": form_text(judgehost_api_token).strip(),
             "JUDGEHOST_API_USERNAME": form_text(judgehost_api_username).strip(),
         }
-        result = config.system_config_service.apply_patch(payload, actor_user_id=actor_user_id)
-        config.reload_config()
+        result = runtime().system_config_service.apply_patch(payload, actor_user_id=actor_user_id)
+        runtime().reload_config()
         diff_rows = result.get("diff")
         diffs = diff_rows if isinstance(diff_rows, list) else []
         restart_changed = sum(
@@ -589,14 +588,14 @@ def admin_worker_queue_snapshot(
 ):
     _admin_user_context(user)
     cap = coerce_int(limit, 200, 1, 2000)
-    payload = config.worker_queue_service.snapshot(limit=cap)
+    payload = runtime().worker_queue_service.snapshot(limit=cap)
     payload["limit"] = cap
     return JSONResponse(payload)
 
 
 def admin_judgehost_snapshot(user: Annotated[str, Depends(require_session_user)]):
     _admin_user_context(user)
-    return JSONResponse(config.judgehost_task_service.status())
+    return JSONResponse(runtime().judgehost_task_service.status())
 
 
 def admin_judgehost_host_action(
@@ -613,7 +612,7 @@ def admin_judgehost_host_action(
         return redirect_response("/admin/judgehosts", status_code=303, message="Invalid judgehost action")
     enable_flag = safe_action == "enable"
     try:
-        result = config.judgehost_task_service.set_host_enabled(safe_host, enable_flag)
+        result = runtime().judgehost_task_service.set_host_enabled(safe_host, enable_flag)
         if enable_flag:
             message = f"Judgehost {safe_host} enabled"
         else:
@@ -633,12 +632,12 @@ async def admin_config_category_update(
     category: str,
 ):
     ctx, actor_user_id = _admin_user_context(user)
-    safe_category_slug = config.system_config_service.category_slug(category)
+    safe_category_slug = runtime().system_config_service.category_slug(category)
     redirect_target = f"/admin/config/{safe_category_slug}"
     message = "System config updated"
     try:
-        config.system_config_service.refresh()
-        section = config.system_config_service.section_by_slug(safe_category_slug)
+        runtime().system_config_service.refresh()
+        section = runtime().system_config_service.section_by_slug(safe_category_slug)
         if section is None:
             raise ValueError("config category not found")
         raw_rows = section.get("rows")
@@ -662,8 +661,8 @@ async def admin_config_category_update(
                 payload[key] = input_name in form
             elif input_name in form:
                 payload[key] = form.get(input_name)
-        result = config.system_config_service.apply_patch(payload, actor_user_id=actor_user_id)
-        config.reload_config()
+        result = runtime().system_config_service.apply_patch(payload, actor_user_id=actor_user_id)
+        runtime().reload_config()
         raw_diff = result.get("diff")
         diff_rows = raw_diff if isinstance(raw_diff, list) else []
         restart_changed = sum(
@@ -679,8 +678,8 @@ async def admin_config_category_update(
 
 def admin_system_config_reset(user: Annotated[str, Depends(require_session_user)]):
     ctx, _actor_user_id = _admin_user_context(user)
-    config.system_config_service.reset()
-    config.reload_config()
+    runtime().system_config_service.reset()
+    runtime().reload_config()
     return redirect_response(
         "/admin/config",
         status_code=303,
@@ -704,7 +703,7 @@ def admin_user_system_admin_update(
         if safe_action not in {"grant", "revoke"}:
             raise ValueError("invalid system admin action")
         enabled = safe_action == "grant"
-        config.auth_service.set_system_admin(
+        runtime().auth_service.set_system_admin(
             actor_user_id=actor_user_id,
             username=safe_target,
             enabled=enabled,
@@ -731,7 +730,7 @@ def admin_user_ban_update(
         if safe_action not in {"ban", "unban"}:
             raise ValueError("invalid ban action")
         banned = safe_action == "ban"
-        config.auth_service.set_user_banned(
+        runtime().auth_service.set_user_banned(
             actor_user_id=actor_user_id,
             username=safe_target,
             banned=banned,
@@ -780,10 +779,10 @@ def admin_user_password_update(
             raise ValueError("invalid new password envelope") from exc
         new_salt = normalize_password_salt_hex(form_text(new_password_salt))
         new_iters = normalize_password_iters(form_text(new_password_iters))
-        if new_iters != int(_C.PASSWORD_HASH_ITERS):
+        if new_iters != int(runtime().config_values.PASSWORD_HASH_ITERS):
             raise ValueError("invalid password iterations")
         set_user_password_verifier(int(target_row["id"]), new_verifier, new_salt, new_iters)
-        config.auth_service.revoke_all_access_for_user(int(target_row["id"]))
+        runtime().auth_service.revoke_all_access_for_user(int(target_row["id"]))
         message = f"Password updated for {safe_target}"
     except ValueError as exc:
         message = str(exc)

@@ -27,7 +27,7 @@ from app.impl.run_export.import_source import (
     import_package_as_new_problem,
     import_package_warnings,
 )
-from app.impl.runtime.config import config
+from app.impl.runtime.dependency import runtime
 from app.impl.workspace.context import global_user_ctx
 from app.impl.workspace.context_operation import (
     normalize_contest_slug_required,
@@ -49,12 +49,11 @@ from app.service.importing.contest import (
 )
 from app.service.importing.upload import spool_fileobj
 
-_C = config.config_values
 _POLYGON_CONTEST_IMPORT_SERVICE = PolygonContestImportService()
 
 
 def _contest_archive_policies() -> tuple[ArchivePolicy, ProblemImportPolicy, int]:
-    snapshot = _C.snapshot()
+    snapshot = runtime().config_values.snapshot()
     max_problems = int(snapshot["CONTEST_MAX_PROBLEMS"])
     problem_expanded = int(snapshot["PROBLEM_ZIP_MAX_EXPANDED_BYTES"])
     problem_policy = problem_import_policy(
@@ -133,8 +132,8 @@ def _render_contest_import_review_page(
 def contests_root_page(request: Request, user: str = ""):
     active_user = _active_root_user(request, user)
     gctx = global_user_ctx(active_user)
-    entries = user_contests_overview(int(gctx['user']['id']), limit=_C.API_PROBLEMS_LIST_LIMIT)
-    return template_response(request, 'root_contests.html', {'user': gctx['user'], 'default_problem': gctx['default_problem'], 'entries': entries, 'entries_limit': _C.API_PROBLEMS_LIST_LIMIT, 'active_main': 'contests'})
+    entries = user_contests_overview(int(gctx['user']['id']), limit=runtime().config_values.API_PROBLEMS_LIST_LIMIT)
+    return template_response(request, 'root_contests.html', {'user': gctx['user'], 'default_problem': gctx['default_problem'], 'entries': entries, 'entries_limit': runtime().config_values.API_PROBLEMS_LIST_LIMIT, 'active_main': 'contests'})
 
 def contests_root_create(request: Request, user: str = "", contest_slug: str = Form(...), contest_title: str = Form(...)):
     active_user = _active_root_user(request, user)
@@ -144,7 +143,7 @@ def contests_root_create(request: Request, user: str = "", contest_slug: str = F
         slug = normalize_contest_slug_required(contest_slug)
         title = normalize_contest_title_required(contest_title)
         actor_user_id = int(gctx["user"]["id"])
-        config.contest_service.create_contest_with_owner(
+        runtime().contest_service.create_contest_with_owner(
             slug=slug,
             title=title,
             owner_user_id=actor_user_id,
@@ -174,11 +173,11 @@ def contests_root_import(
         package_name = str(package_upload.filename or "").strip()
         if not package_name:
             raise ValueError("package filename is required")
-        snapshot = _C.snapshot()
+        snapshot = runtime().config_values.snapshot()
         contest_policy, problem_policy, max_problems = _contest_archive_policies()
         with spool_fileobj(
             package_upload.file,
-            root=config.storage_layout.archive_upload_root,
+            root=runtime().storage_layout.archive_upload_root,
             max_bytes=int(snapshot["UPLOAD_MAX_BYTES"]),
             label="package file",
         ) as package_path:
@@ -338,7 +337,7 @@ async def contests_root_import_confirm(request: Request, user: str = ""):
             form_text(contest_title_input).strip() or parsed_title or target_contest_slug
         )
 
-        contest_id = config.contest_service.create_contest_with_owner(
+        contest_id = runtime().contest_service.create_contest_with_owner(
             slug=target_contest_slug,
             title=target_contest_title,
             owner_user_id=actor_user_id,
@@ -380,11 +379,11 @@ async def contests_root_import_confirm(request: Request, user: str = ""):
             warnings = import_package_warnings(imported)
             for warning in warnings:
                 import_warnings.append(f"{imported_problem_slug}: {warning}")
-            problem_id = config.workspace_service.known_problem_id(imported_problem_slug)
+            problem_id = runtime().workspace_service.known_problem_id(imported_problem_slug)
             if problem_id is None:
                 raise RuntimeError(f"imported problem missing: {imported_problem_slug}")
             contest_problem_idx = _normalize_import_contest_idx(row.get("index"), idx, used_indices)
-            config.contest_service.add_problem(
+            runtime().contest_service.add_problem(
                 contest_id=contest_id,
                 idx=contest_problem_idx,
                 problem_id=problem_id,
@@ -399,18 +398,18 @@ async def contests_root_import_confirm(request: Request, user: str = ""):
             statement_files,
             statement_staging,
         )
-        config.contest_service.replace_statement_sources(
+        runtime().contest_service.replace_statement_sources(
             contest_id=contest_id,
             contest_slug=target_contest_slug,
             actor_user_id=actor_user_id,
             files=staged_statement_files,
         )
-        config.contest_service.set_statement_default_language(contest_id, actor_user_id, default_language)
+        runtime().contest_service.set_statement_default_language(contest_id, actor_user_id, default_language)
         if inferred_location:
-            config.contest_service.upsert_property(contest_id, actor_user_id, "location", inferred_location)
+            runtime().contest_service.upsert_property(contest_id, actor_user_id, "location", inferred_location)
         if inferred_date:
-            config.contest_service.upsert_property(contest_id, actor_user_id, "date", inferred_date)
-        config.contest_service.set_statement_problem_source_folders(contest_id, actor_user_id, source_folder_map)
+            runtime().contest_service.upsert_property(contest_id, actor_user_id, "date", inferred_date)
+        runtime().contest_service.set_statement_problem_source_folders(contest_id, actor_user_id, source_folder_map)
 
         contest_archive.close()
         contest_archive = None

@@ -141,7 +141,7 @@ def ensure_local_env() -> None:
 
 ensure_local_env()
 
-from app.impl.runtime.config import config  # noqa: E402
+from app.main import runtime  # noqa: E402
 
 
 _COMPLETION_REF_ABORT_TRIGGER = "test_abort_verification_completion_ref_insert"
@@ -152,7 +152,7 @@ _STARTUP_RECOVERY_ABORT_TRIGGER = "test_abort_verification_startup_recovery"
 def install_completion_ref_abort_fault() -> None:
     """Force completion commits to fail while inserting artifact refs."""
 
-    config.db.execute(
+    runtime.db.execute(
         f"""
         CREATE TRIGGER {_COMPLETION_REF_ABORT_TRIGGER}
         BEFORE INSERT ON verification_task_artifacts
@@ -166,7 +166,7 @@ def install_completion_ref_abort_fault() -> None:
 def clear_completion_ref_abort_fault() -> None:
     """Remove the completion fault installed by the matching test helper."""
 
-    config.db.execute(
+    runtime.db.execute(
         f"DROP TRIGGER IF EXISTS {_COMPLETION_REF_ABORT_TRIGGER}"
     )
 
@@ -174,7 +174,7 @@ def clear_completion_ref_abort_fault() -> None:
 def install_activation_task_abort_fault() -> None:
     """Force activation to fail while inserting its immutable task graph."""
 
-    config.db.execute(
+    runtime.db.execute(
         f"""
         CREATE TRIGGER {_ACTIVATION_TASK_ABORT_TRIGGER}
         BEFORE INSERT ON verification_tasks
@@ -188,7 +188,7 @@ def install_activation_task_abort_fault() -> None:
 def clear_activation_task_abort_fault() -> None:
     """Remove the activation fault installed by the matching test helper."""
 
-    config.db.execute(
+    runtime.db.execute(
         f"DROP TRIGGER IF EXISTS {_ACTIVATION_TASK_ABORT_TRIGGER}"
     )
 
@@ -196,7 +196,7 @@ def clear_activation_task_abort_fault() -> None:
 def install_startup_recovery_abort_fault() -> None:
     """Force startup recovery to roll back its aggregate transition."""
 
-    config.db.execute(
+    runtime.db.execute(
         f"""
         CREATE TRIGGER {_STARTUP_RECOVERY_ABORT_TRIGGER}
         BEFORE UPDATE OF status ON verifications
@@ -211,7 +211,7 @@ def install_startup_recovery_abort_fault() -> None:
 def clear_startup_recovery_abort_fault() -> None:
     """Remove the startup recovery fault installed by the matching helper."""
 
-    config.db.execute(
+    runtime.db.execute(
         f"DROP TRIGGER IF EXISTS {_STARTUP_RECOVERY_ABORT_TRIGGER}"
     )
 import app.impl.auth.password_envelope as password_envelope_module  # noqa: E402
@@ -226,7 +226,7 @@ def _expected_test_db_path() -> Path:
 
 
 def _assert_test_runtime_paths() -> None:
-    db_path = Path(config.db.path).resolve()
+    db_path = Path(runtime.db.path).resolve()
     expected_db_path = _expected_test_db_path()
     if db_path != expected_db_path:
         raise RuntimeError(
@@ -244,9 +244,9 @@ _TEST_PASSWORD_KEY = rsa.generate_private_key(public_exponent=65537, key_size=20
 password_envelope_module.password_envelope_store = PasswordEnvelopeStore(
     key_factory=lambda: _TEST_PASSWORD_KEY
 )
-_test_config_values = dict(config.config_values.snapshot())
+_test_config_values = dict(runtime.config_values.snapshot())
 _test_config_values["PASSWORD_HASH_ITERS"] = 10_000
-config.config_values.replace(_test_config_values)
+runtime.config_values.replace(_test_config_values)
 
 
 def override_config_values(
@@ -266,10 +266,10 @@ def override_config_values(
 def _wait_for_worker_group(lock_attr: str, workers_attr: str, timeout_sec: float = 300.0) -> None:
     deadline = time.monotonic() + max(0.0, float(timeout_sec))
     while True:
-        lock = getattr(config, lock_attr)
+        lock = getattr(runtime, lock_attr)
         with lock:
-            workers = [w for w in getattr(config, workers_attr) if w.is_alive()]
-            current = getattr(config, workers_attr)
+            workers = [w for w in getattr(runtime, workers_attr) if w.is_alive()]
+            current = getattr(runtime, workers_attr)
             current.clear()
             current.update(workers)
         if not workers:
@@ -277,7 +277,7 @@ def _wait_for_worker_group(lock_attr: str, workers_attr: str, timeout_sec: float
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             return
-        config.worker_queue_service.wait_for_futures(workers, timeout_sec=min(0.2, remaining))
+        runtime.worker_queue_service.wait_for_futures(workers, timeout_sec=min(0.2, remaining))
 
 
 def _wait_for_verification_workers(timeout_sec: float = 300.0) -> None:
@@ -287,10 +287,10 @@ def _wait_for_verification_workers(timeout_sec: float = 300.0) -> None:
 def _wait_for_export_workers(timeout_sec: float = 300.0) -> None:
     _wait_for_worker_group("export_lock", "export_workers", timeout_sec=timeout_sec)
 
-db = config.db
-export_service = config.export_service
-preview_service = config.preview_service
-workspace_service = config.workspace_service
+db = runtime.db
+export_service = runtime.export_service
+preview_service = runtime.preview_service
+workspace_service = runtime.workspace_service
 
 
 _DB_TEMPLATE_PATH = suite_root() / "fixture-template" / "metadata.db"
@@ -328,12 +328,12 @@ def _restore_database_template() -> None:
 
 def _clear_runtime_files() -> None:
     roots = {
-        Path(config.settings.bare_root),
-        Path(config.settings.workspace_root),
-        Path(config.settings.artifacts_root),
-        Path(config.settings.cache_root),
-        Path(config.settings.contest_source_root),
-        Path(config.settings.backup_root),
+        Path(runtime.settings.bare_root),
+        Path(runtime.settings.workspace_root),
+        Path(runtime.settings.artifacts_root),
+        Path(runtime.settings.cache_root),
+        Path(runtime.settings.contest_source_root),
+        Path(runtime.settings.backup_root),
     }
     for root in roots:
         _rmtree_retry(root)
@@ -471,7 +471,7 @@ class WorkspaceTestBase(RuntimeDBTestBase):
         workspace_service.clear_identity_caches()
         if not self.allow_worker_submit:
             submit_guard = patch.object(
-                config.worker_queue_service,
+                runtime.worker_queue_service,
                 "submit",
                 side_effect=AssertionError("workspace tests may not submit worker jobs"),
             )
@@ -487,7 +487,7 @@ class WorkerTestBase(WorkspaceTestBase):
     def setUp(self) -> None:
         _wait_for_verification_workers(timeout_sec=10.0)
         _wait_for_export_workers(timeout_sec=10.0)
-        config.judgehost_task_service.reset_runtime_state()
+        runtime.judgehost_task_service.reset_runtime_state()
         self._clear_test_files()
         super().setUp()
         self.addCleanup(self._cleanup_workers)
@@ -499,7 +499,7 @@ class WorkerTestBase(WorkspaceTestBase):
     def _cleanup_workers() -> None:
         _wait_for_verification_workers(timeout_sec=10.0)
         _wait_for_export_workers(timeout_sec=10.0)
-        config.judgehost_task_service.reset_runtime_state()
+        runtime.judgehost_task_service.reset_runtime_state()
 
 
 class E2ETestBase(WorkerTestBase):
@@ -513,11 +513,11 @@ class E2ETestBase(WorkerTestBase):
 
     def setUp(self) -> None:
         super().setUp()
-        old_long_poll = config.judgehost_task_service.state.fetch_long_poll_sec
-        config.judgehost_task_service.state.fetch_long_poll_sec = 0.0
+        old_long_poll = runtime.judgehost_task_service.state.fetch_long_poll_sec
+        runtime.judgehost_task_service.state.fetch_long_poll_sec = 0.0
         self.addCleanup(
             setattr,
-            config.judgehost_task_service.state,
+            runtime.judgehost_task_service.state,
             "fetch_long_poll_sec",
             old_long_poll,
         )

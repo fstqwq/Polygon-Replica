@@ -8,7 +8,7 @@ from typing import TypedDict, cast
 
 from fastapi import Request
 
-from app.impl.runtime.config import config
+from app.impl.runtime.dependency import runtime
 from app.main_util import (
     normalize_optional_component_source_path_safe,
     sanitize_log_text_for_ui,
@@ -16,7 +16,6 @@ from app.main_util import (
 
 from app.impl.workspace.context_operation import dedupe_preserve_order, workspace_rel_file_exists
 
-_C = config.config_values
 
 RunDetailPreview = TypedDict(
     "RunDetailPreview",
@@ -56,7 +55,7 @@ def _run_detail_preview_unavailable(message: str = 'missing') -> RunDetailPrevie
         'available': False,
         'text': '',
         'truncated': False,
-        'limit': int(_C.RUN_DETAIL_PREVIEW_MAX_BYTES),
+        'limit': int(runtime().config_values.RUN_DETAIL_PREVIEW_MAX_BYTES),
         'download_verification_id': '',
         'download_rel_path': '',
         'message': message,
@@ -68,7 +67,7 @@ def _run_detail_preview_from_bytes(
     verification_id: str = "",
     rel_path: str = "",
 ) -> RunDetailPreview:
-    limit = int(_C.RUN_DETAIL_PREVIEW_MAX_BYTES)
+    limit = int(runtime().config_values.RUN_DETAIL_PREVIEW_MAX_BYTES)
     data = blob
     clipped = len(data) > limit
     head = data[:limit]

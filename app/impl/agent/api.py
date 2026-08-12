@@ -9,12 +9,12 @@ from fastapi.responses import JSONResponse, PlainTextResponse, Response
 
 from app.impl.agent.shared import require_agent_token, workspace_context_for_identity
 from app.impl.auth.shared import json_error_response
-from app.impl.runtime.config import config
+from app.impl.runtime.dependency import runtime
 from app.impl.workspace.context_job import start_export_job, start_verification_job
 from app.impl.workspace.context_job_helper import allocate_verification_id
 from app.impl.workspace.context_run_detail import normalize_run_test_name_token
 from app.impl.workspace.problem_config import read_problem_config
-from app.impl.workspace.published_materialization import build_full_verification_targets
+from app.service.problem_package.workflow import build_full_verification_targets
 from app.impl.workspace.run_view_detail import build_run_detail_context
 from app.service.execution.identity import new_run_id
 from app.service.importing.archive import (
@@ -47,7 +47,7 @@ def _agent_problem_ctx(identity) -> dict[str, object]:
 async def agent_register(request: Request, code: str):
     payload = await _read_json(request)
     try:
-        result = config.agent_service.register_agent(
+        result = runtime().agent_service.register_agent(
             code=code,
             agent_name=str(payload.get("agent_name") or ""),
             desktop_id=str(payload.get("desktop_id") or ""),
@@ -67,7 +67,7 @@ async def agent_register(request: Request, code: str):
 async def agent_request_access(request: Request):
     payload = await _read_json(request)
     try:
-        result = config.agent_service.request_problem_access(
+        result = runtime().agent_service.request_problem_access(
             agent_session_id=str(payload.get("agent_session_id") or ""),
             identity_hash=str(payload.get("identity_hash") or ""),
             problem=str(payload.get("problem") or ""),
@@ -85,7 +85,7 @@ async def agent_poll_access(request: Request, request_id: str):
     session_id = str(request.query_params.get("agent_session_id") or "")
     identity_hash = str(request.query_params.get("identity_hash") or "")
     try:
-        result = config.agent_service.poll_access_request(
+        result = runtime().agent_service.poll_access_request(
             agent_session_id=session_id,
             identity_hash=identity_hash,
             request_id=request_id,
@@ -101,7 +101,7 @@ async def agent_auth_status(request: Request):
     session_id = str(request.query_params.get("agent_session_id") or "")
     identity_hash = str(request.query_params.get("identity_hash") or "")
     try:
-        result = config.agent_service.session_status(
+        result = runtime().agent_service.session_status(
             agent_session_id=session_id,
             identity_hash=identity_hash,
         )
@@ -113,7 +113,7 @@ async def agent_auth_status(request: Request):
 async def agent_problem_create(request: Request):
     payload = await _read_json(request)
     try:
-        result = config.agent_service.create_problem(
+        result = runtime().agent_service.create_problem(
             agent_session_id=str(payload.get("agent_session_id") or ""),
             identity_hash=str(payload.get("identity_hash") or ""),
             problem=str(payload.get("problem") or ""),
@@ -156,14 +156,14 @@ async def agent_verification_start(request: Request):
 async def agent_verification_status(request: Request, verification_id: str):
     identity = require_agent_token(request, min_scope="readonly")
     ctx = _agent_problem_ctx(identity)
-    snapshot = config.verification_service.verification_snapshot(verification_id)
+    snapshot = runtime().verification_service.verification_snapshot(verification_id)
     if (
         snapshot is None
         or int(snapshot["record"]["problem_id"]) != int(identity.problem_id)
         or snapshot["record"]["workspace_id"] != int(ctx["workspace"]["id"])
     ):
         return json_error_response("verification not found", status_code=404)
-    runtime_summary = config.verification_service.verification_runtime_summary_from_tasks(
+    runtime_summary = runtime().verification_service.verification_runtime_summary_from_tasks(
         snapshot["tasks"]
     )
     return _json_body(
@@ -513,7 +513,7 @@ def _agent_verification_detail_yaml(ctx: dict[str, object], verification_id: str
 async def agent_verification_detail(request: Request, verification_id: str):
     identity = require_agent_token(request, min_scope="readonly")
     ctx = _agent_problem_ctx(identity)
-    detail = config.verification_service.workspace_verification_detail(
+    detail = runtime().verification_service.workspace_verification_detail(
         int(identity.problem_id),
         int(ctx["workspace"]["id"]),
         verification_id,
@@ -558,11 +558,11 @@ async def agent_export_start(request: Request):
 
 async def agent_export_status(request: Request, job_id: str):
     identity = require_agent_token(request, min_scope="readonly")
-    job = config.export_service.export_job(
+    job = runtime().export_service.export_job(
         int(identity.problem_id),
         job_id,
     )
-    if job is None or not config.access_query.package_job_context(
+    if job is None or not runtime().access_query.package_job_context(
         actor_user_id=int(identity.user_id),
         problem_id=int(identity.problem_id),
         job_actor_user_id=int(job["actor_user_id"]),
@@ -588,13 +588,13 @@ async def agent_export_status(request: Request, job_id: str):
 
 async def agent_export_download(request: Request, job_id: str):
     identity = require_agent_token(request, min_scope="readonly")
-    job = config.export_service.export_job(
+    job = runtime().export_service.export_job(
         int(identity.problem_id),
         job_id,
     )
     if job is None:
         return json_error_response("export not ready", status_code=404)
-    access = config.access_query.package_job_context(
+    access = runtime().access_query.package_job_context(
         actor_user_id=int(identity.user_id),
         problem_id=int(identity.problem_id),
         job_actor_user_id=int(job["actor_user_id"]),
@@ -606,7 +606,7 @@ async def agent_export_download(request: Request, job_id: str):
     filename = str(job.get("filename") or "")
     if not artifact_id or not filename:
         return json_error_response("export not ready", status_code=404)
-    archive_path = config.export_service.export_archive_path(
+    archive_path = runtime().export_service.export_archive_path(
         int(identity.problem_id),
         artifact_id,
         filename,
@@ -625,10 +625,10 @@ async def agent_workspace_files(request: Request):
     workspace = Path(str(_agent_problem_ctx(identity)["workspace"]["path"])).resolve()
     rel = str(request.query_params.get("path") or "").strip()
     try:
-        listed = config.workspace_file_service.list_entries(
+        listed = runtime().workspace_file_service.list_entries(
             workspace,
             rel,
-            limit=config.config_values.WORKSPACE_FILE_LIST_LIMIT,
+            limit=runtime().config_values.WORKSPACE_FILE_LIST_LIMIT,
             require_allowed_root=True,
         )
         items = [{"path": item.path, "is_dir": item.is_dir, "is_file": item.is_file} for item in listed.entries]
@@ -650,7 +650,7 @@ async def agent_workspace_status(request: Request):
             "workspace_id": int(ctx["workspace"]["id"]),
             "head_commit": str(ctx["workspace"].get("head_commit") or ""),
             "dirty": bool(ctx["workspace"].get("dirty")),
-            "git": config.git_service.status(workspace),
+            "git": runtime().git_service.status(workspace),
         }
     )
 
@@ -662,13 +662,16 @@ def _workspace_zip_filename(problem_slug: str, suffix: str) -> str:
 
 
 async def agent_workspace_snapshot(request: Request):
+    request_runtime = runtime()
     identity = require_agent_token(request, min_scope="readonly")
     ctx = _agent_problem_ctx(identity)
     workspace = Path(str(ctx["workspace"]["path"])).resolve()
     try:
-        result = config.workspace_mutation_service.read_locked(
+        result = request_runtime.workspace_mutation_service.read_locked(
             workspace,
-            lambda: config.workspace_archive_service.build_snapshot_zip(workspace),
+            lambda: request_runtime.workspace_archive_service.build_snapshot_zip(
+                workspace
+            ),
         )
         status = result.status
         payload = result.value
@@ -689,14 +692,15 @@ async def agent_workspace_snapshot(request: Request):
 
 
 async def agent_workspace_compare(request: Request, archive: UploadFile = File(...)):
+    request_runtime = runtime()
     identity = require_agent_token(request, min_scope="readonly")
     ctx = _agent_problem_ctx(identity)
     workspace = Path(str(ctx["workspace"]["path"])).resolve()
     try:
-        snapshot = config.config_values.snapshot()
+        snapshot = request_runtime.config_values.snapshot()
         async with spool_upload(
             archive,
-            root=config.storage_layout.archive_upload_root,
+            root=request_runtime.storage_layout.archive_upload_root,
             max_bytes=int(snapshot["UPLOAD_MAX_BYTES"]),
             label="workspace archive",
         ) as archive_path:
@@ -706,9 +710,9 @@ async def agent_workspace_compare(request: Request, archive: UploadFile = File(.
                     int(snapshot["PROBLEM_ZIP_MAX_EXPANDED_BYTES"])
                 ),
             ) as package:
-                result = config.workspace_mutation_service.read_locked(
+                result = request_runtime.workspace_mutation_service.read_locked(
                     workspace,
-                    lambda: config.workspace_archive_service.compare_zip(
+                    lambda: request_runtime.workspace_archive_service.compare_zip(
                         workspace, package
                     ),
                 )
@@ -730,15 +734,16 @@ async def agent_workspace_apply(
     archive: UploadFile = File(...),
     base_head_commit: str = Form(""),
 ):
+    request_runtime = runtime()
     identity = require_agent_token(request, min_scope="workspace")
     ctx = _agent_problem_ctx(identity)
     workspace = Path(str(ctx["workspace"]["path"])).resolve()
     expected_head = str(base_head_commit or "").strip()
     try:
-        snapshot = config.config_values.snapshot()
+        snapshot = request_runtime.config_values.snapshot()
         async with spool_upload(
             archive,
-            root=config.storage_layout.archive_upload_root,
+            root=request_runtime.storage_layout.archive_upload_root,
             max_bytes=int(snapshot["UPLOAD_MAX_BYTES"]),
             label="workspace archive",
         ) as archive_path:
@@ -749,13 +754,17 @@ async def agent_workspace_apply(
                 ),
             ) as package:
                 def apply_archive():
-                    status_before = config.workspace_service.read_workspace_status(workspace)
+                    status_before = request_runtime.workspace_service.read_workspace_status(
+                        workspace
+                    )
                     current_head = str(status_before.get("head_commit") or "")
                     if expected_head and expected_head != current_head:
                         raise WorkspaceMutationConflict("workspace head changed")
-                    return config.workspace_archive_service.apply_zip(workspace, package)
+                    return request_runtime.workspace_archive_service.apply_zip(
+                        workspace, package
+                    )
 
-                result = config.workspace_mutation_service.write_locked(
+                result = request_runtime.workspace_mutation_service.write_locked(
                     workspace, apply_archive
                 )
         diff = result.value
@@ -779,7 +788,7 @@ async def agent_workspace_file(request: Request):
     workspace = Path(str(_agent_problem_ctx(identity)["workspace"]["path"])).resolve()
     rel = str(request.query_params.get("path") or "").strip()
     try:
-        file_payload = config.workspace_file_service.file_payload(workspace, rel, require_allowed_root=True)
+        file_payload = runtime().workspace_file_service.file_payload(workspace, rel, require_allowed_root=True)
         payload: dict[str, object] = {
             "path": file_payload.path,
             "is_dir": file_payload.is_dir,
@@ -811,7 +820,7 @@ async def agent_workspace_upload(request: Request, file: UploadFile = File(...))
     if not rel:
         return json_error_response("path is required", status_code=400)
     try:
-        normalized, total_bytes = await config.workspace_file_service.upload_file(workspace, rel, file, require_allowed_root=True)
+        normalized, total_bytes = await runtime().workspace_file_service.upload_file(workspace, rel, file, require_allowed_root=True)
         return _json_body({"ok": True, "path": normalized, "bytes": total_bytes})
     except HTTPException as exc:
         return json_error_response(str(exc.detail), status_code=exc.status_code)
@@ -824,7 +833,7 @@ async def agent_workspace_delete(request: Request, path: str):
     ctx = _agent_problem_ctx(identity)
     workspace = Path(str(ctx["workspace"]["path"])).resolve()
     try:
-        normalized = config.workspace_file_service.delete_path(workspace, path, require_allowed_root=True)
+        normalized = runtime().workspace_file_service.delete_path(workspace, path, require_allowed_root=True)
         return _json_body({"ok": True, "path": normalized})
     except HTTPException as exc:
         return json_error_response(str(exc.detail), status_code=exc.status_code)
@@ -843,9 +852,9 @@ async def agent_commit(request: Request):
     commit_created = False
     commit_head = ""
     try:
-        with config.workspace_service.workspace_lock(workspace):
+        with runtime().workspace_service.workspace_lock(workspace):
             try:
-                commit_head = config.git_service.commit(workspace, message, identity.username, f"{identity.username}@polygonlike.local")
+                commit_head = runtime().git_service.commit(workspace, message, identity.username, f"{identity.username}@polygonlike.local")
                 commit_created = True
             except Exception as commit_exc:
                 commit_err = str(commit_exc or "")
@@ -853,10 +862,10 @@ async def agent_commit(request: Request):
                 if "nothing to commit" not in commit_err_lower and "no changes added to commit" not in commit_err_lower:
                     raise
             try:
-                config.git_service.push(workspace, "main")
+                runtime().git_service.push(workspace, "main")
             except Exception as push_exc:
                 if commit_created:
-                    config.git_service.rollback_last_commit(workspace, expected_head=commit_head)
+                    runtime().git_service.rollback_last_commit(workspace, expected_head=commit_head)
                 raise push_exc
         return _json_body({"status": "ok", "head": commit_head})
     except Exception as exc:

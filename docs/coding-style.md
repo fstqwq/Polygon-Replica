@@ -65,30 +65,23 @@ allowlist for direct imports of `app.service.disk` and `app.service.memory`.
 CI also runs pyflakes over `app/`, `tests/`, and `scripts/`, and pylint over
 `app/`; unused or unresolved imports are lint failures.
 
-The repository wrapper loads `import-policy/import-boundaries.json`. Its layer
-allowlists apply to all route, implementation, and service modules. They
-enforce the normal `route` to `impl` to `service` direction and prevent those
-layers from importing templates or static assets. The dependency-light
+The checker discovers every Python file below `app/`, `tests/`, and `scripts/`
+without a module list or boundary configuration. It derives application layers
+from the canonical `app.route`, `app.impl`, and `app.service` package locations
+and enforces the normal `route` to `impl` to `service` direction. The dependency-light
 `app.config` package owns typed configuration definitions and immutable active
 snapshots; implementation and service modules may depend on that foundation.
-The application composition root remains in `app.impl.runtime.config` until it
-is moved to its top-level owner. Verification workflow policy and execution are
-owned by `app.service.verification`; service code must not import implementation
+The application composition root is `app.runtime.ApplicationRuntime`.
+`app.main.create_app()` installs one explicit instance in application state;
+request implementation code reaches it only through the implementation
+boundary accessor, while lifecycle and background work receive or capture it
+explicitly. Verification workflow policy and execution are owned by
+`app.service.verification`; service code must not import implementation
 modules.
 
-Cycle and naming checks use a staged module set because the complete current
-application graph still contains known reverse dependencies. The checked set is
-`app.route`, `app.impl.auth`, `app.impl.run_export`, `app.impl.workspace`, and
-`app.service.statement`. Cycles wholly inside that set fail the gate. Expand
-the set when a package has a clear owner and is cycle-free; do not add a
-baseline or hide a new cycle.
-
-Within the selected implementation and service packages, naming analysis
-rejects plural package/module segments except for narrow lexical exceptions,
-and rejects packages that accumulate three or more modules repeating the
-package name as a prefix or suffix. These checks keep a domain package from
-turning into a flat cluster such as `statement_parse`, `statement_render`, and
-`statement_service`; use responsibility-bearing module names instead.
+Cycle analysis covers every discovered module below `app/`. Any cycle fails the
+gate; there is no scope list, exception list, allowlist, or baseline to update
+when a module is added.
 
 Import grouping, placement, and the preference for absolute imports are
 authoring and review rules. The repository does not currently run an import

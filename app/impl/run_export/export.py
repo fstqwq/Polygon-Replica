@@ -11,7 +11,7 @@ from fastapi import Form, Request, Depends
 
 from app.impl.auth.shared import redirect_response, template_response
 from app.impl.contest.workspace_scope import contest_workspace_context_from_request
-from app.impl.runtime.config import config
+from app.impl.runtime.dependency import runtime
 from app.impl.workspace.access import workspace_access_context
 from app.impl.workspace.context import global_user_ctx
 from app.impl.workspace.context_job import start_export_job
@@ -141,7 +141,7 @@ def _resolve_export_archive_path(
     archive_name = Path(filename.strip()).name
     if (not export_id) or (not archive_name):
         return None
-    return config.export_service.export_archive_path(
+    return runtime().export_service.export_archive_path(
         problem_id,
         export_id,
         archive_name,
@@ -155,7 +155,7 @@ def export_page(request: Request, problem: str, user: Annotated[str, Depends(req
     )
     problem_id = int(ctx['problem']['id'])
     try:
-        published_revision = config.problem_package_service.published_revision(problem_id)
+        published_revision = runtime().problem_package_service.published_revision(problem_id)
         head_commit = published_revision.source_commit
         generate_revision: int | None = published_revision.revision_number
     except (OSError, RuntimeError, ValueError):
@@ -172,7 +172,7 @@ def export_page(request: Request, problem: str, user: Annotated[str, Depends(req
         if head_commit
         else 'Native (requires published revision)'
     )
-    job_rows = config.export_service.problem_export_jobs(
+    job_rows = runtime().export_service.problem_export_jobs(
         problem_id,
         limit=40,
     )
@@ -181,7 +181,7 @@ def export_page(request: Request, problem: str, user: Annotated[str, Depends(req
     job_rows = [
         row
         for row in job_rows
-        if config.access_query.package_job_context(
+        if runtime().access_query.package_job_context(
             actor_user_id=actor_user_id,
             problem_id=problem_id,
             job_actor_user_id=int(row["actor_user_id"]),
@@ -189,7 +189,7 @@ def export_page(request: Request, problem: str, user: Annotated[str, Depends(req
             problem_access=problem_access,
         )["can_view"]
     ]
-    materialization_rows = config.problem_package_service.problem_materializations(
+    materialization_rows = runtime().problem_package_service.problem_materializations(
         problem_id,
         limit=40,
     )
@@ -200,7 +200,7 @@ def export_page(request: Request, problem: str, user: Annotated[str, Depends(req
         item = dict(row)
         source_commit = cast(str, item["source_commit"])
         if source_commit not in revision_cache:
-            revision_cache[source_commit] = config.problem_package_service.revision_number(problem_id, source_commit)
+            revision_cache[source_commit] = runtime().problem_package_service.revision_number(problem_id, source_commit)
         revision_number = revision_cache[source_commit]
         source_display = f"v{revision_number}" if revision_number is not None else "unavailable"
         stored_filename = Path(cast(str, item["filename"])).name if item["filename"] else ""
@@ -318,7 +318,7 @@ def export_page(request: Request, problem: str, user: Annotated[str, Depends(req
 
 def export_create(problem: str, user: Annotated[str, Depends(require_session_user)], export_type: str=Form('icpc')):
     user_ctx = global_user_ctx(user)
-    problem_row = config.contest_service.problem_by_slug(problem)
+    problem_row = runtime().contest_service.problem_by_slug(problem)
     if problem_row is None:
         return redirect_response(f'/problems/{problem}/export', status_code=303, message="problem not found")
     problem_id = int(problem_row["id"])

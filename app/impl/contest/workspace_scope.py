@@ -10,7 +10,7 @@ from fastapi import Depends, HTTPException, Request
 from starlette.responses import JSONResponse, RedirectResponse, Response
 
 from app.impl.auth.session import require_session_user
-from app.impl.runtime.config import config
+from app.impl.runtime.dependency import runtime
 from app.main_constant import CONTEST_IDENT_RE
 
 
@@ -277,22 +277,22 @@ def resolve_problem_contest_scope(
         raise HTTPException(status_code=400, detail="contest must be specified once")
     try:
         contest_slug = _normalize_contest_query(contest_values[0])
-        problem_id, user_id = config.workspace_service.page_identity(problem, user)
+        problem_id, user_id = runtime().workspace_service.page_identity(problem, user)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    contest = config.contest_service.contest_context(contest_slug)
+    contest = runtime().contest_service.contest_context(contest_slug)
     if contest is None:
         raise HTTPException(status_code=404, detail="contest not found")
     contest_id = int(contest["id"])
-    contest_access = config.access_query.contest_context(contest_id, user_id)
+    contest_access = runtime().access_query.contest_context(contest_id, user_id)
     if not contest_access["can_read"]:
         raise HTTPException(
             status_code=403,
             detail=contest_access["read_block_reason"] or "contest access required",
         )
 
-    contest_problems = config.contest_service.contest_problems(contest_id)
+    contest_problems = runtime().contest_service.contest_problems(contest_id)
     active = next(
         (row for row in contest_problems if int(row["problem_id"]) == problem_id),
         None,
@@ -301,7 +301,7 @@ def resolve_problem_contest_scope(
         raise HTTPException(status_code=404, detail="problem is not part of this contest")
 
     problem_ids = [int(row["problem_id"]) for row in contest_problems]
-    access_by_problem = config.access_query.problem_contexts(problem_ids, user_id)
+    access_by_problem = runtime().access_query.problem_contexts(problem_ids, user_id)
     active_access = access_by_problem[problem_id]
     if not bool(active_access["can_read"]):
         raise HTTPException(

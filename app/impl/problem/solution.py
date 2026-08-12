@@ -10,7 +10,7 @@ from fastapi.responses import JSONResponse
 
 from app.impl.auth.shared import redirect_response, set_flash_cookie, template_response
 from app.impl.contest.workspace_scope import contest_workspace_context_from_request
-from app.impl.runtime.config import config
+from app.impl.runtime.dependency import runtime
 from app.impl.problem.shared import MAIN_CORRECT_EXPECTED_LABEL, MAIN_CORRECT_EXPECTED_VALUE
 from app.impl.workspace.context_operation import (
     list_solution_entries,
@@ -37,7 +37,6 @@ from app.service.platform.workspace_path import (
     safe_workspace_path,
 )
 
-_C = config.config_values
 
 _EXPECTED_BEHAVIOR_TAG_CLASS: dict[str, str] = {
     MAIN_CORRECT_EXPECTED_VALUE: "tag-select-main-correct",
@@ -91,7 +90,7 @@ def solutions_page(request: Request, problem: str, user: Annotated[str, Depends(
         while solution_create_default_path in existing_paths:
             suffix += 1
             solution_create_default_path = f'solutions/solution_{suffix}.cpp'
-    return template_response(request, 'solutions.html', {'ctx': ctx, 'entries': entries_view, 'entries_truncated': entries_truncated, 'entries_limit': _C.SOLUTION_LIST_LIMIT, 'selected': selected, 'selected_entry': selected_entry, 'expected_behavior_options': expected_behavior_options, 'accepted_source': accepted_source, 'accepted_source_exists': accepted_source_exists, 'solution_create_default_path': solution_create_default_path})
+    return template_response(request, 'solutions.html', {'ctx': ctx, 'entries': entries_view, 'entries_truncated': entries_truncated, 'entries_limit': runtime().config_values.SOLUTION_LIST_LIMIT, 'selected': selected, 'selected_entry': selected_entry, 'expected_behavior_options': expected_behavior_options, 'accepted_source': accepted_source, 'accepted_source_exists': accepted_source_exists, 'solution_create_default_path': solution_create_default_path})
 
 def solutions_editor_page(request: Request, problem: str, user: Annotated[str, Depends(require_session_user)]):
     ctx = page_ctx(
@@ -118,7 +117,7 @@ def solutions_editor_page(request: Request, problem: str, user: Annotated[str, D
         selected_abs = safe_workspace_path(workspace, selected)
         if selected_abs.exists() and selected_abs.is_file() and (not selected_abs.is_symlink()):
             selected_exists = True
-            content, content_truncated = config.git_service.read_file_limited(workspace, selected, _C.WORKSPACE_FILE_VIEW_CHAR_LIMIT)
+            content, content_truncated = runtime().git_service.read_file_limited(workspace, selected, runtime().config_values.WORKSPACE_FILE_VIEW_CHAR_LIMIT)
     except HTTPException:
         selected_exists = False
         content = ''
@@ -126,7 +125,7 @@ def solutions_editor_page(request: Request, problem: str, user: Annotated[str, D
     if selected_entry is None:
         selected_entry = solution_metadata_entry(workspace, selected)
     selected_expected_behavior = normalize_expected_behavior(selected_entry['expected_behavior'])
-    return template_response(request, 'solutions_editor.html', {'ctx': ctx, 'entries': entries, 'entries_truncated': entries_truncated, 'entries_limit': _C.SOLUTION_LIST_LIMIT, 'selected': selected, 'selected_entry': selected_entry, 'selected_exists': selected_exists, 'content': content, 'content_truncated': content_truncated, 'content_char_limit': _C.WORKSPACE_FILE_VIEW_CHAR_LIMIT, 'expected_behavior_options': solution_behavior_options(), 'selected_expected_behavior_class': _expected_behavior_tag_class(selected_expected_behavior)})
+    return template_response(request, 'solutions_editor.html', {'ctx': ctx, 'entries': entries, 'entries_truncated': entries_truncated, 'entries_limit': runtime().config_values.SOLUTION_LIST_LIMIT, 'selected': selected, 'selected_entry': selected_entry, 'selected_exists': selected_exists, 'content': content, 'content_truncated': content_truncated, 'content_char_limit': runtime().config_values.WORKSPACE_FILE_VIEW_CHAR_LIMIT, 'expected_behavior_options': solution_behavior_options(), 'selected_expected_behavior_class': _expected_behavior_tag_class(selected_expected_behavior)})
 
 def solutions_save_source(request: Request, problem: str, user: Annotated[str, Depends(require_session_user)], source_path: str=Form(...), content: str=Form(''), expected_behavior: str=Form('unknown')):
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
@@ -149,20 +148,20 @@ def solutions_save_source(request: Request, problem: str, user: Annotated[str, D
         safe_content = enforce_textarea_max_bytes(
             content,
             label='solution source',
-            max_bytes=int(_C.TEXTAREA_MAX_BYTES),
+            max_bytes=int(runtime().config_values.TEXTAREA_MAX_BYTES),
         )
         selected_for_redirect = selected
-        with config.workspace_service.workspace_lock(workspace):
+        with runtime().workspace_service.workspace_lock(workspace):
             desc_path = desc_rel_path_for_source(selected)
             desc_abs = safe_workspace_path(workspace, desc_path)
             desc_existed_before = desc_abs.exists() and desc_abs.is_file() and (not desc_abs.is_symlink())
             desc_note = ''
             if desc_existed_before:
-                desc_text, _ = read_text_safe_limited(desc_abs, _C.SOLUTION_NOTE_CHAR_LIMIT * 8)
+                desc_text, _ = read_text_safe_limited(desc_abs, runtime().config_values.SOLUTION_NOTE_CHAR_LIMIT * 8)
                 parsed_desc = parse_solution_desc(desc_text)
                 desc_note = parsed_desc['note']
-            config.git_service.write_file(workspace, selected, safe_content)
-            config.git_service.write_file(workspace, desc_path, render_solution_desc(normalized_expected, desc_note))
+            runtime().git_service.write_file(workspace, selected, safe_content)
+            runtime().git_service.write_file(workspace, desc_path, render_solution_desc(normalized_expected, desc_note))
             metadata_created = not desc_existed_before
         if metadata_created:
             msg = 'solution source and metadata saved'
@@ -195,10 +194,10 @@ def solutions_set_tag(problem: str, user: Annotated[str, Depends(require_session
         normalized_expected = 'accepted' if is_main_correct else normalize_expected_behavior(expected_behavior)
         desc_path = desc_rel_path_for_source(selected)
         note = ''
-        with config.workspace_service.workspace_lock(workspace):
+        with runtime().workspace_service.workspace_lock(workspace):
             if workspace_rel_file_exists(workspace, desc_path):
                 desc_abs = safe_workspace_path(workspace, desc_path)
-                desc_text, _ = read_text_safe_limited(desc_abs, _C.SOLUTION_NOTE_CHAR_LIMIT * 8)
+                desc_text, _ = read_text_safe_limited(desc_abs, runtime().config_values.SOLUTION_NOTE_CHAR_LIMIT * 8)
                 parsed = parse_solution_desc(desc_text)
                 note = parsed['note']
             build_cfg, cfg_path = read_build_config(workspace)
@@ -213,7 +212,7 @@ def solutions_set_tag(problem: str, user: Annotated[str, Depends(require_session
                 build_cfg_changed = True
             if build_cfg_changed:
                 write_build_config(cfg_path, build_cfg)
-            config.git_service.write_file(
+            runtime().git_service.write_file(
                 workspace,
                 desc_path,
                 render_solution_desc(normalized_expected, note),
@@ -247,7 +246,7 @@ def solutions_rename(problem: str, user: Annotated[str, Depends(require_session_
         else:
             old_desc = desc_rel_path_for_source(old_source)
             new_desc = desc_rel_path_for_source(new_source)
-            with config.workspace_service.workspace_lock(workspace):
+            with runtime().workspace_service.workspace_lock(workspace):
                 old_abs = safe_workspace_path(workspace, old_source)
                 if old_abs.is_symlink() or (not old_abs.exists()) or (not old_abs.is_file()):
                     raise ValueError('solution source does not exist')
@@ -257,9 +256,9 @@ def solutions_rename(problem: str, user: Annotated[str, Depends(require_session_
                 old_desc_exists = workspace_rel_file_exists(workspace, old_desc)
                 if old_desc_exists and workspace_rel_file_exists(workspace, new_desc):
                     raise ValueError('destination metadata already exists')
-                config.git_service.rename_path(workspace, old_source, new_source)
+                runtime().git_service.rename_path(workspace, old_source, new_source)
                 if old_desc_exists and old_desc != new_desc:
-                    config.git_service.rename_path(workspace, old_desc, new_desc)
+                    runtime().git_service.rename_path(workspace, old_desc, new_desc)
                 build_cfg, cfg_path = read_build_config(workspace)
                 configured = build_cfg.get('accepted_solution_source', '')
                 if configured == old_source:
@@ -281,13 +280,13 @@ def solutions_delete(problem: str, user: Annotated[str, Depends(require_session_
     try:
         selected = normalize_solution_source_path_required(source_path)
         desc_path = desc_rel_path_for_source(selected)
-        with config.workspace_service.workspace_lock(workspace):
+        with runtime().workspace_service.workspace_lock(workspace):
             source_abs = safe_workspace_path(workspace, selected)
             if source_abs.is_symlink() or (not source_abs.exists()) or (not source_abs.is_file()):
                 raise ValueError('solution source does not exist')
-            config.git_service.delete_path(workspace, selected)
+            runtime().git_service.delete_path(workspace, selected)
             if workspace_rel_file_exists(workspace, desc_path):
-                config.git_service.delete_path(workspace, desc_path)
+                runtime().git_service.delete_path(workspace, desc_path)
             build_cfg, cfg_path = read_build_config(workspace)
             configured = build_cfg.get('accepted_solution_source', '')
             if configured == selected:

@@ -5,15 +5,14 @@ import binascii
 import json
 import logging
 import shlex
+from contextlib import AbstractContextManager
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Protocol, cast
+from typing import Protocol, cast
 
+from app.config import ConfigValues
 from app.db import now_iso
+from app.service.judgehost.batch_scheduler import BatchScheduler
 from app.service.platform.hashing import compile_command_digest
-
-if TYPE_CHECKING:
-    from app.service.judgehost.state import JudgehostState
-
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +55,26 @@ class HostTelemetryEventSink(Protocol):
         ...
 
 
+class JudgehostTelemetryState(Protocol):
+    """State surface required by optional toolchain telemetry."""
+
+    @property
+    def batch_scheduler(self) -> BatchScheduler:
+        ...
+
+    @property
+    def config_values(self) -> ConfigValues:
+        ...
+
+    @property
+    def state_lock(self) -> AbstractContextManager[object]:
+        ...
+
+    @property
+    def host_toolchains(self) -> dict[str, dict[str, HostToolchainTelemetry]]:
+        ...
+
+
 @dataclass(frozen=True, slots=True)
 class ToolchainVersionReport:
     judgetask_id: int
@@ -78,7 +97,7 @@ class ToolchainVersionCollector:
     _SKIP_COMPILE_DIGEST = compile_command_digest("skip.compile", [])
     _LANGUAGE_IDS = frozenset({"c", "cpp", "java", "py"})
 
-    def __init__(self, state: JudgehostState) -> None:
+    def __init__(self, state: JudgehostTelemetryState) -> None:
         self._state = state
 
     @staticmethod
@@ -226,7 +245,7 @@ class ToolchainTelemetryHandler:
 
     def __init__(
         self,
-        state: JudgehostState,
+        state: JudgehostTelemetryState,
         event_sink: HostTelemetryEventSink,
     ) -> None:
         self._collector = ToolchainVersionCollector(state)

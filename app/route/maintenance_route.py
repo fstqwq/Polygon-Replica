@@ -1,17 +1,16 @@
 from __future__ import annotations
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from fastapi.responses import PlainTextResponse, RedirectResponse
 
-from app.impl.runtime.config import config
 
 
 router = APIRouter()
 
 
 @router.get("/maintenance", include_in_schema=False)
-def maintenance_page():
-    snapshot = config.maintenance_service.snapshot()
+def maintenance_page(request: Request):
+    snapshot = request.app.state.runtime.maintenance_service.snapshot()
     status = str(snapshot.get("status") or "idle")
     operation = str(snapshot.get("operation") or "artifact_cleanup")
     operation_label = (

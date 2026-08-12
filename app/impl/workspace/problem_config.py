@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from app.impl.runtime.config import config
+from app.impl.runtime.dependency import runtime
 from app.main_util import safe_workspace_path
 from app.service.problem.runtime_config import (
     PROBLEM_CONFIG_REL,
@@ -18,6 +18,6 @@ def read_problem_config(
     cfg_path = safe_workspace_path(workspace, PROBLEM_CONFIG_REL.as_posix())
     payload = load_problem_config(
         workspace,
-        limits=problem_config_limits(config.config_values),
+        limits=problem_config_limits(runtime().config_values),
     )
     return (payload, dict(payload), cfg_path)

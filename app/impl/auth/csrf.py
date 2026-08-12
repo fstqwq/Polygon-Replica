@@ -4,14 +4,13 @@ import secrets
 import time
 
 import app.main_constant as _K
-from app.impl.runtime.config import config
+from app.impl.runtime.dependency import runtime
 from app.service.platform.hashing import hmac_sha256_hex
 
-_C = config.config_values
 
 def _password_form_csrf_signature(scope: str, issued_at: int, nonce: str) -> str:
     payload = f'{scope}|{issued_at}|{nonce}'.encode('utf-8')
-    return hmac_sha256_hex(config.password_form_csrf_secret, payload)
+    return hmac_sha256_hex(runtime().password_form_csrf_secret, payload)
 
 def issue_password_form_csrf_token(scope: str) -> str:
     safe_scope = str(scope or '').strip().lower()
@@ -39,7 +38,7 @@ def verify_password_form_csrf_token(token: str, scope: str) -> bool:
     now_ts = int(time.time())
     if issued_at <= 0 or issued_at > now_ts + 60:
         return False
-    if now_ts - issued_at > _C.PASSWORD_FORM_CSRF_TTL_SEC:
+    if now_ts - issued_at > runtime().config_values.PASSWORD_FORM_CSRF_TTL_SEC:
         return False
     expected = _password_form_csrf_signature(str(scope or '').strip().lower(), issued_at, nonce)
     return secrets.compare_digest(expected, str(provided_sig or '').lower())

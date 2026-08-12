@@ -9,7 +9,7 @@ from urllib.parse import urlencode
 from fastapi import Form, HTTPException, Depends
 
 from app.impl.auth.shared import redirect_response
-from app.impl.runtime.config import config
+from app.impl.runtime.dependency import runtime
 from app.impl.workspace.context_operation import (
     read_build_config,
     workspace_rel_file_exists,
@@ -26,7 +26,6 @@ from app.service.problem.runtime_config import (
 )
 from app.impl.workspace.problem_config import read_problem_config
 
-_C = config.config_values
 
 _BUILD_SOURCE_KEYS = (
     'accepted_solution_source',
@@ -74,7 +73,7 @@ def general_save(
     workspace = Path(ctx['workspace']['path'])
     msg = 'saved'
     try:
-        limits = problem_config_limits(_C)
+        limits = problem_config_limits(runtime().config_values)
         try:
             safe_time_limit = int(time_limit_ms)
             safe_memory = int(memory_limit_mb)
@@ -99,7 +98,7 @@ def general_save(
         if mode not in {"pass-fail", "interactive"}:
             raise ValueError("problem mode must be pass-fail or interactive")
         safe_mode = cast(ProblemMode, mode)
-        with config.workspace_service.workspace_lock(workspace):
+        with runtime().workspace_service.workspace_lock(workspace):
             _current, _, cfg_path = read_problem_config(workspace)
             payload = ProblemConfig(
                 time_limit_ms=safe_time_limit,

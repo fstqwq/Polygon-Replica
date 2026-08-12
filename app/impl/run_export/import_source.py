@@ -9,7 +9,7 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import TypedDict, cast
 
-from app.impl.runtime.config import config
+from app.impl.runtime.dependency import runtime
 from app.impl.run_export.query import (
     _bare_repo_head_commit,
 )
@@ -23,7 +23,6 @@ from app.service.importing.polygon import PolygonPackageImportService
 from app.service.problem.runtime_config import problem_config_limits
 from app.service.platform.git_process import run_git
 
-_C = config.config_values
 _POLYGON_IMPORTER = PolygonPackageImportService()
 _ICPC_IMPORTER = ICPCPackageImportService()
 _NATIVE_IMPORTER = NativePackageImportService()
@@ -123,7 +122,7 @@ def _next_available_problem_slug(owner: str, base: str) -> str:
     max_len = _problem_slug_segment_max_len(owner)
     candidate = token
     idx = 2
-    while config.workspace_service.known_problem_id(_problem_full_slug(owner, candidate)) is not None:
+    while runtime().workspace_service.known_problem_id(_problem_full_slug(owner, candidate)) is not None:
         suffix = f"-{idx}"
         prefix_len = max(1, max_len - len(suffix))
         prefix = token[:prefix_len].rstrip("-") or "p"
@@ -150,7 +149,7 @@ def build_import_slug_hint(owner: str, filename: str, requested_slug: str) -> di
                 "message": _K.PROBLEM_ID_RULE_MESSAGE,
             }
         full_requested = _problem_full_slug(owner, normalized)
-        exists = config.workspace_service.known_problem_id(full_requested) is not None
+        exists = runtime().workspace_service.known_problem_id(full_requested) is not None
         suggested = _next_available_problem_slug(owner, normalized) if exists else normalized
         message = ""
         if exists:
@@ -183,7 +182,7 @@ def _resolve_import_problem_slug(owner: str, requested_slug: str, package_name: 
     if requested:
         normalized = _normalize_problem_slug_segment_required(owner, requested)
         full_requested = _problem_full_slug(owner, normalized)
-        if config.workspace_service.known_problem_id(full_requested) is not None:
+        if runtime().workspace_service.known_problem_id(full_requested) is not None:
             suggestion = _next_available_problem_slug(owner, normalized)
             raise ValueError(f"problem already exists: {full_requested} (try: {_problem_full_slug(owner, suggestion)})")
         return full_requested
@@ -234,8 +233,8 @@ def _open_problem_archive(
 
 def _finalize_imported_problem(problem: str, actor_user: str, workspace: Path, package_format: str) -> str:
     commit_message = f"import {package_format} package"
-    commit_head = config.git_service.commit(workspace, commit_message, actor_user, f"{actor_user}@polygonlike.local")
-    config.git_service.push(workspace, "main")
+    commit_head = runtime().git_service.commit(workspace, commit_message, actor_user, f"{actor_user}@polygonlike.local")
+    runtime().git_service.push(workspace, "main")
     return commit_head
 
 
@@ -289,7 +288,7 @@ def import_package_into_workspace(
         raise ValueError("package filename is required")
     with _open_problem_archive(package, policy) as archive:
         package_format = _detect_problem_package_format(archive)
-        target_workspace = Path(config.workspace_service.ensure_workspace(safe_target_problem, safe_actor_user, refresh_status=False))
+        target_workspace = Path(runtime().workspace_service.ensure_workspace(safe_target_problem, safe_actor_user, refresh_status=False))
         importer = _select_importer(package_format)
         staging_root = target_workspace.parent / f".workspace-import-{uuid.uuid4().hex}"
         staging_workspace = staging_root / "workspace"
@@ -306,13 +305,13 @@ def import_package_into_workspace(
                     text_limit_bytes=policy.text_limit_bytes,
                     statement_sample_max_bytes=policy.statement_sample_max_bytes,
                     problem_config_limits=problem_config_limits(
-                        config.config_values
+                        runtime().config_values
                     ),
                 ),
             )
-            with config.workspace_service.workspace_lock(target_workspace):
+            with runtime().workspace_service.workspace_lock(target_workspace):
                 _merge_imported_tree(staging_workspace, target_workspace)
-            config.workspace_service.ensure_workspace(safe_target_problem, safe_actor_user, refresh_status=True)
+            runtime().workspace_service.ensure_workspace(safe_target_problem, safe_actor_user, refresh_status=True)
         finally:
             shutil.rmtree(staging_root, ignore_errors=True)
 
@@ -342,20 +341,20 @@ def import_package_as_new_problem(
     target_problem = _resolve_import_problem_slug(safe_actor_user, requested_slug, safe_package_name)
     with _open_problem_archive(package, policy) as archive:
         package_format = _detect_problem_package_format(archive)
-        target_bare = config.storage_layout.bare_repository(f"{target_problem}.git")
+        target_bare = runtime().storage_layout.bare_repository(f"{target_problem}.git")
         existing_bare_head = _bare_repo_head_commit(target_bare)
         if existing_bare_head:
             raise ValueError(f"import target already has revision history: {target_problem}")
         created_problem = False
         try:
-            config.workspace_service.ensure_problem(target_problem)
+            runtime().workspace_service.ensure_problem(target_problem)
             created_problem = True
-            config.workspace_service.grant_repo_access(target_problem, safe_actor_user, "owner")
-            target_workspace = Path(config.workspace_service.ensure_workspace(target_problem, safe_actor_user))
+            runtime().workspace_service.grant_repo_access(target_problem, safe_actor_user, "owner")
+            target_workspace = Path(runtime().workspace_service.ensure_workspace(target_problem, safe_actor_user))
             workspace_head = run_git(["git", "-C", str(target_workspace), "rev-parse", "--verify", "HEAD"])
             if workspace_head.returncode == 0 and workspace_head.stdout.strip():
                 raise ValueError(f"import target already has revision history: {target_problem}")
-            with config.workspace_service.workspace_lock(target_workspace):
+            with runtime().workspace_service.workspace_lock(target_workspace):
                 importer = _select_importer(package_format)
                 result = cast(
                     ImportedPackageResult,
@@ -367,13 +366,13 @@ def import_package_as_new_problem(
                         text_limit_bytes=policy.text_limit_bytes,
                         statement_sample_max_bytes=policy.statement_sample_max_bytes,
                         problem_config_limits=problem_config_limits(
-                            config.config_values
+                            runtime().config_values
                         ),
                     ),
                 )
-            with config.workspace_service.workspace_lock(target_workspace):
+            with runtime().workspace_service.workspace_lock(target_workspace):
                 imported_commit = _finalize_imported_problem(target_problem, safe_actor_user, target_workspace, package_format)
-            config.workspace_service.ensure_workspace(target_problem, safe_actor_user, refresh_status=True)
+            runtime().workspace_service.ensure_workspace(target_problem, safe_actor_user, refresh_status=True)
             result["commit"] = imported_commit
             tests_info = result.get("tests")
             total_tests = int(cast(dict[str, object], tests_info).get("total", 0)) if tests_info is not None else 0
@@ -381,7 +380,7 @@ def import_package_as_new_problem(
         except Exception:
             if created_problem:
                 try:
-                    config.workspace_service.delete_problem(target_problem)
+                    runtime().workspace_service.delete_problem(target_problem)
                 except Exception:
                     pass
             raise

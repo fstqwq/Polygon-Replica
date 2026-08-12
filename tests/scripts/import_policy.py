@@ -3,29 +3,13 @@ from __future__ import annotations
 import argparse
 import ast
 import json
-import subprocess
 import sys
 from collections import Counter, defaultdict
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterable
 
 ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_NAMING_RULE_SCOPE_PREFIXES = (
-    "app.impl.auth.",
-    "app.impl.build_preview.",
-    "app.impl.run_export.",
-    "app.impl.workspace.",
-    "app.service.statement.",
-)
-DEFAULT_NAMING_PLURAL_SEGMENT_EXCEPTIONS = {
-    "fs",
-    "status",
-    "process",
-    "news",
-    "series",
-}
 
 
 @dataclass(frozen=True)
@@ -36,7 +20,6 @@ class Violation:
     importer: str
     target: str
     message: str
-    first_wave: bool
 
 
 def _read_text(path: Path) -> str:
@@ -47,54 +30,16 @@ def _iter_python_files() -> list[Path]:
     files: list[Path] = []
     for root_name in ("app", "tests", "scripts"):
         root = ROOT / root_name
-        if not root.exists():
-            continue
-        files.extend(sorted(root.rglob("*.py")))
-    return files
+        if root.exists():
+            files.extend(root.rglob("*.py"))
+    return sorted(files)
 
 
 def _module_name_for_path(path: Path) -> str:
-    rel = path.relative_to(ROOT).as_posix()
-    if rel.endswith(".py"):
-        rel = rel[:-3]
-    if rel.endswith("/__init__"):
-        rel = rel[: -len("/__init__")]
-    return rel.replace("/", ".")
-
-
-def _load_first_wave(path: Path | None) -> list[str]:
-    if path is None:
-        return []
-    items: list[str] = []
-    for raw in path.read_text(encoding="utf-8").splitlines():
-        line = raw.split("#", 1)[0].strip()
-        if not line:
-            continue
-        items.append(line)
-    return items
-
-
-def _load_boundaries(path: Path | None) -> dict:
-    if path is None:
-        return {"firstWave": [], "layers": []}
-    data = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(data, dict):
-        raise ValueError(f"invalid boundaries config: {path}")
-    if "layers" not in data or not isinstance(data["layers"], list):
-        data["layers"] = []
-    if "firstWave" not in data or not isinstance(data["firstWave"], list):
-        data["firstWave"] = []
-    return data
-
-
-def _in_prefixes(module_name: str, prefixes: Iterable[str]) -> bool:
-    for prefix in prefixes:
-        p = str(prefix).strip().rstrip(".")
-        if not p:
-            continue
-        if module_name == p or module_name.startswith(f"{p}."):
-            return True
-    return False
+    relative = path.relative_to(ROOT).with_suffix("").as_posix()
+    if relative.endswith("/__init__"):
+        relative = relative[: -len("/__init__")]
+    return relative.replace("/", ".")
 
 
 def _resolve_imported_module(importer_module: str, node: ast.ImportFrom) -> str:
@@ -110,26 +55,11 @@ def _resolve_imported_module(importer_module: str, node: ast.ImportFrom) -> str:
     return ".".join(part for part in base_parts if part)
 
 
-def _layer_for_module(module_name: str, layers: list[dict]) -> dict | None:
-    for layer in layers:
-        for raw in layer.get("match", []):
-            prefix = str(raw or "").strip().rstrip(".")
-            if prefix and _in_prefixes(module_name, (prefix,)):
-                return layer
-    return None
-
-
-def _target_allowed(target_module: str, allowed: list[str]) -> bool:
-    for raw in allowed:
-        prefix = str(raw or "").strip().rstrip(".")
-        if not prefix:
-            continue
-        if target_module == prefix or target_module.startswith(f"{prefix}."):
-            return True
-    return False
-
-
-def _import_targets(importer_module: str, node: ast.ImportFrom, module_set: set[str]) -> set[str]:
+def _import_targets(
+    importer_module: str,
+    node: ast.ImportFrom,
+    module_set: set[str],
+) -> set[str]:
     targets: set[str] = set()
     base = _resolve_imported_module(importer_module, node)
     if not base:
@@ -139,9 +69,9 @@ def _import_targets(importer_module: str, node: ast.ImportFrom, module_set: set[
     for alias in node.names:
         if alias.name == "*":
             continue
-        sub = f"{base}.{alias.name}"
-        if sub in module_set:
-            targets.add(sub)
+        candidate = f"{base}.{alias.name}"
+        if candidate in module_set:
+            targets.add(candidate)
     return targets
 
 
@@ -150,510 +80,312 @@ def _cycle_signatures(graph: dict[str, set[str]]) -> list[list[str]]:
     stack: list[str] = []
     on_stack: set[str] = set()
     indices: dict[str, int] = {}
-    low: dict[str, int] = {}
-    sccs: list[list[str]] = []
+    low_links: dict[str, int] = {}
+    components: list[list[str]] = []
 
-    def strongconnect(v: str) -> None:
+    def visit(module: str) -> None:
         nonlocal index
-        indices[v] = index
-        low[v] = index
+        indices[module] = index
+        low_links[module] = index
         index += 1
-        stack.append(v)
-        on_stack.add(v)
+        stack.append(module)
+        on_stack.add(module)
 
-        for w in sorted(graph.get(v, set())):
-            if w not in indices:
-                strongconnect(w)
-                low[v] = min(low[v], low[w])
-            elif w in on_stack:
-                low[v] = min(low[v], indices[w])
+        for target in sorted(graph.get(module, set())):
+            if target not in indices:
+                visit(target)
+                low_links[module] = min(low_links[module], low_links[target])
+            elif target in on_stack:
+                low_links[module] = min(low_links[module], indices[target])
 
-        if low[v] == indices[v]:
-            component: list[str] = []
-            while stack:
-                w = stack.pop()
-                on_stack.remove(w)
-                component.append(w)
-                if w == v:
-                    break
-            component_sorted = sorted(component)
-            if len(component_sorted) > 1:
-                sccs.append(component_sorted)
-            elif component_sorted and component_sorted[0] in graph.get(component_sorted[0], set()):
-                sccs.append(component_sorted)
+        if low_links[module] != indices[module]:
+            return
+        component: list[str] = []
+        while stack:
+            target = stack.pop()
+            on_stack.remove(target)
+            component.append(target)
+            if target == module:
+                break
+        component.sort()
+        if len(component) > 1 or (
+            component and component[0] in graph.get(component[0], set())
+        ):
+            components.append(component)
 
-    for v in sorted(graph):
-        if v not in indices:
-            strongconnect(v)
-    return sorted(sccs)
+    for module in sorted(graph):
+        if module not in indices:
+            visit(module)
+    return sorted(components)
 
 
 def _dynamic_reexport_detected(importer_module: str, source: str) -> bool:
-    # Only enforce this in application modules; scripts/tests may legitimately
-    # contain these tokens in policy logic or fixture text.
     if not importer_module.startswith("app."):
         return False
     if "globals()" not in source and "globals()[" not in source:
         return False
-    if "for _module in" in source or "for name in dir(" in source or "setdefault(" in source:
-        return True
-    return False
-
-
-def _scope_for_naming_rules(
-    importer_module: str,
-    first_wave: list[str],
-    scope_prefixes: Iterable[str],
-) -> bool:
-    if not _in_prefixes(importer_module, first_wave):
-        return False
-    return _in_prefixes(importer_module, scope_prefixes)
-
-
-def _module_segments_for_naming(importer_module: str) -> list[str]:
-    parts = importer_module.split(".")
-    if len(parts) < 4:
-        return []
-    # app.impl.<domain>... or app.service.<domain>...
-    if parts[0] != "app" or parts[1] not in {"impl", "service"}:
-        return []
-    return [p for p in parts[2:] if p]
-
-
-def _plural_name_violations_for_module(
-    importer_module: str,
-    plural_exceptions: Iterable[str] | None = None,
-) -> list[str]:
-    exceptions = {
-        str(item or "").strip().lower()
-        for item in (plural_exceptions or DEFAULT_NAMING_PLURAL_SEGMENT_EXCEPTIONS)
-        if str(item or "").strip()
-    }
-    violations: list[str] = []
-    for segment in _module_segments_for_naming(importer_module):
-        safe_segment = segment.lower()
-        if "_" in segment:
-            # snake_case module names are validated by the anti-affix rule.
-            continue
-        if not segment.endswith("s"):
-            continue
-        if segment.endswith(("ss", "us", "is")):
-            continue
-        if safe_segment in exceptions:
-            continue
-        violations.append(segment)
-    return violations
-
-
-def _affix_cluster_modules(package_leaf: str, module_stems: list[str]) -> set[str]:
-    leaf = str(package_leaf or "").strip().lower()
-    stems = [str(item or "").strip().lower() for item in module_stems if str(item or "").strip()]
-    if not leaf or len(stems) < 3:
-        return set()
-    offenders: set[str] = set()
-    prefix_cluster = [stem for stem in stems if stem.startswith(f"{leaf}_")]
-    suffix_cluster = [stem for stem in stems if stem.endswith(f"_{leaf}")]
-    service_cluster = [stem for stem in stems if stem.endswith("_service")]
-    impl_cluster = [stem for stem in stems if stem.endswith("_impl")]
-    if len(prefix_cluster) >= 3:
-        offenders.update(prefix_cluster)
-    if len(suffix_cluster) >= 3:
-        offenders.update(suffix_cluster)
-    if len(service_cluster) >= 3:
-        offenders.update(service_cluster)
-    if len(impl_cluster) >= 3:
-        offenders.update(impl_cluster)
-    return offenders
-
-
-def collect_audit(
-    *,
-    boundaries: dict,
-    first_wave: list[str],
-) -> tuple[list[Violation], list[list[str]], dict]:
-    violations: list[Violation] = []
-    module_for_path: dict[str, str] = {}
-    module_set: set[str] = set()
-    graph: dict[str, set[str]] = defaultdict(set)
-    layers = boundaries.get("layers", [])
-    naming_policy = boundaries.get("namingPolicy", {})
-    scope_prefixes = naming_policy.get("scopePrefixes", list(DEFAULT_NAMING_RULE_SCOPE_PREFIXES))
-    plural_exceptions = naming_policy.get(
-        "pluralSegmentExceptions",
-        list(DEFAULT_NAMING_PLURAL_SEGMENT_EXCEPTIONS),
+    return (
+        "for _module in" in source
+        or "for name in dir(" in source
+        or "setdefault(" in source
     )
 
+
+def _is_module_or_child(module_name: str, owner: str) -> bool:
+    return module_name == owner or module_name.startswith(f"{owner}.")
+
+
+def _layer_violation(importer: str, target: str) -> str | None:
+    """Derive layer direction from the canonical package topology."""
+
+    layer = ""
+    allowed: tuple[str, ...] | None = None
+    if _is_module_or_child(importer, "app.route"):
+        layer = "route"
+        allowed = ("app.route", "app.impl")
+    elif _is_module_or_child(importer, "app.impl"):
+        layer = "implementation"
+        allowed = (
+            "app.impl",
+            "app.config",
+            "app.service",
+            "app.db",
+            "app.main_constant",
+            "app.main_util",
+            "app.runtime",
+            "app.setting",
+        )
+    elif _is_module_or_child(importer, "app.service"):
+        layer = "service"
+        allowed = (
+            "app.service",
+            "app.config",
+            "app.db",
+            "app.main_constant",
+            "app.main_util",
+            "app.setting",
+        )
+    if allowed is None or any(_is_module_or_child(target, owner) for owner in allowed):
+        return None
+    return f"layer `{layer}` cannot import `{target}`"
+
+
+def collect_audit() -> tuple[list[Violation], list[list[str]], dict[str, object]]:
+    """Inspect every repository Python file and the complete application graph."""
+
+    violations: list[Violation] = []
     python_files = _iter_python_files()
-    for path in python_files:
-        module = _module_name_for_path(path)
-        module_for_path[path.relative_to(ROOT).as_posix()] = module
-        if module.startswith("app."):
-            module_set.add(module)
-
-    first_wave_package_files: dict[str, list[str]] = defaultdict(list)
-    first_wave_package_stems: dict[str, list[str]] = defaultdict(list)
+    module_by_path = {path: _module_name_for_path(path) for path in python_files}
+    app_modules = {
+        module for module in module_by_path.values() if _is_module_or_child(module, "app")
+    }
+    graph: dict[str, set[str]] = defaultdict(set)
 
     for path in python_files:
-        rel = path.relative_to(ROOT).as_posix()
+        relative = path.relative_to(ROOT).as_posix()
         source = _read_text(path)
-        module = module_for_path[rel]
-        in_first_wave = _in_prefixes(module, first_wave)
-        try:
-            tree = ast.parse(source, filename=rel)
-        except SyntaxError:
-            continue
+        module = module_by_path[path]
+        tree = ast.parse(source, filename=relative)
 
         if _dynamic_reexport_detected(module, source):
             violations.append(
                 Violation(
                     rule="REEXPORT_DYNAMIC",
-                    file=rel,
+                    file=relative,
                     line=1,
                     importer=module,
                     target=module,
                     message="dynamic re-export chain is prohibited in application modules",
-                    first_wave=in_first_wave,
                 )
             )
 
-        if _scope_for_naming_rules(module, first_wave, scope_prefixes):
-            for segment in _plural_name_violations_for_module(module, plural_exceptions):
-                violations.append(
-                    Violation(
-                        rule="NAMING_PLURAL_SEGMENT",
-                        file=rel,
-                        line=1,
-                        importer=module,
-                        target=segment,
-                        message="plural module/package segment is prohibited in scoped modules",
-                        first_wave=in_first_wave,
-                    )
-                )
-            path_obj = Path(rel)
-            if path_obj.name != "__init__.py":
-                package_key = path_obj.parent.as_posix()
-                stem = path_obj.stem
-                first_wave_package_files[package_key].append(rel)
-                first_wave_package_stems[package_key].append(stem)
-
         for node in ast.walk(tree):
             if isinstance(node, ast.ImportFrom):
-                base_module = _resolve_imported_module(module, node)
-
+                target = _resolve_imported_module(module, node)
                 if any(alias.asname for alias in node.names):
                     violations.append(
                         Violation(
                             rule="ALIAS_FROM_IMPORT",
-                            file=rel,
+                            file=relative,
                             line=int(node.lineno),
                             importer=module,
-                            target=base_module or str(node.module or ""),
+                            target=target or str(node.module or ""),
                             message="`from X import Y as Z` is prohibited",
-                            first_wave=in_first_wave,
                         )
                     )
-
                 if any(alias.name == "*" for alias in node.names):
                     violations.append(
                         Violation(
                             rule="WILDCARD_IMPORT",
-                            file=rel,
+                            file=relative,
                             line=int(node.lineno),
                             importer=module,
-                            target=base_module or str(node.module or ""),
+                            target=target or str(node.module or ""),
                             message="wildcard import is prohibited",
-                            first_wave=in_first_wave,
                         )
                     )
-
                 if node.level > 0 and node.module:
                     violations.append(
                         Violation(
                             rule="MESH_RELATIVE_IMPORT",
-                            file=rel,
+                            file=relative,
                             line=int(node.lineno),
                             importer=module,
-                            target=base_module or str(node.module or ""),
+                            target=target or str(node.module or ""),
                             message="mesh-style relative import is prohibited",
-                            first_wave=in_first_wave,
                         )
                     )
-
-                if module.startswith("app.") and base_module.startswith("app."):
-                    layer = _layer_for_module(module, layers)
-                    if layer is not None and not _target_allowed(base_module, list(layer.get("allow", []))):
+                if module in app_modules and target.startswith("app."):
+                    message = _layer_violation(module, target)
+                    if message is not None:
                         violations.append(
                             Violation(
                                 rule="BOUNDARY_LAYER_VIOLATION",
-                                file=rel,
+                                file=relative,
                                 line=int(node.lineno),
                                 importer=module,
-                                target=base_module,
-                                message=f"layer `{layer.get('name', 'unknown')}` cannot import `{base_module}`",
-                                first_wave=in_first_wave,
+                                target=target,
+                                message=message,
                             )
                         )
-
-                if module.startswith("app.") and _in_prefixes(module, first_wave):
-                    for target in _import_targets(module, node, module_set):
-                        if _in_prefixes(target, first_wave):
-                            graph[module].add(target)
-
+                if module in app_modules:
+                    graph[module].update(_import_targets(module, node, app_modules))
             elif isinstance(node, ast.Import):
                 for alias in node.names:
-                    imported = str(alias.name or "").strip()
-                    if not imported:
-                        continue
-                    if module.startswith("app.") and imported.startswith("app."):
-                        layer = _layer_for_module(module, layers)
-                        if layer is not None and not _target_allowed(
-                            imported,
-                            list(layer.get("allow", [])),
-                        ):
+                    target = str(alias.name or "")
+                    if module in app_modules and target.startswith("app."):
+                        message = _layer_violation(module, target)
+                        if message is not None:
                             violations.append(
                                 Violation(
                                     rule="BOUNDARY_LAYER_VIOLATION",
-                                    file=rel,
+                                    file=relative,
                                     line=int(node.lineno),
                                     importer=module,
-                                    target=imported,
-                                    message=(
-                                        f"layer `{layer.get('name', 'unknown')}` "
-                                        f"cannot import `{imported}`"
-                                    ),
-                                    first_wave=in_first_wave,
+                                    target=target,
+                                    message=message,
                                 )
                             )
-                    if module.startswith("app.") and _in_prefixes(module, first_wave):
-                        candidate = imported
-                        if candidate in module_set and _in_prefixes(candidate, first_wave):
-                            graph[module].add(candidate)
+                        if target in app_modules:
+                            graph[module].add(target)
 
-    for module in sorted(module_set):
-        if _in_prefixes(module, first_wave):
-            graph.setdefault(module, set())
-
-    for package_key, stems in first_wave_package_stems.items():
-        package_leaf = Path(package_key).name
-        offenders = _affix_cluster_modules(package_leaf, stems)
-        if not offenders:
-            continue
-        for rel in sorted(first_wave_package_files.get(package_key, [])):
-            stem = Path(rel).stem.lower()
-            if stem not in offenders:
-                continue
-            importer = module_for_path.get(rel, "")
-            in_first_wave = _in_prefixes(importer, first_wave)
-            violations.append(
-                Violation(
-                    rule="NAMING_AFFIX_CLUSTER",
-                    file=rel,
-                    line=1,
-                    importer=importer,
-                    target=package_leaf,
-                    message="module name participates in forbidden affix-heavy cluster",
-                    first_wave=in_first_wave,
-                )
-            )
-
+    for module in app_modules:
+        graph.setdefault(module, set())
     cycles = _cycle_signatures(graph)
-    counts = Counter(v.rule for v in violations)
-    meta = {
+    counts = Counter(violation.rule for violation in violations)
+    metadata: dict[str, object] = {
+        "pythonFileCount": len(python_files),
+        "applicationModuleCount": len(app_modules),
         "summary": {
             "violations_total": len(violations),
             "cycles_total": len(cycles),
             "rule_counts": dict(sorted(counts.items())),
         },
-        "moduleCount": len(module_set),
-        "firstWaveModuleCount": len([m for m in module_set if _in_prefixes(m, first_wave)]),
     }
-    return sorted(violations, key=lambda v: (v.file, v.line, v.rule, v.target)), cycles, meta
-
-
-def _changed_python_files(base_ref: str) -> set[str]:
-    try:
-        proc = subprocess.run(
-            [
-                "git",
-                "diff",
-                "--name-only",
-                "--diff-filter=ACMR",
-                f"{base_ref}...HEAD",
-            ],
-            check=True,
-            cwd=ROOT,
-            capture_output=True,
-            text=True,
-        )
-    except Exception:
-        return set()
-    changed = {
-        line.strip().replace("\\", "/")
-        for line in proc.stdout.splitlines()
-        if str(line).strip().endswith(".py")
-    }
-    return {p for p in changed if p.startswith(("app/", "tests/", "scripts/"))}
+    return (
+        sorted(violations, key=lambda item: (item.file, item.line, item.rule, item.target)),
+        cycles,
+        metadata,
+    )
 
 
 def _audit_payload(
-    *,
-    boundaries: dict,
-    first_wave: list[str],
     violations: list[Violation],
     cycles: list[list[str]],
-    meta: dict,
-) -> dict:
+    metadata: dict[str, object],
+) -> dict[str, object]:
     return {
         "generatedAt": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-        "firstWave": first_wave,
-        "boundaries": boundaries,
-        "summary": meta["summary"],
-        "meta": {k: v for k, v in meta.items() if k != "summary"},
-        "violations": [
-            {
-                "rule": v.rule,
-                "file": v.file,
-                "line": v.line,
-                "importer": v.importer,
-                "target": v.target,
-                "message": v.message,
-                "firstWave": v.first_wave,
-            }
-            for v in violations
-        ],
-        "cycles": [{"nodes": list(nodes)} for nodes in cycles],
+        "summary": metadata["summary"],
+        "meta": {key: value for key, value in metadata.items() if key != "summary"},
+        "violations": [asdict(violation) for violation in violations],
+        "cycles": [{"nodes": nodes} for nodes in cycles],
     }
 
 
-def _print_text_report(payload: dict, *, show_details: bool) -> None:
+def _print_text_report(payload: dict[str, object], *, show_details: bool) -> None:
     summary = payload["summary"]
+    assert isinstance(summary, dict)
     print(
-        f"Import policy audit: violations={summary['violations_total']} cycles={summary['cycles_total']}"
+        "Import policy audit: "
+        f"violations={summary['violations_total']} cycles={summary['cycles_total']}"
     )
-    if summary["rule_counts"]:
-        for rule, count in sorted(summary["rule_counts"].items()):
-            print(f"  {rule}: {count}")
-    if show_details and payload["violations"]:
+    rule_counts = summary["rule_counts"]
+    assert isinstance(rule_counts, dict)
+    for rule, count in sorted(rule_counts.items()):
+        print(f"  {rule}: {count}")
+    violations = payload["violations"]
+    cycles = payload["cycles"]
+    assert isinstance(violations, list)
+    assert isinstance(cycles, list)
+    if show_details and violations:
         print("\nViolations:")
-        for v in payload["violations"]:
+        for violation in violations:
+            assert isinstance(violation, dict)
             print(
-                f"  - {v['file']}:{v['line']} [{v['rule']}] "
-                f"{v['message']} ({v['importer']} -> {v['target']})"
+                f"  - {violation['file']}:{violation['line']} [{violation['rule']}] "
+                f"{violation['message']} "
+                f"({violation['importer']} -> {violation['target']})"
             )
-    if show_details and payload["cycles"]:
+    if show_details and cycles:
         print("\nCycles:")
-        for cycle in payload["cycles"]:
-            print(f"  - {' -> '.join(cycle['nodes'])}")
+        for cycle in cycles:
+            assert isinstance(cycle, dict)
+            nodes = cycle["nodes"]
+            assert isinstance(nodes, list)
+            print(f"  - {' -> '.join(nodes)}")
 
 
-def cmd_audit(args: argparse.Namespace) -> int:
-    boundary_path = Path(args.boundaries) if args.boundaries else None
-    first_wave_path = Path(args.first_wave) if args.first_wave else None
-    boundaries = _load_boundaries(boundary_path)
-    first_wave = list(boundaries.get("firstWave", [])) or _load_first_wave(first_wave_path)
-    violations, cycles, meta = collect_audit(boundaries=boundaries, first_wave=first_wave)
-    payload = _audit_payload(
-        boundaries=boundaries,
-        first_wave=first_wave,
-        violations=violations,
-        cycles=cycles,
-        meta=meta,
-    )
-    output_path = Path(args.output) if args.output else None
-    if output_path is not None:
+def _run(args: argparse.Namespace, *, fail_on_findings: bool) -> int:
+    violations, cycles, metadata = collect_audit()
+    payload = _audit_payload(violations, cycles, metadata)
+    if args.output:
+        output_path = Path(args.output)
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        output_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        output_path.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
     if args.format == "json":
         print(json.dumps(payload, ensure_ascii=False, indent=2))
     else:
         _print_text_report(payload, show_details=bool(args.verbose))
-    return 0
-
-
-def cmd_check(args: argparse.Namespace) -> int:
-    boundary_path = Path(args.boundaries) if args.boundaries else None
-    first_wave_path = Path(args.first_wave) if args.first_wave else None
-    boundaries = _load_boundaries(boundary_path)
-    first_wave = list(boundaries.get("firstWave", [])) or _load_first_wave(first_wave_path)
-    violations, cycles, meta = collect_audit(boundaries=boundaries, first_wave=first_wave)
-    payload = _audit_payload(
-        boundaries=boundaries,
-        first_wave=first_wave,
-        violations=violations,
-        cycles=cycles,
-        meta=meta,
-    )
-    changed_files = _changed_python_files(args.base_ref) if args.changed_only else set()
-
-    checked_violations = violations
-    checked_cycles = cycles
-
-    if changed_files:
-        changed_files_norm = {p.replace("\\", "/") for p in changed_files}
-        checked_violations = [v for v in checked_violations if v.file in changed_files_norm]
-        module_by_file = {
-            _module_name_for_path(ROOT / f): f for f in changed_files_norm if (ROOT / f).exists()
-        }
-        changed_modules = set(module_by_file.keys())
-        checked_cycles = [
-            nodes
-            for nodes in checked_cycles
-            if any(node in changed_modules for node in nodes)
-        ]
-
-    if args.format == "json":
-        print(json.dumps(payload, ensure_ascii=False, indent=2))
-    else:
-        _print_text_report(payload, show_details=bool(args.verbose))
-
-    if checked_violations or checked_cycles:
-        print("\nImport policy check failed: violations detected.", file=sys.stderr)
-        for v in checked_violations:
+    if fail_on_findings and (violations or cycles):
+        print("\nImport policy check failed.", file=sys.stderr)
+        for violation in violations:
             print(
-                f"  {v.file}:{v.line} [{v.rule}] {v.importer} -> {v.target}",
+                f"  {violation.file}:{violation.line} [{violation.rule}] "
+                f"{violation.importer} -> {violation.target}",
                 file=sys.stderr,
             )
-        for nodes in checked_cycles:
-            print(f"  CYCLE {' -> '.join(nodes)}", file=sys.stderr)
+        for cycle in cycles:
+            print(f"  CYCLE {' -> '.join(cycle)}", file=sys.stderr)
         return 1
-
-    if args.changed_only and not changed_files:
-        print("\nNo changed python files detected; skipped import policy gate.")
-    else:
-        print("\nImport policy check passed: no violations/cycles.")
+    if fail_on_findings:
+        print("\nImport policy check passed: complete app graph is cycle-free.")
     return 0
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Import architecture policy audit/check tool")
-    parser.add_argument(
-        "--boundaries",
-        help="Optional path to import boundary config JSON",
+    parser = argparse.ArgumentParser(
+        description="Audit every Python import and the complete application graph"
     )
-    parser.add_argument(
-        "--first-wave",
-        help="Optional path to first-wave module prefixes list",
-    )
-    sub = parser.add_subparsers(dest="cmd", required=True)
-
-    audit = sub.add_parser("audit", help="emit current policy violations and cycle inventory")
+    subparsers = parser.add_subparsers(dest="command", required=True)
+    audit = subparsers.add_parser("audit", help="emit the complete import inventory")
     audit.add_argument("--output")
     audit.add_argument("--format", choices=("text", "json"), default="json")
     audit.add_argument("--verbose", action="store_true")
-    audit.set_defaults(func=cmd_audit)
-
-    check = sub.add_parser("check", help="enforce zero import-policy violations and cycles")
-    check.add_argument("--changed-only", action="store_true")
-    check.add_argument("--base-ref", default="HEAD~1")
+    audit.set_defaults(func=lambda args: _run(args, fail_on_findings=False))
+    check = subparsers.add_parser("check", help="enforce the complete import policy")
+    check.add_argument("--output")
     check.add_argument("--format", choices=("text", "json"), default="text")
     check.add_argument("--verbose", action="store_true")
-    check.set_defaults(func=cmd_check)
+    check.set_defaults(func=lambda args: _run(args, fail_on_findings=True))
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = build_parser()
-    args = parser.parse_args(argv)
+    args = build_parser().parse_args(argv)
     return int(args.func(args))
 
 

@@ -11,9 +11,12 @@ from fastapi.staticfiles import StaticFiles
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 import app.impl.auth.middleware as auth_http
-import app.impl.runtime.lifecycle as runtime_lifecycle
-from app.impl.auth.shared import _apply_security_headers
-from app.impl.runtime.config import config
+from app import runtime_lifecycle
+from app.impl.auth.shared import (
+    _apply_security_headers,
+    install_template_filters,
+)
+from app.impl.runtime.dependency import bind_application
 from app.route import (
     admin_route,
     tests_route,
@@ -27,6 +30,8 @@ from app.route import (
     maintenance_route,
 )
 from app.service.platform.http_logging import install_uvicorn_access_filter
+from app.runtime import ApplicationRuntime, build_runtime
+from app.setting import Settings, load_settings
 
 
 install_uvicorn_access_filter()
@@ -36,8 +41,13 @@ install_uvicorn_access_filter()
 class MaintenanceAdmissionMiddleware:  # pylint: disable=too-few-public-methods
     """Count admitted HTTP work until the complete ASGI response finishes."""
 
-    def __init__(self, asgi_app: ASGIApp) -> None:
+    def __init__(
+        self,
+        asgi_app: ASGIApp,
+        application_runtime: ApplicationRuntime,
+    ) -> None:
         self._asgi_app = asgi_app
+        self._runtime = application_runtime
 
     async def __call__(
         self,
@@ -48,7 +58,7 @@ class MaintenanceAdmissionMiddleware:  # pylint: disable=too-few-public-methods
         if scope["type"] != "http":
             await self._asgi_app(scope, receive, send)
             return
-        schema_error = config.schema_error
+        schema_error = self._runtime.schema_error
         if schema_error is not None:
             response = PlainTextResponse(
                 "Database schema upgrade required.\n"
@@ -65,7 +75,7 @@ class MaintenanceAdmissionMiddleware:  # pylint: disable=too-few-public-methods
             _apply_security_headers(response)
             await response(scope, receive, send)
             return
-        admission = config.maintenance_admission_gate
+        admission = self._runtime.maintenance_admission_gate
         path = str(scope.get("path") or "")
         if admission.is_exempt(path):
             await self._asgi_app(scope, receive, send)
@@ -88,28 +98,32 @@ class MaintenanceAdmissionMiddleware:  # pylint: disable=too-few-public-methods
             admission.leave_request()
 
 
-@asynccontextmanager
-async def lifespan(_app: FastAPI):
-    """Start and stop process-wide runtime helpers."""
+class RuntimeBindingMiddleware:  # pylint: disable=too-few-public-methods
+    """Expose one installed application runtime for the complete ASGI request."""
 
-    runtime_lifecycle.startup()
-    try:
-        yield
-    finally:
-        runtime_lifecycle.shutdown()
+    def __init__(self, asgi_app: ASGIApp, application: FastAPI) -> None:
+        self._asgi_app = asgi_app
+        self._application = application
+
+    async def __call__(
+        self,
+        scope: Scope,
+        receive: Receive,
+        send: Send,
+    ) -> None:
+        with bind_application(self._application):
+            await self._asgi_app(scope, receive, send)
 
 
-app = FastAPI(title="Polygonlike", lifespan=lifespan)
-app.mount("/static", StaticFiles(directory="app/static"), name="static")
-
-
-@app.get("/favicon.ico", include_in_schema=False)
-async def favicon():
+async def favicon(request: Request):
     """Serve the browser favicon at the conventional root path."""
-    return FileResponse("app/static/favicon.ico", media_type="image/x-icon")
+    application_runtime = request.app.state.runtime
+    return FileResponse(
+        application_runtime.STATIC_ROOT / "favicon.ico",
+        media_type="image/x-icon",
+    )
 
 
-@app.middleware("http")
 async def auth_middleware(request: Request, call_next):
     """Apply authentication and common response headers to every request."""
 
@@ -129,16 +143,52 @@ async def auth_middleware(request: Request, call_next):
     return response
 
 
-app.add_middleware(MaintenanceAdmissionMiddleware)
+def create_app(application_runtime: ApplicationRuntime) -> FastAPI:
+    """Create an ASGI application bound to one explicit runtime."""
+
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI):
+        runtime_lifecycle.startup(application_runtime)
+        try:
+            yield
+        finally:
+            runtime_lifecycle.shutdown(application_runtime)
+
+    install_template_filters(application_runtime.templates)
+    application = FastAPI(title="Polygonlike", lifespan=lifespan)
+    application.state.runtime = application_runtime
+    application.mount(
+        "/static",
+        StaticFiles(directory=str(application_runtime.STATIC_ROOT)),
+        name="static",
+    )
+    application.add_api_route(
+        "/favicon.ico",
+        favicon,
+        include_in_schema=False,
+    )
+    application.middleware("http")(auth_middleware)
+    application.add_middleware(
+        MaintenanceAdmissionMiddleware,
+        application_runtime=application_runtime,
+    )
+    application.add_middleware(RuntimeBindingMiddleware, application=application)
+    for router in (
+        root_auth_route.router,
+        admin_route.router,
+        contest_route.router,
+        agent_route.router,
+        problem_route.router,
+        tests_route.router,
+        preview_route.router,
+        run_export_route.router,
+        judgehost_route.router,
+        maintenance_route.router,
+    ):
+        application.include_router(router)
+    return application
 
 
-app.include_router(root_auth_route.router)
-app.include_router(admin_route.router)
-app.include_router(contest_route.router)
-app.include_router(agent_route.router)
-app.include_router(problem_route.router)
-app.include_router(tests_route.router)
-app.include_router(preview_route.router)
-app.include_router(run_export_route.router)
-app.include_router(judgehost_route.router)
-app.include_router(maintenance_route.router)
+settings: Settings = load_settings()
+runtime: ApplicationRuntime = build_runtime(settings)
+app: FastAPI = create_app(runtime)

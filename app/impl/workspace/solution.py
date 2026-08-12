@@ -5,7 +5,7 @@ import app.main_constant as _K
 import os
 from pathlib import Path
 
-from app.impl.runtime.config import config
+from app.impl.runtime.dependency import runtime
 from app.main_util import normalize_workspace_rel_path, safe_workspace_path
 from app.service.problem.solution_metadata import (
     EXPECTED_BEHAVIOR_VALUES,
@@ -14,7 +14,6 @@ from app.service.problem.solution_metadata import (
     render_solution_desc,
 )
 
-_C = config.config_values
 
 
 def list_solution_sources(workspace: Path, limit: int = 64) -> tuple[list[str], bool]:
@@ -68,7 +67,7 @@ def ensure_solution_metadata_for_source(workspace: Path, source_rel: str) -> boo
     desc_abs = safe_workspace_path(workspace, desc_rel)
     if desc_abs.exists() and desc_abs.is_file() and (desc_abs.stat().st_size > 0):
         return False
-    config.git_service.write_file(
+    runtime().git_service.write_file(
         workspace,
         desc_rel,
         render_solution_desc("unknown", ""),

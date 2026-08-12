@@ -4,7 +4,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from app.impl.problem.compile_check import judgehost_compile_check_error
-from app.impl.runtime.config import config
+from app.main import runtime
 
 from tests.common import E2ETestBase
 
@@ -12,11 +12,11 @@ from tests.common import E2ETestBase
 class TestVerificationCompileAdapter(E2ETestBase):
     def test_judgehost_compile_check_reads_full_diagnostics_from_transient_task_result(self) -> None:
         with (
-            patch.object(config.judgehost_task_service, "enabled", return_value=True),
-            patch.object(config.judgehost_task_service, "auth_token_configured", return_value=True),
-            patch.object(config.judgehost_task_service, "status", return_value={"hosts_online": 1}),
+            patch.object(runtime.judgehost_task_service, "enabled", return_value=True),
+            patch.object(runtime.judgehost_task_service, "auth_token_configured", return_value=True),
+            patch.object(runtime.judgehost_task_service, "status", return_value={"hosts_online": 1}),
             patch.object(
-                config.judgehost_task_service,
+                runtime.judgehost_task_service,
                 "compile_only_submission",
                 return_value={
                     "status": "failed",
@@ -45,11 +45,11 @@ class TestVerificationCompileAdapter(E2ETestBase):
 
     def test_judgehost_compile_check_surfaces_backend_failure_when_result_is_missing(self) -> None:
         with (
-            patch.object(config.judgehost_task_service, "enabled", return_value=True),
-            patch.object(config.judgehost_task_service, "auth_token_configured", return_value=True),
-            patch.object(config.judgehost_task_service, "status", return_value={"hosts_online": 1}),
+            patch.object(runtime.judgehost_task_service, "enabled", return_value=True),
+            patch.object(runtime.judgehost_task_service, "auth_token_configured", return_value=True),
+            patch.object(runtime.judgehost_task_service, "status", return_value={"hosts_online": 1}),
             patch.object(
-                config.judgehost_task_service,
+                runtime.judgehost_task_service,
                 "compile_only_submission",
                 side_effect=RuntimeError("Compiling failed with exitcode 1, compiler output:"),
             ),

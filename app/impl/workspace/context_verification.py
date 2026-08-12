@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 
-from app.impl.runtime.config import config
+from app.impl.runtime.dependency import runtime
 from app.service.verification.types import Kind, WorkspaceVerificationRow
 
 
@@ -32,7 +32,7 @@ def latest_workspace_verification(
     *,
     ok_only: bool = False,
 ) -> WorkspaceVerificationRow | None:
-    return config.verification_service.latest_workspace_verification(
+    return runtime().verification_service.latest_workspace_verification(
         int(problem_id),
         int(workspace_id),
         ok_only=bool(ok_only),
@@ -48,7 +48,7 @@ def latest_workspace_signature_verification(
 ) -> WorkspaceVerificationRow | None:
     if not signature:
         return None
-    rows = config.verification_service.workspace_verification_rows(
+    rows = runtime().verification_service.workspace_verification_rows(
         int(problem_id),
         int(workspace_id),
         limit=40,
@@ -74,7 +74,7 @@ def latest_workspace_source_commit_verification(
 ) -> WorkspaceVerificationRow | None:
     if not source_commit:
         return None
-    return config.verification_service.workspace_source_commit_verification(
+    return runtime().verification_service.workspace_source_commit_verification(
         int(problem_id),
         int(workspace_id),
         source_commit,

@@ -5,7 +5,7 @@ from pathlib import Path
 from fastapi import HTTPException
 
 from app.impl.auth.shared import redirect_response
-from app.impl.runtime.config import config
+from app.impl.runtime.dependency import runtime
 from app.impl.workspace.context_operation import normalize_contest_slug_required
 from app.impl.workspace.context import global_user_ctx
 from app.service.problem.runtime_config import (
@@ -14,7 +14,6 @@ from app.service.problem.runtime_config import (
 from app.service.platform.git_process import run_git
 from app.impl.workspace.problem_config import read_problem_config
 
-_C = config.config_values
 
 _CONTEST_PROPERTY_LOCATION = "location"
 _CONTEST_PROPERTY_DATE = "date"
@@ -60,10 +59,10 @@ def _contest_manage_nav(contest_slug: str, active: str) -> list[dict[str, str | 
 def _contest_ctx(contest_slug: str, user: str, active_page: str) -> dict:
     gctx = global_user_ctx(user)
     safe_slug = normalize_contest_slug_required(contest_slug)
-    contest_row = config.contest_service.contest_context(safe_slug)
+    contest_row = runtime().contest_service.contest_context(safe_slug)
     if contest_row is None:
         raise HTTPException(status_code=404, detail="contest not found")
-    access = config.access_query.contest_context(
+    access = runtime().access_query.contest_context(
         int(contest_row["id"]),
         int(gctx["user"]["id"]),
     )
@@ -152,7 +151,7 @@ def _run_problem_general_update(
         "commit_id": "",
         "error": "",
     }
-    problem_access = config.access_query.problem_context(
+    problem_access = runtime().access_query.problem_context(
         problem_id,
         actor_user_id,
     )
@@ -160,8 +159,8 @@ def _run_problem_general_update(
         result["error"] = problem_access["write_block_reason"]
         return result
     try:
-        workspace = Path(config.workspace_service.ensure_workspace(problem_slug, actor_username, refresh_status=True))
-        limits = problem_config_limits(_C)
+        workspace = Path(runtime().workspace_service.ensure_workspace(problem_slug, actor_username, refresh_status=True))
+        limits = problem_config_limits(runtime().config_values)
         try:
             safe_tl = int(requested_time_limit_ms)
             safe_ml = int(requested_memory_limit_mb)
@@ -171,11 +170,11 @@ def _run_problem_general_update(
             raise ValueError("time limit is outside the configured range")
         if not limits.min_memory_limit_mb <= safe_ml <= limits.max_memory_limit_mb:
             raise ValueError("memory limit is outside the configured range")
-        with config.workspace_service.workspace_lock(workspace):
+        with runtime().workspace_service.workspace_lock(workspace):
             has_head = run_git(["git", "-C", str(workspace), "rev-parse", "--verify", "HEAD"]).returncode == 0
             if not has_head:
                 raise RuntimeError("bulk TL/ML update requires an initialized repository; create the initial commit first")
-            before = config.git_service.status_change_summary(workspace, limit=1)
+            before = runtime().git_service.status_change_summary(workspace, limit=1)
             if int(before.get("total", 0)) > 0:
                 raise RuntimeError("workspace has uncommitted changes")
             _payload, general_cfg, cfg_path = read_problem_config(workspace)
@@ -189,29 +188,29 @@ def _run_problem_general_update(
             cfg_path.write_text(
                 dumps_problem_config(payload, limits=limits), encoding="utf-8", newline="\n"
             )
-            after = config.git_service.status_change_summary(workspace, limit=1)
+            after = runtime().git_service.status_change_summary(workspace, limit=1)
             if int(after.get("total", 0)) <= 0:
                 result["status"] = "skipped"
                 return result
             commit_msg = f"contest {contest_slug}: bulk update TL/ML"
-            commit_id = config.git_service.commit(
+            commit_id = runtime().git_service.commit(
                 workspace,
                 commit_msg,
                 actor_username,
                 f"{actor_username}@polygonlike.local",
             )
             try:
-                config.git_service.push(workspace, "main")
+                runtime().git_service.push(workspace, "main")
             except Exception as exc:
                 try:
-                    config.git_service.rollback_last_commit(workspace, expected_head=commit_id)
+                    runtime().git_service.rollback_last_commit(workspace, expected_head=commit_id)
                 except Exception as rollback_exc:
                     raise RuntimeError(f"push failed: {exc}; rollback failed: {rollback_exc}") from exc
                 raise RuntimeError(f"push failed: {exc}; commit rolled back") from exc
             result["status"] = "success"
             result["commit_id"] = str(commit_id)
         try:
-            config.workspace_service.ensure_workspace(problem_slug, actor_username, refresh_status=True)
+            runtime().workspace_service.ensure_workspace(problem_slug, actor_username, refresh_status=True)
         except Exception:
             pass
         return result

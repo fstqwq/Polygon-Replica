@@ -15,7 +15,7 @@ from app.impl.contest.workspace_scope import (
     contest_workspace_context_from_request,
     problem_href_builder,
 )
-from app.impl.runtime.config import config
+from app.impl.runtime.dependency import runtime
 from app.impl.workspace.access import require_write_access
 from app.impl.workspace.context_ui import page_ctx
 from app.service.repository.merge import MergeEntry, MergeFile, MergePreview
@@ -152,8 +152,8 @@ def _form_choices(preview: MergePreview, form) -> dict[str, str]:
 def merge_start(problem: str, user: Annotated[str, Depends(require_session_user)]):
     ctx, workspace = _workspace_context(problem, user)
     try:
-        if config.workspace_merge_service.advance_clean_workspace(workspace):
-            config.workspace_service.refresh_workspace_status_with_ids(
+        if runtime().workspace_merge_service.advance_clean_workspace(workspace):
+            runtime().workspace_service.refresh_workspace_status_with_ids(
                 workspace,
                 int(ctx["problem"]["id"]),
                 int(ctx["user"]["id"]),
@@ -162,7 +162,7 @@ def merge_start(problem: str, user: Annotated[str, Depends(require_session_user)
                 f"/problems/{problem}/workspace",
                 message="Workspace updated to the published revision.",
             )
-        preview = config.workspace_merge_service.start_preview(user, problem, workspace)
+        preview = runtime().workspace_merge_service.start_preview(user, problem, workspace)
         return redirect_response(f"/problems/{problem}/merge/{preview.preview_id}")
     except Exception as exc:
         return redirect_response(f"/problems/{problem}/workspace", message=str(exc))
@@ -175,7 +175,7 @@ def merge_page(
     user: Annotated[str, Depends(require_session_user)],
 ):
     try:
-        preview = config.workspace_merge_service.get_preview(user, problem, preview_id)
+        preview = runtime().workspace_merge_service.get_preview(user, problem, preview_id)
         requested_mode = str(request.query_params.get("mode") or "")
         mode = "manual" if requested_mode == "manual" or not preview.suggested_available else "suggested"
         return _render_merge(request, problem, user, preview, mode=mode)
@@ -193,7 +193,7 @@ def merge_compare(
     try:
         _workspace_context(problem, user)
         target = str(request.query_params.get("target") or "published")
-        comparison = config.workspace_merge_service.comparison(
+        comparison = runtime().workspace_merge_service.comparison(
             user,
             problem,
             preview_id,
@@ -230,7 +230,7 @@ async def merge_apply(
 ):
     ctx, workspace = _workspace_context(problem, user)
     try:
-        preview = config.workspace_merge_service.get_preview(user, problem, preview_id)
+        preview = runtime().workspace_merge_service.get_preview(user, problem, preview_id)
         form = await request.form()
         mode = str(form.get("mode") or "")
         choices = _form_choices(preview, form)
@@ -242,8 +242,8 @@ async def merge_apply(
                 raise ValueError("choose a result for every affected file")
         else:
             raise ValueError("select an update result")
-        config.workspace_merge_service.apply_preview(user, problem, preview_id, mode, choices)
-        changes = config.git_service.status_change_summary(workspace)
+        runtime().workspace_merge_service.apply_preview(user, problem, preview_id, mode, choices)
+        changes = runtime().git_service.status_change_summary(workspace)
         changed_count = int(changes.get("total") or 0)
         if changed_count:
             message = (
@@ -259,7 +259,7 @@ async def merge_apply(
 def merge_undo(problem: str, user: Annotated[str, Depends(require_session_user)]):
     ctx, workspace = _workspace_context(problem, user)
     try:
-        config.workspace_merge_service.undo(workspace)
+        runtime().workspace_merge_service.undo(workspace)
         message = "files from before the update were restored"
     except Exception as exc:
         message = str(exc)
@@ -274,7 +274,7 @@ def merge_file(
     user: Annotated[str, Depends(require_session_user)],
 ):
     _workspace_context(problem, user)
-    path, descriptor = config.workspace_merge_service.entry_file(
+    path, descriptor = runtime().workspace_merge_service.entry_file(
         user, problem, preview_id, entry_id, side
     )
     media_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"

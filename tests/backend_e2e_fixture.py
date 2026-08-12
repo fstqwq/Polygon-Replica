@@ -3,7 +3,7 @@ from __future__ import annotations
 import io
 from pathlib import Path
 
-from app.impl.runtime.config import config
+from app.main import runtime
 from app.service.statement.render import statement_title_for_language
 from app.service.verification.lifecycle import (
     ActivationPlan,
@@ -30,7 +30,7 @@ class BackendE2ETestBase(E2ETestBase):
         kind: str = "all",
         detail: dict[str, object] | None = None,
     ) -> str:
-        admission = config.verification_service.admit_verification(
+        admission = runtime.verification_service.admit_verification(
             VerificationAdmission(
                 verification_id=verification_id,
                 problem_id=problem_id,
@@ -46,7 +46,7 @@ class BackendE2ETestBase(E2ETestBase):
             "accepted",
             "001.in",
         )
-        activation = config.verification_service.activate_verification(
+        activation = runtime.verification_service.activate_verification(
             ActivationPlan.build(
                 verification_id,
                 detail=dict(detail or {}),
@@ -57,7 +57,7 @@ class BackendE2ETestBase(E2ETestBase):
                         source_path="fixture.cpp",
                         compile_spec=VerificationCompileSpec(
                             source_name="fixture.cpp",
-                            source_file=config.runtime_blob_store.put_bytes(
+                            source_file=runtime.runtime_blob_store.put_bytes(
                                 b"int main(){return 0;}\n"
                             ),
                         ),

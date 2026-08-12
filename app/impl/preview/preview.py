@@ -16,7 +16,7 @@ from fastapi.responses import JSONResponse, PlainTextResponse
 
 from app.impl.auth.shared import redirect_response, template_response
 from app.impl.contest.workspace_scope import contest_workspace_context_from_request
-from app.impl.runtime.config import config
+from app.impl.runtime.dependency import runtime
 from app.impl.workspace.access import require_write_access
 from app.impl.workspace.context_ui import page_ctx
 from app.impl.workspace.context_operation import (
@@ -53,7 +53,6 @@ from app.service.statement.render import (
 from app.service.statement.signature import statement_sources_signature
 from app.service.problem.runtime_config import problem_config_limits
 
-_C = config.config_values
 _CONTESTANT_ATTACHMENTS_ROOT = "attachments"
 
 def statement_compile_asset_rows(workspace: Path) -> list[dict[str, str]]:
@@ -298,7 +297,7 @@ def extract_latex_failure_summary(log_text: str, summary_obj: dict[str, object] 
 
 
 def preview_page(request: Request, problem: str, user: Annotated[str, Depends(require_session_user)]):
-    config_snapshot = _C.snapshot()
+    config_snapshot = runtime().config_values.snapshot()
     ctx = page_ctx(
         problem,
         user,
@@ -327,11 +326,11 @@ def preview_page(request: Request, problem: str, user: Annotated[str, Depends(re
     has_statement_language = bool(current_language)
     preview_id = requested_preview_id
     message = ''
-    previews = config.preview_service.list_workspace_previews(problem_id, workspace_id)
+    previews = runtime().preview_service.list_workspace_previews(problem_id, workspace_id)
     if has_statement_language and (not preview_id):
         dirty = bool(ctx['workspace'].get('dirty'))
         if workspace_head and (not dirty):
-            cached_id = config.preview_service.find_cached_preview_id(
+            cached_id = runtime().preview_service.find_cached_preview_id(
                 problem,
                 problem_id,
                 workspace_id,
@@ -342,7 +341,7 @@ def preview_page(request: Request, problem: str, user: Annotated[str, Depends(re
             if cached_id:
                 preview_id = cached_id
         elif dirty:
-            cached_id = config.preview_service.find_cached_preview_id(
+            cached_id = runtime().preview_service.find_cached_preview_id(
                 problem,
                 problem_id,
                 workspace_id,
@@ -381,7 +380,7 @@ def preview_page(request: Request, problem: str, user: Annotated[str, Depends(re
 
     if has_statement_language and preview_id:
         lp = None
-        preview_state = config.preview_service.get_workspace_preview_state(
+        preview_state = runtime().preview_service.get_workspace_preview_state(
             problem_id,
             workspace_id,
             preview_id,
@@ -406,18 +405,18 @@ def preview_page(request: Request, problem: str, user: Annotated[str, Depends(re
             pdf_exists = bool(preview_state['pdf_available'])
             preview_artifacts_missing = preview_display_status == 'missing'
             if bool(preview_state['log_available']):
-                lp = config.storage_layout.resolve_preview_root(preview_id) / 'logs' / 'latex.log'
+                lp = runtime().storage_layout.resolve_preview_root(preview_id) / 'logs' / 'latex.log'
             preview_compile_failed = selected_preview_row_status in {'failed', 'error'}
         else:
             preview_id = ''
         if preview_id and lp is not None:
             latex_log_available = True
-            raw_log, log_truncated = read_text_safe_limited(lp, _C.UI_LOG_TEXT_CHAR_LIMIT)
+            raw_log, log_truncated = read_text_safe_limited(lp, runtime().config_values.UI_LOG_TEXT_CHAR_LIMIT)
             redact_prefixes: list[tuple[str, str]] = [
                 (str(workspace.resolve()), '.'),
-                (str(config.storage_layout.workspace_root.resolve()), '__workspace_root__'),
-                (str(config.storage_layout.artifacts_root.resolve()), '__artifacts__'),
-                (str(config.storage_layout.cache_root.resolve()), '__cache__'),
+                (str(runtime().storage_layout.workspace_root.resolve()), '__workspace_root__'),
+                (str(runtime().storage_layout.artifacts_root.resolve()), '__artifacts__'),
+                (str(runtime().storage_layout.cache_root.resolve()), '__cache__'),
             ]
             log = sanitize_log_text_for_ui(raw_log, path_prefixes=redact_prefixes)
             if not log.strip():
@@ -427,7 +426,7 @@ def preview_page(request: Request, problem: str, user: Annotated[str, Depends(re
                 m = tex_ref.search(line)
                 if m:
                     log_refs_total += 1
-                    if len(log_refs) >= _C.PREVIEW_LOG_REF_LIST_LIMIT:
+                    if len(log_refs) >= runtime().config_values.PREVIEW_LOG_REF_LIST_LIMIT:
                         log_refs_truncated = True
                         continue
                     log_refs.append({'file': m.group('file'), 'line': int(m.group('line')), 'context': line})
@@ -469,10 +468,10 @@ def preview_page(request: Request, problem: str, user: Annotated[str, Depends(re
             'statement_style_path': STATEMENT_STYLE_REL.as_posix(),
             'statement_compile_assets': statement_compile_assets,
             'contestant_attachments': contestant_attachments,
-            'editor_char_limit': _C.TEXTAREA_MAX_BYTES,
+            'editor_char_limit': runtime().config_values.TEXTAREA_MAX_BYTES,
             'log': log,
             'log_truncated': log_truncated,
-            'log_char_limit': _C.UI_LOG_TEXT_CHAR_LIMIT,
+            'log_char_limit': runtime().config_values.UI_LOG_TEXT_CHAR_LIMIT,
             'pdf_exists': pdf_exists,
             'preview_artifacts_missing': preview_artifacts_missing,
             'preview_display_status': preview_display_status,
@@ -480,17 +479,17 @@ def preview_page(request: Request, problem: str, user: Annotated[str, Depends(re
             'log_refs': log_refs,
             'log_refs_total': log_refs_total,
             'log_refs_truncated': log_refs_truncated,
-            'log_refs_limit': _C.PREVIEW_LOG_REF_LIST_LIMIT,
+            'log_refs_limit': runtime().config_values.PREVIEW_LOG_REF_LIST_LIMIT,
             'preview_compile_failed': preview_compile_failed,
             'preview_failure_title': preview_failure_title,
             'preview_failure_detail': preview_failure_detail,
             'preview_failed_stage': preview_failed_stage,
             'latex_log_available': latex_log_available,
             'problem_mode_values': list(_K.GENERAL_MODE_VALUES),
-            'time_limit_min_ms': _C.GENERAL_TIME_LIMIT_MIN_MS,
-            'time_limit_max_ms': _C.GENERAL_TIME_LIMIT_MAX_MS,
-            'memory_limit_min_mb': _C.GENERAL_MEMORY_LIMIT_MIN_MB,
-            'memory_limit_max_mb': _C.GENERAL_MEMORY_LIMIT_MAX_MB,
+            'time_limit_min_ms': runtime().config_values.GENERAL_TIME_LIMIT_MIN_MS,
+            'time_limit_max_ms': runtime().config_values.GENERAL_TIME_LIMIT_MAX_MS,
+            'memory_limit_min_mb': runtime().config_values.GENERAL_MEMORY_LIMIT_MIN_MB,
+            'memory_limit_max_mb': runtime().config_values.GENERAL_MEMORY_LIMIT_MAX_MB,
             'return_page': return_page,
             'statement_mode': safe_mode,
             'available_languages': available_languages,
@@ -536,17 +535,17 @@ def preview_run(
     }
     msg = 'preview compile failed'
     base = statement_redirect_url(problem, user, target_page, language=current_language)
-    with config.preview_lock:
-        if workspace_key in config.preview_inflight:
+    with runtime().preview_lock:
+        if workspace_key in runtime().preview_inflight:
             details['status'] = 'running'
             details['preview_status'] = 'running'
             details['error'] = 'preview compile already running'
             return redirect_response(base, status_code=303, message='preview compile already running')
-        config.preview_inflight.add(workspace_key)
+        runtime().preview_inflight.add(workspace_key)
     try:
-        preview_id = config.preview_service.compile_preview(problem, user, language=current_language)
+        preview_id = runtime().preview_service.compile_preview(problem, user, language=current_language)
         details['preview_id'] = preview_id
-        row = config.preview_service.get_workspace_preview(problem_id, workspace_id, details['preview_id'])
+        row = runtime().preview_service.get_workspace_preview(problem_id, workspace_id, details['preview_id'])
         if row is None:
             raise RuntimeError('preview metadata missing after compile')
         preview_status = row['status']
@@ -568,8 +567,8 @@ def preview_run(
         details['error'] = str(exc)
         msg = str(exc)
     finally:
-        with config.preview_lock:
-            config.preview_inflight.discard(workspace_key)
+        with runtime().preview_lock:
+            runtime().preview_inflight.discard(workspace_key)
     redirect_url = base
     preview_id = details["preview_id"]
     if preview_id:
@@ -577,7 +576,7 @@ def preview_run(
     return redirect_response(redirect_url, status_code=303, message=msg)
 
 def preview_status(problem: str, user: Annotated[str, Depends(require_session_user)], language: str = ""):
-    config_snapshot = _C.snapshot()
+    config_snapshot = runtime().config_values.snapshot()
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
     problem_id = int(ctx['problem']['id'])
     workspace_id = int(ctx['workspace']['id'])
@@ -601,9 +600,9 @@ def preview_status(problem: str, user: Annotated[str, Depends(require_session_us
     )
     workspace_head = str(ctx['workspace'].get('head_commit') or "")
     workspace_key = f'{problem_id}:{workspace_id}'
-    with config.preview_lock:
-        running = workspace_key in config.preview_inflight
-    row = config.preview_service.latest_workspace_preview_state(
+    with runtime().preview_lock:
+        running = workspace_key in runtime().preview_inflight
+    row = runtime().preview_service.latest_workspace_preview_state(
         problem_id,
         workspace_id,
         statement_signature=current_statement_signature,
@@ -632,7 +631,7 @@ def preview_status(problem: str, user: Annotated[str, Depends(require_session_us
 
 
 def statement_tex_source(problem: str, user: Annotated[str, Depends(require_session_user)], language: str = ""):
-    config_snapshot = _C.snapshot()
+    config_snapshot = runtime().config_values.snapshot()
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
     workspace = Path(ctx['workspace']['path'])
     try:
@@ -650,7 +649,7 @@ def statement_tex_source(problem: str, user: Annotated[str, Depends(require_sess
                 ),
                 tests_spec_max_bytes=int(config_snapshot["TEXTAREA_MAX_BYTES"]),
                 statement_sample_max_bytes=int(config_snapshot["STATEMENT_SAMPLE_MAX_BYTES"]),
-                problem_limits=problem_config_limits(_C),
+                problem_limits=problem_config_limits(runtime().config_values),
             )
             tex_text = tex_path.read_text(encoding='utf-8')
     except (RuntimeError, ValueError) as exc:
@@ -691,14 +690,14 @@ def preview_save(
     statement_mode = statement_mode_from_ctx(ctx)
     msg = 'statement saved'
     try:
-        textarea_limit = int(_C.TEXTAREA_MAX_BYTES)
+        textarea_limit = int(runtime().config_values.TEXTAREA_MAX_BYTES)
         safe_name_tex = enforce_textarea_max_bytes(name_tex, label="statement title", max_bytes=textarea_limit)
         safe_legend_tex = enforce_textarea_max_bytes(legend_tex, label="statement legend", max_bytes=textarea_limit)
         safe_input_tex = enforce_textarea_max_bytes(input_tex, label="statement input", max_bytes=textarea_limit)
         safe_output_tex = enforce_textarea_max_bytes(output_tex, label="statement output", max_bytes=textarea_limit)
         safe_notes_tex = enforce_textarea_max_bytes(notes_tex, label="statement notes", max_bytes=textarea_limit)
         safe_interaction_tex = enforce_textarea_max_bytes(interaction_tex, label="statement interaction", max_bytes=textarea_limit)
-        with config.workspace_service.workspace_lock(workspace):
+        with runtime().workspace_service.workspace_lock(workspace):
             section_paths = statement_editor_section_paths(current_language)
             write_plan = {
                 'name': safe_name_tex,
@@ -737,7 +736,7 @@ def statement_templates_reset(
     current_language = resolve_statement_page_language(workspace, language)
     message = 'default statement templates restored'
     try:
-        with config.workspace_service.workspace_lock(workspace):
+        with runtime().workspace_service.workspace_lock(workspace):
             for rel, content in STATEMENT_DEFAULT_FILES.items():
                 target = safe_workspace_path(workspace, rel)
                 if target.is_symlink():
@@ -778,7 +777,7 @@ def statement_compile_asset_delete(
     message = 'statement asset deleted'
     try:
         safe_rel = normalize_statement_compile_asset_target(path)
-        with config.workspace_service.workspace_lock(workspace):
+        with runtime().workspace_service.workspace_lock(workspace):
             attachment_abs = safe_workspace_path(workspace, safe_rel)
             if not attachment_abs.exists() or (not attachment_abs.is_file()):
                 raise ValueError('statement asset not found')
@@ -820,7 +819,7 @@ async def statement_compile_asset_upload(
     target_rel = ''
     try:
         target_rel = normalize_statement_compile_asset_target(path, upload_filename=upload.filename or "")
-        with config.workspace_service.workspace_lock(workspace):
+        with runtime().workspace_service.workspace_lock(workspace):
             asset_abs = safe_workspace_path(workspace, target_rel)
             if asset_abs.exists() and asset_abs.is_dir():
                 raise ValueError('statement asset target must be a file path')
@@ -833,7 +832,7 @@ async def statement_compile_asset_upload(
                         upload,
                         out,
                         label='statement asset',
-                        max_bytes=int(_C.UPLOAD_MAX_BYTES),
+                        max_bytes=int(runtime().config_values.UPLOAD_MAX_BYTES),
                     )
                 os.replace(tmp_path, asset_abs)
                 tmp_path = None
@@ -882,7 +881,7 @@ async def statement_attachment_upload(
     target_rel = ''
     try:
         target_rel = normalize_contestant_attachment_target(path, upload_filename=upload.filename)
-        with config.workspace_service.workspace_lock(workspace):
+        with runtime().workspace_service.workspace_lock(workspace):
             attachment_abs = safe_workspace_path(workspace, target_rel)
             if attachment_abs.exists() and attachment_abs.is_dir():
                 raise ValueError('attachment target must be a file path')
@@ -895,7 +894,7 @@ async def statement_attachment_upload(
                         upload,
                         out,
                         label='attachment',
-                        max_bytes=int(_C.UPLOAD_MAX_BYTES),
+                        max_bytes=int(runtime().config_values.UPLOAD_MAX_BYTES),
                     )
                 os.replace(tmp_path, attachment_abs)
                 tmp_path = None
@@ -941,7 +940,7 @@ def statement_attachment_delete(
     message = 'attachment deleted'
     try:
         safe_rel = normalize_contestant_attachment_target(path)
-        with config.workspace_service.workspace_lock(workspace):
+        with runtime().workspace_service.workspace_lock(workspace):
             attachment_abs = safe_workspace_path(workspace, safe_rel)
             if not attachment_abs.exists() or (not attachment_abs.is_file()):
                 raise ValueError('attachment not found')
@@ -973,7 +972,7 @@ def statement_language_add(
         safe_language = normalize_statement_language(language)
         if not safe_language:
             raise ValueError('statement language is required')
-        with config.workspace_service.workspace_lock(workspace):
+        with runtime().workspace_service.workspace_lock(workspace):
             ensure_statement_language_sources(workspace, safe_language)
     except (RuntimeError, ValueError, OSError) as exc:
         safe_language = ""
@@ -1000,7 +999,7 @@ def statement_language_delete(
     message = 'statement language deleted'
     try:
         current_language = selected_statement_language(workspace, language)
-        with config.workspace_service.workspace_lock(workspace):
+        with runtime().workspace_service.workspace_lock(workspace):
             language_root = safe_workspace_path(
                 workspace,
                 (STATEMENT_SECTIONS_DIR / current_language).as_posix(),

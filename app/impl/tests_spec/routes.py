@@ -12,7 +12,7 @@ from starlette.background import BackgroundTask
 
 from app.impl.auth.shared import redirect_response, template_response
 from app.impl.contest.workspace_scope import contest_workspace_context_from_request
-from app.impl.runtime.config import config
+from app.impl.runtime.dependency import runtime
 from app.impl.tests_spec.shared import (
     parse_gen_script_lines,
     tests_spec_add_single_entry,
@@ -48,11 +48,10 @@ from app.service.problem.test_spec import (
     normalize_tests_spec_entry,
 )
 
-_C = config.config_values
 
 
 def _read_tests_spec(workspace: Path) -> tuple[list[dict[str, str]], Path]:
-    limits = _C.snapshot()
+    limits = runtime().config_values.snapshot()
     return read_tests_spec(
         workspace,
         document_max_bytes=int(limits["TEXTAREA_MAX_BYTES"]),
@@ -61,7 +60,7 @@ def _read_tests_spec(workspace: Path) -> tuple[list[dict[str, str]], Path]:
 
 
 def _write_tests_spec(path: Path, entries: list[dict[str, str]]) -> None:
-    limits = _C.snapshot()
+    limits = runtime().config_values.snapshot()
     write_tests_spec(
         path,
         entries,
@@ -74,7 +73,7 @@ def _normalize_tests_spec_entry(raw: object, *, index: int) -> dict:
     return normalize_tests_spec_entry(
         raw,
         index=index,
-        sample_max_bytes=int(_C.STATEMENT_SAMPLE_MAX_BYTES),
+        sample_max_bytes=int(runtime().config_values.STATEMENT_SAMPLE_MAX_BYTES),
     )
 
 
@@ -90,7 +89,7 @@ def render_tests_page(request: Request, problem: str, user: Annotated[str, Depen
     try:
         tests_editor = tests_spec_editor_context(
             workspace,
-            limit=int(_C.TESTS_SPEC_ROWS_LIMIT),
+            limit=int(runtime().config_values.TESTS_SPEC_ROWS_LIMIT),
         )
     except (ValueError, OSError) as exc:
         tests_editor_error = str(exc)
@@ -109,7 +108,7 @@ def render_tests_page(request: Request, problem: str, user: Annotated[str, Depen
         'tests_gen_script': tests_gen_script,
         'tests_gen_script_configured': tests_gen_script_configured,
         'tests_gen_script_edit': request.query_params.get('edit') == 'gen-script',
-        'statement_sample_max_bytes': int(_C.STATEMENT_SAMPLE_MAX_BYTES),
+        'statement_sample_max_bytes': int(runtime().config_values.STATEMENT_SAMPLE_MAX_BYTES),
     }
     if tests_editor_error:
         template_context['message'] = tests_editor_error
@@ -133,7 +132,7 @@ def add_manual_test(
     try:
         safe_input = normalize_manual_input(
             tests_spec_form_text(manual_input),
-            max_bytes=int(_C.TEXTAREA_MAX_BYTES),
+            max_bytes=int(runtime().config_values.TEXTAREA_MAX_BYTES),
         )
         safe_sample = tests_spec_bool_flag(tests_spec_form_text(sample))
         requested_id = tests_spec_form_text(test_id).strip()
@@ -142,7 +141,7 @@ def add_manual_test(
         safe_sample_output_validate = tests_spec_sample_output_validate_value(sample_output_validate, True)
         if not safe_sample:
             safe_sample_output_validate = False
-        with config.workspace_service.workspace_lock(workspace):
+        with runtime().workspace_service.workspace_lock(workspace):
             added_index, safe_test_id = tests_spec_add_single_entry(
                 workspace,
                 requested_id=requested_id,
@@ -180,7 +179,7 @@ async def upload_manual_test(
         raw_payload = await read_upload_bytes_limited(
             manual_upload,
             label='uploaded payload',
-            max_bytes=int(_C.UPLOAD_MAX_BYTES),
+            max_bytes=int(runtime().config_values.UPLOAD_MAX_BYTES),
         )
         try:
             uploaded_text = raw_payload.decode('utf-8')
@@ -194,7 +193,7 @@ async def upload_manual_test(
         safe_sample_output_validate = tests_spec_sample_output_validate_value(sample_output_validate, True)
         if not safe_sample:
             safe_sample_output_validate = False
-        with config.workspace_service.workspace_lock(workspace):
+        with runtime().workspace_service.workspace_lock(workspace):
             added_index, safe_test_id = tests_spec_add_single_entry(
                 workspace,
                 requested_id=requested_id,
@@ -242,7 +241,7 @@ def add_generator_test(
         safe_sample_output_validate = tests_spec_sample_output_validate_value(sample_output_validate, True)
         if not safe_sample:
             safe_sample_output_validate = False
-        with config.workspace_service.workspace_lock(workspace):
+        with runtime().workspace_service.workspace_lock(workspace):
             added_index, safe_test_id = tests_spec_add_single_entry(
                 workspace,
                 requested_id=requested_id,
@@ -281,7 +280,7 @@ def edit_spec_test(
         safe_test_id = normalize_test_id(tests_spec_form_text(test_id))
         safe_kind = normalize_test_kind(tests_spec_form_text(kind))
         safe_sample = tests_spec_bool_flag(tests_spec_form_text(sample))
-        with config.workspace_service.workspace_lock(workspace):
+        with runtime().workspace_service.workspace_lock(workspace):
             entries, spec_path = _read_tests_spec(workspace)
             idx = tests_spec_resolve_index(index, len(entries))
             current = _normalize_tests_spec_entry(dict(entries[idx - 1]), index=idx)
@@ -302,7 +301,7 @@ def edit_spec_test(
             if safe_kind == 'manual':
                 safe_payload = normalize_manual_input(
                     submitted_payload,
-                    max_bytes=int(_C.TEXTAREA_MAX_BYTES),
+                    max_bytes=int(runtime().config_values.TEXTAREA_MAX_BYTES),
                 )
             elif safe_kind == 'gen':
                 safe_payload = normalize_gen_command(submitted_payload)
@@ -331,7 +330,7 @@ def delete_spec_test(problem: str, user: Annotated[str, Depends(require_session_
     workspace = Path(ctx['workspace']['path'])
     msg = 'test deleted'
     try:
-        with config.workspace_service.workspace_lock(workspace):
+        with runtime().workspace_service.workspace_lock(workspace):
             entries, spec_path = _read_tests_spec(workspace)
             idx = tests_spec_resolve_index(index, len(entries))
             deleted = entries.pop(idx - 1)
@@ -363,7 +362,7 @@ def reindex_spec_test(
             target_pos = int(target_raw)
         except Exception as exc:
             raise ValueError('target position must be an integer') from exc
-        with config.workspace_service.workspace_lock(workspace):
+        with runtime().workspace_service.workspace_lock(workspace):
             entries, spec_path = _read_tests_spec(workspace)
             if not entries:
                 raise ValueError('no tests to reindex')
@@ -404,10 +403,10 @@ def save_gen_script(problem: str, user: Annotated[str, Depends(require_session_u
         safe_script_text = enforce_textarea_max_bytes(
             tests_spec_form_text(gen_script_text),
             label='generator script',
-            max_bytes=int(_C.TEXTAREA_MAX_BYTES),
+            max_bytes=int(runtime().config_values.TEXTAREA_MAX_BYTES),
         )
         desired_commands = parse_gen_script_lines(safe_script_text)
-        with config.workspace_service.workspace_lock(workspace):
+        with runtime().workspace_service.workspace_lock(workspace):
             entries, spec_path = _read_tests_spec(workspace)
             existing_gen_rows: list[dict[str, object]] = []
             seed_entries: list[dict[str, object]] = []
@@ -513,7 +512,7 @@ def save_gen_script(problem: str, user: Annotated[str, Depends(require_session_u
 def download_test_payload(problem: str, user: Annotated[str, Depends(require_session_user)], index: str):
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
     workspace = Path(ctx['workspace']['path'])
-    with config.workspace_service.workspace_lock(workspace):
+    with runtime().workspace_service.workspace_lock(workspace):
         entries, _spec_path = _read_tests_spec(workspace)
         idx = tests_spec_resolve_index(index, len(entries))
         entry = dict(entries[idx - 1])
@@ -551,14 +550,14 @@ async def upload_test_payload(
         raw_payload = await read_upload_bytes_limited(
             payload_upload,
             label='uploaded payload',
-            max_bytes=int(_C.UPLOAD_MAX_BYTES),
+            max_bytes=int(runtime().config_values.UPLOAD_MAX_BYTES),
         )
         try:
             uploaded_text = raw_payload.decode('utf-8')
         except UnicodeDecodeError as exc:
             raise ValueError('uploaded payload must be utf-8 text') from exc
         safe_payload = normalize_file_manual_input(uploaded_text)
-        with config.workspace_service.workspace_lock(workspace):
+        with runtime().workspace_service.workspace_lock(workspace):
             entries, _spec_path = _read_tests_spec(workspace)
             idx = tests_spec_resolve_index(index, len(entries))
             entry = dict(entries[idx - 1])

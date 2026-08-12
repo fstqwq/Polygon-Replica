@@ -6,14 +6,14 @@ from urllib.parse import parse_qs, urlparse
 from fastapi import HTTPException
 
 from app.impl.problem.file import files_page, files_restore_default
-from app.impl.runtime.config import config
+from app.main import runtime
 from app.service.statement.constant import STATEMENT_DEFAULT_FILES
 
 from tests.common import WorkspaceTestBase
 from tests.ui_support import _flash_messages_from_response, _request
 
 
-workspace_service = config.workspace_service
+workspace_service = runtime.workspace_service
 
 
 class TestStatementDefaultRestore(WorkspaceTestBase):

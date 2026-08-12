@@ -1,3 +1,5 @@
+"""Composition root for one Polygon Replica application process."""
+
 from __future__ import annotations
 import secrets
 import threading
@@ -30,6 +32,7 @@ from app.service.problem_package.service import (
     ProblemPackageService,
     PublishedRevision,
 )
+from app.service.problem_package.workflow import PublishedMaterializationWorkflow
 from app.service.problem.readiness import ProblemReadinessService
 from app.service.repository.git import GitService
 from app.service.repository.merge import WorkspaceMergeService
@@ -60,15 +63,17 @@ from app.service.platform.maintenance.filesystem import (
 )
 from app.service.platform.source_backup import SourceBackupService
 from app.service.repository import workspace
-from app.setting import Settings, load_settings
+from app.setting import Settings
 
 @dataclass
-class RuntimeConfig:
-    TEMPLATE_ROOT: Path = Path(__file__).resolve().parents[2] / "template"
-    STATIC_ROOT: Path = Path(__file__).resolve().parents[2] / "static"
-    settings: Settings = field(default_factory=load_settings)
+class ApplicationRuntime:  # pylint: disable=too-many-instance-attributes
+    """Own every concrete service and process-scoped coordination primitive."""
+
+    settings: Settings
+    TEMPLATE_ROOT: Path = Path(__file__).resolve().parent / "template"  # pylint: disable=invalid-name
+    STATIC_ROOT: Path = Path(__file__).resolve().parent / "static"  # pylint: disable=invalid-name
     config_values: ConfigValues = field(init=False)
-    db: DB = field(init=False)
+    db: DB = field(init=False)  # pylint: disable=invalid-name
     schema_error: SchemaRequirementsError | None = field(init=False, default=None)
     workspace_service: workspace.WorkspaceService = field(init=False)
     access_query: AccessQuery = field(init=False)
@@ -100,6 +105,9 @@ class RuntimeConfig:
     judgehost_task_service: Judgehost = field(init=False)
     export_service: ExportService = field(init=False)
     problem_package_service: ProblemPackageService = field(init=False)
+    published_materialization_workflow: PublishedMaterializationWorkflow = field(
+        init=False
+    )
     problem_readiness_service: ProblemReadinessService = field(init=False)
     worker_queue_service: WorkerQueueService = field(init=False)
     artifact_cleanup_service: ArtifactCleanupService = field(init=False)
@@ -114,7 +122,9 @@ class RuntimeConfig:
     workspace_mutation_service: WorkspaceMutationService = field(init=False)
     static_assets: StaticAssetManifest = field(init=False)
     templates: Jinja2Templates = field(
-        default_factory=lambda: Jinja2Templates(directory=str(RuntimeConfig.TEMPLATE_ROOT))
+        default_factory=lambda: Jinja2Templates(
+            directory=str(ApplicationRuntime.TEMPLATE_ROOT)
+        )
     )
     preview_lock: threading.Lock = field(default_factory=threading.Lock)
     preview_inflight: set[str] = field(default_factory=set)
@@ -129,6 +139,7 @@ class RuntimeConfig:
     password_form_csrf_secret: bytes = field(init=False)
 
     def _resolve_password_form_csrf_secret(self) -> bytes:
+        """Resolve the runtime-owned form secret from canonical configuration."""
         configured = str(self.config_values.PASSWORD_FORM_CSRF_SECRET or "").strip()
         if configured:
             return configured.encode("utf-8")
@@ -148,6 +159,7 @@ class RuntimeConfig:
             self.verification_inflight.clear()
 
     def _cleanup_problem_judgehost_runtime(self, problem_slug: str) -> None:
+        """Remove Judgehost state owned by one deleted problem."""
         task_rows = self.judgehost_task_service.state.task_registry.snapshots()
         run_ids = sorted(
             {
@@ -161,6 +173,7 @@ class RuntimeConfig:
         self.judgehost_task_service.forget_problem_tasks(problem_slug)
 
     def reload_config(self, *, include_restart_required: bool = False) -> dict[str, object]:
+        """Refresh mutable runtime configuration from its durable store."""
         runtime_overrides = self.system_config_service.refresh(
             include_restart_required=include_restart_required,
         )
@@ -169,7 +182,7 @@ class RuntimeConfig:
         self.password_form_csrf_secret = self._resolve_password_form_csrf_secret()
         return runtime_overrides
 
-    def __post_init__(self) -> None:
+    def __post_init__(self) -> None:  # pylint: disable=too-many-statements
         self.storage_layout = StorageLayout.from_settings(self.settings)
         validate_runtime_startup_preconditions(self.storage_layout)
         self.static_assets = StaticAssetManifest(self.STATIC_ROOT)
@@ -281,7 +294,6 @@ class RuntimeConfig:
             task_store=self.verification_task_store,
             config_values=self.config_values,
         )
-        self.verification_service.set_workflow(self.verification_workflow)
         self.preview_service = PreviewService(
             self.db,
             self.workspace_service,
@@ -294,6 +306,11 @@ class RuntimeConfig:
             self.storage_layout,
             artifact_file_resolver=self.runtime_blob_store.descriptor,
             verification_id_allocator=self.verification_service.allocate_verification_id,
+        )
+        self.published_materialization_workflow = PublishedMaterializationWorkflow(
+            self.problem_package_service,
+            self.verification_service,
+            self.verification_workflow,
         )
         self.problem_readiness_service = ProblemReadinessService(
             self.verification_service,
@@ -334,11 +351,7 @@ class RuntimeConfig:
             actor_user_id: int,
             actor_username: str,
         ) -> MaterializationRow:
-            from app.impl.workspace.published_materialization import (
-                ensure_published_materialization,
-            )
-
-            return ensure_published_materialization(
+            return self.published_materialization_workflow.ensure(
                 revision=revision,
                 actor_user_id=actor_user_id,
                 actor_username=actor_username,
@@ -393,4 +406,9 @@ class RuntimeConfig:
             cleanup_problem_runtime=self._cleanup_problem_judgehost_runtime,
         )
         self.password_form_csrf_secret = self._resolve_password_form_csrf_secret()
-config = RuntimeConfig()
+
+
+def build_runtime(settings: Settings) -> ApplicationRuntime:
+    """Construct one complete process runtime without installing global state."""
+
+    return ApplicationRuntime(settings=settings)

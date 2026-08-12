@@ -5,7 +5,7 @@ import app.main_constant as _K
 from pathlib import Path
 from typing import TypedDict
 
-from app.impl.runtime.config import config
+from app.impl.runtime.dependency import runtime
 from app.impl.workspace.context_component_status import (
     checker_status_context,
     interactor_status_context,
@@ -24,7 +24,6 @@ from app.service.repository.revision import workspace_upstream_revision_display
 from app.service.statement.context import statement_languages
 from app.service.workspace.state import WorkspaceState
 
-_C = config.config_values
 
 class ContestProblemDisplayRow(TypedDict):
     contest_problem_id: int
@@ -84,7 +83,7 @@ def _resolved_workspace_path(
     username: str,
 ) -> Path | None:
     try:
-        expected = config.storage_layout.workspace(username, problem_slug)
+        expected = runtime().storage_layout.workspace(username, problem_slug)
         workspace = Path(workspace_state["path"]).resolve()
     except OSError:
         return None
@@ -102,9 +101,9 @@ def _contest_problem_rows(
     *,
     include_review: bool,
 ) -> list[ContestProblemDisplayRow]:
-    config_snapshot = _C.snapshot()
-    rows = config.contest_service.contest_problems(contest_id)
-    access_by_problem = config.access_query.problem_contexts(
+    config_snapshot = runtime().config_values.snapshot()
+    rows = runtime().contest_service.contest_problems(contest_id)
+    access_by_problem = runtime().access_query.problem_contexts(
         [row["problem_id"] for row in rows],
         user_id,
     )
@@ -118,7 +117,7 @@ def _contest_problem_rows(
     # workspace whose revision state has never been recorded.
     readable_problem_ids = [row["problem_id"] for row in readable_rows]
     workspace_by_problem = (
-        config.workspace_service.workspace_rows(readable_problem_ids, user_id)
+        runtime().workspace_service.workspace_rows(readable_problem_ids, user_id)
         if readable_problem_ids
         else {}
     )
@@ -139,7 +138,7 @@ def _contest_problem_rows(
         if workspace is not None:
             continue
         try:
-            config.workspace_service.ensure_workspace(
+            runtime().workspace_service.ensure_workspace(
                 row["problem_slug"],
                 username,
                 refresh_status=True,
@@ -148,7 +147,7 @@ def _contest_problem_rows(
         except (OSError, RuntimeError, ValueError):
             workspace_errors.add(problem_id)
     if provisioned:
-        workspace_by_problem = config.workspace_service.workspace_rows(
+        workspace_by_problem = runtime().workspace_service.workspace_rows(
             readable_problem_ids,
             user_id,
         )
@@ -170,7 +169,7 @@ def _contest_problem_rows(
             workspace_errors.add(problem_id)
             continue
         try:
-            config.workspace_service.refresh_workspace_status_with_ids(
+            runtime().workspace_service.refresh_workspace_status_with_ids(
                 workspace,
                 problem_id,
                 user_id,
@@ -179,7 +178,7 @@ def _contest_problem_rows(
         except (OSError, RuntimeError, ValueError):
             workspace_errors.add(problem_id)
     if refreshed:
-        workspace_by_problem = config.workspace_service.workspace_rows(
+        workspace_by_problem = runtime().workspace_service.workspace_rows(
             readable_problem_ids,
             user_id,
         )
@@ -218,7 +217,7 @@ def _contest_problem_rows(
                 }
             )
     readiness_by_problem = (
-        config.problem_readiness_service.readiness_many(
+        runtime().problem_readiness_service.readiness_many(
             readiness_subjects,
             explain_verification=False,
         )
@@ -274,7 +273,7 @@ def _contest_problem_rows(
 
                 source_tree = load_problem_source_tree(
                     workspace,
-                    problem_limits=problem_config_limits(_C),
+                    problem_limits=problem_config_limits(runtime().config_values),
                     tests_spec_max_bytes=int(
                         config_snapshot["TEXTAREA_MAX_BYTES"]
                     ),
@@ -289,7 +288,7 @@ def _contest_problem_rows(
                 test_count = len(source_tree.tests)
                 solution_sources, solutions_truncated = list_solution_sources(
                     workspace,
-                    limit=int(_C.SOLUTION_LIST_LIMIT),
+                    limit=int(runtime().config_values.SOLUTION_LIST_LIMIT),
                 )
                 solution_count = len(solution_sources)
                 statement_language_names = statement_languages(workspace)

@@ -13,7 +13,7 @@ from fastapi import Depends, Form, HTTPException, Request
 from app.impl.auth.session import require_session_user
 from app.impl.auth.shared import template_response
 from app.impl.contest.shared import _contest_ctx, _contest_redirect
-from app.impl.runtime.config import config
+from app.impl.runtime.dependency import runtime
 from app.service.access.policy import transferable_contest_role
 
 
@@ -29,8 +29,8 @@ def contest_access_page(
         "contest_access.html",
         {
             "ctx": ctx,
-            "entries": config.contest_service.member_entries(contest_id),
-            "owner_count": config.contest_service.owner_count(contest_id),
+            "entries": runtime().contest_service.member_entries(contest_id),
+            "owner_count": runtime().contest_service.owner_count(contest_id),
         },
     )
 
@@ -48,7 +48,7 @@ def contest_access_grant(
     safe_target = target_user.strip()
     try:
         safe_role = transferable_contest_role(role)
-        if not config.contest_service.grant_member_role(contest_id, safe_target, safe_role):
+        if not runtime().contest_service.grant_member_role(contest_id, safe_target, safe_role):
             return _contest_redirect(
                 str(ctx["contest"]["slug"]),
                 "access",
@@ -73,7 +73,7 @@ def contest_access_revoke(
         raise HTTPException(status_code=403, detail=ctx["access"]["manage_block_reason"])
     contest_id = int(ctx["contest"]["id"])
     safe_target = target_user.strip()
-    membership = config.contest_service.membership_for_username(contest_id, safe_target)
+    membership = runtime().contest_service.membership_for_username(contest_id, safe_target)
     if membership is None:
         return _contest_redirect(
             str(ctx["contest"]["slug"]), "access", message=f"{safe_target} is not a member"
@@ -84,7 +84,7 @@ def contest_access_revoke(
             "access",
             message="owner access is fixed and cannot be transferred",
         )
-    config.contest_service.revoke_member(contest_id, membership["user_id"])
+    runtime().contest_service.revoke_member(contest_id, membership["user_id"])
     return _contest_redirect(
         str(ctx["contest"]["slug"]),
         "access",

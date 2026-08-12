@@ -11,7 +11,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest.mock import patch
 
-from app.impl.runtime.config import config
+from app.main import runtime
 import app.impl.workspace.context_job as workspace_context_job
 from app.service.export.icpc_package import SUBMISSION_RULES
 from app.service.importing.native import NativePackageImportService
@@ -38,7 +38,7 @@ class TestPublishedRevisionExport(E2ETestBase):
     def test_materialization_reserves_accepted_program_for_configured_source(
         self,
     ) -> None:
-        from app.impl.workspace.published_materialization import (
+        from app.service.problem_package.workflow import (
             build_full_verification_targets,
         )
 
@@ -122,14 +122,14 @@ class TestPublishedRevisionExport(E2ETestBase):
             "expected: accepted\n",
             encoding="utf-8",
         )
-        commit = config.git_service.commit(
+        commit = runtime.git_service.commit(
             workspace,
             "publish materialization fixture",
             self.user,
             f"{self.user}@polygonlike.local",
         )
-        config.git_service.push(workspace, "main")
-        context = config.workspace_service.workspace_context(self.problem, self.user, include_recent=False)
+        runtime.git_service.push(workspace, "main")
+        context = runtime.workspace_service.workspace_context(self.problem, self.user, include_recent=False)
         return workspace, int(context["problem"]["id"]), commit
 
     @staticmethod
@@ -154,14 +154,14 @@ class TestPublishedRevisionExport(E2ETestBase):
             )
             if admission.outcome != "admitted":
                 raise AssertionError(f"unexpected admission outcome: {admission.outcome}")
-            input_ref = config.verification_service.store_verification_blob(
+            input_ref = runtime.verification_service.store_verification_blob(
                 verification_id=verification_id,
                 test_name="001.in",
                 role="input",
                 file_name="001.in",
                 payload=input_bytes,
             )
-            answer_ref = config.verification_service.store_verification_blob(
+            answer_ref = runtime.verification_service.store_verification_blob(
                 verification_id=verification_id,
                 test_name="001.in",
                 role="answer",
@@ -191,7 +191,7 @@ class TestPublishedRevisionExport(E2ETestBase):
             )
             if activation.outcome != "activated":
                 raise AssertionError(f"unexpected activation outcome: {activation.outcome}")
-            completion = config.verification_task_store.commit_task_completions(
+            completion = runtime.verification_task_store.commit_task_completions(
                 [
                     TaskCompletion(
                         task_id=task_id,
@@ -234,7 +234,7 @@ class TestPublishedRevisionExport(E2ETestBase):
         key = f"{problem_id}:{commit}:native:{job_id}"
         try:
             with patch.object(
-                config.worker_queue_service,
+                runtime.worker_queue_service,
                 "submit",
                 side_effect=submit,
             ):
@@ -258,15 +258,15 @@ class TestPublishedRevisionExport(E2ETestBase):
             self.assertIsNone(row["started_at"])
         finally:
             worker.alive = False
-            with config.export_lock:
-                config.export_inflight.discard(key)
-                config.export_workers.discard(worker)
+            with runtime.export_lock:
+                runtime.export_inflight.discard(key)
+                runtime.export_workers.discard(worker)
 
     def _materialize(self):
         _workspace, problem_id, commit = self._publish_problem()
-        revision = config.problem_package_service.published_revision(problem_id)
+        revision = runtime.problem_package_service.published_revision(problem_id)
         self.assertEqual(revision.source_commit, commit)
-        materialization = config.problem_package_service.ensure_materialization(
+        materialization = runtime.problem_package_service.ensure_materialization(
             revision,
             self._verification_builder(problem_id),
         )
@@ -290,29 +290,29 @@ class TestPublishedRevisionExport(E2ETestBase):
         actor = db_fetch_one("SELECT id FROM users WHERE username=?", [self.user])
         self.assertIsNotNone(actor)
         job_id = "export-latest-current-native"
-        config.export_service.create_export_job(
+        runtime.export_service.create_export_job(
             job_id=job_id,
             problem_id=problem_id,
             actor_user_id=int(actor["id"]),
             export_type="native",
             source_commit=commit,
         )
-        config.export_service.mark_export_job_running(
+        runtime.export_service.mark_export_job_running(
             job_id,
             source_commit=commit,
         )
-        export_id, archive = config.export_service.create_export(
+        export_id, archive = runtime.export_service.create_export(
             self.problem,
             "native",
             materialization_id=materialization["id"],
         )
-        config.export_service.mark_export_job_succeeded(
+        runtime.export_service.mark_export_job_succeeded(
             job_id,
             materialization_id=materialization["id"],
             export_id=export_id,
         )
 
-        current = config.export_service.latest_succeeded_export_job(
+        current = runtime.export_service.latest_succeeded_export_job(
             problem_id,
             commit,
             "native",
@@ -323,14 +323,14 @@ class TestPublishedRevisionExport(E2ETestBase):
         self.assertTrue(current["filename"].endswith("-native-v1.zip"))
         self.assertTrue(archive.is_file())
         self.assertIsNone(
-            config.export_service.latest_succeeded_export_job(
+            runtime.export_service.latest_succeeded_export_job(
                 problem_id,
                 commit,
                 "icpc",
             )
         )
         self.assertIsNone(
-            config.export_service.latest_succeeded_export_job(
+            runtime.export_service.latest_succeeded_export_job(
                 problem_id,
                 "f" * 40,
                 "native",
@@ -339,14 +339,14 @@ class TestPublishedRevisionExport(E2ETestBase):
 
     def test_native_is_the_published_git_revision_plus_materialized_test_data(self) -> None:
         workspace, problem_id, commit = self._publish_problem()
-        revision = config.problem_package_service.published_revision(problem_id)
-        materialization = config.problem_package_service.ensure_materialization(
+        revision = runtime.problem_package_service.published_revision(problem_id)
+        materialization = runtime.problem_package_service.ensure_materialization(
             revision,
             self._verification_builder(problem_id),
         )
         (workspace / "dirty-only.txt").write_text("must not be exported\n", encoding="utf-8")
 
-        stored, archive = config.problem_package_service.native_archive(materialization["id"])
+        stored, archive = runtime.problem_package_service.native_archive(materialization["id"])
         self.assertEqual(stored["source_commit"], commit)
         with zipfile.ZipFile(archive, "r") as package:
             names = set(package.namelist())
@@ -369,7 +369,7 @@ class TestPublishedRevisionExport(E2ETestBase):
 
     def test_same_revision_reuses_native_and_missing_archive_requires_explicit_rebuild(self) -> None:
         problem_id, _commit, first = self._materialize()
-        revision = config.problem_package_service.published_revision(problem_id)
+        revision = runtime.problem_package_service.published_revision(problem_id)
         verification_called = False
 
         def unexpected_verification(
@@ -382,40 +382,40 @@ class TestPublishedRevisionExport(E2ETestBase):
             verification_called = True
             raise AssertionError("reused Native must not run verification")
 
-        second = config.problem_package_service.ensure_materialization(
+        second = runtime.problem_package_service.ensure_materialization(
             revision,
             unexpected_verification,
         )
         self.assertEqual(second["id"], first["id"])
         self.assertFalse(verification_called)
 
-        _stored, archive = config.problem_package_service.native_archive(first["id"])
+        _stored, archive = runtime.problem_package_service.native_archive(first["id"])
         archive.unlink()
         self.assertIsNone(
-            config.problem_package_service.available_materialization(problem_id, revision.source_commit)
+            runtime.problem_package_service.available_materialization(problem_id, revision.source_commit)
         )
         with self.assertRaisesRegex(ValueError, "explicit rebuild"):
-            config.problem_package_service.ensure_materialization(
+            runtime.problem_package_service.ensure_materialization(
                 revision,
                 self._verification_builder(problem_id),
             )
-        restored = config.problem_package_service.rebuild_materialization(
+        restored = runtime.problem_package_service.rebuild_materialization(
             revision, self._verification_builder(problem_id)
         )
         self.assertEqual(restored["id"], first["id"])
-        self.assertTrue(config.problem_package_service.native_archive(restored["id"])[1].is_file())
+        self.assertTrue(runtime.problem_package_service.native_archive(restored["id"])[1].is_file())
 
     def test_published_readiness_is_metadata_only_and_never_writes(self) -> None:
         problem_id, _commit, materialization = self._materialize()
         with (
             patch("app.service.problem_package.service.sha256_file", side_effect=AssertionError("readiness must not hash archives")) as hash_file,
-            patch.object(config.problem_package_service, "_archive_path", side_effect=AssertionError("readiness must not resolve archives")) as archive_path,
-            patch.object(config.problem_package_service, "_validate_materialization", side_effect=AssertionError("readiness must not validate archives")) as validate,
-            patch.object(config.problem_package_service, "_invalidate_materialization", side_effect=AssertionError("readiness must not invalidate packages")) as invalidate,
-            patch.object(config.db, "execute", side_effect=AssertionError("readiness must not write SQLite")) as execute,
-            patch.object(config.db, "write_transaction", side_effect=AssertionError("readiness must not start write transactions")) as write_transaction,
+            patch.object(runtime.problem_package_service, "_archive_path", side_effect=AssertionError("readiness must not resolve archives")) as archive_path,
+            patch.object(runtime.problem_package_service, "_validate_materialization", side_effect=AssertionError("readiness must not validate archives")) as validate,
+            patch.object(runtime.problem_package_service, "_invalidate_materialization", side_effect=AssertionError("readiness must not invalidate packages")) as invalidate,
+            patch.object(runtime.db, "execute", side_effect=AssertionError("readiness must not write SQLite")) as execute,
+            patch.object(runtime.db, "write_transaction", side_effect=AssertionError("readiness must not start write transactions")) as write_transaction,
         ):
-            readiness = config.problem_package_service.published_readiness_many(
+            readiness = runtime.problem_package_service.published_readiness_many(
                 [problem_id]
             )[problem_id]
 
@@ -430,8 +430,8 @@ class TestPublishedRevisionExport(E2ETestBase):
 
     def test_published_readiness_reports_an_older_available_package_as_stale(self) -> None:
         workspace, problem_id, first_commit = self._publish_problem()
-        first_revision = config.problem_package_service.published_revision(problem_id)
-        materialization = config.problem_package_service.ensure_materialization(
+        first_revision = runtime.problem_package_service.published_revision(problem_id)
+        materialization = runtime.problem_package_service.ensure_materialization(
             first_revision,
             self._verification_builder(problem_id),
         )
@@ -440,15 +440,15 @@ class TestPublishedRevisionExport(E2ETestBase):
         marker = workspace / "notes" / "package-stale.txt"
         marker.parent.mkdir(parents=True, exist_ok=True)
         marker.write_text("published after package build\n", encoding="utf-8")
-        second_commit = config.git_service.commit(
+        second_commit = runtime.git_service.commit(
             workspace,
             "publish after package build",
             self.user,
             f"{self.user}@polygonlike.local",
         )
-        config.git_service.push(workspace, "main")
+        runtime.git_service.push(workspace, "main")
 
-        readiness = config.problem_package_service.published_readiness(problem_id)
+        readiness = runtime.problem_package_service.published_readiness(problem_id)
         self.assertNotEqual(second_commit, first_commit)
         self.assertEqual(readiness["status"], "stale")
         self.assertEqual(
@@ -460,24 +460,24 @@ class TestPublishedRevisionExport(E2ETestBase):
 
     def test_corrupt_package_is_invalidated_only_when_consumed(self) -> None:
         problem_id, _commit, materialization = self._materialize()
-        _stored, archive = config.problem_package_service.native_archive(
+        _stored, archive = runtime.problem_package_service.native_archive(
             materialization["id"]
         )
         archive.write_bytes(b"corrupt package")
 
-        before = config.problem_package_service.published_readiness(problem_id)
+        before = runtime.problem_package_service.published_readiness(problem_id)
         self.assertEqual(before["status"], "ready")
 
         with self.assertRaisesRegex(ValueError, "integrity check failed"):
-            config.problem_package_service.native_archive(materialization["id"])
+            runtime.problem_package_service.native_archive(materialization["id"])
 
-        after = config.problem_package_service.published_readiness(problem_id)
+        after = runtime.problem_package_service.published_readiness(problem_id)
         self.assertEqual(after["status"], "none")
         self.assertIn("rebuild required", after["missing_reason"])
 
     def test_concurrent_materialization_request_fails_fast(self) -> None:
         _workspace, problem_id, _commit = self._publish_problem()
-        revision = config.problem_package_service.published_revision(problem_id)
+        revision = runtime.problem_package_service.published_revision(problem_id)
         build_count = 0
         count_lock = threading.Lock()
         build_started = threading.Event()
@@ -494,13 +494,13 @@ class TestPublishedRevisionExport(E2ETestBase):
 
         with ThreadPoolExecutor(max_workers=2) as executor:
             first = executor.submit(
-                config.problem_package_service.ensure_materialization,
+                runtime.problem_package_service.ensure_materialization,
                 revision,
                 build,
             )
             self.assertTrue(build_started.wait(timeout=5))
             second = executor.submit(
-                config.problem_package_service.ensure_materialization,
+                runtime.problem_package_service.ensure_materialization,
                 revision,
                 build,
             )
@@ -514,14 +514,14 @@ class TestPublishedRevisionExport(E2ETestBase):
 
     def test_explicit_rebuild_reuses_identity_and_invalidates_exports(self) -> None:
         problem_id, _commit, first = self._materialize()
-        revision = config.problem_package_service.published_revision(problem_id)
-        export_id, _archive = config.export_service.create_export(
+        revision = runtime.problem_package_service.published_revision(problem_id)
+        export_id, _archive = runtime.export_service.create_export(
             self.problem,
             "native",
             materialization_id=first["id"],
         )
 
-        rebuilt = config.problem_package_service.rebuild_materialization(
+        rebuilt = runtime.problem_package_service.rebuild_materialization(
             revision,
             self._verification_builder(problem_id, answer_bytes=b"changed\n"),
         )
@@ -530,15 +530,15 @@ class TestPublishedRevisionExport(E2ETestBase):
         self.assertNotEqual(rebuilt["verification_id"], first["verification_id"])
         self.assertRegex(rebuilt["verification_id"], r"^ver-[0-9a-f]+$")
         self.assertIsNone(db_fetch_one("SELECT id FROM exports WHERE id=?", [export_id]))
-        with config.problem_package_service.open_reader(rebuilt["id"]) as native:
+        with runtime.problem_package_service.open_reader(rebuilt["id"]) as native:
             answer = native.payload(native.manifest["tests"][0], "answer")
             self.assertIsNotNone(answer)
             self.assertEqual(answer.read_bytes(), b"changed\n")
 
     def test_inner_integrity_failure_deletes_native_and_export_records(self) -> None:
         problem_id, _commit, materialization = self._materialize()
-        revision = config.problem_package_service.published_revision(problem_id)
-        export_id, archive = config.export_service.create_export(
+        revision = runtime.problem_package_service.published_revision(problem_id)
+        export_id, archive = runtime.export_service.create_export(
             self.problem,
             "native",
             materialization_id=materialization["id"],
@@ -560,12 +560,12 @@ class TestPublishedRevisionExport(E2ETestBase):
         )
 
         with self.assertRaisesRegex(ValueError, "integrity check failed"):
-            config.problem_package_service.ensure_materialization(
+            runtime.problem_package_service.ensure_materialization(
                 revision,
                 self._verification_builder(problem_id),
             )
 
-        stored = config.problem_package_service.store.materialization(materialization["id"])
+        stored = runtime.problem_package_service.store.materialization(materialization["id"])
         self.assertIsNotNone(stored)
         self.assertEqual(stored["status"], "unavailable")
         self.assertFalse(archive.exists())
@@ -573,8 +573,8 @@ class TestPublishedRevisionExport(E2ETestBase):
 
     def test_failed_explicit_rebuild_preserves_valid_native_and_exports(self) -> None:
         problem_id, _commit, materialization = self._materialize()
-        revision = config.problem_package_service.published_revision(problem_id)
-        export_id, original_archive = config.export_service.create_export(
+        revision = runtime.problem_package_service.published_revision(problem_id)
+        export_id, original_archive = runtime.export_service.create_export(
             self.problem,
             "native",
             materialization_id=materialization["id"],
@@ -590,12 +590,12 @@ class TestPublishedRevisionExport(E2ETestBase):
             raise ValueError("forced rebuild failure")
 
         with self.assertRaisesRegex(ValueError, "forced rebuild failure"):
-            config.problem_package_service.rebuild_materialization(
+            runtime.problem_package_service.rebuild_materialization(
                 revision,
                 fail_verification,
             )
 
-        stored, archive = config.problem_package_service.native_archive(
+        stored, archive = runtime.problem_package_service.native_archive(
             materialization["id"]
         )
         self.assertEqual(stored["status"], "available")
@@ -604,8 +604,8 @@ class TestPublishedRevisionExport(E2ETestBase):
 
     def test_rebuild_publish_failure_restores_valid_native_and_exports(self) -> None:
         problem_id, _commit, materialization = self._materialize()
-        revision = config.problem_package_service.published_revision(problem_id)
-        export_id, original_archive = config.export_service.create_export(
+        revision = runtime.problem_package_service.published_revision(problem_id)
+        export_id, original_archive = runtime.export_service.create_export(
             self.problem,
             "native",
             materialization_id=materialization["id"],
@@ -613,17 +613,17 @@ class TestPublishedRevisionExport(E2ETestBase):
         original_bytes = original_archive.read_bytes()
 
         with patch.object(
-            config.problem_package_service.store,
+            runtime.problem_package_service.store,
             "insert_materialization",
             side_effect=RuntimeError("forced publish failure"),
         ):
             with self.assertRaisesRegex(RuntimeError, "forced publish failure"):
-                config.problem_package_service.rebuild_materialization(
+                runtime.problem_package_service.rebuild_materialization(
                     revision,
                     self._verification_builder(problem_id, answer_bytes=b"changed\n"),
                 )
 
-        stored, archive = config.problem_package_service.native_archive(
+        stored, archive = runtime.problem_package_service.native_archive(
             materialization["id"]
         )
         self.assertEqual(stored["archive_sha256"], materialization["archive_sha256"])
@@ -632,8 +632,8 @@ class TestPublishedRevisionExport(E2ETestBase):
 
     def test_distinct_git_commits_with_the_same_tree_are_distinct_revisions(self) -> None:
         workspace, problem_id, first_commit = self._publish_problem()
-        first_revision = config.problem_package_service.published_revision(problem_id)
-        first = config.problem_package_service.ensure_materialization(
+        first_revision = runtime.problem_package_service.published_revision(problem_id)
+        first = runtime.problem_package_service.ensure_materialization(
             first_revision,
             self._verification_builder(problem_id),
         )
@@ -645,9 +645,9 @@ class TestPublishedRevisionExport(E2ETestBase):
         push = run_git(["git", "-C", str(workspace), "push", "origin", "HEAD:main"])
         self.assertEqual(push.returncode, 0, push.stderr or push.stdout)
 
-        second_revision = config.problem_package_service.published_revision(problem_id)
+        second_revision = runtime.problem_package_service.published_revision(problem_id)
         self.assertNotEqual(second_revision.source_commit, first_commit)
-        second = config.problem_package_service.ensure_materialization(
+        second = runtime.problem_package_service.ensure_materialization(
             second_revision,
             self._verification_builder(problem_id),
         )
@@ -691,8 +691,8 @@ class TestPublishedRevisionExport(E2ETestBase):
             (destination / "problem.en.pdf").write_bytes(b"%PDF-1.4\n%%EOF\n")
             return True
 
-        with patch.object(config.export_service, "_try_compile_statement_pdf", side_effect=compile_statement):
-            export_id, archive = config.export_service.create_export(
+        with patch.object(runtime.export_service, "_try_compile_statement_pdf", side_effect=compile_statement):
+            export_id, archive = runtime.export_service.create_export(
                 self.problem,
                 "icpc",
                 materialization_id=materialization["id"],
@@ -711,7 +711,7 @@ class TestPublishedRevisionExport(E2ETestBase):
             self.assertIn("data/sample/001.in", package.namelist())
             self.assertIn("data/sample/001.ans", package.namelist())
 
-        repeated_id, repeated_archive = config.export_service.create_export(
+        repeated_id, repeated_archive = runtime.export_service.create_export(
             self.problem,
             "icpc",
             materialization_id=materialization["id"],
@@ -736,15 +736,15 @@ class TestPublishedRevisionExport(E2ETestBase):
                 f"expected: {expected}\n",
                 encoding="utf-8",
             )
-        config.git_service.commit(
+        runtime.git_service.commit(
             workspace,
             "add expected behavior fixtures",
             self.user,
             f"{self.user}@polygonlike.local",
         )
-        config.git_service.push(workspace, "main")
-        revision = config.problem_package_service.published_revision(problem_id)
-        materialization = config.problem_package_service.ensure_materialization(
+        runtime.git_service.push(workspace, "main")
+        revision = runtime.problem_package_service.published_revision(problem_id)
+        materialization = runtime.problem_package_service.ensure_materialization(
             revision,
             self._verification_builder(problem_id),
         )
@@ -755,11 +755,11 @@ class TestPublishedRevisionExport(E2ETestBase):
             return True
 
         with patch.object(
-            config.export_service,
+            runtime.export_service,
             "_try_compile_statement_pdf",
             side_effect=compile_statement,
         ):
-            _export_id, archive = config.export_service.create_export(
+            _export_id, archive = runtime.export_service.create_export(
                 self.problem,
                 "icpc",
                 materialization_id=materialization["id"],
@@ -780,7 +780,7 @@ class TestPublishedRevisionExport(E2ETestBase):
 
     def test_native_import_discards_materialized_data(self) -> None:
         _problem_id, _commit, materialization = self._materialize()
-        _stored, archive = config.problem_package_service.native_archive(materialization["id"])
+        _stored, archive = runtime.problem_package_service.native_archive(materialization["id"])
         with tempfile.TemporaryDirectory(prefix="native-import-") as temp:
             workspace = Path(temp) / "workspace"
             workspace.mkdir()
@@ -799,12 +799,12 @@ class TestPublishedRevisionExport(E2ETestBase):
         dirty_source = workspace / "solutions" / "snapshot-roundtrip.cpp"
         dirty_source.parent.mkdir(parents=True, exist_ok=True)
         dirty_source.write_text("dirty workspace copy\n", encoding="utf-8")
-        context = config.workspace_service.workspace_context(
+        context = runtime.workspace_service.workspace_context(
             self.problem,
             self.user,
             include_recent=False,
         )
-        archive = config.export_service.create_workspace_snapshot(
+        archive = runtime.export_service.create_workspace_snapshot(
             self.problem,
             workspace_id=int(context["workspace"]["id"]),
         )
@@ -832,20 +832,20 @@ class TestPublishedRevisionExport(E2ETestBase):
     def test_icpc_conversion_rejects_missing_statements(self) -> None:
         workspace, problem_id, _commit = self._publish_problem()
         shutil.rmtree(workspace / "statement-sections")
-        config.git_service.commit(
+        runtime.git_service.commit(
             workspace,
             "remove all statements",
             self.user,
             f"{self.user}@polygonlike.local",
         )
-        config.git_service.push(workspace, "main")
-        revision = config.problem_package_service.published_revision(problem_id)
-        materialization = config.problem_package_service.ensure_materialization(
+        runtime.git_service.push(workspace, "main")
+        revision = runtime.problem_package_service.published_revision(problem_id)
+        materialization = runtime.problem_package_service.ensure_materialization(
             revision,
             self._verification_builder(problem_id),
         )
         with self.assertRaisesRegex(ValueError, "at least one problem statement"):
-            config.export_service.create_export(
+            runtime.export_service.create_export(
                 self.problem,
                 "icpc",
                 materialization_id=materialization["id"],
@@ -859,25 +859,25 @@ class TestPublishedRevisionExport(E2ETestBase):
             build = json.loads(build_path.read_text(encoding="utf-8"))
         build["checker_source"] = "checkers/missing.cpp"
         build_path.write_text(json.dumps(build, indent=2) + "\n", encoding="utf-8")
-        config.git_service.commit(
+        runtime.git_service.commit(
             workspace,
             "configure missing checker",
             self.user,
             f"{self.user}@polygonlike.local",
         )
-        config.git_service.push(workspace, "main")
-        revision = config.problem_package_service.published_revision(problem_id)
+        runtime.git_service.push(workspace, "main")
+        revision = runtime.problem_package_service.published_revision(problem_id)
         with self.assertRaisesRegex(
             ValueError, "checkers/missing.cpp: required regular file is missing"
         ):
-            config.problem_package_service.ensure_materialization(
+            runtime.problem_package_service.ensure_materialization(
                 revision,
                 self._verification_builder(problem_id),
             )
 
     def test_native_reader_rejects_manifest_tampering(self) -> None:
         _problem_id, _commit, materialization = self._materialize()
-        with config.problem_package_service.open_reader(materialization["id"]) as native:
+        with runtime.problem_package_service.open_reader(materialization["id"]) as native:
             manifest_path = native.root / "test_data" / "manifest.json"
             manifest = load_manifest(manifest_path)
             payload = native.root / "test_data" / "tests" / "001" / "input"
@@ -887,13 +887,13 @@ class TestPublishedRevisionExport(E2ETestBase):
                     native.root,
                     manifest,
                     tests_spec_max_bytes=int(
-                        config.config_values.TEXTAREA_MAX_BYTES
+                        runtime.config_values.TEXTAREA_MAX_BYTES
                     ),
                     statement_sample_max_bytes=int(
-                        config.config_values.STATEMENT_SAMPLE_MAX_BYTES
+                        runtime.config_values.STATEMENT_SAMPLE_MAX_BYTES
                     ),
                 )
-        stored = config.problem_package_service.store.materialization(materialization["id"])
+        stored = runtime.problem_package_service.store.materialization(materialization["id"])
         self.assertIsNotNone(stored)
         self.assertEqual(stored["status"], "available")
 

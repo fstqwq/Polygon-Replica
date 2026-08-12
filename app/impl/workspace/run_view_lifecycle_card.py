@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import TypedDict
 
-from app.impl.runtime.config import config
+from app.impl.runtime.dependency import runtime
 
 from app.impl.workspace.context_operation import dedupe_preserve_order
 from app.impl.workspace.context_run_detail import normalize_run_id_token, normalize_run_test_name_token
@@ -31,13 +31,13 @@ def load_verification_detail_summary(problem_id: int, verification_id: str) -> V
     safe_verification_id = normalize_run_id_token(verification_id)
     if not safe_verification_id:
         return {}
-    verification_row = config.verification_service.verification_record(safe_verification_id)
+    verification_row = runtime().verification_service.verification_record(safe_verification_id)
     if verification_row is None or int(verification_row['problem_id']) != int(problem_id):
         return {}
-    detail = config.verification_service.verification_detail(safe_verification_id)
+    detail = runtime().verification_service.verification_detail(safe_verification_id)
     details = {
         **detail,
-        **config.verification_service.verification_runtime_summary(safe_verification_id),
+        **runtime().verification_service.verification_runtime_summary(safe_verification_id),
         'verification_id': safe_verification_id,
         'finished_at': verification_row['finished_at'],
     }
