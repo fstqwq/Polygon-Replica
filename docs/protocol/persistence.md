@@ -15,8 +15,8 @@ with filesystem payloads.
 run, distinguished by `kind`. It records source/signature context, mode, pass
 limit, run configuration, status, failure fields, and timestamps.
 
-`verification_tasks` stores the task DAG and `result_json`. Generated testcase
-input and answer locators are in `verification_artifact_refs`. The schema has no
+`verification_tasks` stores the task DAG and `result_json`. Every downloadable
+artifact locator is indexed in `verification_task_artifacts`. The schema has no
 `verification_tasks.output_ref` column.
 
 Verification admission is insert-only. It creates a `queued` parent without
@@ -39,8 +39,9 @@ duplicate, or inconsistent program definition as an invalid plan.
 
 Task completion uses one `BEGIN IMMEDIATE` transaction under the verification
 runtime write lock. For each task whose `final_status` is empty, that transaction
-writes the terminal status, bounded canonical result, finish time, non-empty
-input or answer locator, and the verification's first non-empty failure reason.
+writes the terminal status, bounded canonical result, finish time, every pass
+artifact ownership row, generated input or accepted answer ownership, and the
+verification's first non-empty failure reason.
 Generator content deduplication, skipped-generator results, and pending
 descendant skips are included in the transaction. Generator, `main-correct`,
 and unexpected task cancellation failures are hard: they also change the
@@ -140,6 +141,26 @@ compared against the DDL. A schema change updates the DDL, required-object
 manifest, service queries, cleanup policy, offline operator procedure, and this
 document together. No project-owned schema version is reserved without an
 actual compatibility boundary.
+
+The current offline procedure for replacing the former verification input/answer
+ref table is:
+
+```bash
+sudo systemctl stop polygon-replica.service
+cd /opt/polygon-replica
+sudo -u polygon PYTHONPATH=. .venv/bin/python \
+  scripts/index_verification_artifacts.py \
+  --db /var/lib/polygon-replica/metadata.db
+sudo systemctl start polygon-replica.service
+```
+
+It runs one `BEGIN IMMEDIATE` transaction, parses every canonical stored task
+result, assigns legacy generated-input and accepted-answer refs to their owning
+tasks, creates the task identity constraint and both ownership indexes, runs
+foreign-key and integrity validation, and only then drops the former table.
+Malformed or ambiguous stored evidence rolls the whole transaction back. An
+operator may instead clear generated artifacts before the upgrade, then run the
+same procedure against the empty execution tables.
 
 The current `workspaces` shape has no recent-verification status field.
 Existing databases may retain that historical extra column because schema

@@ -21,6 +21,10 @@ from app.service.verification.types import (
     WorkspaceVerificationKey,
     WorkspaceVerificationRow,
 )
+from app.service.verification.artifact import (
+    VerificationArtifact,
+    VerificationArtifactQuery,
+)
 from app.service.verification.identity import (
     canonical_verification_id,
     new_verification_id,
@@ -46,7 +50,6 @@ from app.service.verification.read_model import (
 from app.service.verification.signature import verification_manifest
 from app.service.verification.source import select_source
 from app.service.verification.task_store import VerificationTaskStore
-from app.service.execution.codec import execution_result_from_json
 from app.service.verification.test_spec import manual_test_sources, prepare_tests_spec_runtime
 
 from app.service.judgehost.api import Judgehost
@@ -89,6 +92,7 @@ class VerificationService:
         self.storage_layout = storage_layout
         self._config_values = config_values
         self._verification_store = VerificationStore(db)
+        self._artifact_query = VerificationArtifactQuery(db, runtime_blob_store)
 
     def export_runtime_verification(self, problem_id: int, verification_id: str) -> dict[str, object] | None:
         row = self.verification_record(verification_id)
@@ -621,16 +625,17 @@ class VerificationService:
         _ = verification_id, test_name, role, file_name, extra_tags
         return self.runtime_blob_store.put_bytes(payload).blob_ref or ""
 
-    def verification_artifact_refs(self, verification_id: str) -> dict[str, dict[str, str]]:
+    def verification_test_artifacts(self, verification_id: str) -> dict[str, dict[str, str]]:
         safe_verification_id = str(verification_id or "").strip()
         if not safe_verification_id:
             return {}
         rows = self.db.fetch_all(
             """
-            SELECT test_name,input_ref,answer_ref
-            FROM verification_artifact_refs
+            SELECT test_name,role,artifact_ref
+            FROM verification_task_artifacts
             WHERE verification_id=?
-            ORDER BY test_name ASC
+              AND role IN ('generated-input','accepted-answer')
+            ORDER BY test_name,task_id
             """,
             [safe_verification_id],
         )
@@ -639,49 +644,44 @@ class VerificationService:
             test_name = str(row["test_name"] or "")
             if not test_name:
                 continue
-            item: dict[str, str] = {}
-            input_ref = str(row["input_ref"] or "")
-            answer_ref = str(row["answer_ref"] or "")
-            if input_ref:
-                item["input_ref"] = input_ref
-            if answer_ref:
-                item["answer_ref"] = answer_ref
-            if item:
-                refs[test_name] = item
+            item = refs.setdefault(test_name, {})
+            role = str(row["role"])
+            key = "input_ref" if role == "generated-input" else "answer_ref"
+            item.setdefault(key, str(row["artifact_ref"]))
         return refs
 
     def verification_artifact_ref(self, verification_id: str, test_name: str, ref_key: str) -> str:
         safe_ref_key = str(ref_key or "").strip()
-        if safe_ref_key not in {"input_ref", "answer_ref"}:
+        roles = {
+            "input_ref": "generated-input",
+            "answer_ref": "accepted-answer",
+        }
+        if safe_ref_key not in roles:
             return ""
         row = self.db.fetch_one(
             """
-            SELECT input_ref,answer_ref
-            FROM verification_artifact_refs
-            WHERE verification_id=? AND test_name=?
+            SELECT artifact_ref
+            FROM verification_task_artifacts
+            WHERE verification_id=? AND test_name=? AND role=?
+            ORDER BY task_id
+            LIMIT 1
             """,
             [
                 str(verification_id or "").strip(),
                 str(test_name or "").strip(),
+                roles[safe_ref_key],
             ],
         )
         if row is None:
             return ""
-        return str(row[safe_ref_key] or "")
+        return str(row["artifact_ref"] or "")
 
-    def verification_task_output_ref(self, verification_id: str, task_id: str) -> tuple[str, str] | None:
-        row = self.db.fetch_one(
-            """
-            SELECT test_name,result_json
-            FROM verification_tasks
-            WHERE verification_id=? AND id=?
-            """,
-            [str(verification_id or "").strip(), str(task_id or "").strip()],
-        )
-        if row is None:
-            return None
-        result = execution_result_from_json(str(row["result_json"] or "{}"))
-        return (str(row["test_name"] or ""), result.output_run_ref)
+    def verification_artifact(
+        self,
+        verification_id: str,
+        virtual_path: str,
+    ) -> VerificationArtifact | None:
+        return self._artifact_query.resolve(verification_id, virtual_path)
 
     def workspace_verification_run_ids(
         self,
@@ -700,32 +700,6 @@ class VerificationService:
             if run_id and run_id not in values:
                 values.append(run_id)
         return values
-
-    def verification_artifact_tokens(self, verification_id: str) -> set[str]:
-        safe_verification_id = str(verification_id or "").strip()
-        if not safe_verification_id:
-            return set()
-        tokens: set[str] = set()
-        for refs in self.verification_artifact_refs(safe_verification_id).values():
-            input_ref = str(refs.get("input_ref") or "")
-            answer_ref = str(refs.get("answer_ref") or "")
-            if input_ref:
-                tokens.add(input_ref)
-            if answer_ref:
-                tokens.add(answer_ref)
-        for row in self.task_store.list_rows(safe_verification_id):
-            tokens.update(row["result"].artifact_refs())
-        return tokens
-
-    def verification_has_artifact_token(self, verification_id: str, token: str) -> bool:
-        safe_verification_id = str(verification_id or "").strip()
-        safe_token = str(token or "").strip()
-        if (not safe_verification_id) or (not safe_token):
-            return False
-        return safe_token in self.verification_artifact_tokens(safe_verification_id)
-
-    def resolve_artifact_blob(self, token: str) -> bytes | None:
-        return self.judgehost_task_service.resolve_artifact_blob(token)
 
     def artifact_descriptor(self, token: str) -> PayloadFile | None:
         return self.runtime_blob_store.descriptor(token)

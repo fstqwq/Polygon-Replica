@@ -6,11 +6,12 @@ from pathlib import Path
 from app.service.disk.verification_store import VerificationStore
 from app.service.execution.policy import normalize_execution_result
 from app.service.verification.lifecycle import VerificationAdmission
+from app.service.verification.artifact import artifact_virtual_path
 from app.service.verification.task_completion import TaskCompletion
 from app.service.verification.types import VerificationTaskStatus
 
 from tests.identity_helpers import canonical_test_verification_id
-from tests.isolated_db_helpers import isolated_db_fetch_one
+from tests.isolated_db_helpers import isolated_db_fetch_all, isolated_db_fetch_one
 from tests.verification_service_fixture import VerificationServiceTestBase
 
 
@@ -189,7 +190,7 @@ class TestVerificationStoreService(VerificationServiceTestBase):
         self.assertIsInstance(rows, list)
         self.assertEqual([str(row.get("test_name") or "") for row in rows], ["001.in"])
 
-    def test_verification_artifact_refs_live_in_db_not_metadata(self) -> None:
+    def test_verification_artifact_ownership_lives_in_db_not_metadata(self) -> None:
         self.workspace_service.ensure_workspace(self.problem, self.user)
         ctx = self.workspace_service.workspace_context(self.problem, self.user, include_recent=False)
         verification_id = canonical_test_verification_id(
@@ -243,12 +244,105 @@ class TestVerificationStoreService(VerificationServiceTestBase):
         self.assertNotIn("artifact_refs", metadata)
         row = isolated_db_fetch_one(
             self.db,
-            "SELECT input_ref,answer_ref FROM verification_artifact_refs WHERE verification_id=? AND test_name=?",
-            [verification_id, "001.in"],
+            """
+            SELECT role,artifact_ref
+            FROM verification_task_artifacts
+            WHERE verification_id=? AND task_id=?
+            ORDER BY role
+            """,
+            [verification_id, task_id],
         )
         self.assertIsNotNone(row)
-        self.assertEqual(str(row["input_ref"] or ""), input_ref)
-        self.assertEqual(str(row["answer_ref"] or ""), answer_ref)
+        rows = isolated_db_fetch_all(
+            self.db,
+            """
+            SELECT role,artifact_ref
+            FROM verification_task_artifacts
+            WHERE verification_id=? AND task_id=?
+            ORDER BY role
+            """,
+            [verification_id, task_id],
+        )
+        self.assertEqual(
+            [(str(item["role"]), str(item["artifact_ref"])) for item in rows],
+            [("accepted-answer", answer_ref), ("generated-input", input_ref)],
+        )
+
+    def test_artifact_query_uses_owner_index_and_requires_available_blob(self) -> None:
+        verification_id = canonical_test_verification_id(
+            self.random_id("ver-artifact-query")
+        )
+        task_id = self._activate_verification(
+            verification_id=verification_id,
+            problem_id=self.problem_id,
+            workspace_id=self.workspace_id,
+            signature="",
+            kind="all",
+            detail={"status": "running", "selected_test_names": ["001.in"]},
+        )
+        payload = self.runtime_blob_store.put_bytes(
+            f"owned-{self.random_id('payload')}\n".encode("utf-8")
+        )
+        artifact_ref = str(payload.blob_ref)
+        self.verification_task_store.commit_task_completions(
+            (
+                TaskCompletion(
+                    task_id=task_id,
+                    status=VerificationTaskStatus.DONE,
+                    run_id="r-artifact-query",
+                    judgehost_task_id="",
+                    result=normalize_execution_result(verdict="AC"),
+                    input_ref=artifact_ref,
+                ),
+            )
+        )
+        self.db.execute(
+            "UPDATE verification_tasks SET result_json='{malformed' WHERE id=?",
+            [task_id],
+        )
+
+        virtual_path = artifact_virtual_path(artifact_ref)
+        resolved = self.verification_service.verification_artifact(
+            verification_id,
+            virtual_path,
+        )
+        self.assertIsNotNone(resolved)
+        assert resolved is not None
+        self.assertEqual(resolved.payload.path, payload.path)
+        self.assertEqual(resolved.filename, "001.in")
+        for invalid_path in (
+            "../tests/001.in",
+            "/" + virtual_path,
+            "blob//" + virtual_path.removeprefix("blob/"),
+            "blob/not-base64!",
+            virtual_path + "=",
+            virtual_path + "/client-name.txt",
+        ):
+            self.assertIsNone(
+                self.verification_service.verification_artifact(
+                    verification_id,
+                    invalid_path,
+                )
+            )
+
+        payload.path.unlink()
+        self.assertIsNone(
+            self.verification_service.verification_artifact(
+                verification_id,
+                virtual_path,
+            )
+        )
+        owner = isolated_db_fetch_one(
+            self.db,
+            """
+            SELECT artifact_ref
+            FROM verification_task_artifacts
+            WHERE verification_id=? AND task_id=? AND role='generated-input'
+            """,
+            [verification_id, task_id],
+        )
+        self.assertIsNotNone(owner)
+        self.assertEqual(str(owner["artifact_ref"]), artifact_ref)
 
     def test_create_verification_record_uses_canonical_verification_root(self) -> None:
         ctx = self.workspace_service.workspace_context(self.problem, self.user, include_recent=False)

@@ -171,6 +171,10 @@ step is missed, the process remains available only as a raw `503` diagnostic
 that lists the missing schema objects; no workers or Judgehost runtime start.
 Extra tables, columns, indexes, and rows do not block startup and are preserved.
 
+For revisions introducing `verification_task_artifacts`, run the stopped-service
+procedure documented in the [persistence protocol](../protocol/persistence.md)
+after the source backup and before starting the new application revision.
+
 Systemd:
 
 ```bash

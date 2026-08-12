@@ -9,7 +9,7 @@ based on present impact, not on an imagined future architecture.
 
 | ID | Class | Finding and current impact | Suggested owner |
 | --- | --- | --- | --- |
-| STO-009 | refactor | Runtime artifact ownership is reconstructed across JSON results and reference tables rather than one queryable owner index. | execution storage |
+| STO-009 | refactor | Runtime artifact ownership is centralized on the refactor branch but remains open until Linux backfill, completion, cleanup, and HTTP download acceptance complete. | verification storage |
 
 ## Problem source and execution
 

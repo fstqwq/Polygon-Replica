@@ -226,11 +226,12 @@ class TestArtifactCleanup(unittest.TestCase):
         )
         self._execute(
             """
-            INSERT INTO verification_artifact_refs(
-                verification_id,test_name,input_ref,answer_ref,updated_at
-            ) VALUES('ver-c1ea4','001.in','blob://input','blob://answer',?)
+            INSERT INTO verification_task_artifacts(
+                verification_id,task_id,test_name,pass_number,role,
+                artifact_ref,download_filename
+            ) VALUES('ver-c1ea4','task-cleanup','001.in',0,
+                     'generated-input','blob://input','001.in')
             """,
-            (now,),
         )
         self._execute(
             """
@@ -456,7 +457,7 @@ class TestArtifactCleanup(unittest.TestCase):
             "contest_build_items",
             "contest_artifacts",
             "contest_jobs",
-            "verification_artifact_refs",
+            "verification_task_artifacts",
             "verification_selected_tests",
             "verification_source_paths",
             "verification_sanity_check_messages",

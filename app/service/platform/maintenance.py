@@ -177,7 +177,7 @@ class ArtifactCleanupService:
         "problem_package_builds",
         "problem_package_materializations",
         "contest_jobs",
-        "verification_artifact_refs",
+        "verification_task_artifacts",
         "verification_selected_tests",
         "verification_source_paths",
         "verification_sanity_check_messages",

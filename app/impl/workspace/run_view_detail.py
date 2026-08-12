@@ -1104,6 +1104,7 @@ def build_run_detail_context(
                                     'memory_display': pass_memory_display,
                                     'status_display': f'{pass_verdict_short} \u00b7 {pass_time_display} \u00b7 {pass_memory_display}',
                                     'feedback_display': row_feedback_display,
+                                    'output_task_id': str(item.get('task_id') or ''),
                                     'input_ref': str(pass_item.get('input_ref') or ''),
                                     'output_rel': str(output_rel),
                                     'transcript_rel': str(pass_item.get('transcript_ref') or ''),

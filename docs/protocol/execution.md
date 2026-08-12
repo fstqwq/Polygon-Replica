@@ -261,10 +261,11 @@ reads compose them with the immutable result for display. An ordinary duplicate
 compile or final-result callback is an idempotent retry, not diagnostic
 evidence.
 
-Per-test generated input and answer locators are stored in
-`verification_artifact_refs.input_ref` and `answer_ref`. Output, transcript,
-diff, metadata, and feedback locators are carried by serialized execution/pass
-results; there is no physical `verification_tasks.output_ref` column.
+The canonical serialized result carries pass evidence. Every non-empty pass ref,
+plus per-test generated input and accepted answer refs, is indexed in
+`verification_task_artifacts` by owning task, test, pass, and role. The index is
+the only download authorization and locator query; there is no physical
+`verification_tasks.output_ref` column and downloads do not scan result JSON.
 
 Locators point into cleanup-safe runtime storage. A durable terminal result may
 remain after cleanup while one or more payloads are unavailable. Downloads MUST

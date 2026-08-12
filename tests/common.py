@@ -155,7 +155,7 @@ def install_completion_ref_abort_fault() -> None:
     config.db.execute(
         f"""
         CREATE TRIGGER {_COMPLETION_REF_ABORT_TRIGGER}
-        BEFORE INSERT ON verification_artifact_refs
+        BEFORE INSERT ON verification_task_artifacts
         BEGIN
             SELECT RAISE(ABORT, 'forced artifact ref failure');
         END

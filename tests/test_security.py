@@ -48,6 +48,7 @@ from app.impl.problem.solution import (
 )
 from app.impl.problem.validator import validator_rename_source, validator_save_source
 from app.impl.run_export.artifact import artifact_file
+from app.service.verification.artifact import artifact_virtual_path
 from app.impl.run_export.run import run_cancel, run_execute
 from app.impl.root.auth_pages import auth_password_meta, login_page
 from app.config import CONFIG_REGISTRY
@@ -400,14 +401,53 @@ class TestSecurity(E2ETestBase):
             file_name="program.out",
             payload=b"secret-output\n",
         )
-        encoded = base64.urlsafe_b64encode(token.encode("utf-8")).decode("ascii").rstrip("=")
-
+        foreign_task_id = "task-foreign-artifact"
+        db_execute(
+            """
+            INSERT INTO verification_tasks(
+                id,verification_id,predecessor_task_id,task_kind,source_path,
+                program_id,test_name,expected_behavior,final_status,result_json,
+                finished_at,created_at
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            [
+                foreign_task_id,
+                foreign_verification_id,
+                None,
+                "solution-run",
+                "solutions/std.cpp",
+                "solution-0",
+                "001.in",
+                "accepted",
+                "done",
+                "{}",
+                "2026-04-13T00:00:01Z",
+                "2026-04-13T00:00:00Z",
+            ],
+        )
+        db_execute(
+            """
+            INSERT INTO verification_task_artifacts(
+                verification_id,task_id,test_name,pass_number,role,
+                artifact_ref,download_filename
+            ) VALUES(?,?,?,?,?,?,?)
+            """,
+            [
+                foreign_verification_id,
+                foreign_task_id,
+                "001.in",
+                1,
+                "pass-output",
+                token,
+                "001.out",
+            ],
+        )
         with self.assertRaises(HTTPException) as denied:
             artifact_file(
                 "alice/sample",
                 "bob",
                 local_verification_id,
-                f"blob/{encoded}/program.out",
+                artifact_virtual_path(token),
             )
         self.assertEqual(denied.exception.status_code, 404)
         self.assertIn("artifact", str(denied.exception.detail).lower())

@@ -29,6 +29,7 @@ from app.service.verification.diagnostic import (
     task_diagnostic_snapshot_from_json,
     task_diagnostic_snapshot_json,
 )
+from app.service.verification.artifact import index_task_artifacts
 from app.service.verification.lifecycle import (
     ActivationCommit,
     ActivationPlan,
@@ -443,13 +444,26 @@ class VerificationTaskStore:
         rows = conn.execute(
             """
             SELECT task.*,
-                   COALESCE(ref.input_ref,'') AS input_ref,
-                   COALESCE(ref.answer_ref,'') AS answer_ref,
+                   COALESCE((
+                       SELECT artifact.artifact_ref
+                       FROM verification_task_artifacts artifact
+                       WHERE artifact.verification_id=task.verification_id
+                         AND artifact.test_name=task.test_name
+                         AND artifact.role='generated-input'
+                       ORDER BY artifact.task_id
+                       LIMIT 1
+                   ),'') AS input_ref,
+                   COALESCE((
+                       SELECT artifact.artifact_ref
+                       FROM verification_task_artifacts artifact
+                       WHERE artifact.verification_id=task.verification_id
+                         AND artifact.test_name=task.test_name
+                         AND artifact.role='accepted-answer'
+                       ORDER BY artifact.task_id
+                       LIMIT 1
+                   ),'') AS answer_ref,
                    COALESCE(diagnostic.snapshot_json,'') AS late_diagnostic_json
             FROM verification_tasks task
-            LEFT JOIN verification_artifact_refs ref
-              ON ref.verification_id=task.verification_id
-             AND ref.test_name=task.test_name
             LEFT JOIN verification_task_diagnostics diagnostic
               ON diagnostic.task_id=task.id
             WHERE task.verification_id=?
@@ -874,11 +888,25 @@ class VerificationTaskStore:
                     SELECT t.id,t.verification_id,t.task_kind,t.program_id,
                            t.test_name,
                            t.final_status,t.result_json,
-                           COALESCE(r.input_ref,'') AS input_ref,
-                           COALESCE(r.answer_ref,'') AS answer_ref
+                           COALESCE((
+                               SELECT artifact.artifact_ref
+                               FROM verification_task_artifacts artifact
+                               WHERE artifact.verification_id=t.verification_id
+                                 AND artifact.test_name=t.test_name
+                                 AND artifact.role='generated-input'
+                               ORDER BY artifact.task_id
+                               LIMIT 1
+                           ),'') AS input_ref,
+                           COALESCE((
+                               SELECT artifact.artifact_ref
+                               FROM verification_task_artifacts artifact
+                               WHERE artifact.verification_id=t.verification_id
+                                 AND artifact.test_name=t.test_name
+                                 AND artifact.role='accepted-answer'
+                               ORDER BY artifact.task_id
+                               LIMIT 1
+                           ),'') AS answer_ref
                     FROM verification_tasks t
-                    LEFT JOIN verification_artifact_refs r
-                      ON r.verification_id=t.verification_id AND r.test_name=t.test_name
                     WHERE t.id IN ({','.join('?' for _ in task_ids)})
                     """,
                     task_ids,
@@ -1029,31 +1057,15 @@ class VerificationTaskStore:
                     ):
                         hard_failure_reason = effective_completion.fail_reason
 
-                    if effective_completion.input_ref or effective_completion.answer_ref:
-                        conn.execute(
-                            """
-                            INSERT INTO verification_artifact_refs(
-                                verification_id,test_name,input_ref,answer_ref,updated_at
-                            ) VALUES(?,?,?,?,?)
-                            ON CONFLICT(verification_id,test_name) DO UPDATE SET
-                                input_ref=CASE
-                                    WHEN excluded.input_ref<>'' THEN excluded.input_ref
-                                    ELSE verification_artifact_refs.input_ref
-                                END,
-                                answer_ref=CASE
-                                    WHEN excluded.answer_ref<>'' THEN excluded.answer_ref
-                                    ELSE verification_artifact_refs.answer_ref
-                                END,
-                                updated_at=excluded.updated_at
-                            """,
-                            [
-                                verification_id,
-                                str(row["test_name"] or ""),
-                                effective_completion.input_ref,
-                                effective_completion.answer_ref,
-                                now_iso(),
-                            ],
-                        )
+                    index_task_artifacts(
+                        conn,
+                        verification_id=verification_id,
+                        task_id=task_id,
+                        test_name=str(row["test_name"] or ""),
+                        result=effective_completion.result,
+                        generated_input_ref=effective_completion.input_ref,
+                        accepted_answer_ref=effective_completion.answer_ref,
+                    )
                     if (
                         task_kind == "generate-input"
                         and effective_completion.status == VerificationTaskStatus.DONE

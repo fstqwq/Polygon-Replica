@@ -74,22 +74,33 @@ class VerificationJudgehostAdapter:
                     ).fetchall()
                 )
             bounded_names = tuple(test_names[: max(1, int(limit))])
-            refs_by_name = {
-                str(row["test_name"]): row
-                for row in connection.execute(
-                    """
-                    SELECT test_name,input_ref,answer_ref
-                    FROM verification_artifact_refs
-                    WHERE verification_id=?
-                    """,
-                    [execution_scope_id],
-                ).fetchall()
-            }
+            refs_by_name: dict[str, dict[str, str]] = {}
+            for row in connection.execute(
+                """
+                SELECT test_name,role,artifact_ref
+                FROM verification_task_artifacts
+                WHERE verification_id=?
+                  AND role IN ('generated-input','accepted-answer')
+                ORDER BY task_id
+                """,
+                [execution_scope_id],
+            ).fetchall():
+                refs = refs_by_name.setdefault(
+                    str(row["test_name"]),
+                    {"input_ref": "", "answer_ref": ""},
+                )
+                key = (
+                    "input_ref"
+                    if str(row["role"]) == "generated-input"
+                    else "answer_ref"
+                )
+                if not refs[key]:
+                    refs[key] = str(row["artifact_ref"])
             cases = tuple(
                 CaseArtifactBinding(
                     test_name=test_name,
-                    input_ref=str(refs_by_name[test_name]["input_ref"] or ""),
-                    answer_ref=str(refs_by_name[test_name]["answer_ref"] or ""),
+                    input_ref=refs_by_name[test_name]["input_ref"],
+                    answer_ref=refs_by_name[test_name]["answer_ref"],
                 )
                 for test_name in bounded_names
                 if test_name in refs_by_name

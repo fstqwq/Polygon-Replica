@@ -420,14 +420,21 @@ CREATE TABLE IF NOT EXISTS verification_tasks (
     FOREIGN KEY(predecessor_task_id) REFERENCES verification_tasks(id)
 );
 
-CREATE TABLE IF NOT EXISTS verification_artifact_refs (
+CREATE TABLE IF NOT EXISTS verification_task_artifacts (
     verification_id TEXT NOT NULL,
+    task_id TEXT NOT NULL,
     test_name TEXT NOT NULL,
-    input_ref TEXT NOT NULL DEFAULT '',
-    answer_ref TEXT NOT NULL DEFAULT '',
-    updated_at TEXT NOT NULL,
-    PRIMARY KEY(verification_id, test_name),
-    FOREIGN KEY(verification_id) REFERENCES verifications(id)
+    pass_number INTEGER NOT NULL CHECK(pass_number >= 0),
+    role TEXT NOT NULL CHECK(role IN (
+        'generated-input','accepted-answer','pass-input','pass-output',
+        'pass-transcript','pass-stderr','pass-system','pass-feedback',
+        'pass-team-feedback','pass-metadata','pass-compare-metadata'
+    )),
+    artifact_ref TEXT NOT NULL,
+    download_filename TEXT NOT NULL,
+    PRIMARY KEY(verification_id, task_id, pass_number, role),
+    FOREIGN KEY(verification_id,task_id)
+        REFERENCES verification_tasks(verification_id,id)
 );
 
 CREATE TABLE IF NOT EXISTS verification_task_diagnostics (
@@ -564,7 +571,9 @@ CREATE INDEX IF NOT EXISTS idx_verification_tasks_verification_task ON verificat
 CREATE INDEX IF NOT EXISTS idx_verification_tasks_verification_predecessor ON verification_tasks(verification_id, predecessor_task_id);
 CREATE INDEX IF NOT EXISTS idx_verification_tasks_predecessor ON verification_tasks(predecessor_task_id);
 CREATE INDEX IF NOT EXISTS idx_verification_tasks_verification_final ON verification_tasks(verification_id, final_status, task_kind);
-CREATE INDEX IF NOT EXISTS idx_verification_artifact_refs_verification_updated ON verification_artifact_refs(verification_id, updated_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_verification_tasks_verification_identity ON verification_tasks(verification_id, id);
+CREATE INDEX IF NOT EXISTS idx_verification_task_artifacts_ref ON verification_task_artifacts(verification_id, artifact_ref);
+CREATE INDEX IF NOT EXISTS idx_verification_task_artifacts_locator ON verification_task_artifacts(verification_id, task_id, test_name, pass_number, role);
 CREATE INDEX IF NOT EXISTS idx_verification_task_diagnostics_updated ON verification_task_diagnostics(updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_problem_package_materializations_problem_revision ON problem_package_materializations(problem_id,revision_number DESC);
 CREATE INDEX IF NOT EXISTS idx_problem_package_materializations_status ON problem_package_materializations(status,checked_at DESC);
@@ -852,12 +861,14 @@ CURRENT_SCHEMA_COLUMNS: dict[str, tuple[str, ...]] = {
         "created_at",
         "finished_at",
     ),
-    "verification_artifact_refs": (
+    "verification_task_artifacts": (
         "verification_id",
+        "task_id",
         "test_name",
-        "input_ref",
-        "answer_ref",
-        "updated_at",
+        "pass_number",
+        "role",
+        "artifact_ref",
+        "download_filename",
     ),
     "verification_task_diagnostics": (
         "task_id",

@@ -12,6 +12,7 @@ from app.service.verification.task_completion import TaskCompletion
 from app.service.verification.types import VerificationTaskStatus
 
 from tests.identity_helpers import canonical_test_verification_id
+from tests.isolated_db_helpers import isolated_db_fetch_all
 from tests.verification_service_fixture import (
     VerificationServiceTestBase,
     make_execution_result,
@@ -492,6 +493,31 @@ class TestVerificationCompletionService(VerificationServiceTestBase):
                 str(rows[task_id]["feedback_text"]),
                 "skipped because generate-input was skipped",
             )
+        shared_owners = isolated_db_fetch_all(
+            self.db,
+            """
+            SELECT task_id,test_name,role
+            FROM verification_task_artifacts
+            WHERE verification_id=? AND artifact_ref=?
+              AND role='generated-input'
+            ORDER BY test_name
+            """,
+            [verification_id, "blob://same-generated-input"],
+        )
+        self.assertEqual(
+            [
+                (
+                    str(item["task_id"]),
+                    str(item["test_name"]),
+                    str(item["role"]),
+                )
+                for item in shared_owners
+            ],
+            [
+                (owner_id, "001.in", "generated-input"),
+                (duplicate_id, "002.in", "generated-input"),
+            ],
+        )
 
     def test_completion_commit_persists_refs_failure_and_full_result_together(self) -> None:
         verification_id = canonical_test_verification_id(
@@ -568,7 +594,7 @@ class TestVerificationCompletionService(VerificationServiceTestBase):
             commit.committed_task_ids,
             frozenset({generate_id, main_id}),
         )
-        refs = self.verification_service.verification_artifact_refs(
+        refs = self.verification_service.verification_test_artifacts(
             verification_id
         )["001.in"]
         self.assertEqual(refs["input_ref"], input_file.blob_ref)
@@ -596,6 +622,47 @@ class TestVerificationCompletionService(VerificationServiceTestBase):
         )
         self.assertEqual(persisted_result.warnings, main_result.warnings)
         self.assertEqual(persisted_result.outcome.usage, main_result.outcome.usage)
+        ownership = isolated_db_fetch_all(
+            self.db,
+            """
+            SELECT pass_number,role,artifact_ref,download_filename
+            FROM verification_task_artifacts
+            WHERE verification_id=? AND task_id=?
+            ORDER BY pass_number,role
+            """,
+            [verification_id, main_id],
+        )
+        self.assertEqual(
+            {
+                (int(item["pass_number"]), str(item["role"]))
+                for item in ownership
+            },
+            {
+                (0, "accepted-answer"),
+                *{
+                    (pass_number, role)
+                    for pass_number in (1, 2)
+                    for role in (
+                        "pass-compare-metadata",
+                        "pass-feedback",
+                        "pass-input",
+                        "pass-metadata",
+                        "pass-output",
+                        "pass-stderr",
+                        "pass-system",
+                        "pass-team-feedback",
+                    )
+                },
+            },
+        )
+        final_output = next(
+            item
+            for item in ownership
+            if int(item["pass_number"]) == 2
+            and str(item["role"]) == "pass-output"
+        )
+        self.assertEqual(str(final_output["artifact_ref"]), answer_file.blob_ref)
+        self.assertEqual(str(final_output["download_filename"]), "001.out")
 
     def test_completion_commit_rolls_back_task_refs_failure_and_memory_state(self) -> None:
         verification_id = canonical_test_verification_id(
@@ -659,7 +726,7 @@ class TestVerificationCompletionService(VerificationServiceTestBase):
         self.assertEqual(row["status"], VerificationTaskStatus.PENDING)
         self.assertEqual(row["result"].verdict, "")
         self.assertEqual(
-            self.verification_service.verification_artifact_refs(verification_id),
+            self.verification_service.verification_test_artifacts(verification_id),
             {},
         )
         verification_row = self.verification_service.verification_record(
@@ -740,7 +807,7 @@ class TestVerificationCompletionService(VerificationServiceTestBase):
         )
         self.assertEqual(row["status"], VerificationTaskStatus.DONE)
         self.assertEqual(row["verdict"], "OK")
-        refs = self.verification_service.verification_artifact_refs(
+        refs = self.verification_service.verification_test_artifacts(
             verification_id
         )["001.in"]
         self.assertEqual(refs["input_ref"], "blob://first-output")
@@ -871,7 +938,7 @@ class TestVerificationCompletionService(VerificationServiceTestBase):
             [item["message"] for item in original_result.compile.diagnostics],
         )
         self.assertEqual(persisted["result"].warnings, original_result.warnings)
-        refs = self.verification_service.verification_artifact_refs(
+        refs = self.verification_service.verification_test_artifacts(
             verification_id
         )["002.in"]
         self.assertEqual(refs["input_ref"], output_file.blob_ref)

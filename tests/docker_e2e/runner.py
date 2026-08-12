@@ -186,18 +186,20 @@ def _assert_tasks(
 
 
 def _assert_artifact_refs(connection: sqlite3.Connection, verification_id: str) -> None:
-    row = connection.execute(
+    rows = connection.execute(
         """
-        SELECT input_ref,answer_ref
-        FROM verification_artifact_refs
+        SELECT role,artifact_ref
+        FROM verification_task_artifacts
         WHERE verification_id=? AND test_name='001.in'
+          AND role IN ('generated-input','accepted-answer')
         """,
         [verification_id],
-    ).fetchone()
-    if row is None:
+    ).fetchall()
+    refs = {str(row["role"]): str(row["artifact_ref"]) for row in rows}
+    if set(refs) != {"generated-input", "accepted-answer"}:
         raise RuntimeError("verification omitted generated-test artifact refs")
-    input_ref = str(row["input_ref"])
-    answer_ref = str(row["answer_ref"])
+    input_ref = refs["generated-input"]
+    answer_ref = refs["accepted-answer"]
     if _read_blob(input_ref) != b"7\n":
         raise RuntimeError("generator input ref does not resolve to the mock output")
     if _read_blob(answer_ref) != b"49\n":

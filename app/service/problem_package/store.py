@@ -367,16 +367,31 @@ class ProblemPackageStore:
     def artifact_ref(self, verification_id: str, test_id: str, key: str) -> str:
         if key not in {"input_ref", "answer_ref"}:
             raise ValueError("invalid verification artifact key")
+        role = "generated-input" if key == "input_ref" else "accepted-answer"
         row = self.db.fetch_one(
-            f"""SELECT r.{key} AS artifact_ref FROM verification_tests_meta m
-                JOIN verification_artifact_refs r ON r.verification_id=m.verification_id AND r.test_name=m.test_name
-                WHERE m.verification_id=? AND m.source_id=? ORDER BY m.ordinal LIMIT 1""",
-            [verification_id, test_id],
+            """
+            SELECT artifact.artifact_ref
+            FROM verification_tests_meta metadata
+            JOIN verification_task_artifacts artifact
+              ON artifact.verification_id=metadata.verification_id
+             AND artifact.test_name=metadata.test_name
+             AND artifact.role=?
+            WHERE metadata.verification_id=? AND metadata.source_id=?
+            ORDER BY metadata.ordinal,artifact.task_id
+            LIMIT 1
+            """,
+            [role, verification_id, test_id],
         )
         if row is None:
             row = self.db.fetch_one(
-                f"SELECT {key} AS artifact_ref FROM verification_artifact_refs WHERE verification_id=? AND test_name=?",
-                [verification_id, f"{test_id}.in"],
+                """
+                SELECT artifact_ref
+                FROM verification_task_artifacts
+                WHERE verification_id=? AND test_name=? AND role=?
+                ORDER BY task_id
+                LIMIT 1
+                """,
+                [verification_id, f"{test_id}.in", role],
             )
         return "" if row is None else str(row["artifact_ref"] or "")
 

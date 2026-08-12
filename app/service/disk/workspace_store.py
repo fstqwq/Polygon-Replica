@@ -888,7 +888,7 @@ class WorkspaceDiskStore:
             conn.execute("DELETE FROM problem_package_materializations WHERE problem_id=?", [int(problem_id)])
             conn.execute("DELETE FROM previews WHERE problem_id=?", [int(problem_id)])
             conn.execute(
-                "DELETE FROM verification_artifact_refs WHERE verification_id IN (SELECT id FROM verifications WHERE problem_id=?)",
+                "DELETE FROM verification_task_artifacts WHERE verification_id IN (SELECT id FROM verifications WHERE problem_id=?)",
                 [int(problem_id)],
             )
             conn.execute(

@@ -42,11 +42,13 @@ A database locator is not proof that its payload is still available. Artifact-
 root files can disappear after maintenance cleanup; cache-root payloads can also
 disappear at startup. Reads and downloads check the referenced file or blob.
 
-Verification input and answer blobs use `verification_artifact_refs`; other
-execution artifact refs live in structured task results. JudgeFS executable
-blobs and indexes are runtime data. Export and package rows carry artifact-root
-archive locators. Contest artifact paths are derived below
-`artifacts_root/contests`; the contest source root never owns derived artifacts.
+All verification execution refs are indexed by `verification_task_artifacts`.
+The canonical structured task result still owns the execution evidence shape,
+while the ownership index authorizes and locates downloads without scanning that
+JSON. JudgeFS executable blobs and indexes are runtime data. Export and package
+rows carry artifact-root archive locators. Contest artifact paths are derived
+below `artifacts_root/contests`; the contest source root never owns derived
+artifacts.
 
 ## Startup cleanup
 

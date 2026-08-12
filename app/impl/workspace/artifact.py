@@ -1,5 +1,4 @@
 from __future__ import annotations
-import base64
 from pathlib import Path
 
 from fastapi import HTTPException
@@ -9,6 +8,7 @@ from app.impl.runtime.config import config
 from app.main_util import contains_symlink_component
 from app.service.platform.process import is_canonical_artifact_id
 from app.service.platform.runtime_blob_store import PayloadFile
+from app.service.verification.artifact import artifact_virtual_path
 
 
 def artifact_version_number(artifact_id: str | None) -> int | None:
@@ -66,74 +66,21 @@ def verification_artifact_file(verification_id: str, rel: str) -> tuple[PayloadF
     rel_norm = rel.lstrip("/")
     if not safe_verification_id or not rel_norm:
         return None
-    parts = Path(rel_norm).parts
-    if len(parts) == 3 and parts[0] == "blob":
-        encoded = str(parts[1] or "").strip()
-        filename = Path(parts[2]).name
-        if (not encoded) or (not filename):
-            return None
-        padding = "=" * ((4 - (len(encoded) % 4)) % 4)
-        try:
-            token = base64.urlsafe_b64decode((encoded + padding).encode("ascii")).decode("utf-8")
-        except Exception:
-            return None
-        if not token:
-            return None
-        if not config.verification_service.verification_has_artifact_token(safe_verification_id, token):
-            return None
-        payload_file = config.verification_service.artifact_descriptor(token)
-        if payload_file is None:
-            return None
-        return (payload_file, filename)
-    if len(parts) == 3 and parts[0] == "output":
-        task_id = str(parts[1] or "").strip()
-        filename = Path(parts[2]).name
-        if (not task_id) or (not filename):
-            return None
-        task_output = config.verification_service.verification_task_output_ref(safe_verification_id, task_id)
-        if task_output is None:
-            return None
-        test_name, ref = task_output
-        expected_name = f"{Path(test_name).stem}.out" if Path(test_name).stem else "program.out"
-        if filename != expected_name:
-            return None
-        if not ref:
-            return None
-        payload_file = config.verification_service.artifact_descriptor(ref)
-        if payload_file is None:
-            return None
-        return (payload_file, filename)
-    filename = Path(rel_norm).name
-    if rel_norm == f"tests/{filename}" and filename:
-        ref = config.verification_service.verification_artifact_ref(safe_verification_id, filename, "input_ref")
-        if not ref:
-            return None
-        payload_file = config.verification_service.artifact_descriptor(ref)
-        if payload_file is None:
-            return None
-        return (payload_file, filename)
-    if rel_norm == f"ans/{filename}" and filename:
-        stem = Path(filename).stem
-        if not stem:
-            return None
-        test_name = f"{stem}.in"
-        ref = config.verification_service.verification_artifact_ref(safe_verification_id, test_name, "answer_ref")
-        if not ref:
-            return None
-        payload_file = config.verification_service.artifact_descriptor(ref)
-        if payload_file is None:
-            return None
-        return (payload_file, filename)
-    return None
+    artifact = config.verification_service.verification_artifact(
+        safe_verification_id,
+        rel_norm,
+    )
+    if artifact is None:
+        return None
+    return artifact.payload, artifact.filename
 
 
 def verification_blob_virtual_rel(token: str, *, filename: str = "") -> str:
     safe_token = str(token or "").strip()
     if not safe_token:
         return ""
-    encoded = base64.urlsafe_b64encode(safe_token.encode("utf-8")).decode("ascii").rstrip("=")
-    download_name = Path(filename).name or Path(safe_token).name or "artifact.bin"
-    return f"blob/{encoded}/{download_name}"
+    _ = filename
+    return artifact_virtual_path(safe_token)
 
 
 def browser_file_response(file_path: Path) -> FileResponse:

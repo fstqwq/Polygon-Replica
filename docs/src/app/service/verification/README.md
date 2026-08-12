@@ -6,8 +6,11 @@ expected-behavior matching, and read models. It consumes a frozen workspace
 snapshot, selected solutions/tests, canonical runtime configuration, and typed
 Judgehost terminal reports containing an
 [`ExecutionResult`](../execution/README.md). It
-produces durable verification/task rows and runtime blob locators; it does not
-own the Judgehost wire protocol or blob filesystem.
+produces durable verification/task rows and an indexed owner row for every
+runtime blob locator; it does not own the Judgehost wire protocol or blob
+filesystem. Artifact authorization and virtual-path resolution query that
+owner index and then require a currently available runtime blob descriptor;
+they never reconstruct ownership by scanning result JSON.
 
 The lifecycle service admits a verification once, atomically activates one
 immutable execution plan, commits first-wins task decisions, finalizes sanity,

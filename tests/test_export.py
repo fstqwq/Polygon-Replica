@@ -670,7 +670,7 @@ class TestPublishedRevisionExport(E2ETestBase):
                 [verification_id],
             )
             for table in (
-                "verification_artifact_refs",
+                "verification_task_artifacts",
                 "verification_selected_tests",
                 "verification_source_paths",
                 "verification_sanity_check_messages",
