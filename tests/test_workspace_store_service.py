@@ -12,6 +12,7 @@ from app.service.problem.runtime_config import problem_config_limits
 from app.service.repository.git import GitService
 
 from tests.db_fixture import DBTestBase
+from tests.isolated_db_helpers import isolated_db_fetch_one
 
 
 class TestWorkspaceStoreService(DBTestBase):
