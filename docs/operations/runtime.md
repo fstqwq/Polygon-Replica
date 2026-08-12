@@ -1,7 +1,7 @@
 # Runtime and deployment
 
-This document describes runtime constraints. For executable host and Compose
-procedures, TLS setup, first use, upgrades, and recovery, use the
+Runtime constraints are documented here. Host and Compose installation, TLS,
+first use, upgrades, and recovery are covered by the
 [operator deployment runbook](deployment.md).
 
 ## Supported topology
@@ -29,9 +29,8 @@ are explicit installer dependencies, and the XeLaTeX probe resolves both font
 families as the runtime account. The environment file is atomically replaced as
 `root:root` mode `0600`; installer-managed paths are refreshed while other valid
 assignments are preserved as systemd `NAME=VALUE` records without executing the
-old file. An optional shell `export` prefix in an existing assignment is accepted
-only as migration input and is removed from the rendered file. Both `#` and `;`
-comment lines are preserved.
+file. Input assignments may use an optional shell `export` prefix; output uses
+systemd assignment syntax. Both `#` and `;` comment lines are preserved.
 
 The host must provide the regular GIL-enabled `python3.14` interpreter before
 the installer runs. The installer rejects any other Python minor version and
@@ -71,7 +70,7 @@ be requested again.
 ## Docker
 
 The production Compose service mounts durable Git/workspace data, SQLite and
-contest source data, cleanup-safe cache/artifact data, and a separately managed
+Contest source data, cache/derived data, and a separately managed
 backup root. The backup root must not be placed inside a disposable cache
 volume.
 
@@ -87,11 +86,11 @@ model.
 ## Operations
 
 Admin operations include Judgehost status and enablement, users, SMTP/system
-configuration, exclusive artifact cleanup, and exclusive source backup. Source
+configuration, exclusive generated-data cleanup, and exclusive source backup. Source
 backup publishes one archive containing the bare Git and workspace roots; it
 does not include SQLite or other storage roots. Do not manually delete active
 cache subtrees while the process is running. Observe process health, worker
-capacity, Judgehost leases, domain job status, artifact availability, disk
+capacity, Judgehost leases, domain job status, derived-product integrity, disk
 space, and backup age as separate signals.
 
 Both exclusive operations close Judgehost callback admission as well as

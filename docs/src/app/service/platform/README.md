@@ -22,7 +22,7 @@ The worker queue, runtime cache index, blob locks, and maintenance state are
 process-local. Maintenance has explicit owners: `admission` tracks the shared
 gate and active requests; `coordinator` owns the one active operation and its
 snapshot; `plan` declares cleanup-safe tables; `database` and `filesystem`
-provide destructive mechanics; and `artifact` alone orders the cleanup stages
+provide destructive mechanics; and the `artifact` maintenance module orders the cleanup stages
 and runtime resets. The queue JSONL is diagnostic history, not a recoverable
 job source, and startup resets it together with in-memory queue records.
 Runtime blobs and cache entries live below the startup-cleared cache trees.

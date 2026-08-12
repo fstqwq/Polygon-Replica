@@ -172,10 +172,6 @@ step is missed, the process remains available only as a raw `503` diagnostic
 that lists the missing schema objects; no workers or Judgehost runtime start.
 Extra tables, columns, indexes, and rows do not block startup and are preserved.
 
-For revisions introducing `verification_task_artifacts`, run the stopped-service
-procedure documented in the [persistence protocol](../protocol/persistence.md)
-after the source backup and before starting the new application revision.
-
 Systemd:
 
 ```bash
@@ -199,7 +195,6 @@ sudo docker compose logs --tail=200 app
 ```
 
 Do not run old and new application revisions against the same writable roots.
-Project-owned removed shapes are not kept through compatibility layers.
 
 ## Backup
 
@@ -215,16 +210,15 @@ run atomically replaces it. Move the downloaded file to independent off-host
 storage if it must survive loss of the application host.
 
 The archive contains committed problem history and every workspace, including
-uncommitted files. It deliberately excludes SQLite, contest source and
-attachments, artifacts, caches, other backup-root content, application code,
+uncommitted files. It deliberately excludes SQLite, Contest source and
+attachments, derived data, caches, other backup-root content, application code,
 the encryption key, and TLS/proxy configuration. Keep secrets and deployment
 configuration under the operator's separate secret/configuration backup policy.
 This source archive is not a full application-state backup.
 
 ## Restore
 
-There is no in-application restore action. Treat the download as a source
-recovery archive:
+Restore is an operator-managed source recovery procedure:
 
 1. Stop the application and Judgehosts.
 2. Inspect `manifest.json` and the member paths before extraction.

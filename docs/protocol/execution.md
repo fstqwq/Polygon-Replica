@@ -9,8 +9,7 @@ diagnostics; they are cleared at startup and do not recover work after restart.
 Durable job summary rows are reconciled to failed states during startup.
 
 A custom run is represented as a verification with the custom kind. It uses the
-same task storage, Judgehost dispatch, results, and artifact model rather than a
-second run domain.
+same task storage, Judgehost dispatch, results, and cache-payload model.
 
 ## Verification lifecycle and DAG
 
@@ -63,7 +62,7 @@ Generator parameters remain part of each task's input payload: they change the
 invocation and result-cache identity, but not the generator program identity.
 If compilation or an active internal error has already failed that program,
 test tasks that become runnable later inherit the same canonical program
-failure; they are not left waiting for a compile that can no longer run.
+failure and finish without waiting for another compile.
 
 The accepted program uses `accepted`. Distinct logical generator definitions
 receive `generator-<first-seen-index>`, and checked solutions receive
@@ -108,8 +107,8 @@ test. Identical generator invocations share one generated result; duplicate
 generation tasks depend on the owning invocation and finish as skipped.
 
 Generator-backed tests execute their generator payload, including parameters.
-The configured validator is the generator task's checker. There is no additional
-validator task kind between generation and solution execution.
+The configured validator runs as the generator task's checker between
+generation and solution execution.
 
 The DAG scheduler publishes runnable tasks in bounded batches and polls
 Judgehost case-cache misses. Judgehost terminal reports, cache hits, and
@@ -210,9 +209,9 @@ only; they are not currently cache-key fields or consistency gates.
 An available cached result may be reused only for its matching identity. Cache
 availability is checked separately from durable verification status.
 
-## Results and artifacts
+## Results and cache payloads
 
-For a final `add-judging-run` callback, Judgehost first captures artifact bytes
+For a final `add-judging-run` callback, Judgehost first captures cache payloads
 and refs, then a dependency-light normalizer produces the canonical case
 `ExecutionResult` owned by `app.service.execution`. Compile failure arrives
 through `update-judging`, and a
@@ -220,7 +219,7 @@ missing case has no complete final callback. Canonical scheduler and task-queue
 helpers construct those failure results from stored compile/case evidence; the
 batch finalizer publishes and aggregates terminal case results into the task
 report. Verification preserves
-that report instead of rebuilding compile data, passes, warnings, or artifact
+that report instead of rebuilding compile data, passes, warnings, or payload
 evidence from summary fields.
 
 Task results are serialized in `verification_tasks.result_json` only through
@@ -228,7 +227,7 @@ the strict execution codec. The canonical shape has `outcome`, `compile`,
 ordered `passes`, and `warnings`; missing, additional, or incorrectly typed
 fields are invalid. Each pass
 records its number, capture status, run result, verdict, score, answer flag,
-resource usage, feedback, and artifact locators. Pass numbers are contiguous
+resource usage, feedback, and cache locators. Pass numbers are contiguous
 from one; an output locator and transcript locator are mutually exclusive.
 
 Verification converts a terminal report into one `TaskCompletion`. Generator
@@ -265,14 +264,13 @@ compile or final-result callback is an idempotent retry, not diagnostic
 evidence.
 
 The canonical serialized result carries pass evidence. Every non-empty pass ref,
-plus per-test generated input and accepted answer refs, is indexed in
-`verification_task_artifacts` by owning task, test, pass, and role. The index is
-the only download authorization and locator query; there is no physical
-`verification_tasks.output_ref` column and downloads do not scan result JSON.
+plus per-test generated input and accepted answer refs, is indexed in the
+currently named `verification_task_artifacts` table by owning task, test, pass,
+and role. These refs all identify cache payloads. Downloads use the ownership
+index for authorization and locator lookup.
 
-Locators point into cleanup-safe runtime storage. A durable terminal result may
-remain after cleanup while one or more payloads are unavailable. Downloads MUST
-resolve the locator through the owning store and fail as unavailable when the
-payload no longer exists. Verification detail downloads use the existing
-`/problems/{problem:path}/artifacts/{verification_id}/{rel_path:path}` route;
-no `/runs/{run_id}/artifacts/...` route exists.
+Locators point into cache storage. A durable terminal result may remain after
+startup while one or more payloads are unavailable. Downloads MUST resolve the
+locator through the owning store and fail as unavailable when the cache entry is
+missing. Verification detail downloads use
+`/problems/{problem:path}/artifacts/{verification_id}/{rel_path:path}`.

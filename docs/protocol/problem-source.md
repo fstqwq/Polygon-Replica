@@ -166,6 +166,6 @@ be filled in a preview snapshot by a sample-only verification.
 Publishing refuses a workspace based on an older published revision, commits
 the workspace, and pushes `main`. If the push fails, it attempts to roll back
 the new local commit. Verification signatures use the relevant source paths and
-canonical configuration. Derived verification or package artifacts never
-replace Git provenance: their rows retain the source commit they were built
+canonical configuration. Verification cache payloads and derived packages do
+not replace Git provenance: their rows retain the source commit they were built
 from.

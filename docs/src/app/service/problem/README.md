@@ -8,7 +8,7 @@ outputs are canonical JSON/text writers and typed read models for orchestration
 and UI code.
 
 Git remains authoritative for committed source. This package does not own Git
-publication, execution, or artifacts. Readiness combines read-only Git,
+publication, execution, or derived outputs. Readiness combines read-only Git,
 verification, and package projections without collapsing their states. The
 authored shapes and fallbacks are owned by the
 [problem-source protocol](../../../../protocol/problem-source.md).

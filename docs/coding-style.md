@@ -82,8 +82,7 @@ explicitly. Verification workflow policy and execution are owned by
 modules.
 
 Cycle analysis covers every discovered module below `app/`. Any cycle fails the
-gate; there is no scope list, exception list, allowlist, or baseline to update
-when a module is added.
+gate, and newly added modules are included automatically.
 
 Import grouping, placement, and the preference for absolute imports are
 authoring and review rules. The repository does not currently run an import

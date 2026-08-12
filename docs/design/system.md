@@ -18,17 +18,14 @@ and availability are owned by the [storage protocol](../protocol/storage.md).
 The process topology and launcher constraints are described in
 [runtime operations](../operations/runtime.md).
 
-## Source lifecycle
+## State model
 
-A problem has a bare Git repository. The published revision is the commit at its
-`main` reference. Each user workspace is a mutable checkout with its own status.
-Publishing reconciles the workspace and moves the published Git reference; it
-does not copy the committed source into SQLite.
-
-Problem source layout is defined by the [problem source protocol](../protocol/problem-source.md).
-Derived execution and package products are described by the
-[storage](../protocol/storage.md) and [execution](../protocol/execution.md)
-protocols.
+Workspaces, official problem versions, verifications, problem packages, and
+Contest outputs form a one-way derivation chain. Their inputs, freeze points,
+invalidation rules, and cleanup behavior are described in
+[state derivation and lifecycle](state-lifecycle.md). The authored workspace
+layout is defined by the
+[problem source protocol](../protocol/problem-source.md).
 
 ## Trust boundaries
 

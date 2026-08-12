@@ -9,7 +9,7 @@ Judgehost terminal reports containing an
 [`ExecutionResult`](../execution/README.md). It
 produces durable verification/task rows and an indexed owner row for every
 runtime blob locator; it does not own the Judgehost wire protocol or blob
-filesystem. Artifact authorization and virtual-path resolution query that
+filesystem. Cache-payload authorization and virtual-path resolution query that
 owner index and then require a currently available runtime blob descriptor;
 they never reconstruct ownership by scanning result JSON.
 
@@ -67,7 +67,7 @@ reconciliation; idle coordinators repeat that reconciliation before advancing
 successors. An idle coordinator that discovers a terminal durable parent drains
 Judgehost execution before it retires.
 SQLite rows survive restart and startup reconciliation terminalizes interrupted
-work. Artifact bytes remain cleanup-safe. See the
+work. Cache payloads remain disposable. See the
 [execution protocol](../../../../protocol/execution.md) for graph, identity,
 result, and availability semantics.
 

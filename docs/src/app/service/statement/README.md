@@ -8,7 +8,7 @@ The canonical template selects XeLaTeX and uses TeX Gyre Latin fonts plus Noto
 CJK fonts; both host and Docker deployment install and probe those dependencies.
 
 Authored inputs remain Git source. SQLite stores preview metadata, while preview
-PDFs and logs are cleanup-safe cache artifacts. Preview compilation runs
+PDFs and logs are cache payloads. Preview compilation runs
 synchronously and may run sample-only verification to hydrate missing sample
 data in its snapshot.
 The source layout is owned by the

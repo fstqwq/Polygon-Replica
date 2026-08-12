@@ -12,7 +12,7 @@ Native `test_data/**` is deliberately unselected because it is materialization,
 not source. Polygon and ICPC importers likewise leave unknown external payload
 unopened.
 
-The package does not own Git, SQLite, or integration of the staged tree. The
-calling implementation owns that lifecycle. External compatibility input is
-not retained as a second workspace model. Formats and merge semantics are owned
-by the [package protocol](../../../../protocol/package.md).
+The calling implementation owns Git, SQLite, and integration of the staged
+tree. Import converts external input into canonical workspace source. Formats
+and merge semantics are owned by the
+[package protocol](../../../../protocol/package.md).

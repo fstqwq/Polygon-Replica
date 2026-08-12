@@ -31,7 +31,7 @@ verification into the reader's current workspace. Only the workspace that owns
 an active verification can cancel it; published or another user's verification
 is view-only.
 
-Successful package artifacts are shared with problem readers. A queued,
+Successful derived packages are shared with problem readers. A queued,
 running, or failed package job is visible only to its actor or a problem
 manager. Contest members receive `read`, `write`, or fixed `owner` capabilities;
 roster management requires the contest owner or a system administrator, and

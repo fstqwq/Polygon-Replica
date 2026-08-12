@@ -72,8 +72,8 @@ Persistence failure returns non-2xx so the daemon retries. The in-memory case is
 then marked `completion_acknowledged`. A custom-run case has no
 `verification_task_id`; its ACK follows scheduler decision capture and does not
 invoke the verification completion sink.
-A retry whose durable task is already terminal, or whose cancelled/retired case
-can no longer affect state, also receives `1`. Invalid hostnames and active
+A retry whose durable task is already terminal, or whose case is cancelled or
+retired, also receives `1`. Invalid hostnames and active
 lease-owner mismatches receive non-2xx; invalid hostnames are HTTP 400 and a
 concurrent claim is HTTP 503.
 
@@ -83,7 +83,7 @@ carries that task identity directly and does not depend on installing a reverse
 `(judgetask_id, test_name)` mapping after work is visible. A custom-run case has
 no verification task or coordinator binding and is exposed through its
 process-local Judgehost task. The owning result and transaction semantics are
-in the [execution protocol](execution.md#results-and-artifacts).
+in the [execution protocol](execution.md#results-and-cache-payloads).
 
 After a batch is leased, dispatch reports its durable verification task through
 an injected `CaseLeaseSink`. Judgehost does not import or locate the
@@ -153,8 +153,8 @@ compare.meta}`. The final pass contributes `input`, `judgemessage.txt`, and
 
 A valid bundle becomes per-pass evidence in the structured execution result.
 Missing, reduced, or invalid historical capture is retained as a result warning
-rather than reconstructed by the server. The final verification view is derived
-from the accepted case report; there is no separate evidence protocol.
+rather than reconstructed by the server. The accepted case report carries the
+final verification evidence.
 
 Multi-pass capture reads DOMjudge's pass directories directly. Pass 1 input is
 kept by the testcase-local `.polygon-pass-1-input` hard link before DOMjudge
@@ -167,8 +167,7 @@ A terminal callback carries one tar assembled directly from those files. It is
 either a complete historical capture or metadata-only history with the byte
 offset needed to separate final cumulative feedback. Capture does not copy a
 historical tree, hash content, or alter contestant/checker exit status. A pass
-that exceeds DOMjudge's native pass limit ends through `internal-error`; there
-is no final artifact callback for that pass.
+that exceeds DOMjudge's native pass limit ends through `internal-error`.
 
 DOMjudge does not create `teammessage.txt` when a checker or interactor has no
 team-facing message. Capture represents that optional message as a zero-byte

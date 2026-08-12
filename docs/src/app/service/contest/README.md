@@ -1,9 +1,9 @@
 # `app/service/contest`
 
 Owns contest identity, membership, properties, problem roster, statement source
-and attachments, build jobs, frozen build items, and artifact records. It
+and attachments, build jobs, selected build inputs, and derived-output records. It
 accepts canonical contest/problem identities and source payloads and returns
-access contexts, roster/build snapshots, and validated artifact download paths.
+access contexts, roster/build snapshots, and validated output download paths.
 Focused build services own build admission and terminal transitions, durable
 source snapshots, statement assembly and compilation, and Contest-specific
 package construction. HTTP adapters only validate request syntax, translate

@@ -67,7 +67,7 @@ Do not rewrite a test into a tautology merely to preserve its name or count.
 Most UI changes do not require a new assertion. A UI test performs a meaningful
 user action through the real route or interaction boundary and observes the
 result outside the presentation code: authorization, response status or
-redirect, cookies, Git/SQLite/files, queued work, downloadable artifacts, or a
+redirect, cookies, Git/SQLite/files, queued work, downloadable outputs, or a
 user-visible capability.
 
 For example, a settings test submits the form and reads the saved configuration.
@@ -95,7 +95,7 @@ route, while still being a low-value presentation assertion that should be
 deleted. Conversely, an end-to-end scenario is justified when crossing the real
 boundary is essential evidence: routing and authorization reach the intended
 service, a submitted operation changes durable state, an asynchronous workflow
-reaches its terminal result, or an artifact can be retrieved through its public
+reaches its terminal result, or a derived output can be retrieved through its public
 contract.
 
 For a user capability, normally keep one representative successful journey and
@@ -112,7 +112,7 @@ Assertions about intermediate helper calls, mock choreography, or internal data
 shapes are appropriate only when that boundary is the contract under test.
 
 Verify the world rather than the application's self-report. Re-read the stored
-row or file, inspect the issued cookie, retrieve the artifact, or observe the
+row or file, inspect the issued cookie, retrieve the derived output, or observe the
 terminal job state. A success message alone does not prove that an action took
 effect. For a failure test, also verify that protected state did not change when
 that is the important invariant.
@@ -176,7 +176,7 @@ Both projects perform first-run setup, Judgehost configuration, problem
 creation, and every fixture file save through public HTTP and the latest
 Polygon Agent CLI checkout. They run the same generated test through a real
 Judgehost and observe generated input, accepted answer, AC, WA, CE, and public
-artifact downloads. The `bleeding` project alone continues through the more
+derived-output downloads. The `bleeding` project alone continues through the more
 expensive product tail: sample preview, commit, Native and ICPC exports, contest
 creation and statement PDF export, role-aware page walk, and concurrent
 Alice/Bob conflict resolution. This avoids repeating work that does not vary by

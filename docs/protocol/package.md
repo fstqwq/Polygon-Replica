@@ -24,7 +24,7 @@ ZIP64 is accepted within these limits; no compression-ratio rule exists.
 
 Each parsed XML, YAML, INI, or JSON document and the retained metadata set are
 bounded by the fixed 4 MiB metadata limit. Import writes canonical workspace
-source; an imported archive is not retained as source of truth after conversion.
+source and discards the uploaded archive after conversion.
 
 The application currently detects Native packages by `config/problem.json`,
 Polygon packages by `problem.xml`, and ICPC packages by `problem.yaml`. Their
@@ -68,10 +68,9 @@ manifest identity, every declared payload, the absence of undeclared testcase
 payloads, and the committed-source digest. Failed validation marks the
 materialization unavailable and invalidates its derived exports.
 
-Readiness, Git provenance, and archive availability are separate facts:
-successful verification does not itself prove that an old archive still exists,
-and an available archive always retains the source commit from which it was
-built.
+Readiness, Git provenance, and archive availability are separate facts. Archive
+availability is checked independently, and an available archive retains the
+source commit from which it was built.
 
 On Native import, `test_data/**` is materialized judging output rather than Git
 source. Those members, including `manifest.json`, test inputs, answers, and
@@ -110,23 +109,23 @@ created as a side effect of contest builds. An available Native materialization
 can be downloaded directly from the Packages page. Creating an export remains
 a write-authorized operation.
 
-A problem export artifact is identified by its published Native
-materialization and export type. Export requests remain separate attempts with
+A problem export is identified by its published Native materialization and
+export type. Export requests remain separate attempts with
 separate job IDs; successful attempts may resolve to the same available
-artifact. Artifact publication and export-job state are independent writes. If
-a canonical artifact has been published and a later job status or link update
-fails, the valid artifact remains reusable by a later attempt; that failure
+derived output. Output publication and export-job state are independent writes.
+If a canonical output has been published and a later job status or link update
+fails, the valid output remains reusable by a later attempt; that failure
 does not delete or invalidate the cache entry.
 
 Contest labels are placement metadata rather than problem export identity. A
 contest package build consumes the canonical ICPC ZIP, safely extracts it into
 the contest job staging tree, changes the single `short-name` entry in
 `domjudge-problem.ini` to the frozen contest label, and repacks the result as a
-contest-owned artifact. The changed ZIP is not inserted into the problem export
+Contest-owned output. The changed ZIP is not inserted into the problem export
 cache. Thus two contests can publish different labels from the same canonical
-problem artifact without changing that artifact.
+problem package without changing that package.
 
-This transformation consumes a system-generated artifact whose stored size and
+This transformation consumes a system-generated package whose stored size and
 SHA were already verified. The authenticated-upload entry and expanded-byte
 budgets do not apply again. Extraction remains streaming and still validates
 the central-directory structure, normalized paths, path conflicts, member
@@ -134,8 +133,7 @@ types, encryption state, and the fixed metadata-size boundary.
 
 ## ICPC export
 
-ICPC export produces one hybrid ZIP; there are no selectable compatibility
-profiles. The archive contains:
+ICPC export produces one hybrid ZIP. The archive contains:
 
 - `problem.yaml`
 - `domjudge-problem.ini`
@@ -160,13 +158,11 @@ multi-pass samples are kept in `data/secret/` and omitted from rendered sample
 blocks because the legacy DOMjudge sample path cannot express their execution
 semantics.
 
-The output aims at PPF 2025-09 and best-effort legacy DOMjudge consumption.
-There is no compatibility release gate and no guarantee for every legacy
-DOMjudge version. A canonical problem-level export uses the public problem slug
-as the legacy DOMjudge `short-name`. The export cache may reuse an available
-archive for the same materialization/type identity. If rebuilding is required,
-ZIP bytes, timestamps, ordering effects, and SHA are not guaranteed to match an
-earlier build.
+The output targets PPF 2025-09 and the supported legacy DOMjudge layout. A
+canonical problem-level export uses the public problem slug as the legacy
+DOMjudge `short-name`. The export cache may reuse an available archive for the
+same materialization/type identity. Rebuilding may produce different ZIP bytes,
+timestamps, ordering, and SHA.
 
 ## Polygon import
 

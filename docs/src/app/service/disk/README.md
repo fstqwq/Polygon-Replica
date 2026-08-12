@@ -3,7 +3,7 @@
 This package contains SQLite store adapters for authentication, workspaces,
 contests, previews, verifications, exports, runtime reconciliation, system
 configuration, and SMTP configuration. Despite its package name, it does not
-own the artifact/cache filesystem layout.
+own the derived/cache filesystem layout.
 
 The stores accept canonical service identifiers and typed row values, execute
 queries or transactions through `app.db.DB`, and return typed records or decoded

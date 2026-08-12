@@ -1,16 +1,18 @@
 # Documentation
 
-Read the smallest set that owns the change.
+Polygon Replica documentation covers product scope, system design, protocols,
+implementation structure, testing, and deployment.
 
 ## System
 
-- [Design principles](design/principles.md)
+- [Product scope and rationale](product.md)
+- [State derivation and lifecycle](design/state-lifecycle.md)
 - [Runtime and component model](design/system.md)
 - [Access model](design/access.md)
 
 ## Protocols
 
-- [Protocol ownership index](protocol/README.md)
+- [Protocol index](protocol/README.md)
 - [Problem source](protocol/problem-source.md)
 - [Execution and verification](protocol/execution.md)
 - [Judgehost wire protocol](protocol/judgehost.md)
@@ -28,7 +30,3 @@ Read the smallest set that owns the change.
 - [Configuration](operations/configuration.md)
 - [Runtime and deployment](operations/runtime.md)
 - [Operator deployment runbook](operations/deployment.md)
-
-The protocol documents are the source of truth for current exchanged and
-persisted shapes. The package map explains where those contracts are
-implemented. The findings ledger is not a second design specification.

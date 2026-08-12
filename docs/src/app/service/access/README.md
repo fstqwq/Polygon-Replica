@@ -16,6 +16,6 @@ roles or broaden an agent token.
 
 Problem access derived from a contest never grants problem ownership. A problem
 reader may view and rejudge a visible verification, but only the workspace that
-owns that verification may cancel it. Successful package artifacts are shared
+owns that verification may cancel it. Successful derived packages are shared
 with problem readers, while unfinished and failed jobs remain visible only to
 their actor and problem managers.

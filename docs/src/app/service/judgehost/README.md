@@ -23,7 +23,7 @@ The package depends on workspace lookup, `RuntimeBlobStore`,
 `RuntimeCacheIndex`, the injected `JudgehostExecutionPort`, and its process-local
 task registry and batch scheduler. It does not import verification modules or
 query verification tables. `CaseBinding` carries the opaque scope, program,
-durable task, and test identities required for artifact lookup, exposure,
+durable task, and test identities required for cache-payload lookup, exposure,
 lease, completion, diagnostics, and cleanup. Host state, leases, toolchain
 reports, executable/result cache indexes, and batch state do not persist across
 process startup. Callback admission and per-case receipts linearize maintenance
@@ -31,9 +31,9 @@ and quiet cleanup.
 
 The Judgehost composition root constructs one diagnostic publisher, completion
 publisher, and batch finalizer, then injects those boundaries into callback and
-dispatch orchestration. Final `add-judging-run` artifacts are converted by the
+dispatch orchestration. Final `add-judging-run` payloads are converted by the
 dependency-light case normalizer. `artifact_capture.py` selects the bounded
-callback files, validates historical pass bundles, and writes immutable runtime
+callback files, validates historical pass bundles, and writes runtime cache
 blobs without choosing a verdict or publishing a completion.
 `diagnostic_payload.py` reduces already bounded debug and internal-error fields
 to canonical diagnostic text without depending on persistence, runtime

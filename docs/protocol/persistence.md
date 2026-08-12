@@ -1,7 +1,7 @@
 # SQLite persistence
 
 The canonical schema is the `SCHEMA` declaration and validation manifest in
-`app/db.py`. SQLite does not store committed source files or large artifact
+`app/db.py`. SQLite does not store committed source files or large derived
 payloads. The physical table inventory is in
 [the SQLite implementation map](../implementation/sqlite.md).
 
@@ -16,8 +16,8 @@ run, distinguished by `kind`. It records source/signature context, mode, pass
 limit, run configuration, status, failure fields, and timestamps.
 
 `verification_tasks` stores the task DAG and `result_json`. Every downloadable
-artifact locator is indexed in `verification_task_artifacts`. The schema has no
-`verification_tasks.output_ref` column.
+verification-cache locator is indexed in the currently named
+`verification_task_artifacts` table.
 
 Verification admission is insert-only. It creates a `queued` parent without
 task rows. Activation uses one `BEGIN IMMEDIATE` transaction to compare-and-set
@@ -29,9 +29,9 @@ means one source path and compile specification whose test tasks share one
 compilation; it is not an arbitrary task group. The accepted solution,
 generator, and each checked solution have distinct program identities.
 
-There is no separate durable program table. The immutable plan owns the program
-definition, while task rows denormalize `program_id`, task kind, source path, and
-expected behavior. Judgehost validates the corresponding compile identity when
+The immutable plan owns program definitions. Task rows denormalize `program_id`,
+task kind, source path, and expected behavior. Judgehost validates the
+corresponding compile identity when
 cases join the program's batch. A task ID is exactly
 `vt~<verification_id>~<program_id>~<test_name>`. Constructing the key performs
 no database read; activation recomputes every key and rejects a mismatch,
@@ -40,7 +40,7 @@ duplicate, or inconsistent program definition as an invalid plan.
 Task completion uses one `BEGIN IMMEDIATE` transaction under the verification
 runtime write lock. For each task whose `final_status` is empty, that transaction
 writes the terminal status, bounded canonical result, finish time, every pass
-artifact ownership row, generated input or accepted answer ownership, and the
+cache-payload ownership row, generated input or accepted answer ownership, and the
 verification's first non-empty failure reason.
 Generator content deduplication, skipped-generator results, and pending
 descendant skips are included in the transaction. Generator, `main-correct`,
@@ -72,7 +72,7 @@ append uses one `BEGIN IMMEDIATE` read/merge/upsert transaction. A content diges
 deduplicates retries; unchanged snapshots do not write. The bounded ordered
 snapshot retains the newest items when it exceeds the auxiliary display limit.
 This table is not a second completion store: appending diagnostics cannot update
-`result_json`, terminal status, artifact refs, parent status, or `fail_reason`.
+`result_json`, terminal status, cache refs, parent status, or `fail_reason`.
 
 Cancellation and failure compare-and-set a `queued` or `running` parent to
 `cancelled` and `failed`, respectively. Both preserve the first non-empty reason
@@ -108,7 +108,7 @@ execution even when it arrives concurrently with completion or cancellation.
 
 Preview, export, package-build, and contest-job rows survive normal restarts.
 Unfinished rows are moved to `failed` because their process-local work cannot
-resume. Administrative artifact cleanup removes the
+resume. Administrative generated-data cleanup removes the
 execution/package/export/build subset described by the
 [storage protocol](storage.md#maintenance-cleanup), while identity, authoring,
 contest source, attachment, and configuration rows remain.
@@ -116,7 +116,7 @@ contest source, attachment, and configuration rows remain.
 `exports` owns one derived cache row for each Native materialization and export
 type. `export_jobs` owns request attempts: distinct requests retain distinct job
 IDs even when they finish by referencing the same cached export row. Contest
-label variants are contest artifacts and do not enter `exports`.
+label variants are Contest-owned derived outputs and do not enter `exports`.
 
 ## Configuration
 
@@ -139,30 +139,5 @@ application requirement and are not interpreted as compatibility state.
 Existing constraints and definitions behind already named indexes are not
 compared against the DDL. A schema change updates the DDL, required-object
 manifest, service queries, cleanup policy, offline operator procedure, and this
-document together. No project-owned schema version is reserved without an
-actual compatibility boundary.
-
-The current offline procedure for replacing the former verification input/answer
-ref table is:
-
-```bash
-sudo systemctl stop polygon-replica.service
-cd /opt/polygon-replica
-sudo -u polygon PYTHONPATH=. .venv/bin/python \
-  scripts/index_verification_artifacts.py \
-  --db /var/lib/polygon-replica/metadata.db
-sudo systemctl start polygon-replica.service
-```
-
-It runs one `BEGIN IMMEDIATE` transaction, parses every canonical stored task
-result, assigns legacy generated-input and accepted-answer refs to their owning
-tasks, creates the task identity constraint and both ownership indexes, runs
-foreign-key and integrity validation, and only then drops the former table.
-Malformed or ambiguous stored evidence rolls the whole transaction back. An
-operator may instead clear generated artifacts before the upgrade, then run the
-same procedure against the empty execution tables.
-
-The current `workspaces` shape has no recent-verification status field.
-Existing databases may retain that historical extra column because schema
-validation tolerates unrecognized columns; no application path reads, writes,
-or clears it, and fresh databases do not create it.
+document together. An upgrade that introduces required schema objects includes
+its stopped-service procedure with that release.

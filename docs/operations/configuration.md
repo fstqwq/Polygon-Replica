@@ -10,7 +10,7 @@ be read:
 | `POLYGON_REPLICA_DB` | SQLite database | `/var/lib/polygon-replica/metadata.db` |
 | `POLYGON_REPLICA_BARE_ROOT` | bare Git repositories | `/srv/polygon-replica/git` |
 | `POLYGON_REPLICA_WORKSPACE_ROOT` | user workspaces | `/srv/polygon-replica/workspaces` |
-| `POLYGON_REPLICA_ARTIFACTS_ROOT` | export and derived artifacts | `/srv/polygon-replica/export` |
+| `POLYGON_REPLICA_ARTIFACTS_ROOT` | derived packages and Contest outputs | `/srv/polygon-replica/export` |
 | `POLYGON_REPLICA_CACHE_ROOT` | runtime/cache tree | `/tmp/polygon-replica` |
 | `POLYGON_REPLICA_CONTEST_SOURCE_ROOT` | contest sources and attachments | `/var/lib/polygon-replica/contest-sources` |
 | `POLYGON_REPLICA_BACKUP_ROOT` | source backup and operator archives | `/var/backups/polygon-replica` |
@@ -47,8 +47,8 @@ The typed registry under `app/config/` is the only authority for every key's
 type, default, range, category, description, and restart behavior. It currently
 contains 95 settings, including `PROBLEM_ZIP_MAX_EXPANDED_BYTES`,
 `CONTEST_MAX_PROBLEMS`, and `STATEMENT_SAMPLE_MAX_BYTES`. SQLite stores only
-values that differ from registry defaults; there is no second legacy schema or
-environment-variable fallback.
+values that differ from registry defaults. Bootstrap environment variables
+select resources needed before this registry can be loaded.
 
 `app/main_constant.py` contains fixed protocol, path, regular-expression,
 template, and enumeration values. It does not contain admin-editable defaults.
@@ -62,9 +62,8 @@ startup and names the offending key rather than silently restoring a default.
 The statement sample limit cannot exceed the whole `tests/spec.json` textarea
 limit.
 
-Secure-cookie behavior comes from this durable configuration path. There is no
-bootstrap environment-variable override; deployment manifests must leave it
-under `system_config` authority.
+Secure-cookie behavior is controlled by the durable `AUTH_COOKIE_SECURE`
+setting under `system_config` authority.
 
 SMTP connection fields live in the singleton `smtp_config` row. Its password is
 stored encrypted with the deployment key above.
@@ -81,6 +80,6 @@ Most settings become active on that replacement. A registry definition marked
 `restart_required` updates the persisted snapshot but remains pending in the
 current process. A new process validates and activates it during startup. The
 three cookie names are restart-required: after a rename, cookies under the old
-name are no longer read and browsers must authenticate again. Worker sizing,
+name become invalid and browsers must authenticate again. Worker sizing,
 problem expanded-ZIP budget, and contest problem admission limit follow the
 same restart-only model.

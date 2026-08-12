@@ -17,12 +17,11 @@ Important physical facts:
 
 - `workspaces` is unique per problem/user and stores checkout/status projections.
 - `verifications` represents full verification and custom run through `kind`.
-- `verification_tasks.result_json` owns structured task results; the table has
-  no physical `output_ref` column.
+- `verification_tasks.result_json` owns structured task results.
 - `verification_tasks.program_id` records the program whose source and compile
   specification are shared by that program's test tasks; task IDs are the
   natural key `vt~<verification_id>~<program_id>~<test_name>`.
-- `verification_task_artifacts` indexes every canonical execution pass artifact
+- `verification_task_artifacts` indexes every canonical execution cache payload
   plus generated input and accepted answer ownership. It is keyed by task, pass,
   and role and stores the runtime ref and server-chosen download filename. Its
   composite foreign key requires the task to belong to the same verification.
