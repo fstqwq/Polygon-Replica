@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from pathlib import Path
 from typing import cast
 
 from app.config import ConfigValues
@@ -41,7 +40,6 @@ from app.service.verification.read_model import (
     solution_source_paths,
     task_counts,
 )
-from app.service.verification.signature import verification_manifest
 from app.service.verification.task_store import VerificationTaskStore
 
 from app.service.judgehost.api import Judgehost
@@ -929,77 +927,3 @@ class VerificationService:
             }
 
         return self.task_store.read_lifecycle_snapshot(_read)
-
-    def run_verification(
-        self,
-        problem: str,
-        username: str,
-        commit: str | None = None,
-        *,
-        sample_only: bool = False,
-        verification_id: str = "",
-    ) -> str:
-        ctx = self.workspace_service.workspace_context(problem, username, include_recent=False)
-        workspace_path = Path(str(ctx["workspace"]["path"])).resolve()
-        problem_id = int(ctx["problem"]["id"])
-        workspace_id = int(ctx["workspace"]["id"])
-        actor_user_id = int(self.workspace_service.global_user_context(username)["id"])
-        status = self.workspace_service.read_workspace_status(workspace_path)
-        workspace_head = str(status.get("head_commit") or "")
-        workspace_dirty = bool(status.get("dirty"))
-        snapshot_root: Path | None = None
-        source_commit = ""
-        if commit:
-            source_commit = self.workspace_service.resolve_commit(workspace_path, commit)
-            snapshot_root = self.workspace_service.create_snapshot(workspace_path, source_commit)
-            workspace_dirty = False
-        else:
-            snapshot_root = self.workspace_service.create_snapshot(
-                workspace_path,
-                None,
-                workspace_head=workspace_head,
-                workspace_dirty=workspace_dirty,
-            )
-        assert snapshot_root is not None
-        manifest = verification_manifest(snapshot_root)
-        signature = manifest.signature
-        target_verification_id = (
-            canonical_verification_id(verification_id)
-            if verification_id
-            else new_verification_id()
-        )
-        admission = self.admit_verification(
-            VerificationAdmission(
-                verification_id=target_verification_id,
-                problem_id=problem_id,
-                workspace_id=workspace_id,
-                signature=signature,
-                source_commit=source_commit,
-                kind=Kind.SAMPLE.value if sample_only else Kind.ALL.value,
-            )
-        )
-        if admission.outcome != "admitted":
-            raise RuntimeError(
-                f"verification already exists: {target_verification_id}"
-            )
-        workflow = self._workflow
-        if workflow is None:
-            raise RuntimeError("verification workflow is not configured")
-        workflow.run(
-            problem,
-            username,
-            actor_user_id=actor_user_id,
-            problem_id=problem_id,
-            workspace_id=workspace_id,
-            workspace_head=source_commit or workspace_head,
-            workspace_dirty=workspace_dirty,
-            targets=[],
-            verification_id=target_verification_id,
-            signature=signature,
-            source_commit=source_commit,
-            kind=Kind.SAMPLE.value if sample_only else Kind.ALL.value,
-            sample_only=bool(sample_only),
-            snapshot_root_override=snapshot_root,
-            manifest=manifest,
-        )
-        return target_verification_id

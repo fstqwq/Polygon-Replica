@@ -37,7 +37,12 @@ from app.service.verification.lifecycle import (
     TASK_GENERATE_INPUT,
     TASK_MAIN_CORRECT,
     TASK_SOLUTION_RUN,
+    VerificationAdmission,
     VerificationProgram,
+)
+from app.service.verification.identity import (
+    canonical_verification_id,
+    new_verification_id,
 )
 from app.service.verification.plan import VerificationTestPlan
 from app.service.verification.signature import (
@@ -872,6 +877,89 @@ class VerificationWorkflow:
         self._runtime_blob_store = runtime_blob_store
         self._task_store = task_store
         self._config_values = config_values
+
+    def run_workspace(
+        self,
+        problem: str,
+        username: str,
+        commit: str | None = None,
+        *,
+        sample_only: bool = False,
+        verification_id: str = "",
+    ) -> str:
+        """Admit and synchronously execute one workspace verification."""
+
+        context = self._workspace_service.workspace_context(
+            problem,
+            username,
+            include_recent=False,
+        )
+        workspace = Path(str(context["workspace"]["path"])).resolve()
+        problem_id = int(context["problem"]["id"])
+        workspace_id = int(context["workspace"]["id"])
+        actor_user_id = int(
+            self._workspace_service.global_user_context(username)["id"]
+        )
+        status = self._workspace_service.read_workspace_status(workspace)
+        workspace_head = str(status.get("head_commit") or "")
+        workspace_dirty = bool(status.get("dirty"))
+        source_commit = ""
+        if commit:
+            source_commit = self._workspace_service.resolve_commit(workspace, commit)
+            snapshot = self._workspace_service.create_snapshot(
+                workspace,
+                source_commit,
+            )
+            workspace_dirty = False
+        else:
+            snapshot = self._workspace_service.create_snapshot(
+                workspace,
+                None,
+                workspace_head=workspace_head,
+                workspace_dirty=workspace_dirty,
+            )
+        try:
+            manifest = verification_manifest(snapshot)
+            target_id = (
+                canonical_verification_id(verification_id)
+                if verification_id
+                else new_verification_id()
+            )
+            kind = Kind.SAMPLE.value if sample_only else Kind.ALL.value
+            admission = self._verification_service.admit_verification(
+                VerificationAdmission(
+                    verification_id=target_id,
+                    problem_id=problem_id,
+                    workspace_id=workspace_id,
+                    signature=manifest.signature,
+                    source_commit=source_commit,
+                    kind=kind,
+                )
+            )
+        except Exception:
+            shutil.rmtree(snapshot.parent, ignore_errors=True)
+            raise
+        if admission.outcome != "admitted":
+            shutil.rmtree(snapshot.parent, ignore_errors=True)
+            raise RuntimeError(f"verification already exists: {target_id}")
+        self.run(
+            problem,
+            username,
+            actor_user_id=actor_user_id,
+            problem_id=problem_id,
+            workspace_id=workspace_id,
+            workspace_head=source_commit or workspace_head,
+            workspace_dirty=workspace_dirty,
+            targets=[],
+            verification_id=target_id,
+            signature=manifest.signature,
+            source_commit=source_commit,
+            kind=kind,
+            sample_only=sample_only,
+            snapshot_root_override=snapshot,
+            manifest=manifest,
+        )
+        return target_id
 
     def run(
         self,

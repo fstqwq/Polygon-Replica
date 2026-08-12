@@ -26,6 +26,7 @@ from tests.isolated_db_helpers import isolated_db_execute, isolated_db_fetch_one
 
 if TYPE_CHECKING:
     from app.service.verification.service import VerificationService
+    from app.service.verification.workflow import VerificationWorkflow
 
 
 _HEAD = "a" * 40
@@ -135,7 +136,7 @@ class _VerificationArtifacts:
         self.descriptors = descriptors
         self.calls: list[tuple[str, str, bool]] = []
 
-    def run_verification(
+    def run_workspace(
         self,
         problem: str,
         username: str,
@@ -494,6 +495,7 @@ class TestPreviewService(DBTestBase):
             descriptors[descriptor.blob_ref] = descriptor
         verification = _VerificationArtifacts(verification_id, refs, descriptors)
         self.service.verification_service = cast("VerificationService", verification)
+        self.service.verification_workflow = cast("VerificationWorkflow", verification)
 
         summary = self.service.sync_sample_payloads_for_snapshot(
             self.problem,

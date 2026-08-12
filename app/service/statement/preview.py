@@ -33,6 +33,7 @@ from app.service.statement.context import normalize_statement_language
 
 if TYPE_CHECKING:
     from app.service.verification.service import VerificationService
+    from app.service.verification.workflow import VerificationWorkflow
 
 
 class PreviewStateRow(TypedDict):
@@ -65,12 +66,14 @@ class PreviewService:
         pdf_compiler: TexCompileService,
         storage_layout: StorageLayout,
         verification_service: VerificationService | None = None,
+        verification_workflow: VerificationWorkflow | None = None,
     ):
         self.db = db
         self._store = PreviewStore(db)
         self._verification_store = VerificationStore(db)
         self.workspace_service = workspace_service
         self.verification_service = verification_service
+        self.verification_workflow = verification_workflow
         self.storage_layout = storage_layout
         self.pdf_compiler = pdf_compiler
 
@@ -171,9 +174,9 @@ class PreviewService:
         )
         if not rows:
             return {"sample_count": 0, "copied": 0, "verification_id": ""}
-        if self.verification_service is None:
+        if self.verification_service is None or self.verification_workflow is None:
             raise RuntimeError("preview sample sync requires verification service")
-        verification_id = self.verification_service.run_verification(
+        verification_id = self.verification_workflow.run_workspace(
             problem,
             username,
             sample_only=True,

@@ -300,6 +300,7 @@ class ApplicationRuntime:  # pylint: disable=too-many-instance-attributes
             self.tex_compile_service,
             self.storage_layout,
             verification_service=self.verification_service,
+            verification_workflow=self.verification_workflow,
         )
         self.problem_package_service = ProblemPackageService(
             self.db,
