@@ -4,6 +4,9 @@ import json
 import sqlite3
 
 from app.service.execution.policy import normalize_execution_result
+from app.service.judgehost.case_binding import CaseBinding
+from app.service.verification.judgehost_adapter import VerificationJudgehostAdapter
+from app.service.verification.runtime_registry import VerificationRuntimeRegistry
 from app.service.verification.lifecycle import verification_task_id
 from app.service.verification.task_completion import TaskCompletion
 from app.service.verification.types import VerificationTaskStatus
@@ -18,6 +21,86 @@ from tests.verification_service_fixture import (
 
 
 class TestVerificationCompletionService(VerificationServiceTestBase):
+    def test_judgehost_adapter_requires_the_exact_durable_case_binding(self) -> None:
+        verification_id = canonical_test_verification_id(
+            f"binding:{self.test_id}"
+        )
+        self._insert_verification_row(verification_id)
+        task_id = verification_task_id(
+            verification_id,
+            "generator-0",
+            "001.in",
+        )
+        self._activate_graph(
+            verification_id,
+            tasks=[
+                {
+                    "id": task_id,
+                    "task_kind": "generate-input",
+                    "source_path": "generators/gen.cpp",
+                    "program_id": "generator-0",
+                    "test_name": "001.in",
+                    "expected_behavior": "accepted",
+                }
+            ],
+            edges=[],
+        )
+        adapter = VerificationJudgehostAdapter(
+            self.db,
+            self.verification_task_store,
+            self.verification_task_completion_service,
+            VerificationRuntimeRegistry(),
+        )
+        exposed: list[str] = []
+        binding = CaseBinding(
+            execution_scope_id=verification_id,
+            program_id="generator-0",
+            task_id=task_id,
+            test_name="001.in",
+        )
+        self.assertTrue(
+            adapter.bind_and_expose(
+                (binding,),
+                run_id="r-binding",
+                judgehost_task_id="jt-binding",
+                expose=lambda: exposed.append("exposed"),
+            )
+        )
+        self.assertEqual(exposed, ["exposed"])
+        self.assertTrue(
+            adapter.unbind(task_id, judgehost_task_id="jt-binding")
+        )
+        for changed in (
+            CaseBinding(
+                execution_scope_id="ver-1",
+                program_id=binding.program_id,
+                task_id=binding.task_id,
+                test_name=binding.test_name,
+            ),
+            CaseBinding(
+                execution_scope_id=binding.execution_scope_id,
+                program_id="other-program",
+                task_id=binding.task_id,
+                test_name=binding.test_name,
+            ),
+            CaseBinding(
+                execution_scope_id=binding.execution_scope_id,
+                program_id=binding.program_id,
+                task_id=binding.task_id,
+                test_name="002.in",
+            ),
+        ):
+            with self.subTest(binding=changed):
+                self.assertFalse(
+                    adapter.bind_and_expose(
+                        (changed,),
+                        run_id="r-rejected",
+                        judgehost_task_id="jt-rejected",
+                        expose=lambda: exposed.append("invalid"),
+                    )
+                )
+        self.assertEqual(exposed, ["exposed"])
+
     def test_prepare_generate_input_validator_rejection_sets_failure_reason(self) -> None:
         output_file = self.runtime_blob_store.put_bytes(b"bad-input\n")
         task_row = {
@@ -716,6 +799,9 @@ class TestVerificationCompletionService(VerificationServiceTestBase):
         self.assertTrue(
             task_store.bind_and_expose_judgehost_runtime(
                 diagnostic_task_id,
+                expected_verification_id=verification_id,
+                expected_program_id="generator-0",
+                expected_test_name="002.in",
                 run_id="r-amended",
                 judgehost_task_id="jt-amended",
                 expose=lambda: None,

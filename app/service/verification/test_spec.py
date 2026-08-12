@@ -9,7 +9,7 @@ from app.service.problem.test_spec import (
     payload_rel_path_for_test,
     resolve_configured_generator_source,
 )
-from app.service.verification.source import resolve_source
+from app.service.problem.source_file import resolve_source
 
 
 def load_tests_spec_entries(

@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable
 
 from app.service.judgehost.case_result import CaseTerminalReport
+from app.service.judgehost.case_binding import CaseBinding
 from app.service.judgehost.completion import (
     CaseCompletionReport,
     DiagnosticAppendResult,
@@ -338,20 +339,22 @@ class VerificationTaskCompletionService:
         verification_ids: set[str] = set()
         task_ids: set[str] = set()
         for candidate in reports:
-            verification_task_id = candidate.verification_task_id
+            binding = candidate.binding
+            verification_task_id = binding.task_id
             if not verification_task_id:
                 continue
             task_row = self._task_store.runtime_row(verification_task_id)
             if task_row is None:
                 return False
             if (
-                task_row["test_name"] != candidate.test_name
+                task_row["test_name"] != binding.test_name
+                or task_row["program_id"] != binding.program_id
                 or verification_task_id in task_ids
                 or not self._report_matches_task(
                     task_row,
                     candidate.report,
                     judgehost_task_id=candidate.judgehost_task_id,
-                    verification_id=candidate.verification_id,
+                    verification_id=binding.execution_scope_id,
                 )
             ):
                 return False
@@ -366,16 +369,17 @@ class VerificationTaskCompletionService:
 
     def cancelled(
         self,
-        verification_task_id: str,
+        binding: CaseBinding,
         judgehost_task_id: str,
-        test_name: str,
         reason: str,
     ) -> bool:
-        task_row = self._task_store.runtime_row(verification_task_id)
+        task_row = self._task_store.runtime_row(binding.task_id)
         if task_row is None:
             return True
         if (
-            task_row["test_name"] != test_name
+            task_row["verification_id"] != binding.execution_scope_id
+            or task_row["program_id"] != binding.program_id
+            or task_row["test_name"] != binding.test_name
             or task_row["judgehost_task_id"] != judgehost_task_id
         ):
             return False
@@ -399,7 +403,7 @@ class VerificationTaskCompletionService:
     def append(
         self,
         *,
-        task_id: str,
+        binding: CaseBinding,
         kind: str,
         hostname: str,
         text: str,
@@ -407,7 +411,7 @@ class VerificationTaskCompletionService:
     ) -> DiagnosticAppendResult:
         return DiagnosticAppendResult(
             outcome=self._task_store.append_diagnostic(
-                task_id=task_id,
+                task_id=binding.task_id,
                 kind=kind,
                 hostname=hostname,
                 text=text,

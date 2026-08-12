@@ -3,22 +3,15 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import threading
 
-from app.db import DB, now_iso
+from app.db import now_iso
 from app.config import ConfigValues
 from app.service.platform.admission import MaintenanceAdmissionGate
-from app.service.platform.fs.layout import FsManager
 from app.service.platform.runtime_blob_store import RuntimeBlobStore
 from app.service.platform.runtime_cache_index import RuntimeCacheIndex
 from app.service.repository.workspace import WorkspaceService
-from app.service.verification.task_store import VerificationTaskStore
-from app.setting import Settings
 
 from app.service.judgehost.cleanup import JudgehostTerminalCleanup
-from app.service.judgehost.completion import (
-    CaseCompletionSink,
-    CaseDiagnosticSink,
-    CaseLeaseSink,
-)
+from app.service.judgehost.execution_port import JudgehostExecutionPort
 from app.service.judgehost.core import JudgehostCore
 from app.service.judgehost.dispatch import DispatchHandler
 from app.service.judgehost.enqueue import TaskEnqueue
@@ -46,31 +39,19 @@ class Judgehost:
 
     def __init__(
         self,
-        db: DB,
         workspace_service: WorkspaceService,
-        fs_manager: FsManager,
-        settings: Settings,
         config_values: ConfigValues,
         *,
-        case_completion_sink: CaseCompletionSink,
-        case_diagnostic_sink: CaseDiagnosticSink,
-        case_lease_sink: CaseLeaseSink,
-        verification_task_store: VerificationTaskStore,
+        execution_port: JudgehostExecutionPort,
         runtime_blob_store: RuntimeBlobStore,
         runtime_cache_index: RuntimeCacheIndex,
     ) -> None:
-        _ = settings
-        self.db = db
         self._state = JudgehostState(
-            db=db,
             workspace_service=workspace_service,
-            fs_manager=fs_manager,
             config_values=config_values,
             runtime_blob_store=runtime_blob_store,
             runtime_cache_index=runtime_cache_index,
-            verification_task_store=verification_task_store,
-            case_completion_sink=case_completion_sink,
-            case_diagnostic_sink=case_diagnostic_sink,
+            execution_port=execution_port,
         )
         self._toolkit = DomjudgeToolkit(self._state)
         self._core = JudgehostCore(self._state)
@@ -103,13 +84,12 @@ class Judgehost:
             self._queue,
             self._batch_finalizer,
             self._toolkit,
-            case_lease_sink,
         )
         self._enqueue = TaskEnqueue(self._state, self._core, self._dispatch, self._toolkit)
         self._terminal_cleanup = JudgehostTerminalCleanup(
             self._state.task_registry,
             self._state.batch_scheduler,
-            self._state.verification_task_store,
+            self._state.execution_port,
         )
         self._public_status = PublicJudgehostStatusCache(
             lambda: self.status(),
@@ -446,7 +426,7 @@ class Judgehost:
         upload_stream=None,
         run_id: str | None = None,
         selected_tests: list[str] | None = None,
-        verification_id: str = "",
+        verification_id: str,
         verification_program_id: str,
         verification_source: str = "run.execute",
         expected_behavior: str | None = None,
@@ -495,7 +475,7 @@ class Judgehost:
         upload_content: bytes,
         upload_filename: str,
         run_id: str | None = None,
-        verification_id: str = "",
+        verification_id: str,
         verification_program_id: str,
         verification_source: str = "compile.only",
         expected_behavior: str = "compile",

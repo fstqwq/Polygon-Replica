@@ -48,11 +48,11 @@ from app.service.verification.signature import (
     VerificationManifest,
     verification_manifest,
 )
-from app.service.verification.source import resolve_source
+from app.service.problem.source_file import resolve_source
 from app.service.verification.task_completion import TaskCompletion
 from app.service.verification.task_scheduler import TaskPublishResult
 from app.service.verification.task_store import VerificationTaskRow, VerificationTaskStore
-from app.service.verification.test_rows import build_verification_test_row
+from app.service.execution.test_rows import build_execution_test_row
 from app.service.verification.types import Kind, VerificationStatus, VerificationTaskStatus
 
 _C = config.config_values
@@ -432,7 +432,7 @@ def _task_row_to_test_row(row: VerificationTaskRow) -> dict[str, object]:
     wall_ms = cpu_ms if row["wall_sec"] is None else max(0, int(round(float(row["wall_sec"]) * 1000.0)))
     memory_kb = 0 if row["memory_kb"] is None else max(0, int(row["memory_kb"]))
     feedback_text = str(row["feedback_text"] or row["error_text"] or "")
-    return build_verification_test_row(
+    return build_execution_test_row(
         test_name=str(row["test_name"]),
         verdict=str(row["verdict"] or "--"),
         time_ms=runtime_ms,
@@ -1144,17 +1144,12 @@ def run_workspace_verification_dag(
         verification_pass_limit = execution_plan.pass_limit
         source_file_by_path = dict(execution_plan.source_file_by_path)
         source_file_by_path.update(_uploaded_source_files(targets))
-        snapshot_resolved = execution_plan.snapshot_root.resolve()
         for target in targets:
             source_path = str(target.get("path") or "")
             if not source_path or source_path in source_file_by_path:
                 continue
             source_file_by_path[source_path] = RuntimeBlobStore.describe_file(
-                resolve_source(
-                    execution_plan.snapshot_root,
-                    source_path,
-                    snapshot_resolved=snapshot_resolved,
-                )
+                resolve_source(execution_plan.snapshot_root, source_path)
             )
         requested_test_names = selected_test_names or []
         if requested_test_names:

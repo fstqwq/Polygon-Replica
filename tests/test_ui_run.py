@@ -227,10 +227,15 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             tasks=canonical_tasks,
         )
         self.assertEqual(activation.outcome, "activated")
+        planned_by_id = {task.task_id: task for task in canonical_tasks}
         for task_id, run_id, judgehost_task_id in [*(queued or []), *(leased or [])]:
+            planned_task = planned_by_id[task_id]
             self.assertTrue(
                 config.verification_task_store.bind_and_expose_judgehost_runtime(
                     task_id,
+                    expected_verification_id=verification_id,
+                    expected_program_id=planned_task.program_id,
+                    expected_test_name=planned_task.test_name,
                     run_id=run_id,
                     judgehost_task_id=judgehost_task_id,
                     expose=lambda: None,

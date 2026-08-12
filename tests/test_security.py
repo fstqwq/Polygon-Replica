@@ -324,6 +324,9 @@ class TestSecurity(E2ETestBase):
         self.assertTrue(
             config.verification_task_store.bind_and_expose_judgehost_runtime(
                 task_id,
+                expected_verification_id=verification_id,
+                expected_program_id="accepted",
+                expected_test_name="001.in",
                 run_id=run_id,
                 judgehost_task_id="jt-sec-cancel-1",
                 expose=lambda: None,

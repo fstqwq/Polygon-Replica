@@ -397,6 +397,9 @@ class VerificationServiceTestBase(DBTestBase):
             task_id = str(item["id"])
             bound = self.verification_task_store.bind_and_expose_judgehost_runtime(
                 task_id,
+                expected_verification_id=verification_id,
+                expected_program_id=str(item["program_id"]),
+                expected_test_name=str(item["test_name"]),
                 run_id=str(item.get("run_id") or f"r-test-{task_index}"),
                 judgehost_task_id=str(
                     item.get("judgehost_task_id") or f"jt-{task_id}"

@@ -3,15 +3,23 @@ from __future__ import annotations
 import re
 
 from app.service.platform.hashing import sha256_hex_json
-from app.service.verification.identity import verification_numeric_id
-
-
 _DOMJUDGE_NUMERIC_ID_MODULUS = 1 << 63
 _COMPILE_KEY_RE = re.compile(r"^[0-9a-f]{64}$")
+_VERIFICATION_WIRE_ID_RE = re.compile(r"^ver-([0-9a-f]+)$")
 
 
 def domjudge_job_id(verification_id: str) -> int:
-    return verification_numeric_id(verification_id)
+    match = _VERIFICATION_WIRE_ID_RE.fullmatch(verification_id)
+    if match is None:
+        raise RuntimeError("invalid verification id")
+    numeric_id = int(match.group(1), 16)
+    if (
+        numeric_id <= 0
+        or numeric_id >= _DOMJUDGE_NUMERIC_ID_MODULUS
+        or verification_id != f"ver-{numeric_id:x}"
+    ):
+        raise RuntimeError("invalid verification id")
+    return numeric_id
 
 
 def compile_key(

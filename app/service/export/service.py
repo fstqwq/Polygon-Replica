@@ -32,7 +32,7 @@ from app.service.problem.runtime_config import (
     problem_config_limits,
 )
 from app.service.problem.solution_metadata import load_solution_desc
-from app.service.verification.source import resolve_source
+from app.service.problem.source_file import resolve_source
 from app.service.statement.render import render_statement_main
 from app.service.statement.tex_compile import TexCompileService
 from app.service.statement.context import statement_languages

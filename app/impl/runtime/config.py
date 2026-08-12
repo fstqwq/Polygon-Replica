@@ -15,6 +15,7 @@ from app.service.verification.completion import VerificationTaskCompletionServic
 from app.service.verification.execution import VerificationExecutionService
 from app.service.verification.runtime_registry import VerificationRuntimeRegistry
 from app.service.verification.task_store import VerificationTaskStore
+from app.service.verification.judgehost_adapter import VerificationJudgehostAdapter
 from app.service.export.service import ExportService
 from app.service.problem_package.service import ProblemPackageService
 from app.service.problem.readiness import ProblemReadinessService
@@ -196,23 +197,23 @@ class RuntimeConfig:
             self.runtime_blob_store,
             self.verification_runtime_registry.completion_committed,
         )
+        verification_judgehost_adapter = VerificationJudgehostAdapter(
+            self.db,
+            self.verification_task_store,
+            self.verification_task_completion_service,
+            self.verification_runtime_registry,
+        )
         self.tex_sandbox_backend = TexSandboxBackend()
         self.tex_compile_service = TexCompileService(
             sandbox_backend=self.tex_sandbox_backend,
             config_values=self.config_values,
         )
         self.judgehost_task_service = Judgehost(
-            self.db,
             self.workspace_service,
-            self.fs_manager,
-            self.settings,
             self.config_values,
-            case_completion_sink=self.verification_task_completion_service,
-            case_diagnostic_sink=self.verification_task_completion_service,
-            case_lease_sink=self.verification_runtime_registry,
+            execution_port=verification_judgehost_adapter,
             runtime_blob_store=self.runtime_blob_store,
             runtime_cache_index=self.runtime_cache_index,
-            verification_task_store=self.verification_task_store,
         )
         self.verification_service = VerificationService(
             self.db,

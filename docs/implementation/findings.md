@@ -28,7 +28,7 @@ based on present impact, not on an imagined future architecture.
 | PLC-002 | refactor | Some verification locator resolution is performed by workspace implementation code. | verification storage |
 | PLC-003 | refactor | Several HTTP implementation modules construct large read models and contain domain aggregation. | domain services |
 | PLC-004 | refactor | The canonical execution result model is nested under verification although Judgehost and custom run also consume it. | execution model |
-| PLC-006 | refactor | Lease, completion, and diagnostic events now cross narrow injected ports, but Judgehost still depends directly on verification task storage, program identity, and execution-result models. | verification port |
+| PLC-006 | refactor | Judgehost dependency inversion is implemented on the refactor branch but remains open until Linux Judgehost service and mock-wire acceptance complete. | verification port |
 | PLC-008 | refactor | Significant contest build policy remains in `app/impl/contest/shared.py`. | contest service |
 | PLC-009 | refactor | Filesystem storage concerns are split across several service packages without one locator boundary. | disk/platform |
 | PLC-010 | refactor | Maintenance mechanics and domain deletion policy are implemented together. | platform maintenance |

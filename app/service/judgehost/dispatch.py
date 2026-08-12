@@ -11,14 +11,13 @@ from typing import TypedDict
 from app.db import now_iso
 from app.service.judgehost.domjudge.cache import domjudge_hash_of_hashes
 from app.service.judgehost.domjudge.client import domjudge_script_id
-from app.service.judgehost.completion import CaseLeaseSink
+from app.service.judgehost.case_binding import CaseBinding
 from app.service.judgehost.identity import domjudge_submit_id
 from app.service.judgehost.shared import domjudge_lower_text, domjudge_path_name, domjudge_text
 from app.service.judgehost.runtime import (
     domjudge_bool,
 )
 from app.service.judgehost.limits import VERIFICATION_CASE_DISPATCH_BATCH_SIZE
-from app.service.verification.identity import canonical_verification_id
 from app.service.platform.runtime_blob_store import PayloadFile
 from app.service.platform.admission import MaintenanceAdmissionGate
 from app.service.run.runtime import RUN_TEST_NAME_RE
@@ -115,14 +114,12 @@ class DispatchHandler(DispatchCacheMixin):
         queue: TaskQueue,
         batch_finalizer: BatchFinalizationPort,
         toolkit: DomjudgeToolkit,
-        case_lease_sink: CaseLeaseSink,
     ) -> None:
         self._s = state
         self._core = core
         self._queue = queue
         self._batch_finalizer = batch_finalizer
         self._toolkit = toolkit
-        self._case_lease_sink = case_lease_sink
 
     def complete_task_exposure(
         self,
@@ -405,7 +402,9 @@ class DispatchHandler(DispatchCacheMixin):
         compare_files = prepared["compare_files"]
 
         now_text = now_iso()
-        verification_id = canonical_verification_id(domjudge_text(payload.get("verification_id")))
+        verification_id = domjudge_text(payload.get("verification_id"))
+        if not verification_id:
+            raise RuntimeError("execution scope id is required")
         verification_program_id = domjudge_text(
             payload.get("verification_program_id")
         )
@@ -547,9 +546,15 @@ class DispatchHandler(DispatchCacheMixin):
             task_row = self._core.task_by_id(case_task_id)
             verification_id = "" if task_row is None else domjudge_text(task_row.get("verification_id"))
             if verification_id and verification_task_id:
-                self._case_lease_sink.case_leased(
-                    verification_id,
-                    verification_task_id,
+                self._s.execution_port.case_leased(
+                    CaseBinding(
+                        execution_scope_id=verification_id,
+                        program_id=domjudge_text(
+                            batch_row["verification_program_id"]
+                        ),
+                        task_id=verification_task_id,
+                        test_name=domjudge_text(row["test_name"]),
+                    )
                 )
         self._s.batch_scheduler.record_batch_leased(
             hostname,

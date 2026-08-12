@@ -25,6 +25,7 @@ from app.service.platform.runtime_blob_store import PayloadFile
 from app.service.platform.rwlock import WriterPriorityRWLock
 from app.service.verification.completion import VerificationTaskCompletionService
 from app.service.verification.runtime_registry import VerificationRuntimeRegistry
+from app.service.verification.judgehost_adapter import VerificationJudgehostAdapter
 
 from tests.db_fixture import DBTestBase
 
@@ -767,18 +768,18 @@ class TestJudgehostLifecycle(DBTestBase):
             self.runtime_blob_store,
             lambda _verification_id, _commit: False,
         )
+        runtime_registry = VerificationRuntimeRegistry()
         service = Judgehost(
-            self.db,
             self.workspace_service,
-            self.fs_manager,
-            self.settings,
             self.config_values,
-            verification_task_store=self.verification_task_store,
+            execution_port=VerificationJudgehostAdapter(
+                self.db,
+                self.verification_task_store,
+                completion_service,
+                runtime_registry,
+            ),
             runtime_blob_store=self.runtime_blob_store,
             runtime_cache_index=self.runtime_cache_index,
-            case_completion_sink=completion_service,
-            case_diagnostic_sink=completion_service,
-            case_lease_sink=VerificationRuntimeRegistry(),
         )
         self.config_values.replace(
             {
@@ -944,7 +945,7 @@ class TestJudgehostLifecycle(DBTestBase):
         self.assertEqual(store.fetch_case(case_id)["status"], "leased")
 
         with patch.object(
-            service.state.case_completion_sink,
+            service.state.execution_port,
             "cancelled",
             side_effect=RuntimeError("transient cancellation publication failure"),
         ), self.assertRaisesRegex(
@@ -1140,7 +1141,7 @@ class TestJudgehostLifecycle(DBTestBase):
         store.finish_verification_execution("ver-1", now_text=_NOW)
 
         with patch.object(
-            service.state.case_completion_sink,
+            service.state.execution_port,
             "reported_many",
             side_effect=RuntimeError("transient publish failure"),
         ), patch("app.service.judgehost.result.logger.exception"):
@@ -1248,9 +1249,9 @@ class TestJudgehostLifecycle(DBTestBase):
                     self.assertEqual(len(leased), 1)
 
                 with patch.object(
-                    service.state.case_completion_sink,
+                    service.state.execution_port,
                     "cancelled",
-                    wraps=service.state.case_completion_sink.cancelled,
+                    wraps=service.state.execution_port.cancelled,
                 ) as publish_case:
                     if scenario == "cancel":
                         cancellation = service.request_verification_cancel(

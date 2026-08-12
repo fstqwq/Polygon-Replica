@@ -3,15 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from app.service.problem.build_config import BuildConfig
-from app.service.problem.source_file import require_regular_source_file
-
-def resolve_source(snapshot: Path, rel_path: str, snapshot_resolved: Path | None = None) -> Path:
-    del snapshot_resolved
-    try:
-        return require_regular_source_file(snapshot, rel_path).resolve(strict=True)
-    except (OSError, ValueError) as exc:
-        raise RuntimeError(str(exc)) from exc
-
+from app.service.problem.source_file import resolve_source
 
 def select_source(
     snapshot: Path,
@@ -25,11 +17,7 @@ def select_source(
     configured = build_cfg.get(config_key)
     if configured is None:
         return None
-    source = resolve_source(
-        snapshot,
-        str(configured),
-        snapshot_resolved=snapshot_resolved,
-    )
+    source = resolve_source(snapshot, str(configured))
     relative = source.relative_to(snapshot_resolved or snapshot.resolve())
     if not relative.parts or relative.parts[0] != folder:
         raise RuntimeError(f"configured source must be below {folder}/")

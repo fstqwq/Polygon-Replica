@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from app.db import now_iso
 from app.service.judgehost.batch_scheduler_models import ProgramTerminalClaim
+from app.service.judgehost.case_binding import CaseBinding
 from app.service.judgehost.completion import CaseCompletionReport
 from app.service.judgehost.shared import domjudge_lower_text, domjudge_text
 from app.service.judgehost.state import JudgehostState
@@ -63,11 +64,20 @@ class JudgehostCaseDiagnosticPublisher:
         verification_task_id = domjudge_text(case["verification_task_id"])
         if not verification_task_id:
             return
+        batch = self._s.batch_scheduler.fetch_batch(int(case["batch_id"]))
+        if batch is None:
+            return
+        binding = CaseBinding(
+            execution_scope_id=domjudge_text(batch["verification_id"]),
+            program_id=domjudge_text(batch["verification_program_id"]),
+            task_id=verification_task_id,
+            test_name=domjudge_text(case["test_name"]),
+        )
         for diagnostic in self._s.batch_scheduler.pending_case_diagnostics(
             int(case_id)
         ):
-            outcome = self._s.case_diagnostic_sink.append(
-                task_id=verification_task_id,
+            outcome = self._s.execution_port.append(
+                binding=binding,
                 kind=diagnostic.kind,
                 hostname=diagnostic.hostname,
                 text=diagnostic.text,
@@ -117,13 +127,14 @@ class JudgehostCaseCompletionPublisher:
         if report is None:
             return None
         return CaseCompletionReport(
-            verification_task_id=domjudge_text(
-                case["verification_task_id"]
+            binding=CaseBinding(
+                execution_scope_id=domjudge_text(batch["verification_id"]),
+                program_id=domjudge_text(batch["verification_program_id"]),
+                task_id=domjudge_text(case["verification_task_id"]),
+                test_name=test_name,
             ),
             judgehost_task_id=judgehost_task_id,
-            test_name=test_name,
             report=report,
-            verification_id=domjudge_text(batch["verification_id"]),
         )
 
     def publish_reported_cases(
@@ -141,7 +152,7 @@ class JudgehostCaseCompletionPublisher:
             reports.append(report)
         if not reports:
             return True
-        if not self._s.case_completion_sink.reported_many(tuple(reports)):
+        if not self._s.execution_port.reported_many(tuple(reports)):
             return False
         self._s.batch_scheduler.acknowledge_case_completions(
             list(unique_case_ids)
@@ -155,15 +166,13 @@ class JudgehostCaseCompletionPublisher:
     def _publish_cancelled(
         self,
         *,
-        verification_task_id: str,
+        binding: CaseBinding,
         task_id: str,
-        test_name: str,
         reason: str,
     ) -> bool:
-        return self._s.case_completion_sink.cancelled(
-            verification_task_id,
+        return self._s.execution_port.cancelled(
+            binding,
             task_id,
-            test_name,
             reason,
         )
 
@@ -183,12 +192,17 @@ class JudgehostCaseCompletionPublisher:
             if status == "reported":
                 accepted = self.publish_reported_cases((int(case_id),))
             else:
+                batch = self._s.batch_scheduler.fetch_batch(int(case["batch_id"]))
+                if batch is None:
+                    return False
                 accepted = self._publish_cancelled(
-                    verification_task_id=domjudge_text(
-                        case["verification_task_id"]
+                    binding=CaseBinding(
+                        execution_scope_id=domjudge_text(batch["verification_id"]),
+                        program_id=domjudge_text(batch["verification_program_id"]),
+                        task_id=domjudge_text(case["verification_task_id"]),
+                        test_name=domjudge_text(case["test_name"]),
                     ),
                     task_id=domjudge_text(case["task_id"]),
-                    test_name=domjudge_text(case["test_name"]),
                     reason=reason,
                 )
                 if accepted:

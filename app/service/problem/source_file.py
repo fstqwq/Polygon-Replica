@@ -105,3 +105,10 @@ def require_regular_source_file(root: Path, relative: str) -> Path:
     if root_resolved not in resolved.parents:
         raise ValueError(f"{relative}: path escapes the problem source root")
     return path
+
+
+def resolve_source(root: Path, relative: str) -> Path:
+    try:
+        return require_regular_source_file(root, relative).resolve(strict=True)
+    except (OSError, ValueError) as exc:
+        raise RuntimeError(str(exc)) from exc

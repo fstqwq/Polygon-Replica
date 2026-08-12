@@ -5,17 +5,13 @@ from dataclasses import dataclass
 from dataclasses import field
 from typing import Callable
 
-from app.db import DB
 from app.config import ConfigValues
-from app.service.disk.verification_store import VerificationStore
-from app.service.platform.fs.layout import FsManager
+from app.service.judgehost.execution_port import JudgehostExecutionPort
 from app.service.platform.runtime_blob_store import RuntimeBlobStore
 from app.service.platform.runtime_cache_index import RuntimeCacheIndex
 from app.service.repository.workspace import WorkspaceService
-from app.service.verification.task_store import VerificationTaskStore
 
 from app.service.judgehost.batch_scheduler import BatchScheduler
-from app.service.judgehost.completion import CaseCompletionSink, CaseDiagnosticSink
 from app.service.judgehost.task_registry import JudgehostTaskRegistry
 from app.service.judgehost.toolchain_versions import HostToolchainTelemetry
 
@@ -36,17 +32,11 @@ class JudgehostPolicy:
 
 @dataclass
 class JudgehostState:
-    db: DB
     workspace_service: WorkspaceService
-    fs_manager: FsManager
     config_values: ConfigValues
     runtime_blob_store: RuntimeBlobStore
     runtime_cache_index: RuntimeCacheIndex
-    verification_task_store: VerificationTaskStore
-    case_completion_sink: CaseCompletionSink
-    case_diagnostic_sink: CaseDiagnosticSink
-    verification_store: VerificationStore = field(init=False)
-
+    execution_port: JudgehostExecutionPort
     lock: threading.Lock = field(default_factory=threading.Lock)
     state_lock: threading.RLock = field(default_factory=threading.RLock)
 
@@ -62,7 +52,6 @@ class JudgehostState:
     batch_scheduler: BatchScheduler = field(default_factory=BatchScheduler)
 
     def __post_init__(self) -> None:
-        self.verification_store = VerificationStore(self.db)
         self.task_registry = JudgehostTaskRegistry()
 
     def config_policy(self) -> JudgehostPolicy:

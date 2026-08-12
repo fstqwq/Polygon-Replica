@@ -14,8 +14,8 @@ class _RuntimeCaseStore(Protocol):
     def forget_scope(self, verification_id: str) -> None: ...
 
 
-class _VerificationRuntimeStore(Protocol):
-    def unbind_judgehost_runtime(
+class _CaseBindingStore(Protocol):
+    def unbind(
         self,
         verification_task_id: str,
         *,
@@ -37,13 +37,13 @@ class JudgehostTerminalCleanup:
         self,
         task_registry: JudgehostTaskRegistry,
         case_store: _RuntimeCaseStore,
-        verification_runtime_store: _VerificationRuntimeStore,
+        case_binding_store: _CaseBindingStore,
         *,
         quiet_sec: float = 60.0,
     ) -> None:
         self._task_registry = task_registry
         self._case_store = case_store
-        self._verification_runtime_store = verification_runtime_store
+        self._case_binding_store = case_binding_store
         self._quiet_sec = max(1.0, float(quiet_sec))
         self._condition = threading.Condition(threading.Lock())
         self._deadlines: list[tuple[float, int, str]] = []
@@ -124,7 +124,7 @@ class JudgehostTerminalCleanup:
                     row.get("verification_task_id") or ""
                 )
                 if verification_task_id:
-                    self._verification_runtime_store.unbind_judgehost_runtime(
+                    self._case_binding_store.unbind(
                         verification_task_id,
                         judgehost_task_id=str(row["id"]),
                     )

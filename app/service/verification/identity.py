@@ -22,8 +22,3 @@ def canonical_verification_id(raw: str) -> str:
 
 def new_verification_id() -> str:
     return f"ver-{secrets.randbelow(_MAX_NUMERIC_ID) + 1:x}"
-
-
-def verification_numeric_id(verification_id: str) -> int:
-    canonical = canonical_verification_id(verification_id)
-    return int(canonical.removeprefix("ver-"), 16)

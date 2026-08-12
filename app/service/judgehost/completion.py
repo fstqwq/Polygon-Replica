@@ -3,16 +3,15 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal, Protocol
 
+from app.service.judgehost.case_binding import CaseBinding
 from app.service.judgehost.case_result import CaseTerminalReport
 
 
 @dataclass(frozen=True)
 class CaseCompletionReport:
-    verification_task_id: str
+    binding: CaseBinding
     judgehost_task_id: str
-    test_name: str
     report: CaseTerminalReport
-    verification_id: str = ""
 
 
 class CaseCompletionSink(Protocol):
@@ -23,19 +22,14 @@ class CaseCompletionSink(Protocol):
 
     def cancelled(
         self,
-        verification_task_id: str,
+        binding: CaseBinding,
         judgehost_task_id: str,
-        test_name: str,
         reason: str,
     ) -> bool: ...
 
 
 class CaseLeaseSink(Protocol):
-    def case_leased(
-        self,
-        verification_id: str,
-        verification_task_id: str,
-    ) -> bool: ...
+    def case_leased(self, binding: CaseBinding) -> bool: ...
 
 
 DiagnosticAppendOutcome = Literal["persisted", "duplicate", "not-applicable"]
@@ -50,7 +44,7 @@ class CaseDiagnosticSink(Protocol):
     def append(
         self,
         *,
-        task_id: str,
+        binding: CaseBinding,
         kind: str,
         hostname: str,
         text: str,

@@ -17,6 +17,7 @@ from app.service.judgehost.toolchain_versions import HostToolchainTelemetry
 from app.service.platform.runtime_blob_store import PayloadFile
 from app.service.verification.completion import VerificationTaskCompletionService
 from app.service.verification.runtime_registry import VerificationRuntimeRegistry
+from app.service.verification.judgehost_adapter import VerificationJudgehostAdapter
 from tests.db_fixture import DBTestBase
 
 
@@ -34,17 +35,16 @@ class TestJudgehostRuntimeService(DBTestBase):
         )
         self.runtime_registry = VerificationRuntimeRegistry()
         self.service = Judgehost(
-            self.db,
             self.workspace_service,
-            self.fs_manager,
-            self.settings,
             self.config_values,
-            verification_task_store=self.verification_task_store,
+            execution_port=VerificationJudgehostAdapter(
+                self.db,
+                self.verification_task_store,
+                self.completion_service,
+                self.runtime_registry,
+            ),
             runtime_blob_store=self.runtime_blob_store,
             runtime_cache_index=self.runtime_cache_index,
-            case_completion_sink=self.completion_service,
-            case_diagnostic_sink=self.completion_service,
-            case_lease_sink=self.runtime_registry,
         )
         self.config_values.replace(
             {

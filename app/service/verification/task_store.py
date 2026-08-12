@@ -520,6 +520,9 @@ class VerificationTaskStore:
         self,
         verification_task_id: str,
         *,
+        expected_verification_id: str,
+        expected_program_id: str,
+        expected_test_name: str,
         run_id: str,
         judgehost_task_id: str,
         expose: Callable[[], None],
@@ -529,7 +532,8 @@ class VerificationTaskStore:
         with self._runtime_lock.write_lock():
             row = self.db.fetch_one(
                 """
-                SELECT task.final_status,verification.status AS verification_status
+                SELECT task.final_status,task.verification_id,task.program_id,
+                       task.test_name,verification.status AS verification_status
                 FROM verification_tasks task
                 JOIN verifications verification ON verification.id=task.verification_id
                 WHERE task.id=?
@@ -540,6 +544,9 @@ class VerificationTaskStore:
                 row is None
                 or str(row["final_status"] or "")
                 or str(row["verification_status"] or "") != "running"
+                or str(row["verification_id"]) != expected_verification_id
+                or str(row["program_id"]) != expected_program_id
+                or str(row["test_name"]) != expected_test_name
             ):
                 return False
             current = self._runtime_by_task_id.get(verification_task_id)

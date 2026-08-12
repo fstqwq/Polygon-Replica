@@ -58,6 +58,12 @@ work. Artifact bytes remain cleanup-safe. See the
 [execution protocol](../../../../protocol/execution.md) for graph, identity,
 result, and availability semantics.
 
+`VerificationJudgehostAdapter` is the sole verification persistence boundary
+presented to Judgehost. It reads the selected test refs and run configuration
+as one SQLite snapshot, validates every opaque `CaseBinding` against the
+durable task identity, and delegates completion, diagnostic, lease, and quiet
+cleanup effects to their verification owners.
+
 An instance-owned runtime registry admits one coordinator per verification and
 requires object-identical unregistration. `VerificationExecutionService` owns
 coordinator construction, registration, post-registration durable-state

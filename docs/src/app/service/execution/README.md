@@ -6,7 +6,8 @@ resource-usage, warning, and artifact-ref values. `policy.py` validates and
 normalizes evidence, including contiguous passes, capture completeness, and
 aggregate usage. `codec.py` is the sole strict JSON boundary for persisted
 execution results. `identity.py` owns execution `run_id` creation and
-validation.
+validation. `test_rows.py` maps canonical execution evidence to the shared
+test/pass read shape without depending on verification storage.
 
 This package has no dependency on verification identity, task storage,
 Judgehost transport, HTTP, or runtime blob availability. Artifact refs are

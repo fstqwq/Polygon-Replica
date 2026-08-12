@@ -16,9 +16,9 @@ from app.service.execution.policy import (
     canonical_execution_result,
     normalize_execution_result,
 )
-from app.service.verification.test_rows import (
-    build_verification_test_pass_row,
-    build_verification_test_row,
+from app.service.execution.test_rows import (
+    build_execution_test_pass_row,
+    build_execution_test_row,
 )
 
 
@@ -203,7 +203,7 @@ def build_case_result(
 
 def decode_case_test_row(result: ExecutionResult, *, test_name: str) -> dict[str, object]:
     passes = [
-        build_verification_test_pass_row(
+        build_execution_test_pass_row(
             verdict=pass_result.verdict,
             time_ms=(
                 0
@@ -234,7 +234,7 @@ def decode_case_test_row(result: ExecutionResult, *, test_name: str) -> dict[str
         for pass_result in result.passes
     ]
     usage = result.outcome.usage
-    return build_verification_test_row(
+    return build_execution_test_row(
         test_name=test_name,
         verdict=result.outcome.verdict,
         time_ms=0 if usage.runtime_sec is None else int(round(usage.runtime_sec * 1000.0)),

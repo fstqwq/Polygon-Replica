@@ -870,6 +870,11 @@ class TestVerificationLifecycleService(VerificationServiceTestBase):
             self.assertTrue(
                 task_store.bind_and_expose_judgehost_runtime(
                     task_id,
+                    expected_verification_id=verification_id,
+                    expected_program_id=(
+                        "solution-0" if task_id == accepted_id else "solution-1"
+                    ),
+                    expected_test_name="001.in",
                     run_id=run_id,
                     judgehost_task_id=judgehost_task_id,
                     expose=lambda: None,

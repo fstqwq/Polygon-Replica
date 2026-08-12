@@ -43,6 +43,7 @@ from app.service.verification.task_scheduler import (
     VerificationRuntimeCoordinator,
 )
 from app.service.verification.types import VerificationTaskStatus
+from app.service.verification.judgehost_adapter import VerificationJudgehostAdapter
 from tests.common import (
     E2ETestBase,
     config,
@@ -128,17 +129,16 @@ class TestJudgehostService(E2ETestBase):
 
     def _fresh_judgehost_service(self) -> Judgehost:
         service = Judgehost(
-            config.db,
             config.workspace_service,
-            config.fs_manager,
-            config.settings,
             config.config_values,
-            verification_task_store=config.verification_task_store,
+            execution_port=VerificationJudgehostAdapter(
+                config.db,
+                config.verification_task_store,
+                config.verification_task_completion_service,
+                config.verification_runtime_registry,
+            ),
             runtime_blob_store=config.runtime_blob_store,
             runtime_cache_index=config.runtime_cache_index,
-            case_completion_sink=config.verification_task_completion_service,
-            case_diagnostic_sink=config.verification_task_completion_service,
-            case_lease_sink=config.verification_runtime_registry,
         )
         override_config_values(
             self,
@@ -3913,7 +3913,7 @@ class TestJudgehostService(E2ETestBase):
             upload_filename=None,
             run_id=run_id,
             selected_tests=["001.in"],
-            verification_id="",
+            verification_id=verification_id,
             verification_program_id=_SOLUTION_PROGRAM_ID,
             expected_behavior="accepted",
             verification_source="build.solve",
@@ -4008,7 +4008,7 @@ class TestJudgehostService(E2ETestBase):
             upload_filename=None,
             run_id=run_id,
             selected_tests=["001.in"],
-            verification_id="",
+            verification_id=verification_id,
             verification_program_id=_SOLUTION_PROGRAM_ID,
             expected_behavior="accepted",
             verification_source="build.solve",
@@ -4071,7 +4071,7 @@ class TestJudgehostService(E2ETestBase):
             upload_filename=None,
             run_id=run_id,
             selected_tests=["001.in"],
-            verification_id="",
+            verification_id=verification_id,
             verification_program_id=_ACCEPTED_PROGRAM_ID,
             expected_behavior="accepted",
             verification_source="main-correct",
@@ -4127,7 +4127,7 @@ class TestJudgehostService(E2ETestBase):
             upload_filename=None,
             run_id=run_id,
             selected_tests=["001.in"],
-            verification_id="",
+            verification_id=verification_id,
             verification_program_id=_SOLUTION_PROGRAM_ID,
             expected_behavior="accepted",
             verification_source="build.solve",
@@ -5396,6 +5396,9 @@ class TestJudgehostService(E2ETestBase):
         self.assertTrue(
             task_store.bind_and_expose_judgehost_runtime(
                 case_task_id,
+                expected_verification_id=verification_id,
+                expected_program_id=_ACCEPTED_PROGRAM_ID,
+                expected_test_name="016.in",
                 run_id=run_id,
                 judgehost_task_id=task_id,
                 expose=lambda: None,

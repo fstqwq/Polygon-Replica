@@ -14,7 +14,7 @@ from app.service.problem.test_spec import TestSpecEntry
 from app.service.verification.service import CPP_EXTENSIONS, SOLUTION_SOURCE_EXTENSIONS
 from app.service.verification.plan import VerificationExecutionPlan, VerificationTestPlan
 from app.service.verification.signature import VerificationManifest, verification_manifest
-from app.service.verification.source import resolve_source
+from app.service.problem.source_file import resolve_source
 
 
 def _problem_limits(runtime_cfg: ProblemConfig) -> dict[str, int]:
@@ -323,7 +323,6 @@ def _tests_without_spec(
     testlib_header: Path | None,
 ) -> tuple[list[VerificationTestPlan], list[dict[str, object]]]:
     verification_service = config.verification_service
-    snapshot_resolved = snapshot.resolve()
     plans: list[VerificationTestPlan] = []
     tests_meta_rows: list[dict[str, object]] = []
     counter = 1
@@ -350,7 +349,7 @@ def _tests_without_spec(
     configured_generators = build_cfg["generator_sources"]
     generator_sources: list[Path] = []
     for rel in configured_generators:
-        generator_sources.append(resolve_source(snapshot, str(rel), snapshot_resolved=snapshot_resolved))
+        generator_sources.append(resolve_source(snapshot, str(rel)))
     generator_args = build_cfg["generator_args"]
     generator_runs = build_cfg["generator_runs"]
     for source_path in generator_sources:

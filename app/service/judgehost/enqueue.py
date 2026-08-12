@@ -20,17 +20,14 @@ from app.service.judgehost.shared import domjudge_lower_text, domjudge_path_name
 from app.service.judgehost.runtime import domjudge_bool, domjudge_parse_int
 from app.service.platform.hashing import domjudge_executable_hash, sha256_hex_json
 from app.service.platform.runtime_blob_store import PayloadFile, RuntimeBlobStore
-from app.service.verification.identity import (
-    canonical_verification_id,
-    new_verification_id,
-)
 from app.service.problem.build_config import load_build_config
 from app.service.problem.runtime_config import load_problem_config, problem_config_limits
-from app.service.verification.source import resolve_source
+from app.service.problem.source_file import resolve_source
 from app.service.run.runtime import RUN_TEST_NAME_RE
 from app.service.platform.testlib_source import workspace_testlib_header
 
 from app.service.judgehost.core import JudgehostCore
+from app.service.judgehost.case_binding import CaseBinding
 from app.service.judgehost.dispatch import DispatchHandler
 from app.service.judgehost.state import JudgehostState
 from app.service.judgehost.toolkit import DomjudgeToolkit
@@ -74,24 +71,6 @@ class TaskEnqueue:
     @staticmethod
     def _normalize_status(value: object) -> str:
         return TaskEnqueue._normalize_text(value).lower()
-
-    def _verification_artifact_ref(self, verification_id: str, test_name: str, ref_key: str) -> str:
-        safe_verification_id = TaskEnqueue._normalize_text(verification_id)
-        safe_test_name = TaskEnqueue._normalize_text(test_name)
-        safe_ref_key = TaskEnqueue._normalize_text(ref_key)
-        if (not safe_verification_id) or (not safe_test_name) or safe_ref_key not in {"input_ref", "answer_ref"}:
-            return ""
-        row = self._s.db.fetch_one(
-            f"""
-            SELECT {safe_ref_key}
-            FROM verification_artifact_refs
-            WHERE verification_id=? AND test_name=?
-            """,
-            [safe_verification_id, safe_test_name],
-        )
-        if row is None:
-            return ""
-        return TaskEnqueue._normalize_text(row[safe_ref_key])
 
     @staticmethod
     def _json_object(text: str) -> dict[str, object]:
@@ -319,8 +298,8 @@ class TaskEnqueue:
     def _verification_id(self, verification_id: str) -> str:
         token = TaskEnqueue._normalize_text(verification_id)
         if not token:
-            token = new_verification_id()
-        return canonical_verification_id(token)
+            raise RuntimeError("execution scope id is required")
+        return token
 
     def _collect_verification_payload(
         self,
@@ -344,40 +323,23 @@ class TaskEnqueue:
                 if token in wanted_tests:
                     continue
                 wanted_tests.append(token)
-        else:
-            selected_test_rows = self._s.db.fetch_all(
-                """
-                SELECT test_name
-                FROM verification_selected_tests
-                WHERE verification_id=?
-                ORDER BY ordinal ASC
-                """,
-                [safe_verification_id],
-            )
-            for row in selected_test_rows:
-                token = Path(TaskEnqueue._normalize_text(row["test_name"])).name
-                if not RUN_TEST_NAME_RE.fullmatch(token):
-                    continue
-                if token in wanted_tests:
-                    continue
-                wanted_tests.append(token)
-                if len(wanted_tests) >= policy.max_tests_per_task:
-                    break
+        artifact_set = self._s.execution_port.load_artifacts(
+            safe_verification_id,
+            tuple(wanted_tests),
+            limit=policy.max_tests_per_task,
+        )
 
         tests_payload: list[dict[str, object]] = []
-        for test_name in wanted_tests:
-            input_ref = TaskEnqueue._normalize_text(
-                self._verification_artifact_ref(safe_verification_id, test_name, "input_ref")
-            )
+        for artifact in artifact_set.cases:
+            test_name = artifact.test_name
+            input_ref = artifact.input_ref
             if not input_ref:
                 continue
             input_file = self._s.runtime_blob_store.descriptor(input_ref)
             if input_file is None:
                 continue
             ans_name = f"{Path(test_name).stem}.ans"
-            answer_ref = TaskEnqueue._normalize_text(
-                self._verification_artifact_ref(safe_verification_id, test_name, "answer_ref")
-            )
+            answer_ref = artifact.answer_ref
             answer_file = self._s.runtime_blob_store.put_bytes(b"")
             if answer_ref:
                 resolved_answer = self._s.runtime_blob_store.descriptor(answer_ref)
@@ -392,13 +354,7 @@ class TaskEnqueue:
                 }
             )
 
-        run_config_text = ""
-        verification_row = self._s.db.fetch_one(
-            "SELECT run_config_json FROM verifications WHERE id=?",
-            [safe_verification_id],
-        )
-        if verification_row is not None:
-            run_config_text = TaskEnqueue._normalize_text(verification_row["run_config_json"])
+        run_config_text = artifact_set.run_config_json
 
         build_cfg = load_build_config(workspace)
         problem_cfg = load_problem_config(
@@ -985,7 +941,7 @@ class TaskEnqueue:
         upload_filename: str | None,
         run_id: str | None = None,
         selected_tests: list[str] | None,
-        verification_id: str = "",
+        verification_id: str,
         verification_task_id: str = "",
         verification_program_id: str,
         expected_behavior: str,
@@ -1172,8 +1128,17 @@ class TaskEnqueue:
 
         try:
             if safe_verification_task_id:
-                exposed = self._s.verification_task_store.bind_and_expose_judgehost_runtime(
-                    safe_verification_task_id,
+                bindings = tuple(
+                    CaseBinding(
+                        execution_scope_id=safe_verification_id,
+                        program_id=safe_verification_program_id,
+                        task_id=safe_verification_task_id,
+                        test_name=str(case["test_name"]),
+                    )
+                    for case in self._s.batch_scheduler.cases_for_task(task_id)
+                )
+                exposed = self._s.execution_port.bind_and_expose(
+                    bindings,
                     run_id=safe_run_id,
                     judgehost_task_id=task_id,
                     expose=_expose_staged_cases,
