@@ -60,9 +60,17 @@ def export_file(problem: str, user: Annotated[str, Depends(require_session_user)
     if problem_row is None:
         raise HTTPException(status_code=404, detail="problem not found")
     problem_id = int(problem_row["id"])
-    access = workspace_access_context(problem_id, int(user_ctx["user"]["id"]))
-    if not bool(access["can_read"]):
-        raise HTTPException(status_code=403, detail=access["read_block_reason"])
+    actor_user_id = int(user_ctx["user"]["id"])
+    access = workspace_access_context(problem_id, actor_user_id)
+    export = config.export_service.export_problem(export_id)
+    export_access = config.access_query.package_export_context(
+        actor_user_id=actor_user_id,
+        expected_problem_id=problem_id,
+        export=export,
+        problem_access=access,
+    )
+    if not export_access["can_download"]:
+        raise HTTPException(status_code=404, detail="artifact file not found")
     file_path = config.export_service.export_archive_path(
         problem_id,
         export_id,
@@ -84,13 +92,15 @@ def materialization_file(
     if problem_row is None:
         raise HTTPException(status_code=404, detail="problem not found")
     problem_id = int(problem_row["id"])
-    access = workspace_access_context(problem_id, int(user_ctx["user"]["id"]))
-    if not bool(access["can_read"]):
-        raise HTTPException(status_code=403, detail=access["read_block_reason"])
     materialization = config.problem_package_service.materialization(
         materialization_id
     )
-    if materialization is None or materialization["problem_id"] != problem_id:
+    materialization_access = config.access_query.package_materialization_context(
+        actor_user_id=int(user_ctx["user"]["id"]),
+        expected_problem_id=problem_id,
+        materialization=materialization,
+    )
+    if not materialization_access["can_download"]:
         raise HTTPException(status_code=404, detail="package not found")
     try:
         materialization, file_path = config.problem_package_service.native_archive(

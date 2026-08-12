@@ -204,7 +204,7 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
         self.assertEqual(root_page.status_code, 200)
         root_html = root_page.body.decode("utf-8", errors="replace")
         self.assertIn(contest_slug, root_html)
-        admin_access = config.contest_service.access_context(contest_id, workspace_service.known_user_id("alice"))
+        admin_access = config.access_query.contest_context(contest_id, workspace_service.known_user_id("alice"))
         self.assertEqual(admin_access["role"], "admin")
         self.assertTrue(admin_access["can_manage"])
         overview_rows = config.contest_service.user_contests_overview(
@@ -519,7 +519,7 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
         self.assertIn("effective immediately", _flash_messages_from_response(grant)[0].lower())
         bob = db_fetch_one("SELECT id FROM users WHERE username='bob'")
         self.assertIsNotNone(bob)
-        self.assertTrue(workspace_service.access_context(problem_id, int(bob["id"]))["can_write"])
+        self.assertTrue(config.access_query.problem_context(problem_id, int(bob["id"]))["can_write"])
         self.assertEqual(
             db_fetch_all(
                 "SELECT role FROM repo_acl WHERE problem_id=? AND user_id=?",

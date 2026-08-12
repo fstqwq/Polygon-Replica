@@ -5,14 +5,14 @@ from typing import Annotated
 import app.main_constant as _K
 from app.impl.auth.session import require_session_user
 
-from fastapi import Form, Request, Depends
+from fastapi import Depends, Form, HTTPException, Request
 
 from app.impl.auth.shared import enforce_same_origin_state_change, login_redirect, redirect_response
 from app.impl.auth.session import session_user
 from app.impl.runtime.config import config
 from app.impl.problem.shared import _has_destructive_sudo_for_ctx, _sudo_redirect_for_destructive
 from app.impl.workspace.context_operation import normalize_page_target
-from app.impl.workspace.access import require_manage_access, require_write_access, workspace_access_context
+from app.impl.workspace.access import require_manage_access, workspace_access_context
 from app.impl.workspace.context_ui import page_ctx
 from app.main_util import problem_slug_leaf
 
@@ -76,7 +76,12 @@ def switch_workspace(
 def workspace_delete(request: Request, problem: str, user: Annotated[str, Depends(require_session_user)]):
     enforce_same_origin_state_change(request)
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
-    require_write_access(ctx)
+    workspace_access = ctx["workspace_access"]
+    if not workspace_access["can_manage"]:
+        raise HTTPException(
+            status_code=403,
+            detail=workspace_access["manage_block_reason"],
+        )
     next_path = f'/problems/{problem}/workspace'
     if not _has_destructive_sudo_for_ctx(request, ctx):
         return _sudo_redirect_for_destructive(next_path)

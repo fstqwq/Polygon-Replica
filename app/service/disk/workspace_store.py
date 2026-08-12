@@ -43,25 +43,6 @@ class WorkspaceRecentVerificationRow(TypedDict):
     created_at: str
 
 
-class UserProblemRow(TypedDict):
-    slug: str
-    role: str
-    workspace_id: int | None
-    path: str
-    branch: str
-    head_commit: str
-    dirty: int
-    revision_local: int | None
-    revision_upstream: int | None
-    revision_missing: int
-    revision_highlight: int
-    revision_upstream_higher: int
-    revision_ahead_count: int | None
-    revision_behind_count: int | None
-    updated_at: str
-    last_updated_at: str
-
-
 class UserContestOverviewRow(TypedDict):
     id: int
     slug: str
@@ -192,53 +173,6 @@ class WorkspaceDiskStore:
             raise RuntimeError(f"unable to ensure user row for {username}")
         return row
 
-    def repo_role(self, problem_id: int, user_id: int) -> str | None:
-        rows = self.db.fetch_all(
-            """
-            SELECT role FROM repo_acl WHERE problem_id=? AND user_id=?
-            UNION ALL
-            SELECT CASE WHEN cm.role IN ('owner','write') THEN 'write' ELSE 'read' END
-            FROM contest_problems cp
-            JOIN contest_members cm ON cm.contest_id=cp.contest_id
-            WHERE cp.problem_id=? AND cm.user_id=? AND cm.role IN ('owner','write','read')
-            """,
-            [problem_id, user_id, problem_id, user_id],
-        )
-        rank = {"read": 1, "write": 2, "owner": 3, "admin": 4}
-        roles = [str(row["role"]) for row in rows]
-        return max(roles, key=lambda role: rank.get(role, 0)) if roles else None
-
-    def repo_roles(self, problem_ids: list[int], user_id: int) -> dict[int, str]:
-        safe_problem_ids = sorted(
-            {problem_id for problem_id in map(int, problem_ids) if problem_id > 0}
-        )
-        if not safe_problem_ids:
-            return {}
-        placeholders = ",".join("?" for _problem_id in safe_problem_ids)
-        rows = self.db.fetch_all(
-            f"""
-            SELECT problem_id,role FROM repo_acl
-            WHERE user_id=? AND problem_id IN ({placeholders})
-            UNION ALL
-            SELECT cp.problem_id,
-                   CASE WHEN cm.role IN ('owner','write') THEN 'write' ELSE 'read' END AS role
-            FROM contest_problems cp
-            JOIN contest_members cm ON cm.contest_id=cp.contest_id
-            WHERE cm.user_id=? AND cm.role IN ('owner','write','read')
-              AND cp.problem_id IN ({placeholders})
-            """,
-            [int(user_id), *safe_problem_ids, int(user_id), *safe_problem_ids],
-        )
-        rank = {"read": 1, "write": 2, "owner": 3, "admin": 4}
-        result: dict[int, str] = {}
-        for row in rows:
-            problem_id = int(row["problem_id"])
-            role = str(row["role"])
-            current = result.get(problem_id)
-            if current is None or rank.get(role, 0) > rank.get(current, 0):
-                result[problem_id] = role
-        return result
-
     def problem_owner_count(self, problem_id: int) -> int:
         row = self.db.fetch_one(
             "SELECT COUNT(*) AS c FROM repo_acl WHERE problem_id=? AND role='owner'",
@@ -298,56 +232,6 @@ class WorkspaceDiskStore:
             )
         return entries
 
-    def is_system_admin(self, user_id: int) -> bool:
-        row = self.db.fetch_one("SELECT is_system_admin FROM users WHERE id=?", [user_id])
-        if row is None:
-            return False
-        return int(row["is_system_admin"]) == 1
-
-    def user_problem_slugs(self, user_id: int, *, limit: int) -> list[str]:
-        rows = self.db.fetch_all(
-            """
-            WITH accessible(problem_id) AS (
-                SELECT problem_id FROM repo_acl WHERE user_id=?
-                UNION
-                SELECT cp.problem_id
-                FROM contest_problems cp
-                JOIN contest_members cm ON cm.contest_id=cp.contest_id
-                WHERE cm.user_id=? AND cm.role IN ('owner','write','read')
-            )
-            SELECT p.slug
-            FROM accessible a
-            JOIN problems p ON p.id=a.problem_id
-            LEFT JOIN workspaces w ON w.problem_id=p.id AND w.user_id=?
-            ORDER BY COALESCE(NULLIF(w.updated_at, ''), p.created_at) DESC, p.slug ASC
-            LIMIT ?
-            """,
-            [user_id, user_id, user_id, max(1, int(limit))],
-        )
-        result: list[str] = []
-        for row in rows:
-            slug = str(row["slug"])
-            if slug:
-                result.append(slug)
-        return result
-
-    def all_problem_slugs(self, *, limit: int) -> list[str]:
-        rows = self.db.fetch_all(
-            """
-            SELECT slug
-            FROM problems
-            ORDER BY created_at DESC, slug ASC
-            LIMIT ?
-            """,
-            [max(1, int(limit))],
-        )
-        result: list[str] = []
-        for row in rows:
-            slug = str(row["slug"] or "")
-            if slug:
-                result.append(slug)
-        return result
-
     def problem_slugs_by_leaf(self, leaf: str, *, limit: int) -> list[str]:
         rows = self.db.fetch_all(
             """
@@ -365,135 +249,6 @@ class WorkspaceDiskStore:
             if slug:
                 result.append(slug)
         return result
-
-    def user_problem_slugs_by_leaf(self, user_id: int, leaf: str, *, limit: int) -> list[str]:
-        rows = self.db.fetch_all(
-            """
-            WITH accessible(problem_id) AS (
-                SELECT problem_id FROM repo_acl WHERE user_id=?
-                UNION
-                SELECT cp.problem_id
-                FROM contest_problems cp
-                JOIN contest_members cm ON cm.contest_id=cp.contest_id
-                WHERE cm.user_id=? AND cm.role IN ('owner','write','read')
-            )
-            SELECT p.slug
-            FROM accessible a
-            JOIN problems p ON p.id=a.problem_id
-            WHERE p.slug LIKE ?
-            ORDER BY p.slug ASC
-            LIMIT ?
-            """,
-            [
-                int(user_id),
-                int(user_id),
-                f"%/{str(leaf or '').strip()}",
-                max(1, int(limit)),
-            ],
-        )
-        result: list[str] = []
-        for row in rows:
-            slug = str(row["slug"] or "")
-            if slug:
-                result.append(slug)
-        return result
-
-    def user_problem_rows(self, user_id: int, *, limit: int) -> list[UserProblemRow]:
-        rows = self.db.fetch_all(
-            """
-            WITH grants(problem_id,role_rank) AS (
-                SELECT problem_id,
-                       CASE role WHEN 'admin' THEN 4 WHEN 'owner' THEN 3 WHEN 'write' THEN 2 ELSE 1 END
-                FROM repo_acl WHERE user_id=?
-                UNION ALL
-                SELECT cp.problem_id,CASE WHEN cm.role IN ('owner','write') THEN 2 ELSE 1 END
-                FROM contest_problems cp
-                JOIN contest_members cm ON cm.contest_id=cp.contest_id
-                WHERE cm.user_id=? AND cm.role IN ('owner','write','read')
-            ), effective AS (
-                SELECT problem_id,MAX(role_rank) AS role_rank
-                FROM grants GROUP BY problem_id
-            )
-            SELECT p.slug,
-                   CASE e.role_rank WHEN 4 THEN 'admin' WHEN 3 THEN 'owner' WHEN 2 THEN 'write' ELSE 'read' END AS role,
-                   w.id AS workspace_id,w.path,w.branch,w.head_commit,w.dirty,w.updated_at,
-                   w.revision_local,w.revision_upstream,w.revision_missing,w.revision_highlight,
-                   w.revision_upstream_higher,w.revision_ahead_count,w.revision_behind_count,
-                   COALESCE(NULLIF(w.updated_at, ''), p.created_at) AS last_updated_at
-            FROM effective e
-            JOIN problems p ON p.id=e.problem_id
-            LEFT JOIN workspaces w ON w.problem_id=p.id AND w.user_id=?
-            ORDER BY last_updated_at DESC, p.slug ASC
-            LIMIT ?
-            """,
-            [int(user_id), int(user_id), int(user_id), max(1, int(limit))],
-        )
-        items: list[UserProblemRow] = []
-        for row in rows:
-            workspace_id_raw = row["workspace_id"]
-            safe_slug = str(row["slug"] or "")
-            items.append(
-                {
-                    "slug": safe_slug,
-                    "role": str(row["role"] or ""),
-                    "workspace_id": None if workspace_id_raw is None else int(workspace_id_raw),
-                    "path": str(row["path"] or ""),
-                    "branch": str(row["branch"] or ""),
-                    "head_commit": str(row["head_commit"] or ""),
-                    "dirty": int(row["dirty"] or 0),
-                    "revision_local": self._optional_int(row["revision_local"]),
-                    "revision_upstream": self._optional_int(row["revision_upstream"]),
-                    "revision_missing": int(row["revision_missing"] if row["revision_missing"] is not None else 1),
-                    "revision_highlight": int(row["revision_highlight"] if row["revision_highlight"] is not None else 1),
-                    "revision_upstream_higher": int(row["revision_upstream_higher"] or 0),
-                    "revision_ahead_count": self._optional_int(row["revision_ahead_count"]),
-                    "revision_behind_count": self._optional_int(row["revision_behind_count"]),
-                    "updated_at": str(row["updated_at"] or ""),
-                    "last_updated_at": str(row["last_updated_at"] or ""),
-                }
-            )
-        return items
-
-    def all_problem_rows(self, user_id: int, *, limit: int) -> list[UserProblemRow]:
-        rows = self.db.fetch_all(
-            """
-            SELECT p.slug,'admin' AS role,
-                   w.id AS workspace_id,w.path,w.branch,w.head_commit,w.dirty,w.updated_at,
-                   w.revision_local,w.revision_upstream,w.revision_missing,w.revision_highlight,
-                   w.revision_upstream_higher,w.revision_ahead_count,w.revision_behind_count,
-                   COALESCE(NULLIF(w.updated_at, ''), p.created_at) AS last_updated_at
-            FROM problems p
-            LEFT JOIN workspaces w ON w.problem_id=p.id AND w.user_id=?
-            ORDER BY last_updated_at DESC, p.slug ASC
-            LIMIT ?
-            """,
-            [int(user_id), max(1, int(limit))],
-        )
-        items: list[UserProblemRow] = []
-        for row in rows:
-            workspace_id_raw = row["workspace_id"]
-            safe_slug = str(row["slug"] or "")
-            items.append(
-                {
-                    "slug": safe_slug,
-                    "role": str(row["role"] or ""),
-                    "workspace_id": None if workspace_id_raw is None else int(workspace_id_raw),
-                    "path": str(row["path"] or ""),
-                    "branch": str(row["branch"] or ""),
-                    "head_commit": str(row["head_commit"] or ""),
-                    "dirty": int(row["dirty"] or 0),
-                    "revision_local": self._optional_int(row["revision_local"]),
-                    "revision_upstream": self._optional_int(row["revision_upstream"]),
-                    "revision_missing": int(row["revision_missing"] if row["revision_missing"] is not None else 1),
-                    "revision_highlight": int(row["revision_highlight"] if row["revision_highlight"] is not None else 1),
-                    "revision_upstream_higher": int(row["revision_upstream_higher"] or 0),
-                    "revision_ahead_count": self._optional_int(row["revision_ahead_count"]),
-                    "revision_behind_count": self._optional_int(row["revision_behind_count"]),
-                    "updated_at": str(row["updated_at"] or ""),
-                    "last_updated_at": str(row["last_updated_at"] or ""),
-                }
-            )
-        return items
 
     def user_contest_rows(self, user_id: int, *, limit: int) -> list[UserContestOverviewRow]:
         rows = self.db.fetch_all(

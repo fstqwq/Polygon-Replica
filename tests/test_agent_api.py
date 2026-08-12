@@ -171,7 +171,7 @@ class TestAgentAPI(E2ETestBase):
             user_id = workspace_service.known_user_id(username)
             self.assertIsNotNone(problem_id)
             self.assertIsNotNone(user_id)
-            access = workspace_service.access_context(int(problem_id), int(user_id))
+            access = config.access_query.problem_context(int(problem_id), int(user_id))
             self.assertEqual(str(access["role"]), "owner")
             workspace = workspace_service.workspace_context(
                 problem,

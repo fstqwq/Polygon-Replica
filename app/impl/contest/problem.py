@@ -12,7 +12,6 @@ from app.impl.auth.shared import template_response
 from app.impl.contest.problem_rows import contest_management_problem_rows
 from app.impl.contest.workspace_scope import add_contest_problem_hrefs
 from app.impl.runtime.config import config
-from app.impl.workspace.access import workspace_access_context
 from app.main_util import form_text
 
 from app.impl.contest.common import (
@@ -86,8 +85,8 @@ def contest_problems_page(request: Request, contest: str, user: Annotated[str, D
 
 def contest_problems_add(contest: str, user: Annotated[str, Depends(require_session_user)], problem_slugs: list[str] = Form([]), q: str = Form("")):
     ctx = _contest_ctx(contest, user, "problems")
-    if not bool(ctx["access"].get("can_manage")):
-        raise HTTPException(status_code=403, detail=ctx["access"]["manage_block_reason"])
+    if not ctx["access"]["can_manage_roster"]:
+        raise HTTPException(status_code=403, detail=ctx["access"]["roster_block_reason"])
     safe_slugs = _dedupe_preserve([form_text(item) for item in problem_slugs])
     if not safe_slugs:
         safe_query = q.strip()
@@ -107,8 +106,8 @@ def contest_problems_add(contest: str, user: Annotated[str, Depends(require_sess
             failed.append(f"{slug}: problem not found")
             continue
         problem_id = int(problem_row["id"])
-        problem_access = workspace_access_context(problem_id, user_id)
-        if not bool(problem_access.get("can_manage")):
+        problem_access = config.access_query.direct_problem_context(problem_id, user_id)
+        if not problem_access["can_manage"]:
             failed.append(f"{slug}: direct problem manage access required")
             continue
         if config.contest_service.contest_has_problem(contest_id, problem_id):
@@ -132,11 +131,8 @@ def contest_problems_add(contest: str, user: Annotated[str, Depends(require_sess
 
 def contest_problems_remove(contest: str, user: Annotated[str, Depends(require_session_user)], problem_id: str = Form("")):
     ctx = _contest_ctx(contest, user, "problems")
-    if not bool(ctx["access"].get("can_write")):
-        write_block_reason = ctx["access"].get("write_block_reason")
-        if not isinstance(write_block_reason, str) or not write_block_reason.strip():
-            raise RuntimeError("missing write_block_reason")
-        raise HTTPException(status_code=403, detail=write_block_reason)
+    if not ctx["access"]["can_manage_roster"]:
+        raise HTTPException(status_code=403, detail=ctx["access"]["roster_block_reason"])
     msg = "problem removed"
     try:
         pid = int(problem_id)
@@ -151,11 +147,8 @@ def contest_problems_remove(contest: str, user: Annotated[str, Depends(require_s
 
 def contest_problems_remove_selected(contest: str, user: Annotated[str, Depends(require_session_user)], selected_problem_ids: list[str] = Form([])):
     ctx = _contest_ctx(contest, user, "problems")
-    if not bool(ctx["access"].get("can_write")):
-        write_block_reason = ctx["access"].get("write_block_reason")
-        if not isinstance(write_block_reason, str) or not write_block_reason.strip():
-            raise RuntimeError("missing write_block_reason")
-        raise HTTPException(status_code=403, detail=write_block_reason)
+    if not ctx["access"]["can_manage_roster"]:
+        raise HTTPException(status_code=403, detail=ctx["access"]["roster_block_reason"])
     ids: list[int] = []
     for raw in selected_problem_ids:
         try:
@@ -202,11 +195,8 @@ def contest_problems_reorder(
     contest_problem_indices: list[str] = Form([]),
 ):
     ctx = _contest_ctx(contest, user, "problems")
-    if not bool(ctx["access"].get("can_write")):
-        write_block_reason = ctx["access"].get("write_block_reason")
-        if not isinstance(write_block_reason, str) or not write_block_reason.strip():
-            raise RuntimeError("missing write_block_reason")
-        raise HTTPException(status_code=403, detail=write_block_reason)
+    if not ctx["access"]["can_manage_roster"]:
+        raise HTTPException(status_code=403, detail=ctx["access"]["roster_block_reason"])
     try:
         pairs = _contest_problem_index_pairs(contest_problem_ids, contest_problem_indices)
     except ValueError as exc:
@@ -227,11 +217,8 @@ def contest_problems_renumber(
     contest_problem_indices: list[str] = Form([]),
 ):
     ctx = _contest_ctx(contest, user, "problems")
-    if not bool(ctx["access"].get("can_write")):
-        write_block_reason = ctx["access"].get("write_block_reason")
-        if not isinstance(write_block_reason, str) or not write_block_reason.strip():
-            raise RuntimeError("missing write_block_reason")
-        raise HTTPException(status_code=403, detail=write_block_reason)
+    if not ctx["access"]["can_manage_roster"]:
+        raise HTTPException(status_code=403, detail=ctx["access"]["roster_block_reason"])
     try:
         pairs = _contest_problem_index_pairs(contest_problem_ids, contest_problem_indices)
     except ValueError as exc:

@@ -9,6 +9,8 @@ from typing import Literal, TypedDict
 
 from app.db import DB, now_iso
 from app.config import ConfigValues
+from app.service.access.policy import access_role, contest_role
+from app.service.access.query import AccessQuery
 from app.service.contest.model import ContestBuildRevision
 from app.service.contest.statement_meta import infer_contest_header_fields
 from app.service.disk.contest_store import ContestDiskStore
@@ -16,16 +18,6 @@ from app.service.platform.hashing import sha256_file
 from app.service.platform.process import is_canonical_artifact_id
 from app.service.statement.context import normalize_statement_language
 from app.service.platform.fs.layout import StorageLayout
-
-
-class ContestAccessContext(TypedDict):
-    role: str
-    can_read: bool
-    can_write: bool
-    can_manage: bool
-    read_block_reason: str
-    write_block_reason: str
-    manage_block_reason: str
 
 
 class ContestMemberEntry(TypedDict):
@@ -127,7 +119,6 @@ class ContestStatementAttachment(TypedDict):
 
 
 class ContestService:
-    _ACCESS_ROLES = {"admin", "owner", "write", "read"}
     _STATEMENT_DEFAULT_LANGUAGE_KEY = "statement_default_language"
     _LOCATION_KEY = "location"
     _DATE_KEY = "date"
@@ -152,17 +143,14 @@ class ContestService:
         db: DB,
         storage_layout: StorageLayout,
         *,
+        access_query: AccessQuery,
         config_values: ConfigValues,
     ):
         self.db = db
         self.storage_layout = storage_layout
+        self.access_query = access_query
         self._config_values = config_values
         self._store = ContestDiskStore(db)
-
-    def _normalize_role(self, raw_role: str | None) -> str:
-        if raw_role in self._ACCESS_ROLES:
-            return raw_role
-        return "read"
 
     def _job_summary_path(self, contest_slug: str, job_id: str, *, create: bool) -> Path:
         return (
@@ -395,7 +383,7 @@ class ContestService:
 
     def user_contests_overview(self, user_id: int, *, limit: int) -> list[dict[str, object]]:
         items: list[dict[str, object]] = []
-        if self._store.is_system_admin(int(user_id)):
+        if self.access_query.is_system_admin(user_id):
             rows = self._store.all_contest_rows(int(user_id), limit=max(1, int(limit)))
         else:
             rows = self._store.user_contest_rows(int(user_id), limit=max(1, int(limit)))
@@ -410,7 +398,7 @@ class ContestService:
                     "owner_user_id": int(row["owner_user_id"]),
                     "created_at": str(row["created_at"]),
                     "last_updated_at": str(row["last_updated_at"]),
-                    "role": self._normalize_role(str(row["role"])),
+                    "role": access_role(str(row["role"])),
                     "problem_count": problem_count,
                     "dirty_problem_count": dirty_problem_count,
                     "has_dirty": dirty_problem_count > 0,
@@ -474,40 +462,6 @@ class ContestService:
             "created_at": str(row["created_at"]),
         }
 
-    def access_context(self, contest_id: int, user_id: int) -> ContestAccessContext:
-        if self._store.is_system_admin(int(user_id)):
-            return {
-                "role": "admin",
-                "can_read": True,
-                "can_write": True,
-                "can_manage": True,
-                "read_block_reason": "",
-                "write_block_reason": "",
-                "manage_block_reason": "",
-            }
-        role = self._store.contest_role(int(contest_id), int(user_id))
-        if role is None:
-            return {
-                "role": "none",
-                "can_read": False,
-                "can_write": False,
-                "can_manage": False,
-                "read_block_reason": "you do not have access to this contest",
-                "write_block_reason": "write access required",
-                "manage_block_reason": "owner or admin access required",
-            }
-        safe_role = self._normalize_role(role)
-        can_write = safe_role in {"admin", "owner", "write"}
-        return {
-            "role": safe_role,
-            "can_read": True,
-            "can_write": can_write,
-            "can_manage": safe_role in {"admin", "owner"},
-            "read_block_reason": "",
-            "write_block_reason": "" if can_write else "read-only access",
-            "manage_block_reason": "" if safe_role in {"admin", "owner"} else "owner or admin access required",
-        }
-
     def owner_count(self, contest_id: int) -> int:
         return self._store.owner_count(int(contest_id))
 
@@ -520,7 +474,7 @@ class ContestService:
             result.append(
                 {
                     "username": str(row["username"]),
-                    "role": self._normalize_role(str(row["role"])),
+                    "role": contest_role(str(row["role"])),
                     "created_at": str(row["created_at"]),
                     "is_system_admin": int(row["is_system_admin"] or 0),
                 }
@@ -528,12 +482,13 @@ class ContestService:
         return result
 
     def grant_member_role(self, contest_id: int, username: str, role: str) -> bool:
-        if role == "owner":
+        safe_role = contest_role(role)
+        if safe_role == "owner":
             raise ValueError("owner access is fixed and cannot be transferred")
         user_id = self._store.user_id_by_username(username)
         if user_id is None:
             return False
-        self._store.grant_member_role(int(contest_id), user_id, role, now_iso())
+        self._store.grant_member_role(int(contest_id), user_id, safe_role, now_iso())
         return True
 
     def membership_for_username(self, contest_id: int, username: str) -> ContestMembership | None:
@@ -542,7 +497,7 @@ class ContestService:
             return None
         return {
             "user_id": int(row["user_id"]),
-            "role": self._normalize_role(str(row["role"])),
+            "role": contest_role(str(row["role"])),
         }
 
     def revoke_member(self, contest_id: int, user_id: int) -> None:
@@ -754,9 +709,13 @@ class ContestService:
     def available_problems(self, contest_id: int, user_id: int, *, limit: int, query: str) -> list[ContestAvailableProblem]:
         filter_text = str(query).strip().lower()
         result: list[ContestAvailableProblem] = []
-        for row in self._store.available_problem_rows(int(contest_id), int(user_id), limit=max(1, int(limit))):
+        for row in self.access_query.manageable_problem_rows_excluding_contest(
+            contest_id,
+            user_id,
+            limit=max(1, int(limit)),
+        ):
             slug = str(row["problem_slug"])
-            slug_leaf = str(row["slug_leaf"])
+            slug_leaf = slug.rsplit("/", 1)[-1]
             if filter_text and filter_text not in f"{slug} {slug_leaf}".lower():
                 continue
             result.append(
@@ -764,7 +723,7 @@ class ContestService:
                     "problem_id": int(row["problem_id"]),
                     "problem_slug": slug,
                     "slug_leaf": slug_leaf,
-                    "role": self._normalize_role(str(row["role"])),
+                    "role": access_role(str(row["role"])),
                 }
             )
         return result

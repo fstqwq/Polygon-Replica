@@ -8,7 +8,8 @@ from fastapi import Form, Depends
 
 from app.impl.auth.shared import normalize_username_required, redirect_response
 from app.impl.runtime.config import config
-from app.impl.workspace.access import normalize_transferable_repo_role, require_manage_access
+from app.impl.workspace.access import require_manage_access
+from app.service.access.policy import transferable_repo_role
 from app.impl.workspace.context_ui import page_ctx
 
 
@@ -18,7 +19,7 @@ def workspace_access_grant(problem: str, user: Annotated[str, Depends(require_se
     msg = "access updated"
     try:
         safe_target = normalize_username_required(target_user)
-        safe_role = normalize_transferable_repo_role(role)
+        safe_role = transferable_repo_role(role)
         problem_id = int(ctx["problem"]["id"])
         config.workspace_service.set_repo_access_for_problem_id(problem_id, safe_target, safe_role)
         msg = f"access updated: {safe_target} -> {safe_role}"

@@ -16,6 +16,8 @@ from typing import ContextManager
 
 from app.config import ConfigValues
 from app.db import DB
+from app.service.access.policy import repo_role
+from app.service.access.query import AccessQuery
 from app.main_constant import (
     PROBLEM_ID_MAX_LEN,
     PROBLEM_ID_RULE_MESSAGE,
@@ -137,20 +139,19 @@ class WorkspaceService:
     PROBLEM_ID_MAX_LEN = PROBLEM_ID_MAX_LEN
     PROBLEM_CACHE_MAX_ENTRIES = 512
     USER_CACHE_MAX_ENTRIES = 2048
-    REPO_ROLES = {"owner", "write", "read"}
-    ACCESS_ROLES = {"admin", "owner", "write", "read"}
-
     def __init__(
         self,
         db: DB,
         storage_layout: StorageLayout,
         *,
+        access_query: AccessQuery,
         verification_task_store: VerificationTaskStore,
         config_values: ConfigValues,
     ):
         self.db = db
         self.storage_layout = storage_layout
         self.config_values = config_values
+        self.access_query = access_query
         self._store = WorkspaceDiskStore(db, verification_task_store=verification_task_store)
         self._problem_cache: dict[str, dict] = {}
         self._user_cache: dict[str, dict] = {}
@@ -280,16 +281,10 @@ class WorkspaceService:
         self._cache_put(self._user_cache, safe_username, row_dict, self.USER_CACHE_MAX_ENTRIES)
         return row_dict
 
-    def _normalize_repo_role(self, role: str) -> str:
-        safe_role = str(role or "").strip().lower()
-        if safe_role not in self.REPO_ROLES:
-            raise ValueError("invalid repo role")
-        return safe_role
-
     def grant_repo_access(self, problem: str, username: str, role: str) -> None:
         p = self._problem_row(problem)
         u = self.ensure_user(username)
-        safe_role = self._normalize_repo_role(role)
+        safe_role = repo_role(role)
         self._store.upsert_repo_access(int(p["id"]), int(u["id"]), safe_role)
 
     def _problem_row(self, slug: str):
@@ -359,24 +354,27 @@ class WorkspaceService:
         user_id = self.known_user_id(username)
         if user_id is None:
             return ""
-        if self.user_is_system_admin(int(user_id)):
-            items = self._store.all_problem_slugs(limit=max(1, int(limit)))
-        else:
-            items = self._store.user_problem_slugs(user_id, limit=max(1, int(limit)))
+        items = self.access_query.accessible_problem_slugs(
+            user_id,
+            limit=max(1, int(limit)),
+        )
         return items[0] if items else ""
 
     def accessible_problem_slugs(self, user_id: int, *, limit: int = 1) -> list[str]:
-        if self.user_is_system_admin(int(user_id)):
-            return self._store.all_problem_slugs(limit=max(1, int(limit)))
-        return self._store.user_problem_slugs(int(user_id), limit=max(1, int(limit)))
+        return self.access_query.accessible_problem_slugs(
+            user_id,
+            limit=max(1, int(limit)),
+        )
 
     def accessible_problem_slugs_by_leaf(self, user_id: int, leaf: str, *, limit: int = 20) -> list[str]:
         safe_leaf = str(leaf or "").strip()
         if not safe_leaf:
             return []
-        if self.user_is_system_admin(int(user_id)):
-            return self._store.problem_slugs_by_leaf(safe_leaf, limit=max(1, int(limit)))
-        return self._store.user_problem_slugs_by_leaf(int(user_id), safe_leaf, limit=max(1, int(limit)))
+        return self.access_query.accessible_problem_slugs_by_leaf(
+            user_id,
+            safe_leaf,
+            limit=max(1, int(limit)),
+        )
 
     def problem_slugs_by_leaf(self, leaf: str, *, limit: int = 20) -> list[str]:
         safe_leaf = str(leaf or "").strip()
@@ -385,86 +383,20 @@ class WorkspaceService:
         return self._store.problem_slugs_by_leaf(safe_leaf, limit=max(1, int(limit)))
 
     def participating_problem_rows(self, user_id: int, *, limit: int) -> list[dict[str, object]]:
-        if self.user_is_system_admin(int(user_id)):
-            return self._store.all_problem_rows(int(user_id), limit=max(1, int(limit)))
-        return self._store.user_problem_rows(int(user_id), limit=max(1, int(limit)))
+        return list(
+            self.access_query.participating_problem_rows(
+                user_id,
+                limit=max(1, int(limit)),
+            )
+        )
 
     def workspace_path(self, problem_id: int, workspace_id: int) -> str:
         return self._store.workspace_path(int(problem_id), int(workspace_id))
 
-    @classmethod
-    def _access_context_for_role(
-        cls,
-        role: str | None,
-        *,
-        system_admin: bool,
-    ) -> dict[str, object]:
-        if system_admin:
-            return {
-                "role": "admin",
-                "can_read": True,
-                "can_write": True,
-                "can_manage": True,
-                "read_block_reason": "",
-                "write_block_reason": "",
-                "manage_block_reason": "",
-            }
-        if role is None:
-            return {
-                "role": "none",
-                "can_read": False,
-                "can_write": False,
-                "can_manage": False,
-                "read_block_reason": "you do not have access to this problem",
-                "write_block_reason": "write access required",
-                "manage_block_reason": "owner or admin access required",
-            }
-        if role not in cls.ACCESS_ROLES:
-            raise RuntimeError("invalid repo role")
-        can_write = role in {"admin", "owner", "write"}
-        return {
-            "role": role,
-            "can_read": True,
-            "can_write": can_write,
-            "can_manage": role in {"admin", "owner"},
-            "read_block_reason": "",
-            "write_block_reason": "" if can_write else "read-only access",
-            "manage_block_reason": "" if role in {"admin", "owner"} else "owner or admin access required",
-        }
-
-    def access_context(self, problem_id: int, user_id: int) -> dict[str, object]:
-        safe_user_id = int(user_id)
-        return self._access_context_for_role(
-            self._store.repo_role(int(problem_id), safe_user_id),
-            system_admin=self.user_is_system_admin(safe_user_id),
-        )
-
-    def access_contexts(
-        self,
-        problem_ids: list[int],
-        user_id: int,
-    ) -> dict[int, dict[str, object]]:
-        safe_problem_ids = list(
-            dict.fromkeys(int(problem_id) for problem_id in problem_ids)
-        )
-        if not safe_problem_ids:
-            return {}
-        safe_user_id = int(user_id)
-        system_admin = self.user_is_system_admin(safe_user_id)
-        roles = {} if system_admin else self._store.repo_roles(safe_problem_ids, safe_user_id)
-        return {
-            problem_id: self._access_context_for_role(
-                roles.get(problem_id),
-                system_admin=system_admin,
-            )
-            for problem_id in safe_problem_ids
-        }
-
     def access_entries(self, problem_id: int) -> list[dict[str, str]]:
         entries = self._store.problem_acl_entries(int(problem_id))
         for entry in entries:
-            if entry["role"] not in self.REPO_ROLES:
-                raise RuntimeError("invalid repo role")
+            repo_role(entry["role"])
         return entries
 
     def owner_count(self, problem_id: int) -> int:
@@ -472,7 +404,7 @@ class WorkspaceService:
 
     def set_repo_access_for_problem_id(self, problem_id: int, username: str, role: str) -> dict[str, object]:
         target_user = self.known_user(username)
-        safe_role = self._normalize_repo_role(role)
+        safe_role = repo_role(role)
         existing = self._store.repo_access_row(int(problem_id), int(target_user["id"]))
         existing_role = "" if existing is None else str(existing["role"])
         if safe_role == "owner" or existing_role == "owner":
@@ -499,9 +431,6 @@ class WorkspaceService:
             "target_username": str(target_user["username"]),
             "previous_role": existing_role,
         }
-
-    def user_is_system_admin(self, user_id: int) -> bool:
-        return self._store.is_system_admin(int(user_id))
 
     def _user_row(self, username: str):
         username = self._validate_identifier(username, "user")

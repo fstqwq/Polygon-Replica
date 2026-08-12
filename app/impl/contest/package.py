@@ -144,8 +144,8 @@ def contest_packages_build_start(
     insert_blank_pages: Annotated[bool, Form()] = False,
 ):
     ctx = _contest_ctx(contest, user, "packages")
-    if not bool(ctx["access"].get("can_write")):
-        raise HTTPException(status_code=403, detail=ctx["access"]["write_block_reason"])
+    if not ctx["access"]["can_build"]:
+        raise HTTPException(status_code=403, detail=ctx["access"]["build_block_reason"])
     contest_id = int(ctx["contest"]["id"])
     requested_outputs = tuple(outputs or ["statement_pdf", "icpc_bundle"])
     current_language = _contest_statement_language(contest_id, language)
@@ -211,6 +211,8 @@ def contest_packages_job_status(contest: str, user: Annotated[str, Depends(requi
 
 def contest_packages_artifact_download(contest: str, user: Annotated[str, Depends(require_session_user)], artifact_id: str):
     ctx = _contest_ctx(contest, user, "packages")
+    if not ctx["access"]["can_download_packages"]:
+        raise HTTPException(status_code=403, detail=ctx["access"]["package_block_reason"])
     contest_id = int(ctx["contest"]["id"])
     artifact = config.contest_service.artifact_download(contest_id, artifact_id)
     if artifact is None:

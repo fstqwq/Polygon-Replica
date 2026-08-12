@@ -5,13 +5,13 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
 from app.db import DB, now_iso
+from app.service.access.policy import stronger_agent_scope
+from app.service.access.query import AccessQuery
 from app.service.agent.store import AgentStore
 from app.service.platform.hashing import canonical_json, sha256_hex_text
 from app.service.repository.workspace import WorkspaceService
 
 
-_SCOPE_LEVELS = {"readonly": 1, "workspace": 2, "commit": 3}
-_ROLE_LEVELS = {"read": 1, "write": 3, "owner": 3, "admin": 4}
 _DEFAULT_REGISTER_TTL_SEC = 900
 _DEFAULT_REQUEST_TTL_SEC = 900
 _DEFAULT_TOKEN_TTL_SEC = 86400
@@ -33,9 +33,10 @@ class AgentTokenIdentity:
 
 
 class AgentService:
-    def __init__(self, db: DB, workspace_service: WorkspaceService):
+    def __init__(self, db: DB, workspace_service: WorkspaceService, access_query: AccessQuery):
         self.db = db
         self.workspace_service = workspace_service
+        self.access_query = access_query
         self._store = AgentStore(db)
 
     @property
@@ -72,30 +73,6 @@ class AgentService:
         return sha256_hex_text(canonical_json(payload, ensure_ascii=False))
 
     @staticmethod
-    def _normalize_scope(scope: str) -> str:
-        safe_scope = str(scope or "").strip().lower()
-        if safe_scope not in _SCOPE_LEVELS:
-            raise ValueError("invalid scope")
-        return safe_scope
-
-    @staticmethod
-    def _scope_allows(granted_scope: str, min_scope: str) -> bool:
-        return _SCOPE_LEVELS.get(str(granted_scope or ""), 0) >= _SCOPE_LEVELS.get(str(min_scope or ""), 0)
-
-    @staticmethod
-    def _effective_scope(token_scope: str, acl_role: str) -> str:
-        token_level = _SCOPE_LEVELS.get(str(token_scope or ""), 0)
-        acl_level = _ROLE_LEVELS.get(str(acl_role or ""), 0)
-        level = min(token_level, acl_level)
-        if level >= _SCOPE_LEVELS["commit"]:
-            return "commit"
-        if level >= _SCOPE_LEVELS["workspace"]:
-            return "workspace"
-        if level >= _SCOPE_LEVELS["readonly"]:
-            return "readonly"
-        return ""
-
-    @staticmethod
     def _format_expiry(seconds: int | None) -> str | None:
         if seconds is None:
             return None
@@ -107,10 +84,6 @@ class AgentService:
         if not safe_problem:
             raise ValueError("problem is required")
         return safe_problem
-
-    def _problem_acl_role(self, *, problem_id: int, user_id: int) -> str:
-        access = self.workspace_service.access_context(int(problem_id), int(user_id))
-        return str(access.get("role") or "none")
 
     def _require_active_session(self, *, agent_session_id: str, identity_hash: str) -> dict[str, object]:
         session = self._store.session_by_id(agent_session_id)
@@ -135,9 +108,10 @@ class AgentService:
             expires_at = self._parse_iso_utc(expires_at_text)
             if expires_at is not None and expires_at <= now_dt:
                 continue
-            effective_scope = self._effective_scope(
-                str(token_row.get("scope") or ""),
-                self._problem_acl_role(problem_id=int(token_row["problem_id"]), user_id=int(user_id)),
+            effective_scope = self.access_query.effective_agent_scope(
+                token_scope=str(token_row.get("scope") or ""),
+                problem_id=int(token_row["problem_id"]),
+                user_id=int(user_id),
             )
             if not effective_scope:
                 continue
@@ -152,12 +126,14 @@ class AgentService:
             if existing is None:
                 merged[problem_slug] = candidate
                 continue
-            candidate_scope_level = _SCOPE_LEVELS.get(str(candidate["scope"]), 0)
-            existing_scope_level = _SCOPE_LEVELS.get(str(existing["scope"]), 0)
-            if candidate_scope_level > existing_scope_level:
+            stronger_scope = stronger_agent_scope(
+                str(candidate["scope"]),
+                str(existing["scope"]),
+            )
+            if stronger_scope == candidate["scope"] and candidate["scope"] != existing["scope"]:
                 merged[problem_slug] = candidate
                 continue
-            if candidate_scope_level < existing_scope_level:
+            if stronger_scope == existing["scope"] and candidate["scope"] != existing["scope"]:
                 continue
             candidate_expires = str(candidate.get("expires_at") or "")
             existing_expires = str(existing.get("expires_at") or "")
@@ -241,8 +217,8 @@ class AgentService:
         problem_id = self.workspace_service.known_problem_id(safe_problem)
         if problem_id is None:
             raise LookupError("problem not found")
-        access = self.workspace_service.access_context(int(problem_id), int(session["user_id"]))
-        if not bool(access.get("can_read")):
+        access = self.access_query.problem_context(int(problem_id), int(session["user_id"]))
+        if not access["can_read"]:
             raise LookupError("problem not found")
         safe_ttl = max(60, min(3600, int(ttl_sec)))
         request_id = f"ar-{secrets.token_hex(8)}"
@@ -380,7 +356,7 @@ class AgentService:
         if safe_decision == "deny":
             self._store.resolve_access_request(request_id=row["id"], status="denied", resolved_at=now_iso())
             return {"status": "denied"}
-        safe_scope = self._normalize_scope(scope)
+        safe_scope = self.access_query.canonical_agent_scope(scope)
         ttl_seconds: int | None
         if str(ttl or "").strip().lower() == "forever":
             ttl_seconds = None
@@ -483,8 +459,11 @@ class AgentService:
         session = self._store.session_by_id(token_row["agent_session_id"])
         if session is None or str(session.get("revoked_at") or ""):
             return None
-        acl_role = self._problem_acl_role(problem_id=int(token_row["problem_id"]), user_id=int(token_row["user_id"]))
-        effective_scope = self._effective_scope(str(token_row["scope"] or ""), acl_role)
+        effective_scope = self.access_query.effective_agent_scope(
+            token_scope=str(token_row["scope"] or ""),
+            problem_id=int(token_row["problem_id"]),
+            user_id=int(token_row["user_id"]),
+        )
         if not effective_scope:
             return None
         return AgentTokenIdentity(
@@ -504,7 +483,7 @@ class AgentService:
         identity = self.token_identity(raw_token)
         if identity is None:
             raise PermissionError("invalid bearer token")
-        safe_min_scope = self._normalize_scope(min_scope)
-        if not self._scope_allows(identity.effective_scope, safe_min_scope):
+        safe_min_scope = self.access_query.canonical_agent_scope(min_scope)
+        if not self.access_query.agent_scope_allows(identity.effective_scope, safe_min_scope):
             raise RuntimeError("token scope does not allow this operation")
         return identity

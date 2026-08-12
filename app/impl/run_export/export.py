@@ -176,6 +176,19 @@ def export_page(request: Request, problem: str, user: Annotated[str, Depends(req
         problem_id,
         limit=40,
     )
+    actor_user_id = int(ctx["user"]["id"])
+    problem_access = ctx["access"]
+    job_rows = [
+        row
+        for row in job_rows
+        if config.access_query.package_job_context(
+            actor_user_id=actor_user_id,
+            problem_id=problem_id,
+            job_actor_user_id=int(row["actor_user_id"]),
+            status=str(row["status"]),
+            problem_access=problem_access,
+        )["can_view"]
+    ]
     materialization_rows = config.problem_package_service.problem_materializations(
         problem_id,
         limit=40,
@@ -311,11 +324,11 @@ def export_create(problem: str, user: Annotated[str, Depends(require_session_use
     problem_id = int(problem_row["id"])
     actor_user_id = int(user_ctx["user"]["id"])
     access = workspace_access_context(problem_id, actor_user_id)
-    if not bool(access["can_write"]):
+    if not access["can_create_packages"]:
         return redirect_response(
             f'/problems/{problem}/export',
             status_code=303,
-            message=str(access["write_block_reason"]),
+            message=access["package_create_block_reason"],
         )
     requested_export_type = export_type.lower()
     if not requested_export_type:

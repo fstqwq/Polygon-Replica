@@ -29,15 +29,6 @@ def _normalize_contest_problem_idx_required(raw: object) -> str:
     return token
 
 
-def _normalize_transferable_contest_member_role_required(raw: object) -> str:
-    role = str(raw or "").strip().lower()
-    if role in {"write", "read"}:
-        return role
-    if role == "owner":
-        raise ValueError("owner access is fixed and cannot be transferred")
-    raise ValueError("invalid role")
-
-
 def _dedupe_preserve(values: list[str]) -> list[str]:
     result: list[str] = []
     seen: set[str] = set()

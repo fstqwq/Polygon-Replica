@@ -7,7 +7,7 @@
 <section class="content-section">
   <h2>Build Statements and Packages</h2>
   <p><strong>Problems in contest:</strong> {{ problem_count }}</p>
-  {% if not ctx.access.can_write %}
+  {% if not ctx.access.can_build %}
   <p class="muted">Write access required.</p>
   {% elif problem_count <= 0 %}
   <p class="muted">Add a problem to start.</p>

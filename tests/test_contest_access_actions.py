@@ -44,7 +44,7 @@ class TestContestAccessActions(ContestActionBase):
         bob = db_fetch_one("SELECT id FROM users WHERE username='bob'")
         self.assertIsNotNone(bob)
         self.assertTrue(
-            config.workspace_service.access_context(problem_id, int(bob["id"]))["can_write"]
+            config.access_query.problem_context(problem_id, int(bob["id"]))["can_write"]
         )
         self.assertIn(
             _problem_slug,
@@ -65,7 +65,7 @@ class TestContestAccessActions(ContestActionBase):
 
         self.assertEqual(response.status_code, 303)
         self.assertFalse(
-            config.workspace_service.access_context(problem_id, int(bob["id"]))["can_read"]
+            config.access_query.problem_context(problem_id, int(bob["id"]))["can_read"]
         )
         self.assertNotIn(
             _problem_slug,

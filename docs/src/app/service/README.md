@@ -8,7 +8,7 @@ composition, but do not depend on templates or route registration.
 
 Current packages:
 
-- [agent](agent/README.md), [auth](auth/README.md), [contest](contest/README.md)
+- [access](access/README.md), [agent](agent/README.md), [auth](auth/README.md), [contest](contest/README.md)
 - [disk](disk/README.md), [repository](repository/README.md), [workspace](workspace/README.md)
 - [problem](problem/README.md), [statement](statement/README.md), [execution](execution/README.md)
 - [verification](verification/README.md)

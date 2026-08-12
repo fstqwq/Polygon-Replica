@@ -39,13 +39,6 @@ class ContestProblemRecord(TypedDict):
     slug_leaf: str
 
 
-class ContestAvailableProblemRecord(TypedDict):
-    problem_id: int
-    problem_slug: str
-    slug_leaf: str
-    role: str
-
-
 class ContestProblemLookupRecord(TypedDict):
     id: int
     slug: str
@@ -242,15 +235,6 @@ class ContestDiskStore:
         )
         return None if row is None else dict(row)
 
-    def contest_role(self, contest_id: int, user_id: int) -> str | None:
-        row = self.db.fetch_one(
-            "SELECT role FROM contest_members WHERE contest_id=? AND user_id=?",
-            [int(contest_id), int(user_id)],
-        )
-        if row is None:
-            return None
-        return str(row["role"])
-
     def owner_count(self, contest_id: int) -> int:
         row = self.db.fetch_one(
             "SELECT COUNT(*) AS c FROM contest_members WHERE contest_id=? AND role='owner'",
@@ -314,12 +298,6 @@ class ContestDiskStore:
             [int(contest_id), username],
         )
         return None if row is None else dict(row)
-
-    def is_system_admin(self, user_id: int) -> bool:
-        row = self.db.fetch_one("SELECT is_system_admin FROM users WHERE id=?", [int(user_id)])
-        if row is None:
-            return False
-        return int(row["is_system_admin"] or 0) == 1
 
     def revoke_member(self, contest_id: int, user_id: int) -> None:
         self.db.execute(
@@ -440,56 +418,6 @@ class ContestDiskStore:
                     "created_at": str(row["created_at"] or ""),
                     "problem_slug": safe_slug,
                     "slug_leaf": problem_slug_leaf(safe_slug),
-                }
-            )
-        return items
-
-    def available_problem_rows(self, contest_id: int, user_id: int, *, limit: int) -> list[ContestAvailableProblemRecord]:
-        safe_contest_id = int(contest_id)
-        safe_user_id = int(user_id)
-        safe_limit = max(1, int(limit))
-        if self.is_system_admin(safe_user_id):
-            rows = self.db.fetch_all(
-                """
-                SELECT p.id AS problem_id,p.slug AS problem_slug,'admin' AS role
-                FROM problems p
-                WHERE p.id NOT IN (
-                    SELECT cp.problem_id
-                    FROM contest_problems cp
-                    WHERE cp.contest_id=?
-                )
-                ORDER BY p.slug ASC
-                LIMIT ?
-                """,
-                [safe_contest_id, safe_limit],
-            )
-        else:
-            rows = self.db.fetch_all(
-                """
-                SELECT p.id AS problem_id,p.slug AS problem_slug,a.role
-                FROM repo_acl a
-                JOIN problems p ON p.id=a.problem_id
-                WHERE a.user_id=?
-                  AND a.role IN ('owner','admin')
-                  AND p.id NOT IN (
-                      SELECT cp.problem_id
-                      FROM contest_problems cp
-                      WHERE cp.contest_id=?
-                  )
-                ORDER BY p.slug ASC
-                LIMIT ?
-                """,
-                [safe_user_id, safe_contest_id, safe_limit],
-            )
-        items: list[ContestAvailableProblemRecord] = []
-        for row in rows:
-            safe_slug = str(row["problem_slug"] or "")
-            items.append(
-                {
-                    "problem_id": int(row["problem_id"]),
-                    "problem_slug": safe_slug,
-                    "slug_leaf": problem_slug_leaf(safe_slug),
-                    "role": str(row["role"] or ""),
                 }
             )
         return items

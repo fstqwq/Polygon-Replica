@@ -657,20 +657,13 @@ def build_run_detail_context(
         if verification_snapshot is not None
         else None
     )
-    verification_workspace_id = (
-        verification_record["workspace_id"]
-        if verification_record is not None
-        else None
+    verification_access = config.access_query.verification_context(
+        actor_user_id=int(ctx["user"]["id"]),
+        actor_workspace_id=workspace_id,
+        expected_problem_id=problem_id,
+        verification=verification_record,
     )
-    verification_visible = bool(
-        verification_record is not None
-        and int(verification_record["problem_id"] or 0) == problem_id
-    )
-    owns_verification = bool(
-        verification_visible
-        and verification_workspace_id is not None
-        and int(verification_workspace_id) == workspace_id
-    )
+    verification_visible = verification_access["can_view"]
     if verification_visible and verification_record is not None:
         task_rows = cast(
             list[VerificationTaskRow],
@@ -1892,18 +1885,23 @@ def build_run_detail_context(
 
     return {
         'verification_id': verification_id,
-        'owns_verification': owns_verification,
+        'owns_verification': verification_access["owns_verification"],
+        'can_rejudge': verification_access["can_rejudge"],
+        'rejudge_block_reason': verification_access["rejudge_block_reason"],
+        'can_cancel': verification_access["can_cancel"],
         'cancel_disabled_reason': (
-            'You are not the owner of this verification'
-            if verification_visible and not owns_verification and bool(status_summary['has_running'])
+            verification_access["cancel_block_reason"]
+            if verification_visible and not verification_access["can_cancel"] and bool(status_summary['has_running'])
             else ''
         ),
         'verification_scope_notice': (
             'Published verification \u00b7 the original record is read-only'
-            if verification_visible and verification_workspace_id is None
+            if verification_visible
+            and verification_record is not None
+            and verification_record["workspace_id"] is None
             else (
                 'Verification from another workspace \u00b7 the original record is read-only'
-                if verification_visible and not owns_verification
+                if verification_visible and not verification_access["owns_verification"]
                 else ''
             )
         ),

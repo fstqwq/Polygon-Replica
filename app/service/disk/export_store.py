@@ -112,19 +112,13 @@ class ExportStore:
     def export_job(
         self,
         problem_id: int,
-        actor_user_id: int,
         job_id: str,
-        *,
-        include_all: bool = False,
     ) -> ExportJobRow | None:
-        actor_clause = "" if include_all else "AND (j.actor_user_id=? OR j.status='succeeded')"
         params: list[object] = [job_id, int(problem_id)]
-        if not include_all:
-            params.append(int(actor_user_id))
         row = self.db.fetch_one(
-            f"""SELECT j.*,e.filename,e.sha256,e.size_bytes
+            """SELECT j.*,e.filename,e.sha256,e.size_bytes
                FROM export_jobs j LEFT JOIN exports e ON e.id=j.export_id
-               WHERE j.id=? AND j.problem_id=? {actor_clause}""",
+               WHERE j.id=? AND j.problem_id=?""",
             params,
         )
         return None if row is None else _job_row(row)
@@ -210,6 +204,13 @@ class ExportStore:
             "sha256": str(row["sha256"]),
             "size_bytes": int(row["size_bytes"]),
         }
+
+    def export_problem(self, export_id: str) -> dict[str, object] | None:
+        row = self.db.fetch_one(
+            "SELECT id,problem_id FROM exports WHERE id=?",
+            [export_id],
+        )
+        return None if row is None else dict(row)
 
     def workspace_export_context(self, workspace_id: int) -> WorkspaceSnapshotContext | None:
         row = self.db.fetch_one(

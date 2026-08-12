@@ -5,20 +5,8 @@ from typing import TypedDict
 from fastapi import HTTPException
 
 from app.impl.runtime.config import config
+from app.service.access.model import ProblemAccessContext
 
-
-WorkspaceAccessContext = TypedDict(
-    "WorkspaceAccessContext",
-    {
-        "role": str,
-        "can_read": bool,
-        "can_write": bool,
-        "can_manage": bool,
-        "read_block_reason": str,
-        "write_block_reason": str,
-        "manage_block_reason": str,
-    },
-)
 
 ProblemAclEntry = TypedDict(
     "ProblemAclEntry",
@@ -41,23 +29,14 @@ UserContext = TypedDict(
 PageContext = TypedDict(
     "PageContext",
     {
-        "access": WorkspaceAccessContext,
+        "access": ProblemAccessContext,
         "user": UserContext,
     },
 )
 
 
-def workspace_access_context(problem_id: int, user_id: int) -> WorkspaceAccessContext:
-    return config.workspace_service.access_context(problem_id, user_id)
-
-def normalize_transferable_repo_role(raw: str) -> str:
-    role = raw.strip().lower()
-    if role in {"write", "read"}:
-        return role
-    if role == "owner":
-        raise ValueError("owner access is fixed and cannot be transferred")
-    raise ValueError("invalid role")
-
+def workspace_access_context(problem_id: int, user_id: int) -> ProblemAccessContext:
+    return config.access_query.problem_context(problem_id, user_id)
 
 def problem_owner_count(problem_id: int) -> int:
     return config.workspace_service.owner_count(problem_id)
@@ -91,7 +70,7 @@ def require_manage_access(ctx: PageContext) -> None:
 def is_system_admin_user_id(user_id: int) -> bool:
     if user_id <= 0:
         return False
-    return config.workspace_service.user_is_system_admin(user_id)
+    return config.access_query.is_system_admin(user_id)
 
 
 def require_system_admin(ctx: PageContext) -> None:

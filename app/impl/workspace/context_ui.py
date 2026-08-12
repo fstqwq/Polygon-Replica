@@ -98,6 +98,11 @@ def page_ctx(
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=str(exc))
     ctx['access'] = access
+    ctx['workspace_access'] = config.access_query.workspace_context(
+        problem_id=problem_id,
+        actor_user_id=user_id,
+        workspace_id=int(ctx['workspace']['id']),
+    )
     ctx['branches'] = ['main']
     ctx['branches_truncated'] = False
     ctx['branch_limit'] = 1

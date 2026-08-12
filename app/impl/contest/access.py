@@ -12,9 +12,9 @@ from fastapi import Depends, Form, HTTPException, Request
 
 from app.impl.auth.session import require_session_user
 from app.impl.auth.shared import template_response
-from app.impl.contest.common import _normalize_transferable_contest_member_role_required
 from app.impl.contest.shared import _contest_ctx, _contest_redirect
 from app.impl.runtime.config import config
+from app.service.access.policy import transferable_contest_role
 
 
 def contest_access_page(
@@ -47,7 +47,7 @@ def contest_access_grant(
     contest_id = int(ctx["contest"]["id"])
     safe_target = target_user.strip()
     try:
-        safe_role = _normalize_transferable_contest_member_role_required(role)
+        safe_role = transferable_contest_role(role)
         if not config.contest_service.grant_member_role(contest_id, safe_target, safe_role):
             return _contest_redirect(
                 str(ctx["contest"]["slug"]),

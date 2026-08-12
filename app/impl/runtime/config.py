@@ -7,6 +7,7 @@ from fastapi.templating import Jinja2Templates
 from app.db import DB, SchemaRequirementsError
 from app.config import ConfigValues, build_config_values
 from app.service.auth.service import AuthService
+from app.service.access.query import AccessQuery
 from app.service.agent.service import AgentService
 from app.service.contest.service import ContestService
 from app.service.platform.fs.layout import StorageLayout
@@ -56,6 +57,7 @@ class RuntimeConfig:
     db: DB = field(init=False)
     schema_error: SchemaRequirementsError | None = field(init=False, default=None)
     workspace_service: workspace.WorkspaceService = field(init=False)
+    access_query: AccessQuery = field(init=False)
     auth_service: AuthService = field(init=False)
     agent_service: AgentService = field(init=False)
     contest_service: ContestService = field(init=False)
@@ -168,16 +170,19 @@ class RuntimeConfig:
             config_values=self.config_values,
         )
         self.runtime_state_service = RuntimeStateService(self.db, RuntimeStateStore(self.db))
+        self.access_query = AccessQuery(self.db)
         self.workspace_service = workspace.WorkspaceService(
             self.db,
             self.storage_layout,
+            access_query=self.access_query,
             verification_task_store=self.verification_task_store,
             config_values=self.config_values,
         )
-        self.agent_service = AgentService(self.db, self.workspace_service)
+        self.agent_service = AgentService(self.db, self.workspace_service, self.access_query)
         self.contest_service = ContestService(
             self.db,
             self.storage_layout,
+            access_query=self.access_query,
             config_values=self.config_values,
         )
         self.git_service = GitService()

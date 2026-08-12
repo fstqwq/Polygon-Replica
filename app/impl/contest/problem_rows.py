@@ -104,7 +104,7 @@ def _contest_problem_rows(
 ) -> list[ContestProblemDisplayRow]:
     config_snapshot = _C.snapshot()
     rows = config.contest_service.contest_problems(contest_id)
-    access_by_problem = config.workspace_service.access_contexts(
+    access_by_problem = config.access_query.problem_contexts(
         [row["problem_id"] for row in rows],
         user_id,
     )

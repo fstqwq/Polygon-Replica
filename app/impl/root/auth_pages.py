@@ -98,7 +98,7 @@ def _is_system_admin_auth_row(row: dict[str, object] | None) -> bool:
         user_id = int(row["id"])
     except Exception:
         return False
-    return config.workspace_service.user_is_system_admin(user_id)
+    return config.access_query.is_system_admin(user_id)
 
 
 def _normalize_registration_email(value: str) -> tuple[str, str]:

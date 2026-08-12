@@ -16,7 +16,7 @@ def _template_user(user: dict[str, object]) -> dict[str, object]:
     return {
         "id": user_id,
         "username": str(user["username"]),
-        "is_system_admin": int(config.workspace_service.user_is_system_admin(user_id)),
+        "is_system_admin": int(config.access_query.is_system_admin(user_id)),
     }
 
 

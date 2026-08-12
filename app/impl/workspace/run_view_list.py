@@ -7,6 +7,7 @@ from pathlib import Path
 
 from app.impl.auth.shared import parse_iso_utc
 from app.impl.runtime.config import config
+from app.service.access.model import VerificationAccessContext
 from app.service.repository.revision import verification_source_display
 from app.service.platform.error_text import bounded_display_text, normalize_display_text
 from app.service.problem.solution_metadata import normalize_expected_behavior
@@ -142,7 +143,11 @@ def _list_reason_display(raw: object) -> tuple[str, str]:
     return (display_text, title_text)
 
 
-def _verification_row_to_list_item(row: dict[str, object]) -> dict[str, object] | None:
+def _verification_row_to_list_item(
+    row: dict[str, object],
+    *,
+    access: VerificationAccessContext,
+) -> dict[str, object] | None:
     verification_id = str(row.get("id") or "")
     if not verification_id:
         return None
@@ -161,6 +166,8 @@ def _verification_row_to_list_item(row: dict[str, object]) -> dict[str, object] 
     elif status == "ok" and sanity_status == "failed":
         status_display = "ok (sanity failed)"
     published = row.get("workspace_id") is None
+    if not access["can_view"]:
+        return None
     return {
         "index": 0,
         "id": verification_id,
@@ -179,17 +186,21 @@ def _verification_row_to_list_item(row: dict[str, object]) -> dict[str, object] 
         "is_failed": status == "failed",
         "is_cancelled": status == "cancelled",
         "published": published,
-        "owns_verification": not published,
+        "owns_verification": access["owns_verification"],
+        "can_rejudge": access["can_rejudge"],
+        "rejudge_block_reason": access["rejudge_block_reason"],
+        "can_cancel": access["can_cancel"],
         "cancel_disabled_reason": (
-            "You are not the owner of this verification"
-            if published and status == "running"
+            access["cancel_block_reason"]
+            if not access["can_cancel"] and status == "running"
             else ""
         ),
     }
 
 
 def run_list_rows(problem_id: int, workspace_id: int, workspace: Path, limit: int = 40, actor_user_id: int | None = None) -> list[dict]:
-    _ = actor_user_id
+    if actor_user_id is None:
+        raise ValueError("actor_user_id is required")
     limit_cap = max(1, int(limit))
     result: list[dict[str, object]] = []
     seen_ids: set[str] = set()
@@ -200,8 +211,19 @@ def run_list_rows(problem_id: int, workspace_id: int, workspace: Path, limit: in
         limit=max(limit_cap * 2, 80),
         kinds=("all", "sample", "custom"),
     )
-    for row in verification_rows:
-        item = _verification_row_to_list_item(row)
+    problem_access = config.access_query.problem_context(problem_id, actor_user_id)
+    access_contexts = config.access_query.verification_contexts(
+        actor_user_id=actor_user_id,
+        actor_workspace_id=workspace_id,
+        expected_problem_id=problem_id,
+        verifications=verification_rows,
+        problem_access=problem_access,
+    )
+    for row, access in zip(verification_rows, access_contexts, strict=True):
+        item = _verification_row_to_list_item(
+            row,
+            access=access,
+        )
         if item is None:
             continue
         item["source_display"] = verification_source_display(

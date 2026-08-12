@@ -164,17 +164,15 @@ class ExportService:
     def export_job(
         self,
         problem_id: int,
-        actor_user_id: int,
         job_id: str,
-        *,
-        include_all: bool = False,
     ) -> ExportJobRow | None:
         return self._store.export_job(
             int(problem_id),
-            int(actor_user_id),
             job_id,
-            include_all=include_all,
         )
+
+    def export_problem(self, export_id: str) -> dict[str, object] | None:
+        return self._store.export_problem(export_id)
 
     def create_export_job(
         self,

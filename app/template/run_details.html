@@ -32,12 +32,12 @@
           {% endif %}
         {% endif %}
       </div>
-      {% if detail_last_updated or cancel_available or cancel_disabled_reason or (rerun_solution_paths and not detail_running) %}
+      {% if detail_last_updated or cancel_available or cancel_disabled_reason or (rerun_solution_paths and not detail_running) or (rejudge_block_reason and not detail_running) %}
       <div class="verification-task-status-tools">
         {% if detail_last_updated %}
         <div class="muted verification-detail-meta">Last&nbsp;updated:&nbsp;{{ (detail_last_updated | local_time) | replace(' ', '&nbsp;') | safe }}</div>
         {% endif %}
-        {% if cancel_available or cancel_disabled_reason or (rerun_solution_paths and not detail_running) %}
+        {% if cancel_available or cancel_disabled_reason or (rerun_solution_paths and not detail_running) or (rejudge_block_reason and not detail_running) %}
         <div class="verification-detail-actions">
           {% if cancel_available %}
           <form class="inline-form verification-inline-action" method="post" action="{{ problem_href('run_cancel') }}">
@@ -47,7 +47,7 @@
           {% elif cancel_disabled_reason %}
           <span class="muted" title="{{ cancel_disabled_reason }}">Cancel disabled ({{ cancel_disabled_reason }})</span>
           {% endif %}
-          {% if rerun_solution_paths and not detail_running %}
+          {% if can_rejudge and rerun_solution_paths and not detail_running %}
           <form
             class="inline-form verification-inline-action"
             method="post"
@@ -57,6 +57,8 @@
             <input type="hidden" name="verification_id" value="{{ cancel_verification_id }}" />
             <a href="#" class="linkish danger-link" data-submit-form="1">Rejudge Without Cache</a>
           </form>
+          {% elif rejudge_block_reason and not detail_running %}
+          <span class="muted" title="{{ rejudge_block_reason }}">Rejudge disabled</span>
           {% endif %}
         </div>
         {% endif %}

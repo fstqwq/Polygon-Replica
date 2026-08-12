@@ -10,6 +10,7 @@ from pathlib import Path
 from app.config import build_config_values
 from app.db import DB
 from app.service.platform.fs.layout import StorageLayout
+from app.service.access.query import AccessQuery
 from app.service.platform.runtime_blob_store import RuntimeBlobStore
 from app.service.platform.runtime_cache_index import RuntimeCacheIndex
 from app.service.repository.workspace import WorkspaceService
@@ -81,9 +82,11 @@ class DBTestBase(unittest.TestCase):
         self.config_values = build_config_values()
         self.db = DB(_DB_PATH, config_values=self.config_values)
         self.verification_task_store = VerificationTaskStore(self.db)
+        self.access_query = AccessQuery(self.db)
         self.workspace_service = WorkspaceService(
             self.db,
             self.storage_layout,
+            access_query=self.access_query,
             verification_task_store=self.verification_task_store,
             config_values=self.config_values,
         )

@@ -558,16 +558,16 @@ async def agent_export_start(request: Request):
 
 async def agent_export_status(request: Request, job_id: str):
     identity = require_agent_token(request, min_scope="readonly")
-    access = config.workspace_service.access_context(
-        int(identity.problem_id), int(identity.user_id)
-    )
     job = config.export_service.export_job(
         int(identity.problem_id),
-        int(identity.user_id),
         job_id,
-        include_all=bool(access["can_manage"]),
     )
-    if job is None:
+    if job is None or not config.access_query.package_job_context(
+        actor_user_id=int(identity.user_id),
+        problem_id=int(identity.problem_id),
+        job_actor_user_id=int(job["actor_user_id"]),
+        status=str(job["status"]),
+    )["can_view"]:
         return json_error_response("export not found", status_code=404)
     status = str(job.get("status") or "")
     payload: dict[str, object] = {
@@ -588,16 +588,19 @@ async def agent_export_status(request: Request, job_id: str):
 
 async def agent_export_download(request: Request, job_id: str):
     identity = require_agent_token(request, min_scope="readonly")
-    access = config.workspace_service.access_context(
-        int(identity.problem_id), int(identity.user_id)
-    )
     job = config.export_service.export_job(
         int(identity.problem_id),
-        int(identity.user_id),
         job_id,
-        include_all=bool(access["can_manage"]),
     )
-    if job is None or str(job.get("status") or "") != "succeeded":
+    if job is None:
+        return json_error_response("export not ready", status_code=404)
+    access = config.access_query.package_job_context(
+        actor_user_id=int(identity.user_id),
+        problem_id=int(identity.problem_id),
+        job_actor_user_id=int(job["actor_user_id"]),
+        status=str(job["status"]),
+    )
+    if not access["can_download"]:
         return json_error_response("export not ready", status_code=404)
     artifact_id = str(job.get("export_id") or "")
     filename = str(job.get("filename") or "")

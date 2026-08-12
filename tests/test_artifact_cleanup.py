@@ -23,6 +23,7 @@ from app.service.platform.runtime_blob_store import RuntimeBlobStore
 from app.service.platform.runtime_cache_index import RuntimeCacheIndex
 from app.service.platform.source_backup import SourceBackupService
 from app.service.repository.workspace import WorkspaceService
+from app.service.access.query import AccessQuery
 from app.service.execution.codec import execution_result_json
 from app.service.execution.policy import normalize_execution_result
 from app.service.verification.task_store import VerificationTaskStore
@@ -87,8 +88,10 @@ class TestArtifactCleanup(unittest.TestCase):
         self.db = DB(self.settings.db_path, config_values=self.config_values)
         self.db.init()
         self.verification_task_store = VerificationTaskStore(self.db)
+        self.access_query = AccessQuery(self.db)
         self.workspace_service = WorkspaceService(
             self.db, self.storage_layout,
+            access_query=self.access_query,
             verification_task_store=self.verification_task_store, config_values=self.config_values,
         )
         self.workspace_service.ensure_problem("admin/sample")

@@ -145,7 +145,7 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         self.assertEqual(root_page.status_code, 200)
         root_html = root_page.body.decode("utf-8", errors="replace")
         self.assertIn(problem, root_html)
-        admin_access = workspace_service.access_context(
+        admin_access = config.access_query.problem_context(
             workspace_service.known_problem_id(problem),
             workspace_service.known_user_id("alice"),
         )

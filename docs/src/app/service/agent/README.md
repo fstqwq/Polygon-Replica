@@ -2,9 +2,9 @@
 
 Owns agent registration codes, desktop identities and sessions, problem access
 requests, scoped tokens, and token authentication. Its inputs are a registered
-agent identity, a user-approved problem and scope, and the current repository
-ACL. It returns session/access status or a canonical token identity for HTTP
-handlers.
+agent identity, a user-approved problem and scope, and the current effective
+problem access. It returns session/access status or a canonical token identity
+for HTTP handlers.
 
 Registration codes, sessions, requests, and tokens are durable in the
 `agent_*` tables. Tokens expire or can be revoked; disconnecting a session

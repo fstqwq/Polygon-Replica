@@ -285,7 +285,7 @@ def resolve_problem_contest_scope(
     if contest is None:
         raise HTTPException(status_code=404, detail="contest not found")
     contest_id = int(contest["id"])
-    contest_access = config.contest_service.access_context(contest_id, user_id)
+    contest_access = config.access_query.contest_context(contest_id, user_id)
     if not contest_access["can_read"]:
         raise HTTPException(
             status_code=403,
@@ -301,7 +301,7 @@ def resolve_problem_contest_scope(
         raise HTTPException(status_code=404, detail="problem is not part of this contest")
 
     problem_ids = [int(row["problem_id"]) for row in contest_problems]
-    access_by_problem = config.workspace_service.access_contexts(problem_ids, user_id)
+    access_by_problem = config.access_query.problem_contexts(problem_ids, user_id)
     active_access = access_by_problem[problem_id]
     if not bool(active_access["can_read"]):
         raise HTTPException(

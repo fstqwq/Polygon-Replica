@@ -43,6 +43,7 @@ from app.service.problem.test_spec import (
     summarize_tests_spec,
 )
 from app.service.repository.revision import workspace_upstream_revision_display
+from app.service.access.policy import access_role
 from app.service.verification.runtime import coerce_int
 
 _C = config.config_values
@@ -63,7 +64,7 @@ def user_participating_problems(user_id: int, limit: int) -> list[dict]:
     rows = config.workspace_service.participating_problem_rows(uid, limit=cap)
     items: list[dict] = []
     for row in rows:
-        role = normalize_contest_role(row['role'])
+        role = access_role(row['role'])
         head = row['head_commit']
         if head is None:
             head = ''
@@ -83,11 +84,6 @@ def user_participating_problems(user_id: int, limit: int) -> list[dict]:
         revision_display = _db_revision_display(revision_local, revision_upstream)
         items.append({'slug': row['slug'], 'role': role, 'workspace_id': row['workspace_id'], 'has_workspace': row['workspace_id'] is not None, 'workspace_path': workspace_path, 'branch': branch, 'head_commit': head, 'head_short': head[:8], 'dirty': dirty, 'revision_local': revision_local, 'revision_upstream': revision_upstream, 'revision_display': revision_display, 'revision_highlight': bool(row['revision_highlight']), 'revision_upstream_higher': bool(row['revision_upstream_higher']), 'revision_missing': bool(row['revision_missing']), 'updated_at': row['updated_at'], 'last_updated_at': row['last_updated_at']})
     return items
-
-def normalize_contest_role(raw: str | None) -> str:
-    if raw in {'admin', 'owner', 'write', 'read'}:
-        return raw
-    return 'read'
 
 def normalize_contest_slug_required(value: str) -> str:
     slug = value.strip()

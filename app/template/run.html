@@ -54,7 +54,7 @@
     </td>
     <td class="verification-actions">
       <a href="{{ problem_href('run_details_page', query={'verification_id': r.id}) }}">View</a>
-      {% if r.owns_verification and r.has_running %}
+      {% if r.can_cancel and r.has_running %}
       <form class="inline-form verification-inline-action" method="post" action="{{ problem_href('run_cancel') }}">
         <input type="hidden" name="verification_id" value="{{ r.id }}" />
         <a href="#" class="linkish danger-link" data-submit-form="1">Cancel</a>
@@ -62,7 +62,7 @@
       {% elif r.cancel_disabled_reason %}
       <span class="muted" title="{{ r.cancel_disabled_reason }}">Cancel disabled ({{ r.cancel_disabled_reason }})</span>
       {% endif %}
-      {% if not r.has_running %}
+      {% if r.can_rejudge and not r.has_running %}
       <form
         class="inline-form verification-inline-action"
         method="post"
@@ -72,6 +72,8 @@
         <input type="hidden" name="verification_id" value="{{ r.id }}" />
         <a href="#" class="linkish danger-link" data-submit-form="1">Rejudge Without Cache</a>
       </form>
+      {% elif not r.has_running and r.rejudge_block_reason %}
+      <span class="muted" title="{{ r.rejudge_block_reason }}">Rejudge disabled</span>
       {% endif %}
     </td>
   </tr>

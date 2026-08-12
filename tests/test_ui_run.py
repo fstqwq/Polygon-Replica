@@ -5983,7 +5983,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             f"/problems/alice/sample/packages/{materialization_id}/native.zip",
             html,
         )
-        self.assertIn("package failed for alice", html)
+        self.assertNotIn("package failed for alice", html)
         materialization = config.problem_package_service.materialization(
             materialization_id
         )

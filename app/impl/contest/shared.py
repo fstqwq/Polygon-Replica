@@ -12,7 +12,6 @@ from app.main_util import problem_slug_leaf
 from app.impl.auth.shared import redirect_response
 from app.impl.runtime.config import config
 from app.impl.contest.common import _contest_problem_slug_file_token
-from app.impl.workspace.access import workspace_access_context
 from app.impl.workspace.context_operation import normalize_contest_slug_required
 from app.impl.workspace.context import global_user_ctx
 from app.impl.workspace.published_materialization import ensure_published_materialization
@@ -104,7 +103,10 @@ def _contest_ctx(contest_slug: str, user: str, active_page: str) -> dict:
     contest_row = config.contest_service.contest_context(safe_slug)
     if contest_row is None:
         raise HTTPException(status_code=404, detail="contest not found")
-    access = config.contest_service.access_context(int(contest_row["id"]), int(gctx["user"]["id"]))
+    access = config.access_query.contest_context(
+        int(contest_row["id"]),
+        int(gctx["user"]["id"]),
+    )
     if not access.get("can_read"):
         read_block_reason = access.get("read_block_reason")
         raise HTTPException(
@@ -695,9 +697,12 @@ def _run_problem_general_update(
         "commit_id": "",
         "error": "",
     }
-    problem_access = workspace_access_context(int(problem_id), int(actor_user_id))
-    if not bool(problem_access.get("can_write")):
-        result["error"] = "write access to problem is required"
+    problem_access = config.access_query.problem_context(
+        problem_id,
+        actor_user_id,
+    )
+    if not problem_access["can_write"]:
+        result["error"] = problem_access["write_block_reason"]
         return result
     try:
         workspace = Path(config.workspace_service.ensure_workspace(problem_slug, actor_username, refresh_status=True))
