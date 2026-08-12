@@ -217,6 +217,8 @@ def clear_startup_recovery_abort_fault() -> None:
 import app.impl.auth.password_envelope as password_envelope_module  # noqa: E402
 from app.config import ConfigValues  # noqa: E402
 from app.impl.auth.password_envelope import PasswordEnvelopeStore  # noqa: E402
+from app.impl.runtime.dependency import bind_application  # noqa: E402
+from app.main import app  # noqa: E402
 from app.service.platform.testlib_source import maintained_testlib_header  # noqa: E402
 from cryptography.hazmat.primitives.asymmetric import rsa  # noqa: E402
 
@@ -346,6 +348,9 @@ class RuntimeDBTestBase(unittest.TestCase):
     """Database reset shared by fixtures that use the global runtime graph."""
 
     def setUp(self) -> None:
+        runtime_binding = bind_application(app)
+        runtime_binding.__enter__()
+        self.addCleanup(runtime_binding.__exit__, None, None, None)
         _restore_database_template()
         self.test_id = uuid.uuid4().hex[:8]
         self.user = self.random_id("alice")
