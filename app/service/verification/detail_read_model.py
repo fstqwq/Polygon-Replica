@@ -97,7 +97,10 @@ def _program_rows(
         run_config = {}
     if not isinstance(run_config, dict):
         run_config = {}
-    run_config = {**run_config, "mode": mode, "pass_limit": pass_limit}
+    if mode in {"pass-fail", "interactive"}:
+        run_config = {**run_config, "mode": mode, "pass_limit": pass_limit}
+    else:
+        run_config = {}
     grouped: dict[str, list[VerificationTaskRow]] = {}
     for row in rows:
         if row["task_kind"] not in _SOLUTION_TASK_KINDS:
@@ -180,7 +183,6 @@ def _program_rows(
             "source": first["source_path"],
             "task_kind": first["task_kind"],
             "expected_behavior": first["expected_behavior"],
-            "run_config": run_config,
             "tests_total": len(program_tasks),
             "tests": tests,
             "compile_log": compile_log,
@@ -194,6 +196,8 @@ def _program_rows(
                 "memory_kb_peak": max_memory_kb,
             },
         }
+        if run_config:
+            summary["run_config"] = run_config
         if any(
             row["status"] == VerificationTaskStatus.CANCELLED
             for row in program_tasks
