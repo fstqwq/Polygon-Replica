@@ -808,6 +808,12 @@ class TestPublishedRevisionExport(E2ETestBase):
             workspace_id=int(context["workspace"]["id"]),
         )
         try:
+            self.assertTrue(
+                archive.is_relative_to(runtime.storage_layout.cache_root)
+            )
+            self.assertFalse(
+                archive.is_relative_to(runtime.storage_layout.artifacts_root)
+            )
             with tempfile.TemporaryDirectory(prefix="snapshot-roundtrip-") as temp:
                 restored = Path(temp) / "workspace"
                 restored.mkdir()

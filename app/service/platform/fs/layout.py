@@ -109,8 +109,8 @@ class StorageLayout:
         return self.artifacts_root / "materializations"
 
     @property
-    def export_snapshot_root(self) -> Path:
-        return self.artifacts_root / "snapshots"
+    def workspace_snapshot_download_root(self) -> Path:
+        return self.snapshot_root / "downloads"
 
     @property
     def contest_artifact_root(self) -> Path:
@@ -192,12 +192,12 @@ class StorageLayout:
             field_name="snapshot_id",
         )
 
-    def export_snapshot(self, snapshot_id: str) -> Path:
-        token = self._normalize_token(snapshot_id, field_name="export_snapshot_id")
+    def workspace_snapshot_download(self, snapshot_id: str) -> Path:
+        token = self._normalize_token(snapshot_id, field_name="snapshot_download_id")
         return self._safe_relative(
-            self.export_snapshot_root,
+            self.workspace_snapshot_download_root,
             token,
-            field_name="export_snapshot_id",
+            field_name="snapshot_download_id",
         )
 
     def materialization_revision_archive(

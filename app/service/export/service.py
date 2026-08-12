@@ -799,9 +799,9 @@ class ExportService:
         problem_row = self._store.problem_export_row(problem)
         if problem_row is None:
             raise ValueError(f"unknown problem: {problem}")
-        snapshots_root = self.storage_layout.export_snapshot_root
+        snapshots_root = self.storage_layout.workspace_snapshot_download_root
         snapshots_root.mkdir(parents=True, exist_ok=True)
-        tmp_parent = self.storage_layout.export_snapshot(
+        tmp_parent = self.storage_layout.workspace_snapshot_download(
             f"snap-{uuid.uuid4().hex[:12]}"
         )
         tmp_root = tmp_parent / "work"
