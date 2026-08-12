@@ -15,9 +15,14 @@ from app.db import DB, now_iso
 from app.config import build_config_values
 from app.service.judgehost.task_registry import JudgehostTaskRegistry
 from app.service.platform.fs.layout import StorageLayout
-from app.service.platform.maintenance import (
-    ArtifactCleanupService,
-    MaintenanceCoordinator,
+from app.service.platform.maintenance.admission import MaintenanceAdmissionGate
+from app.service.platform.maintenance.artifact import ArtifactCleanupService
+from app.service.platform.maintenance.coordinator import MaintenanceCoordinator
+from app.service.platform.maintenance.database import ArtifactCleanupDatabase
+from app.service.platform.maintenance.filesystem import ArtifactCleanupFilesystem
+from app.service.platform.maintenance.plan import (
+    ARTIFACT_TABLES,
+    CLEANUP_FILESYSTEM_CLASSES,
 )
 from app.service.platform.runtime_blob_store import RuntimeBlobStore
 from app.service.platform.runtime_cache_index import RuntimeCacheIndex
@@ -120,9 +125,16 @@ class TestArtifactCleanup(unittest.TestCase):
         self.worker_queue = _WorkerQueueStub()
         self.judgehost = _JudgehostStub()
         self.process_reset_count = 0
-        self.cleanup = ArtifactCleanupService(
+        self.cleanup_database = ArtifactCleanupDatabase(
             self.db,
+            self.storage_layout.database_path,
+        )
+        self.cleanup_filesystem = ArtifactCleanupFilesystem(
             self.storage_layout,
+        )
+        self.cleanup = ArtifactCleanupService(
+            self.cleanup_database,
+            self.cleanup_filesystem,
             self.runtime_cache_index,
             self.runtime_blob_store,
             self.worker_queue,
@@ -131,6 +143,16 @@ class TestArtifactCleanup(unittest.TestCase):
             self._reset_process_tracking,
         )
         self.source_backup = SourceBackupService(self.storage_layout)
+
+    def _coordinator(self) -> MaintenanceCoordinator:
+        self.maintenance_gate = MaintenanceAdmissionGate()
+        return MaintenanceCoordinator(
+            admission_gate=self.maintenance_gate,
+            cleanup_service=self.cleanup,
+            source_backup_service=self.source_backup,
+            worker_queue_service=self.worker_queue,
+            judgehost_task_service=self.judgehost,
+        )
 
     def _reset_process_tracking(self) -> None:
         self.process_reset_count += 1
@@ -431,16 +453,11 @@ class TestArtifactCleanup(unittest.TestCase):
         durable_files = self._seed_generated_data()
         with isolated_db_connection(self.db) as connection:
             connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-        coordinator = MaintenanceCoordinator(
-            self.cleanup,
-            self.worker_queue,
-            self.judgehost,
-            self.source_backup,
-        )
+        coordinator = self._coordinator()
 
         started = coordinator.start_cleanup(actor_user_id=self.actor_user_id)
         self.assertTrue(started.accepted, started.reason)
-        self.assertFalse(coordinator.allow_new_work())
+        self.assertFalse(self.maintenance_gate.is_open())
         worker = coordinator._worker
         self.assertIsNotNone(worker)
         assert worker is not None
@@ -448,7 +465,7 @@ class TestArtifactCleanup(unittest.TestCase):
         self.assertFalse(worker.is_alive())
         snapshot = coordinator.snapshot()
         self.assertEqual(snapshot["status"], "succeeded")
-        self.assertTrue(coordinator.allow_new_work())
+        self.assertTrue(self.maintenance_gate.is_open())
 
         for table in (
             "previews",
@@ -524,7 +541,7 @@ class TestArtifactCleanup(unittest.TestCase):
             "_install_sql_trace",
             side_effect=install_trace,
         ):
-            counts = self.cleanup._delete_metadata()
+            counts = self.cleanup_database.reset_tables(ARTIFACT_TABLES)
 
         statements = [" ".join(sql.upper().split()) for sql in traced_sql]
         self.assertIn("PRAGMA FOREIGN_KEYS=OFF", statements)
@@ -565,11 +582,11 @@ class TestArtifactCleanup(unittest.TestCase):
         self._seed_generated_data()
 
         with patch(
-            "app.service.platform.maintenance.current_schema_statements_for_tables",
+            "app.service.platform.maintenance.database.current_schema_statements_for_tables",
             return_value=("CREATE TABLE invalid schema",),
         ):
             with self.assertRaisesRegex(sqlite3.OperationalError, "syntax"):
-                self.cleanup._delete_metadata()
+                self.cleanup_database.reset_tables(ARTIFACT_TABLES)
 
         self.assertEqual(self._count("verification_tasks"), 1)
         self.assertEqual(self._count("verifications"), 1)
@@ -581,16 +598,11 @@ class TestArtifactCleanup(unittest.TestCase):
             )
 
     def test_busy_check_reopens_admission(self) -> None:
-        coordinator = MaintenanceCoordinator(
-            self.cleanup,
-            self.worker_queue,
-            self.judgehost,
-            self.source_backup,
-        )
+        coordinator = self._coordinator()
         self.worker_queue.queued = 1
         self.judgehost.reporting = 2
         self.judgehost.callbacks = 1
-        self.assertTrue(coordinator.enter_request())
+        self.assertTrue(self.maintenance_gate.enter_request())
 
         started = coordinator.start_cleanup(actor_user_id=self.actor_user_id)
 
@@ -600,16 +612,11 @@ class TestArtifactCleanup(unittest.TestCase):
         self.assertEqual(started.busy["judgehost_reporting"], 2)
         self.assertEqual(started.busy["judgehost_callbacks"], 1)
         self.assertEqual(started.busy["inflight_requests"], 1)
-        self.assertTrue(coordinator.allow_new_work())
-        coordinator.leave_request()
+        self.assertTrue(self.maintenance_gate.is_open())
+        self.maintenance_gate.leave_request()
 
     def test_busy_count_failure_reopens_admission(self) -> None:
-        coordinator = MaintenanceCoordinator(
-            self.cleanup,
-            self.worker_queue,
-            self.judgehost,
-            self.source_backup,
-        )
+        coordinator = self._coordinator()
 
         with patch.object(
             self.worker_queue,
@@ -620,7 +627,7 @@ class TestArtifactCleanup(unittest.TestCase):
 
         self.assertFalse(started.accepted)
         self.assertIn("admission_failed", started.reason)
-        self.assertTrue(coordinator.allow_new_work())
+        self.assertTrue(self.maintenance_gate.is_open())
 
     def test_storage_layout_rejects_durable_root_inside_cleanup_root(self) -> None:
         invalid = replace(
@@ -641,15 +648,10 @@ class TestArtifactCleanup(unittest.TestCase):
         )
 
         with self.assertRaisesRegex(RuntimeError, "symbolic link"):
-            self.cleanup.preflight()
+            self.cleanup_filesystem.preflight(CLEANUP_FILESYSTEM_CLASSES)
 
     def test_repeated_cleanup_start_allows_only_one_background_operation(self) -> None:
-        coordinator = MaintenanceCoordinator(
-            self.cleanup,
-            self.worker_queue,
-            self.judgehost,
-            self.source_backup,
-        )
+        coordinator = self._coordinator()
         running = threading.Event()
         release = threading.Event()
 
@@ -673,7 +675,7 @@ class TestArtifactCleanup(unittest.TestCase):
             self.assertFalse(worker.is_alive())
 
         self.assertEqual(coordinator.snapshot()["status"], "succeeded")
-        self.assertTrue(coordinator.allow_new_work())
+        self.assertTrue(self.maintenance_gate.is_open())
 
     def test_filesystem_failure_keeps_database_deletion(self) -> None:
         self._seed_generated_data()
@@ -689,7 +691,11 @@ class TestArtifactCleanup(unittest.TestCase):
             artifact_file.unlink()
             raise OSError("forced filesystem failure")
 
-        with patch.object(self.cleanup, "_clear_root", side_effect=partially_clear):
+        with patch.object(
+            self.cleanup_filesystem,
+            "clear_root",
+            side_effect=partially_clear,
+        ):
             with self.assertRaisesRegex(OSError, "forced filesystem failure"):
                 self.cleanup.run(
                     operation_id=operation_id,
@@ -712,8 +718,8 @@ class TestArtifactCleanup(unittest.TestCase):
         operation_id = "cleanup-database-failure"
         started_at = now_iso()
         with patch.object(
-            self.cleanup,
-            "_delete_metadata",
+            self.cleanup_database,
+            "reset_tables",
             side_effect=RuntimeError("forced database transaction failure"),
         ):
             with self.assertRaisesRegex(RuntimeError, "forced database"):
@@ -732,8 +738,8 @@ class TestArtifactCleanup(unittest.TestCase):
         operation_id = "cleanup-vacuum-failure"
         started_at = now_iso()
         with patch.object(
-            self.cleanup,
-            "_vacuum",
+            self.cleanup_database,
+            "vacuum",
             side_effect=RuntimeError("forced vacuum failure"),
         ):
             with self.assertRaisesRegex(RuntimeError, "forced vacuum failure"):
@@ -748,12 +754,7 @@ class TestArtifactCleanup(unittest.TestCase):
             [path for path in self.settings.artifacts_root.rglob("*") if path.is_file()],
             [],
         )
-        restarted_coordinator = MaintenanceCoordinator(
-            self.cleanup,
-            self.worker_queue,
-            self.judgehost,
-            self.source_backup,
-        )
+        restarted_coordinator = self._coordinator()
         retried = restarted_coordinator.start_cleanup(
             actor_user_id=self.actor_user_id
         )
@@ -870,12 +871,7 @@ class TestArtifactCleanup(unittest.TestCase):
         self.assertFalse(self.source_backup.latest_summary()["available"])
 
     def test_source_backup_and_artifact_cleanup_are_mutually_exclusive(self) -> None:
-        coordinator = MaintenanceCoordinator(
-            self.cleanup,
-            self.worker_queue,
-            self.judgehost,
-            source_backup_service=self.source_backup,
-        )
+        coordinator = self._coordinator()
         running = threading.Event()
         release = threading.Event()
 
@@ -894,7 +890,7 @@ class TestArtifactCleanup(unittest.TestCase):
             )
             self.assertTrue(started.accepted)
             self.assertTrue(running.wait(timeout=2))
-            self.assertFalse(coordinator.allow_new_work())
+            self.assertFalse(self.maintenance_gate.is_open())
             snapshot = coordinator.snapshot()
             self.assertEqual(snapshot["operation"], "source_backup")
             blocked_cleanup = coordinator.start_cleanup(
@@ -910,7 +906,7 @@ class TestArtifactCleanup(unittest.TestCase):
 
         self.assertFalse(worker.is_alive())
         self.assertEqual(coordinator.snapshot()["status"], "succeeded")
-        self.assertTrue(coordinator.allow_new_work())
+        self.assertTrue(self.maintenance_gate.is_open())
 
     def test_task_registry_reports_reporting_separately_for_maintenance(self) -> None:
         registry = JudgehostTaskRegistry()

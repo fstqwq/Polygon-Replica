@@ -16,7 +16,7 @@ from app import main_constant
 from app.config import CONFIG_REGISTRY, ConfigKind
 from app.impl.auth.password_envelope import PasswordEnvelopeStore
 from app.impl.root.auth_pages import logout
-from app.service.platform.maintenance import MaintenanceStart
+from app.service.platform.maintenance.coordinator import MaintenanceStart
 from tests.common import E2ETestBase, override_config_values
 
 from tests.ui_support import (

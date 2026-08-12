@@ -3481,7 +3481,7 @@ class TestJudgehostService(E2ETestBase):
             JUDGEHOST_API_TOKEN="test-token",
             JUDGEHOST_API_USERNAME="judgehost",
         )
-        gate = config.maintenance_service.admission_gate
+        gate = config.maintenance_admission_gate
 
         with TestClient(app) as client:
             with gate.locked():
@@ -3613,7 +3613,7 @@ class TestJudgehostService(E2ETestBase):
     def test_fetch_work_long_poll_does_not_hold_maintenance_admission_lock(self) -> None:
         service = config.judgehost_task_service
         scheduler = service.state.batch_scheduler
-        gate = config.maintenance_service.admission_gate
+        gate = config.maintenance_admission_gate
         waiting = threading.Event()
         release = threading.Event()
         closed = threading.Event()
@@ -3664,7 +3664,7 @@ class TestJudgehostService(E2ETestBase):
 
     def test_fetch_work_does_not_wait_for_busy_maintenance_admission_lock(self) -> None:
         service = config.judgehost_task_service
-        gate = config.maintenance_service.admission_gate
+        gate = config.maintenance_admission_gate
         locked = threading.Event()
         release = threading.Event()
 

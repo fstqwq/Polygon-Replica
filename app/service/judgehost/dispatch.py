@@ -19,7 +19,7 @@ from app.service.judgehost.runtime import (
 )
 from app.service.judgehost.limits import VERIFICATION_CASE_DISPATCH_BATCH_SIZE
 from app.service.platform.runtime_blob_store import PayloadFile
-from app.service.platform.admission import MaintenanceAdmissionGate
+from app.service.platform.maintenance.admission import MaintenanceAdmissionGate
 from app.service.run.runtime import RUN_TEST_NAME_RE
 
 from app.service.judgehost.core import JudgehostCore

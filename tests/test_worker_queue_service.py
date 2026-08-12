@@ -6,7 +6,7 @@ import threading
 import unittest
 from pathlib import Path
 
-from app.service.platform.admission import MaintenanceAdmissionGate
+from app.service.platform.maintenance.admission import MaintenanceAdmissionGate
 from app.service.platform.worker_queue import WorkerQueueService
 
 

@@ -19,10 +19,15 @@ services use it as their filesystem capability rather than reading settings to
 assemble paths.
 
 The worker queue, runtime cache index, blob locks, and maintenance state are
-process-local. The queue JSONL is diagnostic history, not a recoverable job
-source, and startup resets it together with in-memory queue records. Runtime
-blobs and cache entries live below the startup-cleared cache trees. SQLite is
-used only where a mechanism persists configuration or cleanup effects.
+process-local. Maintenance has explicit owners: `admission` tracks the shared
+gate and active requests; `coordinator` owns the one active operation and its
+snapshot; `plan` declares cleanup-safe tables; `database` and `filesystem`
+provide destructive mechanics; and `artifact` alone orders the cleanup stages
+and runtime resets. The queue JSONL is diagnostic history, not a recoverable
+job source, and startup resets it together with in-memory queue records.
+Runtime blobs and cache entries live below the startup-cleared cache trees.
+SQLite is used only where a mechanism persists configuration or cleanup
+effects.
 Source backup archives only the bare Git and workspace roots while the shared
 maintenance gate is closed. It writes a temporary archive below the backup root
 and atomically replaces the one downloadable latest archive; it does not copy

@@ -5,7 +5,7 @@ import threading
 
 from app.db import now_iso
 from app.config import ConfigValues
-from app.service.platform.admission import MaintenanceAdmissionGate
+from app.service.platform.maintenance.admission import MaintenanceAdmissionGate
 from app.service.platform.runtime_blob_store import RuntimeBlobStore
 from app.service.platform.runtime_cache_index import RuntimeCacheIndex
 from app.service.repository.workspace import WorkspaceService

@@ -8,7 +8,7 @@ from unittest.mock import patch
 from app.db import SchemaRequirementsError
 from app.main import MaintenanceAdmissionMiddleware, config
 from app.route.maintenance_route import maintenance_page
-from app.service.platform.admission import MaintenanceAdmissionGate
+from app.service.platform.maintenance.admission import MaintenanceAdmissionGate
 
 
 class _AdmissionStub:
@@ -215,7 +215,7 @@ class TestMaintenanceAdmissionMiddleware(unittest.IsolatedAsyncioTestCase):
         }
         middleware = MaintenanceAdmissionMiddleware(downstream)
 
-        with patch.object(config, "maintenance_service", stub):
+        with patch.object(config, "maintenance_admission_gate", stub):
             request_task = asyncio.create_task(middleware(scope, receive, send))
             await asyncio.wait_for(body_finished.wait(), timeout=2)
             self.assertEqual(stub.active_requests, 1)
@@ -259,7 +259,7 @@ class TestMaintenanceAdmissionMiddleware(unittest.IsolatedAsyncioTestCase):
         }
         middleware = MaintenanceAdmissionMiddleware(downstream)
 
-        with patch.object(config, "maintenance_service", stub):
+        with patch.object(config, "maintenance_admission_gate", stub):
             await middleware(scope, receive, send)
 
         self.assertFalse(downstream_called)

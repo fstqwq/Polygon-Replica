@@ -47,9 +47,12 @@ from app.service.disk.auth_store import AuthStore
 from app.service.disk.runtime_state_store import RuntimeStateStore
 from app.service.runtime.state_service import RuntimeStateService
 from app.service.platform.worker_queue import WorkerFuture, WorkerQueueService
-from app.service.platform.maintenance import (
-    ArtifactCleanupService,
-    MaintenanceCoordinator,
+from app.service.platform.maintenance.admission import MaintenanceAdmissionGate
+from app.service.platform.maintenance.artifact import ArtifactCleanupService
+from app.service.platform.maintenance.coordinator import MaintenanceCoordinator
+from app.service.platform.maintenance.database import ArtifactCleanupDatabase
+from app.service.platform.maintenance.filesystem import (
+    ArtifactCleanupFilesystem,
     validate_runtime_startup_preconditions,
 )
 from app.service.platform.source_backup import SourceBackupService
@@ -94,6 +97,7 @@ class RuntimeConfig:
     problem_readiness_service: ProblemReadinessService = field(init=False)
     worker_queue_service: WorkerQueueService = field(init=False)
     artifact_cleanup_service: ArtifactCleanupService = field(init=False)
+    maintenance_admission_gate: MaintenanceAdmissionGate = field(init=False)
     source_backup_service: SourceBackupService = field(init=False)
     maintenance_service: MaintenanceCoordinator = field(init=False)
     system_config_service: SystemConfigService = field(init=False)
@@ -323,9 +327,16 @@ class RuntimeConfig:
             worker_queue=self.worker_queue_service,
             materialize_revision=materialize_contest_revision,
         )
-        self.artifact_cleanup_service = ArtifactCleanupService(
+        cleanup_database = ArtifactCleanupDatabase(
             self.db,
+            self.storage_layout.database_path,
+        )
+        cleanup_filesystem = ArtifactCleanupFilesystem(
             self.storage_layout,
+        )
+        self.artifact_cleanup_service = ArtifactCleanupService(
+            cleanup_database,
+            cleanup_filesystem,
             self.runtime_cache_index,
             self.runtime_blob_store,
             self.worker_queue_service,
@@ -336,17 +347,19 @@ class RuntimeConfig:
         self.source_backup_service = SourceBackupService(
             self.storage_layout,
         )
+        self.maintenance_admission_gate = MaintenanceAdmissionGate()
         self.maintenance_service = MaintenanceCoordinator(
-            self.artifact_cleanup_service,
-            self.worker_queue_service,
-            self.judgehost_task_service,
+            admission_gate=self.maintenance_admission_gate,
+            cleanup_service=self.artifact_cleanup_service,
             source_backup_service=self.source_backup_service,
+            worker_queue_service=self.worker_queue_service,
+            judgehost_task_service=self.judgehost_task_service,
         )
         self.worker_queue_service.set_admission_gate(
-            self.maintenance_service.admission_gate
+            self.maintenance_admission_gate
         )
         self.judgehost_task_service.set_admission_gate(
-            self.maintenance_service.admission_gate
+            self.maintenance_admission_gate
         )
         self.workspace_service.configure_problem_deletion_runtime(
             guard=self.maintenance_service.problem_deletion_guard,

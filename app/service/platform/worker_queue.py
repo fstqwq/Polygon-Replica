@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, TypedDict, cast
 
-from app.service.platform.admission import MaintenanceAdmissionGate
+from app.service.platform.maintenance.admission import MaintenanceAdmissionGate
 
 
 WorkerFunc = Callable[[], None]

@@ -65,12 +65,12 @@ class MaintenanceAdmissionMiddleware:  # pylint: disable=too-few-public-methods
             _apply_security_headers(response)
             await response(scope, receive, send)
             return
-        maintenance = config.maintenance_service
+        admission = config.maintenance_admission_gate
         path = str(scope.get("path") or "")
-        if maintenance.is_exempt(path):
+        if admission.is_exempt(path):
             await self._asgi_app(scope, receive, send)
             return
-        if not maintenance.enter_request():
+        if not admission.enter_request():
             response = PlainTextResponse(
                 "The site is temporarily unavailable for maintenance. Retry shortly.\n",
                 status_code=503,
@@ -85,7 +85,7 @@ class MaintenanceAdmissionMiddleware:  # pylint: disable=too-few-public-methods
         try:
             await self._asgi_app(scope, receive, send)
         finally:
-            maintenance.leave_request()
+            admission.leave_request()
 
 
 @asynccontextmanager
