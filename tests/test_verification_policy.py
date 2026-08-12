@@ -451,6 +451,7 @@ class TestVerificationPolicy(VerificationPolicyTestBase):
             test_names=["001.in"],
             parent_status=VerificationStatus.CANCELLED,
             fail_reason="",
+            display_limit=65536,
         )
         self.assertEqual(status, "cancelled")
         self.assertEqual(str(summary["status"]), "cancelled")
@@ -540,6 +541,7 @@ class TestVerificationPolicy(VerificationPolicyTestBase):
             test_names=["001.in"],
             parent_status=VerificationStatus.RUNNING,
             fail_reason="",
+            display_limit=65536,
         )
         self.assertEqual(status, "running")
         self.assertEqual(int(counts["total"]), 2)
