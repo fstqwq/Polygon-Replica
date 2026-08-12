@@ -5,31 +5,8 @@ contract, `risk` identifies a concrete reliability/security/operations hazard,
 and `refactor` identifies misplaced or over-coupled responsibility. Priority is
 based on present impact, not on an imagined future architecture.
 
-## Storage and persistence
-
-| ID | Class | Finding and current impact | Suggested owner |
-| --- | --- | --- | --- |
-| STO-009 | refactor | Runtime artifact ownership is centralized on the refactor branch but remains open until Linux backfill, completion, cleanup, and HTTP download acceptance complete. | verification storage |
-
-## Problem source and execution
-
-| ID | Class | Finding and current impact | Suggested owner |
-| --- | --- | --- | --- |
-| SRCFMT-001 | refactor | Authored configuration readers accept several loose shapes, increasing normalization paths and review cost. | problem source |
-| SRCFMT-002 | refactor | Solution metadata still accepts inferred/unkeyed forms instead of one explicit canonical input shape. | problem source |
-| EXE-001 | refactor | Some cancellation outcomes are represented as failed status plus reason text, complicating status queries. | verification |
-| EXE-002 | refactor | Admission and execution use overlapping `running` language even though queued callable state and domain lifecycle differ. | worker/runtime |
-
 ## Placement and maintainability
 
 | ID | Class | Finding and current impact | Suggested owner |
 | --- | --- | --- | --- |
-| PLC-002 | refactor | Verification locator ownership is centralized on the refactor branch but remains open until Linux storage and HTTP artifact acceptance complete. | verification storage |
-| PLC-003 | refactor | Several HTTP implementation modules construct large read models and contain domain aggregation. | domain services |
-| PLC-004 | refactor | The canonical execution result model is nested under verification although Judgehost and custom run also consume it. | execution model |
-| PLC-006 | refactor | Judgehost dependency inversion is implemented on the refactor branch but remains open until Linux Judgehost service and mock-wire acceptance complete. | verification port |
-| PLC-008 | refactor | Significant contest build policy remains in `app/impl/contest/shared.py`. | contest service |
-| PLC-009 | refactor | Configured filesystem locators are centralized on the refactor branch but remain open until Linux storage, cleanup, and backup acceptance complete. | disk/platform |
-| PLC-010 | refactor | Maintenance mechanics and domain deletion policy are implemented together. | platform maintenance |
-| PLC-012 | refactor | Cross-resource authorization policy has no single service owner. | auth/access |
-| PLC-014 | refactor | Audit write policy is coupled to workspace and maintenance services. | audit service |
+| PLC-003 | refactor | Three HTTP-facing modules still own reusable aggregation: `app/impl/workspace/run_view_detail.py` joins verification, task, artifact, diagnostic, and sanity evidence into the run-detail model; `app/impl/contest/problem_rows.py` joins roster, access, workspace revision, source review, and readiness state; `app/impl/workspace/context_operation.py` joins authored files, solution metadata, test specifications, and verification artifacts into editor/run option models. Their size and direct domain queries make non-HTTP reuse and isolated review difficult. | verification, contest, and problem query services |

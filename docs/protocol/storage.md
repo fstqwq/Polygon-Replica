@@ -18,8 +18,8 @@ database path MUST be a regular-file location outside all managed roots. Archive
 members, user paths, and stored relative locators MUST remain below their owning
 root and MUST NOT escape through `..`, absolute paths, or symlink traversal.
 
-The process composition root constructs one `StorageLayout` from these configured
-roots. That layout is the sole owner of application-derived locations for Git
+`app.runtime.ApplicationRuntime` constructs one `StorageLayout` from these
+configured roots. That layout is the sole owner of application-derived locations for Git
 repositories, workspaces, verification and preview payloads, runtime snapshots
 and blobs, uploads and import drafts, exports, materializations, contest build
 artifacts, staging data, worker history, and source backups. Domain services

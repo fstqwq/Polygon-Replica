@@ -6,6 +6,7 @@ Read the smallest set that owns the change.
 
 - [Design principles](design/principles.md)
 - [Runtime and component model](design/system.md)
+- [Access model](design/access.md)
 
 ## Protocols
 

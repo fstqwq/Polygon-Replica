@@ -5,6 +5,9 @@ status, direct problem ACL, contest membership, workspace ownership, package
 job ownership, and verification ownership into typed capability decisions and
 block reasons.
 
+The user-visible role and capability semantics are owned by the
+[access model](../../../../design/access.md).
+
 `model.py` defines actors, resources, capabilities, decisions, and UI-facing
 contexts. `policy.py` contains pure role and agent-scope rules. `store.py` owns
 the access-specific SQLite queries. `query.py` composes persisted facts with the

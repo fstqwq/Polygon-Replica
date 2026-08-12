@@ -1,8 +1,9 @@
 # `app/service/verification`
 
 Owns verification and custom-run identities, source manifests and signatures,
-execution plans, task persistence, DAG scheduling, result evaluation,
-expected-behavior matching, and read models. It consumes a frozen workspace
+workspace snapshot acquisition, execution plans, task persistence, DAG
+scheduling, result evaluation, expected-behavior matching, and read models. It
+consumes a workspace identity or an explicitly frozen published-revision
 snapshot, selected solutions/tests, canonical runtime configuration, and typed
 Judgehost terminal reports containing an
 [`ExecutionResult`](../execution/README.md). It
@@ -13,10 +14,11 @@ owner index and then require a currently available runtime blob descriptor;
 they never reconstruct ownership by scanning result JSON.
 
 `VerificationExecutionPlanner` turns a frozen source snapshot into the one
-canonical execution plan. `VerificationWorkflow` owns activation, task
-publication, coordinator execution, sanity finalization, and process-local
-cleanup through injected Judgehost, workspace, storage, configuration, and blob
-ports. Pure graph construction and result summarization live in
+canonical execution plan. `VerificationWorkflow.run_workspace()` creates and
+owns the service snapshot before admission; all workflow entry points own
+activation, task publication, coordinator execution, sanity finalization, and
+process-local cleanup through injected Judgehost, workspace, storage,
+configuration, and blob ports. Pure graph construction and result summarization live in
 `workflow_policy`; HTTP implementation modules do not own or import these
 policies.
 

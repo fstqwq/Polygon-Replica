@@ -137,10 +137,13 @@ Lease notification performs one current-owner retry; if both attempts fail,
 the fetch request fails so the process-local lease can expire and be requested
 again instead of silently losing coordinator state.
 
+`VerificationWorkflow` owns workspace snapshot acquisition and cleanup,
+planning, task publication, and sanity callbacks. Callers may instead supply an
+already frozen snapshot for the published-revision and package workflows.
 `VerificationExecutionService` owns coordinator construction, registration,
 durable-state reconciliation, execution, exact unregistration, scheduler
-failure, and user cancellation. Workspace code supplies the frozen snapshot,
-plan, task publisher, and sanity callbacks without owning the runtime session.
+failure, and user cancellation. Neither HTTP code nor the workspace service
+owns the runtime session.
 The coordinator is constructed from the immutable durable graph, then
 registered before execution starts. The execution service rereads the parent
 snapshot after registration. If it is already closed, the coordinator consumes
