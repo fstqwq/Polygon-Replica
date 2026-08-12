@@ -784,8 +784,8 @@ def _assert_accepted_solution(
     result = json.loads(str(row["result_json"]))
     outcome = result.get("outcome") if isinstance(result, dict) else None
     verdict = outcome.get("verdict") if isinstance(outcome, dict) else None
-    if verdict != "AC":
-        raise RuntimeError(f"accepted solution verdict is not AC: {verdict!r}")
+    if verdict != "OK":
+        raise RuntimeError(f"accepted solution verdict is not OK: {verdict!r}")
 
 
 def _git(*args: str) -> str:
