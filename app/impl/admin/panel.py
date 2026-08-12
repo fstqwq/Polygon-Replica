@@ -22,7 +22,6 @@ from app.impl.auth.shared import (
 from app.impl.runtime.config import config
 from app.impl.workspace.access import require_system_admin
 from app.impl.workspace.context import global_user_ctx
-from app.impl.workspace.context_operation import audit
 from app.main_util import form_text
 from app.service.platform.source_backup import SOURCE_BACKUP_DOWNLOAD_NAME
 from app.service.verification.runtime import coerce_int
@@ -73,7 +72,6 @@ class ArtifactUsageView(TypedDict):
     cache_size_label: str
     verification_count_label: str
     removable_rows_label: str
-    audit_rows_label: str
 
 
 def _as_bool_form_value(raw: str) -> bool:
@@ -200,7 +198,6 @@ def _artifact_usage_view() -> ArtifactUsageView:
         "cache_size_label": _storage_size_label(usage["cache_bytes"]),
         "verification_count_label": f"{usage['table_rows']['verifications']:,}",
         "removable_rows_label": f"{usage['removable_rows']:,}",
-        "audit_rows_label": f"{usage['audit_rows']:,}",
     }
 
 
@@ -537,18 +534,6 @@ def admin_smtp_update(
             clear_password=_as_bool_form_value(smtp_clear_password),
             actor_user_id=actor_user_id,
         )
-        audit(
-            ctx["user"]["id"],
-            None,
-            "smtp_config.update",
-            {
-                "host": form_text(smtp_host).strip(),
-                "port": form_text(smtp_port).strip(),
-                "username": form_text(smtp_username).strip(),
-                "password_changed": bool(form_text(smtp_password)),
-                "password_cleared": _as_bool_form_value(smtp_clear_password),
-            },
-        )
         message = "SMTP settings updated"
     except ValueError as exc:
         message = str(exc)
@@ -563,10 +548,8 @@ def admin_smtp_test(
     recipient = form_text(smtp_test_recipient).strip()
     try:
         config.smtp_config_service.send_test_email(recipient=recipient)
-        audit(ctx["user"]["id"], None, "smtp_config.test_email", {"recipient": recipient, "status": "ok"})
         message = "SMTP test email sent"
     except ValueError as exc:
-        audit(ctx["user"]["id"], None, "smtp_config.test_email", {"recipient": recipient, "status": "failed"})
         message = str(exc)
     return redirect_response("/admin/mail", status_code=303, message=message)
 
@@ -587,17 +570,10 @@ def admin_judgehost_runtime_update(
         }
         result = config.system_config_service.apply_patch(payload, actor_user_id=actor_user_id)
         config.reload_config()
-        changed = int(result.get("changed") or 0)
         diff_rows = result.get("diff")
         diffs = diff_rows if isinstance(diff_rows, list) else []
         restart_changed = sum(
             1 for row in diffs if isinstance(row, dict) and bool(row.get("restart_required"))
-        )
-        audit(
-            ctx["user"]["id"],
-            None,
-            "system_config.update_judgehost_runtime_controls",
-            {"changed_count": changed, "diff": diffs},
         )
         message = "Judgehost settings updated"
         if restart_changed:
@@ -638,12 +614,6 @@ def admin_judgehost_host_action(
     enable_flag = safe_action == "enable"
     try:
         result = config.judgehost_task_service.set_host_enabled(safe_host, enable_flag)
-        audit(
-            ctx["user"]["id"],
-            None,
-            "judgehost.host_action",
-            {"hostname": safe_host, "action": safe_action, "result": result},
-        )
         if enable_flag:
             message = f"Judgehost {safe_host} enabled"
         else:
@@ -694,17 +664,10 @@ async def admin_config_category_update(
                 payload[key] = form.get(input_name)
         result = config.system_config_service.apply_patch(payload, actor_user_id=actor_user_id)
         config.reload_config()
-        changed = int(result.get("changed") or 0)
         raw_diff = result.get("diff")
         diff_rows = raw_diff if isinstance(raw_diff, list) else []
         restart_changed = sum(
             1 for row in diff_rows if isinstance(row, dict) and bool(row.get("restart_required"))
-        )
-        audit(
-            ctx["user"]["id"],
-            None,
-            "system_config.update_category",
-            {"category": safe_category_slug, "changed_count": changed, "diff": diff_rows},
         )
         message = "System configuration updated"
         if restart_changed:
@@ -718,7 +681,6 @@ def admin_system_config_reset(user: Annotated[str, Depends(require_session_user)
     ctx, _actor_user_id = _admin_user_context(user)
     config.system_config_service.reset()
     config.reload_config()
-    audit(ctx["user"]["id"], None, "system_config.reset", {})
     return redirect_response(
         "/admin/config",
         status_code=303,
@@ -742,19 +704,10 @@ def admin_user_system_admin_update(
         if safe_action not in {"grant", "revoke"}:
             raise ValueError("invalid system admin action")
         enabled = safe_action == "grant"
-        updated = config.auth_service.set_system_admin(
+        config.auth_service.set_system_admin(
             actor_user_id=actor_user_id,
             username=safe_target,
             enabled=enabled,
-        )
-        audit(
-            actor_user_id,
-            None,
-            "system_admin.user_system_admin_update",
-            {
-                "target_username": str(updated["username"]),
-                "is_system_admin": int(updated["is_system_admin"] or 0),
-            },
         )
         message = (
             f"{safe_target} is now a system admin"
@@ -778,19 +731,10 @@ def admin_user_ban_update(
         if safe_action not in {"ban", "unban"}:
             raise ValueError("invalid ban action")
         banned = safe_action == "ban"
-        updated = config.auth_service.set_user_banned(
+        config.auth_service.set_user_banned(
             actor_user_id=actor_user_id,
             username=safe_target,
             banned=banned,
-        )
-        audit(
-            actor_user_id,
-            None,
-            "system_admin.user_ban_update",
-            {
-                "target_username": str(updated["username"]),
-                "is_banned": int(updated["is_banned"] or 0),
-            },
         )
         message = f"{safe_target} has been banned" if banned else f"{safe_target} has been unbanned"
     except ValueError as exc:
@@ -840,12 +784,6 @@ def admin_user_password_update(
             raise ValueError("invalid password iterations")
         set_user_password_verifier(int(target_row["id"]), new_verifier, new_salt, new_iters)
         config.auth_service.revoke_all_access_for_user(int(target_row["id"]))
-        audit(
-            actor_user_id,
-            None,
-            "system_admin.user_password_update",
-            {"target_username": safe_target, "target_user_id": int(target_row["id"])},
-        )
         message = f"Password updated for {safe_target}"
     except ValueError as exc:
         message = str(exc)

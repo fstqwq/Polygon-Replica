@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
 import io
 import json
+import logging
 import os
 import stat
 import tarfile
@@ -13,14 +15,17 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Callable, TypedDict
 
-from app.db import DB, now_iso
+from app.db import now_iso
 from app.service.platform.maintenance import validate_storage_layout
 from app.setting import Settings
 
 
 SOURCE_BACKUP_DIRECTORY = "source-backup"
 SOURCE_BACKUP_ARCHIVE = "latest.tar.gz"
+SOURCE_BACKUP_SIDECAR = "latest.tar.gz.sha256"
 SOURCE_BACKUP_DOWNLOAD_NAME = "polygon-replica-source-backup.tar.gz"
+
+logger = logging.getLogger(__name__)
 
 _SOURCE_ROOTS = (
     ("bare_root", "bare"),
@@ -63,8 +68,7 @@ def _archive_directory_entry(archive: tarfile.TarFile, name: str) -> None:
 class SourceBackupService:
     """Create and expose one atomic backup of both source-state roots."""
 
-    def __init__(self, db: DB, settings: Settings) -> None:
-        self._db = db
+    def __init__(self, settings: Settings) -> None:
         self._settings = settings
 
     @property
@@ -79,76 +83,11 @@ class SourceBackupService:
 
         return self.backup_directory / SOURCE_BACKUP_ARCHIVE
 
-    def configured_roots(self) -> dict[str, object]:
-        """Describe backup sources and destination for the audit record."""
+    @property
+    def sidecar_path(self) -> Path:
+        """Return the digest sidecar paired with the published archive."""
 
-        return {
-            "bare_root": str(self._settings.bare_root.absolute()),
-            "workspace_root": str(self._settings.workspace_root.absolute()),
-            "destination": str(self.latest_path.absolute()),
-        }
-
-    def _write_audit(
-        self,
-        actor_user_id: int,
-        action: str,
-        details: dict[str, object],
-    ) -> int:
-        def transaction(connection) -> int:
-            cursor = connection.execute(
-                """
-                INSERT INTO audit_log(
-                    actor_user_id,problem_id,action,details_json,created_at
-                ) VALUES(?,NULL,?,?,?)
-                """,
-                (
-                    int(actor_user_id),
-                    action,
-                    json.dumps(
-                        details,
-                        ensure_ascii=True,
-                        separators=(",", ":"),
-                    ),
-                    now_iso(),
-                ),
-            )
-            return int(cursor.lastrowid)
-
-        return int(self._db.write_transaction(transaction))
-
-    def write_start_audit(
-        self,
-        *,
-        actor_user_id: int,
-        operation_id: str,
-        started_at: str,
-        roots: dict[str, object],
-    ) -> int:
-        """Record backup admission before the background thread starts."""
-
-        return self._write_audit(
-            actor_user_id,
-            "source_backup.start",
-            {
-                "operation_id": operation_id,
-                "started_at": started_at,
-                "roots": roots,
-            },
-        )
-
-    def write_failed_audit(
-        self,
-        *,
-        actor_user_id: int,
-        details: dict[str, object],
-    ) -> int:
-        """Record a terminal backup failure."""
-
-        return self._write_audit(
-            actor_user_id,
-            "source_backup.failed",
-            details,
-        )
+        return self.backup_directory / SOURCE_BACKUP_SIDECAR
 
     @staticmethod
     def _inspect_tree(root: Path) -> tuple[int, int]:
@@ -234,6 +173,11 @@ class SourceBackupService:
         if latest.is_symlink() or (latest.exists() and not latest.is_file()):
             raise RuntimeError(
                 f"published source backup must be a regular file: {latest}"
+            )
+        sidecar = self.sidecar_path
+        if sidecar.is_symlink() or (sidecar.exists() and not sidecar.is_file()):
+            raise RuntimeError(
+                f"source backup sidecar must be a regular file: {sidecar}"
             )
         return {
             "roots": roots,
@@ -335,43 +279,112 @@ class SourceBackupService:
                 raise RuntimeError(f"invalid source backup staging entry: {child}")
             child.unlink()
 
-    def _publish_archive(self, partial: Path) -> Path | None:
-        """Publish one archive and retain a hard-linked rollback copy."""
+    @staticmethod
+    def _sha256(path: Path) -> str:
+        digest = hashlib.sha256()
+        with path.open("rb") as stream:
+            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
 
-        rollback: Path | None = None
+    def _write_sidecar(self, archive: Path, destination: Path) -> None:
+        digest = self._sha256(archive)
+        with destination.open("x", encoding="ascii", newline="\n") as stream:
+            stream.write(f"{digest}  {SOURCE_BACKUP_ARCHIVE}\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+
+    def _verify_archive_pair(self, archive_path: Path, sidecar_path: Path) -> None:
+        sidecar_tokens = sidecar_path.read_text(encoding="ascii").split()
+        if sidecar_tokens != [self._sha256(archive_path), SOURCE_BACKUP_ARCHIVE]:
+            raise RuntimeError("source backup SHA-256 sidecar does not match archive")
+        with tarfile.open(archive_path, mode="r:gz") as archive:
+            names: set[str] = set()
+            manifest: dict[str, object] | None = None
+            for member in archive:
+                path = PurePosixPath(member.name)
+                if path.is_absolute() or ".." in path.parts:
+                    raise RuntimeError(
+                        f"unsafe member in source backup archive: {member.name}"
+                    )
+                if not (
+                    member.isfile()
+                    or member.isdir()
+                    or member.issym()
+                    or member.islnk()
+                ):
+                    raise RuntimeError(
+                        f"unsupported member in source backup archive: {member.name}"
+                    )
+                names.add(member.name.rstrip("/"))
+                if member.name == "manifest.json":
+                    stream = archive.extractfile(member)
+                    if stream is None:
+                        raise RuntimeError("source backup manifest is unreadable")
+                    manifest = json.loads(stream.read().decode("ascii"))
+                elif member.isfile():
+                    stream = archive.extractfile(member)
+                    if stream is None:
+                        raise RuntimeError(
+                            f"source backup member is unreadable: {member.name}"
+                        )
+                    while stream.read(1024 * 1024):
+                        pass
+        if manifest is None or manifest.get("contents") != ["bare", "workspaces"]:
+            raise RuntimeError("source backup manifest has invalid contents")
+        if not {"manifest.json", "bare", "workspaces"}.issubset(names):
+            raise RuntimeError("source backup archive is missing required roots")
+
+    def _rollback_path(self, label: str) -> Path:
+        return self.backup_directory / (
+            f".source-backup-{uuid.uuid4().hex}.{label}.previous"
+        )
+
+    def _publish_archive(
+        self,
+        partial: Path,
+        partial_sidecar: Path,
+    ) -> tuple[Path | None, Path | None]:
+        """Publish one verified archive/sidecar pair with rollback copies."""
+
+        archive_rollback: Path | None = None
+        sidecar_rollback: Path | None = None
         if self.latest_path.exists():
-            rollback = self.backup_directory / (
-                f".source-backup-{uuid.uuid4().hex}.previous"
-            )
-            os.link(self.latest_path, rollback)
-            _fsync_directory(self.backup_directory)
-
-        published = False
+            archive_rollback = self._rollback_path("archive")
+            os.link(self.latest_path, archive_rollback)
+        if self.sidecar_path.exists():
+            sidecar_rollback = self._rollback_path("sidecar")
+            os.link(self.sidecar_path, sidecar_rollback)
+        _fsync_directory(self.backup_directory)
         try:
             os.replace(partial, self.latest_path)
-            published = True
+            os.replace(partial_sidecar, self.sidecar_path)
             _fsync_directory(self.backup_directory)
-            return rollback
+            self._verify_archive_pair(self.latest_path, self.sidecar_path)
+            return archive_rollback, sidecar_rollback
         except Exception:
-            if published:
-                self._restore_previous(rollback)
-            elif rollback is not None:
-                rollback.unlink(missing_ok=True)
+            self._restore_previous(archive_rollback, sidecar_rollback)
             raise
 
-    def _restore_previous(self, rollback: Path | None) -> None:
-        if rollback is None:
+    def _restore_previous(
+        self,
+        archive_rollback: Path | None,
+        sidecar_rollback: Path | None,
+    ) -> None:
+        if archive_rollback is None:
             self.latest_path.unlink(missing_ok=True)
         else:
-            os.replace(rollback, self.latest_path)
+            os.replace(archive_rollback, self.latest_path)
+        if sidecar_rollback is None:
+            self.sidecar_path.unlink(missing_ok=True)
+        else:
+            os.replace(sidecar_rollback, self.sidecar_path)
         _fsync_directory(self.backup_directory)
 
     def run(
         self,
         *,
-        actor_user_id: int,
         operation_id: str,
-        start_audit_id: int,
         started_at: str,
         set_stage: Callable[[str], None],
     ) -> dict[str, object]:
@@ -381,14 +394,17 @@ class SourceBackupService:
         stage = "preflight"
         result: dict[str, object] = {
             "operation_id": operation_id,
-            "start_audit_id": int(start_audit_id),
             "started_at": started_at,
             "completed_stage": "admission",
         }
         partial = self.backup_directory / (
             f".source-backup-{uuid.uuid4().hex}.tar.gz.partial"
         )
-        rollback: Path | None = None
+        partial_sidecar = self.backup_directory / (
+            f".source-backup-{uuid.uuid4().hex}.sha256.partial"
+        )
+        archive_rollback: Path | None = None
+        sidecar_rollback: Path | None = None
         published = False
         try:
             set_stage(stage)
@@ -408,12 +424,17 @@ class SourceBackupService:
                 roots=roots,
                 source_stats=source_stats,
             )
+            self._write_sidecar(partial, partial_sidecar)
+            self._verify_archive_pair(partial, partial_sidecar)
             result["archive_bytes"] = int(partial.stat().st_size)
             result["completed_stage"] = "archive"
 
             stage = "publish"
             set_stage(stage)
-            rollback = self._publish_archive(partial)
+            archive_rollback, sidecar_rollback = self._publish_archive(
+                partial,
+                partial_sidecar,
+            )
             published = True
             result["completed_stage"] = "publish"
             result["finished_at"] = now_iso()
@@ -421,53 +442,35 @@ class SourceBackupService:
                 round((time.monotonic() - started) * 1000)
             )
 
-            stage = "audit"
-            set_stage(stage)
-            self._write_audit(
-                actor_user_id,
-                "source_backup.succeeded",
-                result,
-            )
+            logger.info("source backup succeeded", extra={"result": result})
             published = False
-            if rollback is not None:
-                try:
+            for rollback in (archive_rollback, sidecar_rollback):
+                if rollback is not None:
                     rollback.unlink(missing_ok=True)
-                    _fsync_directory(self.backup_directory)
-                except OSError:
-                    # The published archive and terminal audit are authoritative.
-                    # A later run removes this hidden hard-linked staging entry.
-                    pass
+            _fsync_directory(self.backup_directory)
             return result
         except Exception as exc:
             partial.unlink(missing_ok=True)
+            partial_sidecar.unlink(missing_ok=True)
             if published:
                 try:
-                    self._restore_previous(rollback)
+                    self._restore_previous(archive_rollback, sidecar_rollback)
                 except Exception as rollback_exc:
                     exc = RuntimeError(
                         f"{exc}; cannot restore previous source backup: "
                         f"{rollback_exc}"
                     )
-            elif rollback is not None:
-                rollback.unlink(missing_ok=True)
+            else:
+                for rollback in (archive_rollback, sidecar_rollback):
+                    if rollback is not None:
+                        rollback.unlink(missing_ok=True)
             result["finished_at"] = now_iso()
             result["duration_ms"] = int(
                 round((time.monotonic() - started) * 1000)
             )
             result["failed_stage"] = stage
             result["error"] = str(exc)
-            try:
-                self.write_failed_audit(
-                    actor_user_id=actor_user_id,
-                    details=result,
-                )
-            except Exception as audit_exc:
-                combined = RuntimeError(
-                    f"source backup failed at {stage}: {exc}; "
-                    f"terminal audit failed: {audit_exc}"
-                )
-                setattr(combined, "maintenance_result", result)
-                raise combined from audit_exc
+            logger.exception("source backup failed", extra={"result": result})
             setattr(exc, "maintenance_result", result)
             raise
 
@@ -475,11 +478,20 @@ class SourceBackupService:
         """Resolve the latest regular archive without following a symlink."""
 
         candidate = self.latest_path
+        sidecar = self.sidecar_path
         if (
             candidate.is_symlink()
             or not candidate.exists()
             or not candidate.is_file()
+            or sidecar.is_symlink()
+            or not sidecar.exists()
+            or not sidecar.is_file()
         ):
+            return None
+        try:
+            self._verify_archive_pair(candidate, sidecar)
+        except (OSError, ValueError, tarfile.TarError, RuntimeError):
+            logger.exception("published source backup failed verification")
             return None
         return candidate
 

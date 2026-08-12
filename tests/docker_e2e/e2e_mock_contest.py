@@ -207,23 +207,6 @@ def _assert_contest_database(
         detail = None if artifact is None else dict(artifact)
         raise RuntimeError(f"contest PDF artifact metadata is wrong: {detail!r}")
 
-    actions = {
-        str(audit_row["action"])
-        for audit_row in connection.execute(
-            "SELECT action FROM audit_log ORDER BY id"
-        ).fetchall()
-    }
-    required_actions = {
-        "contest.create",
-        "contest.problems.add",
-        "contest.packages.build.start",
-        "contest.packages.pdf",
-    }
-    missing_actions = required_actions.difference(actions)
-    if missing_actions:
-        raise RuntimeError(
-            f"contest PDF audit trail is incomplete: {missing_actions!r}"
-        )
     return verification_id
 
 

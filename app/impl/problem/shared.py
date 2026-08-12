@@ -15,7 +15,6 @@ from app.impl.runtime.config import config
 from app.impl.workspace.access import require_write_access
 from app.impl.workspace.context import global_user_ctx
 from app.impl.workspace.context_operation import (
-    audit,
     generator_sources_from_build_cfg,
     read_build_config,
     write_build_config,
@@ -126,7 +125,6 @@ def rename_component_source(
     folder: str,
     default_filename: str,
     component_label: str,
-    audit_event: str,
     redirect_url_for_path: Callable[[str], str],
     config_key: str = "",
     ctx: dict | None = None,
@@ -168,12 +166,6 @@ def rename_component_source(
                     build_cfg[config_key] = new_source
                     write_build_config(cfg_path, build_cfg)
             source_for_redirect = new_source
-            audit(
-                active_ctx["user"]["id"],
-                active_ctx["problem"]["id"],
-                audit_event,
-                {"old": old_source, "new": new_source},
-            )
     except (ValueError, OSError) as exc:
         msg = str(exc)
     except HTTPException as exc:

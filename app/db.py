@@ -12,24 +12,41 @@ import threading
 import time
 from collections.abc import Callable
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, TypeVar
 
 from app.config.model import ConfigValues
 from app.main_util import is_sqlite_locked_error, summarize_traced_sql
-from app.sqlite_shape_upgrade import (
-    IncompatibleSchemaError,
-    apply_shape_upgrades,
-    validate_current_shape_constraints,
-)
-
 logger = logging.getLogger("uvicorn.error")
 logger.setLevel(logging.INFO)
 
 
 _TxResult = TypeVar("_TxResult")
+
+
+class SchemaRequirementsError(RuntimeError):
+    """Report current schema objects required before runtime may start."""
+
+    def __init__(
+        self,
+        *,
+        missing_tables: list[str],
+        missing_columns: list[str],
+        missing_indexes: list[str],
+    ) -> None:
+        self.missing_tables = tuple(missing_tables)
+        self.missing_columns = tuple(missing_columns)
+        self.missing_indexes = tuple(missing_indexes)
+        parts: list[str] = []
+        if missing_tables:
+            parts.append(f"missing tables: {', '.join(missing_tables)}")
+        if missing_columns:
+            parts.append(f"missing columns: {', '.join(missing_columns)}")
+        if missing_indexes:
+            parts.append(f"missing indexes: {', '.join(missing_indexes)}")
+        super().__init__("; ".join(parts))
 
 
 SCHEMA = """
@@ -490,17 +507,6 @@ CREATE TABLE IF NOT EXISTS export_jobs (
     FOREIGN KEY(export_id) REFERENCES exports(id) ON DELETE SET NULL
 );
 
-CREATE TABLE IF NOT EXISTS audit_log (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    actor_user_id INTEGER,
-    problem_id INTEGER,
-    action TEXT NOT NULL,
-    details_json TEXT,
-    created_at TEXT NOT NULL,
-    FOREIGN KEY(actor_user_id) REFERENCES users(id),
-    FOREIGN KEY(problem_id) REFERENCES problems(id)
-);
-
 CREATE TABLE IF NOT EXISTS system_config (
     key TEXT PRIMARY KEY,
     value_json TEXT NOT NULL,
@@ -568,7 +574,6 @@ CREATE INDEX IF NOT EXISTS idx_exports_materialization_created ON exports(materi
 CREATE INDEX IF NOT EXISTS idx_export_jobs_actor_created ON export_jobs(actor_user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_export_jobs_problem_created ON export_jobs(problem_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_export_jobs_export ON export_jobs(export_id);
-CREATE INDEX IF NOT EXISTS idx_audit_problem_created ON audit_log(problem_id, created_at DESC);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_normalized_unique ON users(email_normalized) WHERE email_normalized <> '';
 CREATE INDEX IF NOT EXISTS idx_auth_sessions_user_created ON auth_sessions(user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_auth_sessions_expires ON auth_sessions(expires_at);
@@ -617,6 +622,18 @@ def _table_name_from_create_index(statement: str) -> str:
     return statement[marker_index + len(marker) :].split("(", 1)[0].strip()
 
 
+def _index_name_from_create_index(statement: str) -> str:
+    upper = statement.upper()
+    prefix = (
+        "CREATE UNIQUE INDEX IF NOT EXISTS "
+        if upper.startswith("CREATE UNIQUE INDEX IF NOT EXISTS ")
+        else "CREATE INDEX IF NOT EXISTS "
+    )
+    if not upper.startswith(prefix):
+        raise RuntimeError(f"invalid SQLite index statement: {statement!r}")
+    return statement[len(prefix) :].split(" ON ", 1)[0].strip()
+
+
 def _current_table_statements() -> dict[str, str]:
     statements: dict[str, str] = {}
     for statement in _split_sql_statements(SCHEMA):
@@ -628,6 +645,10 @@ def _current_table_statements() -> dict[str, str]:
 
 _CURRENT_TABLE_STATEMENTS = _current_table_statements()
 _CURRENT_INDEX_STATEMENTS = tuple(_split_sql_statements(SCHEMA_INDEXES))
+_CURRENT_INDEX_NAMES = tuple(
+    _index_name_from_create_index(statement)
+    for statement in _CURRENT_INDEX_STATEMENTS
+)
 
 
 def current_schema_statements_for_tables(
@@ -974,7 +995,6 @@ CURRENT_SCHEMA_COLUMNS: dict[str, tuple[str, ...]] = {
         "started_at",
         "finished_at",
     ),
-    "audit_log": ("id", "actor_user_id", "problem_id", "action", "details_json", "created_at"),
     "system_config": ("key", "value_json", "updated_at", "updated_by_user_id"),
     "smtp_config": (
         "id",
@@ -999,13 +1019,18 @@ class DB:
 
     path: Path
     config_values: ConfigValues
+    _database_was_present: bool = field(init=False, repr=False)
 
     LOCK_RETRY_ATTEMPTS = 3
     LOCK_RETRY_BASE_SEC = 0.05
     SQLITE_BUSY_TIMEOUT_MS = 5000
     SQL_TRACE_TEXT_LIMIT = 256
+
+    def __post_init__(self) -> None:
+        self._database_was_present = self._db_file_exists()
+
     def init(self) -> None:
-        """Create or validate the current database schema."""
+        """Initialize a new database or validate an existing one without mutation."""
 
         self.path.parent.mkdir(parents=True, exist_ok=True)
         for attempt in range(max(1, int(self.LOCK_RETRY_ATTEMPTS))):
@@ -1019,19 +1044,19 @@ class DB:
                 raise
 
     def _init_current_schema(self) -> None:
+        if self._database_was_present:
+            database_uri = f"{self.path.absolute().resolve().as_uri()}?mode=ro"
+            with sqlite3.connect(database_uri, uri=True) as conn:
+                self._prepare_connection(conn)
+                self._validate_existing_schema(conn)
+            return
         with sqlite3.connect(self.path) as conn:
             self._prepare_connection(conn)
-            apply_shape_upgrades(
-                conn,
-                exports_create_statement=_CURRENT_TABLE_STATEMENTS["exports"],
-                contest_items_create_statement=_CURRENT_TABLE_STATEMENTS["contest_build_items"],
-                verifications_create_statement=_CURRENT_TABLE_STATEMENTS["verifications"],
-            )
             conn.executescript(SCHEMA)
-            self._validate_existing_schema(conn)
-            validate_current_shape_constraints(conn)
             conn.executescript(SCHEMA_INDEXES)
+            self._validate_existing_schema(conn)
             conn.commit()
+        self._database_was_present = True
 
     def _db_file_exists(self) -> bool:
         return self.path.exists() and self.path.stat().st_size > 0
@@ -1047,6 +1072,11 @@ class DB:
         tables = {str(row[0]) for row in table_rows}
         missing_tables: list[str] = []
         missing_columns: list[str] = []
+        index_rows = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='index'"
+        ).fetchall()
+        indexes = {str(row[0]) for row in index_rows}
+        missing_indexes = sorted(set(_CURRENT_INDEX_NAMES).difference(indexes))
         for table_name, expected_columns in CURRENT_SCHEMA_COLUMNS.items():
             if table_name not in tables:
                 missing_tables.append(table_name)
@@ -1058,13 +1088,12 @@ class DB:
             for column_name in expected_columns:
                 if column_name not in actual_columns:
                     missing_columns.append(f"{table_name}.{column_name}")
-        if missing_tables or missing_columns:
-            parts: list[str] = []
-            if missing_tables:
-                parts.append(f"missing tables: {', '.join(missing_tables)}")
-            if missing_columns:
-                parts.append(f"missing columns: {', '.join(missing_columns)}")
-            raise IncompatibleSchemaError("; ".join(parts))
+        if missing_tables or missing_columns or missing_indexes:
+            raise SchemaRequirementsError(
+                missing_tables=sorted(missing_tables),
+                missing_columns=sorted(missing_columns),
+                missing_indexes=missing_indexes,
+            )
 
     @contextmanager
     def conn(self):

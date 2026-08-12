@@ -11,7 +11,6 @@ from fastapi import Form, HTTPException, Depends
 from app.impl.auth.shared import redirect_response
 from app.impl.runtime.config import config
 from app.impl.workspace.context_operation import (
-    audit,
     read_build_config,
     workspace_rel_file_exists,
     write_build_config,
@@ -115,17 +114,6 @@ def general_save(
                 newline='\n',
             )
             _cleanup_build_config_for_mode(workspace, safe_mode)
-        audit(
-            ctx['user']['id'],
-            ctx['problem']['id'],
-            'general.save',
-            {
-                'time_limit_ms': safe_time_limit,
-                'memory_limit_mb': safe_memory,
-                'mode': safe_mode,
-                'pass_limit': safe_pass_limit,
-            },
-        )
     except (ValueError, OSError, HTTPException) as exc:
         msg = str(exc)
     query: dict[str, str] = {}

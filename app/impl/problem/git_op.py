@@ -10,7 +10,6 @@ from app.impl.auth.session import require_session_user
 from app.impl.auth.shared import redirect_response
 from app.impl.runtime.config import config
 from app.impl.workspace.access import require_write_access
-from app.impl.workspace.context_operation import audit
 from app.impl.workspace.context_ui import page_ctx
 
 
@@ -46,12 +45,6 @@ def revision_commit(
                     raise RuntimeError(f"{push_exc}; commit rollback failed: {rollback_exc}") from rollback_exc
                 raise
             config.workspace_merge_service.clear_undo(workspace)
-        audit(
-            int(ctx["user"]["id"]),
-            int(ctx["problem"]["id"]),
-            "revision.commit",
-            {"message": message, "head": commit_head},
-        )
         msg = "revision published"
     except Exception as exc:
         err = str(exc)
@@ -81,12 +74,6 @@ def git_discard_path(
         link_paths = [str(row["link_path"]) for row in rows if row["link_path"]]
         if selected_path not in link_paths:
             next_path = link_paths[0] if link_paths else ""
-        audit(
-            int(ctx["user"]["id"]),
-            int(ctx["problem"]["id"]),
-            "workspace.discard_path",
-            {"path": selected_path},
-        )
     except Exception as exc:
         msg = str(exc)
     return redirect_response(_workspace_redirect_href(problem, next_path), message=msg)

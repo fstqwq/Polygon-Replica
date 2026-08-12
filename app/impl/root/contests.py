@@ -30,7 +30,6 @@ from app.impl.run_export.import_source import (
 from app.impl.runtime.config import config
 from app.impl.workspace.context import global_user_ctx
 from app.impl.workspace.context_operation import (
-    audit,
     normalize_contest_slug_required,
     normalize_contest_title_required,
     user_contests_overview,
@@ -145,21 +144,10 @@ def contests_root_create(request: Request, user: str = "", contest_slug: str = F
         slug = normalize_contest_slug_required(contest_slug)
         title = normalize_contest_title_required(contest_title)
         actor_user_id = int(gctx["user"]["id"])
-        contest_id = config.contest_service.create_contest_with_owner(
+        config.contest_service.create_contest_with_owner(
             slug=slug,
             title=title,
             owner_user_id=actor_user_id,
-        )
-        audit(
-            int(gctx["user"]["id"]),
-            None,
-            "contest.create",
-            {
-                "contest_id": contest_id,
-                "contest_slug": slug,
-                "contest_title": title,
-                "linked_current_problem": False,
-            },
         )
         msg = f"contest {slug} created"
     except (ValueError, RuntimeError) as exc:
@@ -378,13 +366,11 @@ async def contests_root_import_confirm(request: Request, user: str = ""):
                 problem_policy.archive,
             )
             imported = import_package_as_new_problem(
-                actor_user_id=actor_user_id,
                 actor_user=actor_username,
                 package_name=sub_package_name,
                 package=problem_archive,
                 policy=problem_policy,
                 requested_slug=requested_problem_slug,
-                source_problem="",
                 normalize_test_data_newlines=True,
             )
             imported_problem_slug_obj = imported.get("target_problem")
@@ -426,24 +412,6 @@ async def contests_root_import_confirm(request: Request, user: str = ""):
             config.contest_service.upsert_property(contest_id, actor_user_id, "date", inferred_date)
         config.contest_service.set_statement_problem_source_folders(contest_id, actor_user_id, source_folder_map)
 
-        audit(
-            actor_user_id,
-            None,
-            "contest.import",
-            {
-                "contest_id": contest_id,
-                "contest_slug": target_contest_slug,
-                "contest_title": target_contest_title,
-                "package": package_name,
-                "draft_id": draft_id,
-                "problems_imported": imported_problem_slugs,
-                "total_problems": len(imported_problem_slugs),
-                "statement_default_language": default_language,
-                "location": inferred_location,
-                "date": inferred_date,
-                "normalize_test_data_newlines": True,
-            },
-        )
         contest_archive.close()
         contest_archive = None
         _delete_contest_import_draft(draft_id)

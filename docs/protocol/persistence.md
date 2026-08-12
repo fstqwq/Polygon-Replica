@@ -117,32 +117,29 @@ type. `export_jobs` owns request attempts: distinct requests retain distinct job
 IDs even when they finish by referencing the same cached export row. Contest
 label variants are contest artifacts and do not enter `exports`.
 
-## Configuration and audit
+## Configuration
 
 `system_config` is a key/value JSON store with update identity and timestamp. It
 is the application authority for settings such as secure-cookie behavior; there
 is no environment-variable override for that setting.
 
-`audit_log` appends action, actor, optional problem, details JSON, and timestamp.
-It is an operational record, not an event-sourced reconstruction of domain
-state. Missing referenced identities are normalized according to the current
-write service rather than blocking the audit record.
-
 ## Schema changes
 
-At startup the application first applies the concrete recognized table-shape
-upgrades, then creates missing current objects, validates every canonical table
-and required column plus the constraints owned by those upgrades, and creates
-missing named indexes. The shape-upgrade owner reconstructs the historical
-non-nullable `contest_build_items` table when present. It also recognizes the
-historical `exports.options_hash` table, clears job references to those derived
-rows, and replaces it atomically with the canonical materialization/type cache.
-It does not preserve the old derived export rows.
+An absent or empty database is initialized directly with the canonical schema.
+An existing database is opened read-only during startup validation. Every
+canonical table, required column, and named index must already exist. Missing
+objects put the process in a schema-blocked state: worker and runtime startup do
+not run, and every HTTP request receives a raw `503` that lists the missing
+objects and directs the administrator to upgrade the database offline.
 
-Other existing column constraints and index definitions are not compared
-against the DDL. A schema change updates the DDL, required-column manifest,
-service queries, cleanup policy, and this document together. No project-owned
-schema version is reserved without an actual compatibility boundary.
+Startup never applies DDL to an existing database. Extra tables, columns,
+indexes, and rows are accepted and preserved; they do not satisfy any current
+application requirement and are not interpreted as compatibility state.
+Existing constraints and definitions behind already named indexes are not
+compared against the DDL. A schema change updates the DDL, required-object
+manifest, service queries, cleanup policy, offline operator procedure, and this
+document together. No project-owned schema version is reserved without an
+actual compatibility boundary.
 
 The current `workspaces` shape has no recent-verification status field.
 Existing databases may retain that historical extra column because schema

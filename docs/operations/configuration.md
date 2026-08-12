@@ -72,10 +72,10 @@ stored encrypted with the deployment key above.
 ## Change behavior
 
 Configuration input is normalized at the admin boundary, combined with all
-unchanged values, validated as one snapshot, persisted, and audited. Live
+unchanged values, validated as one snapshot, and persisted. Live
 reload atomically replaces one immutable `ConfigValues` snapshot; an operation
 that needs several settings captures that snapshot once. Secrets are redacted
-from status and audit output.
+from status and application log output.
 
 Most settings become active on that replacement. A registry definition marked
 `restart_required` updates the persisted snapshot but remains pending in the

@@ -13,7 +13,6 @@ from app.impl.contest.problem_rows import contest_management_problem_rows
 from app.impl.contest.workspace_scope import add_contest_problem_hrefs
 from app.impl.runtime.config import config
 from app.impl.workspace.access import workspace_access_context
-from app.impl.workspace.context_operation import audit
 from app.main_util import form_text
 
 from app.impl.contest.common import (
@@ -121,18 +120,6 @@ def contest_problems_add(contest: str, user: Annotated[str, Depends(require_sess
             added += 1
         except Exception as exc:
             failed.append(f"{slug}: {exc}")
-    audit(
-        int(ctx["user"]["id"]),
-        None,
-        "contest.problems.add",
-        {
-            "contest_id": contest_id,
-            "contest_slug": str(ctx["contest"]["slug"]),
-            "added_count": added,
-            "failed_count": len(failed),
-            "failed": failed[:20],
-        },
-    )
     msg = f"added {added} problem(s)"
     if failed:
         msg += f"; failed {len(failed)}"
@@ -371,20 +358,6 @@ def _apply_general_changes(
     }
     job_status = "ok" if failed_count == 0 else "failed"
     job_id = config.contest_service.create_job(contest_id, actor_user_id, "change-general", job_status, summary)
-    audit(
-        actor_user_id,
-        None,
-        "contest.problems.change_general",
-        {
-            "contest_id": contest_id,
-            "contest_slug": str(contest_ctx["slug"]),
-            "job_id": job_id,
-            "total": len(results),
-            "success": success_count,
-            "failed": failed_count,
-            "skipped": skipped_count,
-        },
-    )
     return _contest_redirect(
         str(contest_ctx["slug"]),
         "problems",

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import sqlite3
 from typing import TypedDict
 
@@ -837,31 +836,6 @@ class WorkspaceDiskStore:
             )
         return items
 
-    def append_audit_event(
-        self,
-        *,
-        actor_user_id: int | None,
-        problem_id: int | None,
-        action: str,
-        details: dict[str, object],
-    ) -> None:
-        safe_actor_user_id = None if actor_user_id is None else int(actor_user_id)
-        safe_problem_id = None if problem_id is None else int(problem_id)
-        if safe_actor_user_id is not None and self.db.fetch_one("SELECT 1 FROM users WHERE id=?", [safe_actor_user_id]) is None:
-            safe_actor_user_id = None
-        if safe_problem_id is not None and self.db.fetch_one("SELECT 1 FROM problems WHERE id=?", [safe_problem_id]) is None:
-            safe_problem_id = None
-        try:
-            self.db.execute(
-                "INSERT INTO audit_log(actor_user_id,problem_id,action,details_json,created_at) VALUES(?,?,?,?,?)",
-                [safe_actor_user_id, safe_problem_id, action, json.dumps(details), now_iso()],
-            )
-        except sqlite3.IntegrityError:
-            self.db.execute(
-                "INSERT INTO audit_log(actor_user_id,problem_id,action,details_json,created_at) VALUES(?,?,?,?,?)",
-                [None, None, action, json.dumps(details), now_iso()],
-            )
-
     def delete_problem_metadata(self, problem_id: int) -> None:
         def _tx(conn: sqlite3.Connection) -> None:
             active = conn.execute(
@@ -957,7 +931,6 @@ class WorkspaceDiskStore:
             conn.execute("DELETE FROM verifications WHERE problem_id=?", [int(problem_id)])
             conn.execute("DELETE FROM workspaces WHERE problem_id=?", [int(problem_id)])
             conn.execute("DELETE FROM repo_acl WHERE problem_id=?", [int(problem_id)])
-            conn.execute("DELETE FROM audit_log WHERE problem_id=?", [int(problem_id)])
             conn.execute("DELETE FROM problems WHERE id=?", [int(problem_id)])
 
         self.verification_task_store.run_problem_deletion(

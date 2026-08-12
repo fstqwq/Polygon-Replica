@@ -905,40 +905,6 @@ def _assert_commit(connection: sqlite3.Connection) -> str:
             "SQLite workspace status does not match the published clean commit"
         )
 
-    actions = {
-        str(audit_row["action"])
-        for audit_row in connection.execute(
-            "SELECT action FROM audit_log ORDER BY id"
-        ).fetchall()
-    }
-    required_actions = {
-        "system.setup",
-        "system_config.update_judgehost_runtime_controls",
-        "agent.problem.create",
-        "agent.workspace.apply",
-        "agent.verification.start",
-        "agent.commit",
-    }
-    missing_actions = required_actions.difference(actions)
-    if missing_actions:
-        raise RuntimeError(f"journey audit trail is incomplete: {missing_actions!r}")
-    commit_audit = connection.execute(
-        """
-        SELECT details_json
-        FROM audit_log
-        WHERE action='agent.commit'
-        ORDER BY id DESC
-        LIMIT 1
-        """
-    ).fetchone()
-    if commit_audit is None:
-        raise RuntimeError("journey audit omitted agent.commit details")
-    commit_details = json.loads(str(commit_audit["details_json"]))
-    if not isinstance(commit_details, dict) or commit_details != {
-        "message": COMMIT_MESSAGE,
-        "head": workspace_head,
-    }:
-        raise RuntimeError(f"agent.commit audit details are wrong: {commit_details!r}")
     return workspace_head
 
 

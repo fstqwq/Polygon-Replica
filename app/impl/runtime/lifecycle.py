@@ -66,6 +66,8 @@ def _startup_reset_runtime_state() -> None:
 
 
 def startup() -> None:
+    if config.schema_error is not None:
+        return
     config.runtime_state_service.initialize_metadata()
     config.problem_package_service.fail_interrupted_builds()
     config.export_service.fail_interrupted_export_jobs()
@@ -74,6 +76,8 @@ def startup() -> None:
 
 
 def shutdown() -> None:
+    if config.schema_error is not None:
+        return
     try:
         config.worker_queue_service.stop()
     except Exception as exc:

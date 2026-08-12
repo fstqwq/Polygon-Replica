@@ -1209,12 +1209,6 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         self.assertNotIn("/problems/alice/sample/merge/start", refreshed_html)
         self.assertIn("Workspace updated to the published revision.", refreshed_html)
         self.assertEqual((alice_ws / marker).read_text(encoding="utf-8"), "upstream update\n")
-        audit_row = db_fetch_one(
-            "SELECT COUNT(*) AS c FROM audit_log WHERE action='workspace.merge.auto_update'"
-        )
-        self.assertIsNotNone(audit_row)
-        self.assertEqual(int(audit_row["c"]), 1)
-
         repeated = general_page(_request("/problems/alice/sample/general"), "alice/sample", "alice")
         repeated_html = repeated.body.decode("utf-8", errors="replace")
         self.assertNotIn("Workspace updated to the published revision.", repeated_html)

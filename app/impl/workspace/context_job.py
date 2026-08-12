@@ -8,7 +8,6 @@ from app.service.problem_package.service import PublishedRevision
 from app.service.verification.lifecycle import VerificationAdmission
 from app.service.verification.types import Kind
 
-from app.impl.workspace.context_operation import audit
 from app.service.verification.workspace_fingerprint import (
     remember_verification_fingerprint,
     verification_sources_fingerprint,
@@ -70,15 +69,11 @@ def start_verification_job(
     workspace_dirty: bool,
     targets: list[dict[str, object]],
     verification_id: str,
-    initial_details: dict[str, object] | None=None,
-    initial_summary: dict[str, object] | None=None,
     workspace_path: Path | str | None=None,
     selected_test_names: list[str] | None=None,
     bypass_case_result_cache: bool = False,
     source_commit: str = "",
 ) -> bool:
-    if initial_details is None and initial_summary is not None:
-        initial_details = dict(initial_summary)
     key = _verification_workspace_key(problem_id, workspace_id)
     fingerprint = ""
     signature = ""
@@ -90,10 +85,6 @@ def start_verification_job(
         except Exception:
             fingerprint = ""
             signature = ""
-    if initial_details is not None:
-        if signature and (not (initial_details.get("signature") or "")):
-            initial_details["signature"] = signature
-        initial_details.setdefault("verification_source", "verification.start")
     kind = _requested_verification_kind(selected_test_names=list(selected_test_names or []))
     record_source = str(source_commit or "").strip() or workspace_verification_source(workspace_head)
     with config.verification_lock:
@@ -120,8 +111,6 @@ def start_verification_job(
             config.verification_inflight.discard(key)
         raise RuntimeError("verification id already exists")
     try:
-        if initial_details is not None:
-            audit(actor_user_id, problem_id, 'verification.start', initial_details)
         if kind == Kind.ALL.value and fingerprint and signature:
             remember_verification_fingerprint(
                 problem_id,
@@ -279,16 +268,6 @@ def start_export_job(
             source_commit=source_commit,
         )
         job_created = True
-        audit(
-            actor_user_id,
-            problem_id,
-            'export.create',
-            {
-                'export_job_id': export_job_id,
-                'export_type': requested_export_type,
-                'source_commit': source_commit,
-            },
-        )
     except Exception as exc:
         if job_created:
             config.export_service.mark_export_job_failed(export_job_id, str(exc))

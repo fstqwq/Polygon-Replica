@@ -11,7 +11,7 @@ The physical DDL and required-column manifest are maintained together in
 | contests | `contests`, `contest_members`, `contest_problems`, `contest_jobs`, `contest_build_items`, `contest_artifacts`, `contest_attachments` |
 | execution | `previews`, `verifications`, `verification_selected_tests`, `verification_source_paths`, `verification_sanity_checks`, `verification_sanity_check_messages`, `verification_tests_meta`, `verification_tasks`, `verification_artifact_refs`, `verification_task_diagnostics` |
 | packages | `problem_package_materializations`, `problem_package_builds`, `exports`, `export_jobs` |
-| operations | `audit_log`, `system_config`, `smtp_config` |
+| configuration | `system_config`, `smtp_config` |
 
 Important physical facts:
 
@@ -28,11 +28,10 @@ Important physical facts:
   diagnostic snapshot per task; it does not amend `result_json`.
 - materializations are unique by problem/source commit; exports are unique by
   materialization/type/options hash.
-- `system_config` is mutable key/value JSON, `smtp_config` is a singleton, and
-  `audit_log` is append-oriented evidence rather than event-sourced state.
+- `system_config` is mutable key/value JSON and `smtp_config` is a singleton.
 
-Startup creates missing tables, validates the presence of every canonical table
-and required column, then creates missing named indexes. It does not validate
-column constraints or the definitions of already named indexes. The schema also
-contains an inline rebuild path that makes two older `contest_build_items`
-columns nullable; this is recorded as technical debt in the findings ledger.
+Startup initializes only an absent or empty database. For an existing database,
+it performs a read-only check for every canonical table, required column, and
+named index. Missing objects block application runtime and are listed in a raw
+operator-facing `503`; no startup path creates, alters, rebuilds, or drops an
+existing object. Extra objects and rows are tolerated and preserved.

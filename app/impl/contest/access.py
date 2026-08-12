@@ -15,7 +15,6 @@ from app.impl.auth.shared import template_response
 from app.impl.contest.common import _normalize_transferable_contest_member_role_required
 from app.impl.contest.shared import _contest_ctx, _contest_redirect
 from app.impl.runtime.config import config
-from app.impl.workspace.context_operation import audit
 
 
 def contest_access_page(
@@ -57,17 +56,6 @@ def contest_access_grant(
             )
     except ValueError as exc:
         return _contest_redirect(str(ctx["contest"]["slug"]), "access", message=str(exc))
-    audit(
-        int(ctx["user"]["id"]),
-        None,
-        "contest.access.grant",
-        {
-            "contest_id": contest_id,
-            "contest_slug": str(ctx["contest"]["slug"]),
-            "target_user": safe_target,
-            "role": safe_role,
-        },
-    )
     return _contest_redirect(
         str(ctx["contest"]["slug"]),
         "access",
@@ -97,16 +85,6 @@ def contest_access_revoke(
             message="owner access is fixed and cannot be transferred",
         )
     config.contest_service.revoke_member(contest_id, membership["user_id"])
-    audit(
-        int(ctx["user"]["id"]),
-        None,
-        "contest.access.revoke",
-        {
-            "contest_id": contest_id,
-            "contest_slug": str(ctx["contest"]["slug"]),
-            "target_user": safe_target,
-        },
-    )
     return _contest_redirect(
         str(ctx["contest"]["slug"]),
         "access",

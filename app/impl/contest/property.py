@@ -6,7 +6,7 @@ from fastapi import Form, HTTPException, Request, Depends
 
 from app.impl.auth.shared import template_response
 from app.impl.runtime.config import config
-from app.impl.workspace.context_operation import audit, normalize_contest_title_required
+from app.impl.workspace.context_operation import normalize_contest_title_required
 
 from app.impl.contest.shared import (
     _CONTEST_PROPERTY_DATE,
@@ -54,16 +54,4 @@ def contest_properties_save(
     config.contest_service.update_title(contest_id, safe_title)
     config.contest_service.upsert_property(contest_id, actor_user_id, _CONTEST_PROPERTY_LOCATION, safe_location)
     config.contest_service.upsert_property(contest_id, actor_user_id, _CONTEST_PROPERTY_DATE, safe_date)
-    audit(
-        actor_user_id,
-        None,
-        "contest.properties.save",
-        {
-            "contest_id": contest_id,
-            "contest_slug": ctx["contest"]["slug"],
-            "title": safe_title,
-            "location": safe_location,
-            "date": safe_date,
-        },
-    )
     return _contest_redirect(ctx["contest"]["slug"], "properties", message="contest properties saved")

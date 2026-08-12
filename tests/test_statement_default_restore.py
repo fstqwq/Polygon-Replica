@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
@@ -11,7 +10,6 @@ from app.impl.runtime.config import config
 from app.service.statement.constant import STATEMENT_DEFAULT_FILES
 
 from tests.common import WorkspaceTestBase
-from tests.db_helpers import db_fetch_one
 from tests.ui_support import _flash_messages_from_response, _request
 
 
@@ -46,7 +44,7 @@ class TestStatementDefaultRestore(WorkspaceTestBase):
         supported.mkdir()
         self.assertNotIn(action, self._files_html("statement/olymp.sty", user=self.user))
 
-    def test_restore_is_exact_isolated_recreates_missing_file_and_audits(self) -> None:
+    def test_restore_is_exact_and_recreates_missing_file(self) -> None:
         ws = self._workspace_path()
         custom = {
             rel: f"custom {index}\n"
@@ -76,22 +74,6 @@ class TestStatementDefaultRestore(WorkspaceTestBase):
                 for rel, content in custom.items():
                     if rel != selected:
                         self.assertEqual((ws / rel).read_text(encoding="utf-8"), content)
-                audit_row = db_fetch_one(
-                    """
-                    SELECT action, details_json
-                    FROM audit_log
-                    WHERE problem_id=(SELECT id FROM problems WHERE slug=?)
-                    ORDER BY id DESC
-                    LIMIT 1
-                    """,
-                    [self.problem],
-                )
-                self.assertEqual(audit_row["action"], "files.restore_default")
-                self.assertEqual(
-                    json.loads(audit_row["details_json"]),
-                    {"path": selected},
-                )
-
         missing = "statement/olymp.sty"
         (ws / missing).unlink()
         files_restore_default(

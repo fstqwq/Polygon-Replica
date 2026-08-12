@@ -17,7 +17,8 @@ Store instances are process-lived wrappers around short-lived SQLite
 connections and retain no task lifecycle of their own. Cross-store boundary
 fragmentation is recorded as PLC-009.
 
-Concrete historical table reconstructions run before these stores are used.
-The dependency-light SQLite shape-upgrade owner invalidates old derived export
-rows when removing their obsolete option identity and preserves historical job
-rows without stale artifact references.
+Before these stores are used, an existing SQLite database is checked read-only
+for every current required table, column, and named index. Missing objects block
+runtime; the application has no runtime schema mutation owner and does not
+change an existing schema during startup. Extra extension objects and rows are
+tolerated.

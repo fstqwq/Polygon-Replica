@@ -108,14 +108,6 @@ def user_contests_overview(user_id: int, limit: int) -> list[dict]:
     cap = max(1, int(limit))
     return config.contest_service.user_contests_overview(uid, limit=cap)
 
-def audit(actor_user_id: int, problem_id: int | None, action: str, details: dict) -> None:
-    config.workspace_service.record_audit_event(
-        actor_user_id=int(actor_user_id),
-        problem_id=problem_id,
-        action=action,
-        details=details,
-    )
-
 def normalize_page_target(page: str) -> str:
     raw = page.strip().lower()
     allowed = {

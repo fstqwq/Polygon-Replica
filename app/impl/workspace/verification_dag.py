@@ -8,7 +8,6 @@ from typing import cast
 
 from app.db import now_iso
 from app.impl.runtime.config import config
-from app.impl.workspace.context_operation import audit
 from app.impl.workspace.sanity_checks import (
     SANITY_FAILED,
     SANITY_PENDING,
@@ -1126,19 +1125,8 @@ def run_workspace_verification_dag(
         ).transition
         if transition.outcome == "missing":
             raise RuntimeError("verification was not admitted") from exc
-        audit(
-            actor_user_id,
-            problem_id,
-            "verification.start",
-            {
-                "verification_id": verification_id,
-                "status": "failed",
-                "artifact_verification_id": verification_id,
-                "error": str(exc),
-            },
-        )
-        # All task rows, final detail, status, and audit data are durable before
-        # the quiet-window cleanup can retire process-local judgehost records.
+        # All task rows, final detail, and status are durable before the
+        # quiet-window cleanup can retire process-local judgehost records.
         config.judgehost_task_service.schedule_verification_cleanup(verification_id)
         if (
             snapshot_root is not None
@@ -1300,7 +1288,6 @@ def run_workspace_verification_dag(
         snapshot = config.verification_service.verification_snapshot(verification_id)
         if snapshot is None:
             raise RuntimeError("verification disappeared after scheduling")
-        record = snapshot["record"]
         detail = snapshot["detail"]
         if (
             _status == VerificationStatus.RUNNING.value
@@ -1382,24 +1369,9 @@ def run_workspace_verification_dag(
             )
             if snapshot is None:
                 raise RuntimeError("verification disappeared after sanity checks")
-            record = snapshot["record"]
             if finished.outcome == "transitioned":
                 summary["error"] = ""
-        audit(
-            actor_user_id,
-            problem_id,
-            "verification.start",
-            {
-                "verification_id": verification_id,
-                "status": summary.get("status") or record.get("status") or "",
-                "artifact_verification_id": verification_id,
-                "error": summary.get("error") or "",
-                "task_counts": summary.get("task_counts") or {},
-                "fail_flag": bool(summary.get("fail_flag")),
-                "fail_reason": summary.get("fail_reason") or "",
-            },
-        )
-        # Schedule only after final detail, status, and audit writes are durable.
+        # Schedule only after final detail and status writes are durable.
         config.judgehost_task_service.schedule_verification_cleanup(verification_id)
     except VerificationCoordinatorFailure:
         config.judgehost_task_service.schedule_verification_cleanup(

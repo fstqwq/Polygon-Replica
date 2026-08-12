@@ -34,7 +34,6 @@ from app.impl.workspace.context import count_label
 from app.impl.workspace.context_operation import (
     _solutions_status_context,
     _tests_spec_status_context,
-    audit,
 )
 from app.impl.workspace.context_component_status import (
     checker_status_context,
@@ -109,16 +108,6 @@ def page_ctx(
             auto_updated = config.workspace_merge_service.advance_clean_workspace(workspace_path)
         except Exception:
             logger.exception("clean workspace auto-update failed for %s", problem)
-        if auto_updated:
-            try:
-                audit(
-                    int(ctx['user']['id']),
-                    int(ctx['problem']['id']),
-                    'workspace.merge.auto_update',
-                    {},
-                )
-            except Exception:
-                logger.exception("clean workspace auto-update audit failed for %s", problem)
     ctx['workspace_auto_update_message'] = (
         'Workspace updated to the published revision.' if auto_updated else ''
     )

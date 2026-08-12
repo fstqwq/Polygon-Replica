@@ -20,7 +20,6 @@ from app.impl.runtime.config import config
 from app.impl.workspace.access import require_write_access
 from app.impl.workspace.context_ui import page_ctx
 from app.impl.workspace.context_operation import (
-    audit,
     read_text_safe_limited,
     read_workspace_source_with_default,
 )
@@ -542,7 +541,6 @@ def preview_run(
             details['status'] = 'running'
             details['preview_status'] = 'running'
             details['error'] = 'preview compile already running'
-            audit(ctx['user']['id'], problem_id, 'preview.run', details)
             return redirect_response(base, status_code=303, message='preview compile already running')
         config.preview_inflight.add(workspace_key)
     try:
@@ -572,7 +570,6 @@ def preview_run(
     finally:
         with config.preview_lock:
             config.preview_inflight.discard(workspace_key)
-        audit(ctx['user']['id'], problem_id, 'preview.run', details)
     redirect_url = base
     preview_id = details["preview_id"]
     if preview_id:
@@ -717,21 +714,6 @@ def preview_save(
                 section_path = safe_workspace_path(workspace, rel.as_posix())
                 section_path.parent.mkdir(parents=True, exist_ok=True)
                 section_path.write_text(content, encoding='utf-8')
-        audit(
-            ctx['user']['id'],
-            ctx['problem']['id'],
-            'preview.save_sources',
-            {
-                'mode': statement_mode,
-                'name_bytes': len(safe_name_tex.encode('utf-8')),
-                'legend_bytes': len(safe_legend_tex.encode('utf-8')),
-                'input_bytes': len(safe_input_tex.encode('utf-8')),
-                'output_bytes': len(safe_output_tex.encode('utf-8')),
-                'notes_bytes': len(safe_notes_tex.encode('utf-8')),
-                'interaction_bytes': len(safe_interaction_tex.encode('utf-8')) if statement_mode != 'pass-fail' else 0,
-                'language': current_language,
-            },
-        )
     except (ValueError, OSError, HTTPException) as exc:
         msg = str(exc.detail) if isinstance(exc, HTTPException) else str(exc)
     return redirect_response(
@@ -764,15 +746,6 @@ def statement_templates_reset(
                     raise ValueError(f'{rel} must be a regular file')
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_text(content, encoding='utf-8')
-        audit(
-            ctx['user']['id'],
-            ctx['problem']['id'],
-            'statement.templates.reset',
-            {
-                'paths': list(STATEMENT_DEFAULT_FILES),
-                'language': current_language,
-            },
-        )
     except (ValueError, OSError, HTTPException) as exc:
         message = str(exc.detail) if isinstance(exc, HTTPException) else str(exc)
     return redirect_response(
@@ -810,7 +783,6 @@ def statement_compile_asset_delete(
             if not attachment_abs.exists() or (not attachment_abs.is_file()):
                 raise ValueError('statement asset not found')
             attachment_abs.unlink()
-        audit(ctx['user']['id'], ctx['problem']['id'], 'statement.asset.delete', {'path': safe_rel, 'language': current_language})
     except (ValueError, OSError) as exc:
         message = str(exc)
     except HTTPException as exc:
@@ -844,7 +816,6 @@ async def statement_compile_asset_upload(
             message=str(exc),
         )
     message = 'statement asset uploaded'
-    total_bytes = 0
     tmp_path: Path | None = None
     target_rel = ''
     try:
@@ -858,7 +829,7 @@ async def statement_compile_asset_upload(
             tmp_path = Path(tmp_name)
             try:
                 with os.fdopen(fd, 'wb') as out:
-                    total_bytes = await write_upload_file_limited(
+                    await write_upload_file_limited(
                         upload,
                         out,
                         label='statement asset',
@@ -871,7 +842,6 @@ async def statement_compile_asset_upload(
                     tmp_path.unlink(missing_ok=True)
                     tmp_path = None
                 raise
-        audit(ctx['user']['id'], ctx['problem']['id'], 'statement.asset.upload', {'path': target_rel, 'bytes': total_bytes, 'language': current_language})
     except (ValueError, OSError) as exc:
         message = str(exc)
     except HTTPException as exc:
@@ -908,7 +878,6 @@ async def statement_attachment_upload(
             message=str(exc),
         )
     message = 'attachment uploaded'
-    total_bytes = 0
     tmp_path: Path | None = None
     target_rel = ''
     try:
@@ -922,7 +891,7 @@ async def statement_attachment_upload(
             tmp_path = Path(tmp_name)
             try:
                 with os.fdopen(fd, 'wb') as out:
-                    total_bytes = await write_upload_file_limited(
+                    await write_upload_file_limited(
                         upload,
                         out,
                         label='attachment',
@@ -935,7 +904,6 @@ async def statement_attachment_upload(
                     tmp_path.unlink(missing_ok=True)
                     tmp_path = None
                 raise
-        audit(ctx['user']['id'], ctx['problem']['id'], 'statement.attachment.upload', {'path': target_rel, 'bytes': total_bytes})
     except (ValueError, OSError) as exc:
         message = str(exc)
     except HTTPException as exc:
@@ -978,7 +946,6 @@ def statement_attachment_delete(
             if not attachment_abs.exists() or (not attachment_abs.is_file()):
                 raise ValueError('attachment not found')
             attachment_abs.unlink()
-        audit(ctx['user']['id'], ctx['problem']['id'], 'statement.attachment.delete', {'path': safe_rel})
     except (ValueError, OSError) as exc:
         message = str(exc)
     except HTTPException as exc:
@@ -1008,7 +975,6 @@ def statement_language_add(
             raise ValueError('statement language is required')
         with config.workspace_service.workspace_lock(workspace):
             ensure_statement_language_sources(workspace, safe_language)
-        audit(ctx['user']['id'], ctx['problem']['id'], 'statement.language.add', {'language': safe_language})
     except (RuntimeError, ValueError, OSError) as exc:
         safe_language = ""
         message = str(exc)
@@ -1050,7 +1016,6 @@ def statement_language_delete(
                 pass
             remaining_languages = statement_languages(workspace)
         next_language = remaining_languages[0] if remaining_languages else ''
-        audit(ctx['user']['id'], ctx['problem']['id'], 'statement.language.delete', {'language': current_language})
     except (ValueError, OSError, HTTPException) as exc:
         message = str(exc)
     return redirect_response(

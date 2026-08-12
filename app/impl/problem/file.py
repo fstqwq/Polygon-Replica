@@ -15,7 +15,6 @@ from app.impl.contest.workspace_scope import (
 from app.impl.runtime.config import config
 from app.impl.workspace.access import require_write_access
 from app.impl.workspace.context_operation import (
-    audit,
     build_line_focus_context,
     build_repo_browser_context,
     kind_for_path,
@@ -177,8 +176,7 @@ def files_save(
     workspace = Path(ctx['workspace']['path'])
     msg = 'saved'
     try:
-        saved_path = config.workspace_file_service.write_text(workspace, path, content, require_allowed_root=False)
-        audit(ctx['user']['id'], ctx['problem']['id'], 'files.save', {'path': saved_path})
+        config.workspace_file_service.write_text(workspace, path, content, require_allowed_root=False)
     except ValueError as exc:
         msg = str(exc)
     return redirect_response(
@@ -212,7 +210,6 @@ def files_new(
             require_allowed_root=False,
         )
         selected_path = created_path
-        audit(ctx['user']['id'], ctx['problem']['id'], 'files.new', {'path': created_path})
     except ValueError as exc:
         msg = str(exc)
     return redirect_response(
@@ -250,12 +247,6 @@ def files_new_directory(
             path,
             require_allowed_root=False,
         )
-        audit(
-            ctx['user']['id'],
-            ctx['problem']['id'],
-            'files.new_directory',
-            {'path': browse_dir},
-        )
     except ValueError as exc:
         msg = str(exc)
     return redirect_response(
@@ -292,7 +283,6 @@ def files_create_template(
                 config.git_service.write_file(workspace, path, content)
                 if expected_kind == 'solution' and ensure_solution_metadata_for_source(workspace, path):
                     msg = 'template and metadata created'
-                audit(ctx['user']['id'], ctx['problem']['id'], 'files.create_template', {'path': path, 'kind': kind})
     except ValueError as exc:
         msg = str(exc)
     return redirect_response(
@@ -323,12 +313,6 @@ def files_restore_default(
             raise ValueError('default restore is not available for this path')
         with config.workspace_service.workspace_lock(workspace):
             config.git_service.write_file(workspace, selected, content)
-        audit(
-            ctx['user']['id'],
-            ctx['problem']['id'],
-            'files.restore_default',
-            {'path': selected},
-        )
     except (ValueError, OSError) as exc:
         message = str(exc)
     return redirect_response(
@@ -369,8 +353,6 @@ async def files_upload(
         )
     except (ValueError, OSError) as exc:
         message = str(exc)
-    else:
-        audit(ctx['user']['id'], ctx['problem']['id'], 'files.upload', {'path': uploaded_path, 'bytes': total_bytes})
     finally:
         await upload.close()
     return redirect_response(
@@ -415,7 +397,6 @@ def files_rename(
             new_path,
             require_allowed_root=False,
         )
-        audit(ctx['user']['id'], ctx['problem']['id'], 'files.rename', {'old': old_path, 'new': selected})
     except (ValueError, OSError) as exc:
         selected = old_path
         msg = str(exc)
@@ -436,8 +417,7 @@ def files_delete(
     workspace = Path(ctx['workspace']['path'])
     msg = 'deleted'
     try:
-        deleted_path = config.workspace_file_service.delete_path(workspace, path, require_allowed_root=False)
-        audit(ctx['user']['id'], ctx['problem']['id'], 'files.delete', {'path': deleted_path})
+        config.workspace_file_service.delete_path(workspace, path, require_allowed_root=False)
     except ValueError as exc:
         msg = str(exc)
     return redirect_response(

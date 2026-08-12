@@ -5,6 +5,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from app.db import SchemaRequirementsError
 from app.main import MaintenanceAdmissionMiddleware, config
 from app.route.maintenance_route import maintenance_page
 from app.service.platform.admission import MaintenanceAdmissionGate
@@ -32,6 +33,55 @@ class _AdmissionStub:
 
 
 class TestMaintenanceAdmissionMiddleware(unittest.IsolatedAsyncioTestCase):
+    async def test_schema_gap_returns_actionable_raw_503_without_dispatch(self) -> None:
+        downstream_called = False
+        sent: list[dict[str, object]] = []
+
+        async def downstream(scope, receive, send) -> None:
+            nonlocal downstream_called
+            _ = (scope, receive, send)
+            downstream_called = True
+
+        async def receive() -> dict[str, object]:
+            return {"type": "http.request", "body": b"", "more_body": False}
+
+        async def send(message: dict[str, object]) -> None:
+            sent.append(message)
+
+        scope = {
+            "type": "http",
+            "asgi": {"version": "3.0"},
+            "http_version": "1.1",
+            "method": "GET",
+            "scheme": "http",
+            "path": "/admin",
+            "raw_path": b"/admin",
+            "query_string": b"",
+            "headers": [],
+            "client": ("127.0.0.1", 12345),
+            "server": ("testserver", 80),
+        }
+        middleware = MaintenanceAdmissionMiddleware(downstream)
+        schema_error = SchemaRequirementsError(
+            missing_tables=["system_config"],
+            missing_columns=["exports.materialization_id"],
+            missing_indexes=["idx_exports_materialization_created"],
+        )
+
+        with patch.object(config, "schema_error", schema_error):
+            await middleware(scope, receive, send)
+
+        self.assertFalse(downstream_called)
+        self.assertEqual(sent[0]["status"], 503)
+        headers = dict(sent[0]["headers"])
+        self.assertEqual(headers[b"retry-after"], b"60")
+        self.assertEqual(headers[b"cache-control"], b"no-store")
+        body = bytes(sent[-1]["body"])
+        self.assertIn(b"missing tables: system_config", body)
+        self.assertIn(b"missing columns: exports.materialization_id", body)
+        self.assertIn(b"missing indexes: idx_exports_materialization_created", body)
+        self.assertNotIn(b"<html", body.lower())
+
     def test_raw_maintenance_page_reports_running_success_and_failure(self) -> None:
         running_state = {
             "status": "running",

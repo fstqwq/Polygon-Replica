@@ -12,7 +12,6 @@ from app.service.problem.runtime_config import problem_config_limits
 from app.service.repository.git import GitService
 
 from tests.db_fixture import DBTestBase
-from tests.isolated_db_helpers import isolated_db_fetch_one
 
 
 class TestWorkspaceStoreService(DBTestBase):
@@ -108,31 +107,6 @@ class TestWorkspaceStoreService(DBTestBase):
         )
         self.assertEqual(rows[0]["source_commit"], link_commit)
         self.assertIn("symbolic link", rows[0]["error"])
-
-    def test_audit_event_downgrades_missing_foreign_keys_to_null(self) -> None:
-        self.workspace_service.record_audit_event(
-            actor_user_id=987654321,
-            problem_id=987654322,
-            action="test.missing_fk",
-            details={"ok": True},
-        )
-
-        row = isolated_db_fetch_one(
-            self.db,
-            """
-            SELECT actor_user_id,problem_id,action,details_json
-            FROM audit_log
-            WHERE action='test.missing_fk'
-            ORDER BY id DESC
-            LIMIT 1
-            """,
-        )
-
-        self.assertIsNotNone(row)
-        assert row is not None
-        self.assertIsNone(row["actor_user_id"])
-        self.assertIsNone(row["problem_id"])
-        self.assertEqual(str(row["action"]), "test.missing_fk")
 
     def test_ensure_workspace_repairs_unborn_clone_after_origin_main_appears(
         self,

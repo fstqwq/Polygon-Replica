@@ -13,7 +13,6 @@ from app.impl.problem.compile_check import judgehost_compile_check_error
 from app.impl.runtime.config import config
 from app.impl.problem.shared import _normalize_component_create_path, rename_component_source
 from app.impl.workspace.context_operation import (
-    audit,
     generator_sources_from_build_cfg,
     read_build_config,
     template_for_kind,
@@ -109,7 +108,6 @@ def generator_rename_source(
         folder='generators',
         default_filename='generator.cpp',
         component_label='generator',
-        audit_event='generators.rename_source',
         redirect_url_for_path=lambda path: f'/problems/{problem}/generators?path={quote_plus(path)}',
         config_key='generator_sources',
     )
@@ -167,7 +165,6 @@ def generator_save_source(
                     cfg_path.unlink(missing_ok=True)
                 raise ValueError(f'compile check failed: {compile_check_error}')
         save_ok = True
-        audit(ctx['user']['id'], ctx['problem']['id'], 'generators.save_source', {'path': target, 'bytes': len(safe_content.encode('utf-8'))})
     except (ValueError, OSError) as exc:
         msg = str(exc)
     except HTTPException as exc:

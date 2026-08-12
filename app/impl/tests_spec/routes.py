@@ -24,7 +24,7 @@ from app.impl.tests_spec.shared import (
 )
 from app.impl.workspace.access import require_write_access
 from app.impl.workspace.context_ui import page_ctx
-from app.impl.workspace.context_operation import audit, tests_spec_editor_context
+from app.impl.workspace.context_operation import tests_spec_editor_context
 from app.impl.workspace.test_spec import (
     read_tests_spec,
     tests_spec_bool_flag,
@@ -154,19 +154,6 @@ def add_manual_test(
                 sample_output_validate=safe_sample_output_validate,
             )
             redirect_query = f'focus={added_index}'
-        audit(
-            ctx['user']['id'],
-            ctx['problem']['id'],
-            'tests.spec.add_manual',
-            {
-                'index': added_index,
-                'id': safe_test_id,
-                'sample': safe_sample,
-                'custom_sample_input': bool(safe_sample_input),
-                'custom_sample_output': bool(safe_sample_output),
-                'custom_sample_output_validate': bool(safe_sample_output_validate),
-            },
-        )
     except (ValueError, OSError, HTTPException) as exc:
         msg = str(exc)
     redirect_url = f'/problems/{problem}/tests'
@@ -219,20 +206,6 @@ async def upload_manual_test(
                 sample_output_validate=safe_sample_output_validate,
             )
             redirect_query = f'focus={added_index}'
-        audit(
-            ctx['user']['id'],
-            ctx['problem']['id'],
-            'tests.spec.add_manual_upload',
-            {
-                'index': added_index,
-                'id': safe_test_id,
-                'sample': safe_sample,
-                'bytes': len(safe_input.encode('utf-8')),
-                'custom_sample_input': bool(safe_sample_input),
-                'custom_sample_output': bool(safe_sample_output),
-                'custom_sample_output_validate': bool(safe_sample_output_validate),
-            },
-        )
     except (ValueError, OSError, HTTPException) as exc:
         msg = str(exc)
     finally:
@@ -281,20 +254,6 @@ def add_generator_test(
                 sample_output_validate=safe_sample_output_validate,
             )
             redirect_query = f'focus={added_index}'
-        audit(
-            ctx['user']['id'],
-            ctx['problem']['id'],
-            'tests.spec.add_gen',
-            {
-                'index': added_index,
-                'id': safe_test_id,
-                'sample': safe_sample,
-                'command': safe_command,
-                'custom_sample_input': bool(safe_sample_input),
-                'custom_sample_output': bool(safe_sample_output),
-                'custom_sample_output_validate': bool(safe_sample_output_validate),
-            },
-        )
     except (ValueError, OSError, HTTPException) as exc:
         msg = str(exc)
     redirect_url = f'/problems/{problem}/tests'
@@ -362,20 +321,6 @@ def edit_spec_test(
             tests_spec_write_payload(workspace, safe_test_id, safe_kind, safe_payload)
             if safe_test_id != old_id:
                 tests_spec_remove_payload(workspace, old_id)
-        audit(
-            ctx['user']['id'],
-            ctx['problem']['id'],
-            'tests.spec.edit',
-            {
-                'index': idx,
-                'id': safe_test_id,
-                'kind': safe_kind,
-                'sample': safe_sample,
-                'custom_sample_input': bool(safe_sample_input),
-                'custom_sample_output': bool(safe_sample_output),
-                'custom_sample_output_validate': bool(safe_sample_output_validate),
-            },
-        )
     except (ValueError, OSError, HTTPException) as exc:
         msg = str(exc)
     return redirect_response(f'/problems/{problem}/tests', status_code=303, message=msg)
@@ -394,7 +339,6 @@ def delete_spec_test(problem: str, user: Annotated[str, Depends(require_session_
             _write_tests_spec(spec_path, entries)
             if deleted_id:
                 tests_spec_remove_payload(workspace, deleted_id)
-        audit(ctx['user']['id'], ctx['problem']['id'], 'tests.spec.delete', {'index': idx, 'kind': normalize_test_kind(deleted.get('kind')), 'id': deleted_id})
     except (ValueError, OSError, HTTPException) as exc:
         msg = str(exc)
     return redirect_response(f'/problems/{problem}/tests', status_code=303, message=msg)
@@ -443,10 +387,6 @@ def reindex_spec_test(
             entries.insert(target_pos - 1, row)
             _write_tests_spec(spec_path, entries)
             redirect_query = f'focus={target_pos}'
-        audit_payload = {'target': target_pos, 'source_index': source_pos + 1}
-        if safe_test_id_raw:
-            audit_payload['id'] = safe_test_id_raw
-        audit(ctx['user']['id'], ctx['problem']['id'], 'tests.spec.reindex', audit_payload)
     except (ValueError, OSError, HTTPException) as exc:
         msg = str(exc)
     url = f'/problems/{problem}/tests'
@@ -565,7 +505,6 @@ def save_gen_script(problem: str, user: Annotated[str, Depends(require_session_u
                 tests_spec_write_payload(workspace, safe_test_id, 'gen', safe_command)
             for removed_id in sorted(old_gen_ids - new_gen_ids):
                 tests_spec_remove_payload(workspace, removed_id)
-        audit(ctx['user']['id'], ctx['problem']['id'], 'tests.spec.gen_script', {'commands': len(desired_commands)})
     except (ValueError, OSError, HTTPException) as exc:
         msg = str(exc)
         redirect_query = '?edit=gen-script'
@@ -628,7 +567,6 @@ async def upload_test_payload(
             if kind != 'manual':
                 raise ValueError('payload upload is only available for manual tests')
             tests_spec_write_payload(workspace, test_id, 'manual', safe_payload)
-        audit(ctx['user']['id'], ctx['problem']['id'], 'tests.spec.payload.upload', {'index': idx, 'id': test_id, 'bytes': len(safe_payload.encode('utf-8'))})
     except (ValueError, OSError, HTTPException) as exc:
         msg = str(exc)
     finally:

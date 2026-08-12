@@ -190,7 +190,6 @@ def history_import(
         package_name = (package_upload.filename or "").strip()
         if not package_name:
             raise ValueError("archive filename is required")
-        user_context = cast(dict[str, object], ctx["user"])
         workspace_context = cast(dict[str, object], ctx["workspace"])
         workspace = Path(cast(str, workspace_context["path"]))
         snapshot = _C.snapshot()
@@ -218,16 +217,6 @@ def history_import(
                     workspace,
                     apply_snapshot,
                 )
-        config.workspace_service.record_audit_event(
-            actor_user_id=cast(int, user_context["id"]),
-            problem_id=cast(int, ctx["problem"]["id"]),
-            action="history.snapshot_restore",
-            details={
-                "package": package_name,
-                "uploads": applied.value.uploads,
-                "deletes": applied.value.deletes,
-            },
-        )
         message = (
             f"snapshot restored into your workspace "
             f"({count_label(len(applied.value.uploads), 'changed file')})"

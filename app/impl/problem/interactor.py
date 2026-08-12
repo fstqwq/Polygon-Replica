@@ -11,7 +11,7 @@ from app.impl.contest.workspace_scope import contest_workspace_context_from_requ
 from app.impl.problem.compile_check import judgehost_compile_check_error
 from app.impl.problem.shared import rename_component_source, single_source_editor_context
 from app.impl.runtime.config import config
-from app.impl.workspace.context_operation import audit, read_build_config, template_for_kind, write_build_config
+from app.impl.workspace.context_operation import read_build_config, template_for_kind, write_build_config
 from app.impl.workspace.context_component_status import interactor_status_context
 from app.impl.workspace.access import require_write_access
 from app.impl.workspace.context_ui import page_ctx
@@ -55,7 +55,6 @@ def interactor_rename_source(
         folder='interactors',
         default_filename='interactor.cpp',
         component_label='interactor',
-        audit_event='interactor.rename_source',
         redirect_url_for_path=lambda _path: f'/problems/{problem}/interactor',
         config_key='interactor_source',
     )
@@ -110,7 +109,6 @@ def interactor_save_source(
                     cfg_path.unlink(missing_ok=True)
                 raise ValueError(f'compile check failed: {compile_check_error}')
         save_ok = True
-        audit(ctx['user']['id'], ctx['problem']['id'], 'interactor.save_source', {'path': target, 'bytes': len(safe_content.encode('utf-8'))})
     except (ValueError, OSError) as exc:
         msg = str(exc)
     except HTTPException as exc:

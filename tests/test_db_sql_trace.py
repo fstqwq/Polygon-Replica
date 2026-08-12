@@ -87,20 +87,12 @@ class TestDBSqlTrace(DBTestBase):
         sql_texts = self._trace_sql_texts(info)
         self.assertTrue(any(text == "SELECT 1 AS value" for text in sql_texts), sql_texts)
 
-    def test_db_trace_redacts_details_and_value_json_sql(self) -> None:
+    def test_db_trace_redacts_value_json_sql(self) -> None:
         values = dict(self.config_values.snapshot())
         values["DB_SQL_TRACE_ENABLED"] = True
         self.config_values.replace(values)
         payload = {"kind": "verification.start", "blob": "Y" * 1024}
         with patch("app.db.logger.info") as info:
-            self._execute(
-                self.db,
-                """
-                INSERT INTO audit_log(actor_user_id,problem_id,action,details_json,created_at)
-                VALUES(?,?,?,?,?)
-                """,
-                [None, None, "verification.start", json.dumps(payload), now_iso()],
-            )
             self._execute(
                 self.db,
                 """
@@ -110,9 +102,6 @@ class TestDBSqlTrace(DBTestBase):
                 ["DB_SQL_TRACE_ENABLED", json.dumps(payload), now_iso(), None],
             )
         sql_texts = self._trace_sql_texts(info)
-        details_text = next((text for text in sql_texts if "json_fields=details_json" in text), "")
         value_text = next((text for text in sql_texts if "json_fields=value_json" in text), "")
-        self.assertTrue(details_text, sql_texts)
         self.assertTrue(value_text, sql_texts)
-        self.assertNotIn('"blob": "', details_text)
         self.assertNotIn('"blob": "', value_text)

@@ -189,12 +189,6 @@ class AgentService:
         if expires_at is None:
             raise RuntimeError("registration expiry required")
         self._store.create_registration_code(code=code, user_id=int(user_id), expires_at=expires_at)
-        self.workspace_service.record_audit_event(
-            actor_user_id=int(user_id),
-            problem_id=None,
-            action="agent.connect.create_registration_code",
-            details={"code": code, "expires_at": expires_at},
-        )
         return {"code": code, "expires_at": expires_at, "expires_in": safe_ttl}
 
     def register_agent(self, *, code: str, agent_name: str, desktop_id: str, init_ts: str) -> dict[str, object]:
@@ -211,17 +205,6 @@ class AgentService:
         existing = self._store.active_session_by_identity(user_id=int(claimed["user_id"]), identity_hash=identity_hash)
         if existing is not None:
             self._store.touch_session(existing["id"], last_seen_at=now_text)
-            self.workspace_service.record_audit_event(
-                actor_user_id=int(claimed["user_id"]),
-                problem_id=None,
-                action="agent.session.reuse",
-                details={
-                    "agent_session_id": existing["id"],
-                    "agent_name": existing["agent_name"],
-                    "desktop_id": existing["desktop_id"],
-                    "identity_hash": identity_hash,
-                },
-            )
             return {
                 "agent_session_id": existing["id"],
                 "user": existing["username"],
@@ -237,17 +220,6 @@ class AgentService:
             desktop_id=str(desktop_id or "").strip(),
             init_ts=str(init_ts or "").strip(),
             created_at=now_text,
-        )
-        self.workspace_service.record_audit_event(
-            actor_user_id=int(claimed["user_id"]),
-            problem_id=None,
-            action="agent.session.connect",
-            details={
-                "agent_session_id": session_id,
-                "agent_name": str(agent_name or "").strip(),
-                "desktop_id": str(desktop_id or "").strip(),
-                "identity_hash": identity_hash,
-            },
         )
         return {
             "agent_session_id": session_id,
@@ -282,17 +254,6 @@ class AgentService:
             agent_session_id=session["id"],
             problem_id=int(problem_id),
             expires_at=expires_at,
-        )
-        self.workspace_service.record_audit_event(
-            actor_user_id=int(session["user_id"]),
-            problem_id=int(problem_id),
-            action="agent.access_request.create",
-            details={
-                "request_id": request_id,
-                "agent_session_id": session["id"],
-                "problem": safe_problem,
-                "expires_at": expires_at,
-            },
         )
         self._touch_session(str(session["id"]))
         return {"request_id": request_id, "approve_path": f"/agent/approve/{request_id}", "expires_in": safe_ttl}
@@ -381,15 +342,6 @@ class AgentService:
             safe_problem,
             str(session["username"]),
         )
-        self.workspace_service.record_audit_event(
-            actor_user_id=int(session["user_id"]),
-            problem_id=problem_id,
-            action="agent.problem.create",
-            details={
-                "agent_session_id": str(session["id"]),
-                "problem": safe_problem,
-            },
-        )
         self._touch_session(str(session["id"]))
         return {"problem": safe_problem}
 
@@ -427,12 +379,6 @@ class AgentService:
             raise ValueError("invalid decision")
         if safe_decision == "deny":
             self._store.resolve_access_request(request_id=row["id"], status="denied", resolved_at=now_iso())
-            self.workspace_service.record_audit_event(
-                actor_user_id=int(actor_user_id),
-                problem_id=int(row["problem_id"]),
-                action="agent.access_request.deny",
-                details={"request_id": row["id"], "agent_session_id": row["agent_session_id"]},
-            )
             return {"status": "denied"}
         safe_scope = self._normalize_scope(scope)
         ttl_seconds: int | None
@@ -467,29 +413,6 @@ class AgentService:
             resolved_at=created_at,
             token_id=token_id,
             delivery_token=token,
-        )
-        self.workspace_service.record_audit_event(
-            actor_user_id=int(actor_user_id),
-            problem_id=int(row["problem_id"]),
-            action="agent.access_request.approve",
-            details={
-                "request_id": row["id"],
-                "agent_session_id": row["agent_session_id"],
-                "token_id": token_id,
-                "scope": safe_scope,
-                "expires_at": token_expires_at or "",
-            },
-        )
-        self.workspace_service.record_audit_event(
-            actor_user_id=int(actor_user_id),
-            problem_id=int(row["problem_id"]),
-            action="agent.token.mint",
-            details={
-                "token_id": token_id,
-                "agent_session_id": row["agent_session_id"],
-                "scope": safe_scope,
-                "expires_at": token_expires_at or "",
-            },
         )
         return {"status": "approved", "token_id": token_id, "expires_at": token_expires_at}
 
@@ -535,12 +458,6 @@ class AgentService:
         updated = self._store.revoke_token(token_id=str(token_id or ""), user_id=int(actor_user_id), revoked_at=now_iso())
         if updated <= 0:
             raise LookupError("token not found")
-        self.workspace_service.record_audit_event(
-            actor_user_id=int(actor_user_id),
-            problem_id=int(row["problem_id"]),
-            action="agent.token.revoke",
-            details={"token_id": str(token_id or "")},
-        )
 
     def disconnect_session(self, *, actor_user_id: int, session_id: str) -> None:
         row = self._store.session_by_id(session_id)
@@ -549,18 +466,6 @@ class AgentService:
         deleted = self._store.delete_session_state(session_id=str(session_id or ""), user_id=int(actor_user_id))
         if int(deleted["session_count"]) <= 0:
             raise LookupError("agent session not found")
-        self.workspace_service.record_audit_event(
-            actor_user_id=int(actor_user_id),
-            problem_id=None,
-            action="agent.session.disconnect",
-            details={
-                "agent_session_id": str(session_id or ""),
-                "agent_name": str(row["agent_name"] or ""),
-                "desktop_id": str(row["desktop_id"] or ""),
-                "deleted_token_count": int(deleted["token_count"]),
-                "deleted_access_request_count": int(deleted["access_request_count"]),
-            },
-        )
 
     def token_identity(self, raw_token: str) -> AgentTokenIdentity | None:
         safe_token = str(raw_token or "").strip()

@@ -392,21 +392,6 @@ class WorkspaceService:
     def workspace_path(self, problem_id: int, workspace_id: int) -> str:
         return self._store.workspace_path(int(problem_id), int(workspace_id))
 
-    def record_audit_event(
-        self,
-        *,
-        actor_user_id: int | None,
-        problem_id: int | None,
-        action: str,
-        details: dict[str, object],
-    ) -> None:
-        self._store.append_audit_event(
-            actor_user_id=actor_user_id,
-            problem_id=problem_id,
-            action=action,
-            details=details,
-        )
-
     @classmethod
     def _access_context_for_role(
         cls,

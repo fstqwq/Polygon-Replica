@@ -11,7 +11,7 @@ from app.impl.auth.shared import enforce_same_origin_state_change, login_redirec
 from app.impl.auth.session import session_user
 from app.impl.runtime.config import config
 from app.impl.problem.shared import _has_destructive_sudo_for_ctx, _sudo_redirect_for_destructive
-from app.impl.workspace.context_operation import audit, normalize_page_target
+from app.impl.workspace.context_operation import normalize_page_target
 from app.impl.workspace.access import require_manage_access, require_write_access, workspace_access_context
 from app.impl.workspace.context_ui import page_ctx
 from app.main_util import problem_slug_leaf
@@ -82,16 +82,7 @@ def workspace_delete(request: Request, problem: str, user: Annotated[str, Depend
         return _sudo_redirect_for_destructive(next_path)
     msg = 'workspace files deleted; they will be recreated on next open'
     try:
-        result = config.workspace_service.delete_workspace(problem, user)
-        audit(
-            int(ctx['user']['id']),
-            int(ctx['problem']['id']),
-            'workspace.delete',
-            {
-                'workspace_path': result.get('workspace_path') if isinstance(result.get('workspace_path'), str) else '',
-                'removed': bool(result.get('removed')),
-            },
-        )
+        config.workspace_service.delete_workspace(problem, user)
     except (ValueError, RuntimeError) as exc:
         msg = str(exc)
         return redirect_response(next_path, status_code=303, message=msg)
@@ -115,17 +106,6 @@ def problem_delete(request: Request, problem: str, user: Annotated[str, Depends(
         result = config.workspace_service.delete_problem(problem)
         warnings = result.get('fs_warnings') if isinstance(result, dict) else []
         warning_rows = [item.strip() for item in warnings if isinstance(item, str) and item.strip()]
-        audit(
-            int(ctx['user']['id']),
-            None,
-            'problem.delete',
-            {
-                'problem_slug': expected_slug,
-                'problem_id': int(ctx['problem']['id']),
-                'workspace_count': int(result.get('workspace_count', 0)) if isinstance(result, dict) else 0,
-                'fs_warnings': warning_rows,
-            },
-        )
         if warning_rows:
             msg = f"problem deleted with cleanup warnings: {warning_rows[0]}"
     except (ValueError, RuntimeError) as exc:

@@ -8,7 +8,6 @@ from fastapi import Form, Depends
 
 from app.impl.auth.shared import normalize_username_required, redirect_response
 from app.impl.runtime.config import config
-from app.impl.workspace.context_operation import audit
 from app.impl.workspace.access import normalize_transferable_repo_role, require_manage_access
 from app.impl.workspace.context_ui import page_ctx
 
@@ -22,7 +21,6 @@ def workspace_access_grant(problem: str, user: Annotated[str, Depends(require_se
         safe_role = normalize_transferable_repo_role(role)
         problem_id = int(ctx["problem"]["id"])
         config.workspace_service.set_repo_access_for_problem_id(problem_id, safe_target, safe_role)
-        audit(int(ctx["user"]["id"]), problem_id, "access.grant", {"target_user": safe_target, "role": safe_role})
         msg = f"access updated: {safe_target} -> {safe_role}"
     except ValueError as exc:
         msg = str(exc)
@@ -39,11 +37,9 @@ def workspace_access_revoke(problem: str, user: Annotated[str, Depends(require_s
         problem_id = int(ctx["problem"]["id"])
         result = config.workspace_service.revoke_repo_access_for_problem_id(problem_id, safe_target)
         redirect_to_problems = int(result["target_user_id"]) == int(ctx["user"]["id"])
-        audit(int(ctx["user"]["id"]), problem_id, "access.revoke", {"target_user": safe_target})
         msg = f"access removed: {safe_target}"
     except ValueError as exc:
         msg = str(exc)
     if redirect_to_problems:
         return redirect_response("/problems", status_code=303, message=msg)
     return redirect_response(f"/problems/{problem}/access", status_code=303, message=msg)
-

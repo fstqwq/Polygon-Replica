@@ -13,7 +13,7 @@ from app.impl.auth.shared import redirect_response
 from app.impl.runtime.config import config
 from app.impl.contest.common import _contest_problem_slug_file_token
 from app.impl.workspace.access import workspace_access_context
-from app.impl.workspace.context_operation import audit, normalize_contest_slug_required
+from app.impl.workspace.context_operation import normalize_contest_slug_required
 from app.impl.workspace.context import global_user_ctx
 from app.impl.workspace.published_materialization import ensure_published_materialization
 from app.service.contest.metadata import materialize_contest_problem_package
@@ -847,20 +847,6 @@ def _run_contest_pdf_job_worker(
         summary["error"] = first_error or "problem preparation failed"
         if finalize:
             config.contest_service.update_job(contest_id, job_id, "failed", summary, finished=True)
-        audit(
-            actor_user_id,
-            None,
-            "contest.packages.pdf",
-            {
-                "contest_id": contest_id,
-                "contest_slug": contest_slug,
-                "job_id": job_id,
-                "language": language,
-                "total": len(results),
-                "success": success_count,
-                "failed": failed_count,
-            },
-        )
         return summary
     _hoist_contest_problem_preamble_commands(
         compile_root=compile_root,
@@ -977,21 +963,6 @@ def _run_contest_pdf_job_worker(
     summary["pdf_file"] = "contest-pdf/statements.pdf"
     if finalize:
         config.contest_service.update_job(contest_id, job_id, "ok", summary, finished=True)
-    audit(
-        actor_user_id,
-        None,
-        "contest.packages.pdf",
-        {
-            "contest_id": contest_id,
-            "contest_slug": contest_slug,
-            "job_id": job_id,
-            "language": language,
-            "total": len(results),
-            "success": success_count,
-            "failed": failed_count,
-            "artifact_id": artifact_id,
-        },
-    )
     return summary
 
 def _run_contest_package_job_worker(
@@ -1105,20 +1076,6 @@ def _run_contest_package_job_worker(
             summary,
             finished=True,
         )
-    audit(
-        actor_user_id,
-        None,
-        "contest.packages.build",
-        {
-            "contest_id": contest_id,
-            "contest_slug": contest_slug,
-            "job_id": job_id,
-            "total": len(results),
-            "success": success_count,
-            "failed": failed_count,
-            "artifact_id": artifact_id,
-        },
-    )
     return summary
 
 

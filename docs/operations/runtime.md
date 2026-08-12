@@ -43,8 +43,16 @@ does not require root.
 
 ## Startup and shutdown
 
-Runtime composition owns application startup and shutdown. Startup initializes
-metadata, marks interrupted package/export work failed,
+Runtime composition owns application startup and shutdown. A new empty database
+is initialized with the current schema. An existing database is checked
+read-only before services consume it. If a required table, column, or named
+index is missing, runtime startup is skipped and HTTP serves a raw `503` listing
+the missing objects; the operator must stop the service, upgrade SQLite offline,
+and restart. The application never upgrades an existing database automatically.
+Extra schema objects and rows are tolerated.
+
+After schema admission, startup initializes metadata, marks interrupted
+package/export work failed,
 applies durable configuration, and atomically terminalizes unfinished
 verification parents and tasks before deleting their runtime blobs. A failed
 verification recovery aborts startup. It then reconciles other unfinished

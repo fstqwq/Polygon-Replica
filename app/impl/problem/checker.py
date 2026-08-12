@@ -11,7 +11,7 @@ from app.impl.contest.workspace_scope import contest_workspace_context_from_requ
 from app.impl.problem.compile_check import judgehost_compile_check_error
 from app.impl.runtime.config import config
 from app.impl.problem.shared import rename_component_source, single_source_editor_context
-from app.impl.workspace.context_operation import audit, read_build_config, resolve_standard_checker_path, standard_checker_catalog, template_for_kind, write_build_config
+from app.impl.workspace.context_operation import read_build_config, resolve_standard_checker_path, standard_checker_catalog, template_for_kind, write_build_config
 from app.impl.workspace.context_component_status import checker_status_context
 from app.impl.workspace.access import require_write_access
 from app.impl.workspace.context_ui import page_ctx
@@ -96,7 +96,6 @@ def checker_set_standard(problem: str, user: Annotated[str, Depends(require_sess
             build_cfg, cfg_path = read_build_config(workspace)
             build_cfg['checker_source'] = checker_rel
             write_build_config(cfg_path, build_cfg)
-        audit(ctx['user']['id'], ctx['problem']['id'], 'checker.set_standard', {'checker': canonical})
         msg = f'checker set to {canonical}'
     except ValueError as exc:
         msg = str(exc)
@@ -123,7 +122,6 @@ def checker_rename_source(
         folder='checkers',
         default_filename='checker.cpp',
         component_label='checker',
-        audit_event='checker.rename_source',
         redirect_url_for_path=lambda _path: f'/problems/{problem}/checker',
         config_key='checker_source',
         ctx=ctx,
@@ -181,7 +179,6 @@ def checker_save_source(
                     cfg_path.unlink(missing_ok=True)
                 raise ValueError(f'compile check failed: {compile_check_error}')
         save_ok = True
-        audit(ctx['user']['id'], ctx['problem']['id'], 'checker.save_source', {'path': target, 'bytes': len(safe_content.encode('utf-8'))})
     except (ValueError, OSError) as exc:
         msg = str(exc)
     except HTTPException as exc:

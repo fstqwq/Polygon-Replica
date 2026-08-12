@@ -84,13 +84,11 @@ def problems_root_import(request: Request, user: str = "", package_upload: Uploa
             )
             with ArchiveView(package_path, policy.archive) as package:
                 imported = import_package_as_new_problem(
-                    actor_user_id=int(gctx["user"]["id"]),
                     actor_user=str(gctx["user"]["username"]),
                     package_name=package_name,
                     package=package,
                     policy=policy,
                     requested_slug=str(problem_slug or "").strip(),
-                    source_problem="",
                 )
         target_problem_obj = imported.get("target_problem")
         target_problem = target_problem_obj.strip() if isinstance(target_problem_obj, str) else ""

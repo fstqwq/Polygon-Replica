@@ -126,7 +126,7 @@ commits and publishes the exact authored files, creates a contest, adds the
 published problem, materializes that commit through another full verification,
 and exports the contest statement PDF with two `xelatex` passes. The final
 assertions compare the verified `7`/`49` sample payloads used by `problem.tex`,
-the downloaded PDF, frozen commit/materialization identities, and audit records.
+the downloaded PDF and frozen commit/materialization identities.
 
 Run the isolated E2E from the repository root:
 

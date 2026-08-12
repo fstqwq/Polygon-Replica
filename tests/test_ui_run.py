@@ -1254,30 +1254,17 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         query = parse_qs(urlparse(loc).query)
         verification_id = (query.get("verification_id") or [""])[0]
         self.assertTrue(verification_id)
-        audit_row = db_fetch_one(
-            """
-            SELECT details_json
-            FROM audit_log
-            WHERE action='run.execute' AND details_json LIKE ?
-            ORDER BY created_at DESC
-            LIMIT 1
-            """,
-            [f"%{verification_id}%"],
-        )
-        self.assertIsNotNone(audit_row)
-        metadata = json.loads(str(audit_row["details_json"]))
+        metadata = config.verification_service.verification_detail(verification_id)
+        self.assertIsInstance(metadata, dict)
         self.assertEqual(str(metadata.get("mode") or ""), "interactive")
 
-    def test_run_execute_records_verification_audit_before_queue_start(self) -> None:
+    def test_run_execute_passes_canonical_targets_to_queue_start(self) -> None:
         ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
         self._configure_solution_fixtures(
             ws,
             ("accepted.cpp", "accepted"),
             ("wa.cpp", "wrong_answer"),
         )
-        ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
-        problem_id = int(ctx["problem"]["id"])
-        actor_user_id = int(ctx["user"]["id"])
         observed = {"checked": False}
 
         def _fake_start_verification_job(*args, **kwargs) -> bool:
@@ -1288,33 +1275,9 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
                 for item in targets
                 if str(item.get("program_id") or "")
             ]
-            audit_row = db_fetch_one(
-                """
-                SELECT details_json
-                FROM audit_log
-                WHERE problem_id=? AND actor_user_id=? AND action='run.execute'
-                ORDER BY created_at DESC
-                LIMIT 1
-                """,
-                [problem_id, actor_user_id],
-            )
-            self.assertIsNotNone(audit_row)
-            details = json.loads(str(audit_row["details_json"] or "{}"))
-            self.assertEqual(str(details.get("status") or ""), "queued")
-            self.assertEqual(str(details.get("verification_id") or ""), verification_id)
-            self.assertEqual(
-                [
-                    str(item or "")
-                    for item in (
-                        details.get("solution_program_ids") or []
-                    )
-                ],
-                solution_program_ids,
-            )
-            self.assertEqual(
-                int(details.get("solution_program_count") or 0),
-                len(solution_program_ids),
-            )
+            self.assertEqual(len(solution_program_ids), 2)
+            self.assertEqual(len(set(solution_program_ids)), 2)
+            self.assertTrue(verification_id)
             observed["checked"] = True
             return True
 
@@ -1333,18 +1296,6 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         self.assertIn("/problems/alice/sample/run/details?verification_id=", loc)
         verification_id = (parse_qs(urlparse(loc).query).get("verification_id") or [""])[0]
         self.assertTrue(verification_id)
-        mapped_row = db_fetch_one(
-            """
-            SELECT details_json
-            FROM audit_log
-            WHERE problem_id=? AND actor_user_id=? AND action='run.execute'
-              AND details_json LIKE ?
-            ORDER BY created_at DESC
-            LIMIT 1
-            """,
-            [problem_id, actor_user_id, f"%{verification_id}%"],
-        )
-        self.assertIsNotNone(mapped_row)
 
     def test_run_execute_passes_selected_tests_to_runner(self) -> None:
         ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
@@ -1430,22 +1381,6 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         messages = _flash_messages_from_response(start_resp)
         self.assertTrue(messages)
         self.assertIn("verification failed: main correct solution is required", messages[0])
-
-        row = db_fetch_one(
-            """
-            SELECT a.details_json
-            FROM audit_log a
-            JOIN problems p ON p.id=a.problem_id
-            WHERE p.slug=? AND a.action='verification.start'
-            ORDER BY a.created_at DESC
-            LIMIT 1
-            """,
-            [problem],
-        )
-        self.assertIsNotNone(row)
-        payload = json.loads(str(row["details_json"]))
-        self.assertEqual(payload.get("status"), "failed")
-        self.assertIn("main correct solution is required", str(payload.get("error") or ""))
 
     def test_admitted_verification_fails_when_layout_preparation_fails(self) -> None:
         problem = f"alice/layout-failure-{uuid.uuid4().hex[:8]}"
@@ -3724,7 +3659,6 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
         problem_id = int(ctx["problem"]["id"])
         workspace_id = int(ctx["workspace"]["id"])
-        actor_user_id = int(ctx["user"]["id"] )
         verification_id = canonical_test_verification_id(f"inv-verif-run-failed-{uuid.uuid4().hex[:8]}")
         run_id = f"r-verif-run-failed-{uuid.uuid4().hex[:8]}"
         build_id = canonical_test_verification_id(
@@ -3777,21 +3711,6 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             verification_id=verification_id,
             kind=Kind.ALL,
         )
-        db_execute(
-            "INSERT INTO audit_log(actor_user_id,problem_id,action,details_json,created_at) VALUES(?,?,?,?,?)",
-            [
-                actor_user_id,
-                problem_id,
-                "verification.start",
-                json.dumps(
-                    {
-                        "verification_id": verification_id,
-                        "note": "audit payload intentionally ignored",
-                    }
-                ),
-                "2026-02-23T00:00:04Z",
-            ],
-        )
 
         page = run_details_page(
             _request("/problems/alice/sample/run/details", f"verification_id={verification_id}"),
@@ -3809,7 +3728,6 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
         problem_id = int(ctx["problem"]["id"])
         workspace_id = int(ctx["workspace"]["id"])
-        actor_user_id = int(ctx["user"]["id"] )
         verification_id = canonical_test_verification_id(f"inv-verif-run-cancel-{uuid.uuid4().hex[:8]}")
         run_id = f"r-verif-run-cancel-{uuid.uuid4().hex[:8]}"
         build_id = canonical_test_verification_id(
@@ -3862,37 +3780,6 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             verification_id=verification_id,
             kind=Kind.ALL,
         )
-        db_execute(
-            "INSERT INTO audit_log(actor_user_id,problem_id,action,details_json,created_at) VALUES(?,?,?,?,?)",
-            [
-                actor_user_id,
-                problem_id,
-                "verification.start",
-                json.dumps(
-                    {
-                        "verification_id": verification_id,
-                        "note": "audit payload intentionally ignored",
-                    }
-                ),
-                "2026-02-23T00:00:04Z",
-            ],
-        )
-        db_execute(
-            "INSERT INTO audit_log(actor_user_id,problem_id,action,details_json,created_at) VALUES(?,?,?,?,?)",
-            [
-                actor_user_id,
-                problem_id,
-                "run.cancel",
-                json.dumps(
-                    {
-                        "verification_id": verification_id,
-                        "run_ids": [run_id],
-                        "reason": "verification cancelled by user",
-                    }
-                ),
-                "2026-02-23T00:00:05Z",
-            ],
-        )
 
         page = run_details_page(
             _request("/problems/alice/sample/run/details", f"verification_id={verification_id}"),
@@ -3910,7 +3797,6 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
         problem_id = int(ctx["problem"]["id"])
         workspace_id = int(ctx["workspace"]["id"])
-        actor_user_id = int(ctx["user"]["id"] )
         verification_id = canonical_test_verification_id(f"inv-verif-skip-{uuid.uuid4().hex[:8]}")
         run_id = f"r-verif-skip-{uuid.uuid4().hex[:8]}"
         build_id = canonical_test_verification_id(
@@ -3966,21 +3852,6 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             finished_at="2026-02-23T00:00:03Z",
             verification_id=verification_id,
             kind=Kind.ALL,
-        )
-        db_execute(
-            "INSERT INTO audit_log(actor_user_id,problem_id,action,details_json,created_at) VALUES(?,?,?,?,?)",
-            [
-                actor_user_id,
-                problem_id,
-                "verification.start",
-                json.dumps(
-                    {
-                        "verification_id": verification_id,
-                        "note": "audit payload intentionally ignored",
-                    }
-                ),
-                "2026-02-23T00:00:04Z",
-            ],
         )
 
         page = run_details_page(
@@ -6159,7 +6030,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             str(response.headers.get("content-disposition") or ""),
         )
 
-    def test_run_verification_details_prefers_verification_record_over_audit(self) -> None:
+    def test_run_verification_details_reads_verification_record(self) -> None:
         from app.impl.workspace.run_view_lifecycle_card import load_verification_detail_summary
 
         workspace_service.ensure_workspace("alice/sample", "alice")

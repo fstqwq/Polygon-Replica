@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import tarfile
 import tempfile
@@ -16,7 +17,6 @@ from app.service.judgehost.task_registry import JudgehostTaskRegistry
 from app.service.platform.fs.layout import FsManager
 from app.service.platform.maintenance import (
     ArtifactCleanupService,
-    MaintenanceStart,
     MaintenanceCoordinator,
     validate_storage_layout,
 )
@@ -31,7 +31,6 @@ from app.setting import Settings
 from tests.isolated_db_helpers import (
     isolated_db_connection,
     isolated_db_execute,
-    isolated_db_fetch_all,
     isolated_db_fetch_one,
     isolated_db_write_transaction,
 )
@@ -132,7 +131,7 @@ class TestArtifactCleanup(unittest.TestCase):
             self.verification_task_store,
             self._reset_process_tracking,
         )
-        self.source_backup = SourceBackupService(self.db, self.settings)
+        self.source_backup = SourceBackupService(self.settings)
 
     def _reset_process_tracking(self) -> None:
         self.process_reset_count += 1
@@ -150,16 +149,8 @@ class TestArtifactCleanup(unittest.TestCase):
 
     def _run_source_backup(self, operation_id: str) -> dict[str, object]:
         started_at = now_iso()
-        start_audit_id = self.source_backup.write_start_audit(
-            actor_user_id=self.actor_user_id,
-            operation_id=operation_id,
-            started_at=started_at,
-            roots=self.source_backup.configured_roots(),
-        )
         return self.source_backup.run(
-            actor_user_id=self.actor_user_id,
             operation_id=operation_id,
-            start_audit_id=start_audit_id,
             started_at=started_at,
             set_stage=lambda _stage: None,
         )
@@ -390,22 +381,6 @@ class TestArtifactCleanup(unittest.TestCase):
             """,
             (now, self.actor_user_id),
         )
-        for index in range(600):
-            self._execute(
-                """
-                INSERT INTO audit_log(
-                    actor_user_id,problem_id,action,details_json,created_at
-                ) VALUES(?,?,?, ?,?)
-                """,
-                (
-                    self.actor_user_id,
-                    self.problem_id,
-                    f"old.audit.{index}",
-                    json.dumps({"payload": "x" * 4096}),
-                    now,
-                ),
-            )
-
         durable_files = {
             "git": b"git durable",
             "workspace": b"workspace durable",
@@ -450,11 +425,7 @@ class TestArtifactCleanup(unittest.TestCase):
         }
         self.assertEqual(usage["table_rows"], expected_table_rows)
         self.assertEqual(usage["artifact_rows"], sum(expected_table_rows.values()))
-        self.assertEqual(usage["audit_rows"], self._count("audit_log"))
-        self.assertEqual(
-            usage["removable_rows"],
-            usage["artifact_rows"] + usage["audit_rows"],
-        )
+        self.assertEqual(usage["removable_rows"], usage["artifact_rows"])
 
     def test_cleanup_deletes_derived_epoch_and_preserves_durable_data(self) -> None:
         durable_files = self._seed_generated_data()
@@ -523,14 +494,6 @@ class TestArtifactCleanup(unittest.TestCase):
         self.assertEqual(str(smtp_config["host"]), "smtp.example.test")
         self.assertEqual(int(smtp_config["port"]), 2525)
         self.assertEqual(str(smtp_config["password_ciphertext"]), "ciphertext")
-        audit_actions = {
-            str(row["action"])
-            for row in isolated_db_fetch_all(self.db, "SELECT action FROM audit_log")
-        }
-        self.assertEqual(
-            audit_actions,
-            {"artifact_cleanup.start", "artifact_cleanup.succeeded"},
-        )
         self.assertEqual(
             [path for path in self.settings.artifacts_root.rglob("*") if path.is_file()],
             [],
@@ -548,13 +511,6 @@ class TestArtifactCleanup(unittest.TestCase):
 
     def test_database_cleanup_replaces_tables_without_row_deletes(self) -> None:
         self._seed_generated_data()
-        started_at = now_iso()
-        start_audit_id = self.cleanup.write_start_audit(
-            actor_user_id=self.actor_user_id,
-            operation_id="cleanup-schema-reset",
-            started_at=started_at,
-            roots=self.cleanup.configured_roots(),
-        )
         traced_sql: list[str] = []
 
         def install_trace(connection) -> None:
@@ -565,9 +521,7 @@ class TestArtifactCleanup(unittest.TestCase):
             "_install_sql_trace",
             side_effect=install_trace,
         ):
-            counts = self.cleanup._delete_metadata(
-                start_audit_id=start_audit_id
-            )
+            counts = self.cleanup._delete_metadata()
 
         statements = [" ".join(sql.upper().split()) for sql in traced_sql]
         self.assertIn("PRAGMA FOREIGN_KEYS=OFF", statements)
@@ -606,19 +560,13 @@ class TestArtifactCleanup(unittest.TestCase):
 
     def test_schema_reset_failure_rolls_back_dropped_tables(self) -> None:
         self._seed_generated_data()
-        start_audit_id = self.cleanup.write_start_audit(
-            actor_user_id=self.actor_user_id,
-            operation_id="cleanup-schema-reset-failure",
-            started_at=now_iso(),
-            roots=self.cleanup.configured_roots(),
-        )
 
         with patch(
             "app.service.platform.maintenance.current_schema_statements_for_tables",
             return_value=("CREATE TABLE invalid schema",),
         ):
             with self.assertRaisesRegex(sqlite3.OperationalError, "syntax"):
-                self.cleanup._delete_metadata(start_audit_id=start_audit_id)
+                self.cleanup._delete_metadata()
 
         self.assertEqual(self._count("verification_tasks"), 1)
         self.assertEqual(self._count("verifications"), 1)
@@ -629,7 +577,7 @@ class TestArtifactCleanup(unittest.TestCase):
                 [],
             )
 
-    def test_busy_check_reopens_admission_without_writing_start_audit(self) -> None:
+    def test_busy_check_reopens_admission(self) -> None:
         coordinator = MaintenanceCoordinator(
             self.cleanup,
             self.worker_queue,
@@ -650,13 +598,9 @@ class TestArtifactCleanup(unittest.TestCase):
         self.assertEqual(started.busy["judgehost_callbacks"], 1)
         self.assertEqual(started.busy["inflight_requests"], 1)
         self.assertTrue(coordinator.allow_new_work())
-        self.assertEqual(
-            self._count("audit_log"),
-            0,
-        )
         coordinator.leave_request()
 
-    def test_busy_count_failure_reopens_admission_without_start_audit(self) -> None:
+    def test_busy_count_failure_reopens_admission(self) -> None:
         coordinator = MaintenanceCoordinator(
             self.cleanup,
             self.worker_queue,
@@ -673,98 +617,6 @@ class TestArtifactCleanup(unittest.TestCase):
 
         self.assertFalse(started.accepted)
         self.assertIn("admission_failed", started.reason)
-        self.assertTrue(coordinator.allow_new_work())
-        self.assertEqual(self._count("audit_log"), 0)
-
-    def test_start_audit_failure_reopens_admission_without_starting_cleanup(self) -> None:
-        coordinator = MaintenanceCoordinator(
-            self.cleanup,
-            self.worker_queue,
-            self.judgehost,
-            self.source_backup,
-        )
-
-        with patch.object(
-            self.cleanup,
-            "write_start_audit",
-            side_effect=RuntimeError("forced start audit failure"),
-        ):
-            started = coordinator.start_cleanup(actor_user_id=self.actor_user_id)
-
-        self.assertFalse(started.accepted)
-        self.assertIn("audit_failed", started.reason)
-        self.assertTrue(coordinator.allow_new_work())
-        snapshot = coordinator.snapshot()
-        self.assertEqual(snapshot["status"], "failed")
-        self.assertEqual(snapshot["stage"], "start_audit")
-        self.assertIn("forced start audit failure", str(snapshot["error"]))
-        self.assertEqual(self._count("audit_log"), 0)
-
-    def test_start_audit_write_does_not_hold_admission_lock(self) -> None:
-        coordinator = MaintenanceCoordinator(
-            self.cleanup,
-            self.worker_queue,
-            self.judgehost,
-            self.source_backup,
-        )
-        audit_started = threading.Event()
-        release_audit = threading.Event()
-        start_results: list[MaintenanceStart] = []
-        original_write_start = self.cleanup.write_start_audit
-
-        def blocked_start_audit(**kwargs) -> int:
-            audit_started.set()
-            release_audit.wait(timeout=2)
-            return original_write_start(**kwargs)
-
-        with (
-            patch.object(
-                self.cleanup,
-                "write_start_audit",
-                side_effect=blocked_start_audit,
-            ),
-            patch.object(
-                self.cleanup,
-                "run",
-                return_value={"finished_at": now_iso(), "duration_ms": 1},
-            ),
-        ):
-            starter = threading.Thread(
-                target=lambda: start_results.append(
-                    coordinator.start_cleanup(actor_user_id=self.actor_user_id)
-                )
-            )
-            starter.start()
-            request_finished = threading.Event()
-            request_results: list[bool] = []
-
-            def enter_request() -> None:
-                request_results.append(coordinator.enter_request())
-                request_finished.set()
-
-            request_thread = threading.Thread(target=enter_request)
-            try:
-                self.assertTrue(audit_started.wait(timeout=1))
-                request_thread.start()
-                self.assertTrue(request_finished.wait(timeout=0.5))
-                self.assertEqual(request_results, [False])
-            finally:
-                release_audit.set()
-                starter.join(timeout=2)
-                if request_thread.ident is not None:
-                    request_thread.join(timeout=2)
-
-            self.assertFalse(starter.is_alive())
-            if request_thread.ident is not None:
-                self.assertFalse(request_thread.is_alive())
-            self.assertEqual(len(start_results), 1)
-            self.assertTrue(start_results[0].accepted)
-            worker = coordinator._worker
-            self.assertIsNotNone(worker)
-            assert worker is not None
-            worker.join(timeout=2)
-            self.assertFalse(worker.is_alive())
-
         self.assertTrue(coordinator.allow_new_work())
 
     def test_storage_layout_rejects_durable_root_inside_cleanup_root(self) -> None:
@@ -819,12 +671,8 @@ class TestArtifactCleanup(unittest.TestCase):
 
         self.assertEqual(coordinator.snapshot()["status"], "succeeded")
         self.assertTrue(coordinator.allow_new_work())
-        self.assertEqual(
-            self._count("audit_log"),
-            1,
-        )
 
-    def test_filesystem_failure_keeps_database_deletion_and_writes_failed_audit(self) -> None:
+    def test_filesystem_failure_keeps_database_deletion(self) -> None:
         self._seed_generated_data()
         artifact_file = (
             self.settings.artifacts_root
@@ -834,13 +682,6 @@ class TestArtifactCleanup(unittest.TestCase):
         cache_file = self.settings.cache_root / "generated" / "cache.bin"
         operation_id = "cleanup-filesystem-failure"
         started_at = now_iso()
-        start_audit_id = self.cleanup.write_start_audit(
-            actor_user_id=self.actor_user_id,
-            operation_id=operation_id,
-            started_at=started_at,
-            roots=self.cleanup.preflight(),
-        )
-
         def partially_clear(_root: Path) -> int:
             artifact_file.unlink()
             raise OSError("forced filesystem failure")
@@ -848,9 +689,7 @@ class TestArtifactCleanup(unittest.TestCase):
         with patch.object(self.cleanup, "_clear_root", side_effect=partially_clear):
             with self.assertRaisesRegex(OSError, "forced filesystem failure"):
                 self.cleanup.run(
-                    actor_user_id=self.actor_user_id,
                     operation_id=operation_id,
-                    start_audit_id=start_audit_id,
                     started_at=started_at,
                     set_stage=lambda _stage: None,
                 )
@@ -859,17 +698,6 @@ class TestArtifactCleanup(unittest.TestCase):
         self.assertEqual(self._count("exports"), 0)
         self.assertFalse(artifact_file.exists())
         self.assertTrue(cache_file.is_file())
-        actions = [
-            str(row["action"])
-            for row in isolated_db_fetch_all(
-                self.db,
-                "SELECT action FROM audit_log ORDER BY id"
-            )
-        ]
-        self.assertEqual(
-            actions,
-            ["artifact_cleanup.start", "artifact_cleanup.failed"],
-        )
 
     def test_database_transaction_failure_preserves_rows_and_files(self) -> None:
         self._seed_generated_data()
@@ -880,13 +708,6 @@ class TestArtifactCleanup(unittest.TestCase):
         )
         operation_id = "cleanup-database-failure"
         started_at = now_iso()
-        start_audit_id = self.cleanup.write_start_audit(
-            actor_user_id=self.actor_user_id,
-            operation_id=operation_id,
-            started_at=started_at,
-            roots=self.cleanup.configured_roots(),
-        )
-
         with patch.object(
             self.cleanup,
             "_delete_metadata",
@@ -894,9 +715,7 @@ class TestArtifactCleanup(unittest.TestCase):
         ):
             with self.assertRaisesRegex(RuntimeError, "forced database"):
                 self.cleanup.run(
-                    actor_user_id=self.actor_user_id,
                     operation_id=operation_id,
-                    start_audit_id=start_audit_id,
                     started_at=started_at,
                     set_stage=lambda _stage: None,
                 )
@@ -904,25 +723,11 @@ class TestArtifactCleanup(unittest.TestCase):
         self.assertEqual(self._count("verifications"), 1)
         self.assertEqual(self._count("exports"), 1)
         self.assertTrue(artifact_file.is_file())
-        terminal = isolated_db_fetch_one(
-            self.db,
-            "SELECT action,details_json FROM audit_log ORDER BY id DESC LIMIT 1"
-        )
-        self.assertIsNotNone(terminal)
-        self.assertEqual(str(terminal["action"]), "artifact_cleanup.failed")
-        self.assertIn("forced database transaction failure", str(terminal["details_json"]))
 
-    def test_vacuum_failure_is_recorded_after_files_and_rows_are_removed(self) -> None:
+    def test_vacuum_failure_allows_safe_rerun_after_files_and_rows_are_removed(self) -> None:
         self._seed_generated_data()
         operation_id = "cleanup-vacuum-failure"
         started_at = now_iso()
-        start_audit_id = self.cleanup.write_start_audit(
-            actor_user_id=self.actor_user_id,
-            operation_id=operation_id,
-            started_at=started_at,
-            roots=self.cleanup.preflight(),
-        )
-
         with patch.object(
             self.cleanup,
             "_vacuum",
@@ -930,9 +735,7 @@ class TestArtifactCleanup(unittest.TestCase):
         ):
             with self.assertRaisesRegex(RuntimeError, "forced vacuum failure"):
                 self.cleanup.run(
-                    actor_user_id=self.actor_user_id,
                     operation_id=operation_id,
-                    start_audit_id=start_audit_id,
                     started_at=started_at,
                     set_stage=lambda _stage: None,
                 )
@@ -942,14 +745,6 @@ class TestArtifactCleanup(unittest.TestCase):
             [path for path in self.settings.artifacts_root.rglob("*") if path.is_file()],
             [],
         )
-        terminal = isolated_db_fetch_one(
-            self.db,
-            "SELECT action,details_json FROM audit_log ORDER BY id DESC LIMIT 1"
-        )
-        self.assertIsNotNone(terminal)
-        self.assertEqual(str(terminal["action"]), "artifact_cleanup.failed")
-        self.assertIn("forced vacuum failure", str(terminal["details_json"]))
-
         restarted_coordinator = MaintenanceCoordinator(
             self.cleanup,
             self.worker_queue,
@@ -966,51 +761,6 @@ class TestArtifactCleanup(unittest.TestCase):
         retry_worker.join(timeout=20)
         self.assertFalse(retry_worker.is_alive())
         self.assertEqual(restarted_coordinator.snapshot()["status"], "succeeded")
-        actions = [
-            str(row["action"])
-            for row in isolated_db_fetch_all(
-                self.db,
-                "SELECT action FROM audit_log ORDER BY id"
-            )
-        ]
-        self.assertEqual(
-            actions,
-            ["artifact_cleanup.start", "artifact_cleanup.succeeded"],
-        )
-
-    def test_terminal_audit_failure_is_never_silently_ignored(self) -> None:
-        self._seed_generated_data()
-        operation_id = "cleanup-terminal-audit-failure"
-        started_at = now_iso()
-        start_audit_id = self.cleanup.write_start_audit(
-            actor_user_id=self.actor_user_id,
-            operation_id=operation_id,
-            started_at=started_at,
-            roots=self.cleanup.preflight(),
-        )
-
-        with patch.object(
-            self.cleanup,
-            "_write_audit",
-            side_effect=RuntimeError("forced terminal audit failure"),
-        ):
-            with self.assertRaisesRegex(RuntimeError, "terminal audit failed"):
-                self.cleanup.run(
-                    actor_user_id=self.actor_user_id,
-                    operation_id=operation_id,
-                    start_audit_id=start_audit_id,
-                    started_at=started_at,
-                    set_stage=lambda _stage: None,
-                )
-
-        actions = [
-            str(row["action"])
-            for row in isolated_db_fetch_all(
-                self.db,
-                "SELECT action FROM audit_log ORDER BY id"
-            )
-        ]
-        self.assertEqual(actions, ["artifact_cleanup.start"])
 
     def test_source_backup_contains_only_bare_repositories_and_workspaces(
         self,
@@ -1065,8 +815,8 @@ class TestArtifactCleanup(unittest.TestCase):
 
         self.assertNotEqual(self.source_backup.latest_path.read_bytes(), first_bytes)
         self.assertEqual(
-            [path.name for path in self.source_backup.backup_directory.iterdir()],
-            ["latest.tar.gz"],
+            sorted(path.name for path in self.source_backup.backup_directory.iterdir()),
+            ["latest.tar.gz", "latest.tar.gz.sha256"],
         )
         with tarfile.open(self.source_backup.latest_path, mode="r:gz") as archive:
             relative = self.workspace.relative_to(self.settings.workspace_root)
@@ -1077,48 +827,44 @@ class TestArtifactCleanup(unittest.TestCase):
             assert payload is not None
             self.assertEqual(payload.read(), b"second\n")
 
-    def test_source_backup_failure_restores_previous_latest(self) -> None:
+    def test_source_backup_publication_failure_restores_previous_pair(self) -> None:
         marker = self.workspace / "backup-marker.txt"
         marker.write_text("first\n", encoding="utf-8")
         self._run_source_backup("backup-stable")
         previous = self.source_backup.latest_path.read_bytes()
+        previous_sidecar = self.source_backup.sidecar_path.read_bytes()
         marker.write_text("replacement\n", encoding="utf-8")
-        original_write_audit = self.source_backup._write_audit
+        original_replace = os.replace
+        failed = False
 
-        def fail_success_audit(
-            actor_user_id: int,
-            action: str,
-            details: dict[str, object],
-        ) -> int:
-            if action == "source_backup.succeeded":
-                raise RuntimeError("forced success audit failure")
-            return original_write_audit(actor_user_id, action, details)
+        def fail_sidecar_publish(source: Path, destination: Path) -> None:
+            nonlocal failed
+            if Path(destination) == self.source_backup.sidecar_path and not failed:
+                failed = True
+                raise OSError("forced sidecar publication failure")
+            original_replace(source, destination)
 
         with patch.object(
-            self.source_backup,
-            "_write_audit",
-            side_effect=fail_success_audit,
+            os,
+            "replace",
+            side_effect=fail_sidecar_publish,
         ):
-            with self.assertRaisesRegex(RuntimeError, "forced success audit failure"):
+            with self.assertRaisesRegex(OSError, "sidecar publication"):
                 self._run_source_backup("backup-failing")
 
         self.assertEqual(self.source_backup.latest_path.read_bytes(), previous)
-        actions = [
-            str(row["action"])
-            for row in isolated_db_fetch_all(
-                self.db,
-                "SELECT action FROM audit_log ORDER BY id",
-            )
-        ]
-        self.assertEqual(
-            actions,
-            [
-                "source_backup.start",
-                "source_backup.succeeded",
-                "source_backup.start",
-                "source_backup.failed",
-            ],
+        self.assertEqual(self.source_backup.sidecar_path.read_bytes(), previous_sidecar)
+        self.assertEqual(self.source_backup.latest_archive_path(), self.source_backup.latest_path)
+
+    def test_source_backup_download_rejects_unverified_archive(self) -> None:
+        self._run_source_backup("backup-verified")
+        self.source_backup.sidecar_path.write_text(
+            f"{'0' * 64}  latest.tar.gz\n",
+            encoding="ascii",
         )
+
+        self.assertIsNone(self.source_backup.latest_archive_path())
+        self.assertFalse(self.source_backup.latest_summary()["available"])
 
     def test_source_backup_and_artifact_cleanup_are_mutually_exclusive(self) -> None:
         coordinator = MaintenanceCoordinator(

@@ -47,7 +47,6 @@ from app.impl.auth.password_envelope import (
     password_envelope_store,
 )
 from app.impl.runtime.config import config
-from app.impl.workspace.context_operation import audit
 from app.main_util import form_text
 from app.service.auth.password_hash import password_verifier_storage_hash
 
@@ -67,14 +66,6 @@ def _setup_config_rows() -> list[dict[str, str]]:
         {'name': 'POLYGON_REPLICA_BACKUP_ROOT', 'value': str(config.settings.backup_root)},
     ]
 
-
-def _auth_audit(action: str, details: dict[str, object], actor_user_id: int | None = None) -> None:
-    config.workspace_service.record_audit_event(
-        actor_user_id=actor_user_id,
-        problem_id=None,
-        action=action,
-        details=details,
-    )
 
 
 def _client_ip_for_auth_rate_limit(request: Request | None) -> str:
@@ -138,23 +129,11 @@ def _enforce_auth_rate_limit(
     bucket_key: str,
     limit: int,
     window_sec: int,
-    audit_action: str,
-    details: dict[str, object],
     message: str = "too many registration attempts",
 ) -> None:
     hit = _hit_auth_rate_limit(bucket_key, limit=limit, window_sec=window_sec)
     if bool(hit["allowed"]):
         return
-    audit_details = dict(details)
-    audit_details.update(
-        {
-            "rate_limit_bucket": bucket_key,
-            "rate_limit_count": int(hit["count"]),
-            "rate_limit_limit": int(hit["limit"]),
-            "retry_after_sec": int(hit["retry_after_sec"]),
-        }
-    )
-    _auth_audit(audit_action, audit_details)
     raise ValueError(f"{message}; retry in {int(hit['retry_after_sec'])}s")
 
 
@@ -234,7 +213,6 @@ def setup_submit(
             raise ValueError('setup failed; invalid password iterations')
         user_id = bootstrap_super_admin_with_password_verifier(safe_user, verifier, salt_hex, iters)
         token = create_session_for_user(int(user_id))
-        audit(int(user_id), None, 'system.setup', {'super_admin': safe_user, 'config_confirmed': True})
     except ValueError as exc:
         return redirect_response('/setup', status_code=303, message=str(exc))
     target = safe_next_path(next_path, '/problems')
@@ -397,18 +375,14 @@ def register_submit(
     _ = (password, password_confirm)
     request_ip = _client_ip_for_auth_rate_limit(request)
     user_agent = _request_user_agent(request)
-    audit_base: dict[str, object] = {"ip": request_ip, "user_agent": user_agent}
     try:
         _enforce_auth_rate_limit(
             bucket_key="register-submit:global",
             limit=int(_C.AUTH_REGISTER_SUBMIT_MAX),
             window_sec=int(_C.AUTH_REGISTER_SUBMIT_WINDOW_SEC),
-            audit_action="auth.register.rate_limited",
-            details=audit_base,
         )
         safe_user = normalize_username_required(form_text(username))
         safe_email, email_normalized = _normalize_registration_email(form_text(email))
-        audit_base.update({"username": safe_user, "email": email_normalized})
         password_csrf = form_text(csrf_token).strip()
         salt_value = form_text(password_salt)
         iter_value = form_text(password_iters)
@@ -416,16 +390,12 @@ def register_submit(
         terms_value = form_text(terms_accepted)
         conflict = config.auth_service.registration_conflict(safe_user, email_normalized)
         if conflict == "username":
-            _auth_audit("auth.register.rejected", {**audit_base, "reason": "username_unavailable"})
             raise ValueError('registration failed; username is unavailable')
         if conflict == "email":
-            _auth_audit("auth.register.rejected", {**audit_base, "reason": "email_unavailable"})
             raise ValueError('registration failed; email is unavailable')
         if terms_value != 'yes':
-            _auth_audit("auth.register.rejected", {**audit_base, "reason": "terms_not_accepted"})
             raise ValueError('registration failed; terms of use must be accepted')
         if not verify_password_form_csrf_token(password_csrf, 'register-password'):
-            _auth_audit("auth.register.rejected", {**audit_base, "reason": "invalid_csrf"})
             raise ValueError('registration failed; invalid csrf token')
         try:
             verifier = password_envelope_store.consume(
@@ -438,12 +408,10 @@ def register_submit(
                 encrypted_verifier=form_text(encrypted_verifier),
             )
         except ValueError as exc:
-            _auth_audit("auth.register.rejected", {**audit_base, "reason": "invalid_password_envelope"})
             raise ValueError('registration failed; invalid password envelope') from exc
         salt_hex = normalize_password_salt_hex(salt_value)
         iters = normalize_password_iters(iter_value)
         if iters != int(_C.PASSWORD_HASH_ITERS):
-            _auth_audit("auth.register.rejected", {**audit_base, "reason": "invalid_password_iterations"})
             raise ValueError('registration failed; invalid password iterations')
         if not config.smtp_config_service.delivery_configured():
             user_id = create_user_with_password_verifier(
@@ -455,11 +423,6 @@ def register_submit(
                 email_normalized=email_normalized,
             )
             token = create_session_for_user(int(user_id))
-            _auth_audit(
-                "auth.register.user_created",
-                {**audit_base, "user_id": int(user_id), "email_verification": "skipped_no_smtp"},
-                actor_user_id=int(user_id),
-            )
             target = safe_next_path(next_path, '/problems')
             if target in {'/', '/login', '/register'}:
                 target = '/problems'
@@ -470,21 +433,17 @@ def register_submit(
             bucket_key="register-email-send:global",
             limit=int(_C.AUTH_REGISTER_EMAIL_GLOBAL_MAX),
             window_sec=int(_C.AUTH_REGISTER_EMAIL_GLOBAL_WINDOW_SEC),
-            audit_action="auth.register.email_rate_limited",
-            details=audit_base,
             message="too many registration emails",
         )
         _enforce_auth_rate_limit(
             bucket_key=f"register-email-send:email:{email_normalized}",
             limit=int(_C.AUTH_REGISTER_EMAIL_SEND_MAX),
             window_sec=int(_C.AUTH_REGISTER_EMAIL_SEND_WINDOW_SEC),
-            audit_action="auth.register.email_rate_limited",
-            details=audit_base,
             message="too many registration emails",
         )
         verification_code = _new_registration_verification_code()
         token_hash = sha256_hex_text(_normalize_registration_verification_code(verification_code))
-        pending_id = config.auth_service.create_pending_registration(
+        config.auth_service.create_pending_registration(
             username=safe_user,
             email=safe_email,
             email_normalized=email_normalized,
@@ -503,12 +462,7 @@ def register_submit(
                 expires_in_sec=int(_C.AUTH_REGISTER_PENDING_TTL_SEC),
             )
         except ValueError as exc:
-            _auth_audit(
-                "auth.register.email_failed",
-                {**audit_base, "pending_id": pending_id, "error": str(exc)},
-            )
             raise ValueError("registration failed; verification email could not be sent") from exc
-        _auth_audit("auth.register.email_sent", {**audit_base, "pending_id": pending_id})
     except ValueError as exc:
         return redirect_response('/register', status_code=303, message=str(exc))
     return redirect_response(
@@ -528,41 +482,21 @@ def register_verify_page(request: Request):
 
 def register_verify(request: Request, code: str = Form("")):
     enforce_same_origin_state_change(request)
-    request_ip = _client_ip_for_auth_rate_limit(request)
-    user_agent = _request_user_agent(request)
-    audit_base: dict[str, object] = {"ip": request_ip, "user_agent": user_agent}
     try:
         normalized_code = _normalize_registration_verification_code(code)
         token_hash = sha256_hex_text(normalized_code)
-        pending = config.auth_service.pending_registration_by_token_hash(token_hash)
-        if pending is not None:
-            audit_base.update(
-                {
-                    "pending_id": str(pending["id"]),
-                    "username": str(pending["username"]),
-                    "email": str(pending["email_normalized"]),
-                }
-            )
         user_id = config.auth_service.activate_pending_registration(token_hash)
         auth_token = create_session_for_user(int(user_id))
-        _auth_audit(
-            "auth.register.verify_success",
-            {**audit_base, "user_id": int(user_id)},
-            actor_user_id=int(user_id),
-        )
     except ValueError as exc:
         try:
             _enforce_auth_rate_limit(
                 bucket_key="register-verify-fail:global",
                 limit=int(_C.AUTH_REGISTER_VERIFY_FAIL_MAX),
                 window_sec=int(_C.AUTH_REGISTER_VERIFY_FAIL_WINDOW_SEC),
-                audit_action="auth.register.verify_rate_limited",
-                details={**audit_base, "reason": str(exc)},
                 message="too many registration verification attempts",
             )
         except ValueError as rate_exc:
             return redirect_response('/register/verify', status_code=303, message=str(rate_exc))
-        _auth_audit("auth.register.verify_failed", {**audit_base, "reason": str(exc)})
         return redirect_response('/register/verify', status_code=303, message=str(exc))
     response = redirect_response('/problems', status_code=303, message='registration verified')
     response.set_cookie(_C.AUTH_COOKIE_NAME, auth_token, httponly=True, samesite='lax', secure=_C.AUTH_COOKIE_SECURE, max_age=_C.AUTH_COOKIE_MAX_AGE, path='/')

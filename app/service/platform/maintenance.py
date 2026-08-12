@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import json
+import logging
 import os
 import shutil
 import threading
@@ -23,6 +23,9 @@ from app.service.platform.admission import MaintenanceAdmissionGate
 from app.service.platform.runtime_blob_store import RuntimeBlobStore
 from app.service.platform.runtime_cache_index import RuntimeCacheIndex
 from app.setting import Settings
+
+
+logger = logging.getLogger(__name__)
 
 
 MaintenanceStatus = Literal["idle", "running", "succeeded", "failed"]
@@ -57,30 +60,10 @@ class VerificationTaskMaintenancePort(Protocol):
 class MaintenanceOperationPort(Protocol):
     """Operation hooks executed while the shared admission gate is closed."""
 
-    def configured_roots(self) -> dict[str, object]: ...
-
-    def write_start_audit(
-        self,
-        *,
-        actor_user_id: int,
-        operation_id: str,
-        started_at: str,
-        roots: dict[str, object],
-    ) -> int: ...
-
-    def write_failed_audit(
-        self,
-        *,
-        actor_user_id: int,
-        details: dict[str, object],
-    ) -> int: ...
-
     def run(
         self,
         *,
-        actor_user_id: int,
         operation_id: str,
-        start_audit_id: int,
         started_at: str,
         set_stage: Callable[[str], None],
     ) -> dict[str, object]: ...
@@ -94,7 +77,6 @@ class ArtifactUsageSnapshot(TypedDict):
     total_bytes: int
     total_files: int
     artifact_rows: int
-    audit_rows: int
     removable_rows: int
     table_rows: dict[str, int]
 
@@ -276,16 +258,6 @@ class ArtifactCleanupService:
         self._verification_task_store = verification_task_store
         self._reset_process_job_tracking = reset_process_job_tracking
 
-    def configured_roots(self) -> dict[str, object]:
-        """Describe configured storage without performing cleanup preflight."""
-
-        roots = {
-            name: str(Path(getattr(self._settings, name)).absolute())
-            for name in _STORAGE_ROOT_ATTRIBUTES
-        }
-        roots["database"] = str(self._settings.db_path.absolute())
-        return roots
-
     def preflight(
         self,
         *,
@@ -302,7 +274,7 @@ class ArtifactCleanupService:
         result["database"] = str(self._settings.db_path.absolute().resolve())
         return result
 
-    def _delete_metadata(self, *, start_audit_id: int) -> dict[str, int]:
+    def _delete_metadata(self) -> dict[str, int]:
         def transaction(connection) -> dict[str, int]:
             counts = {
                 table: int(
@@ -320,11 +292,6 @@ class ArtifactCleanupService:
                 self._ARTIFACT_TABLES
             ):
                 connection.execute(statement)
-            cursor = connection.execute(
-                "DELETE FROM audit_log WHERE id < ?",
-                (int(start_audit_id),),
-            )
-            counts["audit_log"] = max(0, int(cursor.rowcount))
             return counts
 
         return self._db.write_schema_reset_transaction(transaction)
@@ -362,9 +329,6 @@ class ArtifactCleanupService:
             f"(SELECT COUNT(*) FROM {table}) AS {table}"
             for table in self._ARTIFACT_TABLES
         ]
-        count_expressions.append(
-            "(SELECT COUNT(*) FROM audit_log) AS audit_log"
-        )
         row = self._db.fetch_one("SELECT " + ", ".join(count_expressions))
         if row is None:
             raise RuntimeError("artifact usage query returned no row")
@@ -373,7 +337,6 @@ class ArtifactCleanupService:
             for table in self._ARTIFACT_TABLES
         }
         artifact_rows = sum(table_rows.values())
-        audit_rows = int(row["audit_log"])
         return {
             "artifacts_bytes": artifacts_bytes,
             "artifacts_files": artifacts_files,
@@ -382,8 +345,7 @@ class ArtifactCleanupService:
             "total_bytes": artifacts_bytes + cache_bytes,
             "total_files": artifacts_files + cache_files,
             "artifact_rows": artifact_rows,
-            "audit_rows": audit_rows,
-            "removable_rows": artifact_rows + audit_rows,
+            "removable_rows": artifact_rows,
             "table_rows": table_rows,
         }
 
@@ -429,65 +391,10 @@ class ArtifactCleanupService:
                 continue
         return total
 
-    def _write_audit(
-        self,
-        actor_user_id: int,
-        action: str,
-        details: dict[str, object],
-    ) -> int:
-        def transaction(connection) -> int:
-            cursor = connection.execute(
-                """
-                INSERT INTO audit_log(actor_user_id, problem_id, action, details_json, created_at)
-                VALUES (?, NULL, ?, ?, ?)
-                """,
-                (
-                    int(actor_user_id),
-                    action,
-                    json.dumps(details, ensure_ascii=False, separators=(",", ":")),
-                    now_iso(),
-                ),
-            )
-            return int(cursor.lastrowid)
-
-        return int(self._db.write_transaction(transaction))
-
-    def write_start_audit(
-        self,
-        *,
-        actor_user_id: int,
-        operation_id: str,
-        started_at: str,
-        roots: dict[str, object],
-    ) -> int:
-        return self._write_audit(
-            actor_user_id,
-            "artifact_cleanup.start",
-            {
-                "operation_id": operation_id,
-                "started_at": started_at,
-                "roots": roots,
-            },
-        )
-
-    def write_failed_audit(
-        self,
-        *,
-        actor_user_id: int,
-        details: dict[str, object],
-    ) -> int:
-        return self._write_audit(
-            actor_user_id,
-            "artifact_cleanup.failed",
-            details,
-        )
-
     def run(
         self,
         *,
-        actor_user_id: int,
         operation_id: str,
-        start_audit_id: int,
         started_at: str,
         set_stage: Callable[[str], None],
     ) -> dict[str, object]:
@@ -495,7 +402,6 @@ class ArtifactCleanupService:
         stage = "preflight"
         result: dict[str, object] = {
             "operation_id": operation_id,
-            "start_audit_id": int(start_audit_id),
             "started_at": started_at,
             "completed_stage": "admission",
             "deleted_rows": {},
@@ -520,9 +426,7 @@ class ArtifactCleanupService:
             result["roots"] = self.preflight(create_cleanup_roots=True)
             result["completed_stage"] = "preflight"
             move("database")
-            deleted_rows = self._delete_metadata(
-                start_audit_id=start_audit_id
-            )
+            deleted_rows = self._delete_metadata()
             result["deleted_rows"] = deleted_rows
             result["deleted_row_total"] = sum(deleted_rows.values())
             result["affected_row_total"] = result["deleted_row_total"]
@@ -564,14 +468,9 @@ class ArtifactCleanupService:
             )
             result["total_reclaimed_bytes"] = sum(reclaimed_bytes.values())
             result["completed_stage"] = "vacuum"
-            move("audit")
             result["finished_at"] = now_iso()
             result["duration_ms"] = int(round((time.monotonic() - started) * 1000))
-            self._write_audit(
-                actor_user_id,
-                "artifact_cleanup.succeeded",
-                result,
-            )
+            logger.info("artifact cleanup succeeded", extra={"result": result})
             return result
         except Exception as exc:
             cleanup_roots = {
@@ -588,18 +487,7 @@ class ArtifactCleanupService:
             result["total_reclaimed_bytes"] = sum(reclaimed_bytes.values())
             result["failed_stage"] = stage
             result["error"] = str(exc)
-            try:
-                self.write_failed_audit(
-                    actor_user_id=actor_user_id,
-                    details=result,
-                )
-            except Exception as audit_exc:
-                combined = RuntimeError(
-                    f"artifact cleanup failed at {stage}: {exc}; "
-                    f"terminal audit failed: {audit_exc}"
-                )
-                setattr(combined, "cleanup_result", result)
-                raise combined from audit_exc
+            logger.exception("artifact cleanup failed", extra={"result": result})
             setattr(exc, "cleanup_result", result)
             raise
 
@@ -748,50 +636,20 @@ class MaintenanceCoordinator:
             self._snapshot = MaintenanceSnapshot(
                 status="running",
                 operation=operation,
-                stage="start_audit",
+                stage="starting",
                 operation_id=operation_id,
                 started_at=started_at,
                 actor_user_id=int(actor_user_id),
             )
-
-        try:
-            start_audit_id = service.write_start_audit(
-                actor_user_id=int(actor_user_id),
-                operation_id=operation_id,
-                started_at=started_at,
-                roots=service.configured_roots(),
-            )
-        except Exception as exc:
-            with self._gate.locked():
-                self._snapshot = MaintenanceSnapshot(
-                    status="failed",
-                    operation=operation,
-                    stage="start_audit",
-                    operation_id=operation_id,
-                    started_at=started_at,
-                    finished_at=now_iso(),
-                    actor_user_id=int(actor_user_id),
-                    result={
-                        "completed_stage": "admission",
-                        "failed_stage": "start_audit",
-                    },
-                    error=str(exc),
-                )
-                self._gate.open_locked()
-            return MaintenanceStart(False, f"audit_failed: {exc}", busy)
 
         thread_error: Exception | None = None
         with self._gate.locked():
-            self._snapshot.stage = "starting"
-            self._snapshot.result = {"start_audit_id": int(start_audit_id)}
             try:
                 self._worker = threading.Thread(
                     target=self._run_operation,
                     args=(
                         service,
-                        int(actor_user_id),
                         operation_id,
-                        int(start_audit_id),
                         started_at,
                     ),
                     daemon=True,
@@ -806,35 +664,25 @@ class MaintenanceCoordinator:
 
         details = {
             "operation_id": operation_id,
-            "start_audit_id": int(start_audit_id),
             "started_at": started_at,
             "finished_at": now_iso(),
             "completed_stage": "admission",
             "failed_stage": "thread_start",
             "error": str(thread_error),
         }
-        audit_error = ""
-        try:
-            service.write_failed_audit(
-                actor_user_id=int(actor_user_id),
-                details=details,
-            )
-        except Exception as audit_exc:
-            audit_error = f"; terminal audit failed: {audit_exc}"
+        logger.exception("maintenance thread failed to start", exc_info=thread_error)
         with self._gate.locked():
             self._snapshot.status = "failed"
             self._snapshot.finished_at = str(details["finished_at"])
             self._snapshot.result = details
-            self._snapshot.error = f"{thread_error}{audit_error}"
+            self._snapshot.error = str(thread_error)
             self._gate.open_locked()
         return MaintenanceStart(False, "thread_start_failed", {})
 
     def _run_operation(
         self,
         service: MaintenanceOperationPort,
-        actor_user_id: int,
         operation_id: str,
-        start_audit_id: int,
         started_at: str,
     ) -> None:
         def set_stage(stage: str) -> None:
@@ -843,9 +691,7 @@ class MaintenanceCoordinator:
 
         try:
             result = service.run(
-                actor_user_id=actor_user_id,
                 operation_id=operation_id,
-                start_audit_id=start_audit_id,
                 started_at=started_at,
                 set_stage=set_stage,
             )

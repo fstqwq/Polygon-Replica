@@ -193,21 +193,6 @@ class TestAgentAPI(E2ETestBase):
             )
             self.assertEqual(bad_identity.status_code, 401, bad_identity.text)
 
-            audit_row = db_fetch_one(
-                """
-                SELECT details_json FROM audit_log
-                WHERE problem_id=? AND action='agent.problem.create'
-                """,
-                [problem_id],
-            )
-            self.assertIsNotNone(audit_row)
-            details = json.loads(str(audit_row["details_json"]))
-            self.assertEqual(str(details["problem"]), problem)
-            self.assertEqual(
-                str(details["agent_session_id"]),
-                str(register["agent_session_id"]),
-            )
-
     def test_export_status_and_download_resolve_export_job_directly(self) -> None:
         username = self.random_id("agent-export-job")
         _password, auth_cookie = self._issue_auth_cookie(username)
@@ -355,21 +340,6 @@ class TestAgentAPI(E2ETestBase):
             materialization_id=materialization["id"],
             export_id=export_id,
         )
-        db_execute(
-            """
-            INSERT INTO audit_log(
-                actor_user_id,problem_id,action,details_json,created_at
-            ) VALUES(?,?,?,?,?)
-            """,
-            [
-                actor_user_id,
-                problem_id,
-                "export.create",
-                '{"status":"failed","error":"must-not-be-read"}',
-                "2026-08-08T00:00:01Z",
-            ],
-        )
-
         with TestClient(app, raise_server_exceptions=False) as client:
             connect = self._connect_agent(client, auth_cookie)
             register = self._register_agent(

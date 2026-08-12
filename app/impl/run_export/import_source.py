@@ -10,7 +10,6 @@ from pathlib import Path
 from typing import TypedDict, cast
 
 from app.impl.runtime.config import config
-from app.impl.workspace.context_operation import audit
 from app.impl.run_export.query import (
     _bare_repo_head_commit,
 )
@@ -272,13 +271,11 @@ def _merge_imported_tree(source_root: Path, target_root: Path) -> None:
 
 
 def import_package_into_workspace(
-    actor_user_id: int,
     actor_user: str,
     target_problem: str,
     package_name: str,
     package: Path | ArchiveView,
     policy: ProblemImportPolicy,
-    source_problem: str = "",
     normalize_test_data_newlines: bool = False,
 ) -> dict[str, object]:
     safe_actor_user = actor_user.strip()
@@ -319,24 +316,6 @@ def import_package_into_workspace(
         finally:
             shutil.rmtree(staging_root, ignore_errors=True)
 
-    problem_id = config.workspace_service.known_problem_id(safe_target_problem)
-    if problem_id is not None:
-        audit(
-            actor_user_id,
-            int(problem_id),
-            "export.import_workspace",
-            {
-                "package": safe_package_name,
-                "package_format": package_format,
-                "source_problem": source_problem.strip(),
-                "target_problem": safe_target_problem,
-                "statement": result.get("statement"),
-                "tests": result.get("tests"),
-                "components": result.get("components"),
-                "solutions": result.get("solutions"),
-                "merge_mode": "overwrite_matching_paths_keep_missing",
-            },
-        )
     tests_info = result.get("tests")
     total_tests = int(cast(dict[str, object], tests_info).get("total", 0)) if tests_info is not None else 0
     return {
@@ -347,13 +326,11 @@ def import_package_into_workspace(
     }
 
 def import_package_as_new_problem(
-    actor_user_id: int,
     actor_user: str,
     package_name: str,
     package: Path | ArchiveView,
     policy: ProblemImportPolicy,
     requested_slug: str = "",
-    source_problem: str = "",
     normalize_test_data_newlines: bool = False,
 ) -> dict[str, object]:
     safe_actor_user = actor_user.strip()
@@ -398,20 +375,6 @@ def import_package_as_new_problem(
                 imported_commit = _finalize_imported_problem(target_problem, safe_actor_user, target_workspace, package_format)
             config.workspace_service.ensure_workspace(target_problem, safe_actor_user, refresh_status=True)
             result["commit"] = imported_commit
-            details = {
-                "package": safe_package_name,
-                "package_format": package_format,
-                "source_problem": source_problem.strip(),
-                "target_problem": target_problem,
-                "import_commit": imported_commit,
-                "statement": result.get("statement"),
-                "tests": result.get("tests"),
-                "components": result.get("components"),
-                "solutions": result.get("solutions"),
-            }
-            target_problem_id = config.workspace_service.known_problem_id(target_problem)
-            if target_problem_id is not None:
-                audit(actor_user_id, int(target_problem_id), "export.import", details)
             tests_info = result.get("tests")
             total_tests = int(cast(dict[str, object], tests_info).get("total", 0)) if tests_info is not None else 0
             return {"target_problem": target_problem, "total_tests": total_tests, "result": result, "package_format": package_format}

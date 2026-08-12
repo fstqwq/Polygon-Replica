@@ -4,7 +4,7 @@ import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from fastapi.templating import Jinja2Templates
-from app.db import DB
+from app.db import DB, SchemaRequirementsError
 from app.config import ConfigValues, build_config_values
 from app.service.auth.service import AuthService
 from app.service.agent.service import AgentService
@@ -53,6 +53,7 @@ class RuntimeConfig:
     settings: Settings = field(default_factory=load_settings)
     config_values: ConfigValues = field(init=False)
     db: DB = field(init=False)
+    schema_error: SchemaRequirementsError | None = field(init=False, default=None)
     workspace_service: workspace.WorkspaceService = field(init=False)
     auth_service: AuthService = field(init=False)
     agent_service: AgentService = field(init=False)
@@ -149,6 +150,11 @@ class RuntimeConfig:
         self.templates.env.globals["static_asset_url"] = self.static_assets.url
         self.config_values = build_config_values()
         self.db = DB(self.settings.db_path, config_values=self.config_values)
+        try:
+            self.db.init()
+        except SchemaRequirementsError as exc:
+            self.schema_error = exc
+            return
         self.verification_task_store = VerificationTaskStore(self.db)
         self.system_config_service = SystemConfigService(self.db)
         self.smtp_config_service = SmtpConfigService(self.db)
@@ -269,7 +275,6 @@ class RuntimeConfig:
             self._reset_process_job_tracking,
         )
         self.source_backup_service = SourceBackupService(
-            self.db,
             self.settings,
         )
         self.maintenance_service = MaintenanceCoordinator(

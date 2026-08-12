@@ -12,7 +12,6 @@ from app.impl.auth.shared import json_error_response
 from app.impl.runtime.config import config
 from app.impl.workspace.context_job import start_export_job, start_verification_job
 from app.impl.workspace.context_job_helper import allocate_verification_id
-from app.impl.workspace.context_operation import audit
 from app.impl.workspace.context_run_detail import normalize_run_test_name_token
 from app.impl.workspace.problem_config import read_problem_config
 from app.impl.workspace.published_materialization import build_full_verification_targets
@@ -134,21 +133,7 @@ async def agent_verification_start(request: Request):
     workspace = Path(str(ctx["workspace"]["path"])).resolve()
     verification_id = allocate_verification_id()
     try:
-        targets, accepted_source = build_full_verification_targets(workspace)
-        details: dict[str, object] = {
-            "status": "running",
-            "steps": ["gen", "val", "run", "check"],
-            "workspace_head": str(ctx["workspace"].get("head_commit") or ""),
-            "workspace_dirty": bool(ctx["workspace"].get("dirty")),
-            "verification_id": verification_id,
-            "artifact_verification_id": verification_id,
-            "verification_source": "agent.verification.start",
-            "task_graph": True,
-            "error": "",
-            "submission_paths": [str(item["path"]) for item in targets],
-            "solution_count": len(targets),
-            "accepted_source": accepted_source,
-        }
+        targets, _accepted_source = build_full_verification_targets(workspace)
         started = start_verification_job(
             identity.problem_slug,
             identity.username,
@@ -159,12 +144,10 @@ async def agent_verification_start(request: Request):
             workspace_dirty=bool(ctx["workspace"].get("dirty")),
             targets=targets,
             verification_id=verification_id,
-            initial_details=details,
             workspace_path=workspace,
         )
         if not started:
             return json_error_response("verification already running", status_code=409)
-        audit(int(identity.user_id), int(identity.problem_id), "agent.verification.start", {"verification_id": verification_id})
         return _json_body({"verification_id": verification_id, "status": "queued"})
     except ValueError as exc:
         return json_error_response(str(exc), status_code=400)
@@ -774,17 +757,6 @@ async def agent_workspace_apply(
                 )
         diff = result.value
         status_after = result.status
-        audit(
-            int(identity.user_id),
-            int(identity.problem_id),
-            "agent.workspace.apply",
-            {
-                "uploads": diff.uploads,
-                "deletes": diff.deletes,
-                "base_head_commit": expected_head,
-                "head_commit": str(status_after.get("head_commit") or ""),
-            },
-        )
         payload = {
             "problem": identity.problem_slug,
             "head_commit": str(status_after.get("head_commit") or ""),
@@ -837,7 +809,6 @@ async def agent_workspace_upload(request: Request, file: UploadFile = File(...))
         return json_error_response("path is required", status_code=400)
     try:
         normalized, total_bytes = await config.workspace_file_service.upload_file(workspace, rel, file, require_allowed_root=True)
-        audit(int(identity.user_id), int(identity.problem_id), "agent.workspace.upload", {"path": normalized, "bytes": total_bytes})
         return _json_body({"ok": True, "path": normalized, "bytes": total_bytes})
     except HTTPException as exc:
         return json_error_response(str(exc.detail), status_code=exc.status_code)
@@ -851,7 +822,6 @@ async def agent_workspace_delete(request: Request, path: str):
     workspace = Path(str(ctx["workspace"]["path"])).resolve()
     try:
         normalized = config.workspace_file_service.delete_path(workspace, path, require_allowed_root=True)
-        audit(int(identity.user_id), int(identity.problem_id), "agent.workspace.delete", {"path": normalized})
         return _json_body({"ok": True, "path": normalized})
     except HTTPException as exc:
         return json_error_response(str(exc.detail), status_code=exc.status_code)
@@ -885,7 +855,6 @@ async def agent_commit(request: Request):
                 if commit_created:
                     config.git_service.rollback_last_commit(workspace, expected_head=commit_head)
                 raise push_exc
-        audit(int(identity.user_id), int(identity.problem_id), "agent.commit", {"message": message, "head": commit_head})
         return _json_body({"status": "ok", "head": commit_head})
     except Exception as exc:
         return json_error_response(str(exc), status_code=400)

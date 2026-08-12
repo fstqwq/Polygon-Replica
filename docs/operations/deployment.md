@@ -164,6 +164,13 @@ own image pinning and upgrade validation.
 Create and download a source backup from Admin first. Then update one deployment
 at a time.
 
+Application startup does not alter an existing SQLite schema. Before installing
+a revision that changes required tables, columns, or named indexes, stop the
+service and apply that revision's explicit offline database procedure. If this
+step is missed, the process remains available only as a raw `503` diagnostic
+that lists the missing schema objects; no workers or Judgehost runtime start.
+Extra tables, columns, indexes, and rows do not block startup and are preserved.
+
 Systemd:
 
 ```bash

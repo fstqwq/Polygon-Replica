@@ -63,11 +63,13 @@ Administrative cleanup closes both ordinary work admission and the Judgehost
 callback admission gate. It refuses to start while requests, callbacks, worker
 jobs, or queued/leased/reporting Judgehost work is active. It recreates
 the preview, verification, package, export, and contest-build metadata tables;
-clears stale workspace verification status and earlier audit rows; empties the
-entire artifact and cache roots; resets process-local execution state; vacuums
-SQLite; and appends a terminal audit event. It does not remove problem, user,
-workspace, contest, membership, contest attachment, configuration, or backup
-data.
+empties the entire artifact and cache roots; resets process-local execution
+state; and vacuums SQLite. Recreating those explicitly registered cleanup-safe
+tables removes every row and any extra local columns in that domain. Unknown
+tables and durable problem, user, workspace, contest, membership, contest
+attachment, configuration, and backup data are not guessed at or removed.
+Current-process status is held by the in-memory maintenance snapshot; after a
+restart, the recovery operation is a safe rerun.
 
 ## Source backup
 
@@ -87,9 +89,9 @@ SQLite, contest source, artifacts, cache data, existing backup-root content,
 application code, and deployment secrets are not included. This is a source
 recovery archive, not a complete application-state backup.
 
-The application publishes only
-`backup_root/source-backup/latest.tar.gz`. It builds a hidden temporary archive
-and atomically replaces the published file only after archive creation
-succeeds. A handled failure restores the preceding published archive. Only a
-system administrator can start or download the backup. Artifact cleanup never
-removes it.
+The application publishes the pair
+`backup_root/source-backup/latest.tar.gz` and `latest.tar.gz.sha256`. It builds
+hidden temporary files, reopens and validates the archive and its sidecar, then
+atomically replaces the published pair. A handled failure restores the
+preceding pair. Only a system administrator can start or download the backup.
+Artifact cleanup never removes it.

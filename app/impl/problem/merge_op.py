@@ -17,7 +17,6 @@ from app.impl.contest.workspace_scope import (
 )
 from app.impl.runtime.config import config
 from app.impl.workspace.access import require_write_access
-from app.impl.workspace.context_operation import audit
 from app.impl.workspace.context_ui import page_ctx
 from app.service.repository.merge import MergeEntry, MergeFile, MergePreview
 
@@ -159,23 +158,11 @@ def merge_start(problem: str, user: Annotated[str, Depends(require_session_user)
                 int(ctx["problem"]["id"]),
                 int(ctx["user"]["id"]),
             )
-            audit(
-                int(ctx["user"]["id"]),
-                int(ctx["problem"]["id"]),
-                "workspace.merge.auto_update",
-                {},
-            )
             return redirect_response(
                 f"/problems/{problem}/workspace",
                 message="Workspace updated to the published revision.",
             )
         preview = config.workspace_merge_service.start_preview(user, problem, workspace)
-        audit(
-            int(ctx["user"]["id"]),
-            int(ctx["problem"]["id"]),
-            "workspace.merge.preview",
-            {"preview_id": preview.preview_id, "affected_files": len(preview.entries)},
-        )
         return redirect_response(f"/problems/{problem}/merge/{preview.preview_id}")
     except Exception as exc:
         return redirect_response(f"/problems/{problem}/workspace", message=str(exc))
@@ -255,16 +242,7 @@ async def merge_apply(
                 raise ValueError("choose a result for every affected file")
         else:
             raise ValueError("select an update result")
-        affected_count = (
-            len(preview.suggested_entries) if mode == "suggested" else len(preview.entries)
-        )
         config.workspace_merge_service.apply_preview(user, problem, preview_id, mode, choices)
-        audit(
-            int(ctx["user"]["id"]),
-            int(ctx["problem"]["id"]),
-            "workspace.merge.apply",
-            {"preview_id": preview_id, "mode": mode, "affected_files": affected_count},
-        )
         changes = config.git_service.status_change_summary(workspace)
         changed_count = int(changes.get("total") or 0)
         if changed_count:
@@ -282,12 +260,6 @@ def merge_undo(problem: str, user: Annotated[str, Depends(require_session_user)]
     ctx, workspace = _workspace_context(problem, user)
     try:
         config.workspace_merge_service.undo(workspace)
-        audit(
-            int(ctx["user"]["id"]),
-            int(ctx["problem"]["id"]),
-            "workspace.merge.undo",
-            {},
-        )
         message = "files from before the update were restored"
     except Exception as exc:
         message = str(exc)

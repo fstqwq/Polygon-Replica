@@ -1146,8 +1146,7 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
             "total_bytes": 1536,
             "total_files": 7,
             "artifact_rows": 37,
-            "audit_rows": 5,
-            "removable_rows": 42,
+            "removable_rows": 37,
             "table_rows": {"verifications": 3},
         }
 
@@ -1162,8 +1161,7 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         html = response.body.decode("utf-8", errors="replace")
         self.assertIn("1.5 KiB", html)
         self.assertIn("across 7 files", html)
-        self.assertIn("42 removable database rows", html)
-        self.assertIn("including 5 audit entries", html)
+        self.assertIn("37 removable database rows", html)
         self.assertIn("Artifact files", html)
         self.assertIn("Runtime cache", html)
         self.assertIn("Verifications", html)

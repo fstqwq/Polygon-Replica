@@ -7,7 +7,7 @@ request and returns a redacted configuration snapshot or delivery success.
 Host, port, username, and encrypted password live in the singleton
 `smtp_config` row. Reading or changing the password requires the stable
 deployment encryption key described in
-[configuration](../../../../operations/configuration.md). Snapshot and audit
+[configuration](../../../../operations/configuration.md). Snapshot and log
 payloads expose only whether the password changed or is configured, never its
 plaintext or ciphertext. Delivery has no durable application queue: each send
 completes in its calling request.

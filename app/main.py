@@ -48,6 +48,23 @@ class MaintenanceAdmissionMiddleware:  # pylint: disable=too-few-public-methods
         if scope["type"] != "http":
             await self._asgi_app(scope, receive, send)
             return
+        schema_error = config.schema_error
+        if schema_error is not None:
+            response = PlainTextResponse(
+                "Database schema upgrade required.\n"
+                "The application runtime was not started.\n"
+                f"{schema_error}\n"
+                "Upgrade the database offline, then restart the application. "
+                "No automatic schema changes were applied.\n",
+                status_code=503,
+                headers={
+                    "Retry-After": "60",
+                    "Cache-Control": "no-store",
+                },
+            )
+            _apply_security_headers(response)
+            await response(scope, receive, send)
+            return
         maintenance = config.maintenance_service
         path = str(scope.get("path") or "")
         if maintenance.is_exempt(path):

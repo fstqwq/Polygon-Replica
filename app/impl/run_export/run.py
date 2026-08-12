@@ -19,7 +19,6 @@ from app.impl.workspace.context_job import start_verification_job
 from app.impl.workspace.context_ui import page_ctx
 from app.impl.workspace.context_job_helper import allocate_verification_id
 from app.impl.workspace.context_operation import (
-    audit,
     dedupe_preserve_order,
     run_solution_options_context,
     run_test_options_context,
@@ -43,7 +42,7 @@ from app.impl.run_export.query import (
     _rerun_solution_paths_from_verification,
     _run_detail_use_compact_layout,
 )
-from app.service.verification.types import ACTIVE, VerificationStatus
+from app.service.verification.types import ACTIVE
 
 _C = config.config_values
 logger = logging.getLogger(__name__)
@@ -243,7 +242,6 @@ def run_cancel(problem: str, user: Annotated[str, Depends(require_session_user)]
             status_code=303,
             message="verification id is required",
         )
-    actor_user_id = int(ctx["user"]["id"])
     problem_id = int(ctx["problem"]["id"])
     workspace_id = int(ctx["workspace"]["id"])
     details_url = f"/problems/{problem}/run/details?verification_id={quote_plus(safe_verification_id)}"
@@ -283,12 +281,6 @@ def run_cancel(problem: str, user: Annotated[str, Depends(require_session_user)]
             message="verification already finished",
         )
     cancellation = cancellation_result.drain
-    cancel_details: dict[str, object] = {
-        "verification_id": safe_verification_id,
-        **cancellation,
-        "reason": reason,
-    }
-    audit(actor_user_id, problem_id, "run.cancel", cancel_details)
     awaiting_receipts = int(cancellation["awaiting_receipts"])
     if awaiting_receipts > 0:
         msg = f"verification cancelled ({awaiting_receipts} running cases awaiting receipt)"
@@ -305,7 +297,7 @@ def _build_dag_targets(
     uploaded: bool,
     upload_filename: str,
     upload_content: bytes,
-) -> tuple[list[str], list[str], list[dict[str, object]]]:
+) -> tuple[list[str], list[dict[str, object]]]:
     if not accepted_solution_path:
         raise ValueError("main correct solution is required")
     solution_expected_map = {
@@ -313,7 +305,6 @@ def _build_dag_targets(
         for row in solution_options
     }
     solution_program_ids: list[str] = []
-    resolved_submission_paths: list[str] = []
     dag_targets: list[dict[str, object]] = []
     target_paths = [
         accepted_solution_path,
@@ -341,7 +332,6 @@ def _build_dag_targets(
                 "program_id": program_id,
             }
         )
-        resolved_submission_paths.append(target_path)
     if uploaded:
         uploaded_program_id = f"solution-{solution_index}"
         solution_program_ids.append(uploaded_program_id)
@@ -354,7 +344,7 @@ def _build_dag_targets(
                 "upload_content": upload_content,
             }
         )
-    return (solution_program_ids, resolved_submission_paths, dag_targets)
+    return (solution_program_ids, dag_targets)
 
 
 def _start_run_verification(
@@ -363,15 +353,12 @@ def _start_run_verification(
     user: str,
     ctx: dict[str, object],
     workspace: Path,
-    run_mode: str,
     selected_solution_paths: list[str],
     selected_test_names: list[str],
     uploaded: bool = False,
     upload_filename: str = "",
     upload_content: bytes = b"",
     bypass_case_result_cache_flag: bool = False,
-    audit_action: str = "run.execute",
-    verification_source: str = "verification.start",
 ):
     if (not selected_solution_paths) and (not uploaded):
         msg = 'select at least one solution or upload source file'
@@ -380,7 +367,6 @@ def _start_run_verification(
     verification_id = allocate_verification_id()
     (
         solution_program_ids,
-        resolved_submission_paths,
         dag_targets,
     ) = _build_dag_targets(
         solution_options=solution_options,
@@ -390,30 +376,8 @@ def _start_run_verification(
         upload_filename=upload_filename,
         upload_content=upload_content,
     )
-    primary_solution_program_id = solution_program_ids[0]
     workspace_head = str(ctx["workspace"].get("head_commit") or "")
     workspace_dirty = bool(ctx["workspace"].get("dirty"))
-    details: dict[str, object] = {
-        "verification_id": verification_id,
-        "primary_solution_program_id": primary_solution_program_id,
-        "solution_program_ids": solution_program_ids,
-        "solution_program_count": len(solution_program_ids),
-        "artifact_verification_id": verification_id,
-        "submission_paths": resolved_submission_paths,
-        "solution_paths": selected_solution_paths,
-        "selected_test_names": selected_test_names,
-        "uploaded": uploaded,
-        "upload_filename": _upload_filename_token(upload_filename) if uploaded else "",
-        "mode": run_mode,
-        "execution_model": "task-dag",
-        "async": True,
-        "status": VerificationStatus.QUEUED.value,
-        "bypass_case_result_cache": bypass_case_result_cache_flag,
-        "task_graph": True,
-        "verification_source": verification_source,
-        "steps": ["gen", "val", "run", "check"],
-    }
-    audit(ctx["user"]["id"], ctx["problem"]["id"], audit_action, details)
     try:
         started = start_verification_job(
             problem,
@@ -425,23 +389,13 @@ def _start_run_verification(
             workspace_dirty=workspace_dirty,
             targets=dag_targets,
             verification_id=verification_id,
-            initial_details=details,
-            initial_summary=details,
             workspace_path=workspace,
             selected_test_names=selected_test_names,
             bypass_case_result_cache=bypass_case_result_cache_flag,
         )
     except Exception as exc:
-        failed_details = dict(details)
-        failed_details["status"] = VerificationStatus.FAILED.value
-        failed_details["error"] = str(exc)
-        audit(ctx["user"]["id"], ctx["problem"]["id"], audit_action, failed_details)
         return redirect_response(f"/problems/{problem}/run", status_code=303, message=str(exc))
     if not started:
-        failed_details = dict(details)
-        failed_details["status"] = VerificationStatus.FAILED.value
-        failed_details["error"] = "verification already running"
-        audit(ctx["user"]["id"], ctx["problem"]["id"], audit_action, failed_details)
         return redirect_response(f"/problems/{problem}/run", status_code=303, message="verification already running")
     message_parts: list[str] = []
     if selected_test_names:
@@ -486,18 +440,14 @@ def run_rejudge(
     )
     if not selected_solution_paths:
         return redirect_response(details_url, status_code=303, message="rejudge unavailable: no reusable solution sources")
-    _, general_cfg, _ = read_problem_config(workspace)
     return _start_run_verification(
         problem=problem,
         user=user,
         ctx=ctx,
         workspace=workspace,
-        run_mode=general_cfg['mode'],
         selected_solution_paths=selected_solution_paths,
         selected_test_names=[],
         bypass_case_result_cache_flag=True,
-        audit_action="run.rejudge",
-        verification_source="verification.rejudge",
     )
 
 
@@ -513,8 +463,6 @@ def run_execute(
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False, include_workspace_changes=False)
     require_write_access(ctx)
     workspace = Path(ctx['workspace']['path'])
-    _, general_cfg, _ = read_problem_config(workspace)
-    run_mode = general_cfg['mode']
     upload_content = None
     upload_filename = ''
     uploaded = False
@@ -563,7 +511,6 @@ def run_execute(
             user=user,
             ctx=ctx,
             workspace=workspace,
-            run_mode=run_mode,
             selected_solution_paths=selected_solution_paths,
             selected_test_names=selected_test_names,
             uploaded=uploaded,

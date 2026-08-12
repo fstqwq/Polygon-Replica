@@ -10,7 +10,6 @@ from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 
 from app.impl.auth.shared import template_response
 from app.impl.runtime.config import config
-from app.impl.workspace.context_operation import audit
 from app.main_util import enforce_textarea_max_bytes, read_upload_bytes_limited
 from app.service.statement.constant import DEFAULT_OLYMP_STY
 from app.service.statement.context import normalize_statement_language
@@ -176,20 +175,6 @@ def contest_packages_build_start(
             "active_job_id": job_id if reason == "already_running" else "",
         }
         raise HTTPException(status_code=409, detail=detail)
-    audit(
-        int(ctx["user"]["id"]),
-        None,
-        "contest.packages.build.start",
-        {
-            "contest_id": contest_id,
-            "contest_slug": str(ctx["contest"]["slug"]),
-            "job_id": job_id,
-            "outputs": list(requested_outputs),
-            "language": current_language,
-            "queued": bool(queued),
-            "reason": reason,
-        },
-    )
     return _contest_redirect(
         str(ctx["contest"]["slug"]),
         "packages",
@@ -291,12 +276,6 @@ def contest_statement_source_save(
             key=key,
             package_bytes=text.encode("utf-8"),
         )
-        audit(
-            int(ctx["user"]["id"]),
-            None,
-            "contest.statement.source.save",
-            {"contest_id": contest_id, "contest_slug": str(ctx["contest"]["slug"]), "path": key},
-        )
     except (ValueError, OSError) as exc:
         message = str(exc)
     return _contest_redirect(
@@ -342,12 +321,6 @@ async def contest_statement_source_upload(
             key=key,
             package_bytes=payload,
         )
-        audit(
-            int(ctx["user"]["id"]),
-            None,
-            "contest.statement.source.upload",
-            {"contest_id": contest_id, "contest_slug": str(ctx["contest"]["slug"]), "path": key, "bytes": len(payload)},
-        )
     except (ValueError, OSError) as exc:
         message = str(exc)
     finally:
@@ -379,12 +352,6 @@ def contest_statement_source_delete(
             contest_id=contest_id,
             contest_slug=str(ctx["contest"]["slug"]),
             key=key,
-        )
-        audit(
-            int(ctx["user"]["id"]),
-            None,
-            "contest.statement.source.delete",
-            {"contest_id": contest_id, "contest_slug": str(ctx["contest"]["slug"]), "path": key},
         )
     except (ValueError, OSError) as exc:
         message = str(exc)

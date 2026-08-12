@@ -65,8 +65,7 @@
     <strong>{{ artifact_usage.total_size_label }}</strong>
     <span class="muted">
       across {{ artifact_usage.total_files_label }} files &middot;
-      {{ artifact_usage.removable_rows_label }} removable database rows,
-      including {{ artifact_usage.audit_rows_label }} audit entries
+      {{ artifact_usage.removable_rows_label }} removable database rows
     </span>
   </p>
   <div class="admin-metric-strip">
@@ -78,7 +77,7 @@
   <form
     method="post"
     action="/admin/maintenance/artifacts/cleanup"
-    data-confirm-message="Delete all generated artifacts, generated jobs, runtime caches, and all previous audit history?"
+    data-confirm-message="Delete all generated artifacts, generated jobs, and runtime caches?"
   >
     <button class="btn danger-link" type="submit"{% if maintenance.get('status') == 'running' %} disabled{% endif %}>Clear generated artifacts</button>
   </form>

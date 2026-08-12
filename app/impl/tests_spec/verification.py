@@ -12,7 +12,7 @@ from app.impl.workspace.access import require_write_access
 from app.impl.workspace.context_job import start_verification_job
 from app.impl.workspace.context_ui import page_ctx
 from app.impl.workspace.context_job_helper import allocate_verification_id
-from app.impl.workspace.context_operation import audit, run_solution_options_context, workspace_rel_file_exists
+from app.impl.workspace.context_operation import run_solution_options_context, workspace_rel_file_exists
 from app.service.problem.solution_metadata import normalize_expected_behavior
 
 
@@ -24,7 +24,6 @@ def verification_start(problem: str, user: Annotated[str, Depends(require_sessio
     workspace_head = ctx['workspace']['head_commit']
     workspace_dirty = bool(ctx['workspace'].get('dirty'))
     verification_id = allocate_verification_id()
-    verification_details: dict[str, object] = {'status': 'running', 'steps': ['gen', 'val', 'run', 'check'], 'workspace_head': workspace_head, 'workspace_dirty': workspace_dirty, 'verification_id': verification_id, 'artifact_verification_id': verification_id, 'verification_source': 'verification.start', 'task_graph': True, 'error': ''}
     msg = 'verification running'
     try:
         solution_options, accepted_source, _ = run_solution_options_context(workspace)
@@ -54,7 +53,6 @@ def verification_start(problem: str, user: Annotated[str, Depends(require_sessio
         if not any(item['expected_behavior'] == 'accepted' for item in targets):
             raise ValueError('accepted solution source is required')
         targets.sort(key=lambda item: (0 if item['expected_behavior'] == 'accepted' else 1, item['path']))
-        solution_program_ids: list[str] = []
         solution_index = 0
         for target in targets:
             if target['path'] == accepted_source:
@@ -63,11 +61,6 @@ def verification_start(problem: str, user: Annotated[str, Depends(require_sessio
                 program_id = f'solution-{solution_index}'
                 solution_index += 1
             target['program_id'] = program_id
-            solution_program_ids.append(program_id)
-        verification_details['submission_paths'] = [item['path'] for item in targets]
-        verification_details['solution_count'] = len(targets)
-        verification_details['solution_program_ids'] = solution_program_ids
-        verification_details['solution_program_count'] = len(solution_program_ids)
         started = start_verification_job(
             problem,
             user,
@@ -78,16 +71,10 @@ def verification_start(problem: str, user: Annotated[str, Depends(require_sessio
             workspace_dirty=workspace_dirty,
             targets=targets,
             verification_id=verification_id,
-            initial_details=verification_details,
             workspace_path=workspace,
         )
         msg = 'verification running' if started else 'verification already running'
     except Exception as exc:
-        verification_details['status'] = 'failed'
-        verification_details['error'] = str(exc)
         msg = f'verification failed: {exc}'
     base = f'/problems/{problem}/{target_page}'
-    if verification_details['status'] == 'failed':
-        audit(ctx['user']['id'], ctx['problem']['id'], 'verification.start', verification_details)
     return redirect_response(base, status_code=303, message=msg)
-

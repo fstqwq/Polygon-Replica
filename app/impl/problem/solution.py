@@ -13,7 +13,6 @@ from app.impl.contest.workspace_scope import contest_workspace_context_from_requ
 from app.impl.runtime.config import config
 from app.impl.problem.shared import MAIN_CORRECT_EXPECTED_LABEL, MAIN_CORRECT_EXPECTED_VALUE
 from app.impl.workspace.context_operation import (
-    audit,
     list_solution_entries,
     read_build_config,
     read_text_safe_limited,
@@ -168,7 +167,6 @@ def solutions_save_source(request: Request, problem: str, user: Annotated[str, D
         if metadata_created:
             msg = 'solution source and metadata saved'
         save_ok = True
-        audit(ctx['user']['id'], ctx['problem']['id'], 'solutions.save_source', {'path': selected, 'bytes': len(safe_content.encode('utf-8')), 'metadata_created': metadata_created, 'expected_behavior': normalized_expected})
     except (ValueError, OSError) as exc:
         msg = str(exc)
     except HTTPException as exc:
@@ -224,7 +222,6 @@ def solutions_set_tag(problem: str, user: Annotated[str, Depends(require_session
                 msg = 'solution tag set to main correct solution (AC)'
             else:
                 msg = f'solution tag set to {normalized_expected}'
-        audit(ctx['user']['id'], ctx['problem']['id'], 'solutions.set_tag', {'source': selected, 'expected_behavior': normalized_expected, 'main_correct': bool(is_main_correct)})
     except (ValueError, OSError) as exc:
         msg = str(exc)
     except HTTPException as exc:
@@ -250,7 +247,6 @@ def solutions_rename(problem: str, user: Annotated[str, Depends(require_session_
         else:
             old_desc = desc_rel_path_for_source(old_source)
             new_desc = desc_rel_path_for_source(new_source)
-            renamed_metadata = False
             with config.workspace_service.workspace_lock(workspace):
                 old_abs = safe_workspace_path(workspace, old_source)
                 if old_abs.is_symlink() or (not old_abs.exists()) or (not old_abs.is_file()):
@@ -264,14 +260,12 @@ def solutions_rename(problem: str, user: Annotated[str, Depends(require_session_
                 config.git_service.rename_path(workspace, old_source, new_source)
                 if old_desc_exists and old_desc != new_desc:
                     config.git_service.rename_path(workspace, old_desc, new_desc)
-                    renamed_metadata = True
                 build_cfg, cfg_path = read_build_config(workspace)
                 configured = build_cfg.get('accepted_solution_source', '')
                 if configured == old_source:
                     build_cfg['accepted_solution_source'] = new_source
                     write_build_config(cfg_path, build_cfg)
             selected = new_source
-            audit(ctx['user']['id'], ctx['problem']['id'], 'solutions.rename', {'old': old_source, 'new': new_source, 'renamed_metadata': renamed_metadata})
     except (ValueError, OSError) as exc:
         msg = str(exc)
     except HTTPException as exc:
@@ -299,7 +293,6 @@ def solutions_delete(problem: str, user: Annotated[str, Depends(require_session_
             if configured == selected:
                 build_cfg.pop('accepted_solution_source', None)
                 write_build_config(cfg_path, build_cfg)
-        audit(ctx['user']['id'], ctx['problem']['id'], 'solutions.delete', {'source': selected, 'desc': desc_path})
     except (ValueError, OSError) as exc:
         msg = str(exc)
     except HTTPException as exc:
