@@ -41,7 +41,7 @@ class PayloadFile:
         }
 
     @classmethod
-    def from_payload(cls, raw: object) -> PayloadFile:
+    def from_payload(cls, raw: object) -> "PayloadFile":
         payload = cast(dict[str, object], raw)
         return cls(
             path=Path(str(payload["path"])),

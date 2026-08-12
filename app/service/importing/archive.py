@@ -340,7 +340,12 @@ def preflight_archive(
 class ExpansionBudget:
     """Track declared selected bytes and actual decompressor output."""
 
-    def __init__(self, maximum: int, *, parent: ExpansionBudget | None = None) -> None:
+    def __init__(
+        self,
+        maximum: int,
+        *,
+        parent: "ExpansionBudget | None" = None,
+    ) -> None:
         self.maximum = max(1, int(maximum))
         self._parent = parent
         self._declared = 0
@@ -399,7 +404,7 @@ class _BudgetedReader:
         self._budget = budget
         self._filename = filename
 
-    def __enter__(self) -> _BudgetedReader:
+    def __enter__(self) -> "_BudgetedReader":
         return self
 
     def __exit__(
@@ -591,7 +596,7 @@ class ArchiveView:
             self._archive, self._budget, self._metadata_budget
         )
 
-    def __enter__(self) -> ArchiveView:
+    def __enter__(self) -> "ArchiveView":
         return self
 
     def __exit__(
@@ -606,7 +611,7 @@ class ArchiveView:
     def entries(self) -> dict[str, zipfile.ZipInfo]:
         return dict(self._entries)
 
-    def rooted_at(self, anchor: str) -> ArchiveView:
+    def rooted_at(self, anchor: str) -> "ArchiveView":
         safe_anchor = normalize_archive_path(anchor)
         if safe_anchor in self._entries:
             prefix = ""
@@ -649,7 +654,7 @@ class ArchiveView:
             _owner=False,
         )
 
-    def subview(self, prefix: str, policy: ArchivePolicy) -> ArchiveView:
+    def subview(self, prefix: str, policy: ArchivePolicy) -> "ArchiveView":
         """Create a child archive view with local and parent expansion budgets."""
 
         safe_prefix = normalize_archive_path(prefix).rstrip("/") + "/"

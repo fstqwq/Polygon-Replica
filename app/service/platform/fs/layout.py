@@ -49,7 +49,7 @@ class StorageLayout:
     backup_root: Path
 
     @classmethod
-    def from_settings(cls, settings: Settings) -> StorageLayout:
+    def from_settings(cls, settings: Settings) -> "StorageLayout":
         return cls(
             database_path=settings.db_path,
             bare_root=settings.bare_root,

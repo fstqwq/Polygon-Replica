@@ -5,6 +5,7 @@ from fastapi import HTTPException
 
 from app.impl.problem.file import files_page, files_restore_default
 from app.main import runtime
+from app.service.statement.constant import STATEMENT_DEFAULT_FILES
 
 from tests.common import WorkspaceTestBase
 from tests.ui_support import _flash_messages_from_response, _request

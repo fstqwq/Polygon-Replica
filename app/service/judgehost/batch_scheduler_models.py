@@ -215,7 +215,7 @@ class CaseRecord:
     completion_acknowledged: bool
     last_callback_hostname: str
     callback_receipt_count: int
-    pending_diagnostics: list[PendingCaseDiagnostic]
+    pending_diagnostics: list["PendingCaseDiagnostic"]
     cancel_requested: bool
     terminal_result: CaseResult | None
     requeue_on_abort: bool
