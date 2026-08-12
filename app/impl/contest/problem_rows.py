@@ -84,7 +84,7 @@ def _resolved_workspace_path(
     username: str,
 ) -> Path | None:
     try:
-        expected = (config.settings.workspace_root / username / problem_slug).resolve()
+        expected = config.storage_layout.workspace(username, problem_slug)
         workspace = Path(workspace_state["path"]).resolve()
     except OSError:
         return None

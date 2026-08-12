@@ -183,7 +183,7 @@ class VerificationServiceTestBase(DBTestBase):
             _JudgehostStub(),
             self.verification_task_store,
             self.runtime_blob_store,
-            self.fs_manager,
+            self.storage_layout,
             self.config_values,
         )
         self.verification_task_completion_service = (

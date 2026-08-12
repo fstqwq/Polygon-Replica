@@ -21,6 +21,7 @@ from typing import Literal, TypedDict
 
 from app.db import DB, now_iso
 from app.service.platform.fs.op import extract_git_archive
+from app.service.platform.fs.layout import StorageLayout
 from app.service.platform.git_process import run_git
 from app.service.platform.hashing import sha256_file
 from app.service.platform.runtime_blob_store import PayloadFile
@@ -40,7 +41,6 @@ from app.service.problem_package.manifest import (
     validate_manifest_files,
 )
 from app.service.problem_package.store import MaterializationRow, ProblemPackageStore, PublishedProblem
-from app.setting import Settings
 
 
 VerificationBuilder = Callable[[Path, str, int, str], str]
@@ -94,12 +94,12 @@ class ProblemPackageService:
     def __init__(
         self,
         db: DB,
-        settings: Settings,
+        storage_layout: StorageLayout,
         artifact_file_resolver: Callable[[str], PayloadFile | None],
         verification_id_allocator: Callable[[], str],
     ) -> None:
         self.db = db
-        self.settings = settings
+        self.storage_layout = storage_layout
         self.store = ProblemPackageStore(db)
         self._artifact_file_resolver = artifact_file_resolver
         self._verification_id_allocator = verification_id_allocator
@@ -142,8 +142,8 @@ class ProblemPackageService:
             yield current
 
     def _bare_repo(self, problem: PublishedProblem) -> Path:
-        bare_root = self.settings.bare_root.resolve()
-        candidate = (bare_root / problem["repo_name"]).resolve()
+        bare_root = self.storage_layout.bare_root.resolve()
+        candidate = self.storage_layout.bare_repository(problem["repo_name"])
         if bare_root not in candidate.parents or candidate.is_symlink() or not candidate.is_dir():
             raise ValueError("published bare repository is unavailable")
         return candidate
@@ -361,8 +361,8 @@ class ProblemPackageService:
         }
 
     def _archive_path(self, row: MaterializationRow) -> Path:
-        root = self.settings.artifacts_root.resolve()
-        candidate = root / Path(*PurePosixPath(row["archive_rel_path"]).parts)
+        root = self.storage_layout.artifacts_root.resolve()
+        candidate = self.storage_layout.resolve_artifact(row["archive_rel_path"])
         if candidate.is_symlink():
             raise ValueError("materialization archive must not be a symbolic link")
         path = candidate.resolve()
@@ -372,8 +372,8 @@ class ProblemPackageService:
 
     def _remove_artifact_file(self, rel_path: str) -> str:
         try:
-            root = self.settings.artifacts_root.resolve()
-            path = root / Path(*PurePosixPath(rel_path).parts)
+            root = self.storage_layout.artifacts_root.resolve()
+            path = self.storage_layout.resolve_artifact(rel_path)
             resolved_parent = path.parent.resolve()
             if root != resolved_parent and root not in resolved_parent.parents:
                 raise ValueError("artifact path escapes artifacts root")
@@ -554,16 +554,13 @@ class ProblemPackageService:
             int(revision.problem["id"]), revision.source_commit
         )
         materialization_id = existing["id"] if existing is not None else f"pm-{uuid.uuid4().hex}"
-        staging = self.settings.artifacts_root / ".staging" / materialization_id
+        staging = self.storage_layout.materialization_staging(materialization_id)
         package_root = staging / "package"
         archive_partial = staging / "native.zip.partial"
         previous_archive = staging / "previous-native.zip"
-        final_archive = (
-            self.settings.artifacts_root
-            / "materializations"
-            / str(revision.problem["id"])
-            / revision.source_commit
-            / "native.zip"
+        final_archive = self.storage_layout.materialization_revision_archive(
+            int(revision.problem["id"]),
+            revision.source_commit,
         )
         shutil.rmtree(staging, ignore_errors=True)
         package_root.mkdir(parents=True, exist_ok=True)
@@ -605,7 +602,9 @@ class ProblemPackageService:
                 "source_commit": revision.source_commit,
                 "revision_number": revision.revision_number,
                 "source_digest": digest,
-                "archive_rel_path": archive_partial.relative_to(self.settings.artifacts_root).as_posix(),
+                "archive_rel_path": archive_partial.relative_to(
+                    self.storage_layout.artifacts_root
+                ).as_posix(),
                 "archive_sha256": sha256_file(archive_partial),
                 "archive_size_bytes": int(archive_partial.stat().st_size),
                 "verification_id": verification_id,
@@ -618,7 +617,7 @@ class ProblemPackageService:
             row: MaterializationRow = {
                 **staged_row,
                 "archive_rel_path": final_archive.relative_to(
-                    self.settings.artifacts_root
+                    self.storage_layout.artifacts_root
                 ).as_posix(),
             }
             final_archive.parent.mkdir(parents=True, exist_ok=True)
@@ -670,7 +669,9 @@ class ProblemPackageService:
         )
         build_id = build["id"]
         verification_id = build["verification_id"] or verification_id
-        snapshot_parent = self.settings.artifacts_root / ".staging" / f"snapshot-{uuid.uuid4().hex}"
+        snapshot_parent = self.storage_layout.staging_directory(
+            f"snapshot-{uuid.uuid4().hex}"
+        )
         snapshot = snapshot_parent / "source"
         try:
             self.store.mark_build_running(build_id, phase="snapshot")
@@ -799,7 +800,9 @@ class ProblemPackageService:
             raise ValueError("Native archive size changed")
         if sha256_file(archive_path) != row["archive_sha256"]:
             raise ValueError("Native archive checksum changed")
-        extraction = self.settings.artifacts_root / ".staging" / f"read-{uuid.uuid4().hex}"
+        extraction = self.storage_layout.staging_directory(
+            f"read-{uuid.uuid4().hex}"
+        )
         extraction.mkdir(parents=True, exist_ok=False)
         try:
             self._safe_extract(archive_path, extraction)
@@ -932,7 +935,7 @@ class ProblemPackageService:
             return row, self._archive_path(row)
 
     def fail_interrupted_builds(self) -> int:
-        staging = self.settings.artifacts_root / ".staging"
+        staging = self.storage_layout.artifact_staging_root
         if staging.exists() and staging.is_dir() and not staging.is_symlink():
             for child in staging.iterdir():
                 if child.is_symlink():

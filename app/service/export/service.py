@@ -8,7 +8,7 @@ import shutil
 import threading
 import uuid
 import zipfile
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 
 from app.config import ConfigValues
 from app.db import DB
@@ -25,6 +25,7 @@ from app.service.export.icpc_package import (
 )
 from app.service.platform.hashing import sha256_file
 from app.service.platform.fs.op import extract_git_archive, remove_symlinks
+from app.service.platform.fs.layout import StorageLayout
 from app.service.problem.build_config import BuildConfig, load_build_config
 from app.service.problem.runtime_config import (
     ProblemConfig,
@@ -76,16 +77,14 @@ class ExportService:
     def __init__(
         self,
         db: DB,
-        artifacts_root: Path,
-        workspace_root: Path,
+        storage_layout: StorageLayout,
         tex_compile_service: TexCompileService,
         problem_package_service: ProblemPackageService,
         config_values: ConfigValues,
     ):
         self.db = db
         self._store = ExportStore(db)
-        self.artifacts_root = artifacts_root
-        self.workspace_root = workspace_root
+        self.storage_layout = storage_layout
         self.tex_compile_service = tex_compile_service
         self.problem_package_service = problem_package_service
         self._config_values = config_values
@@ -121,8 +120,10 @@ class ExportService:
                 return None
             return candidate
         try:
-            root = self.artifacts_root.resolve()
-            candidate = (root / Path(*PurePosixPath(str(row["archive_rel_path"])).parts)).resolve()
+            root = self.storage_layout.artifacts_root.resolve()
+            candidate = self.storage_layout.resolve_artifact(
+                str(row["archive_rel_path"])
+            )
             if root not in candidate.parents:
                 return None
         except (ValueError, OSError):
@@ -430,7 +431,10 @@ class ExportService:
         if ws_row is None:
             raise ValueError(f"workspace metadata not found: {workspace_id}")
         workspace = Path(ws_row["path"]).resolve()
-        expected_workspace = (self.workspace_root / ws_row["username"] / problem_slug).resolve()
+        expected_workspace = self.storage_layout.workspace(
+            str(ws_row["username"]),
+            problem_slug,
+        )
         if workspace != expected_workspace:
             raise ValueError(f"workspace path mismatch for export workspace {workspace_id}")
         if not workspace.exists() or not workspace.is_dir():
@@ -798,9 +802,11 @@ class ExportService:
         problem_row = self._store.problem_export_row(problem)
         if problem_row is None:
             raise ValueError(f"unknown problem: {problem}")
-        snapshots_root = self.artifacts_root / "snapshots"
+        snapshots_root = self.storage_layout.export_snapshot_root
         snapshots_root.mkdir(parents=True, exist_ok=True)
-        tmp_parent = snapshots_root / f"snap-{uuid.uuid4().hex[:12]}"
+        tmp_parent = self.storage_layout.export_snapshot(
+            f"snap-{uuid.uuid4().hex[:12]}"
+        )
         tmp_root = tmp_parent / "work"
         package_root = tmp_root / self._package_root_name(str(problem_row["slug"]))
         try:
@@ -834,23 +840,22 @@ class ExportService:
             shutil.rmtree(tmp_root, ignore_errors=True)
 
     def _export_problem_root(self, problem_slug: str) -> Path:
-        return self.artifacts_root / "exports" / self._archive_filename_slug(problem_slug)
+        return self.storage_layout.export_problem(
+            self._archive_filename_slug(problem_slug)
+        )
 
     def _export_dir(self, problem_slug: str, export_id: str) -> Path:
-        safe_export_id = Path(str(export_id).strip()).name
-        if not safe_export_id:
-            raise ValueError("invalid export id")
-        return self._export_problem_root(problem_slug) / safe_export_id
+        return self.storage_layout.export_directory(
+            self._archive_filename_slug(problem_slug),
+            export_id,
+        )
 
     def _export_path(self, problem_slug: str, export_id: str, filename: str) -> Path:
-        safe_filename = Path(str(filename).strip()).name
-        if not safe_filename:
-            raise ValueError("invalid export filename")
-        export_dir = self._export_dir(problem_slug, export_id)
-        candidate = (export_dir / safe_filename).resolve()
-        if export_dir.resolve() not in candidate.parents:
-            raise ValueError("invalid export archive path")
-        return candidate
+        return self.storage_layout.export_archive(
+            self._archive_filename_slug(problem_slug),
+            export_id,
+            filename,
+        )
 
     def _cached_export_path(
         self,
@@ -874,7 +879,7 @@ class ExportService:
                 except ValueError:
                     pass
             else:
-                path = self.artifacts_root / Path(*PurePosixPath(row["archive_rel_path"]).parts)
+                path = self.storage_layout.resolve_artifact(row["archive_rel_path"])
                 if (
                     path.is_file()
                     and not path.is_symlink()
@@ -945,7 +950,9 @@ class ExportService:
             filename = f"{self._archive_filename_slug(str(problem_row['slug']))}-native-{revision_token}.zip"
         else:
             filename = f"{public_slug}-{revision_token}.zip"
-            staging = self.artifacts_root / ".staging" / f"export-{export_id}-{uuid.uuid4().hex}"
+            staging = self.storage_layout.staging_directory(
+                f"export-{export_id}-{uuid.uuid4().hex}"
+            )
             package_root = staging / "package"
             archive_partial = staging / f"{filename}.partial"
             try:
@@ -980,7 +987,9 @@ class ExportService:
             materialization_id=materialization_id,
             export_type=resolved_export_type,
             filename=filename,
-            archive_rel_path=out.relative_to(self.artifacts_root).as_posix(),
+            archive_rel_path=out.relative_to(
+                self.storage_layout.artifacts_root
+            ).as_posix(),
             sha256=sha256_file(out),
             size_bytes=int(out.stat().st_size),
             source_commit=materialization["source_commit"],

@@ -18,6 +18,14 @@ database path MUST be a regular-file location outside all managed roots. Archive
 members, user paths, and stored relative locators MUST remain below their owning
 root and MUST NOT escape through `..`, absolute paths, or symlink traversal.
 
+The process composition root constructs one `StorageLayout` from these configured
+roots. That layout is the sole owner of application-derived locations for Git
+repositories, workspaces, verification and preview payloads, runtime snapshots
+and blobs, uploads and import drafts, exports, materializations, contest build
+artifacts, staging data, worker history, and source backups. Domain services
+receive this layout instead of raw settings and do not concatenate configured
+roots independently.
+
 There is currently no per-repository disk quota. Upload and package expansion
 limits protect individual admission operations; they are not durable workspace
 or Git repository quotas.

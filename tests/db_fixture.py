@@ -9,7 +9,7 @@ from pathlib import Path
 
 from app.config import build_config_values
 from app.db import DB
-from app.service.platform.fs.layout import FsManager
+from app.service.platform.fs.layout import StorageLayout
 from app.service.platform.runtime_blob_store import RuntimeBlobStore
 from app.service.platform.runtime_cache_index import RuntimeCacheIndex
 from app.service.repository.workspace import WorkspaceService
@@ -77,20 +77,17 @@ class DBTestBase(unittest.TestCase):
     def setUp(self) -> None:
         _restore_template()
         self.settings = _settings()
+        self.storage_layout = StorageLayout.from_settings(self.settings)
         self.config_values = build_config_values()
         self.db = DB(_DB_PATH, config_values=self.config_values)
         self.verification_task_store = VerificationTaskStore(self.db)
         self.workspace_service = WorkspaceService(
             self.db,
-            self.settings,
+            self.storage_layout,
             verification_task_store=self.verification_task_store,
             config_values=self.config_values,
         )
-        self.fs_manager = FsManager(
-            self.settings.cache_root,
-            self.settings.artifacts_root,
-        )
-        self.runtime_blob_store = RuntimeBlobStore(self.fs_manager.runtime_root)
+        self.runtime_blob_store = RuntimeBlobStore(self.storage_layout.runtime_blob_root)
         self.runtime_cache_index = RuntimeCacheIndex(self.runtime_blob_store)
         self.user = f"alice-{uuid.uuid4().hex[:8]}"
         self.problem = f"{self.user}/sample-{uuid.uuid4().hex[:8]}"

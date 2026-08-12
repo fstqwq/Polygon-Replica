@@ -15,7 +15,7 @@ from app.service.disk.contest_store import ContestDiskStore
 from app.service.platform.hashing import sha256_file
 from app.service.platform.process import is_canonical_artifact_id
 from app.service.statement.context import normalize_statement_language
-from app.setting import Settings
+from app.service.platform.fs.layout import StorageLayout
 
 
 class ContestAccessContext(TypedDict):
@@ -147,9 +147,15 @@ class ContestService:
         ".txt",
     }
 
-    def __init__(self, db: DB, settings: Settings, *, config_values: ConfigValues):
+    def __init__(
+        self,
+        db: DB,
+        storage_layout: StorageLayout,
+        *,
+        config_values: ConfigValues,
+    ):
         self.db = db
-        self.settings = settings
+        self.storage_layout = storage_layout
         self._config_values = config_values
         self._store = ContestDiskStore(db)
 
@@ -317,17 +323,17 @@ class ContestService:
         }
 
     def artifacts_base(self, *, create: bool = True) -> Path:
-        base = (self.settings.artifacts_root / "contests").resolve()
+        base = self.storage_layout.contest_artifact_root.resolve()
         if create:
             base.mkdir(parents=True, exist_ok=True)
         return base
 
     def contest_sources_base(self) -> Path:
-        return self.settings.contest_source_root.resolve()
+        return self.storage_layout.contest_source_root.resolve()
 
     def contest_source_root(self, contest_slug: str) -> Path:
         base = self.contest_sources_base()
-        root = (base / str(contest_slug).strip()).resolve()
+        root = self.storage_layout.contest_source(str(contest_slug).strip())
         if not self._path_within(base, root):
             raise ValueError("invalid contest source path")
         return root
@@ -337,7 +343,7 @@ class ContestService:
         if not is_canonical_artifact_id(safe_job_id):
             raise ValueError("invalid contest job id")
         base = self.artifacts_base(create=create)
-        root = (base / str(contest_slug).strip() / safe_job_id).resolve()
+        root = self.storage_layout.contest_job(str(contest_slug).strip(), safe_job_id)
         if not self._path_within(base, root):
             raise ValueError("invalid contest artifact path")
         if create:
@@ -356,7 +362,11 @@ class ContestService:
         if not is_canonical_artifact_id(safe_artifact_id):
             raise ValueError("invalid contest artifact id")
         job_root = self.job_root(contest_slug, job_id, create=create)
-        root = (job_root / "artifacts" / safe_artifact_id).resolve()
+        root = self.storage_layout.contest_artifact(
+            contest_slug,
+            job_id,
+            safe_artifact_id,
+        )
         if not self._path_within(job_root, root):
             raise ValueError("invalid contest artifact path")
         if create:

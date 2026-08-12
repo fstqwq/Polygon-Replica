@@ -8,7 +8,7 @@ from app.config import ConfigValues
 from app.db import DB
 from app.service.disk.verification_store import VerificationStore
 from app.service.platform.runtime_blob_store import PayloadFile, RuntimeBlobStore
-from app.service.platform.fs.layout import FsManager
+from app.service.platform.fs.layout import StorageLayout
 from app.service.problem.test_spec import (
     TestSpecEntry,
     parse_gen_command_tokens,
@@ -78,7 +78,7 @@ class VerificationService:
         judgehost_task_service: Judgehost,
         task_store: VerificationTaskStore,
         runtime_blob_store: RuntimeBlobStore,
-        fs_manager: FsManager,
+        storage_layout: StorageLayout,
         config_values: ConfigValues,
     ):
         self.db = db
@@ -86,7 +86,7 @@ class VerificationService:
         self.judgehost_task_service = judgehost_task_service
         self.task_store = task_store
         self.runtime_blob_store = runtime_blob_store
-        self.fs_manager = fs_manager
+        self.storage_layout = storage_layout
         self._config_values = config_values
         self._verification_store = VerificationStore(db)
 
@@ -109,16 +109,16 @@ class VerificationService:
                 "SELECT id FROM previews WHERE id=? AND problem_id=?",
                 [artifact_id, int(problem_id)],
             )
-            return "" if row is None else str(self.fs_manager.resolve_preview_root(artifact_id))
+            return "" if row is None else str(self.storage_layout.resolve_preview_root(artifact_id))
         row = self.db.fetch_one(
             "SELECT id FROM verifications WHERE id=? AND problem_id=?",
             [artifact_id, int(problem_id)],
         )
-        return "" if row is None else str(self.fs_manager.resolve_verification_root(artifact_id))
+        return "" if row is None else str(self.storage_layout.resolve_verification_root(artifact_id))
 
     def artifact_path_for_verification(self, verification_id: str) -> str:
         row = self.db.fetch_one("SELECT id FROM verifications WHERE id=?", [verification_id])
-        return "" if row is None else str(self.fs_manager.resolve_verification_root(verification_id))
+        return "" if row is None else str(self.storage_layout.resolve_verification_root(verification_id))
 
     def allocate_verification_id(self) -> str:
         return new_verification_id()

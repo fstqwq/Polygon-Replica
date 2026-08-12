@@ -9,7 +9,7 @@ from app.config import ConfigValues, build_config_values
 from app.service.auth.service import AuthService
 from app.service.agent.service import AgentService
 from app.service.contest.service import ContestService
-from app.service.platform.fs.layout import FsManager
+from app.service.platform.fs.layout import StorageLayout
 from app.service.verification.service import VerificationService
 from app.service.verification.completion import VerificationTaskCompletionService
 from app.service.verification.execution import VerificationExecutionService
@@ -61,7 +61,7 @@ class RuntimeConfig:
     contest_service: ContestService = field(init=False)
     git_service: GitService = field(init=False)
     workspace_merge_service: WorkspaceMergeService = field(init=False)
-    fs_manager: FsManager = field(init=False)
+    storage_layout: StorageLayout = field(init=False)
     runtime_blob_store: RuntimeBlobStore = field(init=False)
     runtime_cache_index: RuntimeCacheIndex = field(init=False)
     tex_sandbox_backend: SandboxBackend = field(init=False)
@@ -146,11 +146,12 @@ class RuntimeConfig:
         return runtime_overrides
 
     def __post_init__(self) -> None:
-        validate_runtime_startup_preconditions(self.settings)
+        self.storage_layout = StorageLayout.from_settings(self.settings)
+        validate_runtime_startup_preconditions(self.storage_layout)
         self.static_assets = StaticAssetManifest(self.STATIC_ROOT)
         self.templates.env.globals["static_asset_url"] = self.static_assets.url
         self.config_values = build_config_values()
-        self.db = DB(self.settings.db_path, config_values=self.config_values)
+        self.db = DB(self.storage_layout.database_path, config_values=self.config_values)
         try:
             self.db.init()
         except SchemaRequirementsError as exc:
@@ -169,18 +170,21 @@ class RuntimeConfig:
         self.runtime_state_service = RuntimeStateService(self.db, RuntimeStateStore(self.db))
         self.workspace_service = workspace.WorkspaceService(
             self.db,
-            self.settings,
+            self.storage_layout,
             verification_task_store=self.verification_task_store,
             config_values=self.config_values,
         )
         self.agent_service = AgentService(self.db, self.workspace_service)
         self.contest_service = ContestService(
             self.db,
-            self.settings,
+            self.storage_layout,
             config_values=self.config_values,
         )
         self.git_service = GitService()
-        self.workspace_merge_service = WorkspaceMergeService(self.settings, self.workspace_service)
+        self.workspace_merge_service = WorkspaceMergeService(
+            self.storage_layout,
+            self.workspace_service,
+        )
         self.workspace_archive_service = WorkspaceArchiveService()
         self.workspace_file_service = WorkspaceFileService(
             self.git_service,
@@ -188,8 +192,7 @@ class RuntimeConfig:
             config_values=self.config_values,
         )
         self.workspace_mutation_service = WorkspaceMutationService(self.workspace_service)
-        self.fs_manager = FsManager(self.settings.cache_root, self.settings.artifacts_root)
-        self.runtime_blob_store = RuntimeBlobStore(self.fs_manager.runtime_root)
+        self.runtime_blob_store = RuntimeBlobStore(self.storage_layout.runtime_blob_root)
         self.runtime_cache_index = RuntimeCacheIndex(self.runtime_blob_store)
         self.verification_runtime_registry = VerificationRuntimeRegistry()
         self.verification_task_completion_service = VerificationTaskCompletionService(
@@ -221,7 +224,7 @@ class RuntimeConfig:
             self.judgehost_task_service,
             task_store=self.verification_task_store,
             runtime_blob_store=self.runtime_blob_store,
-            fs_manager=self.fs_manager,
+            storage_layout=self.storage_layout,
             config_values=self.config_values,
         )
         self.verification_execution_service = VerificationExecutionService(
@@ -235,11 +238,12 @@ class RuntimeConfig:
             self.db,
             self.workspace_service,
             self.tex_compile_service,
+            self.storage_layout,
             verification_service=self.verification_service,
         )
         self.problem_package_service = ProblemPackageService(
             self.db,
-            self.settings,
+            self.storage_layout,
             artifact_file_resolver=self.runtime_blob_store.descriptor,
             verification_id_allocator=self.verification_service.allocate_verification_id,
         )
@@ -249,13 +253,11 @@ class RuntimeConfig:
         )
         self.export_service = ExportService(
             self.db,
-            self.settings.artifacts_root,
-            self.settings.workspace_root,
+            self.storage_layout,
             self.tex_compile_service,
             problem_package_service=self.problem_package_service,
             config_values=self.config_values,
         )
-        durable_log_path = self.settings.cache_root / "runtime" / "worker-queue-events.jsonl"
         self.worker_queue_service = WorkerQueueService(
             worker_count=int(self.config_values.WORKER_QUEUE_THREADS),
             history_limit=int(self.config_values.WORKER_QUEUE_HISTORY_LIMIT),
@@ -263,11 +265,11 @@ class RuntimeConfig:
             durable_history_limit=int(
                 self.config_values.WORKER_QUEUE_DURABLE_HISTORY_LIMIT
             ),
-            durable_log_path=durable_log_path,
+            durable_log_path=self.storage_layout.worker_history_path,
         )
         self.artifact_cleanup_service = ArtifactCleanupService(
             self.db,
-            self.settings,
+            self.storage_layout,
             self.runtime_cache_index,
             self.runtime_blob_store,
             self.worker_queue_service,
@@ -276,7 +278,7 @@ class RuntimeConfig:
             self._reset_process_job_tracking,
         )
         self.source_backup_service = SourceBackupService(
-            self.settings,
+            self.storage_layout,
         )
         self.maintenance_service = MaintenanceCoordinator(
             self.artifact_cleanup_service,

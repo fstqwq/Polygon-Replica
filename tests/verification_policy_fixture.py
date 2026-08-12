@@ -20,7 +20,7 @@ class VerificationPolicyTestBase(unittest.TestCase):
         )
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
-        self.runtime_blob_store = RuntimeBlobStore(self.root / "runtime")
+        self.runtime_blob_store = RuntimeBlobStore(self.root / "runtime" / "blobs")
 
     def _verification_program(
         self,

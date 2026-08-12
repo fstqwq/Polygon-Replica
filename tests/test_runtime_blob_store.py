@@ -18,7 +18,7 @@ class TestRuntimeBlobStore(unittest.TestCase):
         self.temp_dir = tempfile.TemporaryDirectory(prefix="runtime-blobs-")
         self.addCleanup(self.temp_dir.cleanup)
         self.root = Path(self.temp_dir.name)
-        self.blobs = RuntimeBlobStore(self.root / "runtime")
+        self.blobs = RuntimeBlobStore(self.root / "runtime" / "blobs")
 
     def test_bytes_and_file_with_same_content_share_one_blob(self) -> None:
         payload = b"shared testcase payload\n"

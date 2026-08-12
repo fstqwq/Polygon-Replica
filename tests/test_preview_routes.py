@@ -78,7 +78,7 @@ class TestPreviewRoutes(BackendE2ETestBase):
     def test_preview_page_shows_full_sample_build_failure_detail(self) -> None:
         ctx = config.workspace_service.workspace_context(self.problem, self.user, include_recent=False)
         preview_id = self.random_id("p-preview-sample-sync-detail")
-        artifact_path = config.fs_manager.prepare_preview_layout(preview_id).root
+        artifact_path = config.storage_layout.prepare_preview_layout(preview_id).root
         artifact_path.mkdir(parents=True, exist_ok=True)
         (artifact_path / "logs").mkdir(parents=True, exist_ok=True)
         (artifact_path / "logs" / "latex.log").write_text(
@@ -124,7 +124,7 @@ class TestPreviewRoutes(BackendE2ETestBase):
     def test_preview_artifact_file_serves_statement_pdf_from_preview_root(self) -> None:
         ctx = config.workspace_service.workspace_context(self.problem, self.user, include_recent=False)
         preview_id = self.random_id("p-preview-artifact-pdf")
-        preview_root = config.fs_manager.prepare_preview_layout(preview_id).root
+        preview_root = config.storage_layout.prepare_preview_layout(preview_id).root
         pdf_path = preview_root / "statement_preview" / "statement.pdf"
         pdf_bytes = b"%PDF-1.4\n%preview\n"
         pdf_path.write_bytes(pdf_bytes)
@@ -193,7 +193,7 @@ class TestPreviewRoutes(BackendE2ETestBase):
         chinese_dir = ws / "statement-sections" / "chinese"
         chinese_dir.mkdir(parents=True, exist_ok=True)
         preview_id = self.random_id("p-preview-status-chinese")
-        preview_root = config.fs_manager.prepare_preview_layout(preview_id).root
+        preview_root = config.storage_layout.prepare_preview_layout(preview_id).root
         (preview_root / "statement_preview").mkdir(parents=True, exist_ok=True)
         (preview_root / "statement_preview" / "statement.pdf").write_bytes(b"%PDF-1.4\n%zh\n")
         (preview_root / "logs").mkdir(parents=True, exist_ok=True)

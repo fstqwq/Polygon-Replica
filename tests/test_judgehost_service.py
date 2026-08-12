@@ -245,7 +245,7 @@ class TestJudgehostService(E2ETestBase):
         build_verification_id = _canonical_verification_id(
             f"build-{uuid.uuid4()}"
         )
-        verification_root = config.fs_manager.prepare_verification_root(verification_id).resolve()
+        verification_root = config.storage_layout.prepare_verification_root(verification_id).resolve()
         verification_root.mkdir(parents=True, exist_ok=True)
         admission = admit_test_verification(
             verification_id=verification_id,
@@ -611,7 +611,7 @@ class TestJudgehostService(E2ETestBase):
         ctx = config.workspace_service.workspace_context(self.problem, self.user, include_recent=False)
         problem_id = int(ctx["problem"]["id"])
         workspace_id = int(ctx["workspace"]["id"])
-        artifact_root = config.fs_manager.prepare_verification_root(verification_id).resolve()
+        artifact_root = config.storage_layout.prepare_verification_root(verification_id).resolve()
         artifact_root.mkdir(parents=True, exist_ok=True)
         (artifact_root / "logs").mkdir(parents=True, exist_ok=True)
         admission = admit_test_verification(

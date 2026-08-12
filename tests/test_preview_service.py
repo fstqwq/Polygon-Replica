@@ -237,6 +237,7 @@ class TestPreviewService(DBTestBase):
             self.db,
             cast(WorkspaceService, self.local_workspace),
             compiler,
+            self.storage_layout,
         )
 
     def _insert_preview(
@@ -266,7 +267,7 @@ class TestPreviewService(DBTestBase):
                 created_at,
             ],
         )
-        return self.fs_manager.prepare_preview_layout(preview_id).root
+        return self.storage_layout.prepare_preview_layout(preview_id).root
 
     def _preview_row(self, preview_id: str):
         row = isolated_db_fetch_one(
@@ -336,7 +337,7 @@ class TestPreviewService(DBTestBase):
 
         row = self._preview_row(preview_id)
         summary = json.loads(str(row["summary_json"]))
-        root = self.fs_manager.resolve_preview_root(preview_id)
+        root = self.storage_layout.resolve_preview_root(preview_id)
         self.assertEqual(str(row["status"]), "ok")
         self.assertIsNone(row["verification_id"])
         self.assertEqual(summary["pdf"], "statement_preview/statement.pdf")
@@ -375,7 +376,7 @@ class TestPreviewService(DBTestBase):
 
         row = self._preview_row(preview_id)
         summary = json.loads(str(row["summary_json"]))
-        root = self.fs_manager.resolve_preview_root(preview_id)
+        root = self.storage_layout.resolve_preview_root(preview_id)
         log_text = (root / "logs" / "latex.log").read_text(encoding="utf-8")
         self.assertEqual(str(row["status"]), "failed")
         self.assertEqual(summary["returncode"], 1)
@@ -400,7 +401,7 @@ class TestPreviewService(DBTestBase):
         self.sandbox.handler = _fail_with_empty_log
         preview_id = self.service.compile_preview(self.problem, self.user, language="english")
 
-        root = self.fs_manager.resolve_preview_root(preview_id)
+        root = self.storage_layout.resolve_preview_root(preview_id)
         log_text = (root / "logs" / "latex.log").read_text(encoding="utf-8").strip()
         self.assertEqual(str(self._preview_row(preview_id)["status"]), "failed")
         self.assertIn("latex compile failed", log_text.lower())
@@ -414,7 +415,7 @@ class TestPreviewService(DBTestBase):
 
         row = self._preview_row(preview_id)
         summary = json.loads(str(row["summary_json"]))
-        root = self.fs_manager.resolve_preview_root(preview_id)
+        root = self.storage_layout.resolve_preview_root(preview_id)
         self.assertEqual(str(row["status"]), "failed")
         self.assertIn("pdflatex missing", summary["error"])
         self.assertFalse((root / "statement_preview" / "statement.pdf").exists())

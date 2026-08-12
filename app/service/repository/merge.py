@@ -21,7 +21,7 @@ from app.service.repository.merge_diff import (
     compare_merge_files,
 )
 from app.service.repository.workspace import WorkspaceService, atomic_swap_workspace
-from app.setting import Settings
+from app.service.platform.fs.layout import StorageLayout
 
 
 @dataclass(frozen=True)
@@ -68,10 +68,9 @@ class WorkspaceMergeService:
     PREVIEW_TTL_SEC = 30 * 60
     _UNDO_REF = "refs/polygon-replica/undo"
 
-    def __init__(self, settings: Settings, workspace_service: WorkspaceService):
-        self._settings = settings
+    def __init__(self, storage_layout: StorageLayout, workspace_service: WorkspaceService):
         self._workspace_service = workspace_service
-        self._root = settings.cache_root / "runtime" / "workspace-merges"
+        self._root = storage_layout.workspace_merge_root
         self._lock = threading.Lock()
         self._previews: dict[str, MergePreview] = {}
         self._preview_by_workspace: dict[str, str] = {}

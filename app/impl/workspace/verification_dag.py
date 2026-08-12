@@ -1100,7 +1100,7 @@ def run_workspace_verification_dag(
                 or workspace_path.is_symlink()
             ):
                 raise RuntimeError("workspace path is unavailable")
-        layout = config.fs_manager.prepare_verification_layout(verification_id)
+        layout = config.storage_layout.prepare_verification_layout(verification_id)
         if snapshot_root is None:
             assert workspace_path is not None
             snapshot_root = config.workspace_service.create_snapshot(

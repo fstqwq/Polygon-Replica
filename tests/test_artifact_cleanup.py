@@ -14,11 +14,10 @@ from unittest.mock import patch
 from app.db import DB, now_iso
 from app.config import build_config_values
 from app.service.judgehost.task_registry import JudgehostTaskRegistry
-from app.service.platform.fs.layout import FsManager
+from app.service.platform.fs.layout import StorageLayout
 from app.service.platform.maintenance import (
     ArtifactCleanupService,
     MaintenanceCoordinator,
-    validate_storage_layout,
 )
 from app.service.platform.runtime_blob_store import RuntimeBlobStore
 from app.service.platform.runtime_cache_index import RuntimeCacheIndex
@@ -84,11 +83,12 @@ class TestArtifactCleanup(unittest.TestCase):
             backup_root=self.root / "backups",
         )
         self.config_values = build_config_values()
+        self.storage_layout = StorageLayout.from_settings(self.settings)
         self.db = DB(self.settings.db_path, config_values=self.config_values)
         self.db.init()
         self.verification_task_store = VerificationTaskStore(self.db)
         self.workspace_service = WorkspaceService(
-            self.db, self.settings,
+            self.db, self.storage_layout,
             verification_task_store=self.verification_task_store, config_values=self.config_values,
         )
         self.workspace_service.ensure_problem("admin/sample")
@@ -112,18 +112,14 @@ class TestArtifactCleanup(unittest.TestCase):
             "admin",
             "owner",
         )
-        self.fs_manager = FsManager(
-            self.settings.cache_root,
-            self.settings.artifacts_root,
-        )
-        self.runtime_blob_store = RuntimeBlobStore(self.fs_manager.runtime_root)
+        self.runtime_blob_store = RuntimeBlobStore(self.storage_layout.runtime_blob_root)
         self.runtime_cache_index = RuntimeCacheIndex(self.runtime_blob_store)
         self.worker_queue = _WorkerQueueStub()
         self.judgehost = _JudgehostStub()
         self.process_reset_count = 0
         self.cleanup = ArtifactCleanupService(
             self.db,
-            self.settings,
+            self.storage_layout,
             self.runtime_cache_index,
             self.runtime_blob_store,
             self.worker_queue,
@@ -131,7 +127,7 @@ class TestArtifactCleanup(unittest.TestCase):
             self.verification_task_store,
             self._reset_process_tracking,
         )
-        self.source_backup = SourceBackupService(self.settings)
+        self.source_backup = SourceBackupService(self.storage_layout)
 
     def _reset_process_tracking(self) -> None:
         self.process_reset_count += 1
@@ -626,7 +622,7 @@ class TestArtifactCleanup(unittest.TestCase):
         )
 
         with self.assertRaisesRegex(RuntimeError, "roots overlap"):
-            validate_storage_layout(invalid)
+            StorageLayout.from_settings(invalid).validate()
 
     def test_cleanup_preflight_rejects_nested_symbolic_links(self) -> None:
         outside = self.root / "outside-cache"

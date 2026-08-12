@@ -406,7 +406,7 @@ def preview_page(request: Request, problem: str, user: Annotated[str, Depends(re
             pdf_exists = bool(preview_state['pdf_available'])
             preview_artifacts_missing = preview_display_status == 'missing'
             if bool(preview_state['log_available']):
-                lp = config.fs_manager.resolve_preview_root(preview_id) / 'logs' / 'latex.log'
+                lp = config.storage_layout.resolve_preview_root(preview_id) / 'logs' / 'latex.log'
             preview_compile_failed = selected_preview_row_status in {'failed', 'error'}
         else:
             preview_id = ''
@@ -415,9 +415,9 @@ def preview_page(request: Request, problem: str, user: Annotated[str, Depends(re
             raw_log, log_truncated = read_text_safe_limited(lp, _C.UI_LOG_TEXT_CHAR_LIMIT)
             redact_prefixes: list[tuple[str, str]] = [
                 (str(workspace.resolve()), '.'),
-                (str(config.settings.workspace_root.resolve()), '__workspace_root__'),
-                (str(config.settings.artifacts_root.resolve()), '__artifacts__'),
-                (str(config.settings.cache_root.resolve()), '__cache__'),
+                (str(config.storage_layout.workspace_root.resolve()), '__workspace_root__'),
+                (str(config.storage_layout.artifacts_root.resolve()), '__artifacts__'),
+                (str(config.storage_layout.cache_root.resolve()), '__cache__'),
             ]
             log = sanitize_log_text_for_ui(raw_log, path_prefixes=redact_prefixes)
             if not log.strip():

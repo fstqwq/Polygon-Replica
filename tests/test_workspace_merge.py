@@ -10,6 +10,7 @@ from typing import Iterator, cast
 from unittest.mock import patch
 
 from app.service.platform.git_process import run_git
+from app.service.platform.fs.layout import StorageLayout
 from app.service.repository.git import GitService
 from app.service.repository.merge import WorkspaceMergeService
 from app.service.repository.workspace import WorkspaceService, recover_workspace_swap
@@ -51,7 +52,10 @@ class TestWorkspaceMerge(unittest.TestCase):
             backup_root=self.root / "backups",
         )
         workspace_service = cast(WorkspaceService, _WorkspaceLockStub())
-        self.service = WorkspaceMergeService(settings, workspace_service)
+        self.service = WorkspaceMergeService(
+            StorageLayout.from_settings(settings),
+            workspace_service,
+        )
 
     def tearDown(self) -> None:
         self._temp.cleanup()

@@ -16,13 +16,9 @@ from pathlib import Path, PurePosixPath
 from typing import Callable, TypedDict
 
 from app.db import now_iso
-from app.service.platform.maintenance import validate_storage_layout
-from app.setting import Settings
+from app.service.platform.fs.layout import StorageLayout
 
 
-SOURCE_BACKUP_DIRECTORY = "source-backup"
-SOURCE_BACKUP_ARCHIVE = "latest.tar.gz"
-SOURCE_BACKUP_SIDECAR = "latest.tar.gz.sha256"
 SOURCE_BACKUP_DOWNLOAD_NAME = "polygon-replica-source-backup.tar.gz"
 
 logger = logging.getLogger(__name__)
@@ -68,26 +64,26 @@ def _archive_directory_entry(archive: tarfile.TarFile, name: str) -> None:
 class SourceBackupService:
     """Create and expose one atomic backup of both source-state roots."""
 
-    def __init__(self, settings: Settings) -> None:
-        self._settings = settings
+    def __init__(self, storage_layout: StorageLayout) -> None:
+        self._storage_layout = storage_layout
 
     @property
     def backup_directory(self) -> Path:
         """Return the application-owned backup directory."""
 
-        return self._settings.backup_root / SOURCE_BACKUP_DIRECTORY
+        return self._storage_layout.source_backup.root
 
     @property
     def latest_path(self) -> Path:
         """Return the fixed path of the only published archive."""
 
-        return self.backup_directory / SOURCE_BACKUP_ARCHIVE
+        return self._storage_layout.source_backup.archive
 
     @property
     def sidecar_path(self) -> Path:
         """Return the digest sidecar paired with the published archive."""
 
-        return self.backup_directory / SOURCE_BACKUP_SIDECAR
+        return self._storage_layout.source_backup.sidecar
 
     @staticmethod
     def _inspect_tree(root: Path) -> tuple[int, int]:
@@ -145,7 +141,7 @@ class SourceBackupService:
     def preflight(self) -> SourceBackupPreflight:
         """Validate both source trees and the application-owned destination."""
 
-        roots = validate_storage_layout(self._settings)
+        roots = self._storage_layout.validate()
         source_stats: dict[str, dict[str, int]] = {}
         for setting_name, archive_name in _SOURCE_ROOTS:
             root = roots[setting_name]
@@ -290,13 +286,13 @@ class SourceBackupService:
     def _write_sidecar(self, archive: Path, destination: Path) -> None:
         digest = self._sha256(archive)
         with destination.open("x", encoding="ascii", newline="\n") as stream:
-            stream.write(f"{digest}  {SOURCE_BACKUP_ARCHIVE}\n")
+            stream.write(f"{digest}  {self.latest_path.name}\n")
             stream.flush()
             os.fsync(stream.fileno())
 
     def _verify_archive_pair(self, archive_path: Path, sidecar_path: Path) -> None:
         sidecar_tokens = sidecar_path.read_text(encoding="ascii").split()
-        if sidecar_tokens != [self._sha256(archive_path), SOURCE_BACKUP_ARCHIVE]:
+        if sidecar_tokens != [self._sha256(archive_path), self.latest_path.name]:
             raise RuntimeError("source backup SHA-256 sidecar does not match archive")
         with tarfile.open(archive_path, mode="r:gz") as archive:
             names: set[str] = set()

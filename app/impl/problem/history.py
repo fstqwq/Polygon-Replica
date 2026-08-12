@@ -195,7 +195,7 @@ def history_import(
         snapshot = _C.snapshot()
         with spool_fileobj(
             package_upload.file,
-            root=config.settings.cache_root / "archive-uploads",
+            root=config.storage_layout.archive_upload_root,
             max_bytes=int(snapshot["UPLOAD_MAX_BYTES"]),
             label="archive file",
         ) as package_path:

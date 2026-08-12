@@ -178,7 +178,7 @@ class TestSecurity(E2ETestBase):
         return str(messages[0] or "")
 
     def _fixture_verification_root(self, *, problem: str, workspace_id: int, verification_id: str) -> tuple[str, Path]:
-        artifact_root = config.fs_manager.prepare_verification_root(str(verification_id or "").strip()).resolve()
+        artifact_root = config.storage_layout.prepare_verification_root(str(verification_id or "").strip()).resolve()
         return "", artifact_root
 
     def test_auth_password_meta_ignores_sql_injection_style_username(self) -> None:

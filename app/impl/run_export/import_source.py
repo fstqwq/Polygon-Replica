@@ -342,7 +342,7 @@ def import_package_as_new_problem(
     target_problem = _resolve_import_problem_slug(safe_actor_user, requested_slug, safe_package_name)
     with _open_problem_archive(package, policy) as archive:
         package_format = _detect_problem_package_format(archive)
-        target_bare = (config.settings.bare_root / f"{target_problem}.git").resolve()
+        target_bare = config.storage_layout.bare_repository(f"{target_problem}.git")
         existing_bare_head = _bare_repo_head_commit(target_bare)
         if existing_bare_head:
             raise ValueError(f"import target already has revision history: {target_problem}")

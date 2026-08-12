@@ -70,7 +70,7 @@ def problems_root_import(request: Request, user: str = "", package_upload: Uploa
         if not package_name:
             raise ValueError("package filename is required")
         snapshot = _C.snapshot()
-        upload_root = config.settings.cache_root / "archive-uploads"
+        upload_root = config.storage_layout.archive_upload_root
         with spool_fileobj(
             package_upload.file,
             root=upload_root,

@@ -34,7 +34,7 @@ from app.service.problem.runtime_config import (
     problem_config_limits,
 )
 from app.service.problem.test_spec import dumps_default_tests_spec
-from app.setting import Settings
+from app.service.platform.fs.layout import StorageLayout
 from app.service.platform.git_process import run_git
 from app.service.repository.revision import workspace_revision_info
 from app.service.verification.task_store import VerificationTaskStore
@@ -143,13 +143,13 @@ class WorkspaceService:
     def __init__(
         self,
         db: DB,
-        settings: Settings,
+        storage_layout: StorageLayout,
         *,
         verification_task_store: VerificationTaskStore,
         config_values: ConfigValues,
     ):
         self.db = db
-        self.settings = settings
+        self.storage_layout = storage_layout
         self.config_values = config_values
         self._store = WorkspaceDiskStore(db, verification_task_store=verification_task_store)
         self._problem_cache: dict[str, dict] = {}
@@ -221,10 +221,10 @@ class WorkspaceService:
 
     def ensure_layout(self) -> None:
         for p in [
-            self.settings.bare_root,
-            self.settings.workspace_root,
-            self.settings.artifacts_root,
-            self.settings.cache_root,
+            self.storage_layout.bare_root,
+            self.storage_layout.workspace_root,
+            self.storage_layout.artifacts_root,
+            self.storage_layout.cache_root,
         ]:
             ensure_dir(p)
 
@@ -232,7 +232,7 @@ class WorkspaceService:
         slug = self._validate_identifier(slug, "problem")
         self.ensure_layout()
         repo_name = f"{slug}.git"
-        bare = self.settings.bare_root / repo_name
+        bare = self.storage_layout.bare_repository(repo_name)
         if not bare.exists():
             ensure_dir(bare.parent)
             run_git(["git", "init", "--bare", str(bare)])
@@ -339,7 +339,7 @@ class WorkspaceService:
 
     def committed_statement_languages(self, problem: str) -> list[str]:
         problem_row = self._problem_row(problem)
-        bare_repo = self.settings.bare_root / str(problem_row["repo_name"])
+        bare_repo = self.storage_layout.bare_repository(str(problem_row["repo_name"]))
         proc = run_git(
             [
                 "git",
@@ -554,11 +554,11 @@ class WorkspaceService:
         p = self._problem_row(problem)
 
         username_key = str(u["username"])
-        workspace = self.settings.workspace_root / username_key / problem
+        workspace = self.storage_layout.workspace(username_key, problem)
         lock_path = self._workspace_lock_path(workspace)
         with self._exclusive_lock_file(lock_path, "workspace", remove_after=False):
             recover_workspace_swap(workspace)
-        bare = self.settings.bare_root / p["repo_name"]
+        bare = self.storage_layout.bare_repository(str(p["repo_name"]))
         workspace_id = self._store.workspace_id(int(p["id"]), int(u["id"]))
 
         # Steady-state fast path: avoid provisioning lock when workspace and DB row already exist.
@@ -795,7 +795,7 @@ class WorkspaceService:
         if ws is None:
             raise RuntimeError(f"workspace not available for {problem}/{username}")
         ws_path = Path(ws["path"]).resolve()
-        expected_root = (self.settings.workspace_root / str(u["username"]) / problem).resolve()
+        expected_root = self.storage_layout.workspace(str(u["username"]), problem)
         if ws_path != expected_root:
             raise RuntimeError(f"workspace path mismatch for {problem}/{username}")
         if not ws_path.exists() or not ws_path.is_dir():
@@ -827,7 +827,7 @@ class WorkspaceService:
         return self._store.workspace_rows(problem_ids, int(user_id))
 
     def _workspace_expected_path(self, username: str, problem: str) -> Path:
-        return (self.settings.workspace_root / str(username) / str(problem)).resolve()
+        return self.storage_layout.workspace(str(username), str(problem))
 
     @staticmethod
     def _assert_safe_delete_target(path: Path, root: Path, *, label: str) -> Path:
@@ -875,7 +875,7 @@ class WorkspaceService:
 
         workspace_path = self._assert_safe_delete_target(
             workspace_path,
-            self.settings.workspace_root,
+            self.storage_layout.workspace_root,
             label="workspace path",
         )
 
@@ -921,14 +921,14 @@ class WorkspaceService:
                 raise RuntimeError(f"workspace path mismatch for {safe_problem}/{username}")
             self._assert_safe_delete_target(
                 row_path,
-                self.settings.workspace_root,
+                self.storage_layout.workspace_root,
                 label=f"workspace path for {safe_problem}/{username}",
             )
             workspace_paths.append(row_path)
 
         bare_repo_path = self._assert_safe_delete_target(
-            (self.settings.bare_root / repo_name).resolve(),
-            self.settings.bare_root,
+            self.storage_layout.bare_repository(repo_name),
+            self.storage_layout.bare_root,
             label=f"bare repo path for {safe_problem}",
         )
 
@@ -1019,7 +1019,7 @@ class WorkspaceService:
         workspace_dirty: bool | None = None,
     ) -> Path:
         snapshot_id = f"snapshot-{uuid.uuid4().hex[:12]}"
-        snap = self.settings.cache_root / "runtime" / "snapshots" / snapshot_id / "src"
+        snap = self.storage_layout.snapshot_source(snapshot_id)
         ensure_dir(snap.parent)
         if commit:
             self._extract_commit_snapshot(workspace, commit, snap)

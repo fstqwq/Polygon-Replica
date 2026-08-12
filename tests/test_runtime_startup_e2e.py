@@ -20,9 +20,9 @@ from tests.identity_helpers import canonical_test_verification_id
 
 class TestRuntimeStartupE2E(BackendE2ETestBase):
     def test_startup_clear_all_caches_wipes_cache_root_artifacts_and_runtime(self) -> None:
-        artifact_file = config.fs_manager.cache_artifacts_root / "verifications" / "ver-test" / "logs" / "compile.log"
-        runtime_file = config.fs_manager.runtime_root / "blobs" / "aa" / ("a" * 64)
-        durable_log = config.fs_manager.runtime_root / "worker-queue-events.jsonl"
+        artifact_file = config.storage_layout.cache_artifacts_root / "verifications" / "ver-test" / "logs" / "compile.log"
+        runtime_file = config.storage_layout.runtime_root / "blobs" / "aa" / ("a" * 64)
+        durable_log = config.storage_layout.runtime_root / "worker-queue-events.jsonl"
         artifact_file.parent.mkdir(parents=True, exist_ok=True)
         runtime_file.parent.mkdir(parents=True, exist_ok=True)
         durable_log.parent.mkdir(parents=True, exist_ok=True)
@@ -39,8 +39,8 @@ class TestRuntimeStartupE2E(BackendE2ETestBase):
 
         reset_history.assert_called_once_with()
 
-        self.assertTrue(config.fs_manager.cache_artifacts_root.exists())
-        self.assertTrue(config.fs_manager.runtime_root.exists())
+        self.assertTrue(config.storage_layout.cache_artifacts_root.exists())
+        self.assertTrue(config.storage_layout.runtime_root.exists())
         self.assertFalse(artifact_file.exists())
         self.assertFalse(runtime_file.exists())
         self.assertFalse(durable_log.exists())
@@ -59,7 +59,7 @@ class TestRuntimeStartupE2E(BackendE2ETestBase):
             problem_id=int(context["problem"]["id"]),
             workspace_id=int(context["workspace"]["id"]),
         )
-        marker = config.fs_manager.runtime_root / "startup-recovery-marker"
+        marker = config.storage_layout.runtime_root / "startup-recovery-marker"
         marker.parent.mkdir(parents=True, exist_ok=True)
         marker.write_text("must survive\n", encoding="utf-8")
 

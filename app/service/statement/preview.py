@@ -10,7 +10,7 @@ from app.db import DB
 from app.main_util import problem_slug_leaf
 from app.service.disk.verification_store import VerificationStore
 from app.service.disk.preview_store import PreviewArtifactRow, PreviewRow, PreviewStore
-from app.service.platform.fs.layout import FsManager
+from app.service.platform.fs.layout import StorageLayout
 from app.service.platform.hashing import sha256_hex_json
 from app.service.statement.tex_compile import TexCompileService
 from app.service.statement.render import (
@@ -63,6 +63,7 @@ class PreviewService:
         db: DB,
         workspace_service: WorkspaceService,
         pdf_compiler: TexCompileService,
+        storage_layout: StorageLayout,
         verification_service: VerificationService | None = None,
     ):
         self.db = db
@@ -70,10 +71,7 @@ class PreviewService:
         self._verification_store = VerificationStore(db)
         self.workspace_service = workspace_service
         self.verification_service = verification_service
-        self.fs_manager = FsManager(
-            self.workspace_service.settings.cache_root,
-            self.workspace_service.settings.artifacts_root,
-        )
+        self.storage_layout = storage_layout
         self.pdf_compiler = pdf_compiler
 
     def list_workspace_previews(self, problem_id: int, workspace_id: int) -> list[PreviewRow]:
@@ -465,8 +463,8 @@ class PreviewService:
         if row is None:
             return None
         try:
-            root = self.fs_manager.resolve_preview_root(str(preview_id or "").strip())
-            base = self.fs_manager.preview_root.resolve()
+            root = self.storage_layout.resolve_preview_root(str(preview_id or "").strip())
+            base = self.storage_layout.preview_root.resolve()
         except OSError:
             return None
         if root != base and base not in root.parents:
@@ -600,7 +598,7 @@ class PreviewService:
                 language=safe_language,
             )
             preview_id = f"p-{uuid.uuid4().hex[:12]}"
-            preview_layout = self.fs_manager.prepare_preview_layout(preview_id)
+            preview_layout = self.storage_layout.prepare_preview_layout(preview_id)
             self._store.insert_running_preview(
                 preview_id=preview_id,
                 problem_id=problem_id,

@@ -693,7 +693,7 @@ async def agent_workspace_compare(request: Request, archive: UploadFile = File(.
         snapshot = config.config_values.snapshot()
         async with spool_upload(
             archive,
-            root=config.settings.cache_root / "archive-uploads",
+            root=config.storage_layout.archive_upload_root,
             max_bytes=int(snapshot["UPLOAD_MAX_BYTES"]),
             label="workspace archive",
         ) as archive_path:
@@ -735,7 +735,7 @@ async def agent_workspace_apply(
         snapshot = config.config_values.snapshot()
         async with spool_upload(
             archive,
-            root=config.settings.cache_root / "archive-uploads",
+            root=config.storage_layout.archive_upload_root,
             max_bytes=int(snapshot["UPLOAD_MAX_BYTES"]),
             label="workspace archive",
         ) as archive_path:

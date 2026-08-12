@@ -22,7 +22,7 @@ from app.db import (
 from app.service.platform.admission import MaintenanceAdmissionGate
 from app.service.platform.runtime_blob_store import RuntimeBlobStore
 from app.service.platform.runtime_cache_index import RuntimeCacheIndex
-from app.setting import Settings
+from app.service.platform.fs.layout import StorageLayout
 
 
 logger = logging.getLogger(__name__)
@@ -30,16 +30,6 @@ logger = logging.getLogger(__name__)
 
 MaintenanceStatus = Literal["idle", "running", "succeeded", "failed"]
 MaintenanceOperation = Literal["", "artifact_cleanup", "source_backup"]
-
-_STORAGE_ROOT_ATTRIBUTES = (
-    "bare_root",
-    "workspace_root",
-    "contest_source_root",
-    "backup_root",
-    "artifacts_root",
-    "cache_root",
-)
-
 
 class WorkerMaintenancePort(Protocol):
     def active_counts(self) -> dict[str, int]: ...
@@ -79,48 +69,6 @@ class ArtifactUsageSnapshot(TypedDict):
     artifact_rows: int
     removable_rows: int
     table_rows: dict[str, int]
-
-
-def _is_within(root: Path, target: Path) -> bool:
-    return root == target or root in target.parents
-
-
-def validate_storage_layout(settings: Settings) -> dict[str, Path]:
-    """Validate configured root geometry before any runtime path is mutated."""
-
-    configured = {
-        name: Path(getattr(settings, name)).absolute()
-        for name in _STORAGE_ROOT_ATTRIBUTES
-    }
-    for name, root in configured.items():
-        if root == Path(root.anchor):
-            raise RuntimeError(f"refusing filesystem root: {name}={root}")
-        if root.is_symlink():
-            raise RuntimeError(f"filesystem root must not be a symlink: {name}={root}")
-        if root.exists() and not root.is_dir():
-            raise RuntimeError(f"filesystem root must be a directory: {name}={root}")
-    resolved = {name: root.resolve() for name, root in configured.items()}
-    root_items = list(resolved.items())
-    for index, (left_name, left) in enumerate(root_items):
-        for right_name, right in root_items[index + 1 :]:
-            if _is_within(left, right) or _is_within(right, left):
-                raise RuntimeError(
-                    f"filesystem roots overlap: {left_name}={left}, "
-                    f"{right_name}={right}"
-                )
-    configured_database = settings.db_path.absolute()
-    if configured_database.is_symlink():
-        raise RuntimeError(f"database path must not be a symlink: {configured_database}")
-    if configured_database.exists() and not configured_database.is_file():
-        raise RuntimeError(f"database path must be a file: {configured_database}")
-    database = configured_database.resolve()
-    for name, root in resolved.items():
-        if _is_within(root, database) or _is_within(database, root):
-            raise RuntimeError(
-                f"database path overlaps managed root: {name}={root}, "
-                f"database={database}"
-            )
-    return resolved
 
 
 def _assert_cleanup_tree_safe(root: Path) -> None:
@@ -166,18 +114,20 @@ def _assert_cleanup_tree_safe(root: Path) -> None:
                 )
 
 
-def validate_runtime_startup_preconditions(settings: Settings) -> dict[str, Path]:
+def validate_runtime_startup_preconditions(
+    storage_layout: StorageLayout,
+) -> dict[str, Path]:
     """Reject unsafe roots before runtime services touch the startup-cleared cache."""
 
-    roots = validate_storage_layout(settings)
+    roots = storage_layout.validate()
     _assert_cleanup_tree_safe(roots["cache_root"])
     return roots
 
 
-def validate_cleanup_preconditions(settings: Settings) -> dict[str, Path]:
+def validate_cleanup_preconditions(storage_layout: StorageLayout) -> dict[str, Path]:
     """Revalidate both recursively deleted trees immediately before cleanup."""
 
-    roots = validate_runtime_startup_preconditions(settings)
+    roots = validate_runtime_startup_preconditions(storage_layout)
     _assert_cleanup_tree_safe(roots["artifacts_root"])
     return roots
 
@@ -241,7 +191,7 @@ class ArtifactCleanupService:
     def __init__(
         self,
         db: DB,
-        settings: Settings,
+        storage_layout: StorageLayout,
         runtime_cache_index: RuntimeCacheIndex,
         runtime_blob_store: RuntimeBlobStore,
         worker_queue_service: WorkerMaintenancePort,
@@ -250,7 +200,7 @@ class ArtifactCleanupService:
         reset_process_job_tracking: Callable[[], None],
     ) -> None:
         self._db = db
-        self._settings = settings
+        self._storage_layout = storage_layout
         self._runtime_cache_index = runtime_cache_index
         self._runtime_blob_store = runtime_blob_store
         self._worker_queue = worker_queue_service
@@ -263,7 +213,7 @@ class ArtifactCleanupService:
         *,
         create_cleanup_roots: bool = False,
     ) -> dict[str, object]:
-        roots = validate_cleanup_preconditions(self._settings)
+        roots = validate_cleanup_preconditions(self._storage_layout)
         if create_cleanup_roots:
             for root in (
                 roots["artifacts_root"],
@@ -271,7 +221,7 @@ class ArtifactCleanupService:
             ):
                 root.mkdir(parents=True, exist_ok=True)
         result = {name: str(root) for name, root in roots.items()}
-        result["database"] = str(self._settings.db_path.absolute().resolve())
+        result["database"] = str(self._storage_layout.database_path.absolute().resolve())
         return result
 
     def _delete_metadata(self) -> dict[str, int]:
@@ -320,10 +270,10 @@ class ArtifactCleanupService:
 
     def usage_snapshot(self) -> ArtifactUsageSnapshot:
         artifacts_bytes, artifacts_files = self._tree_usage(
-            self._settings.artifacts_root.absolute()
+            self._storage_layout.artifacts_root.absolute()
         )
         cache_bytes, cache_files = self._tree_usage(
-            self._settings.cache_root.absolute()
+            self._storage_layout.cache_root.absolute()
         )
         count_expressions = [
             f"(SELECT COUNT(*) FROM {table}) AS {table}"
@@ -378,9 +328,9 @@ class ArtifactCleanupService:
 
     def _database_storage_bytes(self) -> int:
         paths = (
-            self._settings.db_path,
-            Path(f"{self._settings.db_path}-wal"),
-            Path(f"{self._settings.db_path}-shm"),
+            self._storage_layout.database_path,
+            Path(f"{self._storage_layout.database_path}-wal"),
+            Path(f"{self._storage_layout.database_path}-shm"),
         )
         total = 0
         for path in paths:
@@ -434,19 +384,19 @@ class ArtifactCleanupService:
             move("filesystem")
             filesystem_bytes_before = {
                 "artifacts_root": self._tree_bytes(
-                    self._settings.artifacts_root.absolute()
+                    self._storage_layout.artifacts_root.absolute()
                 ),
                 "cache_root": self._tree_bytes(
-                    self._settings.cache_root.absolute()
+                    self._storage_layout.cache_root.absolute()
                 ),
             }
             result["filesystem_bytes_before"] = dict(filesystem_bytes_before)
             reclaimed_bytes["artifacts_root"] = self._clear_root(
-                self._settings.artifacts_root.absolute()
+                self._storage_layout.artifacts_root.absolute()
             )
             result["total_reclaimed_bytes"] = sum(reclaimed_bytes.values())
             reclaimed_bytes["cache_root"] = self._clear_root(
-                self._settings.cache_root.absolute()
+                self._storage_layout.cache_root.absolute()
             )
             result["total_reclaimed_bytes"] = sum(reclaimed_bytes.values())
             result["completed_stage"] = "filesystem"
@@ -474,8 +424,8 @@ class ArtifactCleanupService:
             return result
         except Exception as exc:
             cleanup_roots = {
-                "artifacts_root": self._settings.artifacts_root.absolute(),
-                "cache_root": self._settings.cache_root.absolute(),
+                "artifacts_root": self._storage_layout.artifacts_root.absolute(),
+                "cache_root": self._storage_layout.cache_root.absolute(),
             }
             for label, before in filesystem_bytes_before.items():
                 reclaimed_bytes[label] = max(

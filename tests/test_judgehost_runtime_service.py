@@ -273,7 +273,7 @@ class TestJudgehostRuntimeService(DBTestBase):
         result = self.service.wait_for_task_result(task_id, timeout_sec=1.0)
         self.assertEqual(result["artifact_path"], "")
         run_root = (
-            self.fs_manager.resolve_verification_root(verification_id)
+            self.storage_layout.resolve_verification_root(verification_id)
             / "runs"
             / run_id
         )

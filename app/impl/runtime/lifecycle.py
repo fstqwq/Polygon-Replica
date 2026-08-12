@@ -41,8 +41,8 @@ def _startup_clear_all_caches() -> None:
     except Exception as exc:
         warnings.warn(f"startup runtime cache index clear failed: {exc}", RuntimeWarning)
     for root, label in (
-        (config.fs_manager.cache_artifacts_root.resolve(), "artifact cache"),
-        (config.fs_manager.runtime_root.resolve(), "runtime cache"),
+        (config.storage_layout.cache_artifacts_root.resolve(), "artifact cache"),
+        (config.storage_layout.runtime_root.resolve(), "runtime cache"),
     ):
         try:
             if root.exists() and root.is_dir() and (not root.is_symlink()):

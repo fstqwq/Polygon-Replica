@@ -60,8 +60,8 @@ class RuntimeBlobStore:
     valid until the startup-owned runtime root is cleared.
     """
 
-    def __init__(self, runtime_root: Path) -> None:
-        self._root = (Path(runtime_root).resolve() / "blobs").resolve()
+    def __init__(self, blob_root: Path) -> None:
+        self._root = Path(blob_root).resolve()
         self._root.mkdir(parents=True, exist_ok=True)
         self._locks_guard = threading.Lock()
         self._locks: dict[str, tuple[threading.Lock, int]] = {}

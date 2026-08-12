@@ -177,7 +177,7 @@ class TestVerificationAdapters(E2ETestBase):
         verification_id = canonical_test_verification_id(
             self.random_id("ver-sanity-stable")
         )
-        logs_dir = config.fs_manager.prepare_verification_root(verification_id).resolve() / "logs"
+        logs_dir = config.storage_layout.prepare_verification_root(verification_id).resolve() / "logs"
         calls: list[dict[str, object]] = []
         closed_programs: list[tuple[str, list[str]]] = []
 
@@ -252,7 +252,7 @@ class TestVerificationAdapters(E2ETestBase):
         verification_id = canonical_test_verification_id(
             self.random_id("ver-sanity-boundary")
         )
-        logs_dir = config.fs_manager.prepare_verification_root(verification_id).resolve() / "logs"
+        logs_dir = config.storage_layout.prepare_verification_root(verification_id).resolve() / "logs"
 
         def _fake_enqueue_task(**kwargs: object) -> str:
             return "jt-boundary"
@@ -295,7 +295,7 @@ class TestVerificationAdapters(E2ETestBase):
         verification_id = canonical_test_verification_id(
             self.random_id("ver-sanity-runtime")
         )
-        logs_dir = config.fs_manager.prepare_verification_root(verification_id).resolve() / "logs"
+        logs_dir = config.storage_layout.prepare_verification_root(verification_id).resolve() / "logs"
 
         def _fake_enqueue_task(**kwargs: object) -> str:
             return "jt-runtime"
@@ -361,7 +361,7 @@ class TestVerificationAdapters(E2ETestBase):
         verification_id = canonical_test_verification_id(
             self.random_id("ver-sanity-ac")
         )
-        logs_dir = config.fs_manager.prepare_verification_root(verification_id).resolve() / "logs"
+        logs_dir = config.storage_layout.prepare_verification_root(verification_id).resolve() / "logs"
         calls: list[dict[str, object]] = []
 
         def _fake_enqueue_task(**kwargs: object) -> str:
@@ -399,7 +399,7 @@ class TestVerificationAdapters(E2ETestBase):
         verification_id = canonical_test_verification_id(
             self.random_id("ver-sanity-fl")
         )
-        logs_dir = config.fs_manager.prepare_verification_root(verification_id).resolve() / "logs"
+        logs_dir = config.storage_layout.prepare_verification_root(verification_id).resolve() / "logs"
         calls: list[dict[str, object]] = []
 
         def _fake_enqueue_task(**kwargs: object) -> str:

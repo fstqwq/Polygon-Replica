@@ -25,12 +25,12 @@ based on present impact, not on an imagined future architecture.
 | ID | Class | Finding and current impact | Suggested owner |
 | --- | --- | --- | --- |
 | PLC-001 | refactor | Process lifecycle has a dedicated runtime owner, but the process-wide `RuntimeConfig` composition root remains under `app.impl` and directly aggregates service construction and storage roots. | runtime |
-| PLC-002 | refactor | Some verification locator resolution is performed by workspace implementation code. | verification storage |
+| PLC-002 | refactor | Verification locator ownership is centralized on the refactor branch but remains open until Linux storage and HTTP artifact acceptance complete. | verification storage |
 | PLC-003 | refactor | Several HTTP implementation modules construct large read models and contain domain aggregation. | domain services |
 | PLC-004 | refactor | The canonical execution result model is nested under verification although Judgehost and custom run also consume it. | execution model |
 | PLC-006 | refactor | Judgehost dependency inversion is implemented on the refactor branch but remains open until Linux Judgehost service and mock-wire acceptance complete. | verification port |
 | PLC-008 | refactor | Significant contest build policy remains in `app/impl/contest/shared.py`. | contest service |
-| PLC-009 | refactor | Filesystem storage concerns are split across several service packages without one locator boundary. | disk/platform |
+| PLC-009 | refactor | Configured filesystem locators are centralized on the refactor branch but remain open until Linux storage, cleanup, and backup acceptance complete. | disk/platform |
 | PLC-010 | refactor | Maintenance mechanics and domain deletion policy are implemented together. | platform maintenance |
 | PLC-012 | refactor | Cross-resource authorization policy has no single service owner. | auth/access |
 | PLC-014 | refactor | Audit write policy is coupled to workspace and maintenance services. | audit service |

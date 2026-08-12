@@ -103,7 +103,7 @@ def _normalize_import_contest_idx(raw: object, seq: int, used: set[str]) -> str:
 
 
 def _contest_import_draft_root() -> Path:
-    root = (config.settings.cache_root / "contest-import-drafts").resolve()
+    root = config.storage_layout.contest_import_draft_root.resolve()
     root.mkdir(parents=True, exist_ok=True)
     return root
 

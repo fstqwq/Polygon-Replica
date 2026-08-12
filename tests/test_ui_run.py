@@ -288,7 +288,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         summary_extra: dict[str, object] | None = None,
         activate_tasks: bool = True,
     ) -> None:
-        verification_root = config.fs_manager.prepare_verification_root(verification_id).resolve()
+        verification_root = config.storage_layout.prepare_verification_root(verification_id).resolve()
         verification_root.mkdir(parents=True, exist_ok=True)
         existing_row = config.verification_service.verification_record(verification_id)
         existing_metadata: dict[str, object] = {}
@@ -492,7 +492,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         root = (
             Path(str(artifact_path)).resolve()
             if artifact_path
-            else config.fs_manager.prepare_verification_root(verification_id).resolve()
+            else config.storage_layout.prepare_verification_root(verification_id).resolve()
         )
         root.mkdir(parents=True, exist_ok=True)
         self._admit_verification_fixture(
@@ -1408,7 +1408,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         )
 
         with patch.object(
-            config.fs_manager,
+            config.storage_layout,
             "prepare_verification_layout",
             side_effect=RuntimeError("verification layout unavailable"),
         ):
@@ -1972,7 +1972,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
                 mode="pass-fail",
                 status="ok",
                 summary=_summary(verification_id, run_ids, source),
-                artifact_path=str(config.fs_manager.prepare_verification_root(verification_id).resolve()),
+                artifact_path=str(config.storage_layout.prepare_verification_root(verification_id).resolve()),
                 created_at=created_at,
                 finished_at=created_at,
                 verification_id=verification_id,
@@ -2406,7 +2406,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         workspace_id = int(ctx["workspace"]["id"])
         verification_id = canonical_test_verification_id(f"ver-list-failed-{uuid.uuid4().hex[:8]}")
         build_id = self.random_id("b-list-failed")
-        build_root = config.fs_manager.prepare_verification_root(build_id).resolve()
+        build_root = config.storage_layout.prepare_verification_root(build_id).resolve()
         build_root.mkdir(parents=True, exist_ok=True)
         self._insert_verification_row(
             verification_id=verification_id,
@@ -2423,7 +2423,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
                     "status": "failed",
                     "source_label": "solutions/accepted.cpp",
                     "expected_behavior": "accepted",
-                    "artifact_path": str(config.fs_manager.prepare_verification_root(verification_id).resolve()),
+                    "artifact_path": str(config.storage_layout.prepare_verification_root(verification_id).resolve()),
                     "summary": {
                         "mode": "interactive",
                         "source": "solutions/accepted.cpp",
@@ -2486,7 +2486,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         verification_id = canonical_test_verification_id(f"inv-verif-task-status-{uuid.uuid4().hex[:8]}")
         run_id = f"r-verif-task-status-{uuid.uuid4().hex[:8]}"
         build_id = self.random_id("b-verif-lifecycle")
-        run_root = config.fs_manager.prepare_verification_root(verification_id).resolve()
+        run_root = config.storage_layout.prepare_verification_root(verification_id).resolve()
         run_root.mkdir(parents=True, exist_ok=True)
         summary = {
             "mode": "pass-fail",
@@ -4562,7 +4562,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         problem_id = int(alice_ctx["problem"]["id"])
         alice_workspace_id = int(alice_ctx["workspace"]["id"])
         verification_id = canonical_test_verification_id(f"ver-collab-detail-{uuid.uuid4().hex[:8]}")
-        artifact_root = config.fs_manager.prepare_verification_root(verification_id).resolve()
+        artifact_root = config.storage_layout.prepare_verification_root(verification_id).resolve()
         artifact_root.mkdir(parents=True, exist_ok=True)
 
         self._insert_verification_row(
@@ -5891,7 +5891,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             status="failed",
             summary=run_summary,
             artifact_path=str(
-                config.fs_manager.prepare_verification_root(verification_id).resolve()
+                config.storage_layout.prepare_verification_root(verification_id).resolve()
             ),
             created_at="2026-02-23T00:02:00Z",
             finished_at="2026-02-23T00:02:01Z",

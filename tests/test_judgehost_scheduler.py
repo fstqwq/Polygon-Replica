@@ -281,7 +281,7 @@ class TestJudgehostScheduler(unittest.TestCase):
     def _runtime_toolkit(
         temp_root: Path,
     ) -> tuple[DomjudgeToolkit, RuntimeBlobStore, RuntimeCacheIndex]:
-        blob_store = RuntimeBlobStore(temp_root)
+        blob_store = RuntimeBlobStore(temp_root / "blobs")
         cache_index = RuntimeCacheIndex(blob_store)
         state = SimpleNamespace(
             runtime_blob_store=blob_store,
@@ -378,7 +378,7 @@ class TestJudgehostScheduler(unittest.TestCase):
             snapshot_source = root / "snapshot" / "main.cpp"
             snapshot_source.parent.mkdir(parents=True)
             snapshot_source.write_bytes(_COMPILE_KEY.encode("ascii"))
-            blob_store = RuntimeBlobStore(root / "runtime")
+            blob_store = RuntimeBlobStore(root / "runtime" / "blobs")
             stored_source = blob_store.put_file(
                 RuntimeBlobStore.describe_file(snapshot_source)
             )
@@ -422,7 +422,7 @@ class TestJudgehostScheduler(unittest.TestCase):
             root = Path(temp_dir)
             source = root / "main.cpp"
             source.write_bytes(_COMPILE_KEY.encode("ascii"))
-            blob_store = RuntimeBlobStore(root / "runtime")
+            blob_store = RuntimeBlobStore(root / "runtime" / "blobs")
             materialized = CompileSubmission(
                 compile_key=_COMPILE_KEY,
                 submit_id=domjudge_submit_id(_COMPILE_KEY),

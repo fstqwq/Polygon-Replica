@@ -178,7 +178,7 @@ def contests_root_import(
         contest_policy, problem_policy, max_problems = _contest_archive_policies()
         with spool_fileobj(
             package_upload.file,
-            root=config.settings.cache_root / "archive-uploads",
+            root=config.storage_layout.archive_upload_root,
             max_bytes=int(snapshot["UPLOAD_MAX_BYTES"]),
             label="package file",
         ) as package_path:

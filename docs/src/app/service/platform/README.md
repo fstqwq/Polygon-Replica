@@ -13,6 +13,11 @@ reports, and the single published source archive. Domain services remain
 responsible for interpreting results and publishing their own status
 transitions.
 
+`platform.fs.StorageLayout` is constructed once from environment-derived
+settings. It validates configured root geometry and owns every derived locator;
+services use it as their filesystem capability rather than reading settings to
+assemble paths.
+
 The worker queue, runtime cache index, blob locks, and maintenance state are
 process-local. The queue JSONL is diagnostic history, not a recoverable job
 source, and startup resets it together with in-memory queue records. Runtime

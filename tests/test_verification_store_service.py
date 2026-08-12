@@ -126,7 +126,14 @@ class TestVerificationStoreService(VerificationServiceTestBase):
         tests_meta_rows = detail.get("tests_meta_rows")
         self.assertIsInstance(tests_meta_rows, list)
         self.assertEqual(str((tests_meta_rows[1] or {}).get("test_name") or ""), "002.in")
-        self.assertFalse((self.fs_manager.cache_artifacts_root / "verifications" / verification_id / "metadata.json").exists())
+        self.assertFalse(
+            (
+                self.storage_layout.cache_artifacts_root
+                / "verifications"
+                / verification_id
+                / "metadata.json"
+            ).exists()
+        )
 
     def test_verification_detail_partial_tests_meta_uses_index_not_selected_position(self) -> None:
         self.workspace_service.ensure_workspace(self.problem, self.user)
@@ -272,9 +279,9 @@ class TestVerificationStoreService(VerificationServiceTestBase):
         assert row is not None
         self.assertEqual(
             self.verification_service.artifact_path_for_verification(verification_id),
-            str(self.fs_manager.prepare_verification_root(verification_id).resolve()),
+            str(self.storage_layout.prepare_verification_root(verification_id).resolve()),
         )
         self.assertEqual(
-            self.fs_manager.prepare_verification_root(verification_id).resolve(),
+            self.storage_layout.prepare_verification_root(verification_id).resolve(),
             Path(self.verification_service.artifact_path_for_verification(verification_id)).resolve(),
         )

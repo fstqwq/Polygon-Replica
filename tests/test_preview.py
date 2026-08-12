@@ -15,7 +15,7 @@ class TestPreview(E2ETestBase):
 
     def test_validate_custom_sample_outputs_uses_exact_diff_without_checker(self) -> None:
         verification_id = canonical_test_verification_id(self.random_id("ver-validate-sample"))
-        artifact_root = config.fs_manager.prepare_verification_root(verification_id).resolve()
+        artifact_root = config.storage_layout.prepare_verification_root(verification_id).resolve()
         logs_root = artifact_root / "logs"
         logs_root.mkdir(parents=True, exist_ok=True)
         plan = VerificationTestPlan(
@@ -95,7 +95,7 @@ class TestPreview(E2ETestBase):
 
     def test_validate_custom_sample_outputs_uses_custom_input_without_sample_only(self) -> None:
         verification_id = canonical_test_verification_id(self.random_id("ver-validate-sample-custom-input"))
-        artifact_root = config.fs_manager.prepare_verification_root(verification_id).resolve()
+        artifact_root = config.storage_layout.prepare_verification_root(verification_id).resolve()
         logs_root = artifact_root / "logs"
         logs_root.mkdir(parents=True, exist_ok=True)
         answer_file = config.runtime_blob_store.put_bytes(b"custom-answer\n")
@@ -225,7 +225,7 @@ class TestPreview(E2ETestBase):
             self.random_id("ver-validate-sample-shared-accepted")
         )
         logs_root = (
-            config.fs_manager.prepare_verification_root(verification_id).resolve()
+            config.storage_layout.prepare_verification_root(verification_id).resolve()
             / "logs"
         )
         logs_root.mkdir(parents=True, exist_ok=True)
