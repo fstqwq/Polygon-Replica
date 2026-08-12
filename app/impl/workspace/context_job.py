@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import app.main_constant as _K
-
 from pathlib import Path
 
 from app.impl.runtime.config import config
@@ -9,7 +7,6 @@ from app.service.repository.revision import workspace_verification_source
 from app.service.problem_package.service import PublishedRevision
 from app.service.verification.lifecycle import VerificationAdmission
 from app.service.verification.types import Kind
-from app.service.verification.runtime import normalize_pass_limit, normalize_problem_mode
 
 from app.impl.workspace.context_operation import audit
 from app.service.verification.workspace_fingerprint import (
@@ -18,25 +15,7 @@ from app.service.verification.workspace_fingerprint import (
     verification_sources_signature,
 )
 from app.impl.workspace.published_materialization import ensure_published_materialization
-from app.impl.workspace.problem_config import read_problem_config
 from app.impl.workspace.verification_dag import run_workspace_verification_dag
-
-_C = config.config_values
-
-
-def _workspace_mode_and_pass_limit(problem_id: int, workspace_id: int) -> tuple[str, int]:
-    default_mode = str(_K.GENERAL_CONFIG_DEFAULTS.get("mode") or "pass-fail")
-    default_pass_limit = int(_K.GENERAL_CONFIG_DEFAULTS.get("pass_limit") or 1)
-    workspace_path_text = config.workspace_service.workspace_path(int(problem_id), int(workspace_id))
-    if not workspace_path_text:
-        return (default_mode, default_pass_limit)
-    workspace_path = Path(workspace_path_text).resolve()
-    _payload, general_cfg, _cfg_path = read_problem_config(workspace_path)
-    return (
-        normalize_problem_mode(general_cfg.get("mode"), default_mode),
-        normalize_pass_limit(general_cfg.get("pass_limit"), default_pass_limit),
-    )
-
 
 def _verification_workspace_key(problem_id: int, workspace_id: int) -> str:
     return f"{int(problem_id)}:{int(workspace_id)}"

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import os
 import shutil
 from pathlib import Path
@@ -12,6 +11,7 @@ from app.service.problem.test_spec import (
     payload_rel_path_for_test,
     read_statement_sample_text,
 )
+from app.service.problem.runtime_config import ProblemConfigLimits, load_problem_config
 from app.service.statement.constant import (
     DEFAULT_OLYMP_STY,
     DEFAULT_PROBLEM_TITLE,
@@ -43,17 +43,6 @@ def _safe_read_text(path: Path, fallback: str) -> str:
     except OSError:
         return fallback
     return fallback
-
-
-def _safe_read_json(path: Path) -> dict:
-    try:
-        if path.exists() and path.is_file() and (not path.is_symlink()):
-            payload = json.loads(path.read_text(encoding="utf-8"))
-            if isinstance(payload, dict):
-                return payload
-    except Exception:
-        return {}
-    return {}
 
 
 def _statement_section_text(workspace: Path, language: str, section_name: str, fallback: str = "") -> str:
@@ -104,18 +93,13 @@ def _collect_sample_tests(
         raise RuntimeError(f"invalid tests/spec.json: {exc}") from exc
     rows: list[dict[str, str]] = []
     for index, entry in enumerate(entries, start=1):
-        if not bool(entry.get("sample")):
+        if not entry["sample"]:
             continue
         kind = entry["kind"]
-        if kind not in {"manual", "gen"}:
-            raise RuntimeError(f"invalid test kind at tests/spec.json entry {index}: {kind}")
         test_id = entry["id"]
         sample_input_text = entry["sample_input"]
         sample_output_text = entry["sample_output"]
-        try:
-            input_rel = Path(payload_rel_path_for_test(test_id, kind))
-        except Exception:
-            continue
+        input_rel = Path(payload_rel_path_for_test(test_id, kind))
         input_source = None if sample_input_text else _safe_workspace_regular_file(workspace, input_rel)
         if (not sample_input_text) and (input_source is None):
             continue
@@ -154,27 +138,20 @@ def _problem_context_for_language(
     problem_title: str | None,
     *,
     sample_tests: list[dict[str, str]] | None = None,
+    problem_limits: ProblemConfigLimits,
 ) -> dict[str, object]:
-    cfg = _safe_read_json(workspace / "config" / "problem.json")
+    cfg = load_problem_config(workspace, limits=problem_limits)
     input_file = "standard input"
     output_file = "standard output"
-    time_limit_ms_obj = cfg.get("time_limit_ms", 2000)
-    try:
-        time_limit_ms = int(time_limit_ms_obj)
-    except Exception:
-        time_limit_ms = 2000
-    memory_limit_mb_obj = cfg.get("memory_limit_mb", 1024)
-    try:
-        memory_limit_mb = int(memory_limit_mb_obj)
-    except Exception:
-        memory_limit_mb = 1024
+    time_limit_ms = cfg["time_limit_ms"]
+    memory_limit_mb = cfg["memory_limit_mb"]
     resolved_title = statement_title_for_language(workspace, language, problem_title)
     return {
         "name": resolved_title,
         "inputFile": input_file,
         "outputFile": output_file,
         "timeLimit": time_limit_ms,
-        "memoryLimit": max(1, memory_limit_mb) * 1024 * 1024,
+        "memoryLimit": memory_limit_mb * 1024 * 1024,
         "legend": _statement_section_text(workspace, language, "legend.tex", fallback=""),
         "input": _statement_section_text(workspace, language, "input.tex", fallback=""),
         "output": _statement_section_text(workspace, language, "output.tex", fallback=""),
@@ -278,6 +255,7 @@ def _render_polygon_statement(
     include_sample_tests: bool = True,
     tests_spec_max_bytes: int,
     statement_sample_max_bytes: int,
+    problem_limits: ProblemConfigLimits,
 ) -> Path:
     template_text = _read_required_text(
         workspace / STATEMENT_TEMPLATE_REL,
@@ -309,6 +287,7 @@ def _render_polygon_statement(
         safe_language,
         problem_title,
         sample_tests=sample_tests,
+        problem_limits=problem_limits,
     )
     rendered_problem_tex = render_ftl_template(
         problem_template_text,
@@ -348,6 +327,7 @@ def render_statement_problem_assets_for_language(
     problem_title: str | None = None,
     tests_spec_max_bytes: int,
     statement_sample_max_bytes: int,
+    problem_limits: ProblemConfigLimits,
 ) -> Path:
     template_text = _safe_read_text(workspace / STATEMENT_PROBLEM_REL, DEFAULT_STATEMENT_PROBLEM_TEMPLATE)
     _read_required_text(
@@ -369,6 +349,7 @@ def render_statement_problem_assets_for_language(
         safe_language,
         problem_title,
         sample_tests=sample_tests,
+        problem_limits=problem_limits,
     )
     rendered_problem_tex = render_ftl_template(
         template_text,
@@ -398,6 +379,7 @@ def render_statement_main(
     include_sample_tests: bool = True,
     tests_spec_max_bytes: int,
     statement_sample_max_bytes: int,
+    problem_limits: ProblemConfigLimits,
 ) -> Path:
     workspace = statement_root.parent
     return _render_polygon_statement(
@@ -408,4 +390,5 @@ def render_statement_main(
         include_sample_tests=include_sample_tests,
         tests_spec_max_bytes=tests_spec_max_bytes,
         statement_sample_max_bytes=statement_sample_max_bytes,
+        problem_limits=problem_limits,
     )

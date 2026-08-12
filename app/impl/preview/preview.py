@@ -52,6 +52,7 @@ from app.service.statement.render import (
     statement_title_for_language,
 )
 from app.service.statement.signature import statement_sources_signature
+from app.service.problem.runtime_config import problem_config_limits
 
 _C = config.config_values
 _CONTESTANT_ATTACHMENTS_ROOT = "attachments"
@@ -651,14 +652,11 @@ def statement_tex_source(problem: str, user: Annotated[str, Depends(require_sess
                     fallback_title=problem_slug_leaf(problem),
                 ),
                 tests_spec_max_bytes=int(config_snapshot["TEXTAREA_MAX_BYTES"]),
-                statement_sample_max_bytes=int(
-                    config_snapshot["STATEMENT_SAMPLE_MAX_BYTES"]
-                ),
+                statement_sample_max_bytes=int(config_snapshot["STATEMENT_SAMPLE_MAX_BYTES"]),
+                problem_limits=problem_config_limits(_C),
             )
             tex_text = tex_path.read_text(encoding='utf-8')
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except RuntimeError as exc:
+    except (RuntimeError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except OSError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc

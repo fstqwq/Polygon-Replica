@@ -7,35 +7,31 @@ from pathlib import Path
 from app.impl.runtime.config import config
 from app.service.platform.testlib_source import workspace_testlib_header
 from app.service.platform.runtime_blob_store import PayloadFile
-from app.service.verification.service import CPP_EXTENSIONS, DEFAULT_TIME_LIMIT_MS, SOLUTION_SOURCE_EXTENSIONS
-from app.service.verification.runtime import normalize_pass_limit, normalize_problem_mode
+from app.service.problem.build_config import BuildConfig
+from app.service.problem.runtime_config import ProblemConfig, problem_config_limits
+from app.service.problem.source_tree import load_problem_source_tree
+from app.service.problem.test_spec import TestSpecEntry
+from app.service.verification.service import CPP_EXTENSIONS, SOLUTION_SOURCE_EXTENSIONS
 from app.service.verification.plan import VerificationExecutionPlan, VerificationTestPlan
 from app.service.verification.signature import VerificationManifest, verification_manifest
 from app.service.verification.source import resolve_source
-from app.impl.workspace.context_operation import list_solution_entries, resolve_build_accepted_solution_source
 
 
-def _problem_limits(runtime_cfg: dict[str, object], *, pass_limit: int) -> dict[str, int]:
-    try:
-        time_limit_ms = int(runtime_cfg.get("time_limit_ms", DEFAULT_TIME_LIMIT_MS))
-    except Exception:
-        time_limit_ms = DEFAULT_TIME_LIMIT_MS
-    memory_limit_mb = int(runtime_cfg["memory_limit_mb"])
+def _problem_limits(runtime_cfg: ProblemConfig) -> dict[str, int]:
     return {
-        "time_limit_ms": max(100, time_limit_ms),
-        "memory_limit_mb": memory_limit_mb,
-        "pass_limit": max(1, int(pass_limit)),
+        "time_limit_ms": runtime_cfg["time_limit_ms"],
+        "memory_limit_mb": runtime_cfg["memory_limit_mb"],
+        "pass_limit": runtime_cfg["pass_limit"],
     }
 
 
 def _run_payload_base(
     *,
-    build_cfg: dict[str, object],
+    build_cfg: BuildConfig,
     problem_limits: dict[str, int],
     source_files: dict[str, PayloadFile],
 ) -> dict[str, object]:
-    checker_args_raw = build_cfg.get("checker_args") or []
-    checker_args = [str(item) for item in checker_args_raw if str(item or "")]
+    checker_args = list(build_cfg["checker_args"])
     return {
         "run_config_json": json.dumps(
             {
@@ -83,7 +79,7 @@ def _shared_source_payloads(
     *,
     snapshot: Path,
     manifest: VerificationManifest,
-    build_cfg: dict[str, object],
+    build_cfg: BuildConfig,
     mode: str,
 ) -> dict[str, object]:
     snapshot_resolved = snapshot.resolve()
@@ -95,23 +91,25 @@ def _shared_source_payloads(
         "validators",
         snapshot_resolved=snapshot_resolved,
     )
-    checker_source = (
-        None
-        if mode == "interactive"
-        else verification_service._select_checker_source(
+    if mode == "interactive":
+        checker_source = None
+        interactor_source = verification_service._select_source(
+            snapshot,
+            build_cfg,
+            "interactor_source",
+            "interactors",
+            snapshot_resolved=snapshot_resolved,
+        )
+        if interactor_source is None:
+            raise RuntimeError("interactor source is required for interactive mode")
+    else:
+        checker_source = verification_service._select_checker_source(
             snapshot,
             build_cfg,
             snapshot_resolved=snapshot_resolved,
         )
-    )
-    interactor_source = verification_service._select_source(
-        snapshot,
-        build_cfg,
-        "interactor_source",
-        "interactors",
-        snapshot_resolved=snapshot_resolved,
-    )
-    accepted_source_path = resolve_build_accepted_solution_source(snapshot, list_solution_entries(snapshot)[0]) or ""
+        interactor_source = None
+    accepted_source_path = build_cfg.get("accepted_solution_source", "")
     if not accepted_source_path:
         raise RuntimeError("accepted solution is missing")
     if not accepted_source_path.startswith("solutions/"):
@@ -119,8 +117,6 @@ def _shared_source_payloads(
     if Path(accepted_source_path).suffix.lower() not in SOLUTION_SOURCE_EXTENSIONS:
         raise RuntimeError("accepted solution source must be .cpp/.cc/.cxx/.c++/.py/.java")
     manifest.require(accepted_source_path)
-    if mode == "interactive" and interactor_source is None:
-        raise RuntimeError("interactor source is required for interactive mode")
     source_file_by_path = {
         accepted_source_path: manifest.require(accepted_source_path),
     }
@@ -228,12 +224,15 @@ def _tests_from_spec(
     manifest: VerificationManifest,
     testlib_header: Path | None,
     sample_only: bool,
+    build_cfg: BuildConfig,
+    entries: tuple[TestSpecEntry, ...],
 ) -> tuple[list[VerificationTestPlan], list[dict[str, object]]]:
     verification_service = config.verification_service
-    entries = verification_service._load_tests_spec(snapshot)
-    if entries is None:
-        return ([], [])
-    runtime_rows, generator_targets = verification_service._prepare_tests_spec_runtime(snapshot, entries)
+    runtime_rows, generator_targets = verification_service._prepare_tests_spec_runtime(
+        snapshot,
+        list(entries),
+        generator_sources=build_cfg["generator_sources"],
+    )
     generator_source_by_name = {
         str(target_name): source_path
         for target_name, source_path in generator_targets
@@ -320,7 +319,7 @@ def _tests_without_spec(
     *,
     snapshot: Path,
     manifest: VerificationManifest,
-    build_cfg: dict[str, object],
+    build_cfg: BuildConfig,
     testlib_header: Path | None,
 ) -> tuple[list[VerificationTestPlan], list[dict[str, object]]]:
     verification_service = config.verification_service
@@ -348,12 +347,12 @@ def _tests_without_spec(
         plans.append(plan)
         tests_meta_rows.append(dict(tests_meta))
         counter += 1
-    configured_generators = list(build_cfg.get("generator_sources") or [])
+    configured_generators = build_cfg["generator_sources"]
     generator_sources: list[Path] = []
     for rel in configured_generators:
         generator_sources.append(resolve_source(snapshot, str(rel), snapshot_resolved=snapshot_resolved))
-    generator_args = [str(item) for item in list(build_cfg.get("generator_args") or [])]
-    generator_runs = max(0, int(build_cfg.get("generator_runs", 3) or 0))
+    generator_args = build_cfg["generator_args"]
+    generator_runs = build_cfg["generator_runs"]
     for source_path in generator_sources:
         try:
             source_label = source_path.relative_to(snapshot).as_posix()
@@ -391,22 +390,33 @@ def build_verification_execution_plan(
 ) -> VerificationExecutionPlan:
     resolved_manifest = verification_manifest(snapshot) if manifest is None else manifest
     verification_service = config.verification_service
-    build_cfg = verification_service._load_build_config(snapshot)
-    runtime_cfg = verification_service._load_problem_runtime_config(snapshot)
-    mode = normalize_problem_mode(runtime_cfg.get("mode"), "pass-fail")
-    pass_limit = normalize_pass_limit(runtime_cfg.get("pass_limit"), 1)
+    limits = config.config_values.snapshot()
+    source_tree = load_problem_source_tree(
+        snapshot,
+        problem_limits=problem_config_limits(config.config_values),
+        tests_spec_max_bytes=int(limits["TEXTAREA_MAX_BYTES"]),
+        statement_sample_max_bytes=int(
+            limits["STATEMENT_SAMPLE_MAX_BYTES"]
+        ),
+    )
+    build_cfg = source_tree.build
+    runtime_cfg = source_tree.problem
+    mode = runtime_cfg["mode"]
+    pass_limit = runtime_cfg["pass_limit"]
     shared_sources = _shared_source_payloads(
         snapshot=snapshot,
         manifest=resolved_manifest,
         build_cfg=build_cfg,
         mode=mode,
     )
-    problem_limits = _problem_limits(runtime_cfg, pass_limit=pass_limit)
+    problem_limits = _problem_limits(runtime_cfg)
     plans, tests_meta_rows = _tests_from_spec(
         snapshot=snapshot,
         manifest=resolved_manifest,
         testlib_header=shared_sources["testlib_header"],
         sample_only=bool(sample_only),
+        build_cfg=build_cfg,
+        entries=source_tree.tests,
     )
     if not plans:
         plans, tests_meta_rows = _tests_without_spec(

@@ -7,7 +7,6 @@ verification artifact reference.
 
 from __future__ import annotations
 
-import json
 import os
 import shutil
 import stat
@@ -25,7 +24,12 @@ from app.service.platform.fs.op import extract_git_archive
 from app.service.platform.git_process import run_git
 from app.service.platform.hashing import sha256_file
 from app.service.platform.runtime_blob_store import PayloadFile
-from app.service.problem.test_spec import load_tests_spec
+from app.service.problem.runtime_config import (
+    ProblemConfig,
+    parse_problem_config,
+    problem_config_limits,
+)
+from app.service.problem.source_tree import ProblemSourceTree, load_problem_source_tree
 from app.service.problem_package.manifest import (
     NativeManifest,
     NativeTestEntry,
@@ -251,17 +255,17 @@ class ProblemPackageService:
             bare_repo=bare_repo,
         )
 
-    def published_config(self, revision: PublishedRevision) -> dict[str, object]:
+    def published_config(self, revision: PublishedRevision) -> ProblemConfig:
         result = run_git(
             ["git", "-C", str(revision.bare_repo), "show", f"{revision.source_commit}:config/problem.json"],
             timeout=120,
         )
         if result.returncode != 0:
             raise ValueError("published problem config is unavailable")
-        payload = json.loads(result.stdout)
-        if not isinstance(payload, dict):
-            raise ValueError("published problem config must be an object")
-        return payload
+        return parse_problem_config(
+            result.stdout,
+            limits=problem_config_limits(self.db.config_values),
+        )
 
     @staticmethod
     def _published_readiness(
@@ -471,14 +475,9 @@ class ProblemPackageService:
         package_root: Path,
         verification_id: str,
         mode: str,
-        tests_spec_max_bytes: int,
-        statement_sample_max_bytes: int,
+        source_tree: ProblemSourceTree,
     ) -> list[NativeTestEntry]:
-        tests = load_tests_spec(
-            snapshot / "tests" / "spec.json",
-            document_max_bytes=tests_spec_max_bytes,
-            sample_max_bytes=statement_sample_max_bytes,
-        )
+        tests = source_tree.tests
         if not tests:
             raise ValueError("Native materialization requires tests/spec.json entries")
         manifest_tests: list[NativeTestEntry] = []
@@ -506,28 +505,18 @@ class ProblemPackageService:
                 item["answer"] = describe_file(answer_path, root=package_root)
             elif mode != "interactive":
                 raise ValueError(f"verification answer is missing: {test_id}")
-            sample_input = str(row["sample_input"] or "")
-            if bool(row["sample"]) and sample_input and self._different_text(sample_input, input_path):
+            sample_input = row.get("sample_input", "")
+            if row["sample"] and sample_input and self._different_text(sample_input, input_path):
                 path = test_root / "sample-input"
                 path.write_text(sample_input, encoding="utf-8", newline="")
                 item["sample_input"] = describe_file(path, root=package_root)
-            sample_output = str(row["sample_output"] or "")
-            if bool(row["sample"]) and sample_output and self._different_text(sample_output, answer_path):
+            sample_output = row.get("sample_output", "")
+            if row["sample"] and sample_output and self._different_text(sample_output, answer_path):
                 path = test_root / "sample-output"
                 path.write_text(sample_output, encoding="utf-8", newline="")
                 item["sample_output"] = describe_file(path, root=package_root)
             manifest_tests.append(item)
         return manifest_tests
-
-    @staticmethod
-    def _mode(snapshot: Path) -> tuple[str, int]:
-        config_path = snapshot / "config" / "problem.json"
-        payload = json.loads(config_path.read_text(encoding="utf-8"))
-        mode = str(payload.get("mode") or "pass-fail")
-        pass_limit = int(payload.get("pass_limit") or 1)
-        if mode not in {"pass-fail", "interactive"} or pass_limit < 1:
-            raise ValueError("published problem has invalid mode/pass_limit")
-        return mode, pass_limit
 
     @staticmethod
     def _write_archive(source_root: Path, target: Path) -> None:
@@ -553,6 +542,7 @@ class ProblemPackageService:
         verification_id: str,
         build_id: str,
         invalidate_exports: bool,
+        source_tree: ProblemSourceTree,
     ) -> MaterializationRow:
         config_snapshot = self.db.config_values.snapshot()
         tests_spec_max_bytes = int(config_snapshot["TEXTAREA_MAX_BYTES"])
@@ -580,14 +570,14 @@ class ProblemPackageService:
         try:
             digest = source_digest(snapshot)
             self._copy_source_tree(snapshot, package_root)
-            mode, pass_limit = self._mode(package_root)
+            mode = source_tree.problem["mode"]
+            pass_limit = source_tree.problem["pass_limit"]
             tests = self._materialize_tests(
                 snapshot=snapshot,
                 package_root=package_root,
                 verification_id=verification_id,
                 mode=mode,
-                tests_spec_max_bytes=tests_spec_max_bytes,
-                statement_sample_max_bytes=statement_sample_max_bytes,
+                source_tree=source_tree,
             )
             manifest: NativeManifest = {
                 "source_commit": revision.source_commit,
@@ -685,6 +675,15 @@ class ProblemPackageService:
         snapshot = snapshot_parent / "source"
         try:
             extract_git_archive(revision.bare_repo, revision.source_commit, snapshot, timeout=120)
+            config_snapshot = self.db.config_values.snapshot()
+            source_tree = load_problem_source_tree(
+                snapshot,
+                problem_limits=problem_config_limits(self.db.config_values),
+                tests_spec_max_bytes=int(config_snapshot["TEXTAREA_MAX_BYTES"]),
+                statement_sample_max_bytes=int(
+                    config_snapshot["STATEMENT_SAMPLE_MAX_BYTES"]
+                ),
+            )
             self.store.mark_build_phase(build_id, "verification")
             completed_verification_id = verification_builder(
                 snapshot, revision.source_commit, revision.revision_number, verification_id
@@ -697,6 +696,7 @@ class ProblemPackageService:
                 verification_id=verification_id,
                 build_id=build_id,
                 invalidate_exports=invalidate_exports,
+                source_tree=source_tree,
             )
         except Exception as exc:
             self.store.mark_build_failed(build_id, str(exc))
@@ -824,6 +824,22 @@ class ProblemPackageService:
                     config_snapshot["STATEMENT_SAMPLE_MAX_BYTES"]
                 ),
             )
+            source_tree = load_problem_source_tree(
+                extraction,
+                problem_limits=problem_config_limits(self.db.config_values),
+                tests_spec_max_bytes=int(config_snapshot["TEXTAREA_MAX_BYTES"]),
+                statement_sample_max_bytes=int(
+                    config_snapshot["STATEMENT_SAMPLE_MAX_BYTES"]
+                ),
+            )
+            if source_tree.problem["mode"] != manifest["mode"]:
+                raise ValueError(
+                    "Native manifest mode does not match config/problem.json"
+                )
+            if source_tree.problem["pass_limit"] != manifest["pass_limit"]:
+                raise ValueError(
+                    "Native manifest pass limit does not match config/problem.json"
+                )
             yield NativePackageReader(
                 materialization=row,
                 root=extraction,

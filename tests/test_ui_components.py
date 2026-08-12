@@ -45,6 +45,15 @@ class TestUIComponents(UIHelpersMixin, E2ETestBase):
     seed_primary_workspace = True
     seed_default_workspace = False
 
+    @staticmethod
+    def _update_build_config(ws: Path, **updates: object) -> None:
+        path = ws / "config/build.json"
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload.update(updates)
+        path.write_text(
+            json.dumps(payload, indent=2) + "\n", encoding="utf-8"
+        )
+
     def test_read_problem_config_rejects_persisted_shape_without_pass_limit(
         self,
     ) -> None:
@@ -55,7 +64,7 @@ class TestUIComponents(UIHelpersMixin, E2ETestBase):
             json.dumps({"mode": "interactive"}, indent=2) + "\n", encoding="utf-8"
         )
 
-        with self.assertRaisesRegex(ValueError, "missing pass_limit"):
+        with self.assertRaisesRegex(ValueError, "missing key"):
             read_problem_config(ws)
 
     def test_interactor_tab_visible_only_for_non_pass_fail_mode(self) -> None:
@@ -63,9 +72,10 @@ class TestUIComponents(UIHelpersMixin, E2ETestBase):
         cfg_path = ws / "config/problem.json"
         cfg_path.parent.mkdir(parents=True, exist_ok=True)
 
+        payload = json.loads(cfg_path.read_text(encoding="utf-8"))
+        payload.update({"mode": "pass-fail", "pass_limit": 1})
         cfg_path.write_text(
-            json.dumps({"mode": "pass-fail", "pass_limit": 1}, indent=2) + "\n",
-            encoding="utf-8",
+            json.dumps(payload, indent=2) + "\n", encoding="utf-8"
         )
         pass_fail_resp = general_page(
             _request(f"/problems/{self.problem}/general"), self.problem, self.user
@@ -74,9 +84,9 @@ class TestUIComponents(UIHelpersMixin, E2ETestBase):
         pass_fail_html = pass_fail_resp.body.decode("utf-8", errors="replace")
         self.assertNotIn(f'/problems/{self.problem}/interactor', pass_fail_html)
 
+        payload["mode"] = "interactive"
         cfg_path.write_text(
-            json.dumps({"mode": "interactive", "pass_limit": 1}, indent=2) + "\n",
-            encoding="utf-8",
+            json.dumps(payload, indent=2) + "\n", encoding="utf-8"
         )
         interactive_resp = general_page(
             _request(f"/problems/{self.problem}/general"), self.problem, self.user
@@ -127,11 +137,7 @@ class TestUIComponents(UIHelpersMixin, E2ETestBase):
         (ws / rel).write_text(
             "// custom checker with a standard name\n", encoding="utf-8"
         )
-        cfg_path = ws / "config" / "build.json"
-        cfg_path.parent.mkdir(parents=True, exist_ok=True)
-        cfg_path.write_text(
-            json.dumps({"checker_source": rel}, indent=2) + "\n", encoding="utf-8"
-        )
+        self._update_build_config(ws, checker_source=rel)
 
         resp = checker_page(
             _request(f"/problems/{self.problem}/checker"), self.problem, self.user
@@ -149,12 +155,7 @@ class TestUIComponents(UIHelpersMixin, E2ETestBase):
         standard_rel = copy_standard_checker("wcmp.cpp", ws)
         custom_rel = "checkers/custom.cpp"
         (ws / custom_rel).write_bytes((ws / standard_rel).read_bytes())
-        cfg_path = ws / "config" / "build.json"
-        cfg_path.parent.mkdir(parents=True, exist_ok=True)
-        cfg_path.write_text(
-            json.dumps({"checker_source": custom_rel}, indent=2) + "\n",
-            encoding="utf-8",
-        )
+        self._update_build_config(ws, checker_source=custom_rel)
 
         resp = checker_page(
             _request(f"/problems/{self.problem}/checker"), self.problem, self.user
@@ -359,19 +360,12 @@ class TestUIComponents(UIHelpersMixin, E2ETestBase):
         other_generator = "generators/other.cpp"
         (ws / other_generator).write_text("// other generator\n", encoding="utf-8")
         cfg_path = ws / "config" / "build.json"
-        cfg_path.parent.mkdir(parents=True, exist_ok=True)
-        cfg_path.write_text(
-            json.dumps(
-                {
-                    "checker_source": old_paths["checker"],
-                    "validator_source": old_paths["validator"],
-                    "interactor_source": old_paths["interactor"],
-                    "generator_sources": [old_paths["generator"], other_generator],
-                },
-                indent=2,
-            )
-            + "\n",
-            encoding="utf-8",
+        self._update_build_config(
+            ws,
+            checker_source=old_paths["checker"],
+            validator_source=old_paths["validator"],
+            interactor_source=old_paths["interactor"],
+            generator_sources=[old_paths["generator"], other_generator],
         )
 
         responses = [
@@ -533,14 +527,10 @@ class TestUIComponents(UIHelpersMixin, E2ETestBase):
         if target.exists():
             target.unlink()
         cfg_path = ws / "config" / "build.json"
-        cfg_path.parent.mkdir(parents=True, exist_ok=True)
         from app.service.verification.standard_checker import copy_standard_checker
 
         copy_standard_checker("wcmp.cpp", ws)
-        cfg_path.write_text(
-            json.dumps({"checker_source": "checkers/wcmp.cpp"}, indent=2) + "\n",
-            encoding="utf-8",
-        )
+        self._update_build_config(ws, checker_source="checkers/wcmp.cpp")
 
         page = checker_page(
             _request_with_cookie(
@@ -585,11 +575,7 @@ class TestUIComponents(UIHelpersMixin, E2ETestBase):
         rel = "generators/gen.cpp"
         (ws / rel).parent.mkdir(parents=True, exist_ok=True)
         (ws / rel).write_text("int main(){return 0;}\n", encoding="utf-8")
-        cfg_path = ws / "config" / "build.json"
-        cfg_path.parent.mkdir(parents=True, exist_ok=True)
-        cfg_path.write_text(
-            json.dumps({"generator_sources": [rel]}, indent=2) + "\n", encoding="utf-8"
-        )
+        self._update_build_config(ws, generator_sources=[rel])
 
         page = generators_page(
             _request_with_cookie(
@@ -614,11 +600,7 @@ class TestUIComponents(UIHelpersMixin, E2ETestBase):
         target = ws / rel
         if target.exists():
             target.unlink()
-        cfg_path = ws / "config" / "build.json"
-        cfg_path.parent.mkdir(parents=True, exist_ok=True)
-        cfg_path.write_text(
-            json.dumps({"generator_sources": []}, indent=2) + "\n", encoding="utf-8"
-        )
+        self._update_build_config(ws, generator_sources=[])
 
         page = generators_page(
             _request_with_cookie(
@@ -647,12 +629,8 @@ class TestUIComponents(UIHelpersMixin, E2ETestBase):
         existing_abs = ws / existing_rel
         existing_abs.parent.mkdir(parents=True, exist_ok=True)
         existing_abs.write_text("int main(){return 0;}\n", encoding="utf-8")
-        cfg_path = ws / "config" / "build.json"
-        cfg_path.parent.mkdir(parents=True, exist_ok=True)
-        cfg_path.write_text(
-            json.dumps({"generator_sources": [missing_rel, existing_rel]}, indent=2)
-            + "\n",
-            encoding="utf-8",
+        self._update_build_config(
+            ws, generator_sources=[missing_rel, existing_rel]
         )
 
         page = generators_page(
@@ -675,7 +653,8 @@ class TestUIComponents(UIHelpersMixin, E2ETestBase):
         source.write_text("int main(){return 0;}\n", encoding="utf-8")
         desc = ws / "solutions/std.cpp.desc"
         desc.write_text(
-            "expected: wrong-answer\nnote: baseline negative case\n", encoding="utf-8"
+            "expected: wrong_answer\nnote: baseline negative case\n",
+            encoding="utf-8",
         )
 
         page = solutions_page(
@@ -720,8 +699,6 @@ class TestUIComponents(UIHelpersMixin, E2ETestBase):
         (ws / main_rel).write_text("int main(){return 0;}\n", encoding="utf-8")
         (ws / other_rel).write_text("int main(){return 1;}\n", encoding="utf-8")
         cfg_path = ws / "config" / "build.json"
-        cfg_path.parent.mkdir(parents=True, exist_ok=True)
-        cfg_path.write_text("{}\n", encoding="utf-8")
 
         before = solutions_page(
             _request(f"/problems/{self.problem}/solutions"), self.problem, self.user
@@ -749,7 +726,7 @@ class TestUIComponents(UIHelpersMixin, E2ETestBase):
         after_html = after.body.decode("utf-8", errors="replace")
         self.assertNotIn("Main correct solution is required.", after_html)
 
-    def test_solutions_set_tag_accepted_keeps_build_config_unset_but_resolves_main_correct_in_ui(
+    def test_solutions_set_tag_accepted_does_not_select_main_correct_source(
         self,
     ) -> None:
         ws = Path(workspace_service.ensure_workspace(self.problem, self.user))
@@ -757,8 +734,6 @@ class TestUIComponents(UIHelpersMixin, E2ETestBase):
         source_rel = f"solutions/foo_{token}.cpp"
         (ws / source_rel).write_text("int main(){return 0;}\n", encoding="utf-8")
         cfg_path = ws / "config" / "build.json"
-        cfg_path.parent.mkdir(parents=True, exist_ok=True)
-        cfg_path.write_text("{}\n", encoding="utf-8")
 
         resp = solutions_set_tag(
             problem=self.problem,
@@ -775,6 +750,10 @@ class TestUIComponents(UIHelpersMixin, E2ETestBase):
             _request(f"/problems/{self.problem}/solutions"), self.problem, self.user
         )
         self.assertEqual(page.status_code, 200)
+        self.assertIn(
+            "Main correct solution is required.",
+            page.body.decode("utf-8", errors="replace"),
+        )
 
     def test_solutions_rename_moves_desc_and_updates_config(self) -> None:
         ws = Path(workspace_service.ensure_workspace(self.problem, self.user))
@@ -793,11 +772,7 @@ class TestUIComponents(UIHelpersMixin, E2ETestBase):
         (ws / f"{new_rel}.desc").unlink(missing_ok=True)
 
         cfg_path = ws / "config" / "build.json"
-        cfg_path.parent.mkdir(parents=True, exist_ok=True)
-        cfg_path.write_text(
-            json.dumps({"accepted_solution_source": old_rel}, indent=2) + "\n",
-            encoding="utf-8",
-        )
+        self._update_build_config(ws, accepted_solution_source=old_rel)
 
         resp = solutions_rename(
             problem=self.problem,
@@ -834,11 +809,7 @@ class TestUIComponents(UIHelpersMixin, E2ETestBase):
         desc_abs.write_text("expected: accepted\n", encoding="utf-8")
 
         cfg_path = ws / "config" / "build.json"
-        cfg_path.parent.mkdir(parents=True, exist_ok=True)
-        cfg_path.write_text(
-            json.dumps({"accepted_solution_source": source_rel}, indent=2) + "\n",
-            encoding="utf-8",
-        )
+        self._update_build_config(ws, accepted_solution_source=source_rel)
 
         resp = solutions_delete(
             problem=self.problem, user=self.user, source_path=source_rel

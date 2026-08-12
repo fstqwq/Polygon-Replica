@@ -9,6 +9,11 @@ from typing import TYPE_CHECKING, Callable, Iterator, cast
 
 from app.db import now_iso
 from app.service.platform.runtime_blob_store import PayloadFile
+from app.service.problem.runtime_config import (
+    default_problem_config,
+    dumps_problem_config,
+    problem_config_limits,
+)
 from app.service.problem.test_spec import dumps_tests_spec, load_tests_spec
 from app.service.sandbox.base import ExecResult, ExecSpec, SandboxBackend
 from app.service.statement.preview import PreviewService
@@ -191,6 +196,16 @@ class TestPreviewService(DBTestBase):
         (self.workspace / "config").mkdir(parents=True, exist_ok=True)
         (self.workspace / "tests" / "manual").mkdir(parents=True, exist_ok=True)
         (self.workspace / "tests" / "generator").mkdir(parents=True, exist_ok=True)
+        limits = problem_config_limits(self.config_values)
+        (self.workspace / "config/problem.json").write_text(
+            dumps_problem_config(
+                default_problem_config(limits=limits), limits=limits
+            ),
+            encoding="utf-8",
+        )
+        (self.workspace / "tests/spec.json").write_text(
+            '{"tests": []}\n', encoding="utf-8"
+        )
         isolated_db_execute(
             self.db,
             """
@@ -509,9 +524,11 @@ class TestPreviewService(DBTestBase):
         self.assertEqual(spec[2]["sample_output"], "custom-sample-answer\n")
 
     def test_interactive_sample_sync_does_not_start_verification(self) -> None:
+        limits = problem_config_limits(self.config_values)
+        problem = default_problem_config(limits=limits)
+        problem["mode"] = "interactive"
         (self.workspace / "config" / "problem.json").write_text(
-            json.dumps({"mode": "interactive"}),
-            encoding="utf-8",
+            dumps_problem_config(problem, limits=limits), encoding="utf-8"
         )
         (self.workspace / "tests" / "spec.json").write_text(
             dumps_tests_spec(

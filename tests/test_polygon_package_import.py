@@ -37,6 +37,13 @@ class TestPolygonPackageImport(unittest.TestCase):
             max_expanded_bytes=64 * 1024,
         )
         self.assertEqual(result["tests"]["total"], 1)
+        self.assertEqual(
+            result["components"]["testlib_source"],
+            "third_party/testlib/testlib.h",
+        )
+        self.assertTrue(
+            (self.workspace / "third_party/testlib/testlib.h").is_file()
+        )
 
     def test_import_generated_python_generator_keeps_generator_source(self) -> None:
         ws = self._workspace_path()

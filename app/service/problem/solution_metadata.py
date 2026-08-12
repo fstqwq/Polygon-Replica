@@ -1,14 +1,13 @@
+"""Canonical ``solutions/<source>.desc`` model and codec."""
+
 from __future__ import annotations
 
-import re
 from pathlib import Path
+from typing import Literal, TypedDict, cast
 
+from app.service.problem.source_file import require_regular_source_file
 
-def _normalize_behavior_token(raw: str) -> str:
-    return str(raw or "").strip().lower().replace(" ", "_").replace("-", "_")
-
-
-EXPECTED_BEHAVIOR_VALUES = [
+ExpectedBehavior = Literal[
     "accepted",
     "wrong_answer",
     "tle_or_correct",
@@ -19,152 +18,109 @@ EXPECTED_BEHAVIOR_VALUES = [
     "unknown",
 ]
 
-EXPECTED_BEHAVIOR_LABELS = {
+EXPECTED_BEHAVIOR_VALUES: tuple[ExpectedBehavior, ...] = (
+    "accepted",
+    "wrong_answer",
+    "tle_or_correct",
+    "tle_or_re",
+    "time_limit_exceeded",
+    "run_time_error",
+    "rejected",
+    "unknown",
+)
+_EXPECTED_BEHAVIOR_SET = frozenset(EXPECTED_BEHAVIOR_VALUES)
+
+EXPECTED_BEHAVIOR_LABELS: dict[ExpectedBehavior, str] = {
     "accepted": "accepted (AC)",
     "wrong_answer": "wrong_answer (WA)",
     "tle_or_correct": "tle_or_correct (TL/AC)",
     "tle_or_re": "tle_or_re (TL/RE)",
-    "time_limit_exceeded": "time_limit_exceed (TL)",
+    "time_limit_exceeded": "time_limit_exceeded (TL)",
     "run_time_error": "run_time_error (RE)",
     "rejected": "rejected",
     "unknown": "unknown",
 }
 
-EXPECTED_BEHAVIOR_ALIASES = {
-    "accepted": "accepted",
-    "wrong_answer": "wrong_answer",
-    "tle_or_correct": "tle_or_correct",
-    "tle_or_re": "tle_or_re",
-    "time_limit_exceeded": "time_limit_exceeded",
-    "run_time_error": "run_time_error",
-    "rejected": "rejected",
-    "unknown": "unknown",
-}
 
-# Filename-only shorthand used when creating/importing solution metadata.
-# Runtime verification does not consult these aliases.
-EXPECTED_BEHAVIOR_FILENAME_ALIASES = {
-    "ac": "accepted",
-    "main": "accepted",
-    "wa": "wrong_answer",
-    "tlac": "tle_or_correct",
-    "tle_or_ac": "tle_or_correct",
-    "tleorac": "tle_or_correct",
-    "tlre": "tle_or_re",
-    "tle_or_re": "tle_or_re",
-    "tleorre": "tle_or_re",
-    "tl": "time_limit_exceeded",
-    "tle": "time_limit_exceeded",
-    "bf": "time_limit_exceeded",
-    "bruteforce": "time_limit_exceeded",
-    "brute_force": "time_limit_exceeded",
-    "re": "run_time_error",
-    "rte": "run_time_error",
-    "mle": "run_time_error",
-    "rej": "rejected",
-    "reject": "rejected",
-}
+class SolutionDescriptor(TypedDict):
+    expected_behavior: ExpectedBehavior
+    note: str
 
 
-def normalize_expected_behavior(raw: str) -> str:
-    token = _normalize_behavior_token(raw)
-    if not token:
-        return "unknown"
-    direct = EXPECTED_BEHAVIOR_ALIASES.get(token)
-    if direct:
-        return direct
-    alias = EXPECTED_BEHAVIOR_FILENAME_ALIASES.get(token)
-    if alias:
-        return alias
-    compact = token.replace("_", "")
-    alias = EXPECTED_BEHAVIOR_FILENAME_ALIASES.get(compact)
-    if alias:
-        return alias
-    return "unknown"
+def normalize_expected_behavior(raw: str) -> ExpectedBehavior:
+    """Validate a canonical behavior token received at an authoring boundary."""
 
-
-def _infer_behavior_from_filename_token(raw: str) -> str:
-    token = _normalize_behavior_token(raw)
-    if not token:
-        return "unknown"
-    direct = normalize_expected_behavior(token)
-    if direct != "unknown":
-        return direct
-    alias = EXPECTED_BEHAVIOR_FILENAME_ALIASES.get(token)
-    if alias:
-        return alias
-    compact = token.replace("_", "")
-    alias = EXPECTED_BEHAVIOR_FILENAME_ALIASES.get(compact)
-    if alias:
-        return alias
-    return "unknown"
+    if not isinstance(raw, str):
+        raise ValueError("expected behavior must be a string")
+    token = raw
+    if token not in _EXPECTED_BEHAVIOR_SET:
+        raise ValueError(f"unknown expected behavior '{token}'")
+    return cast(ExpectedBehavior, token)
 
 
 def expected_behavior_label(value: str) -> str:
-    normalized = normalize_expected_behavior(value)
-    return str(EXPECTED_BEHAVIOR_LABELS.get(normalized, EXPECTED_BEHAVIOR_LABELS["unknown"]))
+    return EXPECTED_BEHAVIOR_LABELS[normalize_expected_behavior(value)]
 
 
 def desc_rel_path_for_source(source_rel: str) -> str:
     return f"{source_rel}.desc"
 
 
-def infer_expected_behavior_from_name(source_rel: str) -> str:
-    stem = Path(str(source_rel or "")).stem.lower()
-    direct = _infer_behavior_from_filename_token(stem)
-    if direct != "unknown":
-        return direct
-    for token in re.split(r"[^a-z0-9]+", stem):
-        if not token:
+def parse_solution_desc(
+    text: str,
+    *,
+    label: str = "solution descriptor",
+) -> SolutionDescriptor:
+    if not isinstance(text, str):
+        raise ValueError(f"{label}: content must be UTF-8 text")
+    expected: ExpectedBehavior | None = None
+    notes: list[str] = []
+    for line_number, raw_line in enumerate(text.splitlines(), start=1):
+        if not raw_line:
             continue
-        guess = _infer_behavior_from_filename_token(token)
-        if guess != "unknown":
-            return guess
-    return "unknown"
-
-
-def parse_solution_desc(text: str) -> dict:
-    expected_raw = ""
-    note_lines: list[str] = []
-    errors: list[str] = []
-
-    for raw_line in str(text or "").splitlines():
-        line = str(raw_line or "").strip()
-        if not line or line.startswith("#"):
-            continue
-        if ":" not in line:
-            note_lines.append(line)
-            continue
-        key, value = line.split(":", 1)
-        key = str(key or "").strip().lower()
-        value = str(value or "").strip()
-        if key in {"expected", "behavior", "verdict"}:
-            expected_raw = value
+        if ":" not in raw_line:
+            raise ValueError(f"{label}:{line_number}: expected 'key: value'")
+        raw_key, raw_value = raw_line.split(":", 1)
+        key = raw_key.strip()
+        value = raw_value.strip()
+        if key == "expected":
+            if expected is not None:
+                raise ValueError(f"{label}:{line_number}: duplicate expected field")
+            try:
+                expected = normalize_expected_behavior(value)
+            except ValueError as exc:
+                raise ValueError(f"{label}:{line_number}: {exc}") from exc
             continue
         if key == "note":
-            if value:
-                note_lines.append(value)
+            if not value:
+                raise ValueError(f"{label}:{line_number}: note must not be empty")
+            notes.append(value)
             continue
-        errors.append(f"unknown key '{key}'")
+        raise ValueError(f"{label}:{line_number}: unsupported key '{key}'")
+    if expected is None:
+        raise ValueError(f"{label}: missing expected field")
+    return {"expected_behavior": expected, "note": "\n".join(notes)}
 
-    expected_behavior = normalize_expected_behavior(expected_raw)
-    if expected_raw and expected_behavior == "unknown":
-        errors.append(f"unknown expected behavior '{expected_raw}'")
-    note = "\n".join(note_lines).strip()
-    return {
-        "expected_behavior": expected_behavior,
-        "note": note,
-        "errors": errors,
-    }
+
+def load_solution_desc(root: Path, source_rel: str) -> SolutionDescriptor:
+    label = desc_rel_path_for_source(source_rel)
+    path = require_regular_source_file(root, label)
+    try:
+        text = path.read_text(encoding="utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"{label}: must be UTF-8") from exc
+    except OSError as exc:
+        raise ValueError(f"{label}: cannot read file: {exc}") from exc
+    return parse_solution_desc(text, label=label)
 
 
 def render_solution_desc(expected_behavior: str, note: str = "") -> str:
     normalized = normalize_expected_behavior(expected_behavior)
     lines = [f"expected: {normalized}"]
-    clean_note = str(note or "").strip()
-    if clean_note:
-        for item in clean_note.splitlines():
-            piece = str(item or "").rstrip()
-            if piece:
-                lines.append(f"note: {piece}")
+    if not isinstance(note, str):
+        raise ValueError("solution note must be a string")
+    for raw_line in note.splitlines():
+        piece = raw_line.strip()
+        if piece:
+            lines.append(f"note: {piece}")
     return "\n".join(lines) + "\n"

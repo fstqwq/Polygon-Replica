@@ -164,6 +164,7 @@ class RuntimeConfig:
             self.db,
             self.settings,
             verification_task_store=self.verification_task_store,
+            config_values=self.config_values,
         )
         self.agent_service = AgentService(self.db, self.workspace_service)
         self.contest_service = ContestService(
@@ -245,6 +246,7 @@ class RuntimeConfig:
             self.settings.workspace_root,
             self.tex_compile_service,
             problem_package_service=self.problem_package_service,
+            config_values=self.config_values,
         )
         durable_log_path = self.settings.cache_root / "runtime" / "worker-queue-events.jsonl"
         self.worker_queue_service = WorkerQueueService(

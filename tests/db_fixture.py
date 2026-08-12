@@ -84,6 +84,7 @@ class DBTestBase(unittest.TestCase):
             self.db,
             self.settings,
             verification_task_store=self.verification_task_store,
+            config_values=self.config_values,
         )
         self.fs_manager = FsManager(
             self.settings.cache_root,

@@ -11,22 +11,17 @@ from app.impl.workspace.context_component_status import (
     interactor_status_context,
     validator_status_context,
 )
-from app.impl.workspace.problem_config import read_problem_config
 from app.impl.workspace.solution import list_solution_sources
-from app.impl.workspace.test_spec import read_tests_spec
 from app.service.problem.content_review import (
     ProblemContentReview,
     problem_content_review,
 )
 from app.service.problem.resource_limits import resource_limit_display
+from app.service.problem.runtime_config import problem_config_limits
 from app.service.problem.readiness import ProblemReadiness, WorkspaceReadinessSubject
+from app.service.problem.source_tree import load_problem_source_tree
 from app.service.repository.revision import workspace_upstream_revision_display
 from app.service.statement.context import statement_languages
-from app.service.verification.runtime import (
-    coerce_int,
-    normalize_pass_limit,
-    normalize_problem_mode,
-)
 from app.service.workspace.state import WorkspaceState
 
 _C = config.config_values
@@ -277,38 +272,21 @@ def _contest_problem_rows(
                 ) = _workspace_revision_display(workspace_state)
                 dirty = bool(workspace_state["dirty"])
 
-                _payload, general_config, _config_path = read_problem_config(workspace)
-                time_limit_ms = coerce_int(
-                    general_config.get("time_limit_ms"),
-                    int(_K.GENERAL_CONFIG_DEFAULTS["time_limit_ms"]),
-                    _C.GENERAL_TIME_LIMIT_MIN_MS,
-                    _C.GENERAL_TIME_LIMIT_MAX_MS,
+                source_tree = load_problem_source_tree(
+                    workspace,
+                    problem_limits=problem_config_limits(_C),
+                    tests_spec_max_bytes=int(
+                        config_snapshot["TEXTAREA_MAX_BYTES"]
+                    ),
+                    statement_sample_max_bytes=int(
+                        config_snapshot["STATEMENT_SAMPLE_MAX_BYTES"]
+                    ),
                 )
-                memory_limit_mb = coerce_int(
-                    general_config.get("memory_limit_mb"),
-                    int(_K.GENERAL_CONFIG_DEFAULTS["memory_limit_mb"]),
-                    _C.GENERAL_MEMORY_LIMIT_MIN_MB,
-                    _C.GENERAL_MEMORY_LIMIT_MAX_MB,
-                )
-                mode = normalize_problem_mode(
-                    general_config.get("mode"),
-                    str(_K.GENERAL_CONFIG_DEFAULTS["mode"]),
-                )
-                pass_limit = normalize_pass_limit(
-                    general_config.get("pass_limit"),
-                    int(_K.GENERAL_CONFIG_DEFAULTS["pass_limit"]),
-                )
-                test_count = len(
-                    read_tests_spec(
-                        workspace,
-                        document_max_bytes=int(
-                            config_snapshot["TEXTAREA_MAX_BYTES"]
-                        ),
-                        sample_max_bytes=int(
-                            config_snapshot["STATEMENT_SAMPLE_MAX_BYTES"]
-                        ),
-                    )[0]
-                )
+                time_limit_ms = source_tree.problem["time_limit_ms"]
+                memory_limit_mb = source_tree.problem["memory_limit_mb"]
+                mode = source_tree.problem["mode"]
+                pass_limit = source_tree.problem["pass_limit"]
+                test_count = len(source_tree.tests)
                 solution_sources, solutions_truncated = list_solution_sources(
                     workspace,
                     limit=int(_C.SOLUTION_LIST_LIMIT),
@@ -335,7 +313,9 @@ def _contest_problem_rows(
                     tests_valid=True,
                     solution_count=solution_count,
                     solutions_truncated=solutions_truncated,
-                    main_solution_ready=solution_count > 0,
+                    main_solution_ready=bool(
+                        source_tree.build.get("accepted_solution_source")
+                    ),
                     output_component_label=output_component_label,
                     output_component_display=output_component_display,
                     output_component_ready=(

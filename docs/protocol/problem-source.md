@@ -7,57 +7,66 @@ the problem repository's `main` reference. A workspace is a mutable per-user
 checkout; SQLite stores its identity, owner, base revision, and status but not
 the committed file contents.
 
-Paths supplied through HTTP or package archives MUST be relative, normalized,
-remain inside the workspace, and not traverse symlinks outside it.
+Authored entries are limited to `attachments/`, `checkers/`, `config/`,
+`generators/`, `interactors/`, `solutions/`, `statement/`,
+`statement-assets/`, `statement-sections/`, `tests/`, `third_party/`, and
+`validators/`. They are regular files and directories; symbolic links,
+special files, hidden paths, and materialized answer paths are invalid. The
+workspace's `.git` metadata is outside the authored tree. Native
+`test_data/` is validated by the package manifest and is never authored source.
 
 ## Problem configuration
 
-`config/problem.json` is the authored runtime configuration. The settings UI
-writes these canonical fields:
+`config/problem.json` is a required UTF-8 JSON object with exactly these
+fields:
 
 - `time_limit_ms`: 100 through 30000; default 2000
 - `memory_limit_mb`: 1 through 2048; default 1024
 - `mode`: `pass-fail` or `interactive`; default `pass-fail`
 - `pass_limit`: 1 through 64; default 1
 
-The settings reader uses all four defaults when the file is absent. When the
-file exists, it requires a JSON object containing `mode` and `pass_limit`; the
-two limit fields remain optional and are clamped to their authoring ranges.
-Verification also defaults a missing or unreadable file, but Native
-materialization and ICPC export require the published `config/problem.json`.
-UI saves, manually edited source, and imported source all enter execution
-through this same normalization; execution dispatches the normalized value
-without an additional memory floor.
+The service creates these defaults only when it creates a new problem. A reader
+never supplies a missing field, clamps an authored value, or replaces a missing
+or malformed file. UI saves, imported source, verification, preview,
+publication readiness, and package materialization all use this codec.
+Execution dispatches the accepted values without another memory floor.
 
-`config/build.json` records optional source selections. Its canonical ordered
-selection keys are `accepted_solution_source`, `validator_source`,
-`checker_source`, `interactor_source`, and the ordered `generator_sources`
-array. Each selected source is a normalized workspace-relative path below its
-corresponding source directory. When a component selection is absent,
-verification and export choose the lexicographically first eligible source in
-that component directory. A directory with multiple eligible sources and no
-selection is non-canonical import input: this fallback is best effort and does
-not guarantee that the author's intended checker, validator, or interactor was
-chosen. A configured path is the only unambiguous selection.
+`config/build.json` is also a required UTF-8 JSON object. These fields are
+required:
 
-Execution also reads `checker_args`. When `tests/spec.json` is absent or empty,
-it discovers `.in` files below `tests/manual/` and runs every configured
-`generator_sources` entry `generator_runs` times with the shared
-`generator_args`; the defaults are three runs and no arguments. These fallback
-keys are preserved by the build-config writer but are not source-selection
-keys.
+- `generator_sources`: ordered source paths
+- `generator_runs`: integer from 0 through 4096
+- `generator_args`, `validator_args`, and `checker_args`: arrays of strings
+- `compile_jobs`, `validate_jobs`, `solve_jobs`, and `run_jobs`: integers from
+  0 through 16; zero selects the configured service default
+- `run_timeout_sec`: integer from 1 through 300
+
+The optional selection fields are `accepted_solution_source`,
+`validator_source`, `checker_source`, and `interactor_source`. All paths are
+normalized relative POSIX paths. Solutions live directly under `solutions/`;
+generators may be below `generators/`; validator, checker, and interactor
+selections point to C++ source below their matching roots. Duplicate generator
+selections are invalid.
+
+An absent selection means that component is not selected. Runtime code does not
+scan a directory or choose a conventional filename. Interactive source rejects
+a checker selection, and pass-fail source rejects an interactor selection.
+External import adapters may infer a best-effort selection, but they write the
+result into this object before any authored-source consumer runs.
 
 ## Test specification
 
-`tests/spec.json` is the ordered testcase definition. The canonical writer emits
-a JSON object with a `tests` array; the reader also accepts that array directly.
-Each entry has:
+`tests/spec.json` is a required UTF-8 JSON object whose only field is `tests`.
+The array order is testcase order. Each entry requires:
 
 - `id`: a unique string of 3 through 12 decimal digits
 - `kind`: `manual` or `gen`
 - `sample`: a boolean
 - optional `sample_input` and `sample_output` strings
-- optional `sample_output_validate`, which defaults to `true`
+- optional `sample_output_validate`, a boolean whose absence means `true`
+
+Unknown or duplicate object keys, a top-level array, string booleans, normalized
+aliases, duplicate IDs, and other scalar types are invalid.
 
 The serialized file is bounded by `TEXTAREA_MAX_BYTES` (256 KiB by default).
 For each sample entry, the combined UTF-8 bytes of `sample_input` and
@@ -68,10 +77,17 @@ answer files. Oversized samples are rejected rather than truncated. Different
 sample entries do not share another aggregate budget; the serialized-file
 limit remains their common envelope.
 
-The payload is not embedded in the entry. A manual test reads
+Judge input is not embedded in the entry. A manual test reads
 `tests/manual/<id>.in`. A generated test reads
 `tests/generator/<id>.in` as a shell-word command: its first token resolves a
-source below `generators/`, and the remaining tokens are its arguments.
+source explicitly listed by `generator_sources`, and the remaining tokens are
+its arguments. A missing payload, unselected generator, or ambiguous generator
+token invalidates the source tree.
+
+An empty `tests` array keeps the existing full-verification fallback: it scans
+manual `.in` files and runs each selected generator `generator_runs` times with
+`generator_args`. Native materialization requires an explicit non-empty ordered
+test list because its manifest is keyed to this specification.
 
 The runtime generator input payload is the generator executable invocation plus
 these command parameters. Its execution identity and scheduling semantics are
@@ -90,13 +106,32 @@ stored next to it as `<source>.desc`. The canonical writer emits
 values are `accepted`, `wrong_answer`, `tle_or_correct`, `tle_or_re`,
 `time_limit_exceeded`, `run_time_error`, `rejected`, and `unknown`.
 
-The reader also recognizes `behavior` and `verdict` as the expected-behavior key
-and treats an unkeyed line as note text. When a descriptor is missing, the
-effective behavior is inferred from filename tokens such as `ac`, `wa`, `tle`,
-and `re`; an unrecognized name becomes `unknown`. A present descriptor replaces
-that inferred value. The accepted solution is the configured
-`accepted_solution_source`, otherwise the first solution whose effective
-behavior is `accepted`, otherwise the only visible solution.
+Every supported solution source has a descriptor. `expected` occurs exactly
+once; each non-empty line is either `expected: ...` or `note: ...`.
+`behavior:`, `verdict:`, and unkeyed lines are invalid. The configured accepted
+solution must have `expected: accepted`; no filename or list-order inference is
+performed at runtime. Polygon and ICPC importers may infer external intent, but
+they materialize one of the canonical values in a descriptor before returning
+the imported workspace.
+
+## Native import and preflight
+
+A Native package contains the committed source tree at its root plus a complete
+`test_data/manifest.json` and its declared materialized test payloads. Import
+validates the manifest shape, source digest, test order, payload paths, sizes,
+checksums, file types, and the complete `test_data/` inventory. It then discards
+the entire `test_data/` tree and imports only authored source. Materialized
+answers never enter the destination workspace or Git history.
+
+Operators can inspect all published `main` revisions without mutating Git:
+
+```text
+PYTHONPATH=. python scripts/check_problem_sources.py --db <sqlite> --bare-root <repos>
+```
+
+The command opens SQLite read-only, extracts each published commit to a
+temporary directory, and reports path-specific canonical-source errors. It does
+not rewrite a repository or create a workspace.
 
 ## Statements
 

@@ -717,7 +717,7 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         self.assertEqual(payload.get("mode"), "interactive")
         self.assertFalse((ws / "statement" / "rendered").exists())
 
-    def test_general_limits_are_clamped_to_configured_bounds(self) -> None:
+    def test_general_save_rejects_limits_outside_configured_bounds(self) -> None:
         resp = general_save(
             problem="alice/sample",
             user="alice",
@@ -730,8 +730,8 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
 
         ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
         payload = json.loads((ws / "config" / "problem.json").read_text(encoding="utf-8"))
-        self.assertEqual(payload.get("time_limit_ms"), 100)
-        self.assertEqual(payload.get("memory_limit_mb"), 2048)
+        self.assertEqual(payload.get("time_limit_ms"), 2000)
+        self.assertEqual(payload.get("memory_limit_mb"), 1024)
 
     def test_general_memory_limit_preserves_one_and_clamps_zero_to_one(self) -> None:
         ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
@@ -778,19 +778,17 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
             path = ws / rel
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text("int main(){return 0;}\n", encoding="utf-8")
-        (ws / "config" / "build.json").write_text(
-            json.dumps(
-                {
-                    "accepted_solution_source": "solutions/std.cpp",
-                    "validator_source": "validators/validator.cpp",
-                    "checker_source": "checkers/checker.cpp",
-                    "interactor_source": "interactors/interactor.cpp",
-                },
-                indent=2,
-            )
-            + "\n",
-            encoding="utf-8",
+        build_path = ws / "config" / "build.json"
+        build = json.loads(build_path.read_text(encoding="utf-8"))
+        build.update(
+            {
+                "accepted_solution_source": "solutions/std.cpp",
+                "validator_source": "validators/validator.cpp",
+                "checker_source": "checkers/checker.cpp",
+                "interactor_source": "interactors/interactor.cpp",
+            }
         )
+        build_path.write_text(json.dumps(build, indent=2) + "\n", encoding="utf-8")
 
         resp = general_save(
             problem="alice/sample",
@@ -813,19 +811,17 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         interactor = ws / "interactors" / "interactor.cpp"
         interactor.parent.mkdir(parents=True, exist_ok=True)
         interactor.write_text("int main(){return 0;}\n", encoding="utf-8")
-        (ws / "config" / "build.json").write_text(
-            json.dumps(
-                {
-                    "accepted_solution_source": "solutions/missing.cpp",
-                    "validator_source": "validators/missing.cpp",
-                    "checker_source": "checkers/checker.cpp",
-                    "interactor_source": "interactors/interactor.cpp",
-                },
-                indent=2,
-            )
-            + "\n",
-            encoding="utf-8",
+        build_path = ws / "config" / "build.json"
+        build = json.loads(build_path.read_text(encoding="utf-8"))
+        build.update(
+            {
+                "accepted_solution_source": "solutions/missing.cpp",
+                "validator_source": "validators/missing.cpp",
+                "checker_source": "checkers/checker.cpp",
+                "interactor_source": "interactors/interactor.cpp",
+            }
         )
+        build_path.write_text(json.dumps(build, indent=2) + "\n", encoding="utf-8")
 
         resp = general_save(
             problem="alice/sample",

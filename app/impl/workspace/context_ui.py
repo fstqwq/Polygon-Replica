@@ -23,7 +23,6 @@ from app.service.statement.constant import (
 )
 from app.service.statement.context import statement_languages
 from app.service.statement.render import default_statement_title_for_workspace
-from app.service.verification.runtime import coerce_int, normalize_pass_limit, normalize_problem_mode
 
 from app.impl.workspace.access import (
     problem_acl_entries,
@@ -151,15 +150,15 @@ def page_ctx(
     workspace_head = workspace_head_raw or ''
     workspace_dirty = bool(ctx['workspace'].get('dirty'))
     _payload, general_cfg, _cfg_path = read_problem_config(workspace_path)
-    safe_mode = normalize_problem_mode(general_cfg.get('mode'), str(_K.GENERAL_CONFIG_DEFAULTS['mode']))
+    safe_mode = general_cfg['mode']
     ctx['problem_mode'] = safe_mode
-    time_limit_ms = coerce_int(general_cfg.get('time_limit_ms'), int(_K.GENERAL_CONFIG_DEFAULTS['time_limit_ms']), _C.GENERAL_TIME_LIMIT_MIN_MS, _C.GENERAL_TIME_LIMIT_MAX_MS)
-    memory_limit_mb = coerce_int(general_cfg.get('memory_limit_mb'), int(_K.GENERAL_CONFIG_DEFAULTS['memory_limit_mb']), _C.GENERAL_MEMORY_LIMIT_MIN_MB, _C.GENERAL_MEMORY_LIMIT_MAX_MB)
+    time_limit_ms = general_cfg['time_limit_ms']
+    memory_limit_mb = general_cfg['memory_limit_mb']
     ctx['general_cfg'] = {
         'time_limit_ms': time_limit_ms,
         'memory_limit_mb': memory_limit_mb,
         'mode': safe_mode,
-        'pass_limit': normalize_pass_limit(general_cfg.get('pass_limit'), int(_K.GENERAL_CONFIG_DEFAULTS['pass_limit'])),
+        'pass_limit': general_cfg['pass_limit'],
         **resource_limit_display(time_limit_ms, memory_limit_mb),
     }
     ctx['system_limit_info'] = _system_limit_info()
@@ -355,10 +354,10 @@ def _build_problem_nav_status(ctx: dict) -> dict[str, dict[str, object]]:
     workspace_path_text = cast(str | None, workspace_path_raw) or ''
     workspace_path = Path(workspace_path_text) if workspace_path_text else Path('.')
     general_cfg = cast(dict[str, object], ctx['general_cfg'])
-    time_limit_ms = _to_int(general_cfg.get('time_limit_ms'), int(_K.GENERAL_CONFIG_DEFAULTS['time_limit_ms']))
-    memory_limit_mb = _to_int(general_cfg.get('memory_limit_mb'), int(_K.GENERAL_CONFIG_DEFAULTS['memory_limit_mb']))
-    mode_text = normalize_problem_mode(general_cfg.get('mode'), str(_K.GENERAL_CONFIG_DEFAULTS['mode']))
-    pass_limit = normalize_pass_limit(general_cfg.get('pass_limit'), int(_K.GENERAL_CONFIG_DEFAULTS['pass_limit']))
+    time_limit_ms = int(general_cfg['time_limit_ms'])
+    memory_limit_mb = int(general_cfg['memory_limit_mb'])
+    mode_text = str(general_cfg['mode'])
+    pass_limit = int(general_cfg['pass_limit'])
     time_text = _compact_time_limit_label(time_limit_ms)
     memory_text = _compact_memory_limit_label(memory_limit_mb)
     general_parts = [time_text, memory_text]
@@ -376,11 +375,8 @@ def _build_problem_nav_status(ctx: dict) -> dict[str, dict[str, object]]:
     configured_count = 0
     configured_ready = 0
     configured_paths: list[str] = []
-    source_paths: list[str] = []
     for row in configured_rows:
         row_path = cast(str | None, row.get('path')) or ''
-        if row_path:
-            source_paths.append(row_path)
         if bool(row.get('configured')):
             configured_count += 1
             if row_path:
@@ -393,7 +389,9 @@ def _build_problem_nav_status(ctx: dict) -> dict[str, dict[str, object]]:
         workspace_path_text = cast(str | None, workspace_path_raw) or ''
         if workspace_path_text:
             try:
-                used_count = _count_used_configured_generators(Path(workspace_path_text), configured_paths, source_paths)
+                used_count = _count_used_configured_generators(
+                    Path(workspace_path_text), configured_paths
+                )
             except Exception:
                 used_count = 0
         generator_text = f'{count_label(configured_count, "file")}, {used_count} used'

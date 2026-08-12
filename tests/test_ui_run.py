@@ -1231,9 +1231,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
         (ws / "solutions").mkdir(parents=True, exist_ok=True)
         (ws / "solutions" / "accepted.cpp").write_text("int main(){return 0;}\n", encoding="utf-8")
-        problem_cfg = ws / "config" / "problem.json"
-        problem_cfg.parent.mkdir(parents=True, exist_ok=True)
-        problem_cfg.write_text(json.dumps({"mode": "interactive", "pass_limit": 2}, indent=2) + "\n", encoding="utf-8")
+        self._update_problem_config(ws, mode="interactive", pass_limit=2)
 
         with patch(
             "app.impl.run_export.run.start_verification_job",
@@ -1408,10 +1406,9 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         problem = f"alice/verify-main-required-{uuid.uuid4().hex[:8]}"
         ws = self._prepare_verification_workspace(problem)
         accepted_path = ws / "solutions" / "accepted.cpp"
-        if accepted_path.exists():
-            accepted_path.unlink()
-        (ws / "solutions" / "foo.cpp").write_text("int main(){return 0;}\n", encoding="utf-8")
-        (ws / "solutions" / "bar.cpp").write_text("int main(){return 0;}\n", encoding="utf-8")
+        for path in (accepted_path, Path(f"{accepted_path}.desc")):
+            path.unlink(missing_ok=True)
+        self._write_solution_fixture(ws, "foo.cpp", "unknown")
         cfg_path = ws / "config" / "build.json"
         cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
         cfg.pop("accepted_solution_source", None)

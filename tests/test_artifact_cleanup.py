@@ -91,9 +91,8 @@ class TestArtifactCleanup(unittest.TestCase):
         self.db.init()
         self.verification_task_store = VerificationTaskStore(self.db)
         self.workspace_service = WorkspaceService(
-            self.db,
-            self.settings,
-            verification_task_store=self.verification_task_store,
+            self.db, self.settings,
+            verification_task_store=self.verification_task_store, config_values=self.config_values,
         )
         self.workspace_service.ensure_problem("admin/sample")
         self.workspace_service.ensure_user("admin")

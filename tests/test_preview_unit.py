@@ -4,7 +4,14 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
+from app.config import build_config_values
+from app.service.problem.runtime_config import (
+    default_problem_config,
+    dumps_problem_config,
+    problem_config_limits,
+)
 from app.service.problem.test_spec import dumps_tests_spec
 from app.service.statement.constant import (
     DEFAULT_STATEMENT_PROBLEM_TEMPLATE,
@@ -23,6 +30,8 @@ from app.service.verification.signature import (
 
 _TESTS_SPEC_MAX_BYTES = 256 * 1024
 _STATEMENT_SAMPLE_MAX_BYTES = 32 * 1024
+_CONFIG_VALUES = build_config_values()
+_PROBLEM_LIMITS = problem_config_limits(_CONFIG_VALUES)
 
 
 class TestPreviewUnit(unittest.TestCase):
@@ -47,7 +56,18 @@ class TestPreviewUnit(unittest.TestCase):
             "// testlib fixture\n",
             encoding="utf-8",
         )
+        (self.workspace / "config/problem.json").write_text(
+            dumps_problem_config(
+                default_problem_config(limits=_PROBLEM_LIMITS),
+                limits=_PROBLEM_LIMITS,
+            ),
+            encoding="utf-8",
+        )
+        (self.workspace / "tests/spec.json").write_text(
+            '{"tests": []}\n', encoding="utf-8"
+        )
         self.preview = PreviewService.__new__(PreviewService)
+        self.preview.db = SimpleNamespace(config_values=_CONFIG_VALUES)
 
     def test_statement_languages_use_stable_preferred_order(self) -> None:
         root = self.workspace / "statement-sections"
@@ -75,6 +95,7 @@ class TestPreviewUnit(unittest.TestCase):
             language="english",
             tests_spec_max_bytes=_TESTS_SPEC_MAX_BYTES,
             statement_sample_max_bytes=_STATEMENT_SAMPLE_MAX_BYTES,
+            problem_limits=_PROBLEM_LIMITS,
         )
 
         rendered = output.read_text(encoding="utf-8")
@@ -96,6 +117,7 @@ class TestPreviewUnit(unittest.TestCase):
                 language="english",
                 tests_spec_max_bytes=_TESTS_SPEC_MAX_BYTES,
                 statement_sample_max_bytes=_STATEMENT_SAMPLE_MAX_BYTES,
+                problem_limits=_PROBLEM_LIMITS,
             )
 
         seed_statement_sources(self.workspace)
@@ -107,6 +129,7 @@ class TestPreviewUnit(unittest.TestCase):
                 language="english",
                 tests_spec_max_bytes=_TESTS_SPEC_MAX_BYTES,
                 statement_sample_max_bytes=_STATEMENT_SAMPLE_MAX_BYTES,
+                problem_limits=_PROBLEM_LIMITS,
             )
 
     def test_statement_render_copies_shared_assets_only(self) -> None:
@@ -122,6 +145,7 @@ class TestPreviewUnit(unittest.TestCase):
             language="english",
             tests_spec_max_bytes=_TESTS_SPEC_MAX_BYTES,
             statement_sample_max_bytes=_STATEMENT_SAMPLE_MAX_BYTES,
+            problem_limits=_PROBLEM_LIMITS,
         )
 
         rendered = self.workspace / "statement" / "rendered" / "english"
@@ -169,6 +193,7 @@ class TestPreviewUnit(unittest.TestCase):
             language="english",
             tests_spec_max_bytes=_TESTS_SPEC_MAX_BYTES,
             statement_sample_max_bytes=_STATEMENT_SAMPLE_MAX_BYTES,
+            problem_limits=_PROBLEM_LIMITS,
         )
 
         rendered = self.workspace / "statement/rendered/english"
@@ -213,6 +238,7 @@ class TestPreviewUnit(unittest.TestCase):
             language="english",
             tests_spec_max_bytes=_TESTS_SPEC_MAX_BYTES,
             statement_sample_max_bytes=_STATEMENT_SAMPLE_MAX_BYTES,
+            problem_limits=_PROBLEM_LIMITS,
         )
 
         rendered = self.workspace / "statement/rendered/english"
@@ -327,7 +353,12 @@ class TestPreviewUnit(unittest.TestCase):
 
     def test_sample_selection_skips_interactive_and_rejects_invalid_kind(self) -> None:
         config_path = self.workspace / "config/problem.json"
-        config_path.write_text('{"mode":"interactive"}\n', encoding="utf-8")
+        interactive_config = default_problem_config(limits=_PROBLEM_LIMITS)
+        interactive_config["mode"] = "interactive"
+        config_path.write_text(
+            dumps_problem_config(interactive_config, limits=_PROBLEM_LIMITS),
+            encoding="utf-8",
+        )
         (self.workspace / "tests/spec.json").write_text(
             dumps_tests_spec(
                 [{"id": "001", "kind": "gen", "sample": True}],
@@ -345,7 +376,11 @@ class TestPreviewUnit(unittest.TestCase):
             [],
         )
 
-        config_path.write_text('{"mode":"pass-fail"}\n', encoding="utf-8")
+        pass_fail_config = default_problem_config(limits=_PROBLEM_LIMITS)
+        config_path.write_text(
+            dumps_problem_config(pass_fail_config, limits=_PROBLEM_LIMITS),
+            encoding="utf-8",
+        )
         (self.workspace / "tests/spec.json").write_text(
             '{"version":2,"tests":[{"id":"001","kind":"generator","sample":true}]}',
             encoding="utf-8",

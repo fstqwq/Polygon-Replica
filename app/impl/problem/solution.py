@@ -12,7 +12,16 @@ from app.impl.auth.shared import redirect_response, set_flash_cookie, template_r
 from app.impl.contest.workspace_scope import contest_workspace_context_from_request
 from app.impl.runtime.config import config
 from app.impl.problem.shared import MAIN_CORRECT_EXPECTED_LABEL, MAIN_CORRECT_EXPECTED_VALUE
-from app.impl.workspace.context_operation import audit, list_solution_entries, normalize_optional_component_source_path_safe, read_build_config, read_text_safe_limited, resolve_build_accepted_solution_source, solution_metadata_entry, workspace_rel_file_exists, write_build_config
+from app.impl.workspace.context_operation import (
+    audit,
+    list_solution_entries,
+    read_build_config,
+    read_text_safe_limited,
+    resolve_build_accepted_solution_source,
+    solution_metadata_entry,
+    workspace_rel_file_exists,
+    write_build_config,
+)
 from app.impl.workspace.solution import normalize_solution_source_path_required, solution_behavior_options
 from app.impl.workspace.access import require_write_access
 from app.impl.workspace.context_ui import page_ctx
@@ -60,7 +69,7 @@ def solutions_page(request: Request, problem: str, user: Annotated[str, Depends(
     if not selected or not any(row.get('source_path') == selected for row in entries):
         selected = entries[0]['source_path'] if entries else ''
     selected_entry = next((row for row in entries if row.get('source_path') == selected), None)
-    accepted_source = resolve_build_accepted_solution_source(workspace, entries)
+    accepted_source = resolve_build_accepted_solution_source(workspace)
     accepted_source_exists = bool(accepted_source) and workspace_rel_file_exists(workspace, accepted_source)
     expected_behavior_options = [{'value': MAIN_CORRECT_EXPECTED_VALUE, 'label': MAIN_CORRECT_EXPECTED_LABEL}, *solution_behavior_options()]
     entries_view: list[dict] = []
@@ -152,9 +161,7 @@ def solutions_save_source(request: Request, problem: str, user: Annotated[str, D
             if desc_existed_before:
                 desc_text, _ = read_text_safe_limited(desc_abs, _C.SOLUTION_NOTE_CHAR_LIMIT * 8)
                 parsed_desc = parse_solution_desc(desc_text)
-                note = parsed_desc.get('note')
-                if isinstance(note, str):
-                    desc_note = note
+                desc_note = parsed_desc['note']
             config.git_service.write_file(workspace, selected, safe_content)
             config.git_service.write_file(workspace, desc_path, render_solution_desc(normalized_expected, desc_note))
             metadata_created = not desc_existed_before
@@ -186,8 +193,7 @@ def solutions_set_tag(problem: str, user: Annotated[str, Depends(require_session
         source_abs = safe_workspace_path(workspace, selected)
         if source_abs.is_symlink() or not source_abs.exists() or (not source_abs.is_file()):
             raise ValueError('solution source does not exist')
-        raw_expected = expected_behavior.strip().lower()
-        is_main_correct = raw_expected in {MAIN_CORRECT_EXPECTED_VALUE, 'main-correct', 'maincorrect'}
+        is_main_correct = expected_behavior == MAIN_CORRECT_EXPECTED_VALUE
         normalized_expected = 'accepted' if is_main_correct else normalize_expected_behavior(expected_behavior)
         desc_path = desc_rel_path_for_source(selected)
         note = ''
@@ -196,11 +202,9 @@ def solutions_set_tag(problem: str, user: Annotated[str, Depends(require_session
                 desc_abs = safe_workspace_path(workspace, desc_path)
                 desc_text, _ = read_text_safe_limited(desc_abs, _C.SOLUTION_NOTE_CHAR_LIMIT * 8)
                 parsed = parse_solution_desc(desc_text)
-                parsed_note = parsed.get('note')
-                if isinstance(parsed_note, str):
-                    note = parsed_note
+                note = parsed['note']
             build_cfg, cfg_path = read_build_config(workspace)
-            configured = normalize_optional_component_source_path_safe(build_cfg.get('accepted_solution_source'), 'solutions', 'accepted solution source')
+            configured = build_cfg.get('accepted_solution_source', '')
             build_cfg_changed = False
             if is_main_correct:
                 if configured != selected:
@@ -211,15 +215,15 @@ def solutions_set_tag(problem: str, user: Annotated[str, Depends(require_session
                 build_cfg_changed = True
             if build_cfg_changed:
                 write_build_config(cfg_path, build_cfg)
-            if normalized_expected == 'unknown' and (not note):
-                config.git_service.delete_path(workspace, desc_path)
-                msg = 'solution tag cleared'
+            config.git_service.write_file(
+                workspace,
+                desc_path,
+                render_solution_desc(normalized_expected, note),
+            )
+            if is_main_correct:
+                msg = 'solution tag set to main correct solution (AC)'
             else:
-                config.git_service.write_file(workspace, desc_path, render_solution_desc(normalized_expected, note))
-                if is_main_correct:
-                    msg = 'solution tag set to main correct solution (AC)'
-                else:
-                    msg = f'solution tag set to {normalized_expected}'
+                msg = f'solution tag set to {normalized_expected}'
         audit(ctx['user']['id'], ctx['problem']['id'], 'solutions.set_tag', {'source': selected, 'expected_behavior': normalized_expected, 'main_correct': bool(is_main_correct)})
     except (ValueError, OSError) as exc:
         msg = str(exc)
@@ -262,7 +266,7 @@ def solutions_rename(problem: str, user: Annotated[str, Depends(require_session_
                     config.git_service.rename_path(workspace, old_desc, new_desc)
                     renamed_metadata = True
                 build_cfg, cfg_path = read_build_config(workspace)
-                configured = normalize_optional_component_source_path_safe(build_cfg.get('accepted_solution_source'), 'solutions', 'accepted solution source')
+                configured = build_cfg.get('accepted_solution_source', '')
                 if configured == old_source:
                     build_cfg['accepted_solution_source'] = new_source
                     write_build_config(cfg_path, build_cfg)
@@ -291,7 +295,7 @@ def solutions_delete(problem: str, user: Annotated[str, Depends(require_session_
             if workspace_rel_file_exists(workspace, desc_path):
                 config.git_service.delete_path(workspace, desc_path)
             build_cfg, cfg_path = read_build_config(workspace)
-            configured = normalize_optional_component_source_path_safe(build_cfg.get('accepted_solution_source'), 'solutions', 'accepted solution source')
+            configured = build_cfg.get('accepted_solution_source', '')
             if configured == selected:
                 build_cfg.pop('accepted_solution_source', None)
                 write_build_config(cfg_path, build_cfg)

@@ -15,6 +15,7 @@ from app.impl.runtime.config import config
 from app.service.export.icpc_package import SUBMISSION_RULES
 from app.service.importing.native import NativePackageImportService
 from app.service.platform.git_process import run_git
+from app.service.problem.build_config import default_build_config, dumps_build_config
 from app.service.problem_package.manifest import load_manifest, validate_manifest_files
 from app.service.verification.lifecycle import PlannedTask, verification_task_id
 from app.service.verification.task_completion import TaskCompletion
@@ -60,11 +61,10 @@ class TestPublishedRevisionExport(E2ETestBase):
                 )
             build_config = snapshot / "config" / "build.json"
             build_config.parent.mkdir(parents=True)
+            config_payload = default_build_config()
+            config_payload["accepted_solution_source"] = "solutions/official.cpp"
             build_config.write_text(
-                json.dumps(
-                    {"accepted_solution_source": "solutions/official.cpp"}
-                )
-                + "\n",
+                dumps_build_config(config_payload),
                 encoding="utf-8",
             )
 
@@ -734,7 +734,7 @@ class TestPublishedRevisionExport(E2ETestBase):
             self.assertFalse((workspace / "test_data").exists())
             self.assertFalse((workspace / "tests" / "answers").exists())
 
-    def test_downloaded_workspace_snapshot_can_be_imported(self) -> None:
+    def test_downloaded_workspace_snapshot_is_not_a_native_package(self) -> None:
         workspace, _problem_id, _commit = self._publish_problem()
         dirty_source = workspace / "solutions" / "snapshot-roundtrip.cpp"
         dirty_source.parent.mkdir(parents=True, exist_ok=True)
@@ -752,19 +752,20 @@ class TestPublishedRevisionExport(E2ETestBase):
             with tempfile.TemporaryDirectory(prefix="snapshot-roundtrip-") as temp:
                 restored = Path(temp) / "workspace"
                 restored.mkdir()
-                import_problem_package(
-                    NativePackageImportService(),
-                    restored,
-                    archive.name,
-                    archive.read_bytes(),
-                )
+                with self.assertRaisesRegex(
+                    ValueError,
+                    "test_data/manifest.json",
+                ):
+                    import_problem_package(
+                        NativePackageImportService(),
+                        restored,
+                        archive.name,
+                        archive.read_bytes(),
+                    )
                 self.assertEqual(
-                    (restored / "solutions" / "snapshot-roundtrip.cpp").read_text(
-                        encoding="utf-8"
-                    ),
-                    "dirty workspace copy\n",
+                    list(restored.iterdir()),
+                    [],
                 )
-                self.assertFalse((restored / "test_data").exists())
         finally:
             shutil.rmtree(archive.parent, ignore_errors=True)
 
@@ -806,15 +807,12 @@ class TestPublishedRevisionExport(E2ETestBase):
         )
         config.git_service.push(workspace, "main")
         revision = config.problem_package_service.published_revision(problem_id)
-        materialization = config.problem_package_service.ensure_materialization(
-            revision,
-            self._verification_builder(problem_id),
-        )
-        with self.assertRaisesRegex(ValueError, "checker_source is configured but invalid"):
-            config.export_service.create_export(
-                self.problem,
-                "icpc",
-                materialization_id=materialization["id"],
+        with self.assertRaisesRegex(
+            ValueError, "checkers/missing.cpp: required regular file is missing"
+        ):
+            config.problem_package_service.ensure_materialization(
+                revision,
+                self._verification_builder(problem_id),
             )
 
     def test_native_reader_rejects_manifest_tampering(self) -> None:

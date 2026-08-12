@@ -36,7 +36,7 @@ def hydrate_native_statement_samples(
     manifest_by_id = {row["id"]: row for row in native.manifest["tests"]}
     changed = False
     for row in rows:
-        if not bool(row["sample"]):
+        if not row["sample"]:
             continue
         materialized = manifest_by_id.get(str(row["id"]))
         if materialized is None:
@@ -54,7 +54,7 @@ def hydrate_native_statement_samples(
                 input_path,
                 max_bytes=(
                     statement_sample_max_bytes
-                    - len(str(row["sample_output"]).encode("utf-8"))
+                    - len(row["sample_output"].encode("utf-8"))
                 ),
             )
             row["sample_input"] = sample_input
@@ -64,7 +64,7 @@ def hydrate_native_statement_samples(
                 output_path,
                 max_bytes=(
                     statement_sample_max_bytes
-                    - len(str(row["sample_input"]).encode("utf-8"))
+                    - len(row["sample_input"].encode("utf-8"))
                 ),
             )
             row["sample_output"] = sample_output

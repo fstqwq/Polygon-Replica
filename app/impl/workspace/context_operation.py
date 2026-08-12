@@ -24,18 +24,20 @@ from app.impl.workspace.test_spec import (
     tests_spec_read_payload,
 )
 from app.main_util import (
-    normalize_optional_component_source_path_safe,
     normalize_workspace_rel_path,
     safe_workspace_path,
 )
 from app.service.problem.solution_metadata import (
     desc_rel_path_for_source,
     expected_behavior_label,
-    infer_expected_behavior_from_name,
     normalize_expected_behavior,
     parse_solution_desc,
 )
-from app.service.problem.build_config import dumps_build_config
+from app.service.problem.build_config import (
+    BuildConfig,
+    dumps_build_config,
+    load_build_config,
+)
 from app.service.problem.test_spec import (
     TESTS_SPEC_REL,
     summarize_tests_spec,
@@ -360,27 +362,13 @@ def resolve_standard_checker_path(raw_name: str) -> tuple[str, Path]:
     source = _K.STANDARD_CHECKER_ROOT / checker_name
     return (checker_name, source)
 
-def read_build_config(workspace: Path) -> tuple[dict, Path]:
+def read_build_config(workspace: Path) -> tuple[BuildConfig, Path]:
     cfg_path = safe_workspace_path(workspace, _K.BUILD_CONFIG_REL)
-    payload: dict = {}
-    if cfg_path.exists() and cfg_path.is_file():
-        try:
-            payload = json.loads(cfg_path.read_text(encoding='utf-8'))
-        except Exception:
-            payload = {}
-    return (payload, cfg_path)
+    return (load_build_config(workspace), cfg_path)
 
-def write_build_config(cfg_path: Path, payload: dict) -> None:
-    data = dict(payload)
-    has_generator_keys = 'generator_sources' in data
-    if has_generator_keys:
-        normalized_sources = generator_sources_from_build_cfg(data)
-        if normalized_sources:
-            data['generator_sources'] = normalized_sources
-        else:
-            data.pop('generator_sources', None)
+def write_build_config(cfg_path: Path, payload: BuildConfig) -> None:
     cfg_path.parent.mkdir(parents=True, exist_ok=True)
-    cfg_path.write_text(dumps_build_config(data), encoding='utf-8', newline='\n')
+    cfg_path.write_text(dumps_build_config(payload), encoding='utf-8', newline='\n')
 
 def dedupe_preserve_order(values: list[str]) -> list[str]:
     result: list[str] = []
@@ -561,10 +549,10 @@ def solution_metadata_entry(workspace: Path, source_rel: str) -> dict:
     source_path = source_rel
     desc_path = desc_rel_path_for_source(source_path)
     desc_exists = workspace_rel_file_exists(workspace, desc_path)
-    expected = infer_expected_behavior_from_name(source_path)
+    expected = 'unknown'
     note = ''
     errors: list[str] = []
-    origin = 'inferred' if expected != 'unknown' else 'default'
+    origin = 'missing'
     if desc_exists:
         try:
             desc_abs = safe_workspace_path(workspace, desc_path)
@@ -573,10 +561,11 @@ def solution_metadata_entry(workspace: Path, source_rel: str) -> dict:
             expected = parsed['expected_behavior']
             note = parsed['note']
             origin = 'metadata'
-            errors = parsed['errors']
         except Exception as exc:
             errors = [str(exc)]
             origin = 'invalid'
+    else:
+        errors = [f'{desc_path}: required descriptor is missing']
     note_preview = note
     if len(note_preview) > 160:
         note_preview = note_preview[:157] + '...'
@@ -587,31 +576,14 @@ def list_solution_entries(workspace: Path) -> tuple[list[dict], bool]:
     entries = [solution_metadata_entry(workspace, rel) for rel in sources]
     return (entries, truncated)
 
-def resolve_build_accepted_solution_source(workspace: Path, entries: list[dict]) -> str:
+def resolve_build_accepted_solution_source(workspace: Path) -> str:
     build_cfg, _ = read_build_config(workspace)
-    configured = normalize_optional_component_source_path_safe(build_cfg.get('accepted_solution_source'), 'solutions', 'accepted solution source')
-    if configured:
-        return configured
-    accepted_candidates: list[str] = []
-    for row in entries:
-        source_path = row['source_path']
-        if not source_path:
-            continue
-        expected_behavior = row['expected_behavior']
-        if row['is_accepted'] or expected_behavior == 'accepted':
-            if source_path not in accepted_candidates:
-                accepted_candidates.append(source_path)
-    if accepted_candidates:
-        return accepted_candidates[0]
-    visible_sources = [row['source_path'] for row in entries if row['source_path']]
-    if len(visible_sources) == 1:
-        return visible_sources[0]
-    return ''
+    return build_cfg.get('accepted_solution_source', '')
 
 def _solutions_status_context(workspace: Path) -> dict:
     entries, truncated = list_solution_entries(workspace)
     total = len(entries)
-    accepted_source = resolve_build_accepted_solution_source(workspace, entries)
+    accepted_source = resolve_build_accepted_solution_source(workspace)
     accepted_exists = bool(accepted_source) and workspace_rel_file_exists(workspace, accepted_source)
     if truncated:
         count_display = f'{total}+ {"file" if total == 1 else "files"}'
@@ -632,7 +604,7 @@ def _solutions_status_context(workspace: Path) -> dict:
 
 def run_solution_options_context(workspace: Path) -> tuple[list[dict], str, bool]:
     entries, truncated = list_solution_entries(workspace)
-    default_path = resolve_build_accepted_solution_source(workspace, entries)
+    default_path = resolve_build_accepted_solution_source(workspace)
     if default_path and (not any((row['source_path'] == default_path) for row in entries)):
         default_path = ''
     options: list[dict] = []
@@ -790,13 +762,5 @@ def _inline_text_preview(raw: str, max_chars: int, max_lines: int) -> str:
         preview += ' ...'
     return preview
 
-def generator_sources_from_build_cfg(build_cfg: dict) -> list[str]:
-    sources: list[str] = []
-    raw_sources = build_cfg.get('generator_sources', [])
-    if raw_sources is None:
-        return sources
-    for item in raw_sources:
-        normalized = normalize_optional_component_source_path_safe(item, 'generators', 'generator source')
-        if normalized:
-            sources.append(normalized)
-    return dedupe_preserve_order(sources)
+def generator_sources_from_build_cfg(build_cfg: BuildConfig) -> list[str]:
+    return list(build_cfg['generator_sources'])

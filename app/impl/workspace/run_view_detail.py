@@ -40,7 +40,6 @@ from app.service.verification.runtime import (
 )
 from app.service.problem.solution_metadata import (
     expected_behavior_label,
-    infer_expected_behavior_from_name,
     normalize_expected_behavior,
 )
 from app.service.verification.task_store import VerificationTaskRow, VerificationTaskStore
@@ -626,11 +625,11 @@ def build_run_detail_context(
     fallback_timeout_ms = 0
     try:
         _payload, general_cfg, _cfg_path = read_problem_config(workspace)
-        fallback_time_limit_ms = int(general_cfg.get('time_limit_ms') or _K.GENERAL_CONFIG_DEFAULTS['time_limit_ms'])
+        fallback_time_limit_ms = general_cfg['time_limit_ms']
         fallback_timeout_ms = effective_run_timeout_ms(
             fallback_time_limit_ms,
-            mode=general_cfg.get('mode'),
-            pass_limit=general_cfg.get('pass_limit'),
+            mode=general_cfg['mode'],
+            pass_limit=general_cfg['pass_limit'],
             default_ms=int(_K.GENERAL_CONFIG_DEFAULTS['time_limit_ms']),
             min_ms=int(_C.GENERAL_TIME_LIMIT_MIN_MS),
             max_ms=int(_C.GENERAL_TIME_LIMIT_MAX_MS),
@@ -777,7 +776,7 @@ def build_run_detail_context(
             entry = solution_metadata_entry(workspace, safe_source)
             expected_token = normalize_expected_behavior((entry.get('expected_behavior') or 'unknown'))
         except Exception:
-            expected_token = normalize_expected_behavior(infer_expected_behavior_from_name(safe_source))
+            expected_token = "unknown"
         if expected_token != 'unknown':
             expected_by_source_cache[safe_source] = expected_token
             return expected_token
@@ -955,7 +954,7 @@ def build_run_detail_context(
             else:
                 source_section = 'files'
                 source_path = source_rel
-        expected_behavior = _run_expected_behavior_from_summary(summary, source_for_display)
+        expected_behavior = _run_expected_behavior_from_summary(summary)
         if expected_behavior == 'unknown':
             mapped_expected = expected_by_program_id.get(program_id)
             if not mapped_expected and source_rel:

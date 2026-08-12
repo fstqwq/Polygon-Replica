@@ -7,13 +7,14 @@ from typing import cast
 
 from app.config import ConfigValues
 from app.db import DB
-from app.main_constant import GENERAL_CONFIG_DEFAULTS
 from app.service.disk.verification_store import VerificationStore
 from app.service.platform.runtime_blob_store import PayloadFile, RuntimeBlobStore
 from app.service.platform.fs.layout import FsManager
 from app.service.problem.test_spec import (
+    TestSpecEntry,
     parse_gen_command_tokens,
 )
+from app.service.problem.build_config import BuildConfig
 from app.service.repository.workspace import WorkspaceService
 from app.service.verification.types import (
     Kind,
@@ -42,14 +43,13 @@ from app.service.verification.read_model import (
     solution_source_paths,
     task_counts,
 )
-from app.service.verification.runtime import load_problem_runtime_config
 from app.service.verification.signature import verification_manifest
 from app.service.verification.source import select_source
 from app.service.verification.task_store import VerificationTaskStore
 from app.service.verification.execution_result import (
     execution_result_from_json,
 )
-from app.service.verification.test_spec import load_tests_spec_entries, manual_test_sources, prepare_tests_spec_runtime
+from app.service.verification.test_spec import manual_test_sources, prepare_tests_spec_runtime
 
 from app.service.judgehost.api import Judgehost
 
@@ -58,10 +58,6 @@ CPP_EXTENSIONS = (".cpp", ".cc", ".cxx", ".c++")
 SOLUTION_SOURCE_EXTENSIONS = (*CPP_EXTENSIONS, ".py", ".java")
 GENERATOR_SOURCE_EXTENSIONS = (*CPP_EXTENSIONS, ".py", ".java")
 RUN_TEST_NAME_RE = re.compile(r"^[0-9]{3}\.in$")
-DEFAULT_TIME_LIMIT_MS = 2000
-TIME_LIMIT_MIN_MS = 100
-TIME_LIMIT_MAX_MS = 30000
-
 _DETAIL_SCALAR_DEFAULTS: dict[str, object] = {
     "mode": "pass-fail",
     "pass_limit": 1,
@@ -979,7 +975,7 @@ class VerificationService:
     def _select_checker_source(
         self,
         snapshot: Path,
-        build_cfg: dict,
+        build_cfg: BuildConfig,
         snapshot_resolved: Path | None = None,
     ) -> Path | None:
         return select_source(
@@ -994,10 +990,9 @@ class VerificationService:
     def _select_source(
         self,
         snapshot: Path,
-        build_cfg: dict,
+        build_cfg: BuildConfig,
         config_key: str,
         folder: str,
-        preferred: str | None = None,
         snapshot_resolved: Path | None = None,
     ) -> Path | None:
         return select_source(
@@ -1006,91 +1001,23 @@ class VerificationService:
             config_key=config_key,
             folder=folder,
             cpp_extensions=CPP_EXTENSIONS,
-            preferred=preferred,
             snapshot_resolved=snapshot_resolved,
-        )
-
-    def _load_build_config(self, snapshot: Path) -> dict:
-        cfg = {
-            "generator_runs": 3,
-            "compile_jobs": 0,
-            "validate_jobs": 0,
-            "solve_jobs": 0,
-            "run_jobs": 0,
-            "run_timeout_sec": 30,
-            "generator_args": [],
-            "generator_sources": [],
-            "validator_args": [],
-            "checker_args": [],
-        }
-        path = snapshot / "config" / "build.json"
-        if path.exists():
-            try:
-                cfg.update(dict(json.loads(path.read_text(encoding="utf-8"))))
-            except json.JSONDecodeError:
-                pass
-        try:
-            cfg["compile_jobs"] = max(0, min(16, int(cfg.get("compile_jobs", 0))))
-        except Exception:
-            cfg["compile_jobs"] = 0
-        try:
-            cfg["validate_jobs"] = max(0, min(16, int(cfg.get("validate_jobs", 0))))
-        except Exception:
-            cfg["validate_jobs"] = 0
-        try:
-            cfg["solve_jobs"] = max(0, min(16, int(cfg.get("solve_jobs", 0))))
-        except Exception:
-            cfg["solve_jobs"] = 0
-        try:
-            cfg["run_jobs"] = max(0, min(16, int(cfg.get("run_jobs", 0))))
-        except Exception:
-            cfg["run_jobs"] = 0
-        try:
-            cfg["run_timeout_sec"] = max(1, min(300, int(cfg.get("run_timeout_sec", 30))))
-        except Exception:
-            cfg["run_timeout_sec"] = 30
-        return cfg
-
-    def _load_problem_runtime_config(self, snapshot: Path) -> dict:
-        default_cfg = cast(
-            dict[str, object],
-            GENERAL_CONFIG_DEFAULTS,
-        )
-        config_snapshot = self._config_values.snapshot()
-        return load_problem_runtime_config(
-            snapshot,
-            default_time_limit_ms=DEFAULT_TIME_LIMIT_MS,
-            default_memory_limit_mb=int(default_cfg["memory_limit_mb"]),
-            default_mode="pass-fail",
-            min_time_limit_ms=TIME_LIMIT_MIN_MS,
-            max_time_limit_ms=TIME_LIMIT_MAX_MS,
-            min_memory_limit_mb=int(
-                config_snapshot["GENERAL_MEMORY_LIMIT_MIN_MB"]
-            ),
-            max_memory_limit_mb=int(
-                config_snapshot["GENERAL_MEMORY_LIMIT_MAX_MB"]
-            ),
         )
 
     def _manual_test_sources(self, snapshot: Path) -> list[Path]:
         return manual_test_sources(snapshot)
 
-    def _load_tests_spec(self, snapshot: Path) -> list[dict] | None:
-        limits = self._config_values.snapshot()
-        return load_tests_spec_entries(
-            snapshot,
-            document_max_bytes=int(limits["TEXTAREA_MAX_BYTES"]),
-            sample_max_bytes=int(limits["STATEMENT_SAMPLE_MAX_BYTES"]),
-        )
-
     def _prepare_tests_spec_runtime(
         self,
         snapshot: Path,
-        tests_spec_entries: list[dict],
+        tests_spec_entries: list[TestSpecEntry],
+        *,
+        generator_sources: list[str],
     ) -> tuple[list[dict], list[tuple[str, Path]]]:
         return prepare_tests_spec_runtime(
             snapshot,
             tests_spec_entries,
+            generator_sources=generator_sources,
             generator_source_extensions=GENERATOR_SOURCE_EXTENSIONS,
             parse_gen_command_tokens_fn=parse_gen_command_tokens,
         )

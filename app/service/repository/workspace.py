@@ -14,6 +14,7 @@ from pathlib import Path, PurePosixPath
 import re
 from typing import ContextManager
 
+from app.config import ConfigValues
 from app.db import DB
 from app.main_constant import (
     PROBLEM_ID_MAX_LEN,
@@ -26,6 +27,13 @@ from app.service.disk.workspace_store import WorkspaceDiskStore
 from app.service.platform.fs.op import copytree, ensure_dir, extract_git_archive, remove_symlinks
 from app.service.platform.testlib_source import maintained_testlib_header
 from app.service.platform.workspace_path import is_hidden_workspace_path
+from app.service.problem.build_config import default_build_config, dumps_build_config
+from app.service.problem.runtime_config import (
+    default_problem_config,
+    dumps_problem_config,
+    problem_config_limits,
+)
+from app.service.problem.test_spec import dumps_default_tests_spec
 from app.setting import Settings
 from app.service.platform.git_process import run_git
 from app.service.repository.revision import workspace_revision_info
@@ -138,9 +146,11 @@ class WorkspaceService:
         settings: Settings,
         *,
         verification_task_store: VerificationTaskStore,
+        config_values: ConfigValues,
     ):
         self.db = db
         self.settings = settings
+        self.config_values = config_values
         self._store = WorkspaceDiskStore(db, verification_task_store=verification_task_store)
         self._problem_cache: dict[str, dict] = {}
         self._user_cache: dict[str, dict] = {}
@@ -646,6 +656,11 @@ class WorkspaceService:
         run_git(["git", "-C", str(workspace), "symbolic-ref", "HEAD", "refs/heads/main"])
 
     def _seed_problem_repo(self, workspace: Path) -> None:
+        has_head = run_git(
+            ["git", "-C", str(workspace), "rev-parse", "--verify", "HEAD"]
+        ).returncode == 0
+        if has_head:
+            return
         required_dirs = [
             "statement",
             "config",
@@ -660,14 +675,27 @@ class WorkspaceService:
         ]
         for d in required_dirs:
             (workspace / d).mkdir(parents=True, exist_ok=True)
+        canonical_sources = {
+            workspace / "config/problem.json": dumps_problem_config(
+                default_problem_config(
+                    limits=problem_config_limits(self.config_values)
+                ),
+                limits=problem_config_limits(self.config_values),
+            ),
+            workspace / "config/build.json": dumps_build_config(
+                default_build_config()
+            ),
+            workspace / "tests/spec.json": dumps_default_tests_spec(),
+        }
+        for path, content in canonical_sources.items():
+            if not path.exists():
+                path.write_text(content, encoding="utf-8", newline="\n")
         testlib = workspace / "third_party/testlib/testlib.h"
         if not testlib.exists():
             source = maintained_testlib_header(repo_root=Path(__file__).resolve().parents[3])
             testlib.write_bytes(source.read_bytes())
-        has_head = run_git(["git", "-C", str(workspace), "rev-parse", "--verify", "HEAD"]).returncode == 0
-        if not has_head:
-            # Keep newly-created repositories at v0 without an automatic initial commit.
-            run_git(["git", "-C", str(workspace), "symbolic-ref", "HEAD", "refs/heads/main"])
+        # Keep newly-created repositories at v0 without an automatic initial commit.
+        run_git(["git", "-C", str(workspace), "symbolic-ref", "HEAD", "refs/heads/main"])
 
     def _refresh_workspace_status_with_ids(self, workspace: Path, problem_id: int, user_id: int) -> dict[str, str | int | None]:
         status = self.read_workspace_status(workspace)

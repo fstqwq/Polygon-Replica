@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import json
-import tempfile
-from pathlib import Path
 
 from app.service.verification.diagnostic import (
     TaskDiagnosticSnapshot,
@@ -29,41 +27,40 @@ class TestVerificationPolicy(VerificationPolicyTestBase):
             _problem_limits,
             _run_payload_base,
         )
-        from app.service.verification.runtime import load_problem_runtime_config
-
-        cases = (
-            ({"memory_limit_mb": 1}, 1),
-            ({"memory_limit_mb": 0}, 1),
-            ({"memory_limit_mb": "invalid"}, 1024),
-            ({}, 1024),
-            ({"memory_limit_mb": 4096}, 2048),
+        from app.service.problem.build_config import default_build_config
+        from app.service.problem.runtime_config import (
+            ProblemConfig,
+            ProblemConfigLimits,
+            parse_problem_config,
         )
-        for problem_config, expected in cases:
-            with self.subTest(problem_config=problem_config), tempfile.TemporaryDirectory() as tmp:
-                snapshot = Path(tmp)
-                (snapshot / "config").mkdir()
-                (snapshot / "config" / "problem.json").write_text(
-                    json.dumps(problem_config),
-                    encoding="utf-8",
-                )
-                runtime = load_problem_runtime_config(
-                    snapshot,
-                    default_time_limit_ms=2000,
-                    default_memory_limit_mb=1024,
-                    default_mode="pass-fail",
-                    min_time_limit_ms=100,
-                    max_time_limit_ms=30000,
-                    min_memory_limit_mb=1,
-                    max_memory_limit_mb=2048,
-                )
-                self.assertEqual(runtime["memory_limit_mb"], expected)
 
-        limits = _problem_limits(
-            {"time_limit_ms": 2000, "memory_limit_mb": 1},
+        config_limits = ProblemConfigLimits(100, 30000, 1, 2048, 1, 64)
+        runtime = ProblemConfig(
+            time_limit_ms=2000,
+            memory_limit_mb=1,
+            mode="pass-fail",
             pass_limit=1,
         )
+        self.assertEqual(
+            parse_problem_config(
+                json.dumps(runtime),
+                limits=config_limits,
+            )["memory_limit_mb"],
+            1,
+        )
+        invalid_configs = (
+            {**runtime, "memory_limit_mb": 0},
+            {**runtime, "memory_limit_mb": "invalid"},
+            {key: value for key, value in runtime.items() if key != "memory_limit_mb"},
+            {**runtime, "memory_limit_mb": 4096},
+        )
+        for invalid in invalid_configs:
+            with self.subTest(problem_config=invalid), self.assertRaises(ValueError):
+                parse_problem_config(json.dumps(invalid), limits=config_limits)
+
+        limits = _problem_limits(runtime)
         run_payload = _run_payload_base(
-            build_cfg={},
+            build_cfg=default_build_config(),
             problem_limits=limits,
             source_files={},
         )

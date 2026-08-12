@@ -24,7 +24,9 @@ from app.service.verification.identity import (
     canonical_verification_id,
     new_verification_id,
 )
-from app.service.verification.runtime import normalize_memory_limit_mb
+from app.service.problem.build_config import load_build_config
+from app.service.problem.runtime_config import load_problem_config, problem_config_limits
+from app.service.verification.source import resolve_source
 from app.service.run.runtime import RUN_TEST_NAME_RE
 from app.service.platform.testlib_source import workspace_testlib_header
 
@@ -323,7 +325,6 @@ class TaskEnqueue:
     def _collect_verification_payload(
         self,
         *,
-        problem: str,
         artifact_verification_id: str,
         workspace: Path,
         mode: str,
@@ -333,7 +334,6 @@ class TaskEnqueue:
         if not safe_verification_id:
             return {}
 
-        config_snapshot = self._s.config_values.snapshot()
         policy = self._s.config_policy()
         wanted_tests: list[str] = []
         if selected_tests:
@@ -392,8 +392,6 @@ class TaskEnqueue:
                 }
             )
 
-        workspace_resolved = workspace.resolve()
-
         run_config_text = ""
         verification_row = self._s.db.fetch_one(
             "SELECT run_config_json FROM verifications WHERE id=?",
@@ -402,83 +400,37 @@ class TaskEnqueue:
         if verification_row is not None:
             run_config_text = TaskEnqueue._normalize_text(verification_row["run_config_json"])
 
-        def _safe_workspace_rel_file(rel_path: str) -> Path | None:
-            token = TaskEnqueue._normalize_text(rel_path).replace("\\", "/")
-            if not token:
-                return None
-            candidate = (workspace_resolved / token).resolve()
-            if candidate == workspace_resolved or workspace_resolved not in candidate.parents:
-                return None
-            if candidate.is_symlink() or (not candidate.exists()) or (not candidate.is_file()):
-                return None
-            return candidate
-
-        def _first_cpp_under(rel_dir: str) -> Path | None:
-            base = (workspace_resolved / rel_dir).resolve()
-            if base == workspace_resolved or workspace_resolved not in base.parents:
-                return None
-            if (not base.exists()) or (not base.is_dir()):
-                return None
-            for path in sorted(base.glob("*.cpp")):
-                resolved = path.resolve()
-                if resolved.is_symlink() or (not resolved.is_file()):
-                    continue
-                return resolved
-            return None
-
-        build_cfg_obj: dict[str, object] = {}
-        build_cfg_path = _safe_workspace_rel_file("config/build.json")
-        if build_cfg_path is not None:
-            build_cfg_obj = self._json_object(build_cfg_path.read_text(encoding="utf-8", errors="replace"))
-        problem_cfg_obj: dict[str, object] = {}
-        problem_cfg_path = _safe_workspace_rel_file("config/problem.json")
-        if problem_cfg_path is not None:
-            problem_cfg_obj = self._json_object(problem_cfg_path.read_text(encoding="utf-8", errors="replace"))
-        try:
-            problem_time_limit_ms = int(problem_cfg_obj.get("time_limit_ms", 0))
-        except Exception:
-            problem_time_limit_ms = 0
-        default_cfg = cast(dict[str, object], GENERAL_CONFIG_DEFAULTS)
-        problem_memory_limit_mb = normalize_memory_limit_mb(
-            problem_cfg_obj.get("memory_limit_mb"),
-            default_mb=int(default_cfg["memory_limit_mb"]),
-            min_mb=int(config_snapshot["GENERAL_MEMORY_LIMIT_MIN_MB"]),
-            max_mb=int(config_snapshot["GENERAL_MEMORY_LIMIT_MAX_MB"]),
+        build_cfg = load_build_config(workspace)
+        problem_cfg = load_problem_config(
+            workspace,
+            limits=problem_config_limits(self._s.config_values),
         )
-        if problem_time_limit_ms < 0:
-            problem_time_limit_ms = 0
+        problem_time_limit_ms = problem_cfg["time_limit_ms"]
+        problem_memory_limit_mb = problem_cfg["memory_limit_mb"]
 
-        interactive_mode = TaskEnqueue._normalize_status(mode) == "interactive"
+        requested_mode = TaskEnqueue._normalize_status(mode)
+        if requested_mode != problem_cfg["mode"]:
+            raise RuntimeError("execution mode does not match config/problem.json")
+        interactive_mode = requested_mode == "interactive"
         checker_source: Path | None = None
         if not interactive_mode:
-            checker_source_token = cast(str | None, build_cfg_obj.get("checker_source"))
-            if checker_source_token is None:
-                checker_source_token = ""
-            checker_source = _safe_workspace_rel_file(checker_source_token)
-            if checker_source is None:
-                checker_source = _safe_workspace_rel_file("checkers/checker.cpp")
-            if checker_source is None:
-                checker_source = _first_cpp_under("checkers")
+            checker_source_token = build_cfg.get("checker_source")
+            if checker_source_token is not None:
+                checker_source = resolve_source(workspace, checker_source_token)
 
-        validator_source_token = cast(str | None, build_cfg_obj.get("validator_source"))
-        if validator_source_token is None:
-            validator_source_token = ""
-        validator_source: Path | None = _safe_workspace_rel_file(validator_source_token)
-        if validator_source is None:
-            validator_source = _safe_workspace_rel_file("validators/validator.cpp")
-        if validator_source is None:
-            validator_source = _first_cpp_under("validators")
+        validator_source_token = build_cfg.get("validator_source")
+        validator_source = (
+            None
+            if validator_source_token is None
+            else resolve_source(workspace, validator_source_token)
+        )
 
         interactor_source: Path | None = None
         if interactive_mode:
-            interactor_source_token = cast(str | None, build_cfg_obj.get("interactor_source"))
+            interactor_source_token = build_cfg.get("interactor_source")
             if interactor_source_token is None:
-                interactor_source_token = ""
-            interactor_source = _safe_workspace_rel_file(interactor_source_token)
-            if interactor_source is None:
-                interactor_source = _safe_workspace_rel_file("interactors/interactor.cpp")
-            if interactor_source is None:
-                interactor_source = _first_cpp_under("interactors")
+                raise RuntimeError("interactor source is required for interactive mode")
+            interactor_source = resolve_source(workspace, interactor_source_token)
 
         source_files: dict[str, Path] = {}
         if checker_source is not None:
@@ -507,7 +459,7 @@ class TaskEnqueue:
             "problem_limits": {
                 "time_limit_ms": int(problem_time_limit_ms),
                 "memory_limit_mb": int(problem_memory_limit_mb),
-                "pass_limit": domjudge_parse_int(problem_cfg_obj.get("pass_limit"), 1),
+                "pass_limit": problem_cfg["pass_limit"],
             },
             "source_files": sources_payload,
         }
@@ -579,7 +531,6 @@ class TaskEnqueue:
             if workspace is None:
                 raise RuntimeError("workspace is required for verification payload collection")
             verification_payload = self._collect_verification_payload(
-                problem=problem,
                 artifact_verification_id=artifact_verification_id,
                 workspace=workspace,
                 mode=mode,

@@ -111,7 +111,7 @@ class TestExportService(unittest.TestCase):
                 ("123456", "abcdef"),
             )
 
-    def test_native_import_accepts_source_only_archive_with_package_root(self) -> None:
+    def test_native_import_rejects_source_only_archive_with_package_root(self) -> None:
         with tempfile.TemporaryDirectory(prefix="native-source-only-") as temp:
             archive = Path(temp) / "source-only.zip"
             with zipfile.ZipFile(archive, "w") as package:
@@ -127,28 +127,23 @@ class TestExportService(unittest.TestCase):
             workspace.mkdir()
             (workspace / "old.txt").write_text("old\n", encoding="utf-8")
 
-            import_problem_package(
-                NativePackageImportService(),
-                workspace,
-                archive.name,
-                archive.read_bytes(),
-            )
-
-            problem_config = json.loads(
-                (workspace / "config" / "problem.json").read_text(
-                    encoding="utf-8"
+            with self.assertRaisesRegex(
+                ValueError,
+                "test_data/manifest.json",
+            ):
+                import_problem_package(
+                    NativePackageImportService(),
+                    workspace,
+                    archive.name,
+                    archive.read_bytes(),
                 )
-            )
-            self.assertEqual(problem_config["memory_limit_mb"], 1)
-            self.assertEqual(
-                (workspace / "solutions" / "backup.cpp").read_text(
-                    encoding="utf-8"
-                ),
-                "// restored\n",
-            )
-            self.assertFalse((workspace / "old.txt").exists())
 
-    def test_native_import_ignores_partial_materialized_data(self) -> None:
+            self.assertEqual(
+                (workspace / "old.txt").read_text(encoding="utf-8"),
+                "old\n",
+            )
+
+    def test_native_import_rejects_partial_materialized_data(self) -> None:
         with tempfile.TemporaryDirectory(prefix="native-partial-data-") as temp:
             archive = Path(temp) / "partial.zip"
             with zipfile.ZipFile(archive, "w") as package:
@@ -157,13 +152,20 @@ class TestExportService(unittest.TestCase):
                 package.writestr("test_data/tests/001/input", "1\n")
             workspace = Path(temp) / "workspace"
             workspace.mkdir()
+            (workspace / "old.txt").write_text("old\n", encoding="utf-8")
 
-            import_problem_package(
-                NativePackageImportService(),
-                workspace,
-                archive.name,
-                archive.read_bytes(),
+            with self.assertRaisesRegex(
+                ValueError,
+                "test_data/manifest.json",
+            ):
+                import_problem_package(
+                    NativePackageImportService(),
+                    workspace,
+                    archive.name,
+                    archive.read_bytes(),
+                )
+
+            self.assertEqual(
+                (workspace / "old.txt").read_text(encoding="utf-8"),
+                "old\n",
             )
-
-            self.assertTrue((workspace / "solutions" / "restored.cpp").is_file())
-            self.assertFalse((workspace / "test_data").exists())

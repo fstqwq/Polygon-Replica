@@ -11,6 +11,7 @@ from pathlib import Path, PurePosixPath
 from typing import NotRequired, TypedDict, cast
 
 from app.service.platform.hashing import sha256_file
+from app.service.problem.json_codec import loads_object
 from app.service.problem.test_spec import load_tests_spec
 from app.service.verification.identity import canonical_verification_id
 
@@ -113,9 +114,13 @@ def dumps_manifest(manifest: NativeManifest) -> str:
 def load_manifest(path: Path) -> NativeManifest:
     if path.is_symlink() or not path.is_file():
         raise ValueError("Native package manifest is missing")
-    raw = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(raw, dict):
-        raise ValueError("Native package manifest must be an object")
+    try:
+        text = path.read_text(encoding="utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError("Native package manifest must be UTF-8") from exc
+    except OSError as exc:
+        raise ValueError(f"cannot read Native package manifest: {exc}") from exc
+    raw = loads_object(text, label="Native package manifest")
     required = {
         "source_commit",
         "revision_number",
@@ -266,13 +271,24 @@ def validate_manifest_files(
             judge = test.get(judge_key)
             if display is not None and judge is not None and display["sha256"] == judge["sha256"]:
                 raise ValueError(f"Native manifest stores a redundant display override: {test_id}/{display_key}")
-    data_root = package_root / "test_data" / "tests"
-    actual_files = {
-        path.relative_to(package_root).as_posix()
-        for path in data_root.rglob("*")
-        if path.is_file() and not path.is_symlink()
-    }
-    if actual_files != declared:
+    data_root = package_root / "test_data"
+    actual_files: set[str] = set()
+    actual_directories: set[str] = set()
+    for path in data_root.rglob("*"):
+        if path.is_dir() and not path.is_symlink():
+            actual_directories.add(path.relative_to(package_root).as_posix())
+            continue
+        if path.is_symlink() or not path.is_file():
+            raise ValueError("Native test_data contains a non-regular entry")
+        actual_files.add(path.relative_to(package_root).as_posix())
+    expected_files = {*declared, "test_data/manifest.json"}
+    if actual_files != expected_files:
         raise ValueError("Native test_data contains undeclared or missing payload files")
+    expected_directories = {"test_data/tests"}
+    expected_directories.update(
+        f"test_data/tests/{test['id']}" for test in manifest["tests"]
+    )
+    if actual_directories != expected_directories:
+        raise ValueError("Native test_data contains undeclared or missing directories")
     if source_digest(package_root) != manifest["source_digest"]:
         raise ValueError("Native source tree digest does not match its Git revision")

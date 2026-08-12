@@ -4,6 +4,11 @@ import uuid
 from pathlib import Path
 
 from app.service.platform.git_process import run_git
+from app.service.problem.preflight import (
+    PublishedProblemSource,
+    inspect_published_problem_sources,
+)
+from app.service.problem.runtime_config import problem_config_limits
 from app.service.repository.git import GitService
 
 from tests.db_fixture import DBTestBase
@@ -11,6 +16,98 @@ from tests.isolated_db_helpers import isolated_db_fetch_one
 
 
 class TestWorkspaceStoreService(DBTestBase):
+    def test_published_source_preflight_reports_without_mutating_git(self) -> None:
+        self.workspace_service.ensure_problem(self.problem)
+        self.workspace_service.ensure_user(self.user)
+        self.workspace_service.grant_repo_access(
+            self.problem, self.user, "owner"
+        )
+        workspace = Path(
+            self.workspace_service.ensure_workspace(self.problem, self.user)
+        )
+        git_service = GitService()
+        git_service.commit(
+            workspace,
+            "canonical source",
+            self.user,
+            f"{self.user}@example.test",
+        )
+        git_service.push(workspace, "main")
+        problem_row = self.db.fetch_one(
+            "SELECT repo_name FROM problems WHERE slug=?", [self.problem]
+        )
+        self.assertIsNotNone(problem_row)
+        assert problem_row is not None
+        published = [
+            PublishedProblemSource(
+                slug=self.problem,
+                repo_name=str(problem_row["repo_name"]),
+            )
+        ]
+        config_snapshot = self.config_values.snapshot()
+
+        rows = inspect_published_problem_sources(
+            published,
+            bare_root=self.settings.bare_root,
+            problem_limits=problem_config_limits(self.config_values),
+            tests_spec_max_bytes=int(config_snapshot["TEXTAREA_MAX_BYTES"]),
+            statement_sample_max_bytes=int(
+                config_snapshot["STATEMENT_SAMPLE_MAX_BYTES"]
+            ),
+        )
+        self.assertEqual(rows[0]["error"], "")
+
+        config_path = workspace / "config/problem.json"
+        original = config_path.read_text(encoding="utf-8")
+        config_path.write_text(
+            original.rstrip("\n}") + ',\n  "legacy": true\n}\n',
+            encoding="utf-8",
+        )
+        bad_commit = git_service.commit(
+            workspace,
+            "noncanonical source",
+            self.user,
+            f"{self.user}@example.test",
+        )
+        git_service.push(workspace, "main")
+
+        rows = inspect_published_problem_sources(
+            published,
+            bare_root=self.settings.bare_root,
+            problem_limits=problem_config_limits(self.config_values),
+            tests_spec_max_bytes=int(config_snapshot["TEXTAREA_MAX_BYTES"]),
+            statement_sample_max_bytes=int(
+                config_snapshot["STATEMENT_SAMPLE_MAX_BYTES"]
+            ),
+        )
+        self.assertEqual(rows[0]["source_commit"], bad_commit)
+        self.assertIn("unsupported key 'legacy'", rows[0]["error"])
+        self.assertEqual(config_path.read_text(encoding="utf-8").count("legacy"), 1)
+
+        config_path.write_text(original, encoding="utf-8")
+        link = workspace / "attachments/source-link"
+        link.parent.mkdir(parents=True, exist_ok=True)
+        link.symlink_to("../config/problem.json")
+        link_commit = git_service.commit(
+            workspace,
+            "noncanonical source link",
+            self.user,
+            f"{self.user}@example.test",
+        )
+        git_service.push(workspace, "main")
+
+        rows = inspect_published_problem_sources(
+            published,
+            bare_root=self.settings.bare_root,
+            problem_limits=problem_config_limits(self.config_values),
+            tests_spec_max_bytes=int(config_snapshot["TEXTAREA_MAX_BYTES"]),
+            statement_sample_max_bytes=int(
+                config_snapshot["STATEMENT_SAMPLE_MAX_BYTES"]
+            ),
+        )
+        self.assertEqual(rows[0]["source_commit"], link_commit)
+        self.assertIn("symbolic link", rows[0]["error"])
+
     def test_audit_event_downgrades_missing_foreign_keys_to_null(self) -> None:
         self.workspace_service.record_audit_event(
             actor_user_id=987654321,

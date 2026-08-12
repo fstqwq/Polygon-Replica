@@ -11,6 +11,7 @@ import uuid
 import zipfile
 from pathlib import Path, PurePosixPath
 
+from app.config import ConfigValues
 from app.db import DB
 from app.service.disk.export_store import ExportJobRow, ExportStore
 from app.service.export.icpc_package import (
@@ -25,7 +26,14 @@ from app.service.export.icpc_package import (
 )
 from app.service.platform.hashing import sha256_file
 from app.service.platform.fs.op import extract_git_archive, remove_symlinks
-from app.service.problem.solution_metadata import infer_expected_behavior_from_name, normalize_expected_behavior, parse_solution_desc
+from app.service.problem.build_config import BuildConfig, load_build_config
+from app.service.problem.runtime_config import (
+    ProblemConfig,
+    load_problem_config,
+    problem_config_limits,
+)
+from app.service.problem.solution_metadata import load_solution_desc
+from app.service.verification.source import resolve_source
 from app.service.statement.render import render_statement_main
 from app.service.statement.tex_compile import TexCompileService
 from app.service.statement.context import statement_languages
@@ -44,7 +52,7 @@ class ExportService:
         "icpc": "icpc.zip",
         "native": "native.zip",
     }
-    SOURCE_SUFFIX_ORDER = (".cpp", ".cc", ".cxx", ".c", ".py", ".java")
+    SOURCE_SUFFIX_ORDER = (".cpp", ".cc", ".cxx", ".c++", ".py", ".java")
     DOMJUDGE_COLOR_PALETTE = (
         "#e6194b",
         "#3cb44b",
@@ -73,6 +81,7 @@ class ExportService:
         workspace_root: Path,
         tex_compile_service: TexCompileService,
         problem_package_service: ProblemPackageService,
+        config_values: ConfigValues,
     ):
         self.db = db
         self._store = ExportStore(db)
@@ -80,6 +89,7 @@ class ExportService:
         self.workspace_root = workspace_root
         self.tex_compile_service = tex_compile_service
         self.problem_package_service = problem_package_service
+        self._config_values = config_values
         self._conversion_locks_guard = threading.Lock()
         self._conversion_locks: dict[tuple[str, str], threading.Lock] = {}
 
@@ -287,43 +297,6 @@ class ExportService:
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(p, target)
 
-    def _find_first_source(self, folder: Path, preferred: list[str] | None = None) -> Path | None:
-        if not folder.exists() or not folder.is_dir():
-            return None
-        try:
-            _ = folder.resolve()
-        except OSError:
-            return None
-        for name in preferred or []:
-            p = folder / name
-            if self._is_safe_regular_file(folder, p):
-                return p
-
-        best_name_by_suffix: dict[str, str] = {}
-        try:
-            with os.scandir(folder) as entries:
-                for entry in entries:
-                    name = entry.name
-                    suffix = os.path.splitext(name)[1]
-                    if suffix not in self.SOURCE_SUFFIX_ORDER:
-                        continue
-                    try:
-                        if not entry.is_file(follow_symlinks=False):
-                            continue
-                    except OSError:
-                        continue
-                    current = best_name_by_suffix.get(suffix)
-                    if current is None or name < current:
-                        best_name_by_suffix[suffix] = name
-        except OSError:
-            return None
-
-        for suffix in self.SOURCE_SUFFIX_ORDER:
-            selected = best_name_by_suffix.get(suffix)
-            if selected:
-                return folder / selected
-        return None
-
     def _iter_solution_sources(self, folder: Path):
         if not folder.exists() or not folder.is_dir():
             return
@@ -353,15 +326,9 @@ class ExportService:
             yield folder / name
 
     def _solution_expected_behavior(self, source_file: Path) -> str:
-        expected = infer_expected_behavior_from_name(f"solutions/{source_file.name}")
-        desc_path = source_file.parent / f"{source_file.name}.desc"
-        if self._is_safe_regular_file(source_file.parent, desc_path):
-            try:
-                payload = parse_solution_desc(desc_path.read_text(encoding="utf-8", errors="replace"))
-                expected = normalize_expected_behavior(expected_behavior if isinstance(expected_behavior := payload.get("expected_behavior"), str) else expected)
-            except OSError:
-                pass
-        return expected
+        root = source_file.parent.parent
+        source_rel = source_file.relative_to(root).as_posix()
+        return load_solution_desc(root, source_rel)["expected_behavior"]
 
     def _ensure_unique_file_path(self, parent: Path, filename: str) -> Path:
         safe_name = Path(str(filename or "")).name
@@ -379,66 +346,44 @@ class ExportService:
                 return candidate
             idx += 1
 
-    def _load_build_config(self, snapshot: Path) -> dict:
-        cfg_path = snapshot / "config" / "build.json"
-        if not cfg_path.exists():
-            return {}
-        if cfg_path.is_symlink() or not cfg_path.is_file():
-            raise ValueError("published build config is not a regular file")
-        try:
-            payload = json.loads(cfg_path.read_text(encoding="utf-8"))
-        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-            raise ValueError("published build config is invalid") from exc
-        if not isinstance(payload, dict):
-            raise ValueError("published build config must be an object")
-        return payload
+    def _load_build_config(self, snapshot: Path) -> BuildConfig:
+        return load_build_config(snapshot)
 
     def _resolve_snapshot_source(self, snapshot: Path, rel_path: str) -> Path:
-        source_rel = str(rel_path or "").strip()
-        if not source_rel:
-            raise ValueError("configured source path is empty")
-        resolved_snapshot = snapshot.resolve()
-        source_path = (snapshot / source_rel).resolve()
-        if resolved_snapshot not in source_path.parents:
-            raise ValueError(f"invalid configured source path: {source_rel}")
-        if source_path.is_symlink() or not source_path.exists() or not source_path.is_file():
-            raise ValueError(f"configured source does not exist: {source_rel}")
-        return source_path
+        try:
+            return resolve_source(snapshot, rel_path)
+        except RuntimeError as exc:
+            raise ValueError(str(exc)) from exc
 
-    def _effective_checker_source(self, snapshot: Path, strict: bool) -> Path | None:
-        build_cfg = self._load_build_config(snapshot)
-        checker_source = checker_source.strip() if isinstance(checker_source := build_cfg.get("checker_source"), str) else ""
-        if checker_source:
-            try:
-                return self._resolve_snapshot_source(snapshot, checker_source)
-            except ValueError:
-                if strict:
-                    raise ValueError("checker_source is configured but invalid")
-                return None
-        return self._find_first_source(snapshot / "checkers")
+    def _effective_checker_source(
+        self,
+        snapshot: Path,
+        build_cfg: BuildConfig,
+    ) -> Path | None:
+        checker_source = build_cfg.get("checker_source")
+        if checker_source is None:
+            return None
+        return self._resolve_snapshot_source(snapshot, checker_source)
 
-    def _effective_validator_source(self, snapshot: Path, strict: bool) -> Path | None:
-        build_cfg = self._load_build_config(snapshot)
-        configured = validator_source.strip() if isinstance(validator_source := build_cfg.get("validator_source"), str) else ""
-        if configured:
-            try:
-                return self._resolve_snapshot_source(snapshot, configured)
-            except ValueError:
-                if strict:
-                    raise ValueError("validator_source is configured but invalid")
-                return None
-        return self._find_first_source(snapshot / "validators")
+    def _effective_validator_source(
+        self,
+        snapshot: Path,
+        build_cfg: BuildConfig,
+    ) -> Path | None:
+        configured = build_cfg.get("validator_source")
+        if configured is None:
+            return None
+        return self._resolve_snapshot_source(snapshot, configured)
 
-    def _effective_interactor_source(self, snapshot: Path, strict: bool) -> Path | None:
-        configured = interactor_source.strip() if isinstance(interactor_source := self._load_build_config(snapshot).get("interactor_source"), str) else ""
-        if configured:
-            try:
-                return self._resolve_snapshot_source(snapshot, configured)
-            except ValueError:
-                if strict:
-                    raise ValueError("interactor_source is configured but invalid")
-                return None
-        return self._find_first_source(snapshot / "interactors")
+    def _effective_interactor_source(
+        self,
+        snapshot: Path,
+        build_cfg: BuildConfig,
+    ) -> Path | None:
+        configured = build_cfg.get("interactor_source")
+        if configured is None:
+            return None
+        return self._resolve_snapshot_source(snapshot, configured)
 
     def _copy_native_working_tree(self, src_dir: Path, dst_dir: Path, *, root_dir: Path) -> None:
         for child in src_dir.iterdir():
@@ -496,17 +441,11 @@ class ExportService:
             raise ValueError(f"workspace git metadata missing for export workspace {workspace_id}")
         return workspace
 
-    def _load_problem_config(self, snapshot: Path) -> dict:
-        cfg_path = snapshot / "config" / "problem.json"
-        if cfg_path.is_symlink() or not cfg_path.is_file():
-            raise ValueError("published problem config is unavailable")
-        try:
-            payload = json.loads(cfg_path.read_text(encoding="utf-8"))
-        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-            raise ValueError("published problem config is invalid") from exc
-        if not isinstance(payload, dict):
-            raise ValueError("published problem config must be an object")
-        return payload
+    def _load_problem_config(self, snapshot: Path) -> ProblemConfig:
+        return load_problem_config(
+            snapshot,
+            limits=problem_config_limits(self._config_values),
+        )
 
     def _build_problem_yaml(
         self,
@@ -519,18 +458,14 @@ class ExportService:
         snapshot: Path,
     ) -> str:
         cfg = self._load_problem_config(snapshot)
-        time_limit_ms = cfg.get("time_limit_ms")
-        if not isinstance(time_limit_ms, int) or time_limit_ms <= 0:
-            time_limit_ms = 2000
-        memory_limit_mb = cfg.get("memory_limit_mb")
-        if not isinstance(memory_limit_mb, int) or memory_limit_mb <= 0:
-            memory_limit_mb = None
+        time_limit_ms = cfg["time_limit_ms"]
+        memory_limit_mb = cfg["memory_limit_mb"]
         return render_problem_yaml(
             problem_slug=problem_slug,
             source_commit=source_commit,
             names=statement_names,
             mode=mode,
-            pass_limit=max(1, int(pass_limit)),
+            pass_limit=pass_limit,
             time_limit_ms=time_limit_ms,
             memory_limit_mb=memory_limit_mb,
         )
@@ -560,10 +495,7 @@ class ExportService:
         snapshot: Path,
     ) -> str:
         cfg = self._load_problem_config(snapshot)
-        time_limit_ms = cfg.get("time_limit_ms")
-        seconds = 2.0
-        if isinstance(time_limit_ms, int) and time_limit_ms > 0:
-            seconds = max(0.001, float(time_limit_ms) / 1000.0)
+        seconds = float(cfg["time_limit_ms"]) / 1000.0
         return (
             f"name = {self._ini_value(problem_name)}\n"
             f"externalid = {external_id}\n"
@@ -605,6 +537,7 @@ class ExportService:
                     include_sample_tests=include_sample_tests,
                     tests_spec_max_bytes=tests_spec_max_bytes,
                     statement_sample_max_bytes=statement_sample_max_bytes,
+                    problem_limits=problem_config_limits(self._config_values),
                 )
             except Exception as exc:
                 raise ValueError(f"failed to render {language} statement: {exc}") from exc
@@ -624,11 +557,7 @@ class ExportService:
 
     @staticmethod
     def _keep_samples_out_of_domjudge_sample_data(mode: str, pass_limit: int) -> bool:
-        try:
-            safe_pass_limit = int(pass_limit)
-        except Exception:
-            safe_pass_limit = 1
-        return str(mode or "").strip() == "interactive" or safe_pass_limit > 1
+        return mode == "interactive" or pass_limit > 1
 
     def _copy_secret_and_sample_data(
         self,
@@ -711,19 +640,20 @@ class ExportService:
     ) -> None:
         snapshot = native.root
         package_root.mkdir(parents=True, exist_ok=True)
+        build_cfg = self._load_build_config(snapshot)
         checker_source = (
             None
             if mode == "interactive"
-            else self._effective_checker_source(snapshot, strict=True)
+            else self._effective_checker_source(snapshot, build_cfg)
         )
         interactor_source = (
-            self._effective_interactor_source(snapshot, strict=True)
+            self._effective_interactor_source(snapshot, build_cfg)
             if mode == "interactive"
             else None
         )
         if mode == "interactive" and interactor_source is None:
             raise ValueError("interactive export requires interactor source")
-        validator_source = self._effective_validator_source(snapshot, strict=True)
+        validator_source = self._effective_validator_source(snapshot, build_cfg)
 
         samples_as_secret = self._keep_samples_out_of_domjudge_sample_data(mode, pass_limit)
         limits = self.db.config_values.snapshot()

@@ -9,7 +9,7 @@ from app.impl.auth.shared import parse_iso_utc
 from app.impl.runtime.config import config
 from app.service.repository.revision import verification_source_display
 from app.service.platform.error_text import bounded_display_text, normalize_display_text
-from app.service.problem.solution_metadata import infer_expected_behavior_from_name, normalize_expected_behavior
+from app.service.problem.solution_metadata import normalize_expected_behavior
 from app.service.verification.runtime import coerce_int, normalize_problem_mode
 
 from app.service.verification.result_match import run_verdict_short, verification_solution_match
@@ -53,15 +53,12 @@ def _run_test_answer_name(test_name: str) -> str:
     return token + ".ans" if token else ""
 
 
-def _run_expected_behavior_from_summary(summary: dict | None, source: str = "") -> str:
+def _run_expected_behavior_from_summary(summary: dict | None) -> str:
     if summary is not None:
-        token = normalize_expected_behavior(summary.get("expected_behavior"))
-        if token != "unknown":
-            return token
-        summary_source = summary.get("source")
-        if isinstance(summary_source, str) and summary_source:
-            source = summary_source
-    return normalize_expected_behavior(infer_expected_behavior_from_name(source))
+        raw = summary.get("expected_behavior")
+        if isinstance(raw, str):
+            return normalize_expected_behavior(raw)
+    return "unknown"
 
 
 def _run_cell_kind(verdict: str, expected_behavior: str) -> str:

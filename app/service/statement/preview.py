@@ -1,5 +1,4 @@
 from __future__ import annotations
-import json
 import re
 import shutil
 import uuid
@@ -26,11 +25,11 @@ from app.service.problem.test_spec import (
     payload_rel_path_for_test,
     read_statement_sample_text,
 )
+from app.service.problem.runtime_config import load_problem_config, problem_config_limits
 from app.service.platform.git_process import run_git
 from app.service.platform.process import is_canonical_artifact_id
 from app.service.repository.workspace import WorkspaceService
 from app.service.statement.context import normalize_statement_language
-from app.service.verification.runtime import normalize_problem_mode
 
 if TYPE_CHECKING:
     from app.service.verification.service import VerificationService
@@ -98,15 +97,10 @@ class PreviewService:
         return row
 
     def _problem_mode(self, workspace: Path) -> str:
-        cfg_path = workspace / "config" / "problem.json"
-        if not cfg_path.exists() or cfg_path.is_symlink() or not cfg_path.is_file():
-            return "pass-fail"
-        try:
-            payload = json.loads(cfg_path.read_text(encoding="utf-8")) or {}
-            raw_mode = dict(payload).get("mode")
-        except Exception:
-            raw_mode = ""
-        return normalize_problem_mode(raw_mode, "pass-fail")
+        return load_problem_config(
+            workspace,
+            limits=problem_config_limits(self.db.config_values),
+        )["mode"]
 
     def _sample_verification_rows_from_spec(
         self,
@@ -128,23 +122,13 @@ class PreviewService:
             raise RuntimeError(f"invalid tests/spec.json: {exc}") from exc
         rows: list[PreviewService._SampleVerificationRow] = []
         for index, entry in enumerate(entries, start=1):
-            if not isinstance(entry, dict):
+            if not entry["sample"]:
                 continue
-            if not bool(entry.get("sample")):
-                continue
-            test_id_obj = entry.get("id")
-            test_id = str(test_id_obj).strip() if test_id_obj is not None else ""
-            kind_obj = entry.get("kind")
-            kind = str(kind_obj).strip().lower() if kind_obj is not None else ""
-            if kind not in {"manual", "gen"}:
-                raise RuntimeError(f"invalid test kind at tests/spec.json entry {index}: {kind or '(empty)'}")
-            if not test_id:
-                continue
-            sample_input_obj = entry.get("sample_input")
-            sample_input = str(sample_input_obj) if sample_input_obj is not None else ""
-            sample_output_obj = entry.get("sample_output")
-            sample_output = str(sample_output_obj) if sample_output_obj is not None else ""
-            sample_output_validate = bool(entry.get("sample_output_validate", True))
+            test_id = entry["id"]
+            kind = entry["kind"]
+            sample_input = entry.get("sample_input", "")
+            sample_output = entry.get("sample_output", "")
+            sample_output_validate = entry.get("sample_output_validate", True)
             needs_input_copy = False
             needs_output_copy = False
             if not sample_input:
@@ -656,6 +640,7 @@ class PreviewService:
                 language=safe_language,
                 tests_spec_max_bytes=tests_spec_max_bytes,
                 statement_sample_max_bytes=statement_sample_max_bytes,
+                problem_limits=problem_config_limits(self.db.config_values),
             )
 
             try:

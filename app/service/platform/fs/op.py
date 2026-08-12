@@ -96,9 +96,14 @@ def _extract_tar_safe(tar_path: Path, target: Path) -> None:
             if member.isdir():
                 out.mkdir(parents=True, exist_ok=True)
                 continue
-            # Keep snapshot built as plain files/directories only.
-            if member.issym() or member.islnk() or not member.isfile():
-                continue
+            if member.issym() or member.islnk():
+                raise RuntimeError(
+                    f"source archive contains a symbolic link: {member.name}"
+                )
+            if not member.isfile():
+                raise RuntimeError(
+                    f"source archive contains a special file: {member.name}"
+                )
             src = tf.extractfile(member)
             if src is None:
                 continue
@@ -106,5 +111,4 @@ def _extract_tar_safe(tar_path: Path, target: Path) -> None:
             with src, out.open("wb") as dst:
                 shutil.copyfileobj(src, dst, length=1024 * 1024)
             out.chmod(member.mode & 0o777)
-
 

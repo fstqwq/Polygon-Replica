@@ -54,10 +54,8 @@ def _json_text(payload: object) -> str:
 FIXTURE_FILES = {
     "config/problem.json": _json_text(
         {
-            "input_file": "stdin",
             "memory_limit_mb": 4,
             "mode": "pass-fail",
-            "output_file": "stdout",
             "pass_limit": 1,
             "time_limit_ms": 2000,
         }
@@ -66,8 +64,16 @@ FIXTURE_FILES = {
         {
             "accepted_solution_source": "solutions/main.cpp",
             "validator_source": "validators/validate.cpp",
-            "checker_source": "",
             "generator_sources": ["generators/gen.py"],
+            "generator_runs": 3,
+            "generator_args": [],
+            "validator_args": [],
+            "checker_args": [],
+            "compile_jobs": 0,
+            "validate_jobs": 0,
+            "solve_jobs": 0,
+            "run_jobs": 0,
+            "run_timeout_sec": 30,
         }
     ),
     "tests/spec.json": _json_text(

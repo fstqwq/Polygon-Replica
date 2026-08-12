@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import re
 import shutil
 import uuid
@@ -8,8 +7,9 @@ import xml.etree.ElementTree
 ET = xml.etree.ElementTree
 import zipfile
 from pathlib import Path, PurePosixPath
-from typing import TypedDict, cast
+from typing import TypedDict
 
+from app.main_constant import CPP_SOURCE_EXTENSIONS
 from app.service.importing.archive import (
     ArchiveView,
     BudgetedZipFile,
@@ -17,8 +17,22 @@ from app.service.importing.archive import (
 )
 from app.service.importing.statement_assets import ImportedLegacyStatementAsset, merge_imported_statement_assets
 from app.service.platform.testlib_source import maintained_testlib_header
-from app.service.problem.build_config import dumps_build_config
-from app.service.problem.solution_metadata import normalize_expected_behavior, render_solution_desc
+from app.service.problem.build_config import (
+    default_build_config,
+    dumps_build_config,
+    load_build_config,
+)
+from app.service.importing.solution_behavior import (
+    polygon_solution_expected_from_tag,
+    polygon_solution_filename,
+)
+from app.service.problem.solution_metadata import render_solution_desc
+from app.service.problem.runtime_config import (
+    ProblemConfig,
+    ProblemConfigLimits,
+    dumps_problem_config,
+)
+from app.service.problem.source_tree import load_problem_source_tree
 from app.service.verification.standard_checker import copy_standard_checker
 from app.service.statement.constant import (
     DEFAULT_PROBLEM_TITLE,
@@ -42,35 +56,9 @@ from app.service.problem.test_spec import (
 )
 
 
-SOURCE_SUFFIX_ALLOW = {".cpp", ".cc", ".cxx", ".c++", ".h", ".hpp", ".py", ".java"}
 GENERATOR_SOURCE_SUFFIX_ALLOW = {".cpp", ".cc", ".cxx", ".c++", ".py", ".java"}
+SOLUTION_SOURCE_SUFFIX_ALLOW = {".cpp", ".cc", ".cxx", ".c++", ".py", ".java"}
 STATEMENT_SECTION_SAMPLE_FILE_RE = re.compile(r"^example\.(\d+)(?:\.a)?$", re.IGNORECASE)
-POLYGON_SOLUTION_TAG_EXPECTED: dict[str, str] = {
-    "main": "accepted",
-    "accepted": "accepted",
-    "wrong-answer": "wrong_answer",
-    "presentation-error": "wrong_answer",
-    "time-limit-exceeded": "time_limit_exceeded",
-    "time-limit-exceeded-or-accepted": "tle_or_correct",
-    "time-limit-exceeded-or-memory-limit-exceeded": "tle_or_re",
-    "memory-limit-exceeded": "run_time_error",
-    "rejected": "rejected",
-    "failed": "rejected",
-    "do-not-run": "unknown",
-}
-
-
-def polygon_solution_expected_from_tag(tag: str) -> str:
-    if not tag:
-        return "unknown"
-    direct = POLYGON_SOLUTION_TAG_EXPECTED.get(tag)
-    if direct is not None:
-        return normalize_expected_behavior(direct)
-    expected = normalize_expected_behavior(tag)
-    if expected != "unknown":
-        return expected
-    normalized = tag.replace("-", "_").replace(" ", "_")
-    return normalize_expected_behavior(normalized)
 
 
 PolygonTestRow = TypedDict(
@@ -209,15 +197,6 @@ def _coerce_int(raw: str | None, default: int) -> int:
         return int(raw.strip())
     except Exception:
         return default
-
-
-def _safe_read_json(path: Path) -> dict[str, object]:
-    try:
-        if path.exists() and path.is_file() and (not path.is_symlink()):
-            return cast(dict[str, object], json.loads(path.read_text(encoding="utf-8")))
-    except Exception:
-        return {}
-    return {}
 
 
 def _read_small_bytes(zf: BudgetedZipFile, info: zipfile.ZipInfo) -> bytes:
@@ -702,7 +681,17 @@ class PolygonPackageImportService:
             "answers": answer_count,
         }
 
-    def _copy_source_from_zip(self, zf: BudgetedZipFile, entries: dict[str, zipfile.ZipInfo], source_path: str, workspace: Path, target_folder: str, target_name: str) -> str:
+    def _copy_source_from_zip(
+        self,
+        zf: BudgetedZipFile,
+        entries: dict[str, zipfile.ZipInfo],
+        source_path: str,
+        workspace: Path,
+        target_folder: str,
+        target_name: str,
+        *,
+        allowed_suffixes: set[str],
+    ) -> str:
         normalized = _normalize_zip_path(source_path)
         if not normalized:
             return ""
@@ -710,7 +699,7 @@ class PolygonPackageImportService:
         if info is None:
             return ""
         suffix = Path(normalized).suffix.lower()
-        if suffix and suffix not in SOURCE_SUFFIX_ALLOW:
+        if suffix not in allowed_suffixes:
             return ""
         rel = Path(target_folder) / target_name
         zf.copy_to(info, workspace / rel)
@@ -719,7 +708,7 @@ class PolygonPackageImportService:
     def _write_maintained_testlib(self, workspace: Path) -> str:
         target_rel = Path("third_party") / "testlib" / "testlib.h"
         self._write_bytes(workspace, target_rel, maintained_testlib_header(repo_root=Path(__file__).resolve().parents[3]).read_bytes())
-        return "third_party/upstream/testlib/testlib.h"
+        return target_rel.as_posix()
 
     def _import_components(
         self,
@@ -728,7 +717,7 @@ class PolygonPackageImportService:
         workspace: Path,
         meta: PolygonMeta,
     ) -> ComponentImportSummary:
-        build_cfg = _safe_read_json(workspace / "config" / "build.json")
+        build_cfg = default_build_config()
 
         imported_testlib = self._write_maintained_testlib(workspace)
 
@@ -742,6 +731,7 @@ class PolygonPackageImportService:
                 workspace,
                 "validators",
                 "validator.cpp",
+                allowed_suffixes=CPP_SOURCE_EXTENSIONS,
             )
             if imported_validator_source:
                 validator_source = imported_validator_source
@@ -762,6 +752,7 @@ class PolygonPackageImportService:
             workspace,
             "interactors",
             "interactor.cpp",
+            allowed_suffixes=CPP_SOURCE_EXTENSIONS,
         )
         interactor_source: str | None = None
         if imported_interactor_source:
@@ -789,6 +780,7 @@ class PolygonPackageImportService:
                 workspace,
                 "checkers",
                 "checker.cpp",
+                allowed_suffixes=CPP_SOURCE_EXTENSIONS,
             )
             if imported_checker_source:
                 build_cfg["checker_source"] = imported_checker_source
@@ -809,7 +801,15 @@ class PolygonPackageImportService:
             if (stem not in generator_names) and (not stem.lower().startswith("gen")):
                 continue
             suffix = Path(source).suffix.lower()
-            imported = self._copy_source_from_zip(zf, entries, source, workspace, "generators", Path(source).name)
+            imported = self._copy_source_from_zip(
+                zf,
+                entries,
+                source,
+                workspace,
+                "generators",
+                Path(source).name,
+                allowed_suffixes=GENERATOR_SOURCE_SUFFIX_ALLOW,
+            )
             if imported and suffix in GENERATOR_SOURCE_SUFFIX_ALLOW:
                 generator_sources.append(imported)
         generator_sources = sorted(dict.fromkeys(generator_sources))
@@ -830,34 +830,6 @@ class PolygonPackageImportService:
             "interactor_source": interactor_source,
             "generator_sources": generator_sources,
         }
-
-    @staticmethod
-    def _solution_suffix_from_source_type(source_type: str) -> str:
-        if not source_type:
-            return ""
-        token = source_type
-        if ("python" in token) or ("pypy" in token):
-            return ".py"
-        if "java" in token:
-            return ".java"
-        if ("cpp" in token) or ("c++" in token) or ("g++" in token) or ("clang++" in token):
-            return ".cpp"
-        return ""
-
-    def _solution_filename_for_import(self, source_path: str, source_type: str) -> str:
-        safe_name = Path(source_path).name
-        if not safe_name:
-            safe_name = "solution"
-        expected_suffix = self._solution_suffix_from_source_type(source_type)
-        if not expected_suffix:
-            return safe_name
-        lower_name = safe_name.lower()
-        if lower_name.endswith(expected_suffix):
-            return safe_name
-        current_suffix = Path(safe_name).suffix.lower()
-        if (not current_suffix) or (current_suffix in {".cpp", ".cc", ".cxx", ".c++", ".py", ".java"}):
-            return f"{safe_name}{expected_suffix}"
-        return safe_name
 
     def _import_solutions(
         self,
@@ -881,7 +853,9 @@ class PolygonPackageImportService:
             if info is None:
                 continue
             source_type = row["source_type"]
-            filename = self._solution_filename_for_import(source_path, source_type)
+            filename = polygon_solution_filename(source_path, source_type)
+            if Path(filename).suffix.lower() not in SOLUTION_SOURCE_SUFFIX_ALLOW:
+                continue
             target_rel = _unique_rel_path(workspace, solutions_dir_rel, filename)
             zf.copy_to(info, workspace / Path(target_rel))
             tag = row["tag"]
@@ -898,22 +872,37 @@ class PolygonPackageImportService:
         self,
         workspace: Path,
         meta: PolygonMeta,
-        components: ComponentImportSummary,
-    ) -> dict[str, object]:
-        cfg = _safe_read_json(workspace / "config" / "problem.json")
-        pass_limit = int(meta["pass_limit"])
+        *,
+        limits: ProblemConfigLimits,
+    ) -> ProblemConfig:
+        pass_limit = min(
+            limits.max_pass_limit,
+            max(limits.min_pass_limit, int(meta["pass_limit"])),
+        )
         explicit_run_count = str(meta.get("run_count_raw") or "").strip()
         if bool(meta.get("has_multipass_property")) and explicit_run_count in {"", "1"}:
             raise ValueError("multipass Polygon package is missing explicit pass limit")
-        mode = "interactive" if components["interactor_source"] else "pass-fail"
-        cfg["time_limit_ms"] = meta["time_limit_ms"]
-        cfg["memory_limit_mb"] = max(1, meta["memory_limit_bytes"] // (1024 * 1024))
-        cfg["mode"] = mode
-        cfg["pass_limit"] = pass_limit
+        mode = "interactive" if meta["interactor_source"] else "pass-fail"
+        cfg = ProblemConfig(
+            time_limit_ms=min(
+                limits.max_time_limit_ms,
+                max(limits.min_time_limit_ms, meta["time_limit_ms"]),
+            ),
+            memory_limit_mb=min(
+                limits.max_memory_limit_mb,
+                max(
+                    limits.min_memory_limit_mb,
+                    meta["memory_limit_bytes"] // (1024 * 1024),
+                ),
+            ),
+            mode=mode,
+            pass_limit=pass_limit,
+        )
         (workspace / "config").mkdir(parents=True, exist_ok=True)
         (workspace / "config" / "problem.json").write_text(
-            json.dumps(cfg, indent=2, sort_keys=True) + "\n",
+            dumps_problem_config(cfg, limits=limits),
             encoding="utf-8",
+            newline="\n",
         )
         return cfg
 
@@ -926,6 +915,7 @@ class PolygonPackageImportService:
         normalize_test_data_newlines: bool = False,
         text_limit_bytes: int,
         statement_sample_max_bytes: int,
+        problem_config_limits: ProblemConfigLimits,
     ) -> dict[str, object]:
         rooted = package.rooted_at("problem.xml")
         zf = rooted.zip_file
@@ -953,7 +943,7 @@ class PolygonPackageImportService:
         )
         component_summary = self._import_components(zf, entry_map, workspace, meta)
         solutions_summary = self._import_solutions(zf, entry_map, workspace, meta)
-        build_cfg = _safe_read_json(workspace / "config" / "build.json")
+        build_cfg = load_build_config(workspace)
         build_cfg_changed = False
         if solutions_summary["accepted_source"]:
             build_cfg["accepted_solution_source"] = solutions_summary["accepted_source"]
@@ -964,7 +954,17 @@ class PolygonPackageImportService:
                 encoding="utf-8",
                 newline="\n",
             )
-        problem_cfg = self._write_problem_config(workspace, meta, component_summary)
+        problem_cfg = self._write_problem_config(
+            workspace,
+            meta,
+            limits=problem_config_limits,
+        )
+        load_problem_source_tree(
+            workspace,
+            problem_limits=problem_config_limits,
+            tests_spec_max_bytes=text_limit_bytes,
+            statement_sample_max_bytes=statement_sample_max_bytes,
+        )
         warnings: list[str] = []
         checker_warning = component_summary["checker_import_warning"]
         if checker_warning:

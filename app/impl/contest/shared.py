@@ -25,8 +25,10 @@ from app.service.statement.context import normalize_statement_language
 from app.service.statement.render import render_statement_problem_assets_for_language
 from app.service.statement.title import statement_title_from_snapshot
 from app.service.problem_package.statement_samples import hydrate_native_statement_samples
+from app.service.problem.runtime_config import (
+    ProblemConfig, dumps_problem_config, problem_config_limits,
+)
 from app.service.platform.git_process import run_git
-from app.service.verification.runtime import coerce_int, normalize_problem_mode
 from app.impl.workspace.problem_config import read_problem_config
 
 _C = config.config_values
@@ -630,6 +632,7 @@ def _prepare_contest_pdf_problem(
                 statement_sample_max_bytes=int(
                     config_snapshot["STATEMENT_SAMPLE_MAX_BYTES"]
                 ),
+                problem_limits=problem_config_limits(_C),
             )
             item["preamble_lines"] = _extract_latex_color_definition_lines(native.root / "statement" / "olymp.sty")
             item["source_commit"] = native.manifest["source_commit"]
@@ -683,14 +686,13 @@ def _run_problem_general_update(
     requested_time_limit_ms: str,
     requested_memory_limit_mb: str,
 ) -> dict[str, object]:
-    requested: dict[str, object] = {
-        "time_limit_ms": str(requested_time_limit_ms or "").strip(),
-        "memory_limit_mb": str(requested_memory_limit_mb or "").strip(),
-    }
     result: dict[str, object] = {
         "problem_id": int(problem_id),
         "problem_slug": str(problem_slug),
-        "requested": requested,
+        "requested": {
+            "time_limit_ms": requested_time_limit_ms.strip(),
+            "memory_limit_mb": requested_memory_limit_mb.strip(),
+        },
         "status": "failed",
         "commit_id": "",
         "error": "",
@@ -701,18 +703,16 @@ def _run_problem_general_update(
         return result
     try:
         workspace = Path(config.workspace_service.ensure_workspace(problem_slug, actor_username, refresh_status=True))
-        safe_tl = coerce_int(
-            requested.get("time_limit_ms"),
-            int(_K.GENERAL_CONFIG_DEFAULTS["time_limit_ms"]),
-            _C.GENERAL_TIME_LIMIT_MIN_MS,
-            _C.GENERAL_TIME_LIMIT_MAX_MS,
-        )
-        safe_ml = coerce_int(
-            requested.get("memory_limit_mb"),
-            int(_K.GENERAL_CONFIG_DEFAULTS["memory_limit_mb"]),
-            _C.GENERAL_MEMORY_LIMIT_MIN_MB,
-            _C.GENERAL_MEMORY_LIMIT_MAX_MB,
-        )
+        limits = problem_config_limits(_C)
+        try:
+            safe_tl = int(requested_time_limit_ms)
+            safe_ml = int(requested_memory_limit_mb)
+        except ValueError as exc:
+            raise ValueError("problem limits must be integers") from exc
+        if not limits.min_time_limit_ms <= safe_tl <= limits.max_time_limit_ms:
+            raise ValueError("time limit is outside the configured range")
+        if not limits.min_memory_limit_mb <= safe_ml <= limits.max_memory_limit_mb:
+            raise ValueError("memory limit is outside the configured range")
         with config.workspace_service.workspace_lock(workspace):
             has_head = run_git(["git", "-C", str(workspace), "rev-parse", "--verify", "HEAD"]).returncode == 0
             if not has_head:
@@ -720,19 +720,17 @@ def _run_problem_general_update(
             before = config.git_service.status_change_summary(workspace, limit=1)
             if int(before.get("total", 0)) > 0:
                 raise RuntimeError("workspace has uncommitted changes")
-            payload, general_cfg, cfg_path = read_problem_config(workspace)
-            safe_mode = normalize_problem_mode(general_cfg.get("mode"), str(_K.GENERAL_CONFIG_DEFAULTS["mode"]))
-            payload.pop("interactive", None)
-            payload.update(
-                {
-                    "time_limit_ms": safe_tl,
-                    "memory_limit_mb": safe_ml,
-                    "mode": safe_mode,
-                    "pass_limit": int(general_cfg.get("pass_limit") or _K.GENERAL_CONFIG_DEFAULTS["pass_limit"]),
-                }
+            _payload, general_cfg, cfg_path = read_problem_config(workspace)
+            payload = ProblemConfig(
+                time_limit_ms=safe_tl,
+                memory_limit_mb=safe_ml,
+                mode=general_cfg["mode"],
+                pass_limit=general_cfg["pass_limit"],
             )
             cfg_path.parent.mkdir(parents=True, exist_ok=True)
-            cfg_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+            cfg_path.write_text(
+                dumps_problem_config(payload, limits=limits), encoding="utf-8", newline="\n"
+            )
             after = config.git_service.status_change_summary(workspace, limit=1)
             if int(after.get("total", 0)) <= 0:
                 result["status"] = "skipped"

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import hashlib
 import io
+import json
 from pathlib import Path
 import stat
 import struct
@@ -18,8 +20,20 @@ from app.service.importing.archive import (
 )
 from app.service.importing.native import NativePackageImportService
 from app.service.importing.upload import spool_fileobj
-from app.service.importing.polygon import polygon_solution_expected_from_tag
+from app.service.importing.solution_behavior import polygon_solution_expected_from_tag
+from app.service.problem.build_config import default_build_config, dumps_build_config
+from app.service.problem.runtime_config import (
+    ProblemConfig,
+    ProblemConfigLimits,
+    dumps_problem_config,
+)
+from app.service.problem.test_spec import dumps_tests_spec
+from app.service.problem_package.manifest import source_digest
 from tests.archive_support import archive_view_from_bytes
+from tests.identity_helpers import canonical_test_verification_id
+
+
+_PROBLEM_LIMITS = ProblemConfigLimits(100, 30000, 1, 2048, 1, 64)
 
 
 class TestPolygonPackageRules(unittest.TestCase):
@@ -73,6 +87,104 @@ class TestPolygonPackageRules(unittest.TestCase):
                 for name, content in entries:
                     archive.writestr(name, content)
         return payload.getvalue()
+
+    def _native_package(self) -> bytes:
+        with tempfile.TemporaryDirectory(prefix="native-package-") as raw:
+            root = Path(raw)
+            for directory in (
+                "config",
+                "tests/manual",
+                "solutions",
+                "checkers",
+                "test_data/tests/001",
+            ):
+                (root / directory).mkdir(parents=True, exist_ok=True)
+            problem = ProblemConfig(
+                time_limit_ms=1000,
+                memory_limit_mb=256,
+                mode="pass-fail",
+                pass_limit=1,
+            )
+            (root / "config/problem.json").write_text(
+                dumps_problem_config(problem, limits=_PROBLEM_LIMITS),
+                encoding="utf-8",
+            )
+            build = default_build_config()
+            build.update(
+                {
+                    "accepted_solution_source": "solutions/std.cpp",
+                    "checker_source": "checkers/checker.cpp",
+                }
+            )
+            (root / "config/build.json").write_text(
+                dumps_build_config(build), encoding="utf-8"
+            )
+            (root / "tests/spec.json").write_text(
+                dumps_tests_spec(
+                    [{"id": "001", "kind": "manual", "sample": False}],
+                    document_max_bytes=256 * 1024,
+                    sample_max_bytes=32 * 1024,
+                ),
+                encoding="utf-8",
+            )
+            (root / "tests/manual/001.in").write_text("1\n", encoding="utf-8")
+            (root / "solutions/std.cpp").write_text(
+                "int main(){return 0;}\n", encoding="utf-8"
+            )
+            (root / "solutions/std.cpp.desc").write_text(
+                "expected: accepted\n", encoding="utf-8"
+            )
+            (root / "checkers/checker.cpp").write_text(
+                "int main(){return 0;}\n", encoding="utf-8"
+            )
+            input_payload = b"1\n"
+            answer_payload = b"1\n"
+            (root / "test_data/tests/001/input").write_bytes(input_payload)
+            (root / "test_data/tests/001/answer").write_bytes(answer_payload)
+            manifest = {
+                "source_commit": "a" * 40,
+                "revision_number": 1,
+                "source_digest": source_digest(root),
+                "mode": "pass-fail",
+                "pass_limit": 1,
+                "verification": {
+                    "id": canonical_test_verification_id("native-import"),
+                    "source": "published",
+                },
+                "tests": [
+                    {
+                        "id": "001",
+                        "kind": "manual",
+                        "sample": False,
+                        "input": {
+                            "path": "test_data/tests/001/input",
+                            "sha256": hashlib.sha256(input_payload).hexdigest(),
+                            "size": len(input_payload),
+                        },
+                        "answer": {
+                            "path": "test_data/tests/001/answer",
+                            "sha256": hashlib.sha256(answer_payload).hexdigest(),
+                            "size": len(answer_payload),
+                        },
+                    }
+                ],
+            }
+            (root / "test_data/manifest.json").write_text(
+                json.dumps(manifest), encoding="utf-8"
+            )
+            payload = io.BytesIO()
+            with zipfile.ZipFile(
+                payload,
+                "w",
+                compression=zipfile.ZIP_DEFLATED,
+            ) as archive:
+                for path in sorted(root.rglob("*")):
+                    if path.is_file():
+                        archive.write(
+                            path,
+                            path.relative_to(root).as_posix(),
+                        )
+            return payload.getvalue()
 
     @staticmethod
     def _with_zip64_end_records(payload: bytes) -> bytes:
@@ -267,29 +379,53 @@ class TestPolygonPackageRules(unittest.TestCase):
             ):
                 source.read()
 
-    def test_native_import_never_consumes_materialized_test_data(self) -> None:
-        ignored = self._zip(
-            [
-                ("config/problem.json", b"{}\n"),
-                ("test_data/manifest.json", b"x" * 1024),
-                ("test_data/tests/001/input", b"y" * 1024),
-            ]
-        )
+    def test_native_import_validates_then_discards_materialized_test_data(self) -> None:
+        package = self._native_package()
         with tempfile.TemporaryDirectory(prefix="native-ignore-") as temp:
             workspace = Path(temp) / "workspace"
             workspace.mkdir()
-            with archive_view_from_bytes(
-                ignored,
-                max_expanded_bytes=32,
-            ) as archive:
+            git_metadata = workspace / ".git"
+            git_metadata.mkdir()
+            (git_metadata / "keep").write_text("git metadata\n", encoding="utf-8")
+            (workspace / ".stale-source").write_text(
+                "remove me\n", encoding="utf-8"
+            )
+            with archive_view_from_bytes(package) as archive:
                 NativePackageImportService().import_package(
                     workspace,
                     "native.zip",
                     archive,
                     text_limit_bytes=256 * 1024,
                     statement_sample_max_bytes=32 * 1024,
+                    problem_config_limits=_PROBLEM_LIMITS,
                 )
             self.assertFalse((workspace / "test_data").exists())
+            self.assertEqual(
+                (workspace / "solutions/std.cpp").read_text(encoding="utf-8"),
+                "int main(){return 0;}\n",
+            )
+            self.assertTrue((git_metadata / "keep").is_file())
+            self.assertFalse((workspace / ".stale-source").exists())
+
+        malformed = self._zip(
+            [
+                ("config/problem.json", b"{}\n"),
+                ("test_data/manifest.json", b"not-json"),
+            ]
+        )
+        with tempfile.TemporaryDirectory(prefix="native-invalid-") as temp:
+            workspace = Path(temp) / "workspace"
+            workspace.mkdir()
+            with archive_view_from_bytes(malformed) as archive:
+                with self.assertRaisesRegex(ValueError, "manifest"):
+                    NativePackageImportService().import_package(
+                        workspace,
+                        "native.zip",
+                        archive,
+                        text_limit_bytes=256 * 1024,
+                        statement_sample_max_bytes=32 * 1024,
+                        problem_config_limits=_PROBLEM_LIMITS,
+                    )
 
         selected = self._zip(
             [
@@ -314,6 +450,7 @@ class TestPolygonPackageRules(unittest.TestCase):
                         archive,
                         text_limit_bytes=256 * 1024,
                         statement_sample_max_bytes=32 * 1024,
+                        problem_config_limits=_PROBLEM_LIMITS,
                     )
             self.assertEqual(
                 list(workspace.parent.glob(".native-import-*")),

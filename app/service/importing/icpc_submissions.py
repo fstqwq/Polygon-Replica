@@ -9,7 +9,7 @@ import uuid
 
 import yaml
 
-from app.service.problem.solution_metadata import normalize_expected_behavior
+from app.service.importing.solution_behavior import external_expected_behavior
 
 
 _BEHAVIOR_BY_RULE: dict[tuple[frozenset[str], frozenset[str]], str] = {
@@ -44,7 +44,7 @@ _ANNOTATION_BEHAVIOR_BY_RESULTS = {
 
 def submission_expected_from_group(raw_group: str) -> str:
     token = raw_group.strip().lower().replace("-", "_")
-    direct = normalize_expected_behavior(token)
+    direct = external_expected_behavior(token)
     if direct != "unknown":
         return direct
     aliases = {

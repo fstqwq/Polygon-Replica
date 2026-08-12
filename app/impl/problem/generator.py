@@ -12,12 +12,23 @@ from app.impl.contest.workspace_scope import contest_workspace_context_from_requ
 from app.impl.problem.compile_check import judgehost_compile_check_error
 from app.impl.runtime.config import config
 from app.impl.problem.shared import _normalize_component_create_path, rename_component_source
-from app.impl.workspace.context_operation import audit, generator_sources_from_build_cfg, normalize_optional_component_source_path_safe, read_build_config, template_for_kind, workspace_rel_file_exists, write_build_config
+from app.impl.workspace.context_operation import (
+    audit,
+    generator_sources_from_build_cfg,
+    read_build_config,
+    template_for_kind,
+    workspace_rel_file_exists,
+    write_build_config,
+)
 from app.impl.workspace.context_component_status import generator_status_context
 from app.impl.workspace.access import require_write_access
 from app.impl.workspace.context_ui import page_ctx
 from app.main_util import enforce_textarea_max_bytes
-from app.service.platform.workspace_path import normalize_component_source_path, safe_workspace_path
+from app.service.platform.workspace_path import (
+    normalize_component_source_path,
+    normalize_optional_component_source_path_safe,
+    safe_workspace_path,
+)
 
 _C = config.config_values
 

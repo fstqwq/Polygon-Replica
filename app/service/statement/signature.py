@@ -113,17 +113,11 @@ def statement_sources_signature(
     except Exception as exc:
         raise RuntimeError(f"invalid tests/spec.json: {exc}") from exc
     sample_related_files: list[Path] = []
-    for index, row in enumerate(spec_rows, start=1):
-        if not isinstance(row, dict):
+    for row in spec_rows:
+        if not row["sample"]:
             continue
-        if not bool(row.get("sample")):
-            continue
-        test_id = row["id"].strip()
-        kind = row["kind"].strip().lower()
-        if kind not in {"manual", "gen"}:
-            raise RuntimeError(f"invalid test kind at tests/spec.json entry {index}: {kind}")
-        if not test_id:
-            continue
+        test_id = row["id"]
+        kind = row["kind"]
         # Custom sample text already changes tests/spec.json hash.
         if not row["sample_input"]:
             sample_in = _safe_workspace_regular_file(workspace, payload_rel_path_for_test(test_id, kind))

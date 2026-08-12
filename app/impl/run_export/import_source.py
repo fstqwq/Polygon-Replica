@@ -21,6 +21,7 @@ from app.service.importing.archive import (
 )
 from app.service.importing.native import NATIVE_PACKAGE_ANCHOR, NativePackageImportService
 from app.service.importing.polygon import PolygonPackageImportService
+from app.service.problem.runtime_config import problem_config_limits
 from app.service.platform.git_process import run_git
 
 _C = config.config_values
@@ -307,6 +308,9 @@ def import_package_into_workspace(
                     normalize_test_data_newlines=bool(normalize_test_data_newlines),
                     text_limit_bytes=policy.text_limit_bytes,
                     statement_sample_max_bytes=policy.statement_sample_max_bytes,
+                    problem_config_limits=problem_config_limits(
+                        config.config_values
+                    ),
                 ),
             )
             with config.workspace_service.workspace_lock(target_workspace):
@@ -385,6 +389,9 @@ def import_package_as_new_problem(
                         normalize_test_data_newlines=bool(normalize_test_data_newlines),
                         text_limit_bytes=policy.text_limit_bytes,
                         statement_sample_max_bytes=policy.statement_sample_max_bytes,
+                        problem_config_limits=problem_config_limits(
+                            config.config_values
+                        ),
                     ),
                 )
             with config.workspace_service.workspace_lock(target_workspace):

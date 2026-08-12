@@ -5,7 +5,12 @@ from pathlib import Path
 import tempfile
 from typing import Iterator, Protocol
 
+from app.config import build_config_values
 from app.service.importing.archive import ArchivePolicy, ArchiveView
+from app.service.problem.runtime_config import (
+    ProblemConfigLimits,
+    problem_config_limits,
+)
 
 
 class ProblemImporter(Protocol):
@@ -18,6 +23,7 @@ class ProblemImporter(Protocol):
         normalize_test_data_newlines: bool = False,
         text_limit_bytes: int,
         statement_sample_max_bytes: int,
+        problem_config_limits: ProblemConfigLimits,
     ) -> dict[str, object]: ...
 
 
@@ -69,4 +75,5 @@ def import_problem_package(
             normalize_test_data_newlines=normalize_test_data_newlines,
             text_limit_bytes=text_limit_bytes,
             statement_sample_max_bytes=statement_sample_max_bytes,
+            problem_config_limits=problem_config_limits(build_config_values()),
         )

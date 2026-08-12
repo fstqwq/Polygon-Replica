@@ -43,7 +43,12 @@ from app.service.verification.task_scheduler import (
     VerificationRuntimeCoordinator,
 )
 from app.service.verification.task_store import VerificationTaskStore
-from tests.common import E2ETestBase, config, override_config_values
+from tests.common import (
+    E2ETestBase,
+    config,
+    configure_interactive_workspace,
+    override_config_values,
+)
 from tests.identity_helpers import canonical_test_verification_id
 
 
@@ -3861,15 +3866,11 @@ class TestJudgehostService(E2ETestBase):
         )
 
         ws = Path(self._workspace_path())
-        (ws / "config").mkdir(parents=True, exist_ok=True)
-        (ws / "interactors").mkdir(parents=True, exist_ok=True)
-        (ws / "config" / "problem.json").write_text(
-            json.dumps({"time_limit_ms": 6000, "memory_limit_mb": 1, "mode": "interactive"}, indent=2) + "\n",
-            encoding="utf-8",
-        )
-        (ws / "interactors" / "interactor.cpp").write_text(
-            "#include <bits/stdc++.h>\nint main(int, char**){return 0;}\n",
-            encoding="utf-8",
+        configure_interactive_workspace(
+            ws,
+            time_limit_ms=6000,
+            memory_limit_mb=1,
+            pass_limit=1,
         )
 
         verification_id = canonical_test_verification_id(f"b-jh-limits-{uuid.uuid4().hex[:8]}")
@@ -4076,15 +4077,11 @@ class TestJudgehostService(E2ETestBase):
         )
 
         ws = Path(self._workspace_path())
-        (ws / "config").mkdir(parents=True, exist_ok=True)
-        (ws / "interactors").mkdir(parents=True, exist_ok=True)
-        (ws / "config" / "problem.json").write_text(
-            json.dumps({"time_limit_ms": 2000, "memory_limit_mb": 1024, "mode": "interactive", "pass_limit": 3}, indent=2) + "\n",
-            encoding="utf-8",
-        )
-        (ws / "interactors" / "interactor.cpp").write_text(
-            "#include <bits/stdc++.h>\nint main(int, char**){return 0;}\n",
-            encoding="utf-8",
+        configure_interactive_workspace(
+            ws,
+            time_limit_ms=2000,
+            memory_limit_mb=1024,
+            pass_limit=3,
         )
 
         verification_id = canonical_test_verification_id(f"b-jh-multipass-default-{uuid.uuid4().hex[:8]}")

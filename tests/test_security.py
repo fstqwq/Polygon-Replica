@@ -844,7 +844,9 @@ class TestSecurity(E2ETestBase):
         cfg.parent.mkdir(parents=True, exist_ok=True)
         from app.service.verification.standard_checker import copy_standard_checker
         copy_standard_checker("wcmp.cpp", ws)
-        cfg.write_text(json.dumps({"checker_source": "checkers/wcmp.cpp"}, indent=2) + "\n", encoding="utf-8")
+        build = json.loads(cfg.read_text(encoding="utf-8"))
+        build["checker_source"] = "checkers/wcmp.cpp"
+        cfg.write_text(json.dumps(build, indent=2) + "\n", encoding="utf-8")
         resp = checker_set_standard(problem="alice/sample", user="alice", checker_name="../../evil")
         self.assertEqual(resp.status_code, 303)
         messages = _flash_messages_from_response(resp)

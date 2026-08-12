@@ -21,6 +21,36 @@ os.environ["POLYGON_REPLICA_TESTSUITE_ROOT"] = str(_TESTSUITE_ROOT)
 _DEFAULT_TESTSUITE_STALE_TTL_SEC = 3600.0
 
 
+def configure_interactive_workspace(
+    workspace: Path,
+    *,
+    time_limit_ms: int,
+    memory_limit_mb: int,
+    pass_limit: int,
+) -> None:
+    problem_path = workspace / "config/problem.json"
+    problem = json.loads(problem_path.read_text(encoding="utf-8"))
+    problem.update(
+        time_limit_ms=time_limit_ms,
+        memory_limit_mb=memory_limit_mb,
+        mode="interactive",
+        pass_limit=pass_limit,
+    )
+    problem_path.write_text(
+        json.dumps(problem, indent=2) + "\n", encoding="utf-8"
+    )
+    interactor = workspace / "interactors/interactor.cpp"
+    interactor.parent.mkdir(parents=True, exist_ok=True)
+    interactor.write_text(
+        "#include <bits/stdc++.h>\nint main(int, char**){return 0;}\n",
+        encoding="utf-8",
+    )
+    build_path = workspace / "config/build.json"
+    build = json.loads(build_path.read_text(encoding="utf-8"))
+    build["interactor_source"] = "interactors/interactor.cpp"
+    build_path.write_text(json.dumps(build, indent=2) + "\n", encoding="utf-8")
+
+
 def _rmtree_retry(path: Path, attempts: int = 3, delay_sec: float = 0.1) -> None:
     target = Path(path)
     for _ in range(max(1, int(attempts))):
@@ -401,10 +431,8 @@ class WorkspaceTestBase(RuntimeDBTestBase):
     def _seed_verification_files(ws: Path) -> None:
         problem_cfg = ws / "config/problem.json"
         problem_cfg_payload: dict[str, object] = {
-            "input_file": "stdin",
             "memory_limit_mb": 1024,
             "mode": "pass-fail",
-            "output_file": "stdout",
             "pass_limit": 1,
             "time_limit_ms": 2000,
         }

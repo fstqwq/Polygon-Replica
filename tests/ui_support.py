@@ -669,6 +669,25 @@ def _wait_for_row(sql: str, params: list[object], timeout_sec: float = 8.0):
 class UIHelpersMixin:
     """UI helpers without database, workspace, or worker lifecycle ownership."""
 
+    @staticmethod
+    def _update_problem_config(workspace: Path, **changes: object) -> None:
+        path = workspace / "config/problem.json"
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload.update(changes)
+        path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
+    @staticmethod
+    def _write_solution_fixture(
+        workspace: Path,
+        filename: str,
+        expected: str,
+    ) -> None:
+        source = workspace / "solutions" / filename
+        source.write_text("int main(){return 0;}\n", encoding="utf-8")
+        Path(f"{source}.desc").write_text(
+            f"expected: {expected}\n", encoding="utf-8"
+        )
+
     def _prepare_verification_workspace(self, problem: str, user: str = "alice") -> Path:
         safe_problem = str(problem or "").strip()
         safe_user = str(user or "alice").strip() or "alice"
@@ -734,23 +753,39 @@ int main() {
 """,
             encoding="utf-8",
         )
+        (ws / "solutions" / "accepted.cpp.desc").write_text(
+            "expected: accepted\n",
+            encoding="utf-8",
+        )
         (ws / "tests" / "manual" / "001.in").write_text("7\n", encoding="utf-8")
-        (ws / "config" / "build.json").write_text(
+        (ws / "tests" / "spec.json").write_text(
             json.dumps(
                 {
-                    "generator_sources": ["generators/generator.cpp"],
-                    "validator_source": "validators/validator.cpp",
-                    "checker_source": "checkers/checker.cpp",
-                    "accepted_solution_source": "solutions/accepted.cpp",
-                    "generator_runs": 1,
-                    "compile_jobs": 1,
-                    "validate_jobs": 1,
-                    "solve_jobs": 1,
-                    "run_jobs": 1,
+                    "tests": [
+                        {"id": "001", "kind": "manual", "sample": False}
+                    ]
                 },
                 indent=2,
             )
             + "\n",
             encoding="utf-8",
+        )
+        build_path = ws / "config" / "build.json"
+        build = json.loads(build_path.read_text(encoding="utf-8"))
+        build.update(
+            {
+                "generator_sources": ["generators/generator.cpp"],
+                "validator_source": "validators/validator.cpp",
+                "checker_source": "checkers/checker.cpp",
+                "accepted_solution_source": "solutions/accepted.cpp",
+                "generator_runs": 1,
+                "compile_jobs": 1,
+                "validate_jobs": 1,
+                "solve_jobs": 1,
+                "run_jobs": 1,
+            }
+        )
+        build_path.write_text(
+            json.dumps(build, indent=2) + "\n", encoding="utf-8"
         )
         return ws

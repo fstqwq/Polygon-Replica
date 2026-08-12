@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import re
 import shutil
 import uuid
@@ -10,19 +9,26 @@ from typing import TypedDict
 
 import yaml
 
+from app.main_constant import CPP_SOURCE_EXTENSIONS
 from app.service.importing.archive import (
     ArchiveView,
     BudgetedZipFile,
     PACKAGE_METADATA_MAX_BYTES,
 )
 from app.service.importing.statement_assets import ImportedLegacyStatementAsset, merge_imported_statement_assets
-from app.service.problem.build_config import dumps_build_config
+from app.service.problem.build_config import default_build_config, dumps_build_config
 from app.service.importing.icpc_submissions import (
     consume_generated_expected_results,
     parse_submissions_yaml,
     submission_expected_from_group,
 )
 from app.service.problem.solution_metadata import render_solution_desc
+from app.service.problem.runtime_config import (
+    ProblemConfig,
+    ProblemConfigLimits,
+    dumps_problem_config,
+)
+from app.service.problem.source_tree import load_problem_source_tree
 from app.service.statement.constant import (
     DEFAULT_STATEMENT_PROBLEM_TEMPLATE,
     DEFAULT_STATEMENT_TEMPLATE,
@@ -41,21 +47,7 @@ from app.service.statement.title import normalize_problem_title
 from app.service.problem.test_spec import dumps_tests_spec
 
 
-SOURCE_SUFFIX_ALLOW = {
-    ".cpp",
-    ".cc",
-    ".cxx",
-    ".c++",
-    ".c",
-    ".h",
-    ".hpp",
-    ".py",
-    ".java",
-    ".kt",
-    ".rs",
-    ".go",
-    ".pas",
-}
+SOLUTION_SUFFIX_ALLOW = {".cpp", ".cc", ".cxx", ".c++", ".py", ".java"}
 
 
 ProblemMeta = TypedDict(
@@ -153,15 +145,6 @@ def _read_small_bytes(zf: BudgetedZipFile, info: zipfile.ZipInfo) -> bytes:
         limit=PACKAGE_METADATA_MAX_BYTES,
         label=info.filename,
     )
-
-
-def _read_json_or_empty(path: Path) -> dict[str, object]:
-    try:
-        if path.exists() and path.is_file() and (not path.is_symlink()):
-            return json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        return {}
-    return {}
 
 
 def _ini_unquote(raw: str) -> str:
@@ -625,7 +608,7 @@ class ICPCPackageImportService:
             group = rel_path.parts[1]
             filename = rel_path.name
             suffix = rel_path.suffix.lower()
-            if suffix and suffix not in SOURCE_SUFFIX_ALLOW:
+            if suffix not in SOLUTION_SUFFIX_ALLOW:
                 continue
             info = entries.get(rel)
             if info is None:
@@ -697,7 +680,7 @@ class ICPCPackageImportService:
         source_candidates: list[str] = []
         for rel in rel_paths:
             suffix = Path(rel).suffix.lower()
-            if suffix and suffix in SOURCE_SUFFIX_ALLOW:
+            if suffix in CPP_SOURCE_EXTENSIONS:
                 source_candidates.append(rel)
         if not source_candidates:
             return ""
@@ -750,11 +733,6 @@ class ICPCPackageImportService:
         else:
             checker_source = self._select_source_file(output_files, ["checker", "interactor"])
 
-        if mode != "interactive":
-            extra_interactors = self._copy_component_tree(zf, entries, "interactors", workspace, "interactors")
-            if extra_interactors:
-                interactor_source = self._select_source_file(extra_interactors, ["interactor"])
-
         return {
             "validator_files": len(validators),
             "checker_files": len(output_files) if mode != "interactive" else 0,
@@ -769,8 +747,9 @@ class ICPCPackageImportService:
         workspace: Path,
         meta: ProblemMeta,
         statement_summary: StatementSummary,
+        *,
+        limits: ProblemConfigLimits,
     ) -> dict[str, object]:
-        cfg = _read_json_or_empty(workspace / "config" / "problem.json")
         header = statement_summary["header"]
 
         time_limit_ms = meta["time_limit_ms"]
@@ -793,14 +772,33 @@ class ICPCPackageImportService:
         elif raw_output_file and raw_output_file.lower() not in {"stdout", "standard output", ""}:
             file_io_warning = f"package specifies file I/O (output: {raw_output_file}); forced to stdin/stdout"
         mode = meta["mode"]
-        pass_limit = int(meta["pass_limit"])
-
-        cfg["time_limit_ms"] = _coerce_int(time_limit_ms, 2000, min_value=1)
-        cfg["memory_limit_mb"] = _coerce_int(memory_limit_mb, 1024, min_value=1)
-        cfg["mode"] = mode
-        cfg["pass_limit"] = pass_limit
+        cfg = ProblemConfig(
+            time_limit_ms=min(
+                limits.max_time_limit_ms,
+                max(
+                    limits.min_time_limit_ms,
+                    _coerce_int(time_limit_ms, 2000, min_value=1),
+                ),
+            ),
+            memory_limit_mb=min(
+                limits.max_memory_limit_mb,
+                max(
+                    limits.min_memory_limit_mb,
+                    _coerce_int(memory_limit_mb, 1024, min_value=1),
+                ),
+            ),
+            mode=mode,
+            pass_limit=min(
+                limits.max_pass_limit,
+                max(limits.min_pass_limit, int(meta["pass_limit"])),
+            ),
+        )
         (workspace / "config").mkdir(parents=True, exist_ok=True)
-        (workspace / "config" / "problem.json").write_text(json.dumps(cfg, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        (workspace / "config" / "problem.json").write_text(
+            dumps_problem_config(cfg, limits=limits),
+            encoding="utf-8",
+            newline="\n",
+        )
         return {"cfg": cfg, "file_io_warning": file_io_warning}
 
     def _write_build_config(
@@ -810,7 +808,7 @@ class ICPCPackageImportService:
         components: ComponentsSummary,
         solutions: SolutionsSummary,
     ) -> dict[str, object]:
-        build_cfg = _read_json_or_empty(workspace / "config" / "build.json")
+        build_cfg = default_build_config()
         accepted_source = solutions["accepted_source"]
         if accepted_source:
             build_cfg["accepted_solution_source"] = accepted_source
@@ -855,6 +853,7 @@ class ICPCPackageImportService:
         normalize_test_data_newlines: bool = False,
         text_limit_bytes: int,
         statement_sample_max_bytes: int,
+        problem_config_limits: ProblemConfigLimits,
     ) -> dict[str, object]:
         package_name = package_name.strip()
         rooted = package.rooted_at("problem.yaml")
@@ -905,10 +904,21 @@ class ICPCPackageImportService:
         solutions_summary = self._import_solutions(zf, entry_map, workspace)
         components_summary = self._import_components(zf, entry_map, workspace, meta)
         self._import_attachments(zf, entry_map, workspace)
-        problem_result = self._write_problem_config(workspace, meta, statement_summary)
+        problem_result = self._write_problem_config(
+            workspace,
+            meta,
+            statement_summary,
+            limits=problem_config_limits,
+        )
         problem_cfg = problem_result["cfg"]
         file_io_warning = problem_result.get("file_io_warning", "")
         build_cfg = self._write_build_config(workspace, meta, components_summary, solutions_summary)
+        load_problem_source_tree(
+            workspace,
+            problem_limits=problem_config_limits,
+            tests_spec_max_bytes=text_limit_bytes,
+            statement_sample_max_bytes=statement_sample_max_bytes,
+        )
         result: dict[str, object] = {
             "package_name": package_name,
             "title": meta["title"],

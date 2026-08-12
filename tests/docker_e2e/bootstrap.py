@@ -76,10 +76,8 @@ def _seed_workspace() -> tuple[Path, int, int, int, str]:
     _write_json(
         workspace / "config/problem.json",
         {
-            "input_file": "stdin",
             "memory_limit_mb": 4,
             "mode": "pass-fail",
-            "output_file": "stdout",
             "pass_limit": 1,
             "time_limit_ms": 2000,
         },
@@ -89,8 +87,16 @@ def _seed_workspace() -> tuple[Path, int, int, int, str]:
         {
             "accepted_solution_source": "solutions/main.cpp",
             "validator_source": "validators/validate.cpp",
-            "checker_source": "",
             "generator_sources": ["generators/gen.py"],
+            "generator_runs": 3,
+            "generator_args": [],
+            "validator_args": [],
+            "checker_args": [],
+            "compile_jobs": 0,
+            "validate_jobs": 0,
+            "solve_jobs": 0,
+            "run_jobs": 0,
+            "run_timeout_sec": 30,
         },
     )
     _write_json(

@@ -3,7 +3,13 @@ from __future__ import annotations
 from pathlib import Path
 import os
 
-from app.service.problem.test_spec import load_tests_spec, payload_rel_path_for_test
+from app.service.problem.test_spec import (
+    TestSpecEntry,
+    load_tests_spec,
+    payload_rel_path_for_test,
+    resolve_configured_generator_source,
+)
+from app.service.verification.source import resolve_source
 
 
 def load_tests_spec_entries(
@@ -11,10 +17,8 @@ def load_tests_spec_entries(
     *,
     document_max_bytes: int,
     sample_max_bytes: int,
-) -> list[dict] | None:
+) -> list[TestSpecEntry]:
     spec_path = snapshot / "tests" / "spec.json"
-    if not spec_path.exists():
-        return None
     try:
         return load_tests_spec(
             spec_path,
@@ -106,13 +110,13 @@ def manual_test_sources(snapshot: Path) -> list[Path]:
     return []
 
 
-def tests_spec_payload_text(snapshot: Path, row: dict, index: int) -> tuple[str, str]:
-    test_id = row["id"].strip()
-    if not test_id:
-        raise RuntimeError(f"tests/spec.json entry {index} missing id")
-    kind = row["kind"].strip().lower()
-    if kind not in {"manual", "gen"}:
-        raise RuntimeError(f"invalid test kind at tests/spec.json entry {index}")
+def tests_spec_payload_text(
+    snapshot: Path,
+    row: TestSpecEntry,
+    index: int,
+) -> tuple[str, str]:
+    test_id = row["id"]
+    kind = row["kind"]
     rel = payload_rel_path_for_test(test_id, kind)
     payload_path = snapshot / rel
     try:
@@ -122,126 +126,46 @@ def tests_spec_payload_text(snapshot: Path, row: dict, index: int) -> tuple[str,
         raise RuntimeError(f"cannot read tests payload for id {test_id}: {exc}") from exc
     raise RuntimeError(f"missing tests payload file for id {test_id}: {rel}")
 
-def generator_source_catalog(snapshot: Path, generator_source_extensions: tuple[str, ...]) -> list[tuple[str, Path]]:
-    generators_root = snapshot / "generators"
-    try:
-        if not generators_root.exists() or not generators_root.is_dir() or generators_root.is_symlink():
-            return []
-    except OSError:
-        return []
-    try:
-        generators_root_resolved = generators_root.resolve()
-    except OSError:
-        return []
-    rows: list[tuple[str, Path]] = []
-    for dirpath, dirnames, filenames in os.walk(generators_root, topdown=True, followlinks=False):
-        dir_root = Path(dirpath)
-        try:
-            dir_root_resolved = dir_root.resolve()
-        except OSError:
-            dirnames[:] = []
-            continue
-        if generators_root_resolved not in dir_root_resolved.parents and generators_root_resolved != dir_root_resolved:
-            dirnames[:] = []
-            continue
-        safe_dirs: list[str] = []
-        for name in dirnames:
-            p = dir_root / name
-            try:
-                if p.is_symlink() or not p.exists() or not p.is_dir():
-                    continue
-            except OSError:
-                continue
-            safe_dirs.append(name)
-        dirnames[:] = sorted(safe_dirs)
-        for name in sorted(filenames):
-            if Path(name).suffix.lower() not in generator_source_extensions:
-                continue
-            p = dir_root / name
-            try:
-                if p.is_symlink() or not p.exists() or not p.is_file():
-                    continue
-                rel = str(p.relative_to(snapshot)).replace("\\", "/")
-            except (OSError, ValueError):
-                continue
-            rows.append((rel, p))
-    rows.sort(key=lambda item: item[0])
-    return rows
-
-
-def resolve_generator_source_from_token(
-    token: str,
-    generator_catalog: list[tuple[str, Path]],
+def generator_source_catalog(
+    snapshot: Path,
+    generator_sources: list[str],
     generator_source_extensions: tuple[str, ...],
-) -> tuple[str, Path]:
-    raw = str(token or "").strip().replace("\\", "/")
-    while raw.startswith("./"):
-        raw = raw[2:]
-    if not raw:
-        raise RuntimeError("generator command is empty")
-    if any(part == ".." for part in raw.split("/")):
-        raise RuntimeError(f"invalid generator command '{token}'")
-    by_rel = {rel: path for rel, path in generator_catalog}
-    candidates: list[str] = []
-    token_path = Path(raw)
-    suffix = token_path.suffix.lower()
-    if raw.startswith("generators/"):
-        if suffix in generator_source_extensions:
-            candidates.append(raw)
-        else:
-            for ext in generator_source_extensions:
-                candidates.append(f"{raw}{ext}")
-    else:
-        if suffix in generator_source_extensions:
-            candidates.append(f"generators/{raw}")
-        else:
-            candidates.append(f"generators/{raw}")
-            for ext in generator_source_extensions:
-                candidates.append(f"generators/{raw}{ext}")
-    seen: set[str] = set()
-    for rel in candidates:
-        rel_key = str(rel or "").strip()
-        if not rel_key or rel_key in seen:
-            continue
-        seen.add(rel_key)
-        hit = by_rel.get(rel_key)
-        if hit is not None:
-            return rel_key, hit
-    name = token_path.name
-    if suffix in generator_source_extensions:
-        exact = [(rel, p) for rel, p in generator_catalog if Path(rel).name == name]
-        if len(exact) == 1:
-            return exact[0]
-        if len(exact) > 1:
-            raise RuntimeError(f"ambiguous generator source for command '{token}'")
-    else:
-        stem = token_path.name
-        stem_matches = [(rel, p) for rel, p in generator_catalog if Path(rel).stem == stem]
-        if len(stem_matches) == 1:
-            return stem_matches[0]
-        if len(stem_matches) > 1:
-            raise RuntimeError(f"ambiguous generator source for command '{token}'")
-    raise RuntimeError(f"cannot resolve generator source for command '{token}'")
+) -> list[tuple[str, Path]]:
+    rows: list[tuple[str, Path]] = []
+    for relative in generator_sources:
+        source = resolve_source(snapshot, relative)
+        if source.suffix.lower() not in generator_source_extensions:
+            raise RuntimeError(
+                f"unsupported generator source language: {relative}"
+            )
+        rows.append((relative, source))
+    return rows
 
 
 def prepare_tests_spec_runtime(
     snapshot: Path,
-    tests_spec_entries: list[dict],
+    tests_spec_entries: list[TestSpecEntry],
     *,
+    generator_sources: list[str],
     generator_source_extensions: tuple[str, ...],
     parse_gen_command_tokens_fn,
 ) -> tuple[list[dict], list[tuple[str, Path]]]:
     runtime_entries: list[dict] = []
     generator_targets: list[tuple[str, Path]] = []
     by_source_rel: dict[str, str] = {}
-    generator_catalog = generator_source_catalog(snapshot, generator_source_extensions)
+    generator_catalog = generator_source_catalog(
+        snapshot,
+        generator_sources,
+        generator_source_extensions,
+    )
+    generator_path_by_source = dict(generator_catalog)
     for index, row in enumerate(tests_spec_entries, start=1):
-        kind = row["kind"].strip()
-        test_id = row["id"].strip()
-        sample = bool(row["sample"])
-        sample_input = row["sample_input"]
-        sample_output = row["sample_output"]
-        sample_output_validate = bool(row.get("sample_output_validate", True))
+        kind = row["kind"]
+        test_id = row["id"]
+        sample = row["sample"]
+        sample_input = row.get("sample_input", "")
+        sample_output = row.get("sample_output", "")
+        sample_output_validate = row.get("sample_output_validate", True)
         payload_rel, payload = tests_spec_payload_text(snapshot, row, index)
         if kind == "manual":
             runtime_entries.append(
@@ -262,7 +186,14 @@ def prepare_tests_spec_runtime(
             raise RuntimeError(f"invalid test kind at tests/spec.json entry {index}")
         command = str(payload or "").strip()
         tokens = parse_gen_command_tokens_fn(command)
-        source_rel, source_path = resolve_generator_source_from_token(tokens[0], generator_catalog, generator_source_extensions)
+        try:
+            source_rel = resolve_configured_generator_source(
+                tokens[0],
+                list(generator_path_by_source),
+            )
+        except ValueError as exc:
+            raise RuntimeError(str(exc)) from exc
+        source_path = generator_path_by_source[source_rel]
         compiled = by_source_rel.get(source_rel)
         if compiled is None:
             gen_index = len(by_source_rel) + 1

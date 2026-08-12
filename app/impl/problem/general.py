@@ -1,11 +1,9 @@
 from __future__ import annotations
 
-import app.main_constant as _K
 from app.impl.auth.session import require_session_user
 
-import json
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, cast
 from urllib.parse import urlencode
 
 from fastapi import Form, HTTPException, Depends
@@ -21,11 +19,11 @@ from app.impl.workspace.context_operation import (
 from app.impl.workspace.access import require_write_access
 from app.impl.workspace.context_ui import page_ctx
 from app.service.statement.context import normalize_statement_language, statement_languages
-from app.service.verification.runtime import (
-    coerce_int,
-    normalize_memory_limit_mb,
-    normalize_pass_limit,
-    normalize_problem_mode,
+from app.service.problem.runtime_config import (
+    ProblemConfig,
+    ProblemMode,
+    dumps_problem_config,
+    problem_config_limits,
 )
 from app.impl.workspace.problem_config import read_problem_config
 
@@ -77,40 +75,44 @@ def general_save(
     workspace = Path(ctx['workspace']['path'])
     msg = 'saved'
     try:
-        safe_time_limit = coerce_int(
-            time_limit_ms,
-            int(_K.GENERAL_CONFIG_DEFAULTS['time_limit_ms']),
-            _C.GENERAL_TIME_LIMIT_MIN_MS,
-            _C.GENERAL_TIME_LIMIT_MAX_MS,
-        )
-        safe_memory = normalize_memory_limit_mb(
-            memory_limit_mb,
-            default_mb=int(_K.GENERAL_CONFIG_DEFAULTS['memory_limit_mb']),
-            min_mb=_C.GENERAL_MEMORY_LIMIT_MIN_MB,
-            max_mb=_C.GENERAL_MEMORY_LIMIT_MAX_MB,
-        )
-        safe_mode = normalize_problem_mode(mode, str(_K.GENERAL_CONFIG_DEFAULTS['mode']))
-        safe_pass_limit = normalize_pass_limit(
-            pass_limit,
-            int(_K.GENERAL_CONFIG_DEFAULTS['pass_limit']),
-            min_value=_C.GENERAL_PASS_LIMIT_MIN,
-            max_value=_C.GENERAL_PASS_LIMIT_MAX,
-        )
+        limits = problem_config_limits(_C)
+        try:
+            safe_time_limit = int(time_limit_ms)
+            safe_memory = int(memory_limit_mb)
+            safe_pass_limit = int(pass_limit)
+        except ValueError as exc:
+            raise ValueError("problem limits must be integers") from exc
+        if not limits.min_time_limit_ms <= safe_time_limit <= limits.max_time_limit_ms:
+            raise ValueError(
+                "time limit must be between "
+                f"{limits.min_time_limit_ms} and {limits.max_time_limit_ms} ms"
+            )
+        if not limits.min_memory_limit_mb <= safe_memory <= limits.max_memory_limit_mb:
+            raise ValueError(
+                "memory limit must be between "
+                f"{limits.min_memory_limit_mb} and {limits.max_memory_limit_mb} MiB"
+            )
+        if not limits.min_pass_limit <= safe_pass_limit <= limits.max_pass_limit:
+            raise ValueError(
+                "pass limit must be between "
+                f"{limits.min_pass_limit} and {limits.max_pass_limit}"
+            )
+        if mode not in {"pass-fail", "interactive"}:
+            raise ValueError("problem mode must be pass-fail or interactive")
+        safe_mode = cast(ProblemMode, mode)
         with config.workspace_service.workspace_lock(workspace):
-            payload, _, cfg_path = read_problem_config(workspace)
-            payload.pop('interactive', None)
-            payload.update(
-                {
-                    'time_limit_ms': safe_time_limit,
-                    'memory_limit_mb': safe_memory,
-                    'mode': safe_mode,
-                    'pass_limit': safe_pass_limit,
-                }
+            _current, _, cfg_path = read_problem_config(workspace)
+            payload = ProblemConfig(
+                time_limit_ms=safe_time_limit,
+                memory_limit_mb=safe_memory,
+                mode=safe_mode,
+                pass_limit=safe_pass_limit,
             )
             cfg_path.parent.mkdir(parents=True, exist_ok=True)
             cfg_path.write_text(
-                json.dumps(payload, indent=2, sort_keys=True) + '\n',
+                dumps_problem_config(payload, limits=limits),
                 encoding='utf-8',
+                newline='\n',
             )
             _cleanup_build_config_for_mode(workspace, safe_mode)
         audit(

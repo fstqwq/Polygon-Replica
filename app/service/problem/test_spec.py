@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import json
 import shlex
-from pathlib import Path
+from pathlib import Path, PurePosixPath
+from typing import Literal, TypedDict
 
 from app.main_constant import (
     TESTS_SPEC_GEN_COMMAND_MAX_CHARS,
@@ -10,10 +11,46 @@ from app.main_constant import (
     TESTS_SPEC_MAX_ITEMS,
 )
 from app.main_util import enforce_textarea_max_bytes
+from app.service.problem.json_codec import (
+    loads_object,
+    reject_unknown_keys,
+    require_keys,
+)
+from app.service.problem.source_file import require_regular_source_file
 
 TESTS_SPEC_REL = Path("tests/spec.json")
 TESTS_SPEC_MANUAL_DIR_REL = Path("tests/manual")
 TESTS_SPEC_GENERATOR_DIR_REL = Path("tests/generator")
+_TESTS_SPEC_KEYS = frozenset({"tests"})
+_TEST_ENTRY_KEYS = frozenset(
+    {
+        "id",
+        "kind",
+        "sample",
+        "sample_input",
+        "sample_output",
+        "sample_output_validate",
+    }
+)
+_TEST_ENTRY_REQUIRED_KEYS = frozenset({"id", "kind", "sample"})
+
+
+TestKind = Literal["manual", "gen"]
+
+
+class TestSpecEntry(TypedDict):
+    id: str
+    kind: TestKind
+    sample: bool
+    sample_input: str
+    sample_output: str
+    sample_output_validate: bool
+
+
+def dumps_default_tests_spec() -> str:
+    """Construct the canonical source written for a newly-created problem."""
+
+    return json.dumps({"tests": []}, ensure_ascii=False, indent=2) + "\n"
 
 
 def _normalize_newlines(value: str) -> str:
@@ -27,7 +64,7 @@ def normalize_test_id(raw: object) -> str:
     return value
 
 
-def next_test_id(entries: list[dict]) -> str:
+def next_test_id(entries: list[TestSpecEntry]) -> str:
     max_value = 0
     for row in entries:
         raw_id = row.get("id")
@@ -59,11 +96,18 @@ def normalize_test_kind(raw: object) -> str:
 
 def payload_dir_rel_for_kind(kind: str) -> Path:
     safe_kind = normalize_test_kind(kind)
-    return TESTS_SPEC_MANUAL_DIR_REL if safe_kind == "manual" else TESTS_SPEC_GENERATOR_DIR_REL
+    return (
+        TESTS_SPEC_MANUAL_DIR_REL
+        if safe_kind == "manual"
+        else TESTS_SPEC_GENERATOR_DIR_REL
+    )
 
 
 def payload_rel_path_for_test(test_id: str, kind: str) -> str:
-    return f"{payload_dir_rel_for_kind(kind).as_posix()}/{spec_data_filename(test_id)}"
+    return (
+        f"{payload_dir_rel_for_kind(kind).as_posix()}/"
+        f"{spec_data_filename(test_id)}"
+    )
 
 
 def normalize_file_manual_input(raw: object) -> str:
@@ -101,6 +145,46 @@ def parse_gen_command_tokens(command: str) -> list[str]:
     if not tokens:
         raise ValueError("generator command is required")
     return tokens
+
+
+def resolve_configured_generator_source(
+    token: str,
+    configured_sources: list[str],
+) -> str:
+    raw = token.replace("\\", "/")
+    while raw.startswith("./"):
+        raw = raw[2:]
+    if not raw or any(part in {"", ".", ".."} for part in raw.split("/")):
+        raise ValueError(f"invalid generator command source '{token}'")
+    token_path = PurePosixPath(raw)
+    matches: list[str] = []
+    for source in configured_sources:
+        source_path = PurePosixPath(source)
+        without_root = source.removeprefix("generators/")
+        suffix_length = len(source_path.suffix)
+        source_without_suffix = source[:-suffix_length] if suffix_length else source
+        without_root_suffix = (
+            without_root[:-suffix_length] if suffix_length else without_root
+        )
+        if raw in {
+            source,
+            without_root,
+            source_without_suffix,
+            without_root_suffix,
+        }:
+            matches.append(source)
+            continue
+        if "/" not in raw and (
+            token_path.name == source_path.name
+            or (not token_path.suffix and token_path.name == source_path.stem)
+        ):
+            matches.append(source)
+    unique = list(dict.fromkeys(matches))
+    if not unique:
+        raise ValueError(f"generator source is not selected: {token}")
+    if len(unique) > 1:
+        raise ValueError(f"generator source is ambiguous: {token}")
+    return unique[0]
 
 
 def normalize_gen_command(raw: object) -> str:
@@ -175,7 +259,7 @@ def normalize_tests_spec_entry(
     *,
     index: int = 0,
     sample_max_bytes: int,
-) -> dict:
+) -> TestSpecEntry:
     if not isinstance(raw, dict):
         raise ValueError(f"tests[{index}] must be an object")
     raw_kind = raw.get("kind")
@@ -207,26 +291,26 @@ def normalize_tests_spec_entry(
     raw_id = raw_id_obj.strip()
     if not raw_id:
         raise ValueError(f"tests[{index}] id is required")
-    return {
-        "id": normalize_test_id(raw_id),
-        "kind": kind,
-        "sample": sample,
-        "sample_input": sample_input,
-        "sample_output": sample_output,
-        "sample_output_validate": sample_output_validate,
-    }
+    return TestSpecEntry(
+        id=normalize_test_id(raw_id),
+        kind=kind,
+        sample=sample,
+        sample_input=sample_input,
+        sample_output=sample_output,
+        sample_output_validate=sample_output_validate,
+    )
 
 
 def normalize_tests_spec_entries(
     raw: object,
     *,
     sample_max_bytes: int,
-) -> list[dict]:
+) -> list[TestSpecEntry]:
     if raw is None:
         return []
     if not isinstance(raw, list):
         raise ValueError("tests must be an array")
-    entries: list[dict] = []
+    entries: list[TestSpecEntry] = []
     seen_ids: set[str] = set()
     for idx, item in enumerate(raw, start=1):
         row = normalize_tests_spec_entry(
@@ -249,33 +333,81 @@ def loads_tests_spec(
     *,
     document_max_bytes: int,
     sample_max_bytes: int,
-) -> list[dict]:
+) -> list[TestSpecEntry]:
     bounded_text = enforce_textarea_max_bytes(
-        str(text or ""),
+        text,
         label="tests/spec.json",
         max_bytes=document_max_bytes,
     )
-    raw_text = bounded_text.strip()
-    if not raw_text:
-        return []
-    try:
-        payload = json.loads(raw_text)
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"invalid JSON: {exc}") from exc
-    if isinstance(payload, list):
-        return normalize_tests_spec_entries(
-            payload,
-            sample_max_bytes=sample_max_bytes,
+    payload = loads_object(bounded_text, label="tests/spec.json")
+    reject_unknown_keys(payload, allowed=_TESTS_SPEC_KEYS, label="tests/spec.json")
+    require_keys(payload, required=_TESTS_SPEC_KEYS, label="tests/spec.json")
+    tests = payload["tests"]
+    if not isinstance(tests, list):
+        raise ValueError("tests/spec.json.tests: must be an array")
+    entries: list[TestSpecEntry] = []
+    seen_ids: set[str] = set()
+    for index, raw_entry in enumerate(tests, start=1):
+        label = f"tests/spec.json.tests[{index}]"
+        if not isinstance(raw_entry, dict):
+            raise ValueError(f"{label}: must be an object")
+        entry_payload = dict(raw_entry)
+        reject_unknown_keys(entry_payload, allowed=_TEST_ENTRY_KEYS, label=label)
+        require_keys(entry_payload, required=_TEST_ENTRY_REQUIRED_KEYS, label=label)
+        test_id = entry_payload["id"]
+        if not isinstance(test_id, str) or not TESTS_SPEC_ID_RE.fullmatch(test_id):
+            raise ValueError(f"{label}.id: must be 3-12 decimal digits")
+        if test_id in seen_ids:
+            raise ValueError(f"{label}.id: duplicate id '{test_id}'")
+        seen_ids.add(test_id)
+        raw_kind = entry_payload["kind"]
+        if not isinstance(raw_kind, str) or raw_kind not in {"manual", "gen"}:
+            raise ValueError(f"{label}.kind: must be 'manual' or 'gen'")
+        kind: TestKind = raw_kind
+        sample = entry_payload["sample"]
+        if not isinstance(sample, bool):
+            raise ValueError(f"{label}.sample: must be a boolean")
+        entry = TestSpecEntry(
+            id=test_id,
+            kind=kind,
+            sample=sample,
+            sample_input="",
+            sample_output="",
+            sample_output_validate=True,
         )
-    if not isinstance(payload, dict):
-        raise ValueError("tests/spec.json must be an object")
-    tests = payload.get("tests")
-    if tests is None:
-        return []
-    return normalize_tests_spec_entries(
-        tests,
-        sample_max_bytes=sample_max_bytes,
-    )
+        if "sample_input" in entry_payload:
+            sample_input_value = entry_payload["sample_input"]
+            if not isinstance(sample_input_value, str):
+                raise ValueError(f"{label}.sample_input: must be a string")
+            if _normalize_newlines(sample_input_value) != sample_input_value:
+                raise ValueError(f"{label}.sample_input: must use LF newlines")
+            entry["sample_input"] = sample_input_value
+        if "sample_output" in entry_payload:
+            sample_output_value = entry_payload["sample_output"]
+            if not isinstance(sample_output_value, str):
+                raise ValueError(f"{label}.sample_output: must be a string")
+            if _normalize_newlines(sample_output_value) != sample_output_value:
+                raise ValueError(f"{label}.sample_output: must use LF newlines")
+            entry["sample_output"] = sample_output_value
+        if "sample_output_validate" in entry_payload:
+            validate = entry_payload["sample_output_validate"]
+            if not isinstance(validate, bool):
+                raise ValueError(
+                    f"{label}.sample_output_validate: must be a boolean"
+                )
+            entry["sample_output_validate"] = validate
+        sample_input = entry.get("sample_input", "")
+        sample_output = entry.get("sample_output", "")
+        if len(sample_input.encode("utf-8")) + len(sample_output.encode("utf-8")) > max(
+            1, int(sample_max_bytes)
+        ):
+            raise ValueError(
+                f"{label}: sample input and output exceed statement sample byte limit"
+            )
+        entries.append(entry)
+        if len(entries) > TESTS_SPEC_MAX_ITEMS:
+            raise ValueError("too many tests in tests/spec.json")
+    return entries
 
 
 def load_tests_spec(
@@ -283,11 +415,9 @@ def load_tests_spec(
     *,
     document_max_bytes: int,
     sample_max_bytes: int,
-) -> list[dict]:
-    if not path.exists():
-        return []
-    if path.is_symlink() or not path.is_file():
-        raise ValueError("tests/spec.json is invalid")
+) -> list[TestSpecEntry]:
+    root = path.parent.parent
+    path = require_regular_source_file(root, TESTS_SPEC_REL.as_posix())
     cap = max(1, int(document_max_bytes))
     try:
         if path.stat().st_size > cap:
@@ -310,7 +440,7 @@ def load_tests_spec(
 
 
 def dumps_tests_spec(
-    entries: list[dict],
+    entries: list[TestSpecEntry],
     *,
     document_max_bytes: int,
     sample_max_bytes: int,
@@ -373,7 +503,7 @@ def dumps_tests_spec(
     )
 
 
-def summarize_tests_spec(entries: list[dict]) -> dict:
+def summarize_tests_spec(entries: list[TestSpecEntry]) -> dict[str, int]:
     manual = 0
     gen = 0
     sample = 0

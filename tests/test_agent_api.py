@@ -153,12 +153,11 @@ class TestAgentAPI(E2ETestBase):
         username = self.random_id("agent-export-job")
         _password, auth_cookie = self._issue_auth_cookie(username)
         workspace = self._grant_problem_owner(username)
-        (workspace / "config").mkdir(parents=True, exist_ok=True)
         (workspace / "config" / "problem.json").write_text(
-            '{"mode":"pass-fail","pass_limit":1}\n',
+            '{"time_limit_ms":2000,"memory_limit_mb":1024,"mode":"pass-fail","pass_limit":1}\n',
             encoding="utf-8",
         )
-        (workspace / "tests" / "manual").mkdir(parents=True, exist_ok=True)
+        (workspace / "tests/manual").mkdir(parents=True, exist_ok=True)
         (workspace / "tests" / "manual" / "001.in").write_text("1\n", encoding="utf-8")
         (workspace / "tests" / "spec.json").write_text(
             json.dumps(

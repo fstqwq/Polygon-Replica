@@ -5,6 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from app.config import build_config_values
 from app.service.importing.contest import PolygonContestImportService
 from app.service.importing.archive import (
     ArchiveView,
@@ -13,6 +14,10 @@ from app.service.importing.archive import (
 )
 from app.service.importing.icpc import ICPCPackageImportService
 from app.service.importing.polygon import PolygonPackageImportService
+from app.service.problem.runtime_config import problem_config_limits
+
+
+_PROBLEM_LIMITS = problem_config_limits(build_config_values())
 
 
 class TestLargePackageImport(unittest.TestCase):
@@ -27,6 +32,7 @@ class TestLargePackageImport(unittest.TestCase):
                     archive,
                     text_limit_bytes=256 * 1024,
                     statement_sample_max_bytes=32 * 1024,
+                    problem_config_limits=_PROBLEM_LIMITS,
                 )
 
             problem = json.loads((workspace / "config/problem.json").read_text(encoding="utf-8"))
@@ -49,6 +55,7 @@ class TestLargePackageImport(unittest.TestCase):
                     archive,
                     text_limit_bytes=256 * 1024,
                     statement_sample_max_bytes=32 * 1024,
+                    problem_config_limits=_PROBLEM_LIMITS,
                 )
 
             problem = json.loads((workspace / "config/problem.json").read_text(encoding="utf-8"))
