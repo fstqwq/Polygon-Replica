@@ -199,6 +199,15 @@ class TestAgentAPI(E2ETestBase):
             '{"time_limit_ms":2000,"memory_limit_mb":1024,"mode":"pass-fail","pass_limit":1}\n',
             encoding="utf-8",
         )
+        (workspace / "config" / "build.json").write_text(
+            '{"accepted_solution_source":"solutions/ac_python.py"}\n',
+            encoding="utf-8",
+        )
+        (workspace / "solutions").mkdir(parents=True, exist_ok=True)
+        (workspace / "solutions" / "ac_python.py").write_text(
+            "print(2)\n",
+            encoding="utf-8",
+        )
         (workspace / "tests/manual").mkdir(parents=True, exist_ok=True)
         (workspace / "tests" / "manual" / "001.in").write_text("1\n", encoding="utf-8")
         (workspace / "tests" / "spec.json").write_text(
