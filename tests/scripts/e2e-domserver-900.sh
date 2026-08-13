@@ -54,9 +54,18 @@ collect_logs() {
   do
     compose logs --no-color "$service" >"$output_root/${service}.log" 2>&1 || true
   done
-  compose exec -T domserver sh -c \
-    'cat /var/log/nginx/error.log 2>/dev/null || true' \
-    >"$output_root/domserver-nginx-error.log" 2>&1 || true
+  compose exec -T domserver sh -c '
+    printf "%s\n" "=== nginx -t ==="
+    nginx -t 2>&1 || true
+    printf "%s\n" "=== supervisor child logs ==="
+    for file in /var/log/supervisor/*nginx*; do
+      [ -f "$file" ] || continue
+      printf "%s\n" "--- $file"
+      cat "$file"
+    done
+    printf "%s\n" "=== nginx error log ==="
+    cat /var/log/nginx/error.log 2>/dev/null || true
+  ' >"$output_root/domserver-nginx-error.log" 2>&1 || true
   collect_package_members
 }
 
