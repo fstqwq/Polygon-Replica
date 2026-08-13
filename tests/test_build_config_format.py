@@ -102,6 +102,7 @@ class TestBuildConfigFormat(unittest.TestCase):
             inspected["removed_keys"],
             ("checker_args", "run_timeout_sec"),
         )
+        self.assertEqual(inspected["extra_fields"], ())
         self.assertEqual(inspected["error"], "")
         with self.assertRaises(ValueError):
             parse_build_config(json.dumps(legacy))
@@ -112,6 +113,40 @@ class TestBuildConfigFormat(unittest.TestCase):
         self.assertEqual(unknown["config"], {"generator_sources": []})
         self.assertEqual(unknown["removed_keys"], ())
         self.assertIn("unsupported key 'future_selection'", unknown["error"])
+
+    def test_authoring_projects_mode_extra_field_without_losing_config(self) -> None:
+        payload = {
+            "accepted_solution_source": "solutions/std.cpp",
+            "validator_source": "validators/validator.cpp",
+            "checker_source": "checkers/checker.cpp",
+            "interactor_source": "",
+            "generator_sources": ["generators/gen.cpp"],
+        }
+
+        inspected = inspect_authoring_build_config(
+            json.dumps(payload),
+            problem_mode="pass-fail",
+        )
+
+        self.assertEqual(
+            inspected["config"],
+            {
+                "accepted_solution_source": "solutions/std.cpp",
+                "validator_source": "validators/validator.cpp",
+                "checker_source": "checkers/checker.cpp",
+                "generator_sources": ["generators/gen.cpp"],
+            },
+        )
+        self.assertEqual(inspected["extra_fields"], ("interactor_source",))
+        self.assertEqual(inspected["error"], "")
+        with self.assertRaisesRegex(
+            ValueError,
+            "extra field 'interactor_source' in a pass-fail problem",
+        ):
+            parse_build_config(
+                json.dumps(payload),
+                problem_mode="pass-fail",
+            )
 
     def test_authoring_inspection_repairs_legacy_without_guessing(self) -> None:
         with tempfile.TemporaryDirectory(prefix="problem-authoring-") as raw:
@@ -173,6 +208,82 @@ class TestBuildConfigFormat(unittest.TestCase):
             self.assertEqual(
                 (root / "config/build.json").read_text(encoding="utf-8"),
                 invalid_text,
+            )
+
+    def test_authoring_reports_pass_fail_interactor_without_losing_selections(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory(prefix="problem-authoring-") as raw:
+            root = Path(raw)
+            for directory in (
+                "config",
+                "tests",
+                "solutions",
+                "validators",
+                "checkers",
+            ):
+                (root / directory).mkdir(parents=True, exist_ok=True)
+            problem = ProblemConfig(
+                time_limit_ms=2000,
+                memory_limit_mb=1024,
+                mode="pass-fail",
+                pass_limit=1,
+            )
+            (root / "config/problem.json").write_text(
+                dumps_problem_config(problem, limits=_PROBLEM_LIMITS),
+                encoding="utf-8",
+            )
+            (root / "config/build.json").write_text(
+                json.dumps(
+                    {
+                        "accepted_solution_source": "solutions/std.cpp",
+                        "validator_source": "validators/validator.cpp",
+                        "checker_source": "checkers/checker.cpp",
+                        "interactor_source": "",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (root / "tests/spec.json").write_text(
+                '{"tests": []}\n',
+                encoding="utf-8",
+            )
+            for relative in (
+                "solutions/std.cpp",
+                "validators/validator.cpp",
+                "checkers/checker.cpp",
+            ):
+                (root / relative).write_text(
+                    "int main(){return 0;}\n",
+                    encoding="utf-8",
+                )
+
+            state = inspect_authoring_source(
+                root,
+                problem_limits=_PROBLEM_LIMITS,
+                tests_spec_max_bytes=_DOCUMENT_LIMIT,
+                statement_sample_max_bytes=_SAMPLE_LIMIT,
+                allow_repair=True,
+            )
+
+            self.assertEqual(
+                state["build"],
+                {
+                    "accepted_solution_source": "solutions/std.cpp",
+                    "validator_source": "validators/validator.cpp",
+                    "checker_source": "checkers/checker.cpp",
+                    "generator_sources": [],
+                },
+            )
+            self.assertEqual(
+                state["issues"],
+                [
+                    {
+                        "message": "config/build.json: extra field "
+                        "'interactor_source' in a pass-fail problem; remove it",
+                        "tone": "warning",
+                    }
+                ],
             )
 
     def test_problem_config_round_trip_is_exact(self) -> None:
@@ -390,7 +501,10 @@ class TestBuildConfigFormat(unittest.TestCase):
                 )
             (root / "unused-link").unlink()
             (root / "README.md").write_text("not source\n", encoding="utf-8")
-            with self.assertRaisesRegex(ValueError, "root is not allowed"):
+            with self.assertRaisesRegex(
+                ValueError,
+                "unexpected file at repository root: 'README.md'",
+            ):
                 load_problem_source_tree(
                     root,
                     problem_limits=_PROBLEM_LIMITS,

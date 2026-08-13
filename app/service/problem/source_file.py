@@ -2,6 +2,7 @@
 
 import os
 from pathlib import Path, PurePosixPath
+from typing import Literal
 
 from app.service.platform.workspace_path import (
     is_allowed_workspace_root_path,
@@ -10,12 +11,20 @@ from app.service.platform.workspace_path import (
 )
 
 
-def _validate_authored_relative(relative: str) -> None:
+def _validate_authored_relative(
+    relative: str,
+    *,
+    entry_kind: Literal["file", "directory"],
+) -> None:
     parts = PurePosixPath(relative).parts
     if is_hidden_workspace_path(parts):
         raise ValueError(f"{relative}: hidden source paths are not allowed")
     if not is_allowed_workspace_root_path(parts):
-        raise ValueError(f"{relative}: problem source root is not allowed")
+        raise ValueError(
+            f"unexpected {entry_kind} at repository root: '{relative}'; move it "
+            "into the appropriate problem source folder (for example, "
+            "validators/) or remove it"
+        )
     if is_repository_answer_path(parts):
         raise ValueError(f"{relative}: materialized answers are not authored source")
 
@@ -56,7 +65,7 @@ def validate_source_tree_filesystem(root: Path) -> None:
                     )
                 if not directory.is_dir():
                     raise ValueError(f"{relative}: special files are not allowed")
-                _validate_authored_relative(relative)
+                _validate_authored_relative(relative, entry_kind="directory")
             for name in sorted(filenames):
                 if parent == resolved_root and name in {".git", "test_data"}:
                     continue
@@ -68,7 +77,7 @@ def validate_source_tree_filesystem(root: Path) -> None:
                     )
                 if not path.is_file():
                     raise ValueError(f"{relative}: special files are not allowed")
-                _validate_authored_relative(relative)
+                _validate_authored_relative(relative, entry_kind="file")
     except OSError as exc:
         raise ValueError(f"cannot inspect problem source tree: {exc}") from exc
 

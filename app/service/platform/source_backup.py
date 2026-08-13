@@ -469,7 +469,7 @@ class SourceBackupService:
             raise
 
     def latest_archive_path(self) -> Path | None:
-        """Resolve the latest regular archive without following a symlink."""
+        """Resolve and fully verify the latest archive for download."""
 
         candidate = self.latest_path
         sidecar = self.sidecar_path
@@ -490,23 +490,41 @@ class SourceBackupService:
         return candidate
 
     def latest_summary(self) -> SourceBackupSummary:
-        """Return bounded metadata derived from the single archive file."""
+        """Return constant-time metadata for the published archive pair.
 
-        candidate = self.latest_archive_path()
-        if candidate is None:
+        Publication and download verify archive integrity. Rendering an admin
+        overview must not decompress the entire archive merely to show its
+        size and timestamp.
+        """
+
+        candidate = self.latest_path
+        sidecar = self.sidecar_path
+        try:
+            candidate_stat = candidate.lstat()
+            sidecar_stat = sidecar.lstat()
+        except OSError:
             return {
                 "available": False,
                 "filename": SOURCE_BACKUP_DOWNLOAD_NAME,
                 "size_bytes": 0,
                 "created_at": "",
             }
-        file_stat = candidate.stat()
+        if not (
+            stat.S_ISREG(candidate_stat.st_mode)
+            and stat.S_ISREG(sidecar_stat.st_mode)
+        ):
+            return {
+                "available": False,
+                "filename": SOURCE_BACKUP_DOWNLOAD_NAME,
+                "size_bytes": 0,
+                "created_at": "",
+            }
         return {
             "available": True,
             "filename": SOURCE_BACKUP_DOWNLOAD_NAME,
-            "size_bytes": int(file_stat.st_size),
+            "size_bytes": int(candidate_stat.st_size),
             "created_at": datetime.fromtimestamp(
-                file_stat.st_mtime,
+                candidate_stat.st_mtime,
                 tz=timezone.utc,
             ).isoformat(),
         }

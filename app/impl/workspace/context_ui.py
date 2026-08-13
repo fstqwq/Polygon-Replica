@@ -225,10 +225,22 @@ def page_ctx(
     upstream_higher = bool(ctx['workspace_revision'].get('upstream_higher'))
     ctx['workspace_needs_update'] = True if upstream_higher else behind_count > 0
     ctx['head_short'] = workspace_head[:8]
-    try:
-        ctx['checker_status'] = checker_status_context(workspace_path, build_cfg)
-    except Exception:
-        ctx['checker_status'] = {'mode': 'missing', 'display': 'unknown', 'standard_checker': '', 'standard_expected_checker': '', 'standard_warning': '', 'standard_valid': False, 'repo_source': 'checkers/checker.cpp', 'repo_source_exists': False}
+    if safe_mode == 'interactive':
+        ctx['checker_status'] = {
+            'mode': 'not-applicable',
+            'display': 'not used',
+            'standard_checker': '',
+            'standard_expected_checker': '',
+            'standard_warning': '',
+            'standard_valid': True,
+            'repo_source': '',
+            'repo_source_exists': False,
+        }
+    else:
+        try:
+            ctx['checker_status'] = checker_status_context(workspace_path, build_cfg)
+        except Exception:
+            ctx['checker_status'] = {'mode': 'missing', 'display': 'unknown', 'standard_checker': '', 'standard_expected_checker': '', 'standard_warning': '', 'standard_valid': False, 'repo_source': 'checkers/checker.cpp', 'repo_source_exists': False}
     try:
         ctx['generator_status'] = generator_status_context(
             workspace_path,
@@ -243,10 +255,18 @@ def page_ctx(
             'source_rows': [],
             'source_rows_truncated': False,
         }
-    try:
-        ctx['interactor_status'] = interactor_status_context(workspace_path, build_cfg)
-    except Exception:
-        ctx['interactor_status'] = {'mode': 'missing', 'display': 'missing', 'repo_source': 'interactors/interactor.cpp', 'repo_source_exists': False}
+    if safe_mode == 'interactive':
+        try:
+            ctx['interactor_status'] = interactor_status_context(workspace_path, build_cfg)
+        except Exception:
+            ctx['interactor_status'] = {'mode': 'missing', 'display': 'missing', 'repo_source': 'interactors/interactor.cpp', 'repo_source_exists': False}
+    else:
+        ctx['interactor_status'] = {
+            'mode': 'not-applicable',
+            'display': 'not used',
+            'repo_source': '',
+            'repo_source_exists': False,
+        }
     try:
         ctx['validator_status'] = validator_status_context(workspace_path, build_cfg)
     except Exception:

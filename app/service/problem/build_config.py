@@ -1,5 +1,6 @@
 """Canonical ``config/build.json`` model and codec."""
 
+from collections.abc import Collection
 import json
 from pathlib import Path, PurePosixPath
 from typing import NotRequired, TypedDict
@@ -12,6 +13,7 @@ from app.service.problem.json_codec import (
     loads_object,
     reject_unknown_keys,
 )
+from app.service.problem.runtime_config import ProblemMode
 from app.service.problem.source_file import require_regular_source_file
 
 BUILD_CONFIG_REL = Path("config/build.json")
@@ -49,7 +51,52 @@ class BuildConfig(TypedDict):
 class AuthoringBuildConfig(TypedDict):
     config: BuildConfig
     removed_keys: tuple[str, ...]
+    extra_fields: tuple[str, ...]
     error: str
+
+
+def mode_extra_build_fields(
+    problem_mode: ProblemMode | None,
+) -> frozenset[str]:
+    if problem_mode == "pass-fail":
+        return frozenset({"interactor_source"})
+    if problem_mode == "interactive":
+        return frozenset({"checker_source"})
+    return frozenset()
+
+
+def validate_build_fields_for_mode(
+    fields: Collection[str],
+    *,
+    problem_mode: ProblemMode | None,
+    label: str,
+) -> None:
+    extra_fields = sorted(
+        frozenset(fields).intersection(mode_extra_build_fields(problem_mode))
+    )
+    if not extra_fields:
+        return
+    assert problem_mode is not None
+    raise ValueError(
+        mode_extra_build_field_message(
+            extra_fields[0],
+            problem_mode=problem_mode,
+            label=label,
+        )
+    )
+
+
+def mode_extra_build_field_message(
+    field: str,
+    *,
+    problem_mode: ProblemMode,
+    label: str,
+) -> str:
+    article = "an" if problem_mode == "interactive" else "a"
+    return (
+        f"{label}: extra field '{field}' in {article} "
+        f"{problem_mode} problem; remove it"
+    )
 
 
 def _source_path(
@@ -105,9 +152,15 @@ def parse_build_config(
     text: str,
     *,
     label: str = "config/build.json",
+    problem_mode: ProblemMode | None = None,
 ) -> BuildConfig:
     payload = loads_object(text, label=label)
     reject_unknown_keys(payload, allowed=BUILD_CONFIG_KEYS, label=label)
+    validate_build_fields_for_mode(
+        payload,
+        problem_mode=problem_mode,
+        label=label,
+    )
     result = BuildConfig(generator_sources=[])
 
     if "accepted_solution_source" in payload:
@@ -155,13 +208,15 @@ def inspect_authoring_build_config(
     text: str,
     *,
     label: str = "config/build.json",
+    problem_mode: ProblemMode | None = None,
 ) -> AuthoringBuildConfig:
     """Read current or safely-projectable authored configuration.
 
     Strict consumers use :func:`parse_build_config`. This operation exists for
-    authoring pages, where known obsolete fields can be removed without
-    guessing any current selection. Unknown fields and invalid current values
-    remain errors.
+    authoring pages, where known obsolete fields can be removed and fields
+    that do not apply to the selected problem mode can be diagnosed without
+    hiding the remaining valid selections. Unknown fields and invalid current
+    values remain errors.
     """
 
     try:
@@ -170,42 +225,53 @@ def inspect_authoring_build_config(
         return {
             "config": BuildConfig(generator_sources=[]),
             "removed_keys": (),
+            "extra_fields": (),
             "error": str(exc),
         }
 
     unknown = frozenset(payload).difference(BUILD_CONFIG_KEYS)
+    extra_keys = mode_extra_build_fields(problem_mode)
+    extra_fields = tuple(sorted(frozenset(payload).intersection(extra_keys)))
     unsupported = sorted(unknown.difference(REMOVED_BUILD_CONFIG_KEYS))
     if unsupported:
         return {
             "config": BuildConfig(generator_sources=[]),
             "removed_keys": (),
+            "extra_fields": extra_fields,
             "error": f"{label}: unsupported key '{unsupported[0]}'",
         }
 
     projected = {
         key: payload[key]
         for key in BUILD_CONFIG_KEY_ORDER
-        if key in payload
+        if key in payload and key not in extra_keys
     }
     try:
         config = parse_build_config(
             json.dumps(projected, ensure_ascii=False),
             label=label,
+            problem_mode=problem_mode,
         )
     except ValueError as exc:
         return {
             "config": BuildConfig(generator_sources=[]),
             "removed_keys": (),
+            "extra_fields": extra_fields,
             "error": str(exc),
         }
     return {
         "config": config,
         "removed_keys": tuple(sorted(unknown)),
+        "extra_fields": extra_fields,
         "error": "",
     }
 
 
-def load_build_config(root: Path) -> BuildConfig:
+def load_build_config(
+    root: Path,
+    *,
+    problem_mode: ProblemMode | None = None,
+) -> BuildConfig:
     path = require_regular_source_file(root, BUILD_CONFIG_REL.as_posix())
     try:
         text = path.read_text(encoding="utf-8")
@@ -213,7 +279,7 @@ def load_build_config(root: Path) -> BuildConfig:
         raise ValueError("config/build.json: must be UTF-8") from exc
     except OSError as exc:
         raise ValueError(f"config/build.json: cannot read file: {exc}") from exc
-    return parse_build_config(text)
+    return parse_build_config(text, problem_mode=problem_mode)
 
 
 def ordered_build_config(payload: BuildConfig) -> dict[str, object]:

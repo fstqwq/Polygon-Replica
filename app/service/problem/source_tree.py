@@ -4,7 +4,11 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from app.main_constant import SOLUTION_SOURCE_EXTENSIONS
-from app.service.problem.build_config import BuildConfig, load_build_config
+from app.service.problem.build_config import (
+    BuildConfig,
+    load_build_config,
+    validate_build_fields_for_mode,
+)
 from app.service.problem.runtime_config import (
     ProblemConfig,
     ProblemConfigLimits,
@@ -65,7 +69,7 @@ def load_problem_source_tree(
 ) -> ProblemSourceTree:
     validate_source_tree_filesystem(root)
     problem = load_problem_config(root, limits=problem_limits)
-    build = load_build_config(root)
+    build = load_build_config(root, problem_mode=problem["mode"])
     tests = tuple(
         load_tests_spec(
             root / "tests/spec.json",
@@ -73,6 +77,27 @@ def load_problem_source_tree(
             sample_max_bytes=statement_sample_max_bytes,
         )
     )
+    return validate_problem_source_tree(
+        root,
+        problem=problem,
+        build=build,
+        tests=tests,
+        filesystem_validated=True,
+    )
+
+
+def validate_problem_source_tree(
+    root: Path,
+    *,
+    problem: ProblemConfig,
+    build: BuildConfig,
+    tests: tuple[TestSpecEntry, ...],
+    filesystem_validated: bool = False,
+) -> ProblemSourceTree:
+    """Validate already-decoded canonical source configuration."""
+
+    if not filesystem_validated:
+        validate_source_tree_filesystem(root)
     generator_sources = tuple(build["generator_sources"])
 
     selected_sources = [
@@ -112,14 +137,11 @@ def load_problem_source_tree(
     if accepted_source is not None:
         behaviors[accepted_source] = "accepted"
 
-    if problem["mode"] == "interactive" and "checker_source" in build:
-        raise ValueError(
-            "config/build.json.checker_source: not used in interactive mode"
-        )
-    if problem["mode"] == "pass-fail" and "interactor_source" in build:
-        raise ValueError(
-            "config/build.json.interactor_source: not used in pass-fail mode"
-        )
+    validate_build_fields_for_mode(
+        build,
+        problem_mode=problem["mode"],
+        label="config/build.json",
+    )
 
     return ProblemSourceTree(
         problem=problem,

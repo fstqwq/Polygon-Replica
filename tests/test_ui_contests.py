@@ -388,6 +388,65 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
             html,
         )
 
+    def test_pass_fail_extra_interactor_is_a_warning_not_missing_components(
+        self,
+    ) -> None:
+        contest_slug = f"review-mode-{uuid.uuid4().hex[:8]}"
+        self._create_contest(contest_slug)
+        workspace_service.grant_repo_access("alice/sample", "alice", "owner")
+        add_resp = contest_problems_add(
+            contest=contest_slug,
+            user="alice",
+            problem_slugs=["alice/sample"],
+            q="",
+        )
+        self.assertEqual(add_resp.status_code, 303)
+        workspace = Path(
+            workspace_service.ensure_workspace("alice/sample", "alice")
+        )
+        for relative in (
+            "solutions/std.cpp",
+            "checkers/checker.cpp",
+            "validators/validator.cpp",
+        ):
+            path = workspace / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("int main(){return 0;}\n", encoding="utf-8")
+        build_path = workspace / "config/build.json"
+        build_path.write_text(
+            json.dumps(
+                {
+                    "accepted_solution_source": "solutions/std.cpp",
+                    "checker_source": "checkers/checker.cpp",
+                    "validator_source": "validators/validator.cpp",
+                    "interactor_source": "",
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        overview = contest_overview_page(
+            _app_request(f"/contests/{contest_slug}/overview"),
+            contest_slug,
+            "alice",
+        )
+
+        self.assertEqual(overview.status_code, 200)
+        html = overview.body.decode("utf-8", errors="replace")
+        self.assertIn("Checker:", html)
+        self.assertIn("checker.cpp", html)
+        self.assertIn("Validator:", html)
+        self.assertIn("validator.cpp", html)
+        self.assertIn(
+            "extra field &#39;interactor_source&#39; in a pass-fail problem",
+            html,
+        )
+        self.assertNotIn("no main correct", html)
+        self.assertNotIn(
+            'contest-problem-detail contest-problem-detail-summary danger">unavailable',
+            html,
+        )
+
     def test_change_names_tl_ml_creates_per_problem_commit(self) -> None:
         problem_slug = f"alice/ui-bulk-{uuid.uuid4().hex[:8]}"
         workspace_service.ensure_problem(problem_slug)

@@ -9,15 +9,17 @@ from app.service.problem.build_config import (
     BuildConfig,
     dumps_build_config,
     inspect_authoring_build_config,
+    mode_extra_build_field_message,
 )
 from app.service.problem.runtime_config import (
     ProblemConfig,
     ProblemConfigLimits,
+    ProblemMode,
     default_problem_config,
     load_problem_config,
 )
 from app.service.problem.source_file import require_regular_source_file
-from app.service.problem.source_tree import load_problem_source_tree
+from app.service.problem.source_tree import validate_problem_source_tree
 from app.service.problem.test_spec import (
     TESTS_SPEC_REL,
     TestSpecEntry,
@@ -62,16 +64,21 @@ def _append_issue(
     issues.append({"message": message, "tone": tone})
 
 
-def _build_result(root: Path) -> AuthoringBuildConfig:
+def _build_result(
+    root: Path,
+    *,
+    problem_mode: ProblemMode | None,
+) -> AuthoringBuildConfig:
     try:
         text = _read_utf8(root, BUILD_CONFIG_REL.as_posix())
     except ValueError as exc:
         return {
             "config": BuildConfig(generator_sources=[]),
             "removed_keys": (),
+            "extra_fields": (),
             "error": str(exc),
         }
-    return inspect_authoring_build_config(text)
+    return inspect_authoring_build_config(text, problem_mode=problem_mode)
 
 
 def _normalization_message(keys: tuple[str, ...]) -> str:
@@ -108,15 +115,29 @@ def inspect_authoring_source(
         problem = default_problem_config(limits=problem_limits)
         _append_issue(issues, str(exc), "danger")
 
-    build_result = _build_result(root)
+    problem_mode = problem["mode"] if problem_valid else None
+    build_result = _build_result(root, problem_mode=problem_mode)
     build = build_result["config"]
     build_valid = not build_result["error"]
     build_normalized = False
     if build_result["error"]:
         _append_issue(issues, build_result["error"], "danger")
-    elif build_result["removed_keys"]:
+    else:
+        for field in build_result["extra_fields"]:
+            assert problem_mode is not None
+            _append_issue(
+                issues,
+                mode_extra_build_field_message(
+                    field,
+                    problem_mode=problem_mode,
+                    label="config/build.json",
+                ),
+                "warning",
+            )
+
+    if not build_result["error"] and build_result["removed_keys"]:
         message = _normalization_message(build_result["removed_keys"])
-        if allow_repair:
+        if allow_repair and not build_result["extra_fields"]:
             path = root / BUILD_CONFIG_REL
             try:
                 path.write_text(
@@ -143,7 +164,10 @@ def inspect_authoring_source(
             )
 
     if published_build_text is not None:
-        published = inspect_authoring_build_config(published_build_text)
+        published = inspect_authoring_build_config(
+            published_build_text,
+            problem_mode=problem_mode,
+        )
         if published["removed_keys"] and not build_result["removed_keys"]:
             _append_issue(
                 issues,
@@ -167,14 +191,13 @@ def inspect_authoring_source(
         problem_valid
         and build_valid
         and tests_valid
-        and (not build_result["removed_keys"] or build_normalized)
     ):
         try:
-            load_problem_source_tree(
+            validate_problem_source_tree(
                 root,
-                problem_limits=problem_limits,
-                tests_spec_max_bytes=tests_spec_max_bytes,
-                statement_sample_max_bytes=statement_sample_max_bytes,
+                problem=problem,
+                build=build,
+                tests=tuple(tests),
             )
         except ValueError as exc:
             _append_issue(issues, str(exc), "danger")

@@ -9,13 +9,16 @@ from fastapi import Form, HTTPException, Depends
 from app.impl.auth.shared import redirect_response
 from app.impl.runtime.dependency import runtime
 from app.impl.workspace.context_operation import (
-    read_build_config,
     workspace_rel_file_exists,
     write_build_config,
 )
 from app.impl.workspace.access import require_write_access
 from app.impl.workspace.context_ui import page_ctx
 from app.service.statement.context import normalize_statement_language, statement_languages
+from app.service.problem.build_config import (
+    BUILD_CONFIG_REL,
+    inspect_authoring_build_config,
+)
 from app.service.problem.runtime_config import (
     PROBLEM_CONFIG_REL,
     ProblemConfig,
@@ -34,23 +37,36 @@ _BUILD_SOURCE_KEYS = (
 )
 
 
-def _cleanup_build_config_for_mode(workspace: Path, mode: str) -> None:
+def _cleanup_build_config_for_mode(
+    workspace: Path,
+    mode: ProblemMode,
+) -> None:
     try:
-        build_cfg, build_cfg_path = read_build_config(workspace)
-    except ValueError:
+        build_cfg_path = safe_workspace_path(
+            workspace,
+            BUILD_CONFIG_REL.as_posix(),
+        )
+        inspected = inspect_authoring_build_config(
+            build_cfg_path.read_text(encoding="utf-8"),
+            problem_mode=mode,
+        )
+    except (OSError, UnicodeDecodeError, ValueError):
         return
+    if inspected["error"]:
+        return
+    build_cfg = inspected["config"]
     original = dict(build_cfg)
-    if mode == 'pass-fail':
-        build_cfg.pop('interactor_source', None)
-    elif mode == 'interactive':
-        build_cfg.pop('checker_source', None)
 
     for key in _BUILD_SOURCE_KEYS:
         source = build_cfg.get(key)
         if source and (not workspace_rel_file_exists(workspace, str(source))):
             build_cfg.pop(key, None)
 
-    if build_cfg != original:
+    if (
+        build_cfg != original
+        or inspected["extra_fields"]
+        or inspected["removed_keys"]
+    ):
         write_build_config(build_cfg_path, build_cfg)
 
 

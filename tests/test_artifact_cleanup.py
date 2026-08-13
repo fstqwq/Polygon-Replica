@@ -964,7 +964,9 @@ class TestArtifactCleanup(unittest.TestCase):
         self.assertEqual(self.source_backup.sidecar_path.read_bytes(), previous_sidecar)
         self.assertEqual(self.source_backup.latest_archive_path(), self.source_backup.latest_path)
 
-    def test_source_backup_download_rejects_unverified_archive(self) -> None:
+    def test_source_backup_summary_is_metadata_only_but_download_verifies(
+        self,
+    ) -> None:
         self._run_source_backup("backup-verified")
         self.source_backup.sidecar_path.write_text(
             f"{'0' * 64}  latest.tar.gz\n",
@@ -972,7 +974,9 @@ class TestArtifactCleanup(unittest.TestCase):
         )
 
         self.assertIsNone(self.source_backup.latest_archive_path())
-        self.assertFalse(self.source_backup.latest_summary()["available"])
+        # The overview only reports that a published regular-file pair exists;
+        # opening the download remains the strict integrity boundary.
+        self.assertTrue(self.source_backup.latest_summary()["available"])
 
     def test_source_backup_and_artifact_cleanup_are_mutually_exclusive(self) -> None:
         coordinator = self._coordinator()
