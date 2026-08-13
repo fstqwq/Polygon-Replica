@@ -14,8 +14,9 @@ package. The table and locator contracts are documented in the
 [storage](../../../../protocol/storage.md) protocols.
 
 Store instances are process-lived wrappers around short-lived SQLite
-connections and retain no task lifecycle of their own. Cross-store boundary
-fragmentation is recorded as PLC-009.
+connections and retain no task lifecycle of their own. A coordinating domain
+service owns any workflow that spans stores; configured filesystem paths are
+resolved by the platform storage layout rather than by these adapters.
 
 Before these stores are used, an existing SQLite database is checked read-only
 for every current required table, column, and named index. Missing objects block
