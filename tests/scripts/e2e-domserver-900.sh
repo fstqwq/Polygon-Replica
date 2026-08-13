@@ -67,6 +67,7 @@ collect_logs() {
     cat /var/log/nginx/error.log 2>/dev/null || true
   ' >"$output_root/domserver-nginx-error.log" 2>&1 || true
   collect_package_members
+  chmod -R a+rX "$output_root" 2>/dev/null || true
 }
 
 cleanup() {

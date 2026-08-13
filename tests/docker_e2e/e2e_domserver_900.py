@@ -75,6 +75,7 @@ int main(int argc, char **argv) {
     if (stage == 1 && actual == 1) {
         std::ofstream next(std::string(argv[3]) + "/nextpass.in");
         next << "2\n";
+        next.close();
         quitf(_ok, "continue to pass two");
     }
     if (stage == 2 && actual == 2) quitf(_ok, "two passes completed");
