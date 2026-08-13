@@ -75,10 +75,17 @@ class MaintenanceAdmissionMiddleware:  # pylint: disable=too-few-public-methods
             return
         admission = self._runtime.maintenance_admission_gate
         path = str(scope.get("path") or "")
+        method = str(scope.get("method") or "GET").upper()
         if admission.is_exempt(path):
             await self._asgi_app(scope, receive, send)
             return
-        if not admission.enter_request():
+        counted = False
+        if admission.is_drain_control(path, method):
+            admitted, counted = admission.enter_control_request()
+        else:
+            admitted = admission.enter_request()
+            counted = admitted
+        if not admitted:
             response = PlainTextResponse(
                 "The site is temporarily unavailable for maintenance. Retry shortly.\n",
                 status_code=503,
@@ -93,7 +100,8 @@ class MaintenanceAdmissionMiddleware:  # pylint: disable=too-few-public-methods
         try:
             await self._asgi_app(scope, receive, send)
         finally:
-            admission.leave_request()
+            if counted:
+                admission.leave_request()
 
 
 class RuntimeBindingMiddleware:  # pylint: disable=too-few-public-methods

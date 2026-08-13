@@ -4,7 +4,6 @@ from urllib.parse import quote, quote_plus, urlencode
 
 from fastapi import Depends, Form, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
-
 from app.impl.auth.csrf import issue_password_form_csrf_token, verify_password_form_csrf_token
 from app.impl.auth.password_envelope import password_envelope_store
 from app.impl.auth.session import require_session_user
@@ -356,7 +355,9 @@ def admin_overview_page(
                 if isinstance(section.get("changed_count"), (int, float))
             ),
             "smtp": runtime().smtp_config_service.snapshot().__dict__,
-            "maintenance_status": runtime().maintenance_service.snapshot(),
+            "maintenance_status": runtime().maintenance_service.snapshot(
+                exclude_current_request=True
+            ),
             "artifact_usage": _artifact_usage_view(),
             "source_backup": _source_backup_view(),
         }
@@ -470,7 +471,59 @@ def admin_artifacts_cleanup(user: Annotated[str, Depends(require_session_user)])
     return JSONResponse(
         {"error": started.reason, "busy": dict(started.busy)},
         headers={"Cache-Control": "no-store"},
-        status_code=409 if started.reason == "busy" else 500,
+        status_code=(
+            409
+            if started.reason in {"busy", "drain_required"}
+            else 500
+        ),
+    )
+
+
+def admin_maintenance_admission(
+    user: Annotated[str, Depends(require_session_user)],
+    action: str = Form(""),
+):
+    """Begin or cancel the explicit pre-maintenance drain."""
+
+    _admin_user_context(user)
+    if action == "drain":
+        changed = runtime().maintenance_service.begin_drain()
+    elif action == "resume":
+        changed = runtime().maintenance_service.cancel_drain()
+    else:
+        raise HTTPException(status_code=400, detail="unknown admission action")
+    if not changed.accepted:
+        return JSONResponse(
+            {"error": changed.reason, "busy": dict(changed.busy)},
+            headers={"Cache-Control": "no-store"},
+            status_code=409,
+        )
+    return RedirectResponse(
+        "/admin",
+        status_code=303,
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+def admin_application_restart(
+    user: Annotated[str, Depends(require_session_user)],
+):
+    """Exit after a completed drain and let the configured supervisor restart."""
+
+    _ctx, actor_user_id = _admin_user_context(user)
+    started = runtime().maintenance_service.restart_when_idle(
+        actor_user_id=actor_user_id
+    )
+    if started.accepted:
+        return RedirectResponse(
+            "/maintenance",
+            status_code=303,
+            headers={"Cache-Control": "no-store"},
+        )
+    return JSONResponse(
+        {"error": started.reason, "busy": dict(started.busy)},
+        headers={"Cache-Control": "no-store"},
+        status_code=409,
     )
 
 
@@ -492,7 +545,11 @@ def admin_source_backup(
     return JSONResponse(
         {"error": started.reason, "busy": dict(started.busy)},
         headers={"Cache-Control": "no-store"},
-        status_code=409 if started.reason == "busy" else 500,
+        status_code=(
+            409
+            if started.reason in {"busy", "drain_required"}
+            else 500
+        ),
     )
 
 

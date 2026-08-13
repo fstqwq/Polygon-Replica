@@ -120,6 +120,9 @@ run_variant() {
   compose "$variant" run --rm --no-deps e2e-real prepare
   compose "$variant" up --detach judgehost
   compose "$variant" run --rm --no-deps e2e-real verify
+  if [[ "$POLYGON_REPLICA_E2E_PRODUCT_TAIL" == "1" ]]; then
+    compose "$variant" run --rm --no-deps e2e-real restart
+  fi
 }
 
 mkdir -p "$REPO_ROOT/.e2e"

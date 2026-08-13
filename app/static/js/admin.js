@@ -133,9 +133,25 @@ function initJudgehostToggles() {
   });
 }
 
+function initMaintenanceToggle() {
+  const form = document.querySelector("[data-maintenance-toggle-form='1']");
+  if (!form) return;
+  const toggle = form.querySelector("[data-maintenance-toggle='1']");
+  const action = form.querySelector("[data-maintenance-action='1']");
+  if (!toggle || !action) return;
+  toggle.addEventListener("change", () => {
+    const intendedAction = toggle.checked ? "drain" : "resume";
+    action.value = intendedAction;
+    if (intendedAction === "resume") form.dataset.confirmApproved = "1";
+    toggle.disabled = true;
+    form.requestSubmit();
+  });
+}
+
 onReady(() => {
   initTokenGenerators();
   initJudgehostConfiguration();
   initJudgehostFilter();
   initJudgehostToggles();
+  initMaintenanceToggle();
 });

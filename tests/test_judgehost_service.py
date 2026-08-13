@@ -31,6 +31,7 @@ from app.service.judgehost.case_result import build_case_result
 from app.service.judgehost.batch_scheduler_models import CompileSubmission, ExecutionBatchSpec
 from app.service.judgehost.identity import domjudge_job_id, domjudge_submit_id
 from app.service.judgehost.api import Judgehost
+from app.service.platform.maintenance.admission import MaintenanceAdmissionGate
 from app.service.platform.runtime_blob_store import PayloadFile
 from app.service.verification.diagnostic import compose_task_diagnostic_display
 from app.service.execution.policy import normalize_execution_result
@@ -829,9 +830,11 @@ class TestJudgehostService(E2ETestBase):
             }
         )
 
-    def test_domjudge_fetch_uses_two_case_default_and_honors_explicit_one(self) -> None:
+    def test_draining_worker_can_enqueue_and_dispatch_existing_work(self) -> None:
         service = self._fresh_judgehost_service()
         self.addCleanup(service.reset_runtime_state)
+        gate = MaintenanceAdmissionGate()
+        service.set_admission_gate(gate)
         service.state.fetch_batch_size = 2
         verification_id = canonical_test_verification_id(f"b-jh-default-batch-{uuid.uuid4().hex[:8]}")
         run_id = f"r-jh-default-batch-{uuid.uuid4().hex[:8]}"
@@ -844,6 +847,8 @@ class TestJudgehostService(E2ETestBase):
                 ("004.in", "four\n", "four\n"),
             ],
         )
+        with gate.locked():
+            gate.drain_locked()
         service.enqueue_task(
             problem=self.problem,
             username=self.user,
@@ -3585,6 +3590,8 @@ class TestJudgehostService(E2ETestBase):
             try:
                 self.assertTrue(stream_started.wait(timeout=2))
                 self.assertEqual(service.busy_counts()["callbacks"], 1)
+                drained = runtime.maintenance_service.begin_drain()
+                self.assertTrue(drained.accepted, drained.reason)
                 started = runtime.maintenance_service.start_cleanup(
                     actor_user_id=0,
                 )
@@ -3594,6 +3601,7 @@ class TestJudgehostService(E2ETestBase):
             finally:
                 release_stream.set()
                 request_thread.join(timeout=2)
+                runtime.maintenance_service.cancel_drain()
 
         self.assertFalse(request_thread.is_alive())
         self.assertEqual(failures, [])
@@ -3652,6 +3660,29 @@ class TestJudgehostService(E2ETestBase):
                 close_thread.join(timeout=2)
                 with gate.locked():
                     gate.open_locked()
+
+    def test_draining_empty_fetch_work_skips_long_poll(self) -> None:
+        service = runtime.judgehost_task_service
+        scheduler = service.state.batch_scheduler
+        gate = runtime.maintenance_admission_gate
+        with gate.locked():
+            gate.drain_locked()
+        try:
+            with patch.object(
+                scheduler,
+                "wait_for_ready_batch",
+                side_effect=AssertionError("draining fetch-work must not long-poll"),
+            ):
+                started = time.monotonic()
+                result = service.domjudge_fetch_work(
+                    "judgehost-maintenance-draining",
+                    max_batchsize=1,
+                )
+            self.assertEqual(result, [])
+            self.assertLess(time.monotonic() - started, 0.5)
+        finally:
+            with gate.locked():
+                gate.open_locked()
 
     def test_fetch_work_does_not_wait_for_busy_maintenance_admission_lock(self) -> None:
         service = runtime.judgehost_task_service

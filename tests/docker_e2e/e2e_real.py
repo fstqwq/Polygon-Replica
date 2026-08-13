@@ -7,6 +7,7 @@ import json
 import os
 import sqlite3
 import subprocess
+import tarfile
 import time
 import zipfile
 from html.parser import HTMLParser
@@ -18,6 +19,7 @@ import httpx
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
 
+from app.service.platform.maintenance.plan import ARTIFACT_TABLES
 from e2e_real_contest import (
     CONTEST,
     assert_contest_pdf,
@@ -1131,6 +1133,210 @@ def _assert_real_judgehost_executed(client: httpx.Client) -> None:
         raise RuntimeError(f"real Judgehost did not execute a case: {host!r}")
 
 
+def _wait_for_admin_state(
+    client: httpx.Client,
+    *,
+    admission_state: str,
+    operation_status: str | None = None,
+    timeout_sec: float = 120.0,
+) -> str:
+    deadline = time.monotonic() + timeout_sec
+    latest = ""
+    while time.monotonic() < deadline:
+        response = client.get("/admin")
+        if response.status_code == 200:
+            latest = response.text
+            if f">{admission_state}</strong>" in latest and (
+                operation_status is None or f">{operation_status}</strong>" in latest
+            ) and (admission_state != "draining" or "0 active" in latest):
+                return latest
+        time.sleep(0.1)
+    raise RuntimeError(
+        f"Admin did not reach admission={admission_state!r} "
+        f"operation={operation_status!r}: {latest[:500]!r}"
+    )
+
+
+def _begin_idle_drain(client: httpx.Client) -> None:
+    response = _post(
+        client,
+        "/admin/maintenance/admission",
+        {"action": "drain"},
+    )
+    if response.headers.get("location") != "/admin":
+        raise RuntimeError("maintenance drain did not return to Admin")
+    _wait_for_admin_state(client, admission_state="draining")
+    admin_page = client.get("/admin/judgehosts")
+    if admin_page.status_code != 200:
+        raise RuntimeError("draining made Admin pages unavailable")
+    blocked_page = client.get(f"/problems/{PROBLEM}/workspace")
+    if blocked_page.status_code != 503:
+        raise RuntimeError("draining admitted a new business page request")
+
+
+def _wait_for_operation(
+    client: httpx.Client,
+    *,
+    location: str,
+    timeout_sec: float = 300.0,
+) -> None:
+    deadline = time.monotonic() + timeout_sec
+    latest = ""
+    while time.monotonic() < deadline:
+        response = client.get("/maintenance")
+        latest = response.text
+        if response.status_code == 303:
+            if response.headers.get("location") != location:
+                raise RuntimeError(
+                    f"maintenance redirected unexpectedly: {response.headers!r}"
+                )
+            return
+        if "failed" in latest.lower():
+            raise RuntimeError(f"maintenance operation failed: {latest!r}")
+        time.sleep(0.1)
+    raise RuntimeError(f"maintenance operation did not finish: {latest!r}")
+
+
+def _exercise_maintenance_and_backup(
+    client: httpx.Client,
+    *,
+    verification_id: str,
+    expected_head: str,
+) -> None:
+    bare_root = Path(os.environ["POLYGON_REPLICA_E2E_BARE_ROOT"]).resolve()
+    workspace_root = Path(os.environ["POLYGON_REPLICA_E2E_WORKSPACE_ROOT"]).resolve()
+    artifacts_root = Path(os.environ["POLYGON_REPLICA_E2E_ARTIFACTS_ROOT"]).resolve()
+    cache_root = Path(os.environ["POLYGON_REPLICA_E2E_CACHE_ROOT"]).resolve()
+    backup_root = Path(os.environ["POLYGON_REPLICA_E2E_STATE_DIR"]).parent.resolve()
+    contest_source_root = Path("/var/lib/polygon-replica/contest-sources").resolve()
+
+    contest_source = (
+        contest_source_root
+        / CONTEST
+        / "statements"
+        / "english"
+        / "e2e.txt"
+    )
+    upload = client.post(
+        f"/contests/{CONTEST}/packages/statement/upload",
+        data={"language": "english", "path": "e2e.txt"},
+        files={"upload": ("e2e.txt", b"durable contest source\n", "text/plain")},
+        headers={"Origin": str(client.base_url).rstrip("/")},
+    )
+    if upload.status_code != 303 or not contest_source.is_file():
+        raise RuntimeError(
+            f"Contest source upload failed: {upload.status_code} {upload.text[:500]}"
+        )
+    source_before = contest_source.read_bytes()
+    with _connect() as connection:
+        source_row = _journey_row(connection)
+    bare = _resolved_child(bare_root, bare_root / str(source_row["repo_name"]))
+    workspace = _resolved_child(
+        workspace_root,
+        Path(str(source_row["workspace_path"])),
+    )
+    bare_head_before = _git(
+        "--git-dir", str(bare), "rev-parse", "refs/heads/main"
+    )
+    if bare_head_before != expected_head:
+        raise RuntimeError("maintenance fixture is not on the expected published revision")
+    workspace_git_before = _git("-C", str(workspace), "rev-parse", "HEAD")
+
+    _begin_idle_drain(client)
+    fetch_started = time.monotonic()
+    fetch = client.post(
+        "/api/v4/judgehosts/fetch-work",
+        data={
+            "hostname": os.environ["POLYGON_REPLICA_E2E_JUDGEHOST_HOSTNAME"],
+            "max_batchsize": "1",
+        },
+        headers={
+            "Authorization": "Bearer "
+            + os.environ["POLYGON_REPLICA_E2E_JUDGEHOST_TOKEN"]
+        },
+    )
+    if fetch.status_code != 200 or fetch.json() != []:
+        raise RuntimeError(f"draining fetch-work was not empty: {fetch.text!r}")
+    if time.monotonic() - fetch_started > 1.0:
+        raise RuntimeError("draining fetch-work still long-polled")
+
+    backup_started = _post(client, "/admin/maintenance/source-backup", {})
+    if backup_started.headers.get("location") != "/maintenance":
+        raise RuntimeError("source backup did not enter maintenance")
+    _wait_for_operation(client, location="/admin?backup=success")
+    backup_path = backup_root / "source-backup" / "latest.tar.gz"
+    if not backup_path.is_file():
+        raise RuntimeError("source backup archive was not published")
+    with tarfile.open(backup_path, mode="r:gz") as archive:
+        names = set(archive.getnames())
+    if not any(name.startswith("bare/") for name in names):
+        raise RuntimeError("source backup omitted bare repositories")
+    if not any(name.startswith("workspaces/") for name in names):
+        raise RuntimeError("source backup omitted workspaces")
+    if any("contest-sources" in name or name.startswith("artifacts/") for name in names):
+        raise RuntimeError("source backup crossed its source-only boundary")
+
+    _begin_idle_drain(client)
+    cleanup_started = _post(client, "/admin/maintenance/artifacts/cleanup", {})
+    if cleanup_started.headers.get("location") != "/maintenance":
+        raise RuntimeError("artifact cleanup did not enter maintenance")
+    _wait_for_operation(client, location="/admin?cleanup=success")
+
+    with _connect() as connection:
+        for table in ARTIFACT_TABLES:
+            count = int(connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
+            if count:
+                raise RuntimeError(f"cleanup retained {count} rows in {table}")
+        if connection.execute(
+            "SELECT 1 FROM problems WHERE slug=?", [PROBLEM]
+        ).fetchone() is None:
+            raise RuntimeError("cleanup deleted durable problem metadata")
+    if any(path.is_file() for path in artifacts_root.rglob("*")):
+        raise RuntimeError("cleanup retained generated artifact files")
+    if any(path.is_file() for path in cache_root.rglob("*")):
+        raise RuntimeError("cleanup retained runtime cache files")
+    if contest_source.read_bytes() != source_before:
+        raise RuntimeError("cleanup modified durable Contest source")
+    if _git("--git-dir", str(bare), "rev-parse", "refs/heads/main") != bare_head_before:
+        raise RuntimeError("cleanup modified the bare repository")
+    if _git("-C", str(workspace), "rev-parse", "HEAD") != workspace_git_before:
+        raise RuntimeError("cleanup modified the workspace")
+    if not backup_path.is_file():
+        raise RuntimeError("cleanup deleted the source backup")
+    missing = client.get(
+        f"/problems/{PROBLEM}/artifacts/{verification_id}/tests/001.in"
+    )
+    if missing.status_code != 404:
+        raise RuntimeError("cleanup left the verification artifact reachable")
+
+
+def exercise_restart(client: httpx.Client) -> None:
+    """Run after durable checks; Compose must supervise the app service."""
+
+    _begin_idle_drain(client)
+    response = _post(client, "/admin/maintenance/restart", {})
+    if response.headers.get("location") != "/maintenance":
+        raise RuntimeError("restart did not enter maintenance")
+    deadline = time.monotonic() + 90.0
+    observed_downtime = False
+    while time.monotonic() < deadline:
+        try:
+            admin = client.get("/admin")
+            if (
+                admin.status_code == 200
+                and ">open</strong>" in admin.text
+                and observed_downtime
+            ):
+                return
+        except httpx.HTTPError:
+            observed_downtime = True
+        else:
+            if admin.status_code in {502, 503}:
+                observed_downtime = True
+        time.sleep(0.25)
+    raise RuntimeError("supervisor did not restart the application")
+
+
 def verify_deployment() -> None:
     product_tail = os.environ.get("POLYGON_REPLICA_E2E_PRODUCT_TAIL") == "1"
     with _client() as client:
@@ -1283,6 +1489,11 @@ def verify_deployment() -> None:
             verification_id=verification_id,
             initial_head=head,
         )
+        _exercise_maintenance_and_backup(
+            client,
+            verification_id=verification_id,
+            expected_head=collaboration_head,
+        )
     print(
         "e2e-real completed deployment, sample preview, verification, commit, "
         "Native/ICPC exports, and contest PDF export "
@@ -1299,12 +1510,17 @@ def verify_deployment() -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("phase", choices=("prepare", "verify"))
+    parser.add_argument("phase", choices=("prepare", "verify", "restart"))
     args = parser.parse_args()
     if args.phase == "prepare":
         prepare()
         return
-    verify_deployment()
+    if args.phase == "verify":
+        verify_deployment()
+        return
+    with _client() as client:
+        _login(client)
+        exercise_restart(client)
 
 
 if __name__ == "__main__":

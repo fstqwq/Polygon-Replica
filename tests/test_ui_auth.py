@@ -1150,6 +1150,26 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         self.assertEqual(backup.status_code, 303)
         self.assertEqual(backup.headers.get("location"), "/maintenance")
 
+        with patch.object(
+            runtime.maintenance_service,
+            "begin_drain",
+            return_value=MaintenanceStart(True, "draining", {}),
+        ):
+            drained = admin_panel_module.admin_maintenance_admission(
+                user="alice", action="drain"
+            )
+        self.assertEqual(drained.status_code, 303)
+        self.assertEqual(drained.headers.get("location"), "/admin")
+
+        with patch.object(
+            runtime.maintenance_service,
+            "restart_when_idle",
+            return_value=MaintenanceStart(False, "busy", busy_counts),
+        ):
+            restart = admin_panel_module.admin_application_restart(user="alice")
+        self.assertEqual(restart.status_code, 409)
+        self.assertIn(b'"worker_queued":1', restart.body)
+
     def test_admin_users_page_can_search_user_list(self) -> None:
         match_user = self.random_id("lookupa")
         other_user = self.random_id("lookupb")

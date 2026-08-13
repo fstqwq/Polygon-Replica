@@ -5,6 +5,9 @@
 {% set maintenance = maintenance_status if maintenance_status else {} %}
 {% set cleanup_visible = maintenance.get('operation') == 'artifact_cleanup' %}
 {% set backup_visible = maintenance.get('operation') == 'source_backup' %}
+{% set admission_state = maintenance.get('admission_state', 'open') %}
+{% set busy = maintenance.get('busy', {}) %}
+{% set busy_total = busy.get('worker_queued', 0) + busy.get('worker_running', 0) + busy.get('judgehost_queued', 0) + busy.get('judgehost_leased', 0) + busy.get('judgehost_reporting', 0) + busy.get('judgehost_callbacks', 0) + busy.get('inflight_requests', 0) %}
 <div class="admin-summary-grid">
   <a class="admin-summary-card" href="/admin/judgehosts">
     <span class="admin-summary-label">Judgehosts</span>
@@ -47,6 +50,53 @@
 
 <section class="content-section-plain admin-overview-section">
   <div class="admin-card-head">
+    <h2>Maintenance admission</h2>
+    <a href="/maintenance">Maintenance details</a>
+  </div>
+  <p>
+    Status:
+    <strong class="{% if admission_state == 'draining' %}warn{% elif admission_state == 'closed' %}danger{% else %}ok{% endif %}">{{ admission_state }}</strong>
+    <span class="muted">&middot; {{ busy_total }} active</span>
+  </p>
+  <p>
+    Drain rejects new business requests and jobs while admitted worker and
+    Judgehost work finishes. Admin pages remain available; idle Judgehosts
+    receive an immediate empty response.
+  </p>
+  <div class="admin-metric-strip">
+    <div><span>Worker</span><strong>{{ busy.get('worker_queued', 0) + busy.get('worker_running', 0) }}</strong></div>
+    <div><span>Judgehost</span><strong>{{ busy.get('judgehost_queued', 0) + busy.get('judgehost_leased', 0) + busy.get('judgehost_reporting', 0) }}</strong></div>
+    <div><span>Callbacks</span><strong>{{ busy.get('judgehost_callbacks', 0) }}</strong></div>
+    <div><span>Requests</span><strong>{{ busy.get('inflight_requests', 0) }}</strong></div>
+  </div>
+  {% if admission_state == 'draining' %}
+  <div>
+    <form class="inline-form" method="post" action="/admin/maintenance/admission" data-maintenance-toggle-form="1">
+      <input type="hidden" name="action" value="resume" data-maintenance-action="1" />
+      <label class="switch-toggle" title="Resume normal admission">
+        <input type="checkbox" checked data-maintenance-toggle="1" />
+        <span class="switch-track" aria-hidden="true"></span>
+      </label>
+      <span class="muted">Admission paused</span>
+    </form>
+    <form class="inline-form" method="post" action="/admin/maintenance/restart" data-confirm-message="Restart the application now? Active work must be fully drained and the configured service supervisor must be running.">
+      <button class="btn danger-link" type="submit"{% if busy_total %} disabled{% endif %}>Restart application</button>
+    </form>
+  </div>
+  {% elif admission_state == 'open' %}
+  <form class="inline-form" method="post" action="/admin/maintenance/admission" data-maintenance-toggle-form="1" data-confirm-message="Pause new business requests and jobs while existing work drains? Admin pages remain available.">
+    <input type="hidden" name="action" value="drain" data-maintenance-action="1" />
+    <label class="switch-toggle" title="Prepare for maintenance">
+      <input type="checkbox" data-maintenance-toggle="1" />
+      <span class="switch-track" aria-hidden="true"></span>
+    </label>
+    <span class="muted">Pause admission</span>
+  </form>
+  {% endif %}
+</section>
+
+<section class="content-section-plain admin-overview-section">
+  <div class="admin-card-head">
     <h2>Generated artifacts</h2>
     <a href="/maintenance">Maintenance details</a>
   </div>
@@ -79,7 +129,7 @@
     action="/admin/maintenance/artifacts/cleanup"
     data-confirm-message="Delete all generated artifacts, generated jobs, and runtime caches?"
   >
-    <button class="btn danger-link" type="submit"{% if maintenance.get('status') == 'running' %} disabled{% endif %}>Clear generated artifacts</button>
+    <button class="btn danger-link" type="submit"{% if maintenance.get('status') == 'running' or admission_state != 'draining' or busy_total %} disabled{% endif %}>Clear generated artifacts</button>
   </form>
 </section>
 
@@ -120,7 +170,7 @@
     action="/admin/maintenance/source-backup"
     data-confirm-message="Take the whole site offline and replace the previous source backup with a new archive of bare repositories and workspaces?"
   >
-    <button class="btn" type="submit"{% if maintenance.get('status') == 'running' %} disabled{% endif %}>Create source backup</button>
+    <button class="btn" type="submit"{% if maintenance.get('status') == 'running' or admission_state != 'draining' or busy_total %} disabled{% endif %}>Create source backup</button>
   </form>
 </section>
 {% endblock %}

@@ -9,6 +9,29 @@ from app.service.platform.worker_queue import WorkerQueueService
 
 
 class TestWorkerQueueService(unittest.TestCase):
+    def test_drain_rejects_new_worker_jobs(self) -> None:
+        service = WorkerQueueService(worker_count=1, queue_capacity=4, history_limit=64)
+        gate = MaintenanceAdmissionGate()
+        service.set_admission_gate(gate)
+        try:
+            with gate.locked():
+                gate.drain_locked()
+            future, queued, reason = service.submit(
+                name="must-not-run",
+                fn=lambda: None,
+                queue_name="test",
+                job_type="run",
+            )
+
+            self.assertFalse(queued)
+            self.assertEqual(reason, "maintenance")
+            self.assertIsInstance(future.exception(), RuntimeError)
+            self.assertEqual(service.active_counts(), {"queued": 0, "running": 0})
+        finally:
+            with gate.locked():
+                gate.open_locked()
+            service.stop()
+
     def test_admission_close_and_submit_share_one_atomic_boundary(self) -> None:
         service = WorkerQueueService(worker_count=1, queue_capacity=4, history_limit=64)
         gate = MaintenanceAdmissionGate()

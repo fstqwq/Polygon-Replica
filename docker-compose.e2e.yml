@@ -40,7 +40,7 @@ services:
       context: .
       dockerfile: Dockerfile
     image: ${POLYGON_REPLICA_E2E_IMAGE:?set by tests/scripts/docker-e2e.sh}
-    restart: "no"
+    restart: unless-stopped
     environment: *runtime-environment
     volumes:
       - srv:/srv/polygon-replica

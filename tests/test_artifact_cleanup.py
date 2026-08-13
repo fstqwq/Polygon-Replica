@@ -153,6 +153,11 @@ class TestArtifactCleanup(unittest.TestCase):
             judgehost_task_service=self.judgehost,
         )
 
+    def _begin_drain(self, coordinator: MaintenanceCoordinator) -> None:
+        drained = coordinator.begin_drain()
+        self.assertTrue(drained.accepted, drained.reason)
+        self.assertEqual(self.maintenance_gate.state(), "draining")
+
     def _reset_process_tracking(self) -> None:
         self.process_reset_count += 1
 
@@ -477,6 +482,7 @@ class TestArtifactCleanup(unittest.TestCase):
             connection.commit()
             connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
         coordinator = self._coordinator()
+        self._begin_drain(coordinator)
 
         started = coordinator.start_cleanup(actor_user_id=self.actor_user_id)
         self.assertTrue(started.accepted, started.reason)
@@ -636,12 +642,13 @@ class TestArtifactCleanup(unittest.TestCase):
                 [],
             )
 
-    def test_busy_check_reopens_admission(self) -> None:
+    def test_busy_check_keeps_explicit_drain(self) -> None:
         coordinator = self._coordinator()
         self.worker_queue.queued = 1
         self.judgehost.reporting = 2
         self.judgehost.callbacks = 1
         self.assertTrue(self.maintenance_gate.enter_request())
+        self._begin_drain(coordinator)
 
         started = coordinator.start_cleanup(actor_user_id=self.actor_user_id)
 
@@ -651,11 +658,67 @@ class TestArtifactCleanup(unittest.TestCase):
         self.assertEqual(started.busy["judgehost_reporting"], 2)
         self.assertEqual(started.busy["judgehost_callbacks"], 1)
         self.assertEqual(started.busy["inflight_requests"], 1)
-        self.assertTrue(self.maintenance_gate.is_open())
+        self.assertEqual(self.maintenance_gate.state(), "draining")
         self.maintenance_gate.leave_request()
 
-    def test_busy_count_failure_reopens_admission(self) -> None:
+    def test_cleanup_requires_explicit_drain(self) -> None:
         coordinator = self._coordinator()
+
+        started = coordinator.start_cleanup(actor_user_id=self.actor_user_id)
+
+        self.assertFalse(started.accepted)
+        self.assertEqual(started.reason, "drain_required")
+        self.assertEqual(self.maintenance_gate.state(), "open")
+
+    def test_drain_rejects_new_work_until_admin_resumes(self) -> None:
+        coordinator = self._coordinator()
+        self.worker_queue.running = 1
+
+        started = coordinator.begin_drain()
+
+        self.assertTrue(started.accepted)
+        self.assertEqual(self.maintenance_gate.state(), "draining")
+        self.assertFalse(self.maintenance_gate.enter_request())
+        self.assertTrue(
+            self.maintenance_gate.enter_control_request()[0]
+        )
+        self.maintenance_gate.leave_request()
+        self.assertEqual(started.busy["worker_running"], 1)
+
+        resumed = coordinator.cancel_drain()
+        self.assertTrue(resumed.accepted)
+        self.assertEqual(self.maintenance_gate.state(), "open")
+
+    def test_restart_requires_an_idle_explicit_drain(self) -> None:
+        exited = threading.Event()
+        self.maintenance_gate = MaintenanceAdmissionGate()
+        coordinator = MaintenanceCoordinator(
+            admission_gate=self.maintenance_gate,
+            cleanup_service=self.cleanup,
+            source_backup_service=self.source_backup,
+            worker_queue_service=self.worker_queue,
+            judgehost_task_service=self.judgehost,
+            restart_process=exited.set,
+        )
+
+        not_drained = coordinator.restart_when_idle(
+            actor_user_id=self.actor_user_id
+        )
+        self.assertEqual(not_drained.reason, "drain_required")
+        coordinator.begin_drain()
+        self.judgehost.leased = 1
+        busy = coordinator.restart_when_idle(actor_user_id=self.actor_user_id)
+        self.assertEqual(busy.reason, "busy")
+        self.judgehost.leased = 0
+
+        started = coordinator.restart_when_idle(actor_user_id=self.actor_user_id)
+        self.assertTrue(started.accepted)
+        self.assertEqual(self.maintenance_gate.state(), "closed")
+        self.assertTrue(exited.wait(timeout=2))
+
+    def test_busy_count_failure_keeps_explicit_drain(self) -> None:
+        coordinator = self._coordinator()
+        self._begin_drain(coordinator)
 
         with patch.object(
             self.worker_queue,
@@ -666,7 +729,7 @@ class TestArtifactCleanup(unittest.TestCase):
 
         self.assertFalse(started.accepted)
         self.assertIn("admission_failed", started.reason)
-        self.assertTrue(self.maintenance_gate.is_open())
+        self.assertEqual(self.maintenance_gate.state(), "draining")
 
     def test_storage_layout_rejects_durable_root_inside_cleanup_root(self) -> None:
         invalid = replace(
@@ -691,6 +754,7 @@ class TestArtifactCleanup(unittest.TestCase):
 
     def test_repeated_cleanup_start_allows_only_one_background_operation(self) -> None:
         coordinator = self._coordinator()
+        self._begin_drain(coordinator)
         running = threading.Event()
         release = threading.Event()
 
@@ -794,6 +858,7 @@ class TestArtifactCleanup(unittest.TestCase):
             [],
         )
         restarted_coordinator = self._coordinator()
+        self._begin_drain(restarted_coordinator)
         retried = restarted_coordinator.start_cleanup(
             actor_user_id=self.actor_user_id
         )
@@ -911,6 +976,7 @@ class TestArtifactCleanup(unittest.TestCase):
 
     def test_source_backup_and_artifact_cleanup_are_mutually_exclusive(self) -> None:
         coordinator = self._coordinator()
+        self._begin_drain(coordinator)
         running = threading.Event()
         release = threading.Event()
 

@@ -198,11 +198,13 @@ Do not run old and new application revisions against the same writable roots.
 
 ## Backup
 
-Open Admin and use **Create source backup**. The action closes the site-wide
-maintenance gate, refuses to start until active requests and runtime work have
-drained, and then archives the complete bare Git and workspace roots. While it
-runs, `/maintenance` shows progress and other site requests receive a temporary
-maintenance response.
+Open Admin and enable **Pause admission**. New business requests and top-level
+jobs receive a temporary maintenance response while already admitted worker and
+Judgehost work finishes. Admin reads remain available, and idle Judgehosts get
+an immediate empty fetch response instead of long-polling. When the displayed
+active counts reach zero, use **Create source backup**. The operation closes the
+remaining runtime boundary and archives the complete bare Git and workspace
+roots. `/maintenance` shows progress.
 
 After it succeeds, use **Download latest backup**. The application retains one
 published file at `backup_root/source-backup/latest.tar.gz`; a later successful
@@ -215,6 +217,12 @@ attachments, derived data, caches, other backup-root content, application code,
 the encryption key, and TLS/proxy configuration. Keep secrets and deployment
 configuration under the operator's separate secret/configuration backup policy.
 This source archive is not a full application-state backup.
+
+The same drained state enables **Restart application**. That action exits the
+single process after sending the HTTP response; the installed systemd unit or
+the checked-in Compose restart policy starts a new process. Do not use it when
+running uvicorn without a supervisor. Use **Resume admission** to cancel a
+maintenance preparation without starting an operation.
 
 ## Restore
 

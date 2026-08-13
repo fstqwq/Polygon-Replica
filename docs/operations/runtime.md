@@ -93,6 +93,14 @@ cache subtrees while the process is running. Observe process health, worker
 capacity, Judgehost leases, domain job status, derived-product integrity, disk
 space, and backup age as separate signals.
 
+Maintenance admission has three process-local states. `open` admits normal
+requests and jobs. `draining` rejects new business work while admitted workers,
+Judgehost dispatch, callbacks, and counted Admin reads finish; Admin pages stay
+available and an empty Judgehost fetch skips long polling. `closed` is used only
+while cleanup, backup, or a supervised restart owns the process. Cleanup removes
+the configured derived and cache roots plus their cleanup-safe SQLite rows; Git,
+workspaces, Contest source, and backup roots are outside that inventory.
+
 Both exclusive operations close Judgehost callback admission as well as
 ordinary work admission. They remain busy until in-flight callbacks have
 released their receipts; callbacks arriving after the gate closes are

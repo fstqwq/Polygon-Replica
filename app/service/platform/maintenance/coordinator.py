@@ -1,6 +1,7 @@
 """Single-process coordination for exclusive maintenance operations."""
 
 import logging
+import os
 import threading
 import uuid
 from contextlib import contextmanager
@@ -14,7 +15,12 @@ from app.service.platform.maintenance.admission import MaintenanceAdmissionGate
 logger = logging.getLogger(__name__)
 
 MaintenanceStatus = Literal["idle", "running", "succeeded", "failed"]
-MaintenanceOperation = Literal["", "artifact_cleanup", "source_backup"]
+MaintenanceOperation = Literal[
+    "",
+    "artifact_cleanup",
+    "source_backup",
+    "restart",
+]
 
 
 class WorkerMaintenancePort(Protocol):
@@ -79,12 +85,14 @@ class MaintenanceCoordinator:
         source_backup_service: MaintenanceOperationPort,
         worker_queue_service: WorkerMaintenancePort,
         judgehost_task_service: JudgehostMaintenancePort,
+        restart_process: Callable[[], None] | None = None,
     ) -> None:
         self._gate = admission_gate
         self._cleanup = cleanup_service
         self._source_backup = source_backup_service
         self._worker_queue = worker_queue_service
         self._judgehost = judgehost_task_service
+        self._restart_process = restart_process or (lambda: os._exit(0))
         self._snapshot = MaintenanceSnapshot()
         self._worker: threading.Thread | None = None
 
@@ -107,11 +115,90 @@ class MaintenanceCoordinator:
                 )
             yield
 
-    def snapshot(self) -> dict[str, object]:
+    def snapshot(self, *, exclude_current_request: bool = False) -> dict[str, object]:
         with self._gate.locked():
             payload = self._snapshot.as_dict()
-            payload["active_requests"] = self._gate.active_requests_locked()
+            payload["admission_state"] = self._gate.state_locked()
+            busy = self._busy_snapshot_locked()
+            if exclude_current_request and busy["inflight_requests"] > 0:
+                busy["inflight_requests"] -= 1
+            payload["busy"] = busy
+            payload["active_requests"] = busy["inflight_requests"]
             return payload
+
+    def begin_drain(self) -> MaintenanceStart:
+        """Reject new business work while admitted jobs finish normally."""
+
+        with self._gate.locked():
+            if self._snapshot.status == "running":
+                return MaintenanceStart(False, "already_running", {})
+            try:
+                busy = self._busy_snapshot_locked()
+            except Exception as exc:
+                return MaintenanceStart(False, f"admission_failed: {exc}", {})
+            self._gate.drain_locked()
+            return MaintenanceStart(True, "draining", busy)
+
+    def cancel_drain(self) -> MaintenanceStart:
+        with self._gate.locked():
+            if self._snapshot.status == "running":
+                return MaintenanceStart(False, "already_running", {})
+            self._gate.open_locked()
+            return MaintenanceStart(True, "open", self._busy_snapshot_locked())
+
+    def restart_when_idle(self, *, actor_user_id: int) -> MaintenanceStart:
+        """Exit only after the explicitly drained runtime reaches idle."""
+
+        with self._gate.locked():
+            if self._snapshot.status == "running":
+                return MaintenanceStart(False, "already_running", {})
+            if not self._gate.is_draining_locked():
+                return MaintenanceStart(False, "drain_required", {})
+            try:
+                busy = self._busy_snapshot_locked()
+            except Exception as exc:
+                return MaintenanceStart(False, f"admission_failed: {exc}", {})
+            if any(busy.values()):
+                return MaintenanceStart(False, "busy", busy)
+            self._gate.close_locked()
+            operation_id = f"restart-{uuid.uuid4().hex}"
+            started_at = now_iso()
+            self._snapshot = MaintenanceSnapshot(
+                status="running",
+                operation="restart",
+                stage="exiting",
+                operation_id=operation_id,
+                started_at=started_at,
+                actor_user_id=int(actor_user_id),
+            )
+            try:
+                restart_thread = threading.Thread(
+                    target=self._restart_after_response,
+                    daemon=True,
+                    name="application-restart",
+                )
+                restart_thread.start()
+            except Exception as exc:
+                self._snapshot.status = "failed"
+                self._snapshot.finished_at = now_iso()
+                self._snapshot.error = str(exc)
+                self._gate.drain_locked()
+                return MaintenanceStart(False, "restart_thread_failed", {})
+            return MaintenanceStart(True, "restarting", {})
+
+    def _restart_after_response(self) -> None:
+        """Give the redirect time to leave the socket, then exit the process."""
+
+        threading.Event().wait(0.5)
+        try:
+            self._restart_process()
+        except Exception as exc:
+            logger.exception("application restart exit failed")
+            with self._gate.locked():
+                self._snapshot.status = "failed"
+                self._snapshot.finished_at = now_iso()
+                self._snapshot.error = str(exc)
+                self._gate.drain_locked()
 
     def _busy_snapshot_locked(self) -> dict[str, int]:
         worker = self._worker_queue.active_counts()
@@ -156,14 +243,17 @@ class MaintenanceCoordinator:
         with self._gate.locked():
             if self._snapshot.status == "running":
                 return MaintenanceStart(False, "already_running", {})
+            if not self._gate.is_draining_locked():
+                return MaintenanceStart(False, "drain_required", {})
+            previous_state = self._gate.state_locked()
             self._gate.close_locked()
             try:
                 busy = self._busy_snapshot_locked()
             except Exception as exc:
-                self._gate.open_locked()
+                self._gate.restore_locked(previous_state)
                 return MaintenanceStart(False, f"admission_failed: {exc}", {})
             if any(value > 0 for value in busy.values()):
-                self._gate.open_locked()
+                self._gate.restore_locked(previous_state)
                 return MaintenanceStart(False, "busy", busy)
             operation_id = f"{operation_id_prefix}-{uuid.uuid4().hex}"
             started_at = now_iso()
@@ -206,7 +296,7 @@ class MaintenanceCoordinator:
             self._snapshot.finished_at = str(details["finished_at"])
             self._snapshot.result = details
             self._snapshot.error = str(thread_error)
-            self._gate.open_locked()
+            self._gate.restore_locked(previous_state)
         return MaintenanceStart(False, "thread_start_failed", {})
 
     def _run_operation(

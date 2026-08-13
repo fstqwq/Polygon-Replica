@@ -11,9 +11,10 @@ def maintenance_page(request: Request):
     snapshot = request.app.state.runtime.maintenance_service.snapshot()
     status = str(snapshot.get("status") or "idle")
     operation = str(snapshot.get("operation") or "artifact_cleanup")
-    operation_label = (
-        "source backup" if operation == "source_backup" else "artifact cleanup"
-    )
+    operation_label = {
+        "source_backup": "source backup",
+        "restart": "application restart",
+    }.get(operation, "artifact cleanup")
     if status == "succeeded":
         query = "backup=success" if operation == "source_backup" else "cleanup=success"
         return RedirectResponse(

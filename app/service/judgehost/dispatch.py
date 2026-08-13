@@ -589,7 +589,7 @@ class DispatchHandler(DispatchCacheMixin):
                     not admission_acquired
                     or (
                         admission_gate is not None
-                        and not admission_gate.is_open_locked()
+                        and not admission_gate.allows_runtime_work_locked()
                     )
                 ):
                     return []
@@ -643,6 +643,11 @@ class DispatchHandler(DispatchCacheMixin):
                         return []
                     continue
 
+            if (
+                admission_gate is not None
+                and admission_gate.state() == "draining"
+            ):
+                return []
             if not long_poll_used:
                 long_poll_used = True
                 if self._s.batch_scheduler.wait_for_ready_batch(
@@ -661,7 +666,7 @@ class DispatchHandler(DispatchCacheMixin):
                     not admission_acquired
                     or (
                         admission_gate is not None
-                        and not admission_gate.is_open_locked()
+                        and not admission_gate.allows_runtime_work_locked()
                     )
                 ):
                     return []

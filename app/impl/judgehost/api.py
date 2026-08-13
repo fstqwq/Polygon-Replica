@@ -337,19 +337,18 @@ async def domjudge_judgehosts_post(request: Request):
 
 async def domjudge_fetch_work(request: Request):
     service = _require_judgehost_auth(request)
+    payload = await _request_payload(request)
+    hostname = _hostname_from_payload(payload, required=True)
+    max_batchsize = _int_or_none(payload.get("max_batchsize"))
+    tasks = await _run_service_call(
+        service.domjudge_fetch_work,
+        hostname,
+        max_batchsize=max_batchsize,
+    )
     with _callback_admission(service) as admitted:
-        if not admitted:
-            return JSONResponse([])
-        payload = await _request_payload(request)
-        hostname = _hostname_from_payload(payload, required=True)
-        max_batchsize = _int_or_none(payload.get("max_batchsize"))
-        tasks = await _run_service_call(
-            service.domjudge_fetch_work,
-            hostname,
-            max_batchsize=max_batchsize,
-        )
-        _record_host_peer_ip(service, request, hostname)
-        return JSONResponse(tasks)
+        if admitted:
+            _record_host_peer_ip(service, request, hostname)
+    return JSONResponse(tasks)
 
 
 async def domjudge_get_files_source(request: Request, contest_id: str, item_id: str):

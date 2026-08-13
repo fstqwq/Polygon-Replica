@@ -3,6 +3,7 @@ from fastapi.responses import HTMLResponse
 
 from app.impl.admin.panel import (
     admin_artifacts_cleanup,
+    admin_application_restart,
     admin_config_category_page,
     admin_config_category_update,
     admin_config_index,
@@ -11,6 +12,7 @@ from app.impl.admin.panel import (
     admin_judgehost_snapshot,
     admin_judgehosts_page,
     admin_mail_page,
+    admin_maintenance_admission,
     admin_overview_page,
     admin_source_backup,
     admin_source_backup_download,
@@ -33,6 +35,16 @@ router.add_api_route(
     admin_judgehosts_page,
     methods=["GET"],
     response_class=HTMLResponse,
+)
+router.add_api_route(
+    "/admin/maintenance/admission",
+    admin_maintenance_admission,
+    methods=["POST"],
+)
+router.add_api_route(
+    "/admin/maintenance/restart",
+    admin_application_restart,
+    methods=["POST"],
 )
 router.add_api_route("/admin/users", admin_users_page, methods=["GET"], response_class=HTMLResponse)
 router.add_api_route("/admin/mail", admin_mail_page, methods=["GET"], response_class=HTMLResponse)

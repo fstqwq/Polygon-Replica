@@ -12,22 +12,27 @@ from app.service.platform.maintenance.admission import MaintenanceAdmissionGate
 class _AdmissionStub:
     def __init__(self) -> None:
         self.gate = MaintenanceAdmissionGate()
-        self.active_requests = 0
+
+    @property
+    def active_requests(self) -> int:
+        with self.gate.locked():
+            return self.gate.active_requests_locked()
 
     @staticmethod
     def is_exempt(_path: str) -> bool:
         return False
 
+    def is_drain_control(self, path: str, method: str) -> bool:
+        return self.gate.is_drain_control(path, method)
+
+    def enter_control_request(self) -> tuple[bool, bool]:
+        return self.gate.enter_control_request()
+
     def enter_request(self) -> bool:
-        with self.gate.locked():
-            if not self.gate.is_open_locked():
-                return False
-            self.active_requests += 1
-            return True
+        return self.gate.enter_request()
 
     def leave_request(self) -> None:
-        with self.gate.locked():
-            self.active_requests -= 1
+        self.gate.leave_request()
 
 
 class TestMaintenanceAdmissionMiddleware(unittest.IsolatedAsyncioTestCase):
@@ -266,6 +271,40 @@ class TestMaintenanceAdmissionMiddleware(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(headers[b"retry-after"], b"5")
         self.assertEqual(headers[b"cache-control"], b"no-store")
         self.assertNotIn(b"<html", bytes(sent[-1]["body"]).lower())
+
+    async def test_draining_keeps_admin_available_and_releases_its_count(self) -> None:
+        stub = _AdmissionStub()
+        with stub.gate.locked():
+            stub.gate.drain_locked()
+        downstream_called = False
+
+        async def downstream(scope, receive, send) -> None:
+            nonlocal downstream_called
+            _ = (scope, receive)
+            downstream_called = True
+            await send({"type": "http.response.start", "status": 200, "headers": []})
+            await send({"type": "http.response.body", "body": b"admin"})
+
+        async def receive() -> dict[str, object]:
+            return {"type": "http.request", "body": b"", "more_body": False}
+
+        sent: list[dict[str, object]] = []
+
+        async def send(message: dict[str, object]) -> None:
+            sent.append(message)
+
+        scope = {
+            "type": "http",
+            "path": "/admin/judgehosts",
+            "method": "GET",
+        }
+        middleware = MaintenanceAdmissionMiddleware(downstream, runtime)
+        with patch.object(runtime, "maintenance_admission_gate", stub):
+            await middleware(scope, receive, send)
+
+        self.assertTrue(downstream_called)
+        self.assertEqual(sent[0]["status"], 200)
+        self.assertEqual(stub.gate.active_requests_locked(), 0)
 
 
 if __name__ == "__main__":

@@ -157,7 +157,7 @@ class Judgehost:
         if gate is None:
             return self._enqueue.enqueue_task(**kwargs)
         with gate.locked():
-            self._require_admission_locked(gate)
+            self._require_runtime_admission_locked(gate)
             return self._enqueue.enqueue_task(**kwargs)
 
     def enqueue_compile_only_task(self, **kwargs) -> str:
@@ -165,7 +165,7 @@ class Judgehost:
         if gate is None:
             return self._enqueue.enqueue_compile_only_task(**kwargs)
         with gate.locked():
-            self._require_admission_locked(gate)
+            self._require_runtime_admission_locked(gate)
             return self._enqueue.enqueue_compile_only_task(**kwargs)
 
     def set_admission_gate(self, gate: MaintenanceAdmissionGate | None) -> None:
@@ -178,7 +178,7 @@ class Judgehost:
                 self._active_callbacks += 1
             return True
         with gate.locked():
-            if not gate.is_open_locked():
+            if not gate.allows_runtime_work_locked():
                 return False
             with self._callback_count_lock:
                 self._active_callbacks += 1
@@ -199,8 +199,8 @@ class Judgehost:
                 self._active_callbacks -= 1
 
     @staticmethod
-    def _require_admission_locked(gate: MaintenanceAdmissionGate) -> None:
-        if not gate.is_open_locked():
+    def _require_runtime_admission_locked(gate: MaintenanceAdmissionGate) -> None:
+        if not gate.allows_runtime_work_locked():
             raise RuntimeError("maintenance in progress: judgehost admission is closed")
 
     def busy_counts(self) -> dict[str, int]:
