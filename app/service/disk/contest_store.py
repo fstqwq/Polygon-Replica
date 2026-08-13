@@ -73,6 +73,22 @@ class ContestAttachmentRecord(TypedDict):
     created_at: str
 
 
+class ContestBuildProblemRecord(TypedDict):
+    contest_problem_id: int
+    position: int
+    label: str
+    problem_id: int
+    statement_folder: str
+    problem_slug: str
+
+
+class ContestBuildMaterializationRecord(TypedDict):
+    id: str
+    source_commit: str
+    revision_number: int
+    archive_sha256: str
+
+
 class ContestDiskStore:
     def __init__(self, db: DB):
         self.db = db
@@ -656,7 +672,9 @@ class ContestDiskStore:
                     "blocked_problems": ["contest has no problems"],
                 }
             blocked: list[str] = []
-            frozen_rows: list[tuple[sqlite3.Row, sqlite3.Row]] = []
+            frozen_rows: list[
+                tuple[ContestBuildProblemRecord, ContestBuildMaterializationRecord]
+            ] = []
             for row in rows:
                 materialization = connection.execute(
                     """SELECT id,source_commit,revision_number,archive_sha256
@@ -669,7 +687,7 @@ class ContestDiskStore:
                 if materialization is None:
                     blocked.append(str(row["problem_slug"]))
                     continue
-                frozen_rows.append((row, materialization))
+                frozen_rows.append((dict(row), dict(materialization)))
             if blocked:
                 return {
                     "outcome": "not_ready",
