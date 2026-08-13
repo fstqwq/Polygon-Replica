@@ -149,6 +149,13 @@ class TestPolygonPackageRules(unittest.TestCase):
                     "id": canonical_test_verification_id("package-import"),
                     "source": "published",
                 },
+                "solutions": [
+                    {
+                        "source_path": "solutions/std.cpp",
+                        "expected_behavior": "accepted",
+                        "verdicts": ["AC"],
+                    }
+                ],
                 "tests": [
                     {
                         "id": "001",
