@@ -50,6 +50,9 @@
         <span class="contest-problem-detail contest-problem-detail-languages">
           {{ content.languages.label }}: <span class="{{ 'danger' if content.languages.tone == 'danger' else '' }}">{{ content.languages.display }}</span>
         </span>
+        {% for warning in content.warnings if warning.code == 'source' %}
+        <span class="contest-problem-detail contest-problem-detail-summary {{ 'danger' if warning.tone == 'danger' else 'warn' }}">{{ warning.display }}</span>
+        {% endfor %}
         {% else %}
         <span class="contest-problem-detail contest-problem-detail-summary danger">unavailable</span>
         {% endif %}

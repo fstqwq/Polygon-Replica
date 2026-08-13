@@ -148,11 +148,34 @@ def rename_component_source(
                     raise ValueError("destination source already exists")
                 if new_abs.parent.exists() and (not new_abs.parent.is_dir()):
                     raise ValueError("destination parent is not a directory")
-                runtime().git_service.rename_path(workspace, old_source, new_source)
                 build_cfg, cfg_path = read_build_config(workspace)
-                if config_key:
+                config_changed = False
+                if config_key == "generator_sources" and old_source in (
+                    sources := build_cfg["generator_sources"]
+                ):
+                    build_cfg["generator_sources"] = [
+                        new_source if source == old_source else source
+                        for source in sources
+                    ]
+                    config_changed = True
+                elif config_key:
                     build_cfg[config_key] = new_source
-                    write_build_config(cfg_path, build_cfg)
+                    config_changed = True
+                runtime().git_service.rename_path(
+                    workspace,
+                    old_source,
+                    new_source,
+                )
+                try:
+                    if config_changed:
+                        write_build_config(cfg_path, build_cfg)
+                except (OSError, ValueError):
+                    runtime().git_service.rename_path(
+                        workspace,
+                        new_source,
+                        old_source,
+                    )
+                    raise
             source_for_redirect = new_source
     except (ValueError, OSError) as exc:
         msg = str(exc)

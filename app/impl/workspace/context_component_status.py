@@ -69,26 +69,45 @@ def _generator_reference_counts(
         counts[resolved] = counts.get(resolved, 0) + 1
     return counts
 
-def generator_status_context(workspace: Path) -> dict:
+def generator_status_context(
+    workspace: Path,
+    build_cfg: BuildConfig | None = None,
+) -> dict:
+    if build_cfg is None:
+        build_cfg, _ = read_build_config(workspace)
+    configured_sources = tuple(build_cfg["generator_sources"])
     try:
-        all_generator_sources = tuple(generator_source_paths(workspace))
+        discovered_sources = tuple(generator_source_paths(workspace))
     except ValueError:
-        all_generator_sources = ()
-    generator_candidates_truncated = len(all_generator_sources) > 64
-    generator_candidates = all_generator_sources[:64]
-    all_sources = generator_candidates
-    repo_source = all_sources[0] if all_sources else 'generators/generator.cpp'
+        discovered_sources = ()
+    all_sources = tuple(
+        dict.fromkeys((*configured_sources, *discovered_sources))
+    )
+    generator_candidates_truncated = len(all_sources) > 64
+    visible_sources = all_sources[:64]
+    repo_source = next(
+        (
+            source
+            for source in configured_sources
+            if workspace_rel_file_exists(workspace, source)
+        ),
+        configured_sources[0] if configured_sources else (
+            visible_sources[0] if visible_sources else 'generators/generator.cpp'
+        ),
+    )
     repo_exists = workspace_rel_file_exists(workspace, repo_source)
-    reference_counts = _generator_reference_counts(workspace, all_generator_sources)
+    reference_counts = _generator_reference_counts(workspace, configured_sources)
     has_declared_or_discovered = bool(all_sources)
     source_rows: list[dict[str, object]] = []
-    for rel in all_sources:
+    configured_set = frozenset(configured_sources)
+    for rel in visible_sources:
         exists = workspace_rel_file_exists(workspace, rel)
         if not exists:
             continue
         source_rows.append({
             'path': rel,
             'exists': exists,
+            'configured': rel in configured_set,
             'reference_count': reference_counts.get(rel, 0),
         })
     if repo_exists:
@@ -106,6 +125,7 @@ def generator_status_context(workspace: Path) -> dict:
         'repo_source': repo_source,
         'repo_source_exists': bool(repo_exists),
         'source_rows': source_rows,
+        'configured_sources': list(configured_sources),
         'source_rows_truncated': bool(generator_candidates_truncated),
     }
 

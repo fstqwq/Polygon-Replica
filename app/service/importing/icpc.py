@@ -815,7 +815,7 @@ class ICPCPackageImportService:
         components: ComponentsSummary,
         solutions: SolutionsSummary,
     ) -> dict[str, object]:
-        build_cfg = BuildConfig()
+        build_cfg = BuildConfig(generator_sources=[])
         accepted_source = solutions["accepted_source"]
         if accepted_source:
             build_cfg["accepted_solution_source"] = accepted_source

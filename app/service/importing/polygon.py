@@ -714,7 +714,7 @@ class PolygonPackageImportService:
         workspace: Path,
         meta: PolygonMeta,
     ) -> ComponentImportSummary:
-        build_cfg = BuildConfig()
+        build_cfg = BuildConfig(generator_sources=[])
 
         imported_testlib = self._write_maintained_testlib(workspace)
 
@@ -790,13 +790,14 @@ class PolygonPackageImportService:
             for row in meta["tests"]
             if row["method"] == "generated" and row["cmd"]
         }
+        generator_sources: list[str] = []
         for source in meta["executables"]:
             if source in used:
                 continue
             stem = Path(source).stem
             if (stem not in generator_names) and (not stem.lower().startswith("gen")):
                 continue
-            self._copy_source_from_zip(
+            imported_generator = self._copy_source_from_zip(
                 zf,
                 entries,
                 source,
@@ -805,6 +806,9 @@ class PolygonPackageImportService:
                 Path(source).name,
                 allowed_suffixes=GENERATOR_SOURCE_SUFFIX_ALLOW,
             )
+            if imported_generator:
+                generator_sources.append(imported_generator)
+        build_cfg["generator_sources"] = list(dict.fromkeys(generator_sources))
 
         (workspace / "config").mkdir(parents=True, exist_ok=True)
         (workspace / "config" / "build.json").write_text(

@@ -355,6 +355,39 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
         html = overview.body.decode("utf-8", errors="replace")
         self.assertNotIn("private checker detail", html)
 
+    def test_contest_details_remain_available_for_repairable_source_warning(self) -> None:
+        contest_slug = f"review-source-{uuid.uuid4().hex[:8]}"
+        self._create_contest(contest_slug)
+        workspace_service.grant_repo_access("alice/sample", "alice", "owner")
+        add_resp = contest_problems_add(
+            contest=contest_slug,
+            user="alice",
+            problem_slugs=["alice/sample"],
+            q="",
+        )
+        self.assertEqual(add_resp.status_code, 303)
+        workspace = Path(
+            workspace_service.ensure_workspace("alice/sample", "alice")
+        )
+        build_path = workspace / "config/build.json"
+        build = json.loads(build_path.read_text(encoding="utf-8"))
+        build["checker_args"] = ["--obsolete"]
+        build_path.write_text(json.dumps(build, indent=2) + "\n", encoding="utf-8")
+
+        overview = contest_overview_page(
+            _app_request(f"/contests/{contest_slug}/overview"),
+            contest_slug,
+            "alice",
+        )
+
+        self.assertEqual(overview.status_code, 200)
+        html = overview.body.decode("utf-8", errors="replace")
+        self.assertIn("contains obsolete fields", html)
+        self.assertNotIn(
+            'contest-problem-detail contest-problem-detail-summary danger">unavailable',
+            html,
+        )
+
     def test_change_names_tl_ml_creates_per_problem_commit(self) -> None:
         problem_slug = f"alice/ui-bulk-{uuid.uuid4().hex[:8]}"
         workspace_service.ensure_problem(problem_slug)

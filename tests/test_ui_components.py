@@ -213,6 +213,10 @@ class TestUIComponents(UIHelpersMixin, E2ETestBase):
             )
         self.assertEqual(created.status_code, 303)
         self.assertTrue((ws / rel).exists())
+        created_build = json.loads(
+            (ws / "config/build.json").read_text(encoding="utf-8")
+        )
+        self.assertIn(rel, created_build["generator_sources"])
         page_after_create = generators_page(
             _request(f"/problems/{self.problem}/generators"), self.problem, self.user
         )
@@ -272,6 +276,7 @@ class TestUIComponents(UIHelpersMixin, E2ETestBase):
             checker_source=old_paths["checker"],
             validator_source=old_paths["validator"],
             interactor_source=old_paths["interactor"],
+            generator_sources=[old_paths["generator"]],
         )
 
         responses = [
@@ -318,6 +323,7 @@ class TestUIComponents(UIHelpersMixin, E2ETestBase):
         self.assertEqual(cfg.get("checker_source"), new_paths["checker"])
         self.assertEqual(cfg.get("validator_source"), new_paths["validator"])
         self.assertEqual(cfg.get("interactor_source"), new_paths["interactor"])
+        self.assertEqual(cfg.get("generator_sources"), [new_paths["generator"]])
 
     def test_generator_save_source_compile_check_failure_does_not_persist_source_or_config(
         self,
@@ -359,6 +365,10 @@ class TestUIComponents(UIHelpersMixin, E2ETestBase):
         self.assertTrue(messages)
         self.assertIn("compile check failed", messages[0].lower())
         self.assertFalse((ws / rel_bad).exists())
+        build = json.loads(
+            (ws / "config/build.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(build.get("generator_sources"), [rel])
 
     def test_generator_save_source_json_success_returns_redirect(self) -> None:
         ws = Path(workspace_service.ensure_workspace(self.problem, self.user))

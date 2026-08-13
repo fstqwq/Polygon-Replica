@@ -12,6 +12,8 @@ from app.service.problem.content_review import (
     ProblemContentReview,
     problem_content_review,
 )
+from app.service.problem.authoring_source import inspect_authoring_source
+from app.service.problem.build_config import BuildConfig
 from app.service.problem.readiness import (
     ProblemReadiness,
     ProblemReadinessService,
@@ -20,7 +22,7 @@ from app.service.problem.readiness import (
 from app.service.problem.resource_limits import resource_limit_display
 from app.service.problem.runtime_config import problem_config_limits
 from app.service.problem.source_file import require_regular_source_file
-from app.service.problem.source_tree import ProblemSourceTree, load_problem_source_tree
+from app.service.problem.source_tree import solution_sources
 from app.service.repository.workspace import WorkspaceService
 from app.service.repository.revision import workspace_upstream_revision_display
 from app.service.statement.context import statement_languages
@@ -74,11 +76,11 @@ def _workspace_revision_display(state: WorkspaceState) -> tuple[str, bool]:
 
 def _component_display(
     root: Path,
-    source_tree: ProblemSourceTree,
+    build: BuildConfig,
     key: str,
     default_source: str,
 ) -> tuple[str, bool]:
-    source = source_tree.build.get(key, default_source)
+    source = build.get(key, default_source)
     try:
         path = require_regular_source_file(root, source)
     except ValueError:
@@ -316,26 +318,32 @@ class ContestProblemQueryService:
             )
             dirty = bool(state["dirty"])
             values = self._config_values.snapshot()
-            source_tree = load_problem_source_tree(
+            source_state = inspect_authoring_source(
                 workspace,
                 problem_limits=problem_config_limits(self._config_values),
                 tests_spec_max_bytes=int(values["TEXTAREA_MAX_BYTES"]),
                 statement_sample_max_bytes=int(
                     values["STATEMENT_SAMPLE_MAX_BYTES"]
                 ),
+                allow_repair=False,
             )
-            time_limit_ms = source_tree.problem["time_limit_ms"]
-            memory_limit_mb = source_tree.problem["memory_limit_mb"]
-            mode = source_tree.problem["mode"]
-            pass_limit = source_tree.problem["pass_limit"]
-            test_count = len(source_tree.tests)
-            all_solutions = tuple(source_tree.solution_behaviors)
+            problem = source_state["problem"]
+            build = source_state["build"]
+            time_limit_ms = problem["time_limit_ms"]
+            memory_limit_mb = problem["memory_limit_mb"]
+            mode = problem["mode"]
+            pass_limit = problem["pass_limit"]
+            test_count = len(source_state["tests"])
+            try:
+                all_solutions = solution_sources(workspace)
+            except ValueError:
+                all_solutions = ()
             solution_limit = int(self._config_values.SOLUTION_LIST_LIMIT)
             solution_count = min(len(all_solutions), solution_limit)
             solutions_truncated = len(all_solutions) > solution_limit
             languages = statement_languages(workspace)
             validator_display, validator_ready = _component_display(
-                workspace, source_tree, "validator_source", "validators/validator.cpp"
+                workspace, build, "validator_source", "validators/validator.cpp"
             )
             component_key = (
                 "interactor_source"
@@ -349,17 +357,17 @@ class ContestProblemQueryService:
             )
             output_label = "Interactor" if mode == "interactive" else "Checker"
             output_display, output_ready = _component_display(
-                workspace, source_tree, component_key, component_default
+                workspace, build, component_key, component_default
             )
             review = problem_content_review(
                 time_limit_ms=time_limit_ms,
                 memory_limit_mb=memory_limit_mb,
                 test_count=test_count,
-                tests_valid=True,
+                tests_valid=source_state["tests_valid"],
                 solution_count=solution_count,
                 solutions_truncated=solutions_truncated,
                 main_solution_ready=bool(
-                    source_tree.build.get("accepted_solution_source")
+                    build.get("accepted_solution_source")
                 ),
                 output_component_label=output_label,
                 output_component_display=output_display,
@@ -367,6 +375,7 @@ class ContestProblemQueryService:
                 validator_display=validator_display,
                 validator_ready=validator_ready,
                 statement_language_names=languages,
+                source_issues=source_state["issues"],
             )
             details_available = True
         except (OSError, RuntimeError, ValueError):

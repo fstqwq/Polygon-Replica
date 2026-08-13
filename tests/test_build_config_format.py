@@ -32,7 +32,7 @@ _SAMPLE_LIMIT = 32 * 1024
 
 class TestBuildConfigFormat(unittest.TestCase):
     def test_build_config_dump_uses_schema_key_order(self) -> None:
-        config = BuildConfig()
+        config = BuildConfig(generator_sources=[])
         config.update(
             {
                 "checker_source": "checkers/wcmp.cpp",
@@ -53,11 +53,19 @@ class TestBuildConfigFormat(unittest.TestCase):
         self.assertEqual(parse_build_config(text), config)
 
     def test_build_config_rejects_noncanonical_shapes(self) -> None:
-        canonical = BuildConfig()
+        canonical = BuildConfig(generator_sources=[])
         invalid = (
             {**canonical, "unknown": 1},
             {**canonical, "checker_source": "checkers/../checker.cpp"},
             {**canonical, "checker_source": "checkers/checker.py"},
+            {**canonical, "generator_sources": "generators/gen.cpp"},
+            {
+                **canonical,
+                "generator_sources": [
+                    "generators/gen.cpp",
+                    "generators/gen.cpp",
+                ],
+            },
             {
                 **canonical,
                 "accepted_solution_source": "solutions/nested/std.cpp",
@@ -87,11 +95,12 @@ class TestBuildConfigFormat(unittest.TestCase):
             {
                 "accepted_solution_source": "solutions/std.cpp",
                 "checker_source": "checkers/checker.cpp",
+                "generator_sources": ["generators/gen.cpp"],
             },
         )
         self.assertEqual(
             inspected["removed_keys"],
-            ("checker_args", "generator_sources", "run_timeout_sec"),
+            ("checker_args", "run_timeout_sec"),
         )
         self.assertEqual(inspected["error"], "")
         with self.assertRaises(ValueError):
@@ -100,7 +109,7 @@ class TestBuildConfigFormat(unittest.TestCase):
         unknown = inspect_authoring_build_config(
             json.dumps({"future_selection": "solutions/std.cpp"})
         )
-        self.assertEqual(unknown["config"], {})
+        self.assertEqual(unknown["config"], {"generator_sources": []})
         self.assertEqual(unknown["removed_keys"], ())
         self.assertIn("unsupported key 'future_selection'", unknown["error"])
 
@@ -137,7 +146,7 @@ class TestBuildConfigFormat(unittest.TestCase):
             )
 
             self.assertTrue(state["build_normalized"])
-            self.assertEqual(state["build"], {})
+            self.assertEqual(state["build"], {"generator_sources": []})
             self.assertEqual(
                 json.loads((root / "config/build.json").read_text(encoding="utf-8")),
                 {},
@@ -160,7 +169,7 @@ class TestBuildConfigFormat(unittest.TestCase):
                 allow_repair=True,
             )
             self.assertFalse(invalid["build_normalized"])
-            self.assertEqual(invalid["build"], {})
+            self.assertEqual(invalid["build"], {"generator_sources": []})
             self.assertEqual(
                 (root / "config/build.json").read_text(encoding="utf-8"),
                 invalid_text,
@@ -291,7 +300,7 @@ class TestBuildConfigFormat(unittest.TestCase):
                 dumps_problem_config(problem, limits=_PROBLEM_LIMITS),
                 encoding="utf-8",
             )
-            build = BuildConfig()
+            build = BuildConfig(generator_sources=["generators/gen.cpp"])
             build.update(
                 {
                     "accepted_solution_source": "solutions/std.cpp",
@@ -317,6 +326,7 @@ class TestBuildConfigFormat(unittest.TestCase):
                 "solutions/other.cpp",
                 "checkers/checker.cpp",
                 "generators/gen.cpp",
+                "generators/other.cpp",
             ):
                 (root / relative).write_text(
                     "int main(){return 0;}\n", encoding="utf-8"
@@ -360,7 +370,7 @@ class TestBuildConfigFormat(unittest.TestCase):
             (root / "tests/generator/001.in").write_text(
                 "other 5\n", encoding="utf-8"
             )
-            with self.assertRaisesRegex(ValueError, "does not exist"):
+            with self.assertRaisesRegex(ValueError, "not selected"):
                 load_problem_source_tree(
                     root,
                     problem_limits=_PROBLEM_LIMITS,

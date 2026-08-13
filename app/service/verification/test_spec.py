@@ -3,7 +3,6 @@ from pathlib import Path
 
 from app.service.problem.test_spec import (
     TestSpecEntry,
-    generator_source_paths,
     load_tests_spec,
     payload_rel_path_for_test,
     resolve_generator_source,
@@ -48,15 +47,13 @@ def prepare_tests_spec_runtime(
     snapshot: Path,
     tests_spec_entries: list[TestSpecEntry],
     *,
+    generator_sources: list[str],
     parse_gen_command_tokens_fn,
 ) -> tuple[list[dict], list[tuple[str, Path]]]:
     runtime_entries: list[dict] = []
     generator_targets: list[tuple[str, Path]] = []
     by_source_rel: dict[str, str] = {}
-    try:
-        generator_sources = tuple(generator_source_paths(snapshot))
-    except ValueError as exc:
-        raise RuntimeError(str(exc)) from exc
+    selected_sources = tuple(generator_sources)
     for index, row in enumerate(tests_spec_entries, start=1):
         kind = row["kind"]
         test_id = row["id"]
@@ -88,7 +85,7 @@ def prepare_tests_spec_runtime(
         except ValueError as exc:
             raise RuntimeError(str(exc)) from exc
         try:
-            source_rel = resolve_generator_source(tokens[0], generator_sources)
+            source_rel = resolve_generator_source(tokens[0], selected_sources)
             source_path = resolve_source(snapshot, source_rel)
         except ValueError as exc:
             raise RuntimeError(str(exc)) from exc

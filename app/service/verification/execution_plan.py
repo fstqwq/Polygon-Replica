@@ -227,12 +227,14 @@ def _tests_from_spec(
     manifest: VerificationManifest,
     testlib_header: Path | None,
     sample_only: bool,
+    generator_sources: list[str],
     entries: tuple[TestSpecEntry, ...],
     runtime_blob_store: RuntimeBlobStore,
 ) -> tuple[list[VerificationTestPlan], list[dict[str, object]]]:
     runtime_rows, generator_targets = prepare_tests_spec_runtime(
         snapshot,
         list(entries),
+        generator_sources=generator_sources,
         parse_gen_command_tokens_fn=parse_gen_command_tokens,
     )
     generator_source_by_name = {
@@ -365,6 +367,7 @@ class VerificationExecutionPlanner:
             manifest=resolved_manifest,
             testlib_header=shared_sources["testlib_header"],
             sample_only=bool(sample_only),
+            generator_sources=build_cfg["generator_sources"],
             entries=source_tree.tests,
             runtime_blob_store=self._runtime_blob_store,
         )

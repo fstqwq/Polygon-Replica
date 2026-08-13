@@ -230,7 +230,10 @@ def page_ctx(
     except Exception:
         ctx['checker_status'] = {'mode': 'missing', 'display': 'unknown', 'standard_checker': '', 'standard_expected_checker': '', 'standard_warning': '', 'standard_valid': False, 'repo_source': 'checkers/checker.cpp', 'repo_source_exists': False}
     try:
-        ctx['generator_status'] = generator_status_context(workspace_path)
+        ctx['generator_status'] = generator_status_context(
+            workspace_path,
+            build_cfg,
+        )
     except Exception:
         ctx['generator_status'] = {
             'mode': 'missing',

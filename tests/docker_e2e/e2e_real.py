@@ -70,6 +70,7 @@ BASE_FIXTURE_FILES = {
         {
             "accepted_solution_source": "solutions/main.cpp",
             "validator_source": "validators/validate.cpp",
+            "generator_sources": ["generators/gen.py"],
         }
     ),
     "tests/spec.json": _json_text(
@@ -516,7 +517,6 @@ def _exercise_legacy_build_normalization(client: httpx.Client) -> None:
         **canonical,
         "checker_args": ["--removed"],
         "compile_jobs": 0,
-        "generator_sources": ["generators/gen.py"],
         "run_timeout_sec": 30,
     }
     upload_source = AGENT_TEMP / "legacy-build.json"

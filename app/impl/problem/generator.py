@@ -12,8 +12,10 @@ from app.impl.problem.compile_check import judgehost_compile_check_error
 from app.impl.runtime.dependency import runtime
 from app.impl.problem.shared import _normalize_component_create_path, rename_component_source
 from app.impl.workspace.context_operation import (
+    read_build_config,
     template_for_kind,
     workspace_rel_file_exists,
+    write_build_config,
 )
 from app.impl.workspace.context_component_status import generator_status_context
 from app.impl.workspace.access import require_write_access
@@ -43,7 +45,10 @@ def generators_page(request: Request, problem: str, user: Annotated[str, Depends
         contest_workspace=contest_workspace_context_from_request(request),
     )
     workspace = Path(ctx['workspace']['path'])
-    generator_status = generator_status_context(workspace)
+    generator_status = generator_status_context(
+        workspace,
+        ctx['authoring_source']['build'],
+    )
     source_rows: list[dict[str, object]] = []
     if isinstance(generator_status.get('source_rows'), list):
         for row in generator_status['source_rows']:
@@ -56,6 +61,7 @@ def generators_page(request: Request, problem: str, user: Annotated[str, Depends
                 continue
             source_rows.append({
                 'path': path,
+                'configured': bool(row.get('configured')),
                 'reference_count': int(row.get('reference_count') or 0),
             })
     requested_source = normalize_optional_component_source_path_safe(request.query_params.get('path'), 'generators', 'generator source')
@@ -103,6 +109,7 @@ def generator_rename_source(
         default_filename='generator.cpp',
         component_label='generator',
         redirect_url_for_path=lambda path: f'/problems/{problem}/generators?path={quote_plus(path)}',
+        config_key='generator_sources',
     )
 
 def generator_save_source(
@@ -130,22 +137,35 @@ def generator_save_source(
             target_abs = safe_workspace_path(workspace, target)
             target_existed_before = bool(target_abs.exists() and target_abs.is_file() and (not target_abs.is_symlink()))
             target_previous_bytes = target_abs.read_bytes() if target_existed_before else b''
-            runtime().git_service.write_file(workspace, target, safe_content)
-            compile_check_error = judgehost_compile_check_error(
-                application_runtime=runtime(),
-                problem=problem,
-                user=user,
-                workspace=workspace,
-                source_path=target,
-                source_content=safe_content,
-                verification_source='problem.generator.save_source',
-            )
-            if compile_check_error:
+            build_cfg, cfg_path = read_build_config(workspace)
+            cfg_previous_text = cfg_path.read_text(encoding='utf-8')
+            try:
+                runtime().git_service.write_file(workspace, target, safe_content)
+                generator_sources = list(build_cfg['generator_sources'])
+                if target not in generator_sources:
+                    generator_sources.append(target)
+                build_cfg['generator_sources'] = generator_sources
+                write_build_config(cfg_path, build_cfg)
+                compile_check_error = judgehost_compile_check_error(
+                    application_runtime=runtime(),
+                    problem=problem,
+                    user=user,
+                    workspace=workspace,
+                    source_path=target,
+                    source_content=safe_content,
+                    verification_source='problem.generator.save_source',
+                )
+                if compile_check_error:
+                    raise ValueError(
+                        f'compile check failed: {compile_check_error}'
+                    )
+            except (HTTPException, OSError, ValueError):
                 if target_existed_before:
                     target_abs.write_bytes(target_previous_bytes)
                 else:
                     runtime().git_service.delete_path(workspace, target)
-                raise ValueError(f'compile check failed: {compile_check_error}')
+                cfg_path.write_text(cfg_previous_text, encoding='utf-8', newline='\n')
+                raise
         save_ok = True
     except (ValueError, OSError) as exc:
         msg = str(exc)

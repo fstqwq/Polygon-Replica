@@ -107,7 +107,7 @@ class TestPolygonPackageRules(unittest.TestCase):
                 dumps_problem_config(problem, limits=_PROBLEM_LIMITS),
                 encoding="utf-8",
             )
-            build = BuildConfig()
+            build = BuildConfig(generator_sources=[])
             build.update(
                 {
                     "accepted_solution_source": "solutions/std.cpp",

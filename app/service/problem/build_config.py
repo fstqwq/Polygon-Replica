@@ -2,7 +2,7 @@
 
 import json
 from pathlib import Path, PurePosixPath
-from typing import TypedDict
+from typing import NotRequired, TypedDict
 
 from app.main_constant import (
     CPP_SOURCE_EXTENSIONS,
@@ -20,11 +20,11 @@ BUILD_CONFIG_KEY_ORDER: tuple[str, ...] = (
     "validator_source",
     "checker_source",
     "interactor_source",
+    "generator_sources",
 )
 BUILD_CONFIG_KEYS = frozenset(BUILD_CONFIG_KEY_ORDER)
 REMOVED_BUILD_CONFIG_KEYS = frozenset(
     {
-        "generator_sources",
         "generator_runs",
         "generator_args",
         "validator_args",
@@ -38,11 +38,12 @@ REMOVED_BUILD_CONFIG_KEYS = frozenset(
 )
 
 
-class BuildConfig(TypedDict, total=False):
-    accepted_solution_source: str
-    validator_source: str
-    checker_source: str
-    interactor_source: str
+class BuildConfig(TypedDict):
+    generator_sources: list[str]
+    accepted_solution_source: NotRequired[str]
+    validator_source: NotRequired[str]
+    checker_source: NotRequired[str]
+    interactor_source: NotRequired[str]
 
 
 class AuthoringBuildConfig(TypedDict):
@@ -82,6 +83,24 @@ def _source_path(
     return path.as_posix()
 
 
+def _generator_sources(raw: object, *, label: str) -> list[str]:
+    if not isinstance(raw, list):
+        raise ValueError(f"{label}.generator_sources: must be an array")
+    sources = [
+        _source_path(
+            item,
+            key=f"generator_sources[{index}]",
+            root="generators",
+            extensions=SOLUTION_SOURCE_EXTENSIONS,
+            label=label,
+        )
+        for index, item in enumerate(raw)
+    ]
+    if len(set(sources)) != len(sources):
+        raise ValueError(f"{label}.generator_sources: duplicate source path")
+    return sources
+
+
 def parse_build_config(
     text: str,
     *,
@@ -89,7 +108,7 @@ def parse_build_config(
 ) -> BuildConfig:
     payload = loads_object(text, label=label)
     reject_unknown_keys(payload, allowed=BUILD_CONFIG_KEYS, label=label)
-    result = BuildConfig()
+    result = BuildConfig(generator_sources=[])
 
     if "accepted_solution_source" in payload:
         result["accepted_solution_source"] = _source_path(
@@ -123,6 +142,11 @@ def parse_build_config(
             extensions=CPP_SOURCE_EXTENSIONS,
             label=label,
         )
+    if "generator_sources" in payload:
+        result["generator_sources"] = _generator_sources(
+            payload["generator_sources"],
+            label=label,
+        )
 
     return result
 
@@ -143,13 +167,17 @@ def inspect_authoring_build_config(
     try:
         payload = loads_object(text, label=label)
     except ValueError as exc:
-        return {"config": BuildConfig(), "removed_keys": (), "error": str(exc)}
+        return {
+            "config": BuildConfig(generator_sources=[]),
+            "removed_keys": (),
+            "error": str(exc),
+        }
 
     unknown = frozenset(payload).difference(BUILD_CONFIG_KEYS)
     unsupported = sorted(unknown.difference(REMOVED_BUILD_CONFIG_KEYS))
     if unsupported:
         return {
-            "config": BuildConfig(),
+            "config": BuildConfig(generator_sources=[]),
             "removed_keys": (),
             "error": f"{label}: unsupported key '{unsupported[0]}'",
         }
@@ -165,7 +193,11 @@ def inspect_authoring_build_config(
             label=label,
         )
     except ValueError as exc:
-        return {"config": BuildConfig(), "removed_keys": (), "error": str(exc)}
+        return {
+            "config": BuildConfig(generator_sources=[]),
+            "removed_keys": (),
+            "error": str(exc),
+        }
     return {
         "config": config,
         "removed_keys": tuple(sorted(unknown)),
@@ -185,7 +217,11 @@ def load_build_config(root: Path) -> BuildConfig:
 
 
 def ordered_build_config(payload: BuildConfig) -> dict[str, object]:
-    return {key: payload[key] for key in BUILD_CONFIG_KEY_ORDER if key in payload}
+    return {
+        key: payload[key]
+        for key in BUILD_CONFIG_KEY_ORDER
+        if key in payload and (key != "generator_sources" or payload[key])
+    }
 
 
 def dumps_build_config(payload: BuildConfig) -> str:

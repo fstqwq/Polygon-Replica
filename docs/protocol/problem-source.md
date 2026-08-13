@@ -34,12 +34,14 @@ object. Verification, Export, Contest builds, and package materialization still
 reject the invalid source at their entrance.
 Execution dispatches the accepted values without another memory floor.
 
-`config/build.json` is also a required UTF-8 JSON object. Its only fields are
-the optional selections `accepted_solution_source`,
-`validator_source`, `checker_source`, and `interactor_source`. All paths are
-normalized relative POSIX paths. Solutions live directly under `solutions/`;
-validator, checker, and interactor selections point to C++ source below their
-matching roots.
+`config/build.json` is also a required UTF-8 JSON object. Its fields are the
+optional selections `accepted_solution_source`, `validator_source`,
+`checker_source`, and `interactor_source`, plus the optional
+`generator_sources` array. All paths are normalized relative POSIX paths.
+Solutions live directly under `solutions/`; validator, checker, and interactor
+selections point to C++ source below their matching roots. Missing
+`generator_sources` means an empty generator allowlist. When present, its
+entries are unique source paths below `generators/`.
 
 For these four fields, an absent selection means that component is not selected.
 Runtime code does not fill a missing selection by scanning a directory or
@@ -83,10 +85,12 @@ limit remains their common envelope.
 Judge input is not embedded in the entry. A manual test reads
 `tests/manual/<id>.in`. A generated test reads
 `tests/generator/<id>.in` as a shell-word command: its first token resolves a
-source below `generators/`, and the remaining tokens are its arguments. A
-missing payload, missing generator, or ambiguous generator token invalidates
-the source tree. An empty `tests` array has no implicit discovery behavior;
-verification and Native materialization require at least one explicit test.
+source selected by `generator_sources`, and the remaining tokens are its
+arguments. A missing payload, unselected or missing generator, or ambiguous
+generator token invalidates the source tree. Files merely present below
+`generators/` are not executable inputs until selected. An empty `tests` array
+has no implicit discovery behavior; verification and Native materialization
+require at least one explicit test.
 
 The runtime generator input payload is the generator executable invocation plus
 these command parameters. Its execution identity and scheduling semantics are

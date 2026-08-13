@@ -89,6 +89,7 @@ def _seed_workspace() -> tuple[Path, int, int, int, str]:
         {
             "accepted_solution_source": "solutions/main.cpp",
             "validator_source": "validators/validate.cpp",
+            "generator_sources": ["generators/gen.py"],
         },
     )
     _write_json(

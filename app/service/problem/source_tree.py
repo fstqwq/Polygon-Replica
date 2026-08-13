@@ -20,7 +20,6 @@ from app.service.problem.source_file import (
 )
 from app.service.problem.test_spec import (
     TestSpecEntry,
-    generator_source_paths,
     load_tests_spec,
     parse_gen_command_tokens,
     payload_rel_path_for_test,
@@ -74,7 +73,7 @@ def load_problem_source_tree(
             sample_max_bytes=statement_sample_max_bytes,
         )
     )
-    generator_sources = tuple(generator_source_paths(root))
+    generator_sources = tuple(build["generator_sources"])
 
     selected_sources = [
         build[key]
@@ -86,6 +85,7 @@ def load_problem_source_tree(
         )
         if key in build
     ]
+    selected_sources.extend(generator_sources)
     for relative in selected_sources:
         require_regular_source_file(root, relative)
 

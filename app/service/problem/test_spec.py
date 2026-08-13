@@ -198,7 +198,7 @@ def resolve_generator_source(token: str, source_paths: tuple[str, ...]) -> str:
             matches.append(source)
     unique = list(dict.fromkeys(matches))
     if not unique:
-        raise ValueError(f"generator source does not exist: {token}")
+        raise ValueError(f"generator source is not selected: {token}")
     if len(unique) > 1:
         raise ValueError(f"generator source is ambiguous: {token}")
     return unique[0]

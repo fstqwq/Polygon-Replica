@@ -594,7 +594,9 @@ class WorkspaceService:
                 ),
                 limits=problem_config_limits(self.config_values),
             ),
-            workspace / "config/build.json": dumps_build_config(BuildConfig()),
+            workspace / "config/build.json": dumps_build_config(
+                BuildConfig(generator_sources=[])
+            ),
             workspace / "tests/spec.json": dumps_default_tests_spec(),
         }
         for path, content in canonical_sources.items():

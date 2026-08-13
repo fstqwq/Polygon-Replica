@@ -64,7 +64,7 @@ class TestPublishedRevisionExport(E2ETestBase):
                 )
             build_config = snapshot / "config" / "build.json"
             build_config.parent.mkdir(parents=True)
-            config_payload = BuildConfig()
+            config_payload = BuildConfig(generator_sources=[])
             config_payload["accepted_solution_source"] = "solutions/official.cpp"
             build_config.write_text(
                 dumps_build_config(config_payload),

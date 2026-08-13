@@ -18,7 +18,11 @@ from app.service.problem.runtime_config import (
 )
 from app.service.problem.source_file import require_regular_source_file
 from app.service.problem.source_tree import load_problem_source_tree
-from app.service.problem.test_spec import TESTS_SPEC_REL, load_tests_spec
+from app.service.problem.test_spec import (
+    TESTS_SPEC_REL,
+    TestSpecEntry,
+    load_tests_spec,
+)
 
 
 AuthoringSourceIssueTone = Literal["warning", "danger"]
@@ -32,6 +36,8 @@ class AuthoringSourceIssue(TypedDict):
 class AuthoringSourceState(TypedDict):
     problem: ProblemConfig
     build: BuildConfig
+    tests: list[TestSpecEntry]
+    tests_valid: bool
     issues: list[AuthoringSourceIssue]
     build_normalized: bool
 
@@ -60,7 +66,11 @@ def _build_result(root: Path) -> AuthoringBuildConfig:
     try:
         text = _read_utf8(root, BUILD_CONFIG_REL.as_posix())
     except ValueError as exc:
-        return {"config": BuildConfig(), "removed_keys": (), "error": str(exc)}
+        return {
+            "config": BuildConfig(generator_sources=[]),
+            "removed_keys": (),
+            "error": str(exc),
+        }
     return inspect_authoring_build_config(text)
 
 
@@ -124,12 +134,12 @@ def inspect_authoring_source(
                     "danger",
                 )
         else:
-            build_valid = False
+            fields = ", ".join(build_result["removed_keys"])
             _append_issue(
                 issues,
-                "config/build.json: contains obsolete fields; an author must "
-                "review and publish a normalized configuration",
-                "danger",
+                "config/build.json: contains obsolete fields "
+                f"({fields}); review and publish a normalized configuration",
+                "warning",
             )
 
     if published_build_text is not None:
@@ -141,9 +151,10 @@ def inspect_authoring_source(
                 "warning",
             )
 
+    tests: list[TestSpecEntry] = []
     tests_valid = True
     try:
-        load_tests_spec(
+        tests = load_tests_spec(
             root / TESTS_SPEC_REL,
             document_max_bytes=tests_spec_max_bytes,
             sample_max_bytes=statement_sample_max_bytes,
@@ -152,7 +163,12 @@ def inspect_authoring_source(
         tests_valid = False
         _append_issue(issues, str(exc), "danger")
 
-    if problem_valid and build_valid and tests_valid:
+    if (
+        problem_valid
+        and build_valid
+        and tests_valid
+        and (not build_result["removed_keys"] or build_normalized)
+    ):
         try:
             load_problem_source_tree(
                 root,
@@ -166,6 +182,8 @@ def inspect_authoring_source(
     return {
         "problem": problem,
         "build": build,
+        "tests": tests,
+        "tests_valid": tests_valid,
         "issues": issues,
         "build_normalized": build_normalized,
     }
