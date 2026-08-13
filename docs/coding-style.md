@@ -7,6 +7,34 @@ dependency boundaries take precedence over general style guidance.
 Application code targets CPython 3.14 exclusively and uses its native deferred
 annotation semantics.
 
+## Incomplete and legacy data
+
+An authoring system must remain usable when source is incomplete or was written
+by an older application revision. Do not turn one invalid configuration file
+into an Internal Server Error that prevents the author from opening and fixing
+the problem. Also do not carry a partly interpreted value through the program
+and add `try`/`except`, fallback values, or legacy branches to every consumer.
+
+Handle the condition once at the boundary that owns it:
+
+- authoring reads return diagnostics and a complete page model, using neutral
+  defaults only for display and editing;
+- a safe, mechanical repair may run there when it preserves every current
+  field and does not infer user intent;
+- ambiguous data stays unchanged and is shown as a warning under Review and
+  Publish;
+- Verification, Export, Contest builds, and package materialization validate
+  the complete canonical source before doing work, then pass only that
+  canonical shape internally;
+- a consumer may reject, explicitly upgrade, or use a defined fallback at its
+  entrance, but code behind that entrance does not see incomplete or legacy
+  shapes.
+
+Automatic repair is deliberately narrow. Removing fields whose behavior was
+deleted is safe; selecting a main solution from filenames or `.desc` files is
+not. A repair is an ordinary workspace change that the author reviews and
+publishes. Do not add hidden compatibility state or a parallel runtime model.
+
 ## Import layout
 
 Imports normally stay at module scope after the module docstring. Separate them

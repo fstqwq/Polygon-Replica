@@ -26,7 +26,10 @@ def validator_page(request: Request, problem: str, user: Annotated[str, Depends(
         contest_workspace=contest_workspace_context_from_request(request),
     )
     workspace = Path(ctx['workspace']['path'])
-    validator_status = validator_status_context(workspace)
+    validator_status = validator_status_context(
+        workspace,
+        ctx['authoring_source']['build'],
+    )
     repo_source = validator_status['repo_source'] if isinstance(validator_status.get('repo_source'), str) and validator_status['repo_source'] else 'validators/validator.cpp'
     repo_exists = bool(validator_status.get('repo_source_exists'))
     editor = single_source_editor_context(

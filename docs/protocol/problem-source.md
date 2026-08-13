@@ -25,10 +25,13 @@ fields:
 - `mode`: `pass-fail` or `interactive`; default `pass-fail`
 - `pass_limit`: 1 through 64; default 1
 
-The service creates these defaults only when it creates a new problem. A reader
-never supplies a missing field, clamps an authored value, or replaces a missing
-or malformed file. UI saves, imported source, verification, preview,
-publication readiness, and package materialization all use this codec.
+The service writes these defaults when it creates a new problem. Strict source
+consumers never supply a missing field, clamp an authored value, or replace a
+missing or malformed file. Authoring pages are different: they show the
+configuration error under Review and Publish and use the defaults only to keep
+the editor operable. Saving the General form writes one complete canonical
+object. Verification, Export, Contest builds, and package materialization still
+reject the invalid source at their entrance.
 Execution dispatches the accepted values without another memory floor.
 
 `config/build.json` is also a required UTF-8 JSON object. Its only fields are
@@ -44,6 +47,15 @@ choosing a conventional filename. Interactive source rejects a checker
 selection, and pass-fail source rejects an interactor selection. External import
 adapters may infer a best-effort selection, but they write the result into this
 object before any authored-source consumer runs.
+
+An authoring read recognizes the removed build fields from the previous source
+shape. For a writable workspace it deletes those obsolete fields and preserves
+the four current selections exactly. This is a visible workspace modification
+and Review and Publish reports it until the normalized source is published.
+Unknown fields, malformed JSON, invalid paths, and missing selected files are
+diagnosed but never guessed or silently rewritten. In particular, a missing
+`accepted_solution_source` is not inferred from a filename, list order, or an
+`expected: accepted` solution descriptor.
 
 ## Test specification
 

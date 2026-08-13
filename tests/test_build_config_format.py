@@ -6,8 +6,10 @@ from pathlib import Path
 from app.service.problem.build_config import (
     BuildConfig,
     dumps_build_config,
+    inspect_authoring_build_config,
     parse_build_config,
 )
+from app.service.problem.authoring_source import inspect_authoring_source
 from app.service.problem.runtime_config import (
     ProblemConfig,
     ProblemConfigLimits,
@@ -68,6 +70,100 @@ class TestBuildConfigFormat(unittest.TestCase):
             parse_build_config(
                 '{"checker_source":"checkers/a.cpp",'
                 '"checker_source":"checkers/b.cpp"}'
+            )
+
+    def test_authoring_read_can_project_only_removed_build_fields(self) -> None:
+        legacy = {
+            "accepted_solution_source": "solutions/std.cpp",
+            "checker_source": "checkers/checker.cpp",
+            "generator_sources": ["generators/gen.cpp"],
+            "checker_args": ["--obsolete"],
+            "run_timeout_sec": 30,
+        }
+        inspected = inspect_authoring_build_config(json.dumps(legacy))
+
+        self.assertEqual(
+            inspected["config"],
+            {
+                "accepted_solution_source": "solutions/std.cpp",
+                "checker_source": "checkers/checker.cpp",
+            },
+        )
+        self.assertEqual(
+            inspected["removed_keys"],
+            ("checker_args", "generator_sources", "run_timeout_sec"),
+        )
+        self.assertEqual(inspected["error"], "")
+        with self.assertRaises(ValueError):
+            parse_build_config(json.dumps(legacy))
+
+        unknown = inspect_authoring_build_config(
+            json.dumps({"future_selection": "solutions/std.cpp"})
+        )
+        self.assertEqual(unknown["config"], {})
+        self.assertEqual(unknown["removed_keys"], ())
+        self.assertIn("unsupported key 'future_selection'", unknown["error"])
+
+    def test_authoring_inspection_repairs_legacy_without_guessing(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="problem-authoring-") as raw:
+            root = Path(raw)
+            (root / "config").mkdir(parents=True)
+            (root / "tests").mkdir()
+            problem = ProblemConfig(
+                time_limit_ms=2000,
+                memory_limit_mb=1024,
+                mode="pass-fail",
+                pass_limit=1,
+            )
+            (root / "config/problem.json").write_text(
+                dumps_problem_config(problem, limits=_PROBLEM_LIMITS),
+                encoding="utf-8",
+            )
+            (root / "config/build.json").write_text(
+                json.dumps({"checker_args": [], "compile_jobs": 0}),
+                encoding="utf-8",
+            )
+            (root / "tests/spec.json").write_text(
+                '{"tests": []}\n',
+                encoding="utf-8",
+            )
+
+            state = inspect_authoring_source(
+                root,
+                problem_limits=_PROBLEM_LIMITS,
+                tests_spec_max_bytes=_DOCUMENT_LIMIT,
+                statement_sample_max_bytes=_SAMPLE_LIMIT,
+                allow_repair=True,
+            )
+
+            self.assertTrue(state["build_normalized"])
+            self.assertEqual(state["build"], {})
+            self.assertEqual(
+                json.loads((root / "config/build.json").read_text(encoding="utf-8")),
+                {},
+            )
+            self.assertIn(
+                "obsolete fields were removed",
+                state["issues"][0]["message"],
+            )
+
+            invalid_text = '{"checker_source":"checkers/checker.py"}'
+            (root / "config/build.json").write_text(
+                invalid_text,
+                encoding="utf-8",
+            )
+            invalid = inspect_authoring_source(
+                root,
+                problem_limits=_PROBLEM_LIMITS,
+                tests_spec_max_bytes=_DOCUMENT_LIMIT,
+                statement_sample_max_bytes=_SAMPLE_LIMIT,
+                allow_repair=True,
+            )
+            self.assertFalse(invalid["build_normalized"])
+            self.assertEqual(invalid["build"], {})
+            self.assertEqual(
+                (root / "config/build.json").read_text(encoding="utf-8"),
+                invalid_text,
             )
 
     def test_problem_config_round_trip_is_exact(self) -> None:

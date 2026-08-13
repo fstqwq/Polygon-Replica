@@ -109,8 +109,12 @@ def generator_status_context(workspace: Path) -> dict:
         'source_rows_truncated': bool(generator_candidates_truncated),
     }
 
-def validator_status_context(workspace: Path) -> dict:
-    build_cfg, _ = read_build_config(workspace)
+def validator_status_context(
+    workspace: Path,
+    build_cfg: BuildConfig | None = None,
+) -> dict:
+    if build_cfg is None:
+        build_cfg, _ = read_build_config(workspace)
     repo_source, repo_exists = _configured_component_source(
         workspace,
         build_cfg,
@@ -119,8 +123,12 @@ def validator_status_context(workspace: Path) -> dict:
     )
     return {'mode': 'repository' if repo_exists else 'missing', 'display': _source_basename_label(repo_source) if repo_exists else 'missing', 'repo_source': repo_source, 'repo_source_exists': bool(repo_exists)}
 
-def interactor_status_context(workspace: Path) -> dict:
-    build_cfg, _ = read_build_config(workspace)
+def interactor_status_context(
+    workspace: Path,
+    build_cfg: BuildConfig | None = None,
+) -> dict:
+    if build_cfg is None:
+        build_cfg, _ = read_build_config(workspace)
     repo_source, repo_exists = _configured_component_source(
         workspace,
         build_cfg,
@@ -129,8 +137,12 @@ def interactor_status_context(workspace: Path) -> dict:
     )
     return {'mode': 'repository' if repo_exists else 'missing', 'display': _source_basename_label(repo_source) if repo_exists else 'missing', 'repo_source': repo_source, 'repo_source_exists': bool(repo_exists)}
 
-def checker_status_context(workspace: Path) -> dict:
-    build_cfg, _ = read_build_config(workspace)
+def checker_status_context(
+    workspace: Path,
+    build_cfg: BuildConfig | None = None,
+) -> dict:
+    if build_cfg is None:
+        build_cfg, _ = read_build_config(workspace)
     repo_source, repo_exists = _configured_component_source(
         workspace,
         build_cfg,

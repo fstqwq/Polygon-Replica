@@ -840,6 +840,89 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         self.assertNotIn("validator_source", build_cfg)
         self.assertNotIn("accepted_solution_source", build_cfg)
 
+    def test_workspace_normalizes_legacy_build_and_reports_review_warning(self) -> None:
+        ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
+        build_path = ws / "config" / "build.json"
+        build_path.write_text(
+            json.dumps(
+                {
+                    "accepted_solution_source": "solutions/std.cpp",
+                    "checker_args": ["--removed"],
+                    "compile_jobs": 0,
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        response = workspace_page(
+            _request("/problems/alice/sample/workspace"),
+            "alice/sample",
+            "alice",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            json.loads(build_path.read_text(encoding="utf-8")),
+            {"accepted_solution_source": "solutions/std.cpp"},
+        )
+        body = response.body.decode("utf-8", errors="replace")
+        self.assertIn("obsolete fields were removed", body)
+
+    def test_workspace_keeps_malformed_build_editable_without_rewriting_it(self) -> None:
+        ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
+        build_path = ws / "config" / "build.json"
+        malformed = '{"checker_source":"checkers/checker.py"}\n'
+        build_path.write_text(malformed, encoding="utf-8")
+
+        response = workspace_page(
+            _request("/problems/alice/sample/workspace"),
+            "alice/sample",
+            "alice",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(build_path.read_text(encoding="utf-8"), malformed)
+        body = response.body.decode("utf-8", errors="replace")
+        self.assertIn("source must use one of", body)
+
+    def test_malformed_problem_config_can_be_opened_and_replaced_by_general_save(
+        self,
+    ) -> None:
+        ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
+        problem_path = ws / "config" / "problem.json"
+        problem_path.write_text('{"mode":"pass-fail"}\n', encoding="utf-8")
+
+        page = workspace_page(
+            _request("/problems/alice/sample/workspace"),
+            "alice/sample",
+            "alice",
+        )
+        self.assertEqual(page.status_code, 200)
+        self.assertIn(
+            "missing key",
+            page.body.decode("utf-8", errors="replace"),
+        )
+
+        saved = general_save(
+            problem="alice/sample",
+            user="alice",
+            time_limit_ms="1500",
+            memory_limit_mb="64",
+            mode="pass-fail",
+            pass_limit="1",
+        )
+        self.assertEqual(saved.status_code, 303)
+        self.assertEqual(
+            json.loads(problem_path.read_text(encoding="utf-8")),
+            {
+                "time_limit_ms": 1500,
+                "memory_limit_mb": 64,
+                "mode": "pass-fail",
+                "pass_limit": 1,
+            },
+        )
+
     def test_workspace_page_get_refreshes_workspace_status_in_db(self) -> None:
         username = self.random_id("wsget")
         workspace_service.grant_repo_access("alice/sample", username, "owner")

@@ -22,6 +22,20 @@ BUILD_CONFIG_KEY_ORDER: tuple[str, ...] = (
     "interactor_source",
 )
 BUILD_CONFIG_KEYS = frozenset(BUILD_CONFIG_KEY_ORDER)
+REMOVED_BUILD_CONFIG_KEYS = frozenset(
+    {
+        "generator_sources",
+        "generator_runs",
+        "generator_args",
+        "validator_args",
+        "checker_args",
+        "compile_jobs",
+        "validate_jobs",
+        "solve_jobs",
+        "run_jobs",
+        "run_timeout_sec",
+    }
+)
 
 
 class BuildConfig(TypedDict, total=False):
@@ -29,6 +43,12 @@ class BuildConfig(TypedDict, total=False):
     validator_source: str
     checker_source: str
     interactor_source: str
+
+
+class AuthoringBuildConfig(TypedDict):
+    config: BuildConfig
+    removed_keys: tuple[str, ...]
+    error: str
 
 
 def _source_path(
@@ -105,6 +125,52 @@ def parse_build_config(
         )
 
     return result
+
+
+def inspect_authoring_build_config(
+    text: str,
+    *,
+    label: str = "config/build.json",
+) -> AuthoringBuildConfig:
+    """Read current or safely-projectable authored configuration.
+
+    Strict consumers use :func:`parse_build_config`. This operation exists for
+    authoring pages, where known obsolete fields can be removed without
+    guessing any current selection. Unknown fields and invalid current values
+    remain errors.
+    """
+
+    try:
+        payload = loads_object(text, label=label)
+    except ValueError as exc:
+        return {"config": BuildConfig(), "removed_keys": (), "error": str(exc)}
+
+    unknown = frozenset(payload).difference(BUILD_CONFIG_KEYS)
+    unsupported = sorted(unknown.difference(REMOVED_BUILD_CONFIG_KEYS))
+    if unsupported:
+        return {
+            "config": BuildConfig(),
+            "removed_keys": (),
+            "error": f"{label}: unsupported key '{unsupported[0]}'",
+        }
+
+    projected = {
+        key: payload[key]
+        for key in BUILD_CONFIG_KEY_ORDER
+        if key in payload
+    }
+    try:
+        config = parse_build_config(
+            json.dumps(projected, ensure_ascii=False),
+            label=label,
+        )
+    except ValueError as exc:
+        return {"config": BuildConfig(), "removed_keys": (), "error": str(exc)}
+    return {
+        "config": config,
+        "removed_keys": tuple(sorted(unknown)),
+        "error": "",
+    }
 
 
 def load_build_config(root: Path) -> BuildConfig:

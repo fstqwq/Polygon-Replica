@@ -29,7 +29,10 @@ def checker_page(request: Request, problem: str, user: Annotated[str, Depends(re
     if ctx.get('problem_mode') == 'interactive':
         return redirect_response(f'/problems/{problem}/interactor', status_code=303, message='interactive problem uses an interactor; checker section hidden')
     workspace = Path(ctx['workspace']['path'])
-    checker_status = checker_status_context(workspace)
+    checker_status = checker_status_context(
+        workspace,
+        ctx['authoring_source']['build'],
+    )
     standard_checker_options = standard_checker_catalog()
     selected_standard = standard_checker if isinstance(standard_checker := checker_status.get('standard_checker'), str) else ''
     repo_source = repo_source if isinstance(repo_source := checker_status.get('repo_source'), str) and repo_source else 'checkers/checker.cpp'
@@ -59,7 +62,10 @@ def checker_view_standard(request: Request, problem: str, user: Annotated[str, D
     if ctx.get('problem_mode') == 'interactive':
         return redirect_response(f'/problems/{problem}/interactor', status_code=303, message='interactive problem uses an interactor; checker section hidden')
     workspace = Path(ctx['workspace']['path'])
-    checker_status = checker_status_context(workspace)
+    checker_status = checker_status_context(
+        workspace,
+        ctx['authoring_source']['build'],
+    )
     selected = checker_name.strip()
     if not selected:
         selected = standard_checker if isinstance(standard_checker := checker_status.get('standard_checker'), str) else ''

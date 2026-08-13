@@ -368,16 +368,29 @@ def solution_metadata_entry(workspace: Path, source_rel: str) -> dict:
         source_rel,
     )
 
-def list_solution_entries(workspace: Path) -> tuple[list[dict], bool]:
-    return runtime().problem_source_query_service.solution_entries(workspace)
+def list_solution_entries(
+    workspace: Path,
+    build_config: BuildConfig | None = None,
+) -> tuple[list[dict], bool]:
+    return runtime().problem_source_query_service.solution_entries(
+        workspace,
+        build_config,
+    )
 
 def resolve_build_accepted_solution_source(workspace: Path) -> str:
     return runtime().problem_source_query_service.accepted_solution_source(workspace)
 
-def _solutions_status_context(workspace: Path) -> dict:
-    entries, truncated = list_solution_entries(workspace)
+def _solutions_status_context(
+    workspace: Path,
+    build_config: BuildConfig | None = None,
+) -> dict:
+    entries, truncated = list_solution_entries(workspace, build_config)
     total = len(entries)
-    accepted_source = resolve_build_accepted_solution_source(workspace)
+    accepted_source = (
+        resolve_build_accepted_solution_source(workspace)
+        if build_config is None
+        else build_config.get("accepted_solution_source", "")
+    )
     accepted_exists = bool(accepted_source) and workspace_rel_file_exists(workspace, accepted_source)
     if truncated:
         count_display = f'{total}+ {"file" if total == 1 else "files"}'

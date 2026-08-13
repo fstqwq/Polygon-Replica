@@ -26,7 +26,10 @@ def interactor_page(request: Request, problem: str, user: Annotated[str, Depends
         contest_workspace=contest_workspace_context_from_request(request),
     )
     workspace = Path(ctx['workspace']['path'])
-    interactor_status = interactor_status_context(workspace)
+    interactor_status = interactor_status_context(
+        workspace,
+        ctx['authoring_source']['build'],
+    )
     repo_source = repo_source if isinstance(repo_source := interactor_status.get('repo_source'), str) and repo_source else 'interactors/interactor.cpp'
     editor = single_source_editor_context(
         request=request,

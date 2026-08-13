@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import TypedDict
 
 from app.config import ConfigValues
-from app.service.problem.build_config import load_build_config
+from app.service.problem.build_config import BuildConfig, load_build_config
 from app.service.problem.solution_metadata import (
     ExpectedBehavior,
     desc_rel_path_for_source,
@@ -253,10 +253,18 @@ class ProblemSourceQueryService:
             self.accepted_solution_source(workspace),
         )
 
-    def solution_entries(self, workspace: Path) -> tuple[list[SolutionSourceRow], bool]:
+    def solution_entries(
+        self,
+        workspace: Path,
+        build_config: BuildConfig | None = None,
+    ) -> tuple[list[SolutionSourceRow], bool]:
         sources = solution_sources(workspace)
         limit = int(self._config_values.SOLUTION_LIST_LIMIT)
-        accepted_source = self.accepted_solution_source(workspace)
+        accepted_source = (
+            self.accepted_solution_source(workspace)
+            if build_config is None
+            else build_config.get("accepted_solution_source", "")
+        )
         return (
             [
                 self._solution_entry(workspace, source, accepted_source)

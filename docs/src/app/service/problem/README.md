@@ -8,6 +8,11 @@ outputs are canonical JSON/text writers and typed read models for orchestration
 and UI code. `ProblemSourceQueryService` owns solution metadata, test editor,
 and custom-run selector projections; selectors describe the current authored
 Source and never infer a new run from disposable Verification cache files.
+Strict codecs and the source-tree loader protect work entrances such as
+Verification and Export. The authoring-source inspector instead keeps pages
+editable, reports malformed or incomplete source, and performs only
+unambiguous workspace normalization; consumers never receive its display
+fallbacks.
 
 Git remains authoritative for committed source. This package does not own Git
 publication, execution, or derived outputs. Readiness combines read-only Git,

@@ -507,6 +507,59 @@ def _assert_fixture_shape() -> None:
         raise RuntimeError("fixture text must use LF line endings")
 
 
+def _exercise_legacy_build_normalization(client: httpx.Client) -> None:
+    canonical = cast(
+        dict[str, object],
+        json.loads(FIXTURE_FILES["config/build.json"]),
+    )
+    legacy = {
+        **canonical,
+        "checker_args": ["--removed"],
+        "compile_jobs": 0,
+        "generator_sources": ["generators/gen.py"],
+        "run_timeout_sec": 30,
+    }
+    upload_source = AGENT_TEMP / "legacy-build.json"
+    upload_source.write_text(_json_text(legacy), encoding="utf-8", newline="\n")
+    _agent_cli(
+        "upload",
+        "--problem",
+        PROBLEM,
+        "--workspace-path",
+        "config/build.json",
+        "--local-file",
+        str(upload_source),
+    )
+    before = _agent_cli(
+        "read-file",
+        "--problem",
+        PROBLEM,
+        "--path",
+        "config/build.json",
+    )
+    if json.loads(str(before.get("content") or "")) != legacy:
+        raise RuntimeError("Agent did not install the legacy build fixture")
+
+    page = client.get(f"/problems/{PROBLEM}/workspace")
+    if page.status_code != 200:
+        raise RuntimeError(
+            "legacy build source made the authoring page unavailable: "
+            f"{page.status_code} {page.text[:500]}"
+        )
+    if "obsolete fields were removed" not in page.text:
+        raise RuntimeError("Review and Publish omitted the legacy normalization warning")
+
+    after = _agent_cli(
+        "read-file",
+        "--problem",
+        PROBLEM,
+        "--path",
+        "config/build.json",
+    )
+    if json.loads(str(after.get("content") or "")) != canonical:
+        raise RuntimeError("legacy build normalization changed current selections")
+
+
 def prepare() -> None:
     _assert_fixture_shape()
     AGENT_ROOT.mkdir(parents=True, exist_ok=True)
@@ -702,6 +755,7 @@ def prepare() -> None:
         )
         if pushed.get("applied") is not True or pushed.get("changed") is not True:
             raise RuntimeError(f"Agent push did not apply fixture: {pushed!r}")
+        _exercise_legacy_build_normalization(client)
         _agent_cli(
             "pull",
             "--problem",

@@ -30,7 +30,6 @@ from app.impl.workspace.context_verification import (
     normalize_program_id_token,
     normalize_run_id_token,
 )
-from app.impl.workspace.problem_config import read_problem_config
 from app.impl.workspace.run_view_detail import build_run_detail_context
 from app.impl.workspace.run_view_list import run_list_rows
 from app.main_util import normalize_optional_component_source_path, normalize_optional_component_source_path_safe, read_fileobj_bytes_limited
@@ -70,7 +69,7 @@ def run_page(request: Request, problem: str, user: Annotated[str, Depends(requir
         contest_workspace=contest_workspace_context_from_request(request),
     )
     workspace = Path(ctx['workspace']['path'])
-    _, general_cfg, _ = read_problem_config(workspace)
+    general_cfg = ctx['authoring_source']['problem']
     execute_mode = general_cfg['mode']
     workspace_id = int(ctx['workspace']['id'])
     requested_verification_id = parse_verification_detail_id(request)
@@ -107,7 +106,14 @@ def run_new_page(request: Request, problem: str, user: Annotated[str, Depends(re
         contest_workspace=contest_workspace_context_from_request(request),
     )
     workspace = Path(ctx['workspace']['path'])
-    solution_options, default_submission_path, solution_options_truncated = run_solution_options_context(workspace)
+    try:
+        solution_options, default_submission_path, solution_options_truncated = (
+            run_solution_options_context(workspace)
+        )
+    except ValueError:
+        solution_options = []
+        default_submission_path = ''
+        solution_options_truncated = False
     test_options, test_options_truncated, test_options_source = run_test_options_context(
         workspace
     )
@@ -150,8 +156,7 @@ def run_details_page(request: Request, problem: str, user: Annotated[str, Depend
         include_workspace_changes=True,
         contest_workspace=contest_workspace_context_from_request(request),
     )
-    workspace = Path(ctx['workspace']['path'])
-    _, general_cfg, _ = read_problem_config(workspace)
+    general_cfg = ctx['authoring_source']['problem']
     execute_mode = general_cfg['mode']
     requested_verification_id = parse_verification_detail_id(request)
     detail_ctx = build_run_detail_context(
@@ -183,8 +188,7 @@ def run_details_test_fragment(request: Request, problem: str, user: Annotated[st
         include_workspace_changes=True,
         contest_workspace=contest_workspace_context_from_request(request),
     )
-    workspace = Path(ctx['workspace']['path'])
-    _, general_cfg, _ = read_problem_config(workspace)
+    general_cfg = ctx['authoring_source']['problem']
     execute_mode = general_cfg['mode']
 
     requested_verification_id = parse_verification_detail_id(request)

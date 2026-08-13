@@ -311,21 +311,24 @@ def preview_page(request: Request, problem: str, user: Annotated[str, Depends(re
         current_language or pick_statement_language(workspace),
         fallback_title=problem_slug_leaf(problem),
     )
-    current_statement_signature = statement_sources_signature(
-        workspace,
-        problem_title=problem_title,
-        tests_spec_max_bytes=int(config_snapshot["TEXTAREA_MAX_BYTES"]),
-        statement_sample_max_bytes=int(
-            config_snapshot["STATEMENT_SAMPLE_MAX_BYTES"]
-        ),
-    )
+    try:
+        current_statement_signature = statement_sources_signature(
+            workspace,
+            problem_title=problem_title,
+            tests_spec_max_bytes=int(config_snapshot["TEXTAREA_MAX_BYTES"]),
+            statement_sample_max_bytes=int(
+                config_snapshot["STATEMENT_SAMPLE_MAX_BYTES"]
+            ),
+        )
+    except RuntimeError:
+        current_statement_signature = ""
     workspace_head = str(ctx["workspace"].get("head_commit") or "")
     requested_preview_id = request.query_params.get("preview_id", "")
     has_statement_language = bool(current_language)
     preview_id = requested_preview_id
     message = ''
     previews = runtime().preview_service.list_workspace_previews(problem_id, workspace_id)
-    if has_statement_language and (not preview_id):
+    if has_statement_language and current_statement_signature and (not preview_id):
         dirty = bool(ctx['workspace'].get('dirty'))
         if workspace_head and (not dirty):
             cached_id = runtime().preview_service.find_cached_preview_id(
@@ -376,7 +379,7 @@ def preview_page(request: Request, problem: str, user: Annotated[str, Depends(re
     preview_failure_detail = ''
     latex_log_available = False
 
-    if has_statement_language and preview_id:
+    if has_statement_language and current_statement_signature and preview_id:
         lp = None
         preview_state = runtime().preview_service.get_workspace_preview_state(
             problem_id,
@@ -588,14 +591,17 @@ def preview_status(problem: str, user: Annotated[str, Depends(require_session_us
         current_language or pick_statement_language(workspace),
         fallback_title=problem_slug_leaf(problem),
     )
-    current_statement_signature = statement_sources_signature(
-        workspace,
-        problem_title=problem_title,
-        tests_spec_max_bytes=int(config_snapshot["TEXTAREA_MAX_BYTES"]),
-        statement_sample_max_bytes=int(
-            config_snapshot["STATEMENT_SAMPLE_MAX_BYTES"]
-        ),
-    )
+    try:
+        current_statement_signature = statement_sources_signature(
+            workspace,
+            problem_title=problem_title,
+            tests_spec_max_bytes=int(config_snapshot["TEXTAREA_MAX_BYTES"]),
+            statement_sample_max_bytes=int(
+                config_snapshot["STATEMENT_SAMPLE_MAX_BYTES"]
+            ),
+        )
+    except RuntimeError:
+        current_statement_signature = ""
     workspace_head = str(ctx['workspace'].get('head_commit') or "")
     workspace_key = f'{problem_id}:{workspace_id}'
     with runtime().preview_lock:

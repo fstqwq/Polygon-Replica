@@ -174,12 +174,15 @@ intentionally remains a floating upstream compatibility target.
 
 Both projects perform first-run setup, Judgehost configuration, problem
 creation, and every fixture file save through public HTTP and the latest
-Polygon Agent CLI checkout. They run the same generated test through a real
-Judgehost and observe generated input, accepted answer, AC, WA, CE, and public
-derived-output downloads. The `bleeding` project alone continues through the more
-expensive product tail: sample preview, commit, Native and ICPC exports, contest
-creation and statement PDF export, role-aware page walk, and concurrent
-Alice/Bob conflict resolution. This avoids repeating work that does not vary by
+Polygon Agent CLI checkout. Before execution, they install the previous
+`build.json` shape through the CLI, open the authoring workspace, and require a
+Review and Publish warning plus a canonical file that preserves the current
+selections. They then run the same generated test through a real Judgehost and
+observe generated input, accepted answer, AC, WA, CE, and public derived-output
+downloads. The `bleeding` project alone continues through the more expensive
+product tail: sample preview, commit, Native and ICPC exports, contest creation
+and statement PDF export, role-aware page walk, and concurrent Alice/Bob
+conflict resolution. This avoids repeating work that does not vary by
 Judgehost implementation.
 
 The deployed journey on `bleeding` then registers an outsider, a reader, and

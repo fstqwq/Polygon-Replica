@@ -1,10 +1,12 @@
 from typing import Literal, TypedDict
 
+from app.service.problem.authoring_source import AuthoringSourceIssue
 from app.service.problem.resource_limits import resource_limit_display
 
 
 ContentReviewTone = Literal["normal", "warning", "danger"]
 ContentReviewCode = Literal[
+    "source",
     "tests",
     "solutions",
     "output_component",
@@ -69,6 +71,7 @@ def problem_content_review(
     validator_display: str,
     validator_ready: bool,
     statement_language_names: list[str],
+    source_issues: list[AuthoringSourceIssue] | None = None,
 ) -> ProblemContentReview:
     """Build the shared, read-only content checks used before publishing.
 
@@ -142,7 +145,12 @@ def problem_content_review(
         "danger" if language_count == 0 else "normal",
     )
 
+    source_checks = [
+        _check("source", "Source", issue["message"], issue["tone"])
+        for issue in (source_issues or [])
+    ]
     checks = [
+        *source_checks,
         tests,
         solutions,
         output_component,

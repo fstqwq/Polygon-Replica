@@ -17,12 +17,13 @@ from app.impl.workspace.access import require_write_access
 from app.impl.workspace.context_ui import page_ctx
 from app.service.statement.context import normalize_statement_language, statement_languages
 from app.service.problem.runtime_config import (
+    PROBLEM_CONFIG_REL,
     ProblemConfig,
     ProblemMode,
     dumps_problem_config,
     problem_config_limits,
 )
-from app.impl.workspace.problem_config import read_problem_config
+from app.service.platform.workspace_path import safe_workspace_path
 
 
 _BUILD_SOURCE_KEYS = (
@@ -34,7 +35,10 @@ _BUILD_SOURCE_KEYS = (
 
 
 def _cleanup_build_config_for_mode(workspace: Path, mode: str) -> None:
-    build_cfg, build_cfg_path = read_build_config(workspace)
+    try:
+        build_cfg, build_cfg_path = read_build_config(workspace)
+    except ValueError:
+        return
     original = dict(build_cfg)
     if mode == 'pass-fail':
         build_cfg.pop('interactor_source', None)
@@ -97,7 +101,10 @@ def general_save(
             raise ValueError("problem mode must be pass-fail or interactive")
         safe_mode = cast(ProblemMode, mode)
         with runtime().workspace_service.workspace_lock(workspace):
-            _current, _, cfg_path = read_problem_config(workspace)
+            cfg_path = safe_workspace_path(
+                workspace,
+                PROBLEM_CONFIG_REL.as_posix(),
+            )
             payload = ProblemConfig(
                 time_limit_ms=safe_time_limit,
                 memory_limit_mb=safe_memory,

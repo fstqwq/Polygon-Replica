@@ -39,9 +39,11 @@ from app.impl.workspace.context_component_status import (
     interactor_status_context,
     validator_status_context,
 )
-from app.impl.workspace.problem_config import read_problem_config
+from app.service.platform.git_process import run_git
+from app.service.problem.authoring_source import inspect_authoring_source
 from app.service.problem.content_review import problem_content_review
 from app.service.problem.readiness import WorkspaceReadinessSubject
+from app.service.problem.runtime_config import problem_config_limits
 from app.service.repository.revision import workspace_revision_info
 from app.service.problem.resource_limits import resource_limit_display
 
@@ -69,6 +71,21 @@ def _system_limit_info() -> SystemLimitInfo:
             {'label': 'Saved judging log limit', 'value': f'{int(runtime().config_values.JUDGEHOST_STORED_LOG_LIMIT_BYTES)} bytes'},
         ],
     }
+
+
+def _published_build_text(workspace: Path, head_commit: str) -> str | None:
+    if not head_commit:
+        return None
+    result = run_git(
+        [
+            "git",
+            "-C",
+            str(workspace),
+            "show",
+            f"{head_commit}:config/build.json",
+        ]
+    )
+    return result.stdout if result.returncode == 0 else None
 
 
 def page_ctx(
@@ -139,7 +156,44 @@ def page_ctx(
     workspace_head_raw = cast(str | None, ctx['workspace'].get('head_commit'))
     workspace_head = workspace_head_raw or ''
     workspace_dirty = bool(ctx['workspace'].get('dirty'))
-    _payload, general_cfg, _cfg_path = read_problem_config(workspace_path)
+    limits = runtime().config_values.snapshot()
+    with runtime().workspace_service.workspace_lock(workspace_path):
+        source_state = inspect_authoring_source(
+            workspace_path,
+            problem_limits=problem_config_limits(runtime().config_values),
+            tests_spec_max_bytes=int(limits["TEXTAREA_MAX_BYTES"]),
+            statement_sample_max_bytes=int(
+                limits["STATEMENT_SAMPLE_MAX_BYTES"]
+            ),
+            allow_repair=bool(ctx['workspace_access']['can_write']),
+            published_build_text=_published_build_text(
+                workspace_path,
+                workspace_head,
+            ),
+        )
+    if source_state['build_normalized']:
+        workspace_dirty = True
+        ctx['workspace']['dirty'] = 1
+        try:
+            normalized_status = runtime().workspace_service.refresh_workspace_status_with_ids(
+                workspace_path,
+                int(ctx['problem']['id']),
+                int(ctx['user']['id']),
+            )
+            ctx['workspace']['head_commit'] = (
+                cast(str | None, normalized_status.get('head_commit')) or ''
+            )
+            ctx['workspace']['dirty'] = (
+                1 if bool(normalized_status.get('dirty')) else 0
+            )
+        except Exception:
+            logger.exception(
+                "workspace status refresh after source normalization failed for %s",
+                problem,
+            )
+    ctx['authoring_source'] = source_state
+    general_cfg = source_state['problem']
+    build_cfg = source_state['build']
     safe_mode = general_cfg['mode']
     ctx['problem_mode'] = safe_mode
     time_limit_ms = general_cfg['time_limit_ms']
@@ -172,7 +226,7 @@ def page_ctx(
     ctx['workspace_needs_update'] = True if upstream_higher else behind_count > 0
     ctx['head_short'] = workspace_head[:8]
     try:
-        ctx['checker_status'] = checker_status_context(workspace_path)
+        ctx['checker_status'] = checker_status_context(workspace_path, build_cfg)
     except Exception:
         ctx['checker_status'] = {'mode': 'missing', 'display': 'unknown', 'standard_checker': '', 'standard_expected_checker': '', 'standard_warning': '', 'standard_valid': False, 'repo_source': 'checkers/checker.cpp', 'repo_source_exists': False}
     try:
@@ -187,15 +241,15 @@ def page_ctx(
             'source_rows_truncated': False,
         }
     try:
-        ctx['interactor_status'] = interactor_status_context(workspace_path)
+        ctx['interactor_status'] = interactor_status_context(workspace_path, build_cfg)
     except Exception:
         ctx['interactor_status'] = {'mode': 'missing', 'display': 'missing', 'repo_source': 'interactors/interactor.cpp', 'repo_source_exists': False}
     try:
-        ctx['validator_status'] = validator_status_context(workspace_path)
+        ctx['validator_status'] = validator_status_context(workspace_path, build_cfg)
     except Exception:
         ctx['validator_status'] = {'mode': 'missing', 'display': 'missing', 'repo_source': 'validators/validator.cpp', 'repo_source_exists': False}
     try:
-        ctx['solutions_status'] = _solutions_status_context(workspace_path)
+        ctx['solutions_status'] = _solutions_status_context(workspace_path, build_cfg)
     except Exception:
         ctx['solutions_status'] = {'mode': 'missing', 'display': 'missing', 'accepted_source': '', 'accepted_exists': False, 'count': 0, 'count_display': '0 files', 'truncated': False}
     try:
@@ -228,6 +282,7 @@ def page_ctx(
         validator_display=str(ctx['validator_status']['display']),
         validator_ready=ctx['validator_status']['mode'] == 'repository',
         statement_language_names=statement_language_names,
+        source_issues=source_state['issues'],
     )
     empty_changes = {'counts': {'added': 0, 'modified': 0, 'deleted': 0, 'renamed': 0, 'untracked': 0, 'conflicted': 0, 'typechange': 0, 'other': 0}, 'rows': [], 'total': 0, 'truncated': False, 'limit': None}
     if include_workspace_changes:
