@@ -294,7 +294,7 @@ def _setup_domserver() -> None:
         "duration": "5:00:00",
         "formal_name": "Polygon Replica projection E2E",
         "id": CONTEST_ID,
-        "start_time": now.isoformat(),
+        "start_time": now.strftime("%Y-%m-%dT%H:%M:%S%z"),
     }
     account = [
         {
