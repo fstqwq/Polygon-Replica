@@ -1073,6 +1073,50 @@ class TestJudgehostScripts(unittest.TestCase):
                 )
                 self.assertEqual(result.returncode, 43, result.stderr)
 
+    def test_normal_compare_does_not_forward_configuration_arguments(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            executable_dir = root / "executable"
+            executable_dir.mkdir()
+            toolkit = config.judgehost_task_service.toolkit
+            wrapper = executable_dir / "run"
+            wrapper.write_text(
+                toolkit.load_script_asset("normal.compare"),
+                encoding="utf-8",
+            )
+            checker = executable_dir / "checker"
+            checker.write_text(
+                "#!/bin/sh\n"
+                '[ "$#" -eq 3 ] || exit 1\n'
+                "exit 42\n",
+                encoding="utf-8",
+            )
+            capture = executable_dir / "pass-capture"
+            capture.write_bytes(
+                toolkit.pass_capture_script(max_bytes=1024 * 1024)
+            )
+            for path in (wrapper, checker, capture):
+                os.chmod(path, 0o755)
+            final = self._write_domjudge_pass(root / "testcase", "1")
+            test_output = final / "testdata.out"
+            test_output.write_bytes(b"answer\n")
+
+            result = subprocess.run(
+                [
+                    str(wrapper),
+                    str(final / "testdata.in"),
+                    str(test_output),
+                    str(final / "feedback"),
+                    "unexpected",
+                ],
+                input=b"team output\n",
+                cwd=final,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 42, result.stderr)
+
     def test_interactive_capture_reads_history_without_opening_pass_directories(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

@@ -3,7 +3,6 @@ set -e
 TESTIN="$1"
 TESTANS="$2"
 FEEDBACK="$3"
-shift 3
 
 HERE="$(CDPATH= cd -- "$(dirname "$0")" && pwd)"
 mkdir -p "$FEEDBACK"
@@ -19,7 +18,7 @@ trap capture_on_exit EXIT
 TEAMOUT="$FEEDBACK/team.out"
 # DOMjudge testcase_run.sh contract:
 #   compare is invoked as:
-#   compare testdata.in testdata.out feedback/ [checker_args...] < program.out
+#   compare testdata.in testdata.out feedback/ < program.out
 # So contestant output must come from stdin here.
 cat >"$TEAMOUT" || true
 
@@ -62,9 +61,8 @@ compile_checker() {
 
 run_checker() {
   set +e
-  # DOMjudge checker ABI: in, ans, feedback, compare_args... with contestant
-  # output provided on stdin.
-  FEEDBACK_DIR="$FEEDBACK" "$CHECKER_BIN" "$TESTIN" "$TESTANS" "$FEEDBACK" "$@" <"$TEAMOUT" >"$FEEDBACK/checker.log" 2>&1
+  # DOMjudge checker ABI: in, ans, feedback with contestant output on stdin.
+  FEEDBACK_DIR="$FEEDBACK" "$CHECKER_BIN" "$TESTIN" "$TESTANS" "$FEEDBACK" <"$TEAMOUT" >"$FEEDBACK/checker.log" 2>&1
   CHECKER_RC=$?
   set -e
 }
@@ -81,11 +79,11 @@ if [ ! -x "$CHECKER_BIN" ] && [ -f "$CHECKER_SRC" ]; then
 fi
 
 if [ -x "$CHECKER_BIN" ]; then
-  run_checker "$@"
+  run_checker
   RC=$CHECKER_RC
   if [ "$RC" -ne 42 ] && [ "$RC" -ne 43 ] && [ -f "$CHECKER_SRC" ] && grep -Eq "GLIBC_|GLIBCXX_" "$FEEDBACK/checker.log" 2>/dev/null; then
     if compile_checker; then
-      run_checker "$@"
+      run_checker
       RC=$CHECKER_RC
     fi
   fi

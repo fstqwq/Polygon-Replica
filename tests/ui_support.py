@@ -777,7 +777,7 @@ int main() {
             json.dumps(
                 {
                     "tests": [
-                        {"id": "001", "kind": "manual", "sample": False}
+                        {"id": "001", "kind": "manual"}
                     ]
                 },
                 indent=2,
@@ -789,15 +789,9 @@ int main() {
         build = json.loads(build_path.read_text(encoding="utf-8"))
         build.update(
             {
-                "generator_sources": ["generators/generator.cpp"],
                 "validator_source": "validators/validator.cpp",
                 "checker_source": "checkers/checker.cpp",
                 "accepted_solution_source": "solutions/accepted.cpp",
-                "generator_runs": 1,
-                "compile_jobs": 1,
-                "validate_jobs": 1,
-                "solve_jobs": 1,
-                "run_jobs": 1,
             }
         )
         build_path.write_text(

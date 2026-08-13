@@ -4,6 +4,7 @@ from pathlib import Path, PurePosixPath
 from typing import Literal, TypedDict
 
 from app.main_constant import (
+    SOLUTION_SOURCE_EXTENSIONS,
     TESTS_SPEC_GEN_COMMAND_MAX_CHARS,
     TESTS_SPEC_ID_RE,
     TESTS_SPEC_MAX_ITEMS,
@@ -30,7 +31,7 @@ _TEST_ENTRY_KEYS = frozenset(
         "sample_output_validate",
     }
 )
-_TEST_ENTRY_REQUIRED_KEYS = frozenset({"id", "kind", "sample"})
+_TEST_ENTRY_REQUIRED_KEYS = frozenset({"id", "kind"})
 
 
 TestKind = Literal["manual", "gen"]
@@ -145,10 +146,28 @@ def parse_gen_command_tokens(command: str) -> list[str]:
     return tokens
 
 
-def resolve_configured_generator_source(
-    token: str,
-    configured_sources: list[str],
-) -> str:
+def generator_source_paths(root: Path) -> list[str]:
+    directory = root / "generators"
+    if directory.is_symlink():
+        raise ValueError("generators: must not be a symbolic link")
+    if not directory.exists():
+        return []
+    if not directory.is_dir():
+        raise ValueError("generators: must be a directory")
+    sources: list[str] = []
+    try:
+        for path in directory.rglob("*"):
+            if path.suffix.lower() not in SOLUTION_SOURCE_EXTENSIONS:
+                continue
+            relative = path.relative_to(root).as_posix()
+            require_regular_source_file(root, relative)
+            sources.append(relative)
+    except OSError as exc:
+        raise ValueError(f"generators: cannot list directory: {exc}") from exc
+    return sorted(sources)
+
+
+def resolve_generator_source(token: str, source_paths: tuple[str, ...]) -> str:
     raw = token.replace("\\", "/")
     while raw.startswith("./"):
         raw = raw[2:]
@@ -156,7 +175,7 @@ def resolve_configured_generator_source(
         raise ValueError(f"invalid generator command source '{token}'")
     token_path = PurePosixPath(raw)
     matches: list[str] = []
-    for source in configured_sources:
+    for source in source_paths:
         source_path = PurePosixPath(source)
         without_root = source.removeprefix("generators/")
         suffix_length = len(source_path.suffix)
@@ -179,7 +198,7 @@ def resolve_configured_generator_source(
             matches.append(source)
     unique = list(dict.fromkeys(matches))
     if not unique:
-        raise ValueError(f"generator source is not selected: {token}")
+        raise ValueError(f"generator source does not exist: {token}")
     if len(unique) > 1:
         raise ValueError(f"generator source is ambiguous: {token}")
     return unique[0]
@@ -362,7 +381,7 @@ def loads_tests_spec(
         if not isinstance(raw_kind, str) or raw_kind not in {"manual", "gen"}:
             raise ValueError(f"{label}.kind: must be 'manual' or 'gen'")
         kind: TestKind = raw_kind
-        sample = entry_payload["sample"]
+        sample = entry_payload.get("sample", False)
         if not isinstance(sample, bool):
             raise ValueError(f"{label}.sample: must be a boolean")
         entry = TestSpecEntry(
@@ -452,8 +471,9 @@ def dumps_tests_spec(
         row_payload: dict[str, object] = {
             "id": row.get("id"),
             "kind": row.get("kind"),
-            "sample": row.get("sample", False),
         }
+        if row.get("sample", False):
+            row_payload["sample"] = True
         sample_input = normalize_sample_input(
             row.get("sample_input", ""),
             max_bytes=sample_max_bytes,
@@ -479,8 +499,9 @@ def dumps_tests_spec(
         dumped_row: dict[str, object] = {
             "id": normalized_row["id"],
             "kind": normalized_row["kind"],
-            "sample": normalized_row["sample"],
         }
+        if normalized_row["sample"]:
+            dumped_row["sample"] = True
         normalized_sample_input = normalized_row["sample_input"]
         normalized_sample_output = normalized_row["sample_output"]
         normalized_sample_validate = _normalize_sample_output_validate_flag(

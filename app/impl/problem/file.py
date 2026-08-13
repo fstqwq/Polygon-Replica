@@ -20,7 +20,6 @@ from app.impl.workspace.context_operation import (
     template_for_kind,
 )
 from app.impl.workspace.context_ui import page_ctx
-from app.impl.workspace.solution import ensure_solution_metadata_for_source
 from app.main_util import (
     normalize_workspace_rel_path,
     problem_slug_leaf,
@@ -278,8 +277,6 @@ def files_create_template(
                 msg = 'file already exists; not overwritten'
             else:
                 runtime().git_service.write_file(workspace, path, content)
-                if expected_kind == 'solution' and ensure_solution_metadata_for_source(workspace, path):
-                    msg = 'template and metadata created'
     except ValueError as exc:
         msg = str(exc)
     return redirect_response(

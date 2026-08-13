@@ -70,16 +70,6 @@ BASE_FIXTURE_FILES = {
         {
             "accepted_solution_source": "solutions/main.cpp",
             "validator_source": "validators/validate.cpp",
-            "generator_sources": ["generators/gen.py"],
-            "generator_runs": 3,
-            "generator_args": [],
-            "validator_args": [],
-            "checker_args": [],
-            "compile_jobs": 0,
-            "validate_jobs": 0,
-            "solve_jobs": 0,
-            "run_jobs": 0,
-            "run_timeout_sec": 30,
         }
     ),
     "tests/spec.json": _json_text(
@@ -96,7 +86,6 @@ BASE_FIXTURE_FILES = {
         "int main() { long long value = 0; std::cin >> value; "
         "std::cout << value * value << '\\n'; }\n"
     ),
-    "solutions/main.cpp.desc": "expected: accepted\n",
     "solutions/wa.cpp": (
         "#include <iostream>\n"
         "int main() { std::cout << 0 << '\\n'; }\n"
@@ -509,7 +498,7 @@ def _assert_fixture_shape() -> None:
     required_sources = {
         str(build["accepted_solution_source"]),
         str(build["validator_source"]),
-        *[str(path) for path in build["generator_sources"]],
+        "generators/gen.py",
     }
     missing = required_sources.difference(FIXTURE_FILES)
     if missing:

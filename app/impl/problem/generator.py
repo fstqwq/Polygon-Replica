@@ -12,11 +12,8 @@ from app.impl.problem.compile_check import judgehost_compile_check_error
 from app.impl.runtime.dependency import runtime
 from app.impl.problem.shared import _normalize_component_create_path, rename_component_source
 from app.impl.workspace.context_operation import (
-    generator_sources_from_build_cfg,
-    read_build_config,
     template_for_kind,
     workspace_rel_file_exists,
-    write_build_config,
 )
 from app.impl.workspace.context_component_status import generator_status_context
 from app.impl.workspace.access import require_write_access
@@ -48,8 +45,8 @@ def generators_page(request: Request, problem: str, user: Annotated[str, Depends
     workspace = Path(ctx['workspace']['path'])
     generator_status = generator_status_context(workspace)
     source_rows: list[dict[str, object]] = []
-    if isinstance(generator_status.get('configured_sources'), list):
-        for row in generator_status['configured_sources']:
+    if isinstance(generator_status.get('source_rows'), list):
+        for row in generator_status['source_rows']:
             if not isinstance(row, dict):
                 continue
             path = normalize_optional_component_source_path_safe(row.get('path'), 'generators', 'generator source')
@@ -59,7 +56,6 @@ def generators_page(request: Request, problem: str, user: Annotated[str, Depends
                 continue
             source_rows.append({
                 'path': path,
-                'configured': bool(row.get('configured')),
                 'reference_count': int(row.get('reference_count') or 0),
             })
     requested_source = normalize_optional_component_source_path_safe(request.query_params.get('path'), 'generators', 'generator source')
@@ -78,7 +74,7 @@ def generators_page(request: Request, problem: str, user: Annotated[str, Depends
     selected_source = new_source or requested_source or repo_source or 'generators/generator.cpp'
     selected_exists = workspace_rel_file_exists(workspace, selected_source)
     if selected_source and selected_exists and all((row.get('path') != selected_source for row in source_rows)):
-        source_rows.insert(0, {'path': selected_source, 'configured': False})
+        source_rows.insert(0, {'path': selected_source, 'reference_count': 0})
     repo_content = ''
     repo_content_truncated = False
     try:
@@ -107,7 +103,6 @@ def generator_rename_source(
         default_filename='generator.cpp',
         component_label='generator',
         redirect_url_for_path=lambda path: f'/problems/{problem}/generators?path={quote_plus(path)}',
-        config_key='generator_sources',
     )
 
 def generator_save_source(
@@ -135,14 +130,6 @@ def generator_save_source(
             target_abs = safe_workspace_path(workspace, target)
             target_existed_before = bool(target_abs.exists() and target_abs.is_file() and (not target_abs.is_symlink()))
             target_previous_bytes = target_abs.read_bytes() if target_existed_before else b''
-            build_cfg, cfg_path = read_build_config(workspace)
-            cfg_existed_before = bool(cfg_path.exists() and cfg_path.is_file() and (not cfg_path.is_symlink()))
-            cfg_previous_text = cfg_path.read_text(encoding='utf-8') if cfg_existed_before else ''
-            generator_sources = generator_sources_from_build_cfg(build_cfg)
-            if target not in generator_sources:
-                generator_sources.append(target)
-            build_cfg['generator_sources'] = generator_sources
-            write_build_config(cfg_path, build_cfg)
             runtime().git_service.write_file(workspace, target, safe_content)
             compile_check_error = judgehost_compile_check_error(
                 application_runtime=runtime(),
@@ -158,10 +145,6 @@ def generator_save_source(
                     target_abs.write_bytes(target_previous_bytes)
                 else:
                     runtime().git_service.delete_path(workspace, target)
-                if cfg_existed_before:
-                    cfg_path.write_text(cfg_previous_text, encoding='utf-8')
-                else:
-                    cfg_path.unlink(missing_ok=True)
                 raise ValueError(f'compile check failed: {compile_check_error}')
         save_ok = True
     except (ValueError, OSError) as exc:

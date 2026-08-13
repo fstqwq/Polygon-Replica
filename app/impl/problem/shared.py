@@ -13,7 +13,6 @@ from app.impl.runtime.dependency import runtime
 from app.impl.workspace.access import require_write_access
 from app.impl.workspace.context import global_user_ctx
 from app.impl.workspace.context_operation import (
-    generator_sources_from_build_cfg,
     read_build_config,
     write_build_config,
 )
@@ -151,15 +150,7 @@ def rename_component_source(
                     raise ValueError("destination parent is not a directory")
                 runtime().git_service.rename_path(workspace, old_source, new_source)
                 build_cfg, cfg_path = read_build_config(workspace)
-                if config_key == "generator_sources":
-                    generator_sources = generator_sources_from_build_cfg(build_cfg)
-                    if old_source in generator_sources:
-                        build_cfg["generator_sources"] = [
-                            new_source if source == old_source else source
-                            for source in generator_sources
-                        ]
-                        write_build_config(cfg_path, build_cfg)
-                elif config_key:
+                if config_key:
                     build_cfg[config_key] = new_source
                     write_build_config(cfg_path, build_cfg)
             source_for_redirect = new_source

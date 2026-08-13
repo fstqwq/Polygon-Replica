@@ -594,13 +594,19 @@ class ExportService:
         self,
         snapshot: Path,
         package_root: Path,
+        accepted_source: str,
     ) -> None:
         dst_submissions = package_root / "submissions"
         dst_submissions.mkdir(parents=True, exist_ok=True)
         metadata: dict[str, dict[str, object]] = {}
         accepted_count = 0
         for source_file in self._iter_solution_sources(snapshot / "solutions"):
-            expected = self._solution_expected_behavior(source_file)
+            source_rel = source_file.relative_to(snapshot).as_posix()
+            expected = (
+                "accepted"
+                if source_rel == accepted_source
+                else self._solution_expected_behavior(source_file)
+            )
             rule = SUBMISSION_RULES.get(expected)
             if rule is None:
                 continue
@@ -733,7 +739,10 @@ class ExportService:
             package_root=package_root,
             source=interactor_source if mode == "interactive" else checker_source,
         )
-        self._copy_solutions(snapshot, package_root)
+        accepted_source = build_cfg.get("accepted_solution_source", "")
+        if not accepted_source:
+            raise ValueError("ICPC export requires a main correct solution")
+        self._copy_solutions(snapshot, package_root, accepted_source)
         self._copy_attachments(snapshot, package_root)
 
     def _make_archive_from_dir_contents(self, archive_target: Path, root: Path) -> Path:

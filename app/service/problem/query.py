@@ -204,15 +204,19 @@ class ProblemSourceQueryService:
         }
 
     @staticmethod
-    def solution_entry(workspace: Path, source_rel: str) -> SolutionSourceRow:
+    def _solution_entry(
+        workspace: Path,
+        source_rel: str,
+        accepted_source: str,
+    ) -> SolutionSourceRow:
         desc_path = desc_rel_path_for_source(source_rel)
         try:
+            exists = (workspace / desc_path).is_file()
             descriptor = load_solution_desc(workspace, source_rel)
             behavior = descriptor["expected_behavior"]
             note = descriptor["note"]
-            origin = "metadata"
+            origin = "metadata" if exists else "default"
             errors: list[str] = []
-            exists = True
         except ValueError as exc:
             behavior = "unknown"
             note = ""
@@ -221,6 +225,8 @@ class ProblemSourceQueryService:
             exists = (workspace / desc_path).is_file()
             if not exists:
                 origin = "missing"
+        if source_rel == accepted_source:
+            behavior = "accepted"
         preview = note if len(note) <= 160 else note[:157] + "..."
         return {
             "source_path": source_rel,
@@ -236,11 +242,26 @@ class ProblemSourceQueryService:
             "is_accepted": behavior == "accepted",
         }
 
+    def solution_entry(
+        self,
+        workspace: Path,
+        source_rel: str,
+    ) -> SolutionSourceRow:
+        return self._solution_entry(
+            workspace,
+            source_rel,
+            self.accepted_solution_source(workspace),
+        )
+
     def solution_entries(self, workspace: Path) -> tuple[list[SolutionSourceRow], bool]:
         sources = solution_sources(workspace)
         limit = int(self._config_values.SOLUTION_LIST_LIMIT)
+        accepted_source = self.accepted_solution_source(workspace)
         return (
-            [self.solution_entry(workspace, source) for source in sources[:limit]],
+            [
+                self._solution_entry(workspace, source, accepted_source)
+                for source in sources[:limit]
+            ],
             len(sources) > limit,
         )
 

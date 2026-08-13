@@ -16,7 +16,7 @@ from app.service.importing.archive import (
 from app.service.importing.statement_assets import ImportedLegacyStatementAsset, merge_imported_statement_assets
 from app.service.platform.testlib_source import maintained_testlib_header
 from app.service.problem.build_config import (
-    default_build_config,
+    BuildConfig,
     dumps_build_config,
     load_build_config,
 )
@@ -131,7 +131,6 @@ ComponentImportSummary = TypedDict(
         "checker_import_warning": str,
         "validator_source": str | None,
         "interactor_source": str | None,
-        "generator_sources": list[str],
     },
 )
 
@@ -715,7 +714,7 @@ class PolygonPackageImportService:
         workspace: Path,
         meta: PolygonMeta,
     ) -> ComponentImportSummary:
-        build_cfg = default_build_config()
+        build_cfg = BuildConfig()
 
         imported_testlib = self._write_maintained_testlib(workspace)
 
@@ -791,15 +790,13 @@ class PolygonPackageImportService:
             for row in meta["tests"]
             if row["method"] == "generated" and row["cmd"]
         }
-        generator_sources: list[str] = []
         for source in meta["executables"]:
             if source in used:
                 continue
             stem = Path(source).stem
             if (stem not in generator_names) and (not stem.lower().startswith("gen")):
                 continue
-            suffix = Path(source).suffix.lower()
-            imported = self._copy_source_from_zip(
+            self._copy_source_from_zip(
                 zf,
                 entries,
                 source,
@@ -808,10 +805,6 @@ class PolygonPackageImportService:
                 Path(source).name,
                 allowed_suffixes=GENERATOR_SOURCE_SUFFIX_ALLOW,
             )
-            if imported and suffix in GENERATOR_SOURCE_SUFFIX_ALLOW:
-                generator_sources.append(imported)
-        generator_sources = sorted(dict.fromkeys(generator_sources))
-        build_cfg["generator_sources"] = generator_sources
 
         (workspace / "config").mkdir(parents=True, exist_ok=True)
         (workspace / "config" / "build.json").write_text(
@@ -826,7 +819,6 @@ class PolygonPackageImportService:
             "checker_import_warning": checker_import_warning,
             "validator_source": validator_source,
             "interactor_source": interactor_source,
-            "generator_sources": generator_sources,
         }
 
     def _import_solutions(
@@ -843,6 +835,7 @@ class PolygonPackageImportService:
         solutions_dir.mkdir(parents=True, exist_ok=True)
         accepted_source = ""
         imported_count = 0
+        imported_behaviors: list[tuple[str, str]] = []
         for row in solution_rows:
             source_path = _normalize_zip_path(row["path"])
             if not source_path:
@@ -858,12 +851,20 @@ class PolygonPackageImportService:
             zf.copy_to(info, workspace / Path(target_rel))
             tag = row["tag"]
             expected = polygon_solution_expected_from_tag(tag)
-            self._write_text(workspace, Path(f"{target_rel}.desc"), render_solution_desc(expected, ""))
             if not accepted_source and (expected == "accepted"):
                 accepted_source = target_rel
             if tag == "main":
                 accepted_source = target_rel
+            imported_behaviors.append((target_rel, expected))
             imported_count += 1
+        for target_rel, expected in imported_behaviors:
+            if target_rel == accepted_source or expected == "unknown":
+                continue
+            self._write_text(
+                workspace,
+                Path(f"{target_rel}.desc"),
+                render_solution_desc(expected, ""),
+            )
         return {"count": imported_count, "accepted_source": accepted_source}
 
     def _write_problem_config(

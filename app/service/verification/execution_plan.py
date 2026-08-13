@@ -1,5 +1,4 @@
 import json
-import shlex
 from pathlib import Path
 
 from app.config import ConfigValues
@@ -12,16 +11,13 @@ from app.service.problem.test_spec import TestSpecEntry
 from app.service.problem.test_spec import parse_gen_command_tokens
 from app.service.verification.plan import VerificationExecutionPlan, VerificationTestPlan
 from app.service.verification.signature import VerificationManifest, verification_manifest
-from app.service.problem.source_file import resolve_source
 from app.service.verification.source import select_source
 from app.service.verification.test_spec import (
-    manual_test_sources,
     prepare_tests_spec_runtime,
 )
 
 CPP_EXTENSIONS = (".cpp", ".cc", ".cxx", ".c++")
 SOLUTION_SOURCE_EXTENSIONS = (*CPP_EXTENSIONS, ".py", ".java")
-GENERATOR_SOURCE_EXTENSIONS = SOLUTION_SOURCE_EXTENSIONS
 
 
 def _problem_limits(runtime_cfg: ProblemConfig) -> dict[str, int]:
@@ -34,16 +30,13 @@ def _problem_limits(runtime_cfg: ProblemConfig) -> dict[str, int]:
 
 def _run_payload_base(
     *,
-    build_cfg: BuildConfig,
     problem_limits: dict[str, int],
     source_files: dict[str, PayloadFile],
 ) -> dict[str, object]:
-    checker_args = list(build_cfg["checker_args"])
     return {
         "run_config_json": json.dumps(
             {
                 "checker_mode": "testlib",
-                "checker_args": checker_args,
                 "pass_limit": int(problem_limits["pass_limit"]),
                 "time_limit_ms": int(problem_limits["time_limit_ms"]),
                 "memory_limit_mb": int(problem_limits["memory_limit_mb"]),
@@ -65,7 +58,6 @@ def _generate_payload_base(
         "run_config_json": json.dumps(
             {
                 "checker_mode": "testlib",
-                "checker_args": [],
                 "pass_limit": int(problem_limits["pass_limit"]),
                 "time_limit_ms": 30000,
                 "memory_limit_mb": int(problem_limits["memory_limit_mb"]),
@@ -147,12 +139,6 @@ def _shared_source_payloads(
         "source_files": source_files,
         "testlib_header": testlib_header,
     }
-
-
-def _generator_command_payload(args: list[str]) -> str:
-    if not args:
-        return "\"$SUBMISSION_BIN\""
-    return " ".join(["\"$SUBMISSION_BIN\"", *[shlex.quote(item) for item in args]])
 
 
 def _manual_plan(
@@ -241,15 +227,12 @@ def _tests_from_spec(
     manifest: VerificationManifest,
     testlib_header: Path | None,
     sample_only: bool,
-    build_cfg: BuildConfig,
     entries: tuple[TestSpecEntry, ...],
     runtime_blob_store: RuntimeBlobStore,
 ) -> tuple[list[VerificationTestPlan], list[dict[str, object]]]:
     runtime_rows, generator_targets = prepare_tests_spec_runtime(
         snapshot,
         list(entries),
-        generator_sources=build_cfg["generator_sources"],
-        generator_source_extensions=GENERATOR_SOURCE_EXTENSIONS,
         parse_gen_command_tokens_fn=parse_gen_command_tokens,
     )
     generator_source_by_name = {
@@ -319,7 +302,7 @@ def _tests_from_spec(
                 test_name=test_name,
                 display_source_path=str(row["source_rel"]),
                 generator_source=generator_source,
-                command_payload=_generator_command_payload([str(item) for item in row["args"]]),
+                command_payload=str(row["command_payload"]),
                 tests_meta=tests_meta,
                 testlib_header=testlib_header,
                 sample=sample,
@@ -333,74 +316,6 @@ def _tests_from_spec(
         plans.append(plan)
         tests_meta_rows.append(dict(plan.tests_meta))
         counter += 1
-    return (plans, tests_meta_rows)
-
-
-def _tests_without_spec(
-    *,
-    snapshot: Path,
-    manifest: VerificationManifest,
-    build_cfg: BuildConfig,
-    testlib_header: Path | None,
-    runtime_blob_store: RuntimeBlobStore,
-) -> tuple[list[VerificationTestPlan], list[dict[str, object]]]:
-    plans: list[VerificationTestPlan] = []
-    tests_meta_rows: list[dict[str, object]] = []
-    counter = 1
-    for manual_source in manual_test_sources(snapshot):
-        try:
-            source_rel = manual_source.relative_to(snapshot).as_posix()
-        except ValueError:
-            source_rel = manual_source.name
-        tests_meta = {
-            "index": counter,
-            "test_name": f"{counter:03d}.in",
-            "kind": "manual",
-            "desc": f"manual: {source_rel}",
-            "source": source_rel,
-        }
-        plan = _manual_plan(
-            test_name=f"{counter:03d}.in",
-            input_file=manifest.require(manual_source.relative_to(snapshot).as_posix()),
-            tests_meta=tests_meta,
-            runtime_blob_store=runtime_blob_store,
-        )
-        plans.append(plan)
-        tests_meta_rows.append(dict(tests_meta))
-        counter += 1
-    configured_generators = build_cfg["generator_sources"]
-    generator_sources: list[Path] = []
-    for rel in configured_generators:
-        generator_sources.append(resolve_source(snapshot, str(rel)))
-    generator_args = build_cfg["generator_args"]
-    generator_runs = build_cfg["generator_runs"]
-    for source_path in generator_sources:
-        try:
-            source_label = source_path.relative_to(snapshot).as_posix()
-        except ValueError:
-            source_label = source_path.as_posix()
-        for _ in range(generator_runs):
-            tests_meta = {
-                "index": counter,
-                "test_name": f"{counter:03d}.in",
-                "kind": "gen",
-                "desc": f"gen: {source_label}" if not generator_args else f"gen: {source_label} {' '.join(generator_args)}",
-                "source": source_label,
-            }
-            plan = _generated_plan(
-                snapshot=snapshot,
-                manifest=manifest,
-                test_name=f"{counter:03d}.in",
-                display_source_path=source_label,
-                generator_source=source_path,
-                command_payload=_generator_command_payload(generator_args),
-                tests_meta=tests_meta,
-                testlib_header=testlib_header,
-                runtime_blob_store=runtime_blob_store,
-            )
-            plans.append(plan)
-            tests_meta_rows.append(dict(tests_meta))
-            counter += 1
     return (plans, tests_meta_rows)
 
 
@@ -450,16 +365,7 @@ class VerificationExecutionPlanner:
             manifest=resolved_manifest,
             testlib_header=shared_sources["testlib_header"],
             sample_only=bool(sample_only),
-            build_cfg=build_cfg,
             entries=source_tree.tests,
-            runtime_blob_store=self._runtime_blob_store,
-        )
-        if not plans:
-            plans, tests_meta_rows = _tests_without_spec(
-            snapshot=snapshot,
-            manifest=resolved_manifest,
-            build_cfg=build_cfg,
-            testlib_header=shared_sources["testlib_header"],
             runtime_blob_store=self._runtime_blob_store,
         )
         if sample_only:
@@ -479,7 +385,6 @@ class VerificationExecutionPlanner:
             mode=mode,
             pass_limit=pass_limit,
             run_verification_payload_base=_run_payload_base(
-                build_cfg=build_cfg,
                 problem_limits=problem_limits,
                 source_files=dict(shared_sources["source_files"]),
             ),

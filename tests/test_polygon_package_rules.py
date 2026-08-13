@@ -19,7 +19,7 @@ from app.service.importing.archive import (
 from app.service.importing.native import NativePackageImportService
 from app.service.importing.upload import spool_fileobj
 from app.service.importing.solution_behavior import polygon_solution_expected_from_tag
-from app.service.problem.build_config import default_build_config, dumps_build_config
+from app.service.problem.build_config import BuildConfig, dumps_build_config
 from app.service.problem.runtime_config import (
     ProblemConfig,
     ProblemConfigLimits,
@@ -107,7 +107,7 @@ class TestPolygonPackageRules(unittest.TestCase):
                 dumps_problem_config(problem, limits=_PROBLEM_LIMITS),
                 encoding="utf-8",
             )
-            build = default_build_config()
+            build = BuildConfig()
             build.update(
                 {
                     "accepted_solution_source": "solutions/std.cpp",

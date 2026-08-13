@@ -3,13 +3,10 @@ import app.main_constant as _K
 import os
 from pathlib import Path
 
-from app.impl.runtime.dependency import runtime
-from app.main_util import normalize_workspace_rel_path, safe_workspace_path
+from app.main_util import normalize_workspace_rel_path
 from app.service.problem.solution_metadata import (
     EXPECTED_BEHAVIOR_VALUES,
-    desc_rel_path_for_source,
     expected_behavior_label,
-    render_solution_desc,
 )
 
 
@@ -57,17 +54,3 @@ def normalize_solution_source_path_required(raw: str | None) -> str:
     if suffix not in _K.SOLUTION_SOURCE_EXTENSIONS:
         raise ValueError("solution source must be .cpp/.cc/.cxx/.c++/.py/.java")
     return normalized
-
-
-def ensure_solution_metadata_for_source(workspace: Path, source_rel: str) -> bool:
-    source = normalize_solution_source_path_required(source_rel)
-    desc_rel = desc_rel_path_for_source(source)
-    desc_abs = safe_workspace_path(workspace, desc_rel)
-    if desc_abs.exists() and desc_abs.is_file() and (desc_abs.stat().st_size > 0):
-        return False
-    runtime().git_service.write_file(
-        workspace,
-        desc_rel,
-        render_solution_desc("unknown", ""),
-    )
-    return True

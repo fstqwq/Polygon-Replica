@@ -31,37 +31,28 @@ or malformed file. UI saves, imported source, verification, preview,
 publication readiness, and package materialization all use this codec.
 Execution dispatches the accepted values without another memory floor.
 
-`config/build.json` is also a required UTF-8 JSON object. These fields are
-required:
-
-- `generator_sources`: ordered source paths
-- `generator_runs`: integer from 0 through 4096
-- `generator_args`, `validator_args`, and `checker_args`: arrays of strings
-- `compile_jobs`, `validate_jobs`, `solve_jobs`, and `run_jobs`: integers from
-  0 through 16; zero selects the configured service default
-- `run_timeout_sec`: integer from 1 through 300
-
-The optional selection fields are `accepted_solution_source`,
+`config/build.json` is also a required UTF-8 JSON object. Its only fields are
+the optional selections `accepted_solution_source`,
 `validator_source`, `checker_source`, and `interactor_source`. All paths are
 normalized relative POSIX paths. Solutions live directly under `solutions/`;
-generators may be below `generators/`; validator, checker, and interactor
-selections point to C++ source below their matching roots. Duplicate generator
-selections are invalid.
+validator, checker, and interactor selections point to C++ source below their
+matching roots.
 
-An absent selection means that component is not selected. Runtime code does not
-scan a directory or choose a conventional filename. Interactive source rejects
-a checker selection, and pass-fail source rejects an interactor selection.
-External import adapters may infer a best-effort selection, but they write the
-result into this object before any authored-source consumer runs.
+For these four fields, an absent selection means that component is not selected.
+Runtime code does not fill a missing selection by scanning a directory or
+choosing a conventional filename. Interactive source rejects a checker
+selection, and pass-fail source rejects an interactor selection. External import
+adapters may infer a best-effort selection, but they write the result into this
+object before any authored-source consumer runs.
 
 ## Test specification
 
 `tests/spec.json` is a required UTF-8 JSON object whose only field is `tests`.
-The array order is testcase order. Each entry requires:
+The array order is testcase order. Each entry contains:
 
 - `id`: a unique string of 3 through 12 decimal digits
 - `kind`: `manual` or `gen`
-- `sample`: a boolean
+- optional `sample`: a boolean whose absence means `false`
 - optional `sample_input` and `sample_output` strings
 - optional `sample_output_validate`, a boolean whose absence means `true`
 
@@ -80,14 +71,10 @@ limit remains their common envelope.
 Judge input is not embedded in the entry. A manual test reads
 `tests/manual/<id>.in`. A generated test reads
 `tests/generator/<id>.in` as a shell-word command: its first token resolves a
-source explicitly listed by `generator_sources`, and the remaining tokens are
-its arguments. A missing payload, unselected generator, or ambiguous generator
-token invalidates the source tree.
-
-An empty `tests` array keeps the existing full-verification fallback: it scans
-manual `.in` files and runs each selected generator `generator_runs` times with
-`generator_args`. Native materialization requires an explicit non-empty ordered
-test list because its manifest is keyed to this specification.
+source below `generators/`, and the remaining tokens are its arguments. A
+missing payload, missing generator, or ambiguous generator token invalidates
+the source tree. An empty `tests` array has no implicit discovery behavior;
+verification and Native materialization require at least one explicit test.
 
 The runtime generator input payload is the generator executable invocation plus
 these command parameters. Its execution identity and scheduling semantics are
@@ -100,19 +87,22 @@ configured output-checking component is selected from `validators/`.
 ## Solutions
 
 Solution programs live directly below `solutions/`; the UI currently lists
-`.cpp`, `.cc`, `.cxx`, `.c++`, `.py`, and `.java` files. Metadata for a source is
-stored next to it as `<source>.desc`. The canonical writer emits
-`expected: <behavior>` and zero or more `note: <text>` lines. Current behavior
-values are `accepted`, `wrong_answer`, `tle_or_correct`, `tle_or_re`,
+`.cpp`, `.cc`, `.cxx`, `.c++`, `.py`, and `.java` files. Optional metadata for a
+source is stored next to it as `<source>.desc`. When a descriptor is needed, the
+canonical writer emits `expected: <behavior>` and zero or more `note: <text>`
+lines. It omits a descriptor for `unknown` with no note. Current behavior values
+are `accepted`, `wrong_answer`, `tle_or_correct`, `tle_or_re`,
 `time_limit_exceeded`, `run_time_error`, `rejected`, and `unknown`.
 
-Every supported solution source has a descriptor. `expected` occurs exactly
-once; each non-empty line is either `expected: ...` or `note: ...`.
-`behavior:`, `verdict:`, and unkeyed lines are invalid. The configured accepted
-solution must have `expected: accepted`; no filename or list-order inference is
-performed at runtime. Polygon and ICPC importers may infer external intent, but
-they materialize one of the canonical values in a descriptor before returning
-the imported workspace.
+A missing descriptor means `unknown`. When a descriptor exists, `expected`
+occurs exactly once; each non-empty line is either `expected: ...` or
+`note: ...`. `behavior:`, `verdict:`, and unkeyed lines are invalid. The
+configured `accepted_solution_source` is the sole main-correct selection and
+has effective behavior `accepted`, regardless of whether it has a descriptor.
+Selecting it does not create or rewrite a descriptor. No filename or list-order
+inference is performed at runtime. Polygon and ICPC importers may infer external
+intent and materialize descriptors for other behaviors before returning the
+imported workspace.
 
 ## Native import and preflight
 

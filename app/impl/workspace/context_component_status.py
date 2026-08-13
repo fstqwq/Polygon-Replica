@@ -1,18 +1,13 @@
-import app.main_constant as _K
-
 from pathlib import Path
 
 from app.impl.runtime.dependency import runtime
 from app.service.problem.build_config import BuildConfig
 from app.service.problem.test_spec import (
+    generator_source_paths,
     parse_gen_command_tokens,
-    resolve_configured_generator_source,
+    resolve_generator_source,
 )
-
 from app.impl.workspace.context_operation import (
-    dedupe_preserve_order,
-    generator_sources_from_build_cfg,
-    _list_sources_with_extensions,
     read_build_config,
     workspace_rel_file_exists,
 )
@@ -38,11 +33,11 @@ def _source_basename_label(path: str) -> str:
     name = Path(raw).name.strip()
     return name or raw
 
-def _generator_reference_counts(workspace: Path, source_paths: list[str]) -> dict[str, int]:
+def _generator_reference_counts(
+    workspace: Path,
+    source_catalog: tuple[str, ...],
+) -> dict[str, int]:
     limits = runtime().config_values.snapshot()
-    source_catalog = dedupe_preserve_order(
-        [path.strip().replace('\\', '/') for path in source_paths if path.strip()]
-    )
     counts = {path: 0 for path in source_catalog}
     if not source_catalog:
         return counts
@@ -68,50 +63,23 @@ def _generator_reference_counts(workspace: Path, source_paths: list[str]) -> dic
         except Exception:
             continue
         try:
-            resolved = resolve_configured_generator_source(
-                tokens[0], source_catalog
-            )
+            resolved = resolve_generator_source(tokens[0], source_catalog)
         except ValueError:
             continue
         counts[resolved] = counts.get(resolved, 0) + 1
     return counts
 
-
-def _count_used_configured_generators(
-    workspace: Path,
-    configured_sources: list[str],
-) -> int:
-    configured = dedupe_preserve_order(
-        [path.strip().replace('\\', '/') for path in configured_sources if path.strip()]
-    )
-    reference_counts = _generator_reference_counts(workspace, configured)
-    return sum(1 for path in configured if reference_counts.get(path, 0) > 0)
-
 def generator_status_context(workspace: Path) -> dict:
-    build_cfg, _ = read_build_config(workspace)
-    configured_sources = generator_sources_from_build_cfg(build_cfg)
-    generator_candidates, generator_candidates_truncated = _list_sources_with_extensions(
-        workspace,
-        'generators',
-        set(_K.SOLUTION_SOURCE_EXTENSIONS),
-    )
-    repo_source = ''
-    repo_exists = False
-    for rel in configured_sources:
-        if workspace_rel_file_exists(workspace, rel):
-            repo_source = rel
-            repo_exists = True
-            break
-    if not repo_source and configured_sources:
-        repo_source = configured_sources[0]
-    if not repo_source:
-        repo_source = 'generators/generator.cpp'
-        repo_exists = workspace_rel_file_exists(workspace, repo_source)
-    else:
-        repo_exists = workspace_rel_file_exists(workspace, repo_source)
-    configured_set = set(configured_sources)
-    all_sources = dedupe_preserve_order([*configured_sources, *generator_candidates])
-    reference_counts = _generator_reference_counts(workspace, configured_sources)
+    try:
+        all_generator_sources = tuple(generator_source_paths(workspace))
+    except ValueError:
+        all_generator_sources = ()
+    generator_candidates_truncated = len(all_generator_sources) > 64
+    generator_candidates = all_generator_sources[:64]
+    all_sources = generator_candidates
+    repo_source = all_sources[0] if all_sources else 'generators/generator.cpp'
+    repo_exists = workspace_rel_file_exists(workspace, repo_source)
+    reference_counts = _generator_reference_counts(workspace, all_generator_sources)
     has_declared_or_discovered = bool(all_sources)
     source_rows: list[dict[str, object]] = []
     for rel in all_sources:
@@ -121,7 +89,6 @@ def generator_status_context(workspace: Path) -> dict:
         source_rows.append({
             'path': rel,
             'exists': exists,
-            'configured': rel in configured_set,
             'reference_count': reference_counts.get(rel, 0),
         })
     if repo_exists:
@@ -133,7 +100,14 @@ def generator_status_context(workspace: Path) -> dict:
     else:
         mode = 'empty'
         display = '0 files'
-    return {'mode': mode, 'display': display, 'repo_source': repo_source, 'repo_source_exists': bool(repo_exists), 'configured_sources': source_rows, 'source_rows_truncated': bool(generator_candidates_truncated)}
+    return {
+        'mode': mode,
+        'display': display,
+        'repo_source': repo_source,
+        'repo_source_exists': bool(repo_exists),
+        'source_rows': source_rows,
+        'source_rows_truncated': bool(generator_candidates_truncated),
+    }
 
 def validator_status_context(workspace: Path) -> dict:
     build_cfg, _ = read_build_config(workspace)

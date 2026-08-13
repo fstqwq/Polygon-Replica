@@ -35,7 +35,6 @@ from app.impl.workspace.context_operation import (
 )
 from app.impl.workspace.context_component_status import (
     checker_status_context,
-    _count_used_configured_generators,
     generator_status_context,
     interactor_status_context,
     validator_status_context,
@@ -179,7 +178,14 @@ def page_ctx(
     try:
         ctx['generator_status'] = generator_status_context(workspace_path)
     except Exception:
-        ctx['generator_status'] = {'mode': 'missing', 'display': 'missing', 'repo_source': 'generators/generator.cpp', 'repo_source_exists': False, 'configured_sources': [], 'source_rows_truncated': False}
+        ctx['generator_status'] = {
+            'mode': 'missing',
+            'display': 'missing',
+            'repo_source': 'generators/generator.cpp',
+            'repo_source_exists': False,
+            'source_rows': [],
+            'source_rows_truncated': False,
+        }
     try:
         ctx['interactor_status'] = interactor_status_context(workspace_path)
     except Exception:
@@ -362,31 +368,11 @@ def _build_problem_nav_status(ctx: dict) -> dict[str, dict[str, object]]:
     nav['files'] = {'text': 'clean' if changes_total <= 0 else f'{changes_total} changed', 'danger': False}
     generator_status = cast(dict[str, object], ctx['generator_status'])
     generator_mode = cast(str | None, generator_status.get('mode')) or ''
-    configured_rows = cast(list[dict[str, object]], generator_status.get('configured_sources') or [])
-    configured_count = 0
-    configured_ready = 0
-    configured_paths: list[str] = []
-    for row in configured_rows:
-        row_path = cast(str | None, row.get('path')) or ''
-        if bool(row.get('configured')):
-            configured_count += 1
-            if row_path:
-                configured_paths.append(row_path)
-            if bool(row.get('exists')):
-                configured_ready += 1
-    if configured_count > 0:
-        used_count = 0
-        workspace_path_raw = _row_value(cast(dict[str, object], ctx['workspace']), 'path', '')
-        workspace_path_text = cast(str | None, workspace_path_raw) or ''
-        if workspace_path_text:
-            try:
-                used_count = _count_used_configured_generators(
-                    Path(workspace_path_text), configured_paths
-                )
-            except Exception:
-                used_count = 0
-        generator_text = f'{count_label(configured_count, "file")}, {used_count} used'
-        generator_danger = configured_ready < configured_count
+    source_rows = cast(list[dict[str, object]], generator_status.get('source_rows') or [])
+    if source_rows:
+        used_count = sum(1 for row in source_rows if _to_int(row.get('reference_count')) > 0)
+        generator_text = f'{count_label(len(source_rows), "file")}, {used_count} used'
+        generator_danger = False
     else:
         generator_text = cast(str | None, generator_status.get('display')) or 'missing'
         generator_danger = generator_mode in {'missing', 'invalid'}

@@ -2,7 +2,7 @@
 
 import json
 from pathlib import Path, PurePosixPath
-from typing import NotRequired, TypedDict
+from typing import TypedDict
 
 from app.main_constant import (
     CPP_SOURCE_EXTENSIONS,
@@ -11,7 +11,6 @@ from app.main_constant import (
 from app.service.problem.json_codec import (
     loads_object,
     reject_unknown_keys,
-    require_keys,
 )
 from app.service.problem.source_file import require_regular_source_file
 
@@ -21,66 +20,15 @@ BUILD_CONFIG_KEY_ORDER: tuple[str, ...] = (
     "validator_source",
     "checker_source",
     "interactor_source",
-    "generator_sources",
-    "generator_runs",
-    "generator_args",
-    "validator_args",
-    "checker_args",
-    "compile_jobs",
-    "validate_jobs",
-    "solve_jobs",
-    "run_jobs",
-    "run_timeout_sec",
 )
 BUILD_CONFIG_KEYS = frozenset(BUILD_CONFIG_KEY_ORDER)
-BUILD_CONFIG_REQUIRED_KEYS = frozenset(
-    {
-        "generator_sources",
-        "generator_runs",
-        "generator_args",
-        "validator_args",
-        "checker_args",
-        "compile_jobs",
-        "validate_jobs",
-        "solve_jobs",
-        "run_jobs",
-        "run_timeout_sec",
-    }
-)
 
 
-class BuildConfig(TypedDict):
-    accepted_solution_source: NotRequired[str]
-    validator_source: NotRequired[str]
-    checker_source: NotRequired[str]
-    interactor_source: NotRequired[str]
-    generator_sources: list[str]
-    generator_runs: int
-    generator_args: list[str]
-    validator_args: list[str]
-    checker_args: list[str]
-    compile_jobs: int
-    validate_jobs: int
-    solve_jobs: int
-    run_jobs: int
-    run_timeout_sec: int
-
-
-def default_build_config() -> BuildConfig:
-    """Construct the canonical source written for a newly-created problem."""
-
-    return {
-        "generator_sources": [],
-        "generator_runs": 3,
-        "generator_args": [],
-        "validator_args": [],
-        "checker_args": [],
-        "compile_jobs": 0,
-        "validate_jobs": 0,
-        "solve_jobs": 0,
-        "run_jobs": 0,
-        "run_timeout_sec": 30,
-    }
+class BuildConfig(TypedDict, total=False):
+    accepted_solution_source: str
+    validator_source: str
+    checker_source: str
+    interactor_source: str
 
 
 def _source_path(
@@ -114,34 +62,6 @@ def _source_path(
     return path.as_posix()
 
 
-def _string_array(raw: object, *, key: str, label: str) -> list[str]:
-    if not isinstance(raw, list):
-        raise ValueError(f"{label}.{key}: must be an array of strings")
-    values: list[str] = []
-    for index, item in enumerate(raw):
-        if not isinstance(item, str) or "\x00" in item:
-            raise ValueError(f"{label}.{key}[{index}]: must be a string")
-        values.append(item)
-    return values
-
-
-def _integer(
-    raw: object,
-    *,
-    key: str,
-    minimum: int,
-    maximum: int,
-    label: str,
-) -> int:
-    if isinstance(raw, bool) or not isinstance(raw, int):
-        raise ValueError(f"{label}.{key}: must be an integer")
-    if raw < minimum or raw > maximum:
-        raise ValueError(
-            f"{label}.{key}: must be between {minimum} and {maximum}"
-        )
-    return raw
-
-
 def parse_build_config(
     text: str,
     *,
@@ -149,8 +69,7 @@ def parse_build_config(
 ) -> BuildConfig:
     payload = loads_object(text, label=label)
     reject_unknown_keys(payload, allowed=BUILD_CONFIG_KEYS, label=label)
-    require_keys(payload, required=BUILD_CONFIG_REQUIRED_KEYS, label=label)
-    result = default_build_config()
+    result = BuildConfig()
 
     if "accepted_solution_source" in payload:
         result["accepted_solution_source"] = _source_path(
@@ -185,77 +104,6 @@ def parse_build_config(
             label=label,
         )
 
-    raw_sources = payload["generator_sources"]
-    if not isinstance(raw_sources, list):
-        raise ValueError(
-            f"{label}.generator_sources: must be an array of source paths"
-        )
-    sources = [
-        _source_path(
-            item,
-            key=f"generator_sources[{index}]",
-            root="generators",
-            extensions=SOLUTION_SOURCE_EXTENSIONS,
-            label=label,
-        )
-        for index, item in enumerate(raw_sources)
-    ]
-    if len(set(sources)) != len(sources):
-        raise ValueError(f"{label}.generator_sources: duplicate source path")
-    result["generator_sources"] = sources
-
-    result["generator_args"] = _string_array(
-        payload["generator_args"], key="generator_args", label=label
-    )
-    result["validator_args"] = _string_array(
-        payload["validator_args"], key="validator_args", label=label
-    )
-    result["checker_args"] = _string_array(
-        payload["checker_args"], key="checker_args", label=label
-    )
-
-    result["generator_runs"] = _integer(
-        payload["generator_runs"],
-        key="generator_runs",
-        minimum=0,
-        maximum=4096,
-        label=label,
-    )
-    result["compile_jobs"] = _integer(
-        payload["compile_jobs"],
-        key="compile_jobs",
-        minimum=0,
-        maximum=16,
-        label=label,
-    )
-    result["validate_jobs"] = _integer(
-        payload["validate_jobs"],
-        key="validate_jobs",
-        minimum=0,
-        maximum=16,
-        label=label,
-    )
-    result["solve_jobs"] = _integer(
-        payload["solve_jobs"],
-        key="solve_jobs",
-        minimum=0,
-        maximum=16,
-        label=label,
-    )
-    result["run_jobs"] = _integer(
-        payload["run_jobs"],
-        key="run_jobs",
-        minimum=0,
-        maximum=16,
-        label=label,
-    )
-    result["run_timeout_sec"] = _integer(
-        payload["run_timeout_sec"],
-        key="run_timeout_sec",
-        minimum=1,
-        maximum=300,
-        label=label,
-    )
     return result
 
 

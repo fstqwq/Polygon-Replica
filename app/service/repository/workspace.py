@@ -27,7 +27,7 @@ from app.service.disk.workspace_store import WorkspaceDiskStore
 from app.service.platform.fs.op import copytree, ensure_dir, extract_git_archive, remove_symlinks
 from app.service.platform.testlib_source import maintained_testlib_header
 from app.service.platform.workspace_path import is_hidden_workspace_path
-from app.service.problem.build_config import default_build_config, dumps_build_config
+from app.service.problem.build_config import BuildConfig, dumps_build_config
 from app.service.problem.runtime_config import (
     default_problem_config,
     dumps_problem_config,
@@ -594,9 +594,7 @@ class WorkspaceService:
                 ),
                 limits=problem_config_limits(self.config_values),
             ),
-            workspace / "config/build.json": dumps_build_config(
-                default_build_config()
-            ),
+            workspace / "config/build.json": dumps_build_config(BuildConfig()),
             workspace / "tests/spec.json": dumps_default_tests_spec(),
         }
         for path, content in canonical_sources.items():

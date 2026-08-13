@@ -292,8 +292,19 @@ limits:
             source = ws / "solutions" / f"{expected}.cpp"
             desc = ws / "solutions" / f"{expected}.cpp.desc"
             self.assertTrue(source.is_file())
-            self.assertIn(f"expected: {expected}", desc.read_text(encoding="utf-8"))
+            if expected != "accepted":
+                self.assertIn(
+                    f"expected: {expected}",
+                    desc.read_text(encoding="utf-8"),
+                )
             self.assertNotIn("@EXPECTED_RESULTS@", source.read_text(encoding="utf-8"))
+        build_cfg = json.loads(
+            (ws / "config" / "build.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(
+            build_cfg["accepted_solution_source"],
+            "solutions/accepted.cpp",
+        )
 
     def test_submission_yaml_overrides_annotation_and_directory_with_warning(self) -> None:
         ws = self._workspace_path()
@@ -321,8 +332,13 @@ limits:
             payload.getvalue(),
         )
 
-        desc = (ws / "solutions" / "conflict.cpp.desc").read_text(encoding="utf-8")
-        self.assertIn("expected: accepted", desc)
+        build_cfg = json.loads(
+            (ws / "config" / "build.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(
+            build_cfg["accepted_solution_source"],
+            "solutions/conflict.cpp",
+        )
         source = (ws / "solutions" / "conflict.cpp").read_text(encoding="utf-8")
         self.assertNotIn("@EXPECTED_RESULTS@", source)
         warnings = [str(item) for item in result["warnings"]]

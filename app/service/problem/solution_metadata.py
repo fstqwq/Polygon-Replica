@@ -102,6 +102,9 @@ def parse_solution_desc(
 
 def load_solution_desc(root: Path, source_rel: str) -> SolutionDescriptor:
     label = desc_rel_path_for_source(source_rel)
+    unresolved = root / label
+    if not unresolved.is_symlink() and not unresolved.exists():
+        return {"expected_behavior": "unknown", "note": ""}
     path = require_regular_source_file(root, label)
     try:
         text = path.read_text(encoding="utf-8")

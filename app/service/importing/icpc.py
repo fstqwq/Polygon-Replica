@@ -14,7 +14,7 @@ from app.service.importing.archive import (
     PACKAGE_METADATA_MAX_BYTES,
 )
 from app.service.importing.statement_assets import ImportedLegacyStatementAsset, merge_imported_statement_assets
-from app.service.problem.build_config import default_build_config, dumps_build_config
+from app.service.problem.build_config import BuildConfig, dumps_build_config
 from app.service.importing.icpc_submissions import (
     consume_generated_expected_results,
     parse_submissions_yaml,
@@ -597,6 +597,7 @@ class ICPCPackageImportService:
         consumed_yaml_paths: set[str] = set()
         imported_count = 0
         accepted_source = ""
+        imported_behaviors: list[tuple[str, str]] = []
         for rel in sorted(entries):
             if not rel.startswith("submissions/"):
                 continue
@@ -641,10 +642,18 @@ class ICPCPackageImportService:
                     warnings.append(
                         f"{rel}: {chosen_source} expected behavior overrides conflicting {source_name}"
                     )
-            self._write_text(workspace, Path(f"{target_rel}.desc"), render_solution_desc(expected, ""))
             if not accepted_source and expected == "accepted":
                 accepted_source = target_rel
+            imported_behaviors.append((target_rel, expected))
             imported_count += 1
+        for target_rel, expected in imported_behaviors:
+            if target_rel == accepted_source or expected == "unknown":
+                continue
+            self._write_text(
+                workspace,
+                Path(f"{target_rel}.desc"),
+                render_solution_desc(expected, ""),
+            )
         for unused_path in sorted(set(yaml_behaviors).difference(consumed_yaml_paths)):
             warnings.append(f"{unused_path}: submissions.yaml entry has no matching source file")
         return {
@@ -806,7 +815,7 @@ class ICPCPackageImportService:
         components: ComponentsSummary,
         solutions: SolutionsSummary,
     ) -> dict[str, object]:
-        build_cfg = default_build_config()
+        build_cfg = BuildConfig()
         accepted_source = solutions["accepted_source"]
         if accepted_source:
             build_cfg["accepted_solution_source"] = accepted_source
@@ -833,7 +842,6 @@ class ICPCPackageImportService:
         if mode == "interactive" and not interactor_source:
             raise ValueError("interactive ICPC package is missing output_validator/interactor source")
 
-        build_cfg["generator_sources"] = []
         (workspace / "config").mkdir(parents=True, exist_ok=True)
         (workspace / "config" / "build.json").write_text(
             dumps_build_config(build_cfg),

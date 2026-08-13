@@ -362,34 +362,6 @@ def tests_spec_editor_context(workspace: Path, limit: int) -> dict:
 def _tests_spec_status_context(workspace: Path) -> dict:
     return runtime().problem_source_query_service.tests_spec_status(workspace)
 
-def _list_sources_with_extensions(workspace: Path, folder: str, extensions: set[str], limit: int=64) -> tuple[list[str], bool]:
-    base = workspace / folder
-    try:
-        if not base.exists() or not base.is_dir() or base.is_symlink():
-            return ([], False)
-    except OSError:
-        return ([], False)
-    names: list[str] = []
-    try:
-        with os.scandir(base) as entries:
-            for entry in entries:
-                name = entry.name
-                if Path(name).suffix.lower() not in extensions:
-                    continue
-                try:
-                    if not entry.is_file(follow_symlinks=False):
-                        continue
-                except OSError:
-                    continue
-                names.append(f'{folder}/{name}')
-    except OSError:
-        return ([], False)
-    names.sort()
-    truncated = len(names) > int(limit)
-    if truncated:
-        names = names[:int(limit)]
-    return (names, truncated)
-
 def solution_metadata_entry(workspace: Path, source_rel: str) -> dict:
     return runtime().problem_source_query_service.solution_entry(
         workspace,
@@ -430,6 +402,3 @@ def run_solution_options_context(workspace: Path) -> tuple[list[dict], str, bool
 
 def run_test_options_context(workspace: Path) -> tuple[list[dict], bool, str]:
     return runtime().problem_source_query_service.run_test_options(workspace)
-
-def generator_sources_from_build_cfg(build_cfg: BuildConfig) -> list[str]:
-    return list(build_cfg['generator_sources'])

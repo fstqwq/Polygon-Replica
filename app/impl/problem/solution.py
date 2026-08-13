@@ -151,6 +151,7 @@ def solutions_save_source(request: Request, problem: str, user: Annotated[str, D
         )
         selected_for_redirect = selected
         with runtime().workspace_service.workspace_lock(workspace):
+            accepted_source = resolve_build_accepted_solution_source(workspace)
             desc_path = desc_rel_path_for_source(selected)
             desc_abs = safe_workspace_path(workspace, desc_path)
             desc_existed_before = desc_abs.exists() and desc_abs.is_file() and (not desc_abs.is_symlink())
@@ -160,8 +161,17 @@ def solutions_save_source(request: Request, problem: str, user: Annotated[str, D
                 parsed_desc = parse_solution_desc(desc_text)
                 desc_note = parsed_desc['note']
             runtime().git_service.write_file(workspace, selected, safe_content)
-            runtime().git_service.write_file(workspace, desc_path, render_solution_desc(normalized_expected, desc_note))
-            metadata_created = not desc_existed_before
+            if selected != accepted_source:
+                if normalized_expected == 'unknown' and not desc_note:
+                    if desc_existed_before:
+                        runtime().git_service.delete_path(workspace, desc_path)
+                else:
+                    runtime().git_service.write_file(
+                        workspace,
+                        desc_path,
+                        render_solution_desc(normalized_expected, desc_note),
+                    )
+                    metadata_created = not desc_existed_before
         if metadata_created:
             msg = 'solution source and metadata saved'
         save_ok = True
@@ -190,7 +200,11 @@ def solutions_set_tag(problem: str, user: Annotated[str, Depends(require_session
         if source_abs.is_symlink() or not source_abs.exists() or (not source_abs.is_file()):
             raise ValueError('solution source does not exist')
         is_main_correct = expected_behavior == MAIN_CORRECT_EXPECTED_VALUE
-        normalized_expected = 'accepted' if is_main_correct else normalize_expected_behavior(expected_behavior)
+        normalized_expected = (
+            'unknown'
+            if is_main_correct
+            else normalize_expected_behavior(expected_behavior)
+        )
         desc_path = desc_rel_path_for_source(selected)
         note = ''
         with runtime().workspace_service.workspace_lock(workspace):
@@ -211,14 +225,18 @@ def solutions_set_tag(problem: str, user: Annotated[str, Depends(require_session
                 build_cfg_changed = True
             if build_cfg_changed:
                 write_build_config(cfg_path, build_cfg)
-            runtime().git_service.write_file(
-                workspace,
-                desc_path,
-                render_solution_desc(normalized_expected, note),
-            )
             if is_main_correct:
                 msg = 'solution tag set to main correct solution (AC)'
             else:
+                if normalized_expected == 'unknown' and not note:
+                    if workspace_rel_file_exists(workspace, desc_path):
+                        runtime().git_service.delete_path(workspace, desc_path)
+                else:
+                    runtime().git_service.write_file(
+                        workspace,
+                        desc_path,
+                        render_solution_desc(normalized_expected, note),
+                    )
                 msg = f'solution tag set to {normalized_expected}'
     except (ValueError, OSError) as exc:
         msg = str(exc)

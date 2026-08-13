@@ -80,8 +80,6 @@ class TestPolygonPackageImport(unittest.TestCase):
         tests_summary = result.get("tests") if isinstance(result.get("tests"), dict) else {}
         self.assertEqual(int(tests_summary.get("gen") or 0), 1)
         self.assertEqual(int(tests_summary.get("generated_fallback_to_manual") or 0), 0)
-        build_cfg = json.loads((ws / "config" / "build.json").read_text(encoding="utf-8"))
-        self.assertEqual(list(build_cfg.get("generator_sources") or []), ["generators/gen.py"])
         self.assertEqual((ws / "generators" / "gen.py").read_text(encoding="utf-8"), "print(7)\n")
         problem_cfg = json.loads((ws / "config" / "problem.json").read_text(encoding="utf-8"))
         self.assertEqual(problem_cfg["memory_limit_mb"], 1)

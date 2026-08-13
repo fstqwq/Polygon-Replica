@@ -89,16 +89,6 @@ def _seed_workspace() -> tuple[Path, int, int, int, str]:
         {
             "accepted_solution_source": "solutions/main.cpp",
             "validator_source": "validators/validate.cpp",
-            "generator_sources": ["generators/gen.py"],
-            "generator_runs": 3,
-            "generator_args": [],
-            "validator_args": [],
-            "checker_args": [],
-            "compile_jobs": 0,
-            "validate_jobs": 0,
-            "solve_jobs": 0,
-            "run_jobs": 0,
-            "run_timeout_sec": 30,
         },
     )
     _write_json(
@@ -116,10 +106,6 @@ def _seed_workspace() -> tuple[Path, int, int, int, str]:
         "#include <iostream>\n"
         "int main() { long long value = 0; std::cin >> value; "
         "std::cout << value * value << '\\n'; }\n",
-        encoding="utf-8",
-    )
-    (workspace / "solutions/main.cpp.desc").write_text(
-        "expected: accepted\n",
         encoding="utf-8",
     )
     (workspace / "solutions/re.py").write_text(

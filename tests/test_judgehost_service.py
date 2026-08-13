@@ -672,7 +672,6 @@ class TestJudgehostService(E2ETestBase):
                 run_config
                 or {
                     "checker_mode": "testlib",
-                    "checker_args": [],
                     "pass_limit": 1,
                 }
             )
@@ -1242,7 +1241,6 @@ class TestJudgehostService(E2ETestBase):
                 "run_config_json": json.dumps(
                     {
                         "checker_mode": "testlib",
-                        "checker_args": [],
                         "pass_limit": 1,
                         "time_limit_ms": 30000,
                         "memory_limit_mb": 1024,
@@ -1474,7 +1472,6 @@ class TestJudgehostService(E2ETestBase):
             verification_id,
             run_config={
                 "checker_mode": "testlib",
-                "checker_args": [],
                 "pass_limit": 2,
             },
         )
@@ -1598,7 +1595,6 @@ class TestJudgehostService(E2ETestBase):
             verification_id,
             run_config={
                 "checker_mode": "testlib",
-                "checker_args": [],
                 "time_limit_ms": 6000,
             },
         )
@@ -2119,7 +2115,6 @@ class TestJudgehostService(E2ETestBase):
             verification_id,
             run_config={
                 "checker_mode": "testlib",
-                "checker_args": [],
                 "pass_limit": 7,
             },
         )
@@ -2161,7 +2156,6 @@ class TestJudgehostService(E2ETestBase):
             verification_id,
             run_config={
                 "checker_mode": "testlib",
-                "checker_args": [],
                 "pass_limit": 7,
             },
         )
@@ -3133,7 +3127,6 @@ class TestJudgehostService(E2ETestBase):
                     "run_config_json": json.dumps(
                         {
                             "checker_mode": "testlib",
-                            "checker_args": [],
                             "pass_limit": 1,
                             "time_limit_ms": 30000,
                             "memory_limit_mb": 1024,
@@ -3990,7 +3983,6 @@ class TestJudgehostService(E2ETestBase):
             verification_id,
             run_config={
                 "checker_mode": "testlib",
-                "checker_args": [],
                 "pass_limit": 1,
                 "memory_limit_mb": run_mem_mb,
             },
@@ -5536,7 +5528,6 @@ class TestJudgehostService(E2ETestBase):
             "run_config_json": json.dumps(
                 {
                     "checker_mode": "testlib",
-                    "checker_args": [],
                     "pass_limit": 1,
                     "time_limit_ms": 30000,
                     "memory_limit_mb": 1024,
@@ -5745,7 +5736,6 @@ class TestJudgehostService(E2ETestBase):
             "run_config_json": json.dumps(
                 {
                     "checker_mode": "testlib",
-                    "checker_args": [],
                     "pass_limit": 1,
                     "time_limit_ms": 30000,
                     "memory_limit_mb": 1024,

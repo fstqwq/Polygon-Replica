@@ -20,10 +20,11 @@ from app.service.problem.source_file import (
 )
 from app.service.problem.test_spec import (
     TestSpecEntry,
+    generator_source_paths,
     load_tests_spec,
     parse_gen_command_tokens,
     payload_rel_path_for_test,
-    resolve_configured_generator_source,
+    resolve_generator_source,
 )
 
 
@@ -73,6 +74,7 @@ def load_problem_source_tree(
             sample_max_bytes=statement_sample_max_bytes,
         )
     )
+    generator_sources = tuple(generator_source_paths(root))
 
     selected_sources = [
         build[key]
@@ -84,7 +86,6 @@ def load_problem_source_tree(
         )
         if key in build
     ]
-    selected_sources.extend(build["generator_sources"])
     for relative in selected_sources:
         require_regular_source_file(root, relative)
 
@@ -99,10 +100,7 @@ def load_problem_source_tree(
             raise ValueError(f"{relative}: cannot read file: {exc}") from exc
         if entry["kind"] == "gen":
             tokens = parse_gen_command_tokens(payload)
-            resolve_configured_generator_source(
-                tokens[0],
-                build["generator_sources"],
-            )
+            resolve_generator_source(tokens[0], generator_sources)
 
     behaviors: dict[str, ExpectedBehavior] = {}
     for relative in solution_sources(root):
@@ -111,14 +109,8 @@ def load_problem_source_tree(
         ]
 
     accepted_source = build.get("accepted_solution_source")
-    if (
-        accepted_source is not None
-        and behaviors[accepted_source] != "accepted"
-    ):
-        raise ValueError(
-            "config/build.json.accepted_solution_source: "
-            "descriptor must use 'expected: accepted'"
-        )
+    if accepted_source is not None:
+        behaviors[accepted_source] = "accepted"
 
     if problem["mode"] == "interactive" and "checker_source" in build:
         raise ValueError(

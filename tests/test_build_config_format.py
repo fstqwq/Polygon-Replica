@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 
 from app.service.problem.build_config import (
-    default_build_config,
+    BuildConfig,
     dumps_build_config,
     parse_build_config,
 )
@@ -30,11 +30,10 @@ _SAMPLE_LIMIT = 32 * 1024
 
 class TestBuildConfigFormat(unittest.TestCase):
     def test_build_config_dump_uses_schema_key_order(self) -> None:
-        config = default_build_config()
+        config = BuildConfig()
         config.update(
             {
                 "checker_source": "checkers/wcmp.cpp",
-                "generator_sources": ["generators/gen.cpp"],
                 "validator_source": "validators/validator.cpp",
                 "accepted_solution_source": "solutions/std.cpp",
             }
@@ -47,48 +46,28 @@ class TestBuildConfigFormat(unittest.TestCase):
                 "accepted_solution_source",
                 "validator_source",
                 "checker_source",
-                "generator_sources",
-                "generator_runs",
-                "generator_args",
-                "validator_args",
-                "checker_args",
-                "compile_jobs",
-                "validate_jobs",
-                "solve_jobs",
-                "run_jobs",
-                "run_timeout_sec",
             ],
         )
         self.assertEqual(parse_build_config(text), config)
 
     def test_build_config_rejects_noncanonical_shapes(self) -> None:
-        canonical = default_build_config()
+        canonical = BuildConfig()
         invalid = (
             {**canonical, "unknown": 1},
-            {key: value for key, value in canonical.items() if key != "run_jobs"},
-            {**canonical, "generator_sources": "generators/gen.cpp"},
-            {**canonical, "generator_runs": True},
             {**canonical, "checker_source": "checkers/../checker.cpp"},
             {**canonical, "checker_source": "checkers/checker.py"},
             {
                 **canonical,
                 "accepted_solution_source": "solutions/nested/std.cpp",
             },
-            {
-                **canonical,
-                "generator_sources": [
-                    "generators/gen.cpp",
-                    "generators/gen.cpp",
-                ],
-            },
         )
         for payload in invalid:
             with self.subTest(payload=payload), self.assertRaises(ValueError):
                 parse_build_config(json.dumps(payload))
-        with self.assertRaisesRegex(ValueError, "duplicate key 'run_jobs'"):
+        with self.assertRaisesRegex(ValueError, "duplicate key 'checker_source'"):
             parse_build_config(
-                dumps_build_config(canonical).rstrip("\n}")
-                + ',\n  "run_jobs": 1\n}\n'
+                '{"checker_source":"checkers/a.cpp",'
+                '"checker_source":"checkers/b.cpp"}'
             )
 
     def test_problem_config_round_trip_is_exact(self) -> None:
@@ -137,6 +116,25 @@ class TestBuildConfigFormat(unittest.TestCase):
         )
         self.assertEqual(rows[0]["sample"], True)
         self.assertEqual(rows[0]["sample_output_validate"], False)
+        omitted = loads_tests_spec(
+            '{"tests":[{"id":"002","kind":"manual"}]}',
+            document_max_bytes=_DOCUMENT_LIMIT,
+            sample_max_bytes=_SAMPLE_LIMIT,
+        )
+        self.assertFalse(omitted[0]["sample"])
+        dumped_omitted = dumps_tests_spec(
+            omitted,
+            document_max_bytes=_DOCUMENT_LIMIT,
+            sample_max_bytes=_SAMPLE_LIMIT,
+        )
+        self.assertEqual(
+            loads_tests_spec(
+                dumped_omitted,
+                document_max_bytes=_DOCUMENT_LIMIT,
+                sample_max_bytes=_SAMPLE_LIMIT,
+            ),
+            omitted,
+        )
         invalid = (
             '[{"id":"001","kind":"manual","sample":true}]',
             '{"tests":[{"id":"001","kind":"manual","sample":"true"}]}',
@@ -174,7 +172,7 @@ class TestBuildConfigFormat(unittest.TestCase):
         with self.assertRaises(ValueError):
             normalize_expected_behavior("AC")
 
-    def test_problem_source_tree_requires_explicit_solution_and_generator_metadata(
+    def test_problem_source_tree_uses_explicit_main_and_generator_command(
         self,
     ) -> None:
         with tempfile.TemporaryDirectory(prefix="problem-source-tree-") as raw:
@@ -197,12 +195,11 @@ class TestBuildConfigFormat(unittest.TestCase):
                 dumps_problem_config(problem, limits=_PROBLEM_LIMITS),
                 encoding="utf-8",
             )
-            build = default_build_config()
+            build = BuildConfig()
             build.update(
                 {
                     "accepted_solution_source": "solutions/std.cpp",
                     "checker_source": "checkers/checker.cpp",
-                    "generator_sources": ["generators/gen.cpp"],
                 }
             )
             (root / "config/build.json").write_text(
@@ -221,6 +218,7 @@ class TestBuildConfigFormat(unittest.TestCase):
             )
             for relative in (
                 "solutions/std.cpp",
+                "solutions/other.cpp",
                 "checkers/checker.cpp",
                 "generators/gen.cpp",
             ):
@@ -228,9 +226,6 @@ class TestBuildConfigFormat(unittest.TestCase):
                     "int main(){return 0;}\n", encoding="utf-8"
                 )
             descriptor = root / "solutions/std.cpp.desc"
-            descriptor.write_text(
-                render_solution_desc("accepted"), encoding="utf-8"
-            )
 
             source = load_problem_source_tree(
                 root,
@@ -241,39 +236,35 @@ class TestBuildConfigFormat(unittest.TestCase):
             self.assertEqual(source.problem, problem)
             self.assertEqual(
                 source.solution_behaviors,
-                {"solutions/std.cpp": "accepted"},
+                {
+                    "solutions/other.cpp": "unknown",
+                    "solutions/std.cpp": "accepted",
+                },
             )
 
-            descriptor.unlink()
-            with self.assertRaisesRegex(
-                ValueError, "required regular file is missing"
-            ):
-                load_problem_source_tree(
-                    root,
-                    problem_limits=_PROBLEM_LIMITS,
-                    tests_spec_max_bytes=_DOCUMENT_LIMIT,
-                    statement_sample_max_bytes=_SAMPLE_LIMIT,
-                )
             descriptor.write_text(
                 render_solution_desc("wrong_answer"), encoding="utf-8"
             )
-            with self.assertRaisesRegex(
-                ValueError,
-                "descriptor must use 'expected: accepted'",
-            ):
-                load_problem_source_tree(
-                    root,
-                    problem_limits=_PROBLEM_LIMITS,
-                    tests_spec_max_bytes=_DOCUMENT_LIMIT,
-                    statement_sample_max_bytes=_SAMPLE_LIMIT,
-                )
+            source = load_problem_source_tree(
+                root,
+                problem_limits=_PROBLEM_LIMITS,
+                tests_spec_max_bytes=_DOCUMENT_LIMIT,
+                statement_sample_max_bytes=_SAMPLE_LIMIT,
+            )
+            self.assertEqual(
+                source.solution_behaviors,
+                {
+                    "solutions/other.cpp": "unknown",
+                    "solutions/std.cpp": "accepted",
+                },
+            )
             descriptor.write_text(
                 render_solution_desc("accepted"), encoding="utf-8"
             )
             (root / "tests/generator/001.in").write_text(
                 "other 5\n", encoding="utf-8"
             )
-            with self.assertRaisesRegex(ValueError, "not selected"):
+            with self.assertRaisesRegex(ValueError, "does not exist"):
                 load_problem_source_tree(
                     root,
                     problem_limits=_PROBLEM_LIMITS,

@@ -14,7 +14,7 @@ import app.impl.workspace.context_job as workspace_context_job
 from app.service.export.icpc_package import SUBMISSION_RULES
 from app.service.importing.native import NativePackageImportService
 from app.service.platform.git_process import run_git
-from app.service.problem.build_config import default_build_config, dumps_build_config
+from app.service.problem.build_config import BuildConfig, dumps_build_config
 from app.service.problem_package.manifest import load_manifest, validate_manifest_files
 from app.service.verification.lifecycle import PlannedTask, verification_task_id
 from app.service.verification.task_completion import TaskCompletion
@@ -60,7 +60,7 @@ class TestPublishedRevisionExport(E2ETestBase):
                 )
             build_config = snapshot / "config" / "build.json"
             build_config.parent.mkdir(parents=True)
-            config_payload = default_build_config()
+            config_payload = BuildConfig()
             config_payload["accepted_solution_source"] = "solutions/official.cpp"
             build_config.write_text(
                 dumps_build_config(config_payload),

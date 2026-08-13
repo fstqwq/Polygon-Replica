@@ -222,10 +222,6 @@ class TestUIComponents(UIHelpersMixin, E2ETestBase):
             page_after_create.body.decode("utf-8", errors="replace"),
         )
 
-        cfg_path = ws / "config" / "build.json"
-        cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
-        self.assertEqual([str(x) for x in cfg.get("generator_sources", [])], [rel])
-
         with patch(
             "app.impl.problem.generator.judgehost_compile_check_error", return_value=""
         ):
@@ -254,11 +250,6 @@ class TestUIComponents(UIHelpersMixin, E2ETestBase):
         self.assertEqual(saved_second.status_code, 303)
         self.assertEqual((ws / rel_second).read_text(encoding="utf-8"), "print(123)\n")
 
-        cfg_after_second = json.loads(cfg_path.read_text(encoding="utf-8"))
-        self.assertEqual(
-            [str(x) for x in cfg_after_second.get("generator_sources", [])],
-            [rel, rel_second],
-        )
         list_page = generators_page(
             _request(f"/problems/{self.problem}/generators"), self.problem, self.user
         )
@@ -275,15 +266,12 @@ class TestUIComponents(UIHelpersMixin, E2ETestBase):
         for rel in old_paths.values():
             (ws / rel).parent.mkdir(parents=True, exist_ok=True)
             (ws / rel).write_text(f"// {rel}\n", encoding="utf-8")
-        other_generator = "generators/other.cpp"
-        (ws / other_generator).write_text("// other generator\n", encoding="utf-8")
         cfg_path = ws / "config" / "build.json"
         self._update_build_config(
             ws,
             checker_source=old_paths["checker"],
             validator_source=old_paths["validator"],
             interactor_source=old_paths["interactor"],
-            generator_sources=[old_paths["generator"], other_generator],
         )
 
         responses = [
@@ -330,10 +318,6 @@ class TestUIComponents(UIHelpersMixin, E2ETestBase):
         self.assertEqual(cfg.get("checker_source"), new_paths["checker"])
         self.assertEqual(cfg.get("validator_source"), new_paths["validator"])
         self.assertEqual(cfg.get("interactor_source"), new_paths["interactor"])
-        self.assertEqual(
-            [str(x) for x in cfg.get("generator_sources", [])],
-            [new_paths["generator"], other_generator],
-        )
 
     def test_generator_save_source_compile_check_failure_does_not_persist_source_or_config(
         self,
@@ -360,12 +344,6 @@ class TestUIComponents(UIHelpersMixin, E2ETestBase):
         self.assertEqual(ok_saved.status_code, 303)
         self.assertIn("println(7)", (ws / rel).read_text(encoding="utf-8"))
 
-        cfg_path = ws / "config" / "build.json"
-        cfg_before = json.loads(cfg_path.read_text(encoding="utf-8"))
-        self.assertEqual(
-            [str(x) for x in cfg_before.get("generator_sources", [])], [rel]
-        )
-
         with patch(
             "app.impl.problem.generator.judgehost_compile_check_error",
             return_value=f"{rel_bad}: syntax error",
@@ -381,11 +359,6 @@ class TestUIComponents(UIHelpersMixin, E2ETestBase):
         self.assertTrue(messages)
         self.assertIn("compile check failed", messages[0].lower())
         self.assertFalse((ws / rel_bad).exists())
-
-        cfg_after = json.loads(cfg_path.read_text(encoding="utf-8"))
-        self.assertEqual(
-            [str(x) for x in cfg_after.get("generator_sources", [])], [rel]
-        )
 
     def test_generator_save_source_json_success_returns_redirect(self) -> None:
         ws = Path(workspace_service.ensure_workspace(self.problem, self.user))

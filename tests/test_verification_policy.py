@@ -25,7 +25,6 @@ class TestVerificationPolicy(VerificationPolicyTestBase):
             _problem_limits,
             _run_payload_base,
         )
-        from app.service.problem.build_config import default_build_config
         from app.service.problem.runtime_config import (
             ProblemConfig,
             ProblemConfigLimits,
@@ -58,7 +57,6 @@ class TestVerificationPolicy(VerificationPolicyTestBase):
 
         limits = _problem_limits(runtime)
         run_payload = _run_payload_base(
-            build_cfg=default_build_config(),
             problem_limits=limits,
             source_files={},
         )

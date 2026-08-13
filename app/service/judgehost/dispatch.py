@@ -69,7 +69,6 @@ _DomjudgePreparedPayload = TypedDict(
         "tests_rows": list[_DomjudgePreparedTestRow],
         "run_cfg_obj": dict[str, object],
         "problem_limits_obj": dict[str, object],
-        "checker_args": list[str],
         "contest_id": str,
         "mode": str,
         "compile_key": str,
@@ -313,14 +312,6 @@ class DispatchHandler(DispatchCacheMixin):
         if problem_limits_obj is None:
             problem_limits_obj = {}
 
-        checker_args: list[str] = []
-        checker_args_raw = cast(list[object] | None, run_cfg_obj.get("checker_args"))
-        if checker_args_raw is not None:
-            for item in checker_args_raw:
-                token = domjudge_text(item)
-                if token:
-                    checker_args.append(token)
-
         precomputed = self._domjudge_precomputed_bundle(payload.get("domjudge_precomputed"))
         if precomputed is None:
             raise RuntimeError("domjudge precomputed payload is required")
@@ -332,7 +323,6 @@ class DispatchHandler(DispatchCacheMixin):
             "tests_rows": tests_rows,
             "run_cfg_obj": run_cfg_obj,
             "problem_limits_obj": problem_limits_obj,
-            "checker_args": checker_args,
             "contest_id": "local",
             "mode": domjudge_lower_text(payload.get("mode"), default="pass-fail"),
             "compile_key": precomputed["compile_key"],

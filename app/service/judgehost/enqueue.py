@@ -606,13 +606,6 @@ class TaskEnqueue:
         problem_limits_obj = cast(dict[str, object] | None, verification_payload.get("problem_limits"))
         if problem_limits_obj is None:
             problem_limits_obj = {}
-        checker_args_raw = cast(list[object] | None, run_cfg_obj.get("checker_args"))
-        checker_args: list[str] = []
-        if checker_args_raw is not None:
-            for item in checker_args_raw:
-                token = domjudge_text(item)
-                if token:
-                    checker_args.append(token)
         mode = domjudge_lower_text(payload.get("mode"), default="pass-fail")
         compile_only, generate_mode, main_correct = self._toolkit.execution_modes(payload)
         manual_validate_only = domjudge_bool(payload.get("manual_validate_only"), default=False)
@@ -805,9 +798,7 @@ class TaskEnqueue:
         compare_config = {
             "hash": compare_hash,
             "combined_run_compare": bool(interactive),
-            "compare_args": " ".join(
-                [*(['--validate-input'] if manual_validate_only else []), *checker_args]
-            ),
+            "compare_args": "--validate-input" if manual_validate_only else "",
             "script_timelimit": int(compare_script_timelimit),
             "script_memory_limit": max(run_mem_kb, int(compile_mem_mb * 1024)),
             "script_filesize_limit": int(compile_output_limit_kb),
