@@ -26,6 +26,7 @@ services:
     restart: "no"
     environment:
       GIT_OPTIONAL_LOCKS: "0"
+      PYTHONPATH: /opt/polygon-replica
       POLYGON_REPLICA_E2E_APP_ORIGIN: http://app:8001
       POLYGON_REPLICA_E2E_DB: /var/lib/polygon-replica/metadata.db
       POLYGON_REPLICA_E2E_CACHE_ROOT: /tmp/polygon-replica
