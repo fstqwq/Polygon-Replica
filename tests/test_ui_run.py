@@ -5465,11 +5465,34 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             "package failed for alice",
         )
 
-        page = export_page(
-            _request("/problems/alice/sample/export"),
-            "alice/sample",
-            "bob",
-        )
+        with (
+            patch.object(
+                runtime.problem_package_service,
+                "published_revision",
+                return_value=SimpleNamespace(
+                    revision_number=9,
+                    source_commit=source_commit,
+                ),
+            ),
+            patch.object(
+                runtime.problem_package_service,
+                "published_readiness",
+                return_value={
+                    "problem_id": problem_id,
+                    "status": "missing",
+                    "published_revision_number": 9,
+                    "published_commit": source_commit,
+                    "verified_revision_number": None,
+                    "verified_revision_id": "",
+                    "missing_reason": "not verified",
+                },
+            ),
+        ):
+            page = export_page(
+                _request("/problems/alice/sample/export"),
+                "alice/sample",
+                "bob",
+            )
         html = page.body.decode("utf-8", errors="replace")
         self.assertIn('name="format" value="domjudge"', html)
         self.assertIn('name="format" value="icpc-2025-09"', html)
