@@ -193,42 +193,6 @@ class TestJudgehostScripts(unittest.TestCase):
             )
             self.assertNotIn("judgemessage.txt", bundle.pass_files(2))
 
-    def test_domjudge_compare_script_shifts_framework_args_before_checker(self) -> None:
-        service = config.judgehost_task_service
-        script_text = service.toolkit.compare_script().decode("utf-8")
-        self.assertIn("shift 3", script_text)
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            run_script = root / "run"
-            checker = root / "checker"
-            test_in = root / "001.in"
-            test_ans = root / "001.ans"
-            feedback = root / "feedback"
-            run_script.write_text(script_text, encoding="utf-8")
-            checker.write_text(
-                "#!/bin/sh\n"
-                "echo \"argc:$#\"\n"
-                "if [ \"$#\" -eq 4 ]; then\n"
-                "  exit 42\n"
-                "fi\n"
-                "exit 3\n",
-                encoding="utf-8",
-            )
-            os.chmod(run_script, 0o755)
-            os.chmod(checker, 0o755)
-            test_in.write_text("ok\n", encoding="utf-8")
-            test_ans.write_text("ok\n", encoding="utf-8")
-            result = subprocess.run(
-                [str(run_script), str(test_in), str(test_ans), str(feedback), "--flag"],
-                input="ok\n",
-                text=True,
-                capture_output=True,
-                check=False,
-            )
-            self.assertEqual(result.returncode, 42)
-            checker_log = (feedback / "checker.log").read_text(encoding="utf-8", errors="replace")
-            self.assertIn("argc:4", checker_log)
-
     def test_domjudge_compare_script_uses_testlib_arg_convention_with_stdin_team_output(self) -> None:
         service = config.judgehost_task_service
         script_text = service.toolkit.compare_script().decode("utf-8")

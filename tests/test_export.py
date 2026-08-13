@@ -14,7 +14,11 @@ import app.impl.workspace.context_job as workspace_context_job
 from app.service.export.icpc_package import SUBMISSION_RULES
 from app.service.importing.native import NativePackageImportService
 from app.service.platform.git_process import run_git
-from app.service.problem.build_config import BuildConfig, dumps_build_config
+from app.service.problem.build_config import (
+    BuildConfig,
+    dumps_build_config,
+    load_build_config,
+)
 from app.service.problem_package.manifest import load_manifest, validate_manifest_files
 from app.service.verification.lifecycle import PlannedTask, verification_task_id
 from app.service.verification.task_completion import TaskCompletion
@@ -116,8 +120,10 @@ class TestPublishedRevisionExport(E2ETestBase):
         )
         accepted = workspace / "solutions" / "accepted.cpp"
         accepted.write_text("int main() { return 0; }\n", encoding="utf-8")
-        (workspace / "solutions" / "accepted.cpp.desc").write_text(
-            "expected: accepted\n",
+        build = load_build_config(workspace)
+        build["accepted_solution_source"] = "solutions/accepted.cpp"
+        (workspace / "config" / "build.json").write_text(
+            dumps_build_config(build),
             encoding="utf-8",
         )
         commit = runtime.git_service.commit(
