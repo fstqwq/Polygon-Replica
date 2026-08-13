@@ -104,5 +104,9 @@ services:
     networks:
       - e2e
 
+networks:
+  e2e:
+    internal: false
+
 volumes:
   domjudge-db:
