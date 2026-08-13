@@ -54,6 +54,9 @@ collect_logs() {
   do
     compose logs --no-color "$service" >"$output_root/${service}.log" 2>&1 || true
   done
+  compose exec -T domserver sh -c \
+    'cat /var/log/nginx/error.log 2>/dev/null || true' \
+    >"$output_root/domserver-nginx-error.log" 2>&1 || true
   collect_package_members
 }
 
