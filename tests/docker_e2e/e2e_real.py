@@ -66,12 +66,14 @@ BASE_FIXTURE_FILES = {
             "time_limit_ms": 2000,
         }
     ),
-    "config/build.json": _json_text(
-        {
-            "accepted_solution_source": "solutions/main.cpp",
-            "validator_source": "validators/validate.cpp",
-            "generator_sources": ["generators/gen.py"],
-        }
+    "config/build.json": (
+        "{\n"
+        '  "accepted_solution_source": "solutions/main.cpp",\n'
+        '  "validator_source": "validators/validate.cpp",\n'
+        '  "generator_sources": [\n'
+        '    "generators/gen.py"\n'
+        "  ]\n"
+        "}\n"
     ),
     "tests/spec.json": _json_text(
         {"tests": [{"id": "001", "kind": "gen", "sample": True}]}
