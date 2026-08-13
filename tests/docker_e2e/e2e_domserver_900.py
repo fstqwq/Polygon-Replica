@@ -4,7 +4,6 @@ import argparse
 import json
 import os
 import shutil
-import subprocess
 import time
 import zipfile
 from collections import Counter
