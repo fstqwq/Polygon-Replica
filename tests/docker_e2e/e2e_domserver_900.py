@@ -248,7 +248,7 @@ def _wait_domserver() -> None:
         try:
             with _domserver() as client:
                 response = client.get("/api/v4/info")
-            if response.status_code == 200:
+            if response.status_code in {200, 401}:
                 return
             last = f"HTTP {response.status_code}: {response.text[:200]}"
         except httpx.HTTPError as exc:
