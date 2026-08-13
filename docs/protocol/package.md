@@ -1,6 +1,17 @@
-# Package import and export
+# Package import, verified revisions, and projections
 
-## Common boundary
+The package lifecycle is one-way:
+
+```text
+published source -> verified revision -> package projections
+```
+
+A verified revision is not another source revision. It is the cleanup-safe
+result of fully verifying one immutable published Git commit and retaining the
+committed source, generated testcase inputs, and official answers needed by
+delivery consumers.
+
+## Import boundary
 
 Package archives are untrusted input. Uploads are copied to a cache temporary
 file in chunks. `UPLOAD_MAX_BYTES` limits compressed upload bytes; it does not
@@ -15,7 +26,7 @@ central-directory integrity checks. A problem ZIP permits at most 4096 entries.
 
 Only members selected by the active format importer are opened. Selected
 members MUST be regular, unencrypted content and MUST NOT be symlinks or special
-files. Their declared uncompressed sizes are checked before opening and actual
+files. Their declared uncompressed sizes are checked before opening, and actual
 decompressor output is charged again while streaming to an isolated staging
 tree. `PROBLEM_ZIP_MAX_EXPANDED_BYTES` controls this consumed-byte budget; its
 default is 256 MiB and its configured range is 64 MiB through 4 GiB. Unknown or
@@ -26,56 +37,195 @@ Each parsed XML, YAML, INI, or JSON document and the retained metadata set are
 bounded by the fixed 4 MiB metadata limit. Import writes canonical workspace
 source and discards the uploaded archive after conversion.
 
-The application currently detects Native packages by `config/problem.json`,
-Polygon packages by `problem.xml`, and ICPC packages by `problem.yaml`. Their
-converters map accepted external files into the current workspace layout and
-report validation errors at the archive boundary. Detection checks Polygon,
-then ICPC, then Native when an archive contains more than one marker.
+The application detects Polygon packages by `problem.xml`, ICPC/DOMjudge
+packages by `problem.yaml`, and Polygon Replica packages by
+`test_data/manifest.json`. Their importers convert accepted files
+into the current workspace source model and report validation errors at the
+archive boundary.
 
 Importing as a new problem converts into an unborn workspace, commits the
 result, and pushes `main`. Importing into an existing problem converts in a
 staging directory, overwrites paths present in the converted tree, and keeps
-existing paths absent from that tree; it leaves those merged changes uncommitted.
+existing paths absent from that tree; it leaves the merged changes uncommitted.
 
-Native import copies the allowed authored workspace roots and discards packaged
-`test_data/`; its manifest payload is derived data, not authored source. ICPC
-import accepts an absent format version plus `legacy`, `legacy-icpc`, and
-`2025-09`, with `pass-fail`, `interactive`, and `multi-pass` type tokens.
+A Polygon Replica package contains a complete verified-revision payload. Its
+importer validates `test_data/manifest.json`, the committed-source digest, test
+order, declared paths, sizes, checksums, file types, and the complete
+`test_data/` inventory. It then deletes `test_data/` and imports only authored
+source. Generated inputs and answers never enter the destination workspace or
+Git, and import never registers the package as a verified revision of the new
+problem.
+
+The ICPC importer accepts standard 2025-09 packages and the supported
+DOMjudge-compatible layout. It parses scalar or sequence problem types,
+statement layouts, validators, verdict directories, `submissions.yaml`, and
+DOMjudge expected-result annotations into one canonical workspace shape.
 
 Agent workspace compare/apply uses the same file-backed archive admission and
 consumed-byte accounting. Its selected files are streamed into a temporary
 workspace tree before comparison or replacement.
 
-## Native materialization
+## Verified revision identity and contents
 
-Native materialization is built from a specific published source commit and a
-successful full verification of that snapshot. It contains the canonical
-manifest, committed source, and materialized testcase data in manifest order.
-The durable row records source commit, digest, revision, verification, archive
-locator, SHA, size, and current availability.
+At most one verified-revision record exists for a `(problem_id, source_commit)`
+pair. It keeps the published revision number, source digest, verification
+provenance, archive locator, archive size and SHA-256, timestamps, and current
+availability. Rebuilding the same Git revision reuses that identity.
 
-The archive keeps committed source at its root and adds
-`test_data/manifest.json` plus `test_data/tests/<id>/...`. The manifest has the
-exact top-level fields `source_commit`, `revision_number`, `source_digest`,
-`mode`, `pass_limit`, `verification`, and ordered `tests`. Each test records
-`id`, `kind`, `sample`, an `input` descriptor, and optional `answer`,
-`sample_input`, and `sample_output` descriptors. A descriptor contains only
-`path`, `sha256`, and `size`. Non-interactive tests require answers; sample
-overrides are stored only when they differ from judge data.
+The Polygon Replica package keeps the committed source at its root and adds:
 
-Reading a Native archive rechecks its stored size and SHA, safe member types,
-manifest identity, every declared payload, the absence of undeclared testcase
-payloads, and the committed-source digest. Failed validation marks the
-materialization unavailable and invalidates its derived exports.
+```text
+test_data/
+  manifest.json
+  tests/
+    <test-id>/
+      input
+      answer
+      sample-input
+      sample-output
+```
 
-Readiness, Git provenance, and archive availability are separate facts. Archive
-availability is checked independently, and an available archive retains the
-source commit from which it was built.
+Only applicable members are present. Interactive tests may omit `answer`.
+Sample display files occur only when they differ from judge input or answer.
 
-On Native import, `test_data/**` is materialized judging output rather than Git
-source. Those members, including `manifest.json`, test inputs, answers, and
-sample overrides, are never opened, decompressed, or copied. They still count
-toward the 4096-entry ceiling. Native import restores only the Git source shape.
+The manifest contains `source_commit`, `revision_number`, `source_digest`,
+`mode`, `pass_limit`, verification provenance, and the ordered tests. Each
+test records its identity, source kind, sample flag, and descriptors for its
+available payloads. A descriptor contains a canonical path, SHA-256, and size.
+This is the current complete shape; it does not carry a speculative
+project-owned format or materializer version.
+
+Opening a verified revision checks the stored archive size and SHA, safe ZIP
+member paths and types, manifest identity, every declared payload, absence of
+undeclared testcase payloads, canonical source shape, and committed-source
+digest. A frozen consumer can additionally require the checksum recorded at
+admission. The reader exposes only the extracted, validated revision; it does
+not expose Git, a workspace, verification rows, or runtime cache references.
+
+Availability, Git provenance, and current publication are separate facts. An
+older verified revision remains usable after `main` advances. A missing or
+corrupt archive marks that verified revision unavailable and invalidates its
+package projections; it does not remove the Git revision.
+
+## Package Export
+
+Package Export is the only workflow allowed to prepare a verified revision.
+Admission freezes the current published `main` commit and permits only one
+Package Export for the same problem/commit at a time. A competing request fails
+immediately instead of waiting.
+
+The job proceeds through these observable phases:
+
+```text
+queued -> verifying -> projecting -> complete
+```
+
+For the frozen commit, the worker:
+
+1. reuses the verified revision when its complete integrity check succeeds;
+2. otherwise removes an unavailable or corrupt payload and its projections,
+   runs one full verification, and rebuilds the same verified-revision identity;
+3. builds or reuses the requested projection.
+
+The supported Package Export formats are `domjudge` and `icpc-2025-09`.
+Separate request attempts keep separate job IDs even when they resolve to the
+same cached projection. Problem-level projection cache identity is the verified
+revision and target format. A standalone DOMjudge package always derives its
+short name from the public slug segment; Contest label projections are
+temporary Contest-owned children and are not stored in this cache.
+
+The Polygon Replica package is downloaded directly from verified-revision
+history. That read creates neither an export job nor a projection row. Package
+Export always targets the published revision frozen at request time; it does not
+accept a historical revision selector.
+
+## Projection boundary
+
+A package projector accepts only:
+
+- an already validated verified-revision reader;
+- the target external format;
+- canonical naming options; and
+- a caller-owned empty staging directory.
+
+It may render and compile statement source from that reader. It MUST NOT read
+Git, a workspace, verification tables, runtime cache, or another package
+projection. It MUST NOT run verification or write export, Contest, or job rows.
+The caller owns atomic archive publication and persistence.
+
+### ICPC Problem Package 2025-09
+
+The `icpc-2025-09` projection emits the strict supported subset of that
+external format:
+
+- `problem.yaml` with `problem_format_version: 2025-09`;
+- language PDFs below `statement/`;
+- testcase pairs below `data/sample/` and `data/secret/`;
+- `input_validators/` and optional `output_validator/` wrappers;
+- `submissions/` and `submissions/submissions.yaml`; and
+- authored attachments.
+
+The `type` field is the scalar `pass-fail` for ordinary problems and a YAML
+sequence containing `pass-fail` plus `interactive` and/or `multi-pass` for the
+other execution modes. Combined mode does not fall back to legacy metadata. An
+interactive testcase without a canonical answer receives the structurally
+required empty `.ans`. Interactive
+and multi-pass samples without standard interaction data remain secret rather
+than inventing an interaction transcript.
+
+Expected behavior is expressed by `submissions.yaml`. Submitted source bytes are
+not annotated. The archive excludes `domjudge-problem.ini` and
+`problem_statement/`.
+
+### DOMjudge package
+
+The `domjudge` projection emits a DOMjudge-compatible package rather than
+claiming strict ICPC 2025-09 conformance. It contains:
+
+- `domjudge-problem.ini` with the requested short name;
+- DOMjudge-compatible scalar problem type and validation metadata in
+  `problem.yaml`;
+- `problem_statement/problem.pdf`;
+- testcase data, validators, verdict directories, and attachments.
+
+C and C++ validators and interactors in both projections include executable
+`build` and `run` files. The build file compiles the copied source with
+`DOMJUDGE` defined and produces the executable used by `run`. This keeps the
+program contract explicit in both layouts instead of relying on an importer's
+language inference.
+
+It excludes `statement/` and `submissions/submissions.yaml`. Standard accepted,
+wrong-answer, time-limit, and runtime-error submissions use their conventional
+directories. Only the three mixed behaviors use a language-appropriate
+`@EXPECTED_RESULTS@` annotation in the copied source. Standalone export uses the
+public slug segment as the short name; Contest projection passes the frozen
+roster label.
+
+## Contest builds
+
+Contest builds consume verified revisions that already exist. In one SQLite
+writer transaction, admission checks for an active build, reads the ordered
+roster, selects each problem's highest available verified revision, and inserts
+the job and all frozen build items with their archive checksums. If any problem
+has none, admission returns `not_ready` without creating a job or copying
+Contest source.
+
+Selection is not restricted to current `main`: readiness reports `current`,
+`stale`, or `none`. A worker opens exactly the frozen identities and checksums.
+It never starts Verification, calls Package Export, repairs an unavailable
+revision, or falls back to an older revision within the job.
+
+One build can request `statement_pdf`, `domjudge_bundle`, and
+`icpc_2025_09_bundle`. Readers are shared across requested outputs. Statement
+PDF reads statement source, verified samples, and assets directly. Package
+bundles call the same projectors described above and place temporary child ZIPs
+inside a Contest-owned outer bundle. Child packages do not become problem-level
+exports.
+
+Each package bundle is all-or-nothing: failure of one problem publishes no
+bundle of that format. Different requested outputs remain independent, so the
+job is `partial` when at least one output succeeds and another fails.
+Package-only builds do not snapshot the Contest source filesystem.
 
 ## Contest import
 
@@ -90,83 +240,17 @@ expanded limit = CONTEST_MAX_PROBLEMS x PROBLEM_ZIP_MAX_EXPANDED_BYTES
 Every child also independently satisfies the single-problem entry and expanded
 limits. Review retains the original bounded ZIP draft plus bounded display
 metadata. Confirm reopens that draft and imports one child archive view at a
-time; it does not materialize all child ZIP payloads in memory. The configured
+time; it does not materialize all child payloads in memory. The configured
 problem count is checked before a Contest row is created. Manual additions use
 the same limit, with count, next position, and insert serialized in one SQLite
-writer transaction. Lowering the limit does not disable reading, editing,
-building, exporting, or deleting an already over-limit Contest; it only rejects
-new roster entries.
+writer transaction. Lowering the limit does not disable an existing over-limit
+Contest; it only rejects new roster entries.
 
-Only a terminal `ok` verification with its once-installed complete task graph is
-eligible for materialization. A queued, running, failed, or pre-activation
-verification is not ready. Late diagnostic items augment detail display but do
-not change that immutable readiness decision, source identity, or archive
-availability.
+## Cleanup
 
-Package history is problem-level. Every user with problem read access sees the
-same export jobs and Native materializations, including materializations
-created as a side effect of contest builds. An available Native materialization
-can be downloaded directly from the Packages page. Creating an export remains
-a write-authorized operation.
-
-A problem export is identified by its published Native materialization and
-export type. Export requests remain separate attempts with
-separate job IDs; successful attempts may resolve to the same available
-derived output. Output publication and export-job state are independent writes.
-If a canonical output has been published and a later job status or link update
-fails, the valid output remains reusable by a later attempt; that failure
-does not delete or invalidate the cache entry.
-
-Contest labels are placement metadata rather than problem export identity. A
-contest package build consumes the canonical ICPC ZIP, safely extracts it into
-the contest job staging tree, changes the single `short-name` entry in
-`domjudge-problem.ini` to the frozen contest label, and repacks the result as a
-Contest-owned output. The changed ZIP is not inserted into the problem export
-cache. Thus two contests can publish different labels from the same canonical
-problem package without changing that package.
-
-This transformation consumes a system-generated package whose stored size and
-SHA were already verified. The authenticated-upload entry and expanded-byte
-budgets do not apply again. Extraction remains streaming and still validates
-the central-directory structure, normalized paths, path conflicts, member
-types, encryption state, and the fixed metadata-size boundary.
-
-## ICPC export
-
-ICPC export produces one hybrid ZIP. The archive contains:
-
-- `problem.yaml`
-- `domjudge-problem.ini`
-- language PDFs below `statement/`
-- the legacy `problem_statement/` PDF mirror
-- `data/sample/` and `data/secret/` testcase pairs
-- `input_validators/` and, when configured, `output_validator/`
-- categorized solutions and `submissions/submissions.yaml`
-- copied `attachments/` when present
-
-Representable pass-fail, interactive, and multi-pass problems use
-`problem_format_version: 2025-09`. Interactive multi-pass falls back to
-`problem_format_version: legacy`, because that combination is not represented
-by the 2025-09 mode field used by the exporter.
-
-Every rendered statement-language PDF is exported and mirrored into the legacy
-directory. English is preferred for `problem_statement/problem.pdf`; when it is
-absent, the first exported language is used.
-
-Pass-fail sample tests are written below `data/sample/`. Interactive and
-multi-pass samples are kept in `data/secret/` and omitted from rendered sample
-blocks because the legacy DOMjudge sample path cannot express their execution
-semantics.
-
-The output targets PPF 2025-09 and the supported legacy DOMjudge layout. A
-canonical problem-level export uses the public problem slug as the legacy
-DOMjudge `short-name`. The export cache may reuse an available archive for the
-same materialization/type identity. Rebuilding may produce different ZIP bytes,
-timestamps, ordering, and SHA.
-
-## Polygon import
-
-Polygon import accepts the supported Polygon archive layout, converts tests,
-programs, configuration, and statements into the canonical workspace, and
-preserves usable statement assets. Only members mapped by the supported layout
-are converted; the external package is not stored as a parallel source model.
+Verified revisions, their build rows and archives, projection-cache rows and
+archives, Package Export jobs, and Contest build products are Derived data.
+Generated Artifacts cleanup removes them. Published Git commits, workspaces,
+Contest definitions and source, and operator backups remain. A cleaned Git
+revision is simply no longer verified and can become a verified revision again
+through a later Package Export.

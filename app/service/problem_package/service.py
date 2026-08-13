@@ -1,4 +1,4 @@
-"""Build and read immutable problem packages from published Git revisions.
+"""Build and read verified revision archives from published Git revisions.
 
 This module owns the only bridge from a bare repository revision to a package.
 Consumers receive a validated package reader and never a workspace, Git handle, or
@@ -12,10 +12,10 @@ import threading
 import uuid
 import zipfile
 from collections.abc import Callable, Iterator
-from contextlib import contextmanager
+from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import Literal, TypedDict
+from typing import BinaryIO, Literal, TypedDict
 
 from app.db import DB, now_iso
 from app.service.platform.fs.op import extract_git_archive
@@ -30,8 +30,8 @@ from app.service.problem.runtime_config import (
 )
 from app.service.problem.source_tree import ProblemSourceTree, load_problem_source_tree
 from app.service.problem_package.manifest import (
-    NativeManifest,
-    NativeTestEntry,
+    VerifiedRevisionManifest,
+    VerifiedTestEntry,
     describe_file,
     dumps_manifest,
     load_manifest,
@@ -42,6 +42,31 @@ from app.service.problem_package.store import MaterializationRow, ProblemPackage
 
 
 VerificationBuilder = Callable[[Path, str, int, str], str]
+VerifiedRevision = MaterializationRow
+
+
+@dataclass
+class VerifiedRevisionDownload:
+    verified_revision: VerifiedRevision
+    stream: BinaryIO
+    operation: AbstractContextManager[VerifiedRevision]
+    closed: bool = False
+
+    def chunks(self) -> Iterator[bytes]:
+        try:
+            while chunk := self.stream.read(1024 * 1024):
+                yield chunk
+        finally:
+            self.close()
+
+    def close(self) -> None:
+        if self.closed:
+            return
+        self.closed = True
+        try:
+            self.stream.close()
+        finally:
+            self.operation.__exit__(None, None, None)
 
 
 @dataclass(frozen=True)
@@ -53,41 +78,41 @@ class PublishedRevision:
 
 
 @dataclass(frozen=True)
-class NativePackageReader:
-    materialization: MaterializationRow
+class VerifiedRevisionReader:
+    verified_revision: VerifiedRevision
     root: Path
-    manifest: NativeManifest
+    manifest: VerifiedRevisionManifest
 
-    def payload(self, test: NativeTestEntry, key: str) -> Path | None:
+    def payload(self, test: VerifiedTestEntry, key: str) -> Path | None:
         descriptor = test.get(key)
         if descriptor is None:
             return None
         return self.root / Path(*PurePosixPath(str(descriptor["path"])).parts)
 
 
-class FrozenMaterializationMismatch(ValueError):
-    """A frozen consumer no longer points at the recorded Native archive."""
+class FrozenVerifiedRevisionMismatch(ValueError):
+    """A frozen consumer no longer points at the recorded verified revision."""
 
 
-class MaterializationOperationBusy(RuntimeError):
+class VerifiedRevisionOperationBusy(RuntimeError):
     """The revision is already being validated, read, or rebuilt."""
 
 
-PublishedPackageStatus = Literal["ready", "stale", "none"]
+VerifiedRevisionStatus = Literal["ready", "stale", "none"]
 
 
-class PublishedPackageReadiness(TypedDict):
+class VerifiedRevisionReadiness(TypedDict):
     problem_id: int
     published_commit: str
     published_revision_number: int | None
-    materialized_revision_number: int | None
-    materialization_id: str
-    status: PublishedPackageStatus
+    verified_revision_number: int | None
+    verified_revision_id: str
+    status: VerifiedRevisionStatus
     missing_reason: str
 
 
 class ProblemPackageService:
-    """Materialize published revisions into verified, replaceable Native caches."""
+    """Prepare and validate reusable verified published revisions."""
 
     def __init__(
         self,
@@ -102,12 +127,12 @@ class ProblemPackageService:
         self._artifact_file_resolver = artifact_file_resolver
         self._verification_id_allocator = verification_id_allocator
         self._locks_guard = threading.Lock()
-        self._build_locks: dict[tuple[int, str], threading.RLock] = {}
+        self._build_locks: dict[tuple[int, str], threading.Lock] = {}
 
-    def _build_lock(self, problem_id: int, source_commit: str) -> threading.RLock:
+    def _build_lock(self, problem_id: int, source_commit: str) -> threading.Lock:
         key = (int(problem_id), source_commit)
         with self._locks_guard:
-            return self._build_locks.setdefault(key, threading.RLock())
+            return self._build_locks.setdefault(key, threading.Lock())
 
     @contextmanager
     def _revision_operation(
@@ -117,8 +142,8 @@ class ProblemPackageService:
     ) -> Iterator[None]:
         lock = self._build_lock(int(problem_id), source_commit)
         if not lock.acquire(blocking=False):
-            raise MaterializationOperationBusy(
-                "Native materialization operation already running"
+            raise VerifiedRevisionOperationBusy(
+                "verified revision operation already running"
             )
         try:
             yield
@@ -126,17 +151,17 @@ class ProblemPackageService:
             lock.release()
 
     @contextmanager
-    def materialization_operation(
+    def verified_revision_operation(
         self,
-        materialization_id: str,
-    ) -> Iterator[MaterializationRow]:
-        row = self.store.materialization(materialization_id)
+        verified_revision_id: str,
+    ) -> Iterator[VerifiedRevision]:
+        row = self.store.materialization(verified_revision_id)
         if row is None:
-            raise ValueError("Native materialization not found")
+            raise ValueError("verified revision not found")
         with self._revision_operation(row["problem_id"], row["source_commit"]):
-            current = self.store.materialization(materialization_id)
+            current = self.store.materialization(verified_revision_id)
             if current is None:
-                raise ValueError("Native materialization not found")
+                raise ValueError("verified revision not found")
             yield current
 
     def _bare_repo(self, problem: PublishedProblem) -> Path:
@@ -152,19 +177,19 @@ class ProblemPackageService:
             raise ValueError("problem not found")
         return self._published_revision_for_problem(problem)
 
-    def problem_materializations(
+    def verified_revision_history(
         self,
         problem_id: int,
         *,
         limit: int = 40,
-    ) -> list[MaterializationRow]:
-        return self.store.problem_materializations(
+    ) -> list[VerifiedRevision]:
+        return self.store.verified_revision_history(
             int(problem_id),
             limit=max(1, int(limit)),
         )
 
-    def materialization(self, materialization_id: str) -> MaterializationRow | None:
-        return self.store.materialization(materialization_id)
+    def verified_revision(self, verified_revision_id: str) -> VerifiedRevision | None:
+        return self.store.materialization(verified_revision_id)
 
     def _published_revision_for_problem(
         self,
@@ -226,33 +251,6 @@ class ProblemPackageService:
             return None
         return int(count.stdout.strip())
 
-    def published_revision_at(
-        self,
-        problem_id: int,
-        source_commit: str,
-        revision_number: int,
-    ) -> PublishedRevision:
-        problem = self.store.problem(int(problem_id))
-        if problem is None:
-            raise ValueError("problem not found")
-        bare_repo = self._bare_repo(problem)
-        resolved = run_git(
-            ["git", "-C", str(bare_repo), "rev-parse", "--verify", f"{source_commit}^{{commit}}"],
-            timeout=120,
-        )
-        commit = resolved.stdout.strip()
-        if resolved.returncode != 0 or commit != source_commit:
-            raise ValueError("frozen published revision is unavailable")
-        derived_revision = self.revision_number(int(problem_id), source_commit)
-        if derived_revision != int(revision_number):
-            raise ValueError("frozen Git revision number changed")
-        return PublishedRevision(
-            problem=problem,
-            source_commit=source_commit,
-            revision_number=int(revision_number),
-            bare_repo=bare_repo,
-        )
-
     def published_config(self, revision: PublishedRevision) -> ProblemConfig:
         result = run_git(
             ["git", "-C", str(revision.bare_repo), "show", f"{revision.source_commit}:config/problem.json"],
@@ -272,14 +270,14 @@ class ProblemPackageService:
         materialization: MaterializationRow | None,
         previous_materialization: MaterializationRow | None,
         error: str = "",
-    ) -> PublishedPackageReadiness:
+    ) -> VerifiedRevisionReadiness:
         if published is None:
             return {
                 "problem_id": problem_id,
                 "published_commit": "",
                 "published_revision_number": None,
-                "materialized_revision_number": None,
-                "materialization_id": "",
+                "verified_revision_number": None,
+                "verified_revision_id": "",
                 "status": "none",
                 "missing_reason": error or "no published Git revision",
             }
@@ -288,8 +286,8 @@ class ProblemPackageService:
                 "problem_id": problem_id,
                 "published_commit": published.source_commit,
                 "published_revision_number": published.revision_number,
-                "materialized_revision_number": materialization["revision_number"],
-                "materialization_id": materialization["id"],
+                "verified_revision_number": materialization["revision_number"],
+                "verified_revision_id": materialization["id"],
                 "status": "ready",
                 "missing_reason": "",
             }
@@ -298,35 +296,35 @@ class ProblemPackageService:
                 "problem_id": problem_id,
                 "published_commit": published.source_commit,
                 "published_revision_number": published.revision_number,
-                "materialized_revision_number": previous_materialization["revision_number"],
-                "materialization_id": previous_materialization["id"],
+                "verified_revision_number": previous_materialization["revision_number"],
+                "verified_revision_id": previous_materialization["id"],
                 "status": "stale",
-                "missing_reason": "A newer revision has not been packaged",
+                "missing_reason": "A newer revision has not been verified",
             }
         return {
             "problem_id": problem_id,
             "published_commit": published.source_commit,
             "published_revision_number": published.revision_number,
-            "materialized_revision_number": None,
-            "materialization_id": "",
+            "verified_revision_number": None,
+            "verified_revision_id": "",
             "status": "none",
             "missing_reason": (
-                "Package unavailable; rebuild required"
+                "Verified revision unavailable; rebuild required"
                 if materialization is not None
-                else "Package not built"
+                else "No verified revision"
             ),
         }
 
     def published_readiness(
         self,
         problem_id: int,
-    ) -> PublishedPackageReadiness:
+    ) -> VerifiedRevisionReadiness:
         return self.published_readiness_many([int(problem_id)])[int(problem_id)]
 
     def published_readiness_many(
         self,
         problem_ids: list[int],
-    ) -> dict[int, PublishedPackageReadiness]:
+    ) -> dict[int, VerifiedRevisionReadiness]:
         ids = list(dict.fromkeys(int(problem_id) for problem_id in problem_ids))
         revisions, errors = self.published_revisions_many(ids)
         materializations = self.store.materializations_for_revisions(
@@ -362,10 +360,10 @@ class ProblemPackageService:
         root = self.storage_layout.artifacts_root.resolve()
         candidate = self.storage_layout.resolve_artifact(row["archive_rel_path"])
         if candidate.is_symlink():
-            raise ValueError("materialization archive must not be a symbolic link")
+            raise ValueError("verified revision archive must not be a symbolic link")
         path = candidate.resolve()
         if root not in path.parents:
-            raise ValueError("materialization archive path escapes artifacts root")
+            raise ValueError("verified revision archive path escapes artifacts root")
         return path
 
     def _remove_artifact_file(self, rel_path: str) -> str:
@@ -392,36 +390,10 @@ class ProblemPackageService:
         if archive_error:
             cleanup_errors.append(archive_error)
         for export in exports:
-            if export["export_type"] == "native":
-                continue
             export_error = self._remove_artifact_file(export["archive_rel_path"])
             if export_error:
                 cleanup_errors.append(export_error)
         return "; ".join(cleanup_errors)
-
-    def available_materialization(
-        self, problem_id: int, source_commit: str
-    ) -> MaterializationRow | None:
-        initial = self.store.materialization_for_revision(
-            int(problem_id), source_commit
-        )
-        if initial is None or initial["status"] != "available":
-            return None
-        row = initial
-        try:
-            with self._revision_operation(int(problem_id), source_commit):
-                row = self.store.materialization_for_revision(
-                    int(problem_id), source_commit
-                )
-                if row is None or row["status"] != "available":
-                    return None
-                self._validate_materialization(row)
-        except MaterializationOperationBusy:
-            return None
-        except Exception as exc:
-            self._invalidate_materialization(row, str(exc))
-            return None
-        return row
 
     @staticmethod
     def _copy_source_tree(source: Path, target: Path) -> None:
@@ -458,7 +430,7 @@ class ProblemPackageService:
     @staticmethod
     def _write_payload(source: Path, target: Path) -> None:
         if source.is_symlink() or not source.is_file():
-            raise ValueError(f"materialization payload is unavailable: {source}")
+            raise ValueError(f"verified revision payload is unavailable: {source}")
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, target)
 
@@ -474,11 +446,11 @@ class ProblemPackageService:
         verification_id: str,
         mode: str,
         source_tree: ProblemSourceTree,
-    ) -> list[NativeTestEntry]:
+    ) -> list[VerifiedTestEntry]:
         tests = source_tree.tests
         if not tests:
-            raise ValueError("Native materialization requires tests/spec.json entries")
-        manifest_tests: list[NativeTestEntry] = []
+            raise ValueError("verified revision requires tests/spec.json entries")
+        manifest_tests: list[VerifiedTestEntry] = []
         for row in tests:
             test_id = str(row["id"])
             if Path(test_id).name != test_id or test_id in {"", ".", ".."}:
@@ -489,7 +461,7 @@ class ProblemPackageService:
             if payload is None:
                 raise ValueError(f"verification input is missing: {test_id}")
             self._write_payload(payload.path, input_path)
-            item: NativeTestEntry = {
+            item: VerifiedTestEntry = {
                 "id": test_id,
                 "kind": str(row["kind"]),
                 "sample": bool(row["sample"]),
@@ -529,10 +501,12 @@ class ProblemPackageService:
                 for filename in sorted(filenames):
                     source = parent / filename
                     if source.is_symlink() or not source.is_file():
-                        raise ValueError(f"Native archive source is not regular: {source}")
+                        raise ValueError(
+                            f"verified revision archive source is not regular: {source}"
+                        )
                     archive.write(source, source.relative_to(source_root).as_posix())
 
-    def _build_native(
+    def _build_verified_revision(
         self,
         *,
         revision: PublishedRevision,
@@ -547,15 +521,15 @@ class ProblemPackageService:
         statement_sample_max_bytes = int(
             config_snapshot["STATEMENT_SAMPLE_MAX_BYTES"]
         )
-        self.store.mark_build_phase(build_id, "native")
+        self.store.mark_build_phase(build_id, "packaging")
         existing = self.store.materialization_for_revision(
             int(revision.problem["id"]), revision.source_commit
         )
         materialization_id = existing["id"] if existing is not None else f"pm-{uuid.uuid4().hex}"
         staging = self.storage_layout.materialization_staging(materialization_id)
         package_root = staging / "package"
-        archive_partial = staging / "native.zip.partial"
-        previous_archive = staging / "previous-native.zip"
+        archive_partial = staging / "verified-revision.zip.partial"
+        previous_archive = staging / "previous-verified-revision.zip"
         final_archive = self.storage_layout.materialization_revision_archive(
             int(revision.problem["id"]),
             revision.source_commit,
@@ -574,7 +548,7 @@ class ProblemPackageService:
                 mode=mode,
                 source_tree=source_tree,
             )
-            manifest: NativeManifest = {
+            manifest: VerifiedRevisionManifest = {
                 "source_commit": revision.source_commit,
                 "revision_number": revision.revision_number,
                 "source_digest": digest,
@@ -639,13 +613,8 @@ class ProblemPackageService:
                 if had_previous_archive:
                     os.replace(previous_archive, final_archive)
                 raise
-            if had_previous_archive and (
-                previous_archive.is_symlink() or previous_archive.is_file()
-            ):
-                previous_archive.unlink()
             for export in invalidated:
-                if export["export_type"] != "native":
-                    self._remove_artifact_file(export["archive_rel_path"])
+                self._remove_artifact_file(export["archive_rel_path"])
             return row
         finally:
             shutil.rmtree(staging, ignore_errors=True)
@@ -688,8 +657,8 @@ class ProblemPackageService:
                 snapshot, revision.source_commit, revision.revision_number, verification_id
             )
             if completed_verification_id != verification_id:
-                raise RuntimeError("materialization verification identity changed")
-            return self._build_native(
+                raise RuntimeError("verified revision verification identity changed")
+            return self._build_verified_revision(
                 revision=revision,
                 snapshot=snapshot,
                 verification_id=verification_id,
@@ -703,7 +672,7 @@ class ProblemPackageService:
         finally:
             shutil.rmtree(snapshot_parent, ignore_errors=True)
 
-    def ensure_materialization(
+    def ensure_verified_revision(
         self,
         revision: PublishedRevision,
         verification_builder: VerificationBuilder,
@@ -715,26 +684,20 @@ class ProblemPackageService:
                 revision.source_commit,
             )
             if existing is not None:
-                if existing["status"] != "available":
-                    raise ValueError(
-                        "Native materialization is unavailable; explicit rebuild required"
-                    )
-                try:
-                    self._validate_materialization(existing)
-                except Exception as exc:
-                    cleanup_error = self._invalidate_materialization(existing, str(exc))
-                    detail = f"; cleanup failed: {cleanup_error}" if cleanup_error else ""
-                    raise ValueError(
-                        f"Native materialization integrity check failed: {exc}{detail}"
-                    ) from exc
-                return existing
+                if existing["status"] == "available":
+                    try:
+                        self._validate_materialization(existing)
+                    except Exception as exc:
+                        self._invalidate_materialization(existing, str(exc))
+                    else:
+                        return existing
             return self._run_materialization_build(
                 revision,
                 verification_builder,
-                invalidate_exports=False,
+                invalidate_exports=existing is not None,
             )
 
-    def rebuild_materialization(
+    def rebuild_verified_revision(
         self,
         revision: PublishedRevision,
         verification_builder: VerificationBuilder,
@@ -757,13 +720,13 @@ class ProblemPackageService:
             for info in archive.infolist():
                 rel = PurePosixPath(info.filename)
                 if rel.is_absolute() or any(part in {"", ".", ".."} for part in rel.parts):
-                    raise ValueError("Native archive contains an unsafe path")
+                    raise ValueError("Polygon Replica package contains an unsafe path")
                 mode = info.external_attr >> 16
                 if mode and stat.S_ISLNK(mode):
-                    raise ValueError("Native archive contains a symbolic link")
+                    raise ValueError("Polygon Replica package contains a symbolic link")
                 file_type = stat.S_IFMT(mode)
                 if file_type and not (stat.S_ISDIR(mode) if info.is_dir() else stat.S_ISREG(mode)):
-                    raise ValueError("Native archive contains a special file")
+                    raise ValueError("Polygon Replica package contains a special file")
                 target = destination / Path(*rel.parts)
                 if info.is_dir():
                     target.mkdir(parents=True, exist_ok=True)
@@ -783,21 +746,21 @@ class ProblemPackageService:
         *,
         expected_archive_sha256: str | None = None,
         check_current: bool = True,
-    ) -> Iterator[NativePackageReader]:
+    ) -> Iterator[VerifiedRevisionReader]:
         if (
             expected_archive_sha256 is not None
             and row["archive_sha256"] != expected_archive_sha256
         ):
-            raise FrozenMaterializationMismatch(
-                "frozen Native archive checksum no longer matches"
+            raise FrozenVerifiedRevisionMismatch(
+                "frozen verified revision checksum no longer matches"
             )
         archive_path = self._archive_path(row)
         if archive_path.is_symlink() or not archive_path.is_file():
-            raise ValueError("Native archive is missing")
+            raise ValueError("verified revision archive is missing")
         if int(archive_path.stat().st_size) != row["archive_size_bytes"]:
-            raise ValueError("Native archive size changed")
+            raise ValueError("verified revision archive size changed")
         if sha256_file(archive_path) != row["archive_sha256"]:
-            raise ValueError("Native archive checksum changed")
+            raise ValueError("verified revision archive checksum changed")
         extraction = self.storage_layout.staging_directory(
             f"read-{uuid.uuid4().hex}"
         )
@@ -807,14 +770,14 @@ class ProblemPackageService:
             manifest_path = extraction / "test_data" / "manifest.json"
             manifest = load_manifest(manifest_path)
             if manifest["source_commit"] != row["source_commit"]:
-                raise ValueError("Native manifest commit does not match materialization")
+                raise ValueError("verified revision manifest commit does not match metadata")
             if manifest["revision_number"] != row["revision_number"]:
-                raise ValueError("Native manifest revision does not match materialization")
+                raise ValueError("verified revision manifest number does not match metadata")
             if manifest["source_digest"] != row["source_digest"]:
-                raise ValueError("Native manifest source digest does not match materialization")
+                raise ValueError("verified revision source digest does not match metadata")
             if manifest["verification"]["id"] != row["verification_id"]:
                 raise ValueError(
-                    "Native manifest verification does not match materialization"
+                    "verified revision verification does not match metadata"
                 )
             config_snapshot = self.db.config_values.snapshot()
             validate_manifest_files(
@@ -835,33 +798,44 @@ class ProblemPackageService:
             )
             if source_tree.problem["mode"] != manifest["mode"]:
                 raise ValueError(
-                    "Native manifest mode does not match config/problem.json"
+                    "verified revision mode does not match config/problem.json"
                 )
             if source_tree.problem["pass_limit"] != manifest["pass_limit"]:
                 raise ValueError(
-                    "Native manifest pass limit does not match config/problem.json"
+                    "verified revision pass limit does not match config/problem.json"
                 )
-            yield NativePackageReader(
-                materialization=row,
+            yield VerifiedRevisionReader(
+                verified_revision=row,
                 root=extraction,
                 manifest=manifest,
             )
             if check_current:
+                if archive_path.is_symlink() or not archive_path.is_file():
+                    raise FrozenVerifiedRevisionMismatch(
+                        "verified revision archive changed while it was being read"
+                    )
+                if (
+                    int(archive_path.stat().st_size) != row["archive_size_bytes"]
+                    or sha256_file(archive_path) != row["archive_sha256"]
+                ):
+                    raise FrozenVerifiedRevisionMismatch(
+                        "verified revision archive changed while it was being read"
+                    )
                 current = self.store.materialization(row["id"])
                 if (
                     current is None
                     or current["status"] != "available"
                     or current["archive_sha256"] != row["archive_sha256"]
                 ):
-                    raise FrozenMaterializationMismatch(
-                        "Native materialization changed while it was being read"
+                    raise FrozenVerifiedRevisionMismatch(
+                        "verified revision changed while it was being read"
                     )
                 if (
                     expected_archive_sha256 is not None
                     and current["archive_sha256"] != expected_archive_sha256
                 ):
-                    raise FrozenMaterializationMismatch(
-                        "frozen Native archive checksum no longer matches"
+                    raise FrozenVerifiedRevisionMismatch(
+                        "frozen verified revision checksum no longer matches"
                     )
         finally:
             shutil.rmtree(extraction, ignore_errors=True)
@@ -883,25 +857,27 @@ class ProblemPackageService:
     @contextmanager
     def open_reader(
         self,
-        materialization_id: str,
+        verified_revision_id: str,
         *,
         expected_archive_sha256: str | None = None,
-    ) -> Iterator[NativePackageReader]:
-        with self.materialization_operation(materialization_id) as row:
+    ) -> Iterator[VerifiedRevisionReader]:
+        with self.verified_revision_operation(verified_revision_id) as row:
             if row["status"] != "available":
-                raise ValueError("Native materialization is unavailable; explicit rebuild required")
+                raise ValueError("verified revision is unavailable")
             validation = self._validated_reader(
                 row,
                 expected_archive_sha256=expected_archive_sha256,
             )
             try:
                 reader = validation.__enter__()
-            except FrozenMaterializationMismatch:
+            except FrozenVerifiedRevisionMismatch:
                 raise
             except Exception as exc:
                 cleanup_error = self._invalidate_materialization(row, str(exc))
                 detail = f"; cleanup failed: {cleanup_error}" if cleanup_error else ""
-                raise ValueError(f"Native materialization integrity check failed: {exc}{detail}") from exc
+                raise ValueError(
+                    f"verified revision integrity check failed: {exc}{detail}"
+                ) from exc
             try:
                 yield reader
             except BaseException as exc:
@@ -910,29 +886,60 @@ class ProblemPackageService:
             else:
                 validation.__exit__(None, None, None)
 
-    def native_archive(
+    def verified_revision_archive(
         self,
-        materialization_id: str,
+        verified_revision_id: str,
         *,
         expected_archive_sha256: str | None = None,
-    ) -> tuple[MaterializationRow, Path]:
-        with self.materialization_operation(materialization_id) as row:
+    ) -> tuple[VerifiedRevision, Path]:
+        with self.verified_revision_operation(verified_revision_id) as row:
             if row["status"] != "available":
-                raise ValueError("Native materialization is unavailable; explicit rebuild required")
+                raise ValueError("verified revision is unavailable")
             try:
                 self._validate_materialization(
                     row,
                     expected_archive_sha256=expected_archive_sha256,
                 )
-            except FrozenMaterializationMismatch:
+            except FrozenVerifiedRevisionMismatch:
                 raise
             except Exception as exc:
                 cleanup_error = self._invalidate_materialization(row, str(exc))
                 detail = f"; cleanup failed: {cleanup_error}" if cleanup_error else ""
-                raise ValueError(f"Native materialization integrity check failed: {exc}{detail}") from exc
+                raise ValueError(
+                    f"verified revision integrity check failed: {exc}{detail}"
+                ) from exc
             return row, self._archive_path(row)
 
-    def fail_interrupted_builds(self) -> int:
+    def open_verified_revision_download(
+        self,
+        verified_revision_id: str,
+    ) -> VerifiedRevisionDownload:
+        operation = self.verified_revision_operation(verified_revision_id)
+        row = operation.__enter__()
+        try:
+            if row["status"] != "available":
+                raise ValueError("verified revision is unavailable")
+            try:
+                self._validate_materialization(row)
+            except FrozenVerifiedRevisionMismatch:
+                raise
+            except Exception as exc:
+                cleanup_error = self._invalidate_materialization(row, str(exc))
+                detail = f"; cleanup failed: {cleanup_error}" if cleanup_error else ""
+                raise ValueError(
+                    f"verified revision integrity check failed: {exc}{detail}"
+                ) from exc
+            stream = self._archive_path(row).open("rb")
+        except BaseException as exc:
+            operation.__exit__(type(exc), exc, exc.__traceback__)
+            raise
+        return VerifiedRevisionDownload(
+            verified_revision=row,
+            stream=stream,
+            operation=operation,
+        )
+
+    def recover_startup(self) -> int:
         staging = self.storage_layout.artifact_staging_root
         if staging.exists() and staging.is_dir() and not staging.is_symlink():
             for child in staging.iterdir():
@@ -942,6 +949,4 @@ class ProblemPackageService:
                     shutil.rmtree(child, ignore_errors=True)
                 elif child.is_file():
                     child.unlink(missing_ok=True)
-        for row in self.store.all_available_materializations():
-            self.available_materialization(row["problem_id"], row["source_commit"])
         return self.store.fail_interrupted_builds()

@@ -194,8 +194,8 @@ def start_verification_job(
 _DYNAMIC_EXPORT_KEEP = (start_verification_job,)
 _ = len(_DYNAMIC_EXPORT_KEEP)
 
-def _export_key(problem_id: int, source_commit: str, export_type: str) -> str:
-    return f"{int(problem_id)}:{source_commit}:{export_type}"
+def _export_key(problem_id: int, source_commit: str) -> str:
+    return f"{int(problem_id)}:{source_commit}"
 
 
 def _run_export_create_worker(
@@ -205,36 +205,40 @@ def _run_export_create_worker(
     *,
     actor_user_id: int,
     problem_id: int,
-    requested_export_type: str,
+    requested_format: str,
     revision: PublishedRevision,
     export_job_id: str = "",
 ) -> None:
     if not export_job_id:
         raise ValueError("export_job_id is required")
-    safe_export_type = requested_export_type or 'icpc'
+    package_format = requested_format
     effective_source_commit = revision.source_commit
     try:
         application_runtime.export_service.mark_export_job_running(
             export_job_id,
             source_commit=effective_source_commit,
         )
-        if safe_export_type not in {'icpc', 'native'}:
-            raise ValueError('unsupported package type')
+        if package_format not in {'domjudge', 'icpc-2025-09'}:
+            raise ValueError('unsupported package format')
         if not effective_source_commit:
             raise ValueError('no committed revision; commit changes first')
-        materialization = application_runtime.published_materialization_workflow.ensure(
+        verified_revision = application_runtime.verified_revision_workflow.ensure(
             revision=revision,
             actor_user_id=actor_user_id,
             actor_username=user,
         )
+        application_runtime.export_service.mark_export_job_projecting(
+            export_job_id,
+            verified_revision_id=verified_revision["id"],
+        )
         export_id, _out = application_runtime.export_service.create_export(
             problem,
-            safe_export_type,
-            materialization_id=materialization["id"],
+            package_format,
+            verified_revision_id=verified_revision["id"],
         )
         application_runtime.export_service.mark_export_job_succeeded(
             export_job_id,
-            materialization_id=materialization["id"],
+            verified_revision_id=verified_revision["id"],
             export_id=export_id,
         )
     except Exception as exc:
@@ -249,15 +253,17 @@ def start_export_job(
     *,
     actor_user_id: int,
     problem_id: int,
-    requested_export_type: str,
+    requested_format: str,
     export_job_id: str,
 ) -> bool:
     if not export_job_id:
         raise ValueError("export_job_id is required")
     revision = application_runtime.problem_package_service.published_revision(problem_id)
     source_commit = revision.source_commit
-    key = f"{_export_key(problem_id, source_commit, requested_export_type)}:{export_job_id}"
+    key = _export_key(problem_id, source_commit)
     with application_runtime.export_lock:
+        if key in application_runtime.export_inflight:
+            return False
         application_runtime.export_inflight.add(key)
     job_created = False
     try:
@@ -265,7 +271,7 @@ def start_export_job(
             job_id=export_job_id,
             problem_id=problem_id,
             actor_user_id=actor_user_id,
-            export_type=requested_export_type,
+            package_format=requested_format,
             source_commit=source_commit,
         )
         job_created = True
@@ -285,7 +291,7 @@ def start_export_job(
                 user,
                 actor_user_id=actor_user_id,
                 problem_id=problem_id,
-                requested_export_type=requested_export_type,
+                requested_format=requested_format,
                 revision=revision,
                 export_job_id=export_job_id,
             )
@@ -295,7 +301,7 @@ def start_export_job(
                 application_runtime.export_inflight.discard(key)
                 if worker is not None:
                     application_runtime.export_workers.discard(worker)
-    thread_name = key.replace(':', '-')
+    thread_name = f"{key}:{export_job_id}".replace(':', '-')
     try:
         worker, queued, submit_reason = application_runtime.worker_queue_service.submit(
             name=f'export-{thread_name}',

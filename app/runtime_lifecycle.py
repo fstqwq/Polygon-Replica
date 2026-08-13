@@ -63,7 +63,7 @@ def startup(runtime: ApplicationRuntime) -> None:
     if runtime.schema_error is not None:
         return
     runtime.runtime_state_service.initialize_metadata()
-    runtime.problem_package_service.fail_interrupted_builds()
+    runtime.problem_package_service.recover_startup()
     runtime.export_service.fail_interrupted_export_jobs()
     _startup_reset_runtime_state(runtime)
     runtime.worker_queue_service.start()

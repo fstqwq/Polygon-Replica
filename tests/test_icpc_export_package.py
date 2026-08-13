@@ -1,28 +1,32 @@
 # ascii-lint: allow; reason=chinese-test
 
-import hashlib
+import json
 import shutil
 import stat
 import subprocess
 import tempfile
 import unittest
 import uuid
-import zipfile
 from pathlib import Path
+from unittest import mock
 
 import yaml
 
+from app.config import ConfigValues
 from app.service.export.icpc_package import (
     SUBMISSION_RULES,
     annotated_submission,
     problem_uuid,
+    render_domjudge_problem_yaml,
     render_problem_yaml,
     render_submissions_yaml,
     write_input_validator,
     write_output_validator,
 )
-from app.service.contest.metadata import materialize_contest_problem_package
-from app.service.importing.archive import ArchivePolicy, ArchiveView
+from app.service.export.projection import PackageProjectionService
+from app.service.problem_package.manifest import VerifiedRevisionManifest, describe_file
+from app.service.problem_package.service import VerifiedRevisionReader
+from app.service.problem_package.store import MaterializationRow
 
 
 class TestICPCExportPackage(unittest.TestCase):
@@ -66,150 +70,18 @@ class TestICPCExportPackage(unittest.TestCase):
         self.assertEqual(metadata["version"], "a" * 40)
         self.assertEqual(metadata["limits"], {"time_limit": 2.25, "memory": 1})
 
-    def test_contest_short_names_are_variants_of_one_canonical_archive(self) -> None:
-        canonical = self.root / "canonical.zip"
-        with zipfile.ZipFile(
-            canonical,
-            "w",
-            compression=zipfile.ZIP_DEFLATED,
-        ) as archive:
-            archive.writestr("problem.yaml", "name: {en: Sample}\n")
-            archive.writestr(
-                "domjudge-problem.ini",
-                "name = Sample\n"
-                "externalid = sample\n"
-                "short-name = sample\n"
-                "timelimit = 2\n",
-            )
-            archive.writestr("data/secret/001.in", b"1\n")
-        canonical_digest = hashlib.sha256(canonical.read_bytes()).hexdigest()
-
-        variants: dict[str, Path] = {}
-        for label in ("A", "E"):
-            target = self.root / f"{label}-sample.zip"
-            materialize_contest_problem_package(
-                canonical,
-                target,
-                short_name=label,
-                staging_parent=self.root / "staging",
-            )
-            variants[label] = target
-
-        self.assertEqual(
-            hashlib.sha256(canonical.read_bytes()).hexdigest(),
-            canonical_digest,
-        )
-        for label, target in variants.items():
-            with zipfile.ZipFile(target, "r") as archive:
-                self.assertIn(
-                    f"short-name = {label}\n",
-                    archive.read("domjudge-problem.ini").decode("utf-8"),
-                )
-                self.assertEqual(
-                    archive.read("problem.yaml"),
-                    b"name: {en: Sample}\n",
-                )
-                self.assertEqual(archive.read("data/secret/001.in"), b"1\n")
-
-    def test_contest_short_name_rewrite_rejects_ambiguous_metadata(self) -> None:
-        cases = {
-            "missing": {"problem.yaml": "name: Sample\n"},
-            "duplicate-entry": {
-                "domjudge-problem.ini": (
-                    "short-name = sample\nshort-name = duplicate\n"
-                )
-            },
-            "multiline-entry": {
-                "domjudge-problem.ini": "short-name = sample\n continuation\n"
-            },
-        }
-        for name, members in cases.items():
-            with self.subTest(name=name):
-                canonical = self.root / f"{name}.zip"
-                with zipfile.ZipFile(canonical, "w") as archive:
-                    for member, payload in members.items():
-                        archive.writestr(member, payload)
-                with self.assertRaises(ValueError):
-                    materialize_contest_problem_package(
-                        canonical,
-                        self.root / f"{name}-out.zip",
-                        short_name="A",
-                        staging_parent=self.root / "staging",
-                    )
-
-        canonical = self.root / "valid.zip"
-        with zipfile.ZipFile(canonical, "w") as archive:
-            archive.writestr("domjudge-problem.ini", "short-name = sample\n")
-        with self.assertRaisesRegex(
-            ValueError,
-            "invalid contest problem short-name",
-        ):
-            materialize_contest_problem_package(
-                canonical,
-                self.root / "unsafe-out.zip",
-                short_name="A\nB",
-                staging_parent=self.root / "staging",
-            )
-
-    def test_contest_transform_ignores_upload_budgets_but_rejects_symlinks(
-        self,
-    ) -> None:
-        canonical = self.root / "canonical-over-upload-budget.zip"
-        with zipfile.ZipFile(canonical, "w") as archive:
-            archive.writestr("domjudge-problem.ini", "short-name = sample\n")
-            archive.writestr("problem.yaml", "name: {en: Sample}\n")
-            archive.writestr("data/secret/001.in", b"payload larger than one byte\n")
-
-        with self.assertRaisesRegex(ValueError, "more than 1 entries"):
-            ArchiveView(
-                canonical,
-                ArchivePolicy(max_entries=1, max_expanded_bytes=1024 * 1024),
-            )
-        with ArchiveView(
-            canonical,
-            ArchivePolicy(max_entries=10, max_expanded_bytes=1),
-        ) as upload_view:
-            with self.assertRaisesRegex(ValueError, "expanded zip payload"):
-                upload_view.zip_file.open(
-                    upload_view.entries["data/secret/001.in"]
-                )
-
-        transformed = self.root / "trusted-internal.zip"
-        materialize_contest_problem_package(
-            canonical,
-            transformed,
-            short_name="A",
-            staging_parent=self.root / "staging",
-        )
-        with zipfile.ZipFile(transformed, "r") as archive:
-            self.assertEqual(
-                archive.read("data/secret/001.in"),
-                b"payload larger than one byte\n",
-            )
-
-        unsafe = self.root / "canonical-symlink.zip"
-        link = zipfile.ZipInfo("data/secret/link")
-        link.create_system = 3
-        link.external_attr = (stat.S_IFLNK | 0o777) << 16
-        with zipfile.ZipFile(unsafe, "w") as archive:
-            archive.writestr("domjudge-problem.ini", "short-name = sample\n")
-            archive.writestr(link, "001.in")
-        with self.assertRaisesRegex(ValueError, "contains a symlink"):
-            materialize_contest_problem_package(
-                unsafe,
-                self.root / "unsafe-symlink-out.zip",
-                short_name="A",
-                staging_parent=self.root / "staging",
-            )
-
-    def test_problem_yaml_types_and_combined_legacy_fallback(self) -> None:
+    def test_problem_yaml_uses_all_2025_09_execution_types(self) -> None:
         cases = (
-            ("pass-fail", 1, "2025-09", "pass-fail"),
-            ("interactive", 1, "2025-09", "interactive"),
-            ("pass-fail", 3, "2025-09", "multi-pass"),
-            ("interactive", 3, "legacy", "interactive multi-pass"),
+            ("pass-fail", 1, "pass-fail"),
+            ("interactive", 1, ["pass-fail", "interactive"]),
+            ("pass-fail", 3, ["pass-fail", "multi-pass"]),
+            (
+                "interactive",
+                3,
+                ["pass-fail", "interactive", "multi-pass"],
+            ),
         )
-        for mode, pass_limit, expected_version, expected_type in cases:
+        for mode, pass_limit, expected_type in cases:
             with self.subTest(mode=mode, pass_limit=pass_limit):
                 metadata = yaml.safe_load(
                     render_problem_yaml(
@@ -222,12 +94,40 @@ class TestICPCExportPackage(unittest.TestCase):
                         memory_limit_mb=None,
                     )
                 )
-                self.assertEqual(metadata["problem_format_version"], expected_version)
+                self.assertEqual(metadata["problem_format_version"], "2025-09")
                 self.assertEqual(metadata["type"], expected_type)
                 if pass_limit > 1:
                     self.assertEqual(metadata["limits"]["validation_passes"], pass_limit)
                 else:
                     self.assertNotIn("validation_passes", metadata["limits"])
+
+    def test_domjudge_problem_yaml_uses_legacy_validation_fields(self) -> None:
+        cases = (
+            ("pass-fail", 1, "custom", "pass-fail"),
+            ("interactive", 1, "custom interactive", "pass-fail"),
+            ("pass-fail", 3, "custom multi-pass", "pass-fail"),
+            (
+                "interactive",
+                3,
+                "custom interactive",
+                "pass-fail multi-pass",
+            ),
+        )
+        for mode, pass_limit, expected_validation, expected_type in cases:
+            with self.subTest(mode=mode, pass_limit=pass_limit):
+                metadata = yaml.safe_load(
+                    render_domjudge_problem_yaml(
+                        names={"en": "Problem", "zh": "题目"},
+                        mode=mode,
+                        pass_limit=pass_limit,
+                        time_limit_ms=1000,
+                        memory_limit_mb=256,
+                    )
+                )
+                self.assertEqual(metadata["problem_format_version"], "legacy")
+                self.assertEqual(metadata["type"], expected_type)
+                self.assertEqual(metadata["validation"], expected_validation)
+                self.assertEqual(metadata["name"], "Problem")
 
     def test_submissions_yaml_preserves_all_expected_result_sets(self) -> None:
         entries = {
@@ -305,6 +205,32 @@ class TestICPCExportPackage(unittest.TestCase):
         result = subprocess.run([str(validator_dir / "run")], cwd=validator_dir, check=False)
         self.assertEqual(result.returncode, 42)
 
+    def test_c_validator_build_script_defines_domjudge(self) -> None:
+        self.assertIsNotNone(shutil.which("cc"), "Linux test host must provide cc")
+        validator = self.snapshot / "validator.c"
+        validator.write_text(
+            "#ifndef DOMJUDGE\n"
+            "#error DOMJUDGE must be defined by the package build file\n"
+            "#endif\n"
+            "int main(void) { return 0; }\n",
+            encoding="utf-8",
+        )
+        write_output_validator(
+            snapshot=self.snapshot,
+            package_root=self.package,
+            source=validator,
+        )
+        validator_dir = self.package / "output_validator"
+        build = validator_dir / "build"
+        self.assertIn("-DDOMJUDGE", build.read_text(encoding="utf-8"))
+        subprocess.run([str(build)], cwd=validator_dir, check=True)
+        result = subprocess.run(
+            [str(validator_dir / "run")],
+            cwd=validator_dir,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 42)
+
     def test_missing_input_validator_gets_explicit_accept_all_program(self) -> None:
         write_input_validator(snapshot=self.snapshot, package_root=self.package, source=None)
         run = self.package / "input_validators" / "accept_all" / "run"
@@ -312,6 +238,226 @@ class TestICPCExportPackage(unittest.TestCase):
             [str(run)], input=b"arbitrary input\n", capture_output=True, check=False
         )
         self.assertEqual(result.returncode, 42)
+
+    def test_projectors_publish_disjoint_strict_and_domjudge_layouts(self) -> None:
+        reader = self._projection_reader(mode="interactive", pass_limit=2)
+        values = ConfigValues(
+            {
+                "GENERAL_TIME_LIMIT_MIN_MS": 1,
+                "GENERAL_TIME_LIMIT_MAX_MS": 60_000,
+                "GENERAL_MEMORY_LIMIT_MIN_MB": 1,
+                "GENERAL_MEMORY_LIMIT_MAX_MB": 2048,
+                "GENERAL_PASS_LIMIT_MIN": 1,
+                "GENERAL_PASS_LIMIT_MAX": 32,
+                "TEXTAREA_MAX_BYTES": 1024 * 1024,
+                "STATEMENT_SAMPLE_MAX_BYTES": 1024 * 1024,
+            },
+            normalizer=lambda raw: raw,
+        )
+        projector = PackageProjectionService(values, mock.Mock())
+
+        def write_statements(
+            _snapshot: Path,
+            destination: Path,
+            *,
+            problem_name: str,
+            include_sample_tests: bool,
+            keep_all_languages: bool,
+        ) -> dict[str, str]:
+            self.assertEqual(problem_name, "projected-problem")
+            self.assertFalse(include_sample_tests)
+            destination.mkdir(parents=True)
+            filename = "problem.en.pdf" if keep_all_languages else "problem.pdf"
+            (destination / filename).write_bytes(b"%PDF-1.4\n")
+            return {"en": problem_name}
+
+        strict = self.root / "strict"
+        domjudge = self.root / "domjudge"
+        with mock.patch.object(projector, "_write_statements", side_effect=write_statements):
+            projector.project(
+                reader,
+                package_format="icpc-2025-09",
+                target=strict,
+                canonical_problem_slug="owner/projected-problem",
+            )
+            projector.project(
+                reader,
+                package_format="domjudge",
+                target=domjudge,
+                canonical_problem_slug="owner/projected-problem",
+                short_name="A",
+            )
+
+        self.assertTrue((strict / "statement" / "problem.en.pdf").is_file())
+        self.assertTrue((strict / "submissions" / "submissions.yaml").is_file())
+        self.assertFalse((strict / "domjudge-problem.ini").exists())
+        self.assertFalse((strict / "problem_statement").exists())
+        strict_metadata = yaml.safe_load((strict / "problem.yaml").read_text())
+        self.assertEqual(strict_metadata["problem_format_version"], "2025-09")
+        self.assertEqual(
+            strict_metadata["type"],
+            ["pass-fail", "interactive", "multi-pass"],
+        )
+        strict_mixed = strict / "submissions" / "mixed_rejected" / "mixed.cpp"
+        self.assertEqual(strict_mixed.read_text(encoding="utf-8"), "int mixed;\n")
+        self.assertEqual((strict / "data" / "secret" / "001.ans").read_bytes(), b"")
+
+        self.assertTrue((domjudge / "problem_statement" / "problem.pdf").is_file())
+        self.assertTrue((domjudge / "domjudge-problem.ini").is_file())
+        self.assertFalse((domjudge / "statement").exists())
+        self.assertFalse((domjudge / "submissions" / "submissions.yaml").exists())
+        domjudge_metadata = yaml.safe_load((domjudge / "problem.yaml").read_text())
+        self.assertEqual(domjudge_metadata["problem_format_version"], "legacy")
+        self.assertEqual(domjudge_metadata["type"], "pass-fail multi-pass")
+        self.assertEqual(
+            domjudge_metadata["validation"],
+            "custom interactive",
+        )
+        self.assertIn(
+            "short-name = A\n",
+            (domjudge / "domjudge-problem.ini").read_text(encoding="utf-8"),
+        )
+        domjudge_mixed = domjudge / "submissions" / "mixed_rejected" / "mixed.cpp"
+        self.assertTrue(
+            domjudge_mixed.read_bytes().startswith(
+                b"// @EXPECTED_RESULTS@: CORRECT,WRONG-ANSWER,TIMELIMIT,RUN-ERROR\n"
+            )
+        )
+        for package_root in (strict, domjudge):
+            with self.subTest(package_root=package_root.name):
+                validator_dir = package_root / "output_validator"
+                build = validator_dir / "build"
+                run = validator_dir / "run"
+                self.assertIn("-DDOMJUDGE", build.read_text(encoding="utf-8"))
+                self.assertTrue(build.stat().st_mode & stat.S_IXUSR)
+                self.assertTrue(run.stat().st_mode & stat.S_IXUSR)
+                subprocess.run([str(build)], cwd=validator_dir, check=True)
+                result = subprocess.run(
+                    [str(run), "input", "answer", "feedback"],
+                    cwd=validator_dir,
+                    check=False,
+                )
+                self.assertEqual(result.returncode, 42)
+
+    def _projection_reader(
+        self,
+        *,
+        mode: str,
+        pass_limit: int,
+    ) -> VerifiedRevisionReader:
+        package_root = self.root / "verified"
+        (package_root / "config").mkdir(parents=True)
+        (package_root / "tests").mkdir()
+        (package_root / "solutions").mkdir()
+        (package_root / "attachments").mkdir()
+        (package_root / "third_party" / "testlib").mkdir(parents=True)
+        (package_root / "third_party" / "testlib" / "testlib.h").write_text(
+            "// test header\n",
+            encoding="utf-8",
+        )
+        (package_root / "config" / "problem.json").write_text(
+            json.dumps(
+                {
+                    "time_limit_ms": 1500,
+                    "memory_limit_mb": 256,
+                    "mode": mode,
+                    "pass_limit": pass_limit,
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        build_config = {
+            "accepted_solution_source": "solutions/accepted.cpp",
+            "generator_sources": [],
+        }
+        if mode == "interactive":
+            (package_root / "interactors").mkdir()
+            (package_root / "interactors" / "interactor.cpp").write_text(
+                "#ifndef DOMJUDGE\n"
+                "#error DOMJUDGE must be defined by the package build file\n"
+                "#endif\n"
+                "int main() {}\n",
+                encoding="utf-8",
+            )
+            build_config["interactor_source"] = "interactors/interactor.cpp"
+        (package_root / "config" / "build.json").write_text(
+            json.dumps(build_config) + "\n",
+            encoding="utf-8",
+        )
+        (package_root / "tests" / "spec.json").write_text(
+            json.dumps(
+                {
+                    "tests": [
+                        {
+                            "id": "001",
+                            "kind": "manual",
+                            "sample": True,
+                            "sample_input": "1\n",
+                            "sample_output": "",
+                        }
+                    ]
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        (package_root / "solutions" / "accepted.cpp").write_text(
+            "int main() {}\n",
+            encoding="utf-8",
+        )
+        (package_root / "solutions" / "mixed.cpp").write_text(
+            "int mixed;\n",
+            encoding="utf-8",
+        )
+        (package_root / "solutions" / "mixed.cpp.desc").write_text(
+            "expected: rejected\n",
+            encoding="utf-8",
+        )
+        (package_root / "attachments" / "readme.txt").write_text(
+            "attachment\n",
+            encoding="utf-8",
+        )
+        test_root = package_root / "test_data" / "tests" / "001"
+        test_root.mkdir(parents=True)
+        input_path = test_root / "input"
+        input_path.write_bytes(b"1\n")
+        materialization: MaterializationRow = {
+            "id": "pm-projection",
+            "problem_id": 1,
+            "source_commit": "a" * 40,
+            "revision_number": 3,
+            "source_digest": "b" * 64,
+            "archive_rel_path": "materializations/verified.zip",
+            "archive_sha256": "c" * 64,
+            "archive_size_bytes": 1,
+            "verification_id": "ver-projection",
+            "status": "available",
+            "created_at": "2026-01-01T00:00:00Z",
+            "checked_at": "2026-01-01T00:00:00Z",
+            "unavailable_reason": "",
+        }
+        manifest: VerifiedRevisionManifest = {
+            "source_commit": materialization["source_commit"],
+            "revision_number": 3,
+            "source_digest": materialization["source_digest"],
+            "mode": mode,
+            "pass_limit": pass_limit,
+            "verification": {"id": "ver-projection", "source": "full"},
+            "tests": [
+                {
+                    "id": "001",
+                    "kind": "manual",
+                    "sample": True,
+                    "input": describe_file(input_path, root=package_root),
+                }
+            ],
+        }
+        return VerifiedRevisionReader(
+            verified_revision=materialization,
+            root=package_root,
+            manifest=manifest,
+        )
 
 
 if __name__ == "__main__":

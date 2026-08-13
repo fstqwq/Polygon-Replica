@@ -522,12 +522,16 @@ def _build_problem_nav_status(ctx: dict) -> dict[str, dict[str, object]]:
         'danger': package_state == 'none',
         'warn': package_state == 'stale',
     }
-    export_source_commit = runtime().export_service.latest_source_commit(problem_id)
-    if export_source_commit and problem_id > 0:
+    export_source_commit = ''
+    if package_state == 'ready' and problem_id > 0:
+        current_package = runtime().problem_package_service.published_readiness(problem_id)
+        if current_package['status'] == 'ready':
+            export_source_commit = current_package['published_commit']
+    if export_source_commit:
         current_export = runtime().export_service.latest_succeeded_export_job(
             problem_id,
             export_source_commit,
-            'icpc',
+            'domjudge',
         )
         if (
             current_export is not None

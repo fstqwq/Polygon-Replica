@@ -12,8 +12,8 @@ Authored entries are limited to `attachments/`, `checkers/`, `config/`,
 `statement-assets/`, `statement-sections/`, `tests/`, `third_party/`, and
 `validators/`. They are regular files and directories; symbolic links,
 special files, hidden paths, and materialized answer paths are invalid. The
-workspace's `.git` metadata is outside the authored tree. Native
-`test_data/` is validated by the package manifest and is never authored source.
+workspace's `.git` metadata is outside the authored tree. A Polygon Replica
+package's `test_data/` is validated by its manifest and is never authored source.
 
 ## Problem configuration
 
@@ -30,8 +30,8 @@ consumers never supply a missing field, clamp an authored value, or replace a
 missing or malformed file. Authoring pages are different: they show the
 configuration error under Review and Publish and use the defaults only to keep
 the editor operable. Saving the General form writes one complete canonical
-object. Verification, Export, Contest builds, and package materialization still
-reject the invalid source at their entrance.
+object. Verification, Package Export, Contest builds, and verified-revision
+construction still reject the invalid source at their entrance.
 Execution dispatches the accepted values without another memory floor.
 
 `config/build.json` is also a required UTF-8 JSON object. Its fields are the
@@ -89,8 +89,8 @@ source selected by `generator_sources`, and the remaining tokens are its
 arguments. A missing payload, unselected or missing generator, or ambiguous
 generator token invalidates the source tree. Files merely present below
 `generators/` are not executable inputs until selected. An empty `tests` array
-has no implicit discovery behavior; verification and Native materialization
-require at least one explicit test.
+has no implicit discovery behavior; verification and verified-revision
+construction require at least one explicit test.
 
 The runtime generator input payload is the generator executable invocation plus
 these command parameters. Its execution identity and scheduling semantics are
@@ -120,14 +120,16 @@ inference is performed at runtime. Polygon and ICPC importers may infer external
 intent and materialize descriptors for other behaviors before returning the
 imported workspace.
 
-## Native import and preflight
+## Polygon Replica package import and preflight
 
-A Native package contains the committed source tree at its root plus a complete
-`test_data/manifest.json` and its declared materialized test payloads. Import
-validates the manifest shape, source digest, test order, payload paths, sizes,
-checksums, file types, and the complete `test_data/` inventory. It then discards
-the entire `test_data/` tree and imports only authored source. Materialized
-answers never enter the destination workspace or Git history.
+A Polygon Replica package contains the committed source tree at its root plus a
+complete `test_data/manifest.json` and its declared verified test payloads.
+Import validates the manifest shape, source digest, test order, payload paths,
+sizes, checksums, file types, and the complete `test_data/` inventory. It then
+discards the entire `test_data/` tree and imports only authored source.
+Generated answers never enter the destination workspace or Git history, and
+the imported problem does not inherit the source problem's verified-revision
+identity.
 
 Operators can inspect all published `main` revisions without mutating Git:
 

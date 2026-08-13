@@ -15,10 +15,10 @@ from app.service.problem.source_tree import load_problem_source_tree
 from app.service.problem_package.manifest import load_manifest, validate_manifest_files
 
 
-NATIVE_PACKAGE_ANCHOR = "config/problem.json"
+POLYGON_REPLICA_PACKAGE_ANCHOR = "config/problem.json"
 
 
-def _validated_native_entries(
+def _validated_source_entries(
     entry_map: dict[str, zipfile.ZipInfo],
 ) -> list[tuple[Path, zipfile.ZipInfo, str]]:
     validated: list[tuple[Path, zipfile.ZipInfo, str]] = []
@@ -27,11 +27,11 @@ def _validated_native_entries(
         if not target_rel.parts:
             continue
         if is_hidden_workspace_path(target_rel.parts):
-            raise ValueError(f"native package contains forbidden hidden path: {rel}")
+            raise ValueError(f"Polygon Replica package contains forbidden hidden path: {rel}")
         if not is_allowed_workspace_root_path(target_rel.parts):
-            raise ValueError(f"native package contains forbidden root path: {rel}")
+            raise ValueError(f"Polygon Replica package contains forbidden root path: {rel}")
         if is_repository_answer_path(target_rel.parts):
-            raise ValueError(f"native package contains repository answer file: {rel}")
+            raise ValueError(f"Polygon Replica package contains repository answer file: {rel}")
         info = entry_map[rel]
         validated.append((target_rel, info, rel))
     return validated
@@ -53,23 +53,23 @@ def _clear_workspace_tree(workspace: Path) -> None:
 def _validated_source_directory(relative: str) -> Path:
     target_rel = Path(relative)
     if not target_rel.parts:
-        raise ValueError("native package contains an empty directory path")
+        raise ValueError("Polygon Replica package contains an empty directory path")
     if is_hidden_workspace_path(target_rel.parts):
         raise ValueError(
-            f"native package contains forbidden hidden path: {relative}"
+            f"Polygon Replica package contains forbidden hidden path: {relative}"
         )
     if not is_allowed_workspace_root_path(target_rel.parts):
         raise ValueError(
-            f"native package contains forbidden root path: {relative}"
+            f"Polygon Replica package contains forbidden root path: {relative}"
         )
     if is_repository_answer_path(target_rel.parts):
         raise ValueError(
-            f"native package contains repository answer path: {relative}"
+            f"Polygon Replica package contains repository answer path: {relative}"
         )
     return target_rel
 
 
-class NativePackageImportService:
+class PolygonReplicaPackageImportService:
     def import_package(
         self,
         workspace: Path,
@@ -82,7 +82,7 @@ class NativePackageImportService:
         problem_config_limits: ProblemConfigLimits,
     ) -> dict[str, object]:
         del normalize_test_data_newlines
-        rooted = package.rooted_at(NATIVE_PACKAGE_ANCHOR)
+        rooted = package.rooted_at(POLYGON_REPLICA_PACKAGE_ANCHOR)
         rooted_entries = rooted.entries
         complete_entry_map = {
             rel: info
@@ -94,11 +94,11 @@ class NativePackageImportService:
             for rel, info in complete_entry_map.items()
             if not rel.startswith("test_data/")
         }
-        problem_info = entry_map.get(NATIVE_PACKAGE_ANCHOR)
+        problem_info = entry_map.get(POLYGON_REPLICA_PACKAGE_ANCHOR)
         if problem_info is None:
-            raise ValueError(f"{NATIVE_PACKAGE_ANCHOR} is not a file")
-        source_entries = _validated_native_entries(entry_map)
-        staging_root = workspace.parent / f".native-import-{uuid.uuid4().hex}"
+            raise ValueError(f"{POLYGON_REPLICA_PACKAGE_ANCHOR} is not a file")
+        source_entries = _validated_source_entries(entry_map)
+        staging_root = workspace.parent / f".polygon-replica-import-{uuid.uuid4().hex}"
         try:
             staging_root.mkdir(parents=True, exist_ok=False)
             for rel, info in sorted(rooted_entries.items()):
@@ -113,7 +113,7 @@ class NativePackageImportService:
                 file_type = stat.S_IFMT(mode)
                 if file_type not in {0, stat.S_IFDIR}:
                     raise ValueError(
-                        f"native package contains a special file: {rel}"
+                        f"Polygon Replica package contains a special file: {rel}"
                     )
                 (staging_root / target_rel).mkdir(parents=True, exist_ok=True)
             source_by_rel = {
@@ -126,12 +126,12 @@ class NativePackageImportService:
                     target_rel = source_by_rel.get(rel)
                     if target_rel is None:
                         raise ValueError(
-                            f"native package contains invalid source path: {rel}"
+                            f"Polygon Replica package contains invalid source path: {rel}"
                         )
                 mode = info.external_attr >> 16
                 file_type = stat.S_IFMT(mode)
                 if file_type not in {0, stat.S_IFREG}:
-                    raise ValueError(f"native package contains a special file: {rel}")
+                    raise ValueError(f"Polygon Replica package contains a special file: {rel}")
                 rooted.zip_file.copy_to(info, staging_root / target_rel)
                 if mode:
                     (staging_root / target_rel).chmod(stat.S_IMODE(mode))
@@ -151,11 +151,11 @@ class NativePackageImportService:
             )
             if source_tree.problem["mode"] != manifest["mode"]:
                 raise ValueError(
-                    "Native manifest mode does not match config/problem.json"
+                    "Polygon Replica package mode does not match config/problem.json"
                 )
             if source_tree.problem["pass_limit"] != manifest["pass_limit"]:
                 raise ValueError(
-                    "Native manifest pass limit does not match config/problem.json"
+                    "Polygon Replica package pass limit does not match config/problem.json"
                 )
             shutil.rmtree(staging_root / "test_data")
 

@@ -3,50 +3,69 @@
 <h1 class="page-title">Packages</h1>
 {% include "_flash_message.html" %}
 
-<div class="problem-action-card-grid">
-  <section class="info-card">
-    <h2>Export Into Package</h2>
-    <form class="form-row" method="post" action="{{ problem_href('export_create') }}">
-      <label for="export-type">Type</label>
-      <select id="export-type" name="export_type">
-        <option value="icpc">{{ icpc_option_label }}</option>
-        <option value="native">{{ native_option_label }}</option>
-      </select>
-      <button class="btn primary-action" type="submit" {% if not ctx.access.can_write %}disabled title="{{ ctx.access.write_block_reason }}"{% endif %}>Export</button>
+<section class="content-section">
+  <h2>Current published revision</h2>
+  {% if published_revision_number %}
+  <p><strong>v{{ published_revision_number }}</strong> &middot; <code>{{ published_commit }}</code></p>
+  <p>
+    Verified revision:
+    <strong>{{ verified_readiness.status }}</strong>
+    {% if verified_readiness.verified_revision_number %}
+      (v{{ verified_readiness.verified_revision_number }})
+    {% endif %}
+    {% if verified_readiness.missing_reason %}&middot; {{ verified_readiness.missing_reason }}{% endif %}
+  </p>
+  {% if verified_readiness.status != 'ready' %}
+  <p class="muted">Building a package will first run a complete verification of this published revision.</p>
+  {% endif %}
+  <div class="form-row">
+    <form method="post" action="{{ problem_href('export_create') }}">
+      <input type="hidden" name="format" value="domjudge" />
+      <button class="btn primary-action" type="submit" {% if not ctx.access.can_create_packages %}disabled title="{{ ctx.access.package_create_block_reason }}"{% endif %}>Build DOMjudge package</button>
     </form>
-  </section>
-</div>
+    <form method="post" action="{{ problem_href('export_create') }}">
+      <input type="hidden" name="format" value="icpc-2025-09" />
+      <button class="btn primary-action" type="submit" {% if not ctx.access.can_create_packages %}disabled title="{{ ctx.access.package_create_block_reason }}"{% endif %}>Build ICPC 2025-09 package</button>
+    </form>
+  </div>
+  {% else %}
+  <p class="muted">No published revision is available.</p>
+  {% endif %}
+</section>
 
 <section class="content-section">
-  <h2>Activity</h2>
+  <h2>Verified revision history</h2>
+  {% if verified_revisions %}
+  <div class="table-scroll"><table class="table-base">
+    <tr><th>Revision</th><th>Commit</th><th>Verification</th><th>Created</th><th>Status</th><th>Package</th></tr>
+    {% for row in verified_revisions %}
+    <tr>
+      <td>v{{ row.revision_number }}</td>
+      <td><code>{{ row.source_commit }}</code></td>
+      <td>{{ row.verification_id }}</td>
+      <td>{{ row.created_at|local_time }}</td>
+      <td>{{ row.status|status_label }}{% if row.reason %}: {{ row.reason }}{% endif %}</td>
+      <td>{% if row.can_download %}<a href="{{ problem_href('verified_revision_file', verified_revision_id=row.id) }}">Download Polygon Replica package</a>{% else %}-{% endif %}</td>
+    </tr>
+    {% endfor %}
+  </table></div>
+  {% else %}<p class="muted">No verified revisions.</p>{% endif %}
+</section>
+
+<section class="content-section">
+  <h2>Package export activity</h2>
   {% if activity_rows %}
-  <div class="table-scroll">
-  <table class="table-base">
-    <tr><th>Time</th><th>Status</th><th>Type</th><th>Source</th><th>Detail</th><th>Open</th></tr>
+  <div class="table-scroll"><table class="table-base">
+    <tr><th>Time</th><th>Status</th><th>Phase</th><th>Format</th><th>Source</th><th>Detail</th><th>Open</th></tr>
     {% for row in activity_rows %}
     <tr>
       <td class="table-cell-nowrap">{{ row.created_at|local_time }}</td>
-      <td class="table-cell-nowrap">{{ row.status|status_label }}</td>
-      <td class="table-cell-nowrap">{{ row.type_display }}</td>
-      <td class="table-cell-break">{{ row.source_display }}</td>
-      <td class="table-cell-break">{{ row.detail }}</td>
-      <td class="table-cell-actions">
-        {% if row.open_kind == 'export' %}
-        <a href="{{ problem_href('export_file', export_id=row.open_export_id, filename=row.open_filename) }}">{{ row.open_label }}</a>
-        {% elif row.open_kind == 'materialization' %}
-        <a href="{{ problem_href('materialization_file', materialization_id=row.open_materialization_id) }}">{{ row.open_label }}</a>
-        {% elif row.open_kind == 'verification' %}
-        <a href="{{ problem_href('run_details_page', query={'verification_id': row.open_verification_id}) }}">{{ row.open_label }}</a>
-        {% else %}
-        -
-        {% endif %}
-      </td>
+      <td>{{ row.status|status_label }}</td><td>{{ row.phase }}</td>
+      <td>{{ row.format_display }}</td><td>{{ row.source_display }}</td><td>{{ row.detail }}</td>
+      <td>{% if row.export_id %}<a href="{{ problem_href('export_file', export_id=row.export_id, filename=row.filename) }}">zip</a>{% else %}-{% endif %}</td>
     </tr>
     {% endfor %}
-  </table>
-  </div>
-  {% else %}
-  <p class="muted">No exports.</p>
-  {% endif %}
+  </table></div>
+  {% else %}<p class="muted">No package exports.</p>{% endif %}
 </section>
 {% endblock %}

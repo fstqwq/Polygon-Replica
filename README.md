@@ -22,11 +22,12 @@ first-class verification workflow as conventional batch problems.
 - Verify accepted, wrong-answer, time-limit, runtime-error, and rejected
   solutions against the same generated tests.
 - Review workspace changes and publish the next official version of a problem.
-- Turn an official version and its successful verification into a reusable
-  problem archive, then export an ICPC package without rerunning the tests.
+- Verify an official version once, download its Polygon Replica package, and
+  project it into either a DOMjudge package or a strict ICPC Problem Package
+  2025-09 without rerunning the tests.
 - Organize problems into contests, manage contest membership, inspect
-  readiness, and build statement PDFs or ICPC bundles from fixed problem
-  revisions.
+  readiness, and build statement PDFs, DOMjudge bundles, or ICPC 2025-09
+  bundles from fixed verified revisions.
 - Use the browser-first workflow or automate editing, verification, export, and
   downloads through the Agent API and Polygon Agent CLI.
 
@@ -40,10 +41,12 @@ per-user workspace ---- verify and review
       |
       | publish
       v
-official problem version ---- full verification ---- verified problem archive
-                                                |              |
-                                                v              v
-                                           ICPC package   Contest builds
+official problem version ---- full verification ---- verified revision
+                                                        |
+                         +------------------------------+-------------------+
+                         |                 |                    |           |
+                         v                 v                    v           v
+             Polygon Replica package  DOMjudge package  ICPC 2025-09  Contest builds
 ```
 
 A workspace is a private working copy belonging to one user. Publishing saves
@@ -52,11 +55,17 @@ each version is a Git commit on the problem's `main` branch, so the exact source
 used for a package can always be identified. Generated inputs, answers, logs,
 PDFs, and archives can be cleaned and rebuilt without deleting that history.
 
-After a full verification succeeds, Polygon Replica can save one archive that
-contains the exact published source together with the generated test inputs and
-official answers used by that run. The UI calls this a **Native** package. ICPC
-export and Contest builds read this fixed archive rather than a user's changing
-workspace, so later edits cannot silently change an in-progress delivery.
+After a full verification succeeds, that official version becomes a
+**verified revision**. It retains the exact published source together with the
+generated test inputs and official answers used by the run. Its Polygon Replica
+package is the system's own downloadable serialization. DOMjudge and ICPC
+2025-09 packages are projections of the same verified revision, not separate
+verification results.
+
+Contest builds consume only verified revisions that already exist. They never
+start a problem verification implicitly. A Contest can therefore use the
+latest verified revision even when it trails the newest published version, and
+its readiness page makes that distinction visible.
 
 ## Quick start with Docker Compose
 

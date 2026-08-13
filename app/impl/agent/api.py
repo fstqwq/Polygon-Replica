@@ -533,9 +533,9 @@ async def agent_verification_detail(request: Request, verification_id: str):
 async def agent_export_start(request: Request):
     identity = require_agent_token(request, min_scope="workspace")
     payload = await _read_json(request)
-    export_type = str(payload.get("export_type") or "icpc").strip().lower() or "icpc"
-    if export_type not in {"icpc", "native"}:
-        return json_error_response("unsupported package type", status_code=400)
+    package_format = str(payload.get("format") or "").strip().lower()
+    if package_format not in {"domjudge", "icpc-2025-09"}:
+        return json_error_response("unsupported package format", status_code=400)
     try:
         export_job_id = f"exp-api-{new_run_id()}"
         started = start_export_job(
@@ -544,7 +544,7 @@ async def agent_export_start(request: Request):
             identity.username,
             actor_user_id=int(identity.user_id),
             problem_id=int(identity.problem_id),
-            requested_export_type=export_type,
+            requested_format=package_format,
             export_job_id=export_job_id,
         )
         if not started:
@@ -576,8 +576,10 @@ async def agent_export_status(request: Request, job_id: str):
         "created_at": str(job.get("created_at") or ""),
         "started_at": str(job.get("started_at") or ""),
         "finished_at": str(job.get("finished_at") or ""),
-        "export_type": str(job.get("export_type") or ""),
+        "format": str(job.get("export_type") or ""),
+        "phase": runtime().export_service.job_phase(job),
         "source_commit": str(job.get("source_commit") or ""),
+        "verified_revision_id": str(job.get("materialization_id") or ""),
         "error": str(job.get("error") or ""),
     }
     if status == "succeeded" and str(job.get("export_id") or "") and str(job.get("filename") or ""):

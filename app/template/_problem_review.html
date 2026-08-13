@@ -17,7 +17,7 @@
     Verification: <span class="{{ verification_tone }}">{{ verification.display }}</span>{% if show_verification_reason and verification.reason_short %}<span class="problem-review-reason"> &mdash; {{ verification.reason_short }}</span>{% endif %}
   </span>
   <span class="problem-review-line">
-    Package: <span class="{{ package_tone }}">{% if package.state == 'ready' and package.revision_number is not none %}v{{ package.revision_number }}{% elif package.state == 'stale' and package.revision_number is not none %}v{{ package.revision_number }} (stale){% else %}none{% endif %}</span>
+    Verified revision: <span class="{{ package_tone }}">{% if package.state == 'ready' and package.revision_number is not none %}v{{ package.revision_number }} (current){% elif package.state == 'stale' and package.revision_number is not none %}v{{ package.revision_number }} (stale){% else %}none{% endif %}</span>
   </span>
   {% else %}
   <span class="problem-review-line"><span class="danger">unavailable</span></span>

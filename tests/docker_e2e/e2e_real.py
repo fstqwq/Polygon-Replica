@@ -993,17 +993,17 @@ def _assert_agent_verification_detail(verification_id: str) -> None:
         raise RuntimeError(f"Agent result-cell detail is incomplete: {cell_text!r}")
 
 
-def _agent_export(export_type: str) -> tuple[str, Path]:
+def _agent_export(package_format: str) -> tuple[str, Path]:
     started = _agent_cli(
         "export-start",
         "--problem",
         PROBLEM,
-        "--export-type",
-        export_type,
+        "--format",
+        package_format,
     )
     job_id = str(started.get("job_id") or "")
     if not job_id or started.get("status") != "queued":
-        raise RuntimeError(f"Agent {export_type} export did not start: {started!r}")
+        raise RuntimeError(f"Agent {package_format} export did not start: {started!r}")
     waited = _agent_cli(
         "export-wait",
         "--problem",
@@ -1016,10 +1016,10 @@ def _agent_export(export_type: str) -> tuple[str, Path]:
         "300",
     )
     if waited.get("job_id") != job_id or waited.get("status") != "succeeded":
-        raise RuntimeError(f"Agent {export_type} export failed: {waited!r}")
+        raise RuntimeError(f"Agent {package_format} export failed: {waited!r}")
     filename = str(waited.get("filename") or "")
     if Path(filename).name != filename or not filename.endswith(".zip"):
-        raise RuntimeError(f"Agent {export_type} export filename is wrong: {waited!r}")
+        raise RuntimeError(f"Agent {package_format} export filename is wrong: {waited!r}")
 
     output = AGENT_TEMP / f"{job_id}-{filename}"
     downloaded = _agent_cli(
@@ -1036,16 +1036,20 @@ def _agent_export(export_type: str) -> tuple[str, Path]:
         or downloaded.get("output") != str(output)
         or int(downloaded.get("bytes_written") or 0) != output.stat().st_size
     ):
-        raise RuntimeError(f"Agent {export_type} download is inconsistent: {downloaded!r}")
+        raise RuntimeError(f"Agent {package_format} download is inconsistent: {downloaded!r}")
     with zipfile.ZipFile(output) as archive:
         members = set(archive.namelist())
-        required_member = "config/problem.json" if export_type == "native" else "problem.yaml"
-        if required_member not in members:
+        required_members = (
+            {"problem.yaml", "domjudge-problem.ini", "problem_statement/problem.pdf"}
+            if package_format == "domjudge"
+            else {"problem.yaml", "submissions/submissions.yaml"}
+        )
+        if not required_members.issubset(members):
             raise RuntimeError(
-                f"Agent {export_type} archive omitted {required_member}: {sorted(members)!r}"
+                f"Agent {package_format} archive omitted required members: {sorted(members)!r}"
             )
         if archive.testzip() is not None:
-            raise RuntimeError(f"Agent {export_type} archive contains a corrupt member")
+            raise RuntimeError(f"Agent {package_format} archive contains a corrupt member")
     return job_id, output
 
 
@@ -1461,8 +1465,8 @@ def verify_deployment() -> None:
         if persisted_head != head:
             raise RuntimeError("Agent commit response differs from the persisted head")
 
-        native_job_id, native_archive = _agent_export("native")
-        icpc_job_id, icpc_archive = _agent_export("icpc")
+        domjudge_job_id, domjudge_archive = _agent_export("domjudge")
+        icpc_job_id, icpc_archive = _agent_export("icpc-2025-09")
 
         contest_job_id = start_contest_pdf(
             client,
@@ -1496,11 +1500,11 @@ def verify_deployment() -> None:
         )
     print(
         "e2e-real completed deployment, sample preview, verification, commit, "
-        "Native/ICPC exports, and contest PDF export "
+        "DOMjudge/ICPC 2025-09 exports, and contest PDF export "
         f"variant={variant} "
         f"sample_verification={sample_verification_id} "
         f"verification={verification_id} head={head} "
-        f"native_job={native_job_id} native_archive={native_archive} "
+        f"domjudge_job={domjudge_job_id} domjudge_archive={domjudge_archive} "
         f"icpc_job={icpc_job_id} icpc_archive={icpc_archive} "
         f"materialization_verification={materialization_verification_id} "
         f"contest_job={contest_job_id} artifact={artifact_id} "

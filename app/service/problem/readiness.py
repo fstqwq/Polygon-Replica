@@ -4,7 +4,7 @@ from typing import Literal, TypedDict
 from app.service.platform.error_text import bounded_display_text, normalize_display_text
 from app.service.problem_package.service import (
     ProblemPackageService,
-    PublishedPackageReadiness,
+    VerifiedRevisionReadiness,
 )
 from app.service.repository.revision import parse_verification_source
 from app.service.verification.failure_display import verification_task_failure_hint
@@ -166,19 +166,19 @@ class ProblemReadinessService:
         }
 
     @staticmethod
-    def _package(readiness: PublishedPackageReadiness) -> PackageReadiness:
+    def _package(readiness: VerifiedRevisionReadiness) -> PackageReadiness:
         status = readiness["status"]
         if status == "ready":
             return {
                 "state": "ready",
-                "revision_number": readiness["materialized_revision_number"],
+                "revision_number": readiness["verified_revision_number"],
                 "tone": "normal",
                 "reason": "",
             }
         if status == "stale":
             return {
                 "state": "stale",
-                "revision_number": readiness["materialized_revision_number"],
+                "revision_number": readiness["verified_revision_number"],
                 "tone": "warning",
                 "reason": readiness["missing_reason"],
             }
@@ -322,7 +322,7 @@ class ProblemReadinessService:
         self,
         subject: WorkspaceReadinessSubject,
         rows: list[WorkspaceVerificationRow],
-        package: PublishedPackageReadiness,
+        package: VerifiedRevisionReadiness,
         *,
         explain_verification: bool,
     ) -> ProblemReadiness:

@@ -4,23 +4,46 @@ import unittest
 import zipfile
 from pathlib import Path
 
-from app.service.importing.native import NativePackageImportService
+from app.service.disk.export_store import ExportJobRow
+from app.service.export.service import ExportService
+from app.service.importing.polygon_replica import PolygonReplicaPackageImportService
 from app.service.problem_package.manifest import (
-    NativeManifest,
+    VerifiedRevisionManifest,
     describe_file,
 )
-from app.service.problem_package.service import NativePackageReader
+from app.service.problem_package.service import VerifiedRevisionReader
 from app.service.problem_package.statement_samples import (
-    hydrate_native_statement_samples,
+    hydrate_verified_statement_samples,
 )
 from app.service.problem_package.store import MaterializationRow
 from tests.archive_support import import_problem_package
 
 
 class TestExportService(unittest.TestCase):
+    def test_failed_unstarted_export_job_still_reports_queued_phase(self) -> None:
+        job: ExportJobRow = {
+            "id": "exp-not-submitted",
+            "problem_id": 1,
+            "actor_user_id": 1,
+            "export_type": "domjudge",
+            "source_commit": "a" * 40,
+            "status": "failed",
+            "materialization_id": "",
+            "export_id": "",
+            "error": "queue rejected",
+            "created_at": "2026-01-01T00:00:00Z",
+            "started_at": "",
+            "finished_at": "2026-01-01T00:00:01Z",
+            "filename": "",
+            "sha256": "",
+            "size_bytes": 0,
+        }
+
+        self.assertEqual(ExportService.job_phase(job), "queued")
+
     def test_statement_sample_hydration_limits_each_input_output_pair(self) -> None:
         with tempfile.TemporaryDirectory(prefix="statement-sample-budget-") as temp:
-            package_root = Path(temp) / "native"
+            package_root = Path(temp) / "verified-revision"
             spec_path = package_root / "tests" / "spec.json"
             spec_path.parent.mkdir(parents=True)
             spec_payload = {
@@ -59,13 +82,16 @@ class TestExportService(unittest.TestCase):
                 "checked_at": "2026-01-01T00:00:00Z",
                 "unavailable_reason": "",
             }
-            manifest: NativeManifest = {
+            manifest: VerifiedRevisionManifest = {
                 "source_commit": materialization["source_commit"],
                 "revision_number": materialization["revision_number"],
                 "source_digest": materialization["source_digest"],
                 "mode": "pass-fail",
                 "pass_limit": 1,
-                "verification": {"id": materialization["verification_id"]},
+                "verification": {
+                    "id": materialization["verification_id"],
+                    "source": "full-verification",
+                },
                 "tests": [
                     {
                         "id": "001",
@@ -76,8 +102,8 @@ class TestExportService(unittest.TestCase):
                     }
                 ],
             }
-            native = NativePackageReader(
-                materialization=materialization,
+            revision = VerifiedRevisionReader(
+                verified_revision=materialization,
                 root=package_root,
                 manifest=manifest,
             )
@@ -86,8 +112,8 @@ class TestExportService(unittest.TestCase):
                 ValueError,
                 "statement sample exceeds byte limit",
             ):
-                hydrate_native_statement_samples(
-                    native,
+                hydrate_verified_statement_samples(
+                    revision,
                     tests_spec_max_bytes=document_limit,
                     statement_sample_max_bytes=sample_limit,
                 )
@@ -98,8 +124,8 @@ class TestExportService(unittest.TestCase):
             manifest_test = manifest["tests"][0]
             manifest_test["input"] = describe_file(input_path, root=package_root)
             manifest_test["answer"] = describe_file(answer_path, root=package_root)
-            hydrate_native_statement_samples(
-                native,
+            hydrate_verified_statement_samples(
+                revision,
                 tests_spec_max_bytes=document_limit,
                 statement_sample_max_bytes=sample_limit,
             )
@@ -109,8 +135,8 @@ class TestExportService(unittest.TestCase):
                 ("123456", "abcdef"),
             )
 
-    def test_native_import_rejects_source_only_archive_with_package_root(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="native-source-only-") as temp:
+    def test_polygon_replica_import_rejects_source_only_archive(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="polygon-replica-source-only-") as temp:
             archive = Path(temp) / "source-only.zip"
             with zipfile.ZipFile(archive, "w") as package:
                 package.writestr(
@@ -130,7 +156,7 @@ class TestExportService(unittest.TestCase):
                 "test_data/manifest.json",
             ):
                 import_problem_package(
-                    NativePackageImportService(),
+                    PolygonReplicaPackageImportService(),
                     workspace,
                     archive.name,
                     archive.read_bytes(),
@@ -141,8 +167,8 @@ class TestExportService(unittest.TestCase):
                 "old\n",
             )
 
-    def test_native_import_rejects_partial_materialized_data(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="native-partial-data-") as temp:
+    def test_polygon_replica_import_rejects_partial_verified_data(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="polygon-replica-partial-") as temp:
             archive = Path(temp) / "partial.zip"
             with zipfile.ZipFile(archive, "w") as package:
                 package.writestr("config/problem.json", "{}\n")
@@ -157,7 +183,7 @@ class TestExportService(unittest.TestCase):
                 "test_data/manifest.json",
             ):
                 import_problem_package(
-                    NativePackageImportService(),
+                    PolygonReplicaPackageImportService(),
                     workspace,
                     archive.name,
                     archive.read_bytes(),

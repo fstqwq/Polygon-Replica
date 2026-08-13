@@ -106,17 +106,28 @@ remains the only removal rule. Their table has no write path to any decision
 column. This separation makes a late diagnostic incapable of reopening
 execution even when it arrives concurrently with completion or cancellation.
 
-Preview, export, package-build, and contest-job rows survive normal restarts.
-Unfinished rows are moved to `failed` because their process-local work cannot
-resume. Administrative generated-data cleanup removes the
+Preview, Package Export, verified-revision-build, and contest-job rows survive
+normal restarts. Unfinished rows are moved to `failed` because their
+process-local work cannot resume. Startup does not open and validate every
+completed verified-revision archive; integrity is checked when a consumer opens
+one. Administrative generated-data cleanup removes the
 execution/package/export/build subset described by the
 [storage protocol](storage.md#maintenance-cleanup), while identity, authoring,
 contest source, attachment, and configuration rows remain.
 
-`exports` owns one derived cache row for each Native materialization and export
-type. `export_jobs` owns request attempts: distinct requests retain distinct job
-IDs even when they finish by referencing the same cached export row. Contest
-label variants are Contest-owned derived outputs and do not enter `exports`.
+`problem_package_materializations` owns the durable identity and locator for one
+verified revision per problem/source commit. `exports` owns its cached
+`domjudge` and `icpc-2025-09` projections. `export_jobs` owns request attempts:
+distinct requests retain distinct job IDs even when they finish by referencing
+the same cached projection. Direct Polygon Replica package downloads create no
+`exports` row. Contest child packages are Contest-owned temporary bundle
+members and do not enter `exports` or `export_jobs`.
+
+Contest build admission inserts the job, ordered roster items, selected
+verified-revision identities, and frozen archive checksums in one
+`BEGIN IMMEDIATE` transaction. A roster problem with no available verified
+revision aborts admission without a partial job. Filesystem reads occur after
+that transaction and must match the frozen identities and checksums.
 
 ## Configuration
 

@@ -16,14 +16,14 @@ from app.service.importing.archive import (
     ArchiveView,
     ProblemImportPolicy,
 )
-from app.service.importing.native import NATIVE_PACKAGE_ANCHOR, NativePackageImportService
+from app.service.importing.polygon_replica import PolygonReplicaPackageImportService
 from app.service.importing.polygon import PolygonPackageImportService
 from app.service.problem.runtime_config import problem_config_limits
 from app.service.platform.git_process import run_git
 
 _POLYGON_IMPORTER = PolygonPackageImportService()
 _ICPC_IMPORTER = ICPCPackageImportService()
-_NATIVE_IMPORTER = NativePackageImportService()
+_POLYGON_REPLICA_IMPORTER = PolygonReplicaPackageImportService()
 _POLYGON_LINUX_PACKAGE_SUFFIX_RE = re.compile(r"-\d+\$linux$", re.IGNORECASE)
 _PROBLEM_SEGMENT_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 
@@ -65,9 +65,11 @@ def _select_importer(package_format: str):
         return _POLYGON_IMPORTER
     if token == "icpc":
         return _ICPC_IMPORTER
-    if token == "native":
-        return _NATIVE_IMPORTER
+    if token == "polygon-replica":
+        return _POLYGON_REPLICA_IMPORTER
     raise ValueError(f"unsupported package format: {package_format}")
+
+
 def _problem_slug_segment_max_len(owner: str) -> int:
     safe_owner = owner.strip().lower()
     if not _K.USER_IDENT_RE.fullmatch(safe_owner):
@@ -205,11 +207,14 @@ def _detect_problem_package_format(package: ArchiveView) -> str:
     names = list(package.entries)
     if _is_package_marker(names, "problem.xml"):
         return "polygon"
+    if _is_package_marker(names, "test_data/manifest.json"):
+        return "polygon-replica"
     if _is_package_marker(names, "problem.yaml"):
         return "icpc"
-    if _is_package_marker(names, NATIVE_PACKAGE_ANCHOR):
-        return "native"
-    raise ValueError("unsupported package format: expected problem.xml (Polygon), problem.yaml (ICPC), or config/problem.json (native)")
+    raise ValueError(
+        "unsupported package format: expected problem.xml (Polygon), "
+        "problem.yaml (ICPC), or test_data/manifest.json (Polygon Replica)"
+    )
 
 
 @contextmanager

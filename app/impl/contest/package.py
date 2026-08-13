@@ -143,23 +143,24 @@ def contest_packages_build_start(
     if not ctx["access"]["can_build"]:
         raise HTTPException(status_code=403, detail=ctx["access"]["build_block_reason"])
     contest_id = int(ctx["contest"]["id"])
-    requested_outputs = tuple(outputs or ["statement_pdf", "icpc_bundle"])
+    requested_outputs = tuple(outputs)
     current_language = _contest_statement_language(contest_id, language)
     if runtime().contest_service.problem_count(contest_id) <= 0:
         return _contest_redirect(str(ctx["contest"]["slug"]), "packages", message="add at least one problem first")
-    job_id, queued, reason = runtime().contest_build_service.queue(
-        contest_id=contest_id,
-        contest_slug=str(ctx["contest"]["slug"]),
-        actor_user_id=int(ctx["user"]["id"]),
-        actor_username=user,
-        outputs=requested_outputs,
-        language=current_language,
-        insert_blank_pages=insert_blank_pages,
-    )
+    try:
+        job_id, queued, reason = runtime().contest_build_service.queue(
+            contest_id=contest_id,
+            contest_slug=str(ctx["contest"]["slug"]),
+            actor_user_id=int(ctx["user"]["id"]),
+            outputs=requested_outputs,
+            language=current_language,
+            insert_blank_pages=insert_blank_pages,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     conflict = reason in {
         "already_running",
         "busy",
-        "roster_changed",
     } or reason.startswith("not_ready:")
     if queued:
         message = "contest build queued"

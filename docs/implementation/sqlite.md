@@ -27,8 +27,8 @@ Important physical facts:
   composite foreign key requires the task to belong to the same verification.
 - `verification_task_diagnostics` has one bounded, retry-deduplicated late
   diagnostic snapshot per task; it does not amend `result_json`.
-- materializations are unique by problem/source commit; exports are unique by
-  materialization/type/options hash.
+- physical materializations are unique by problem/source commit; problem-level
+  projections are unique by materialization and external format.
 - `system_config` is mutable key/value JSON and `smtp_config` is a singleton.
 
 Startup initializes only an absent or empty database. For an existing database,

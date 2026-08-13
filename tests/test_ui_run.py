@@ -12,6 +12,7 @@ from html import unescape
 import io
 import os
 import re
+from types import SimpleNamespace
 from unittest.mock import patch
 from urllib.parse import parse_qs, urlparse
 
@@ -42,6 +43,7 @@ from tests.ui_support import (
     general_page,
     json,
     export_page,
+    export_create,
     revision_commit,
     run_details_page,
     run_details_test_fragment,
@@ -120,8 +122,8 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             "problem_id": problem_id,
             "published_commit": workspace_row["head_commit"],
             "published_revision_number": workspace_row["revision_upstream"],
-            "materialized_revision_number": None,
-            "materialization_id": "",
+            "verified_revision_number": None,
+            "verified_revision_id": "",
             "status": "none",
             "missing_reason": "Package not built",
         }
@@ -5373,7 +5375,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             "id": "job-current",
             "problem_id": 1,
             "actor_user_id": 1,
-            "export_type": "icpc",
+            "export_type": "domjudge",
             "status": "succeeded",
             "materialization_id": "mat-current",
             "export_id": "exp current",
@@ -5386,8 +5388,21 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             "started_at": "2026-08-08T00:00:00Z",
             "finished_at": "2026-08-08T00:00:01Z",
         }
+        current_package = {
+            "problem_id": 1,
+            "published_commit": head_commit,
+            "published_revision_number": 1,
+            "verified_revision_number": 1,
+            "verified_revision_id": "mat-current",
+            "status": "ready",
+            "missing_reason": "",
+        }
         with (
-            patch.object(runtime.export_service, "latest_source_commit", return_value=head_commit),
+            patch.object(
+                runtime.problem_package_service,
+                "published_readiness",
+                return_value=current_package,
+            ),
             patch.object(runtime.export_service, "latest_succeeded_export_job", return_value=current_export),
             patch.object(runtime.export_service, "export_archive_path", return_value=Path("/tmp/sample-current.zip")),
         ):
@@ -5397,10 +5412,9 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             'href="/problems/alice/sample/exports/exp%20current/sample%20current.zip">Download</a>',
             html,
         )
-        self.assertNotIn('action="/problems/alice/sample/export/create"', html)
 
-    def test_packages_are_problem_visible_across_users_and_build_origins(self) -> None:
-        from app.impl.run_export.artifact import materialization_file
+    def test_packages_page_exposes_formats_and_verified_revision_to_readers(self) -> None:
+        from app.impl.run_export.artifact import verified_revision_file
 
         workspace_service.ensure_user("bob")
         workspace_service.grant_repo_access("alice/sample", "bob", "read")
@@ -5412,7 +5426,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         )
         problem_id = int(alice_ctx["problem"]["id"])
         actor_user_id = int(alice_ctx["user"]["id"])
-        materialization_id = f"pm-visible-{uuid.uuid4().hex[:8]}"
+        verified_revision_id = f"pm-visible-{uuid.uuid4().hex[:8]}"
         source_commit = "9" * 40
         db_execute(
             """
@@ -5423,12 +5437,12 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             ) VALUES(?,?,?,?,?,?,?,?,?,'available',?,?,'')
             """,
             [
-                materialization_id,
+                verified_revision_id,
                 problem_id,
                 source_commit,
                 9,
                 "a" * 64,
-                f"materializations/{problem_id}/{source_commit}/native.zip",
+                f"materializations/{problem_id}/{source_commit}/verified-revision.zip",
                 "b" * 64,
                 123,
                 canonical_test_verification_id(
@@ -5443,7 +5457,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             job_id=export_job_id,
             problem_id=problem_id,
             actor_user_id=actor_user_id,
-            export_type="icpc",
+            package_format="domjudge",
             source_commit=source_commit,
         )
         runtime.export_service.mark_export_job_failed(
@@ -5457,34 +5471,82 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             "bob",
         )
         html = page.body.decode("utf-8", errors="replace")
-        self.assertIn("v9", html)
-        self.assertIn("native.zip", html)
+        self.assertIn('name="format" value="domjudge"', html)
+        self.assertIn('name="format" value="icpc-2025-09"', html)
+        self.assertIn("Building a package will first run a complete verification", html)
         self.assertIn(
-            f"/problems/alice/sample/packages/{materialization_id}/native.zip",
+            f"/problems/alice/sample/verified-revisions/{verified_revision_id}/package",
             html,
         )
         self.assertNotIn("package failed for alice", html)
-        materialization = runtime.problem_package_service.materialization(
-            materialization_id
+        verified_revision = runtime.problem_package_service.verified_revision(
+            verified_revision_id
         )
-        self.assertIsNotNone(materialization)
-        archive = Path(runtime.settings.artifacts_root) / "fixture-native.zip"
-        archive.write_bytes(b"native package")
+        self.assertIsNotNone(verified_revision)
+        archive = Path(runtime.settings.artifacts_root) / "fixture-verified-revision.zip"
+        archive.write_bytes(b"polygon replica package")
+        download = SimpleNamespace(
+            verified_revision=verified_revision,
+            chunks=lambda: iter((archive.read_bytes(),)),
+            close=lambda: None,
+        )
         with patch.object(
             runtime.problem_package_service,
-            "native_archive",
-            return_value=(materialization, archive),
+            "open_verified_revision_download",
+            return_value=download,
         ):
-            response = materialization_file(
+            response = verified_revision_file(
                 "alice/sample",
                 "bob",
-                materialization_id,
+                verified_revision_id,
             )
-        self.assertEqual(Path(response.path), archive)
+        self.assertEqual(response.media_type, "application/zip")
         self.assertIn(
-            "sample-native-v9.zip",
+            "sample-polygon-replica-v9.zip",
             str(response.headers.get("content-disposition") or ""),
         )
+
+        with patch.object(
+            runtime.problem_package_service,
+            "published_readiness",
+            return_value={
+                "problem_id": problem_id,
+                "published_commit": source_commit,
+                "published_revision_number": 9,
+                "verified_revision_number": 9,
+                "verified_revision_id": verified_revision_id,
+                "status": "ready",
+                "missing_reason": "",
+            },
+        ):
+            ready_page = export_page(
+                _request("/problems/alice/sample/export"),
+                "alice/sample",
+                "bob",
+            )
+        self.assertNotIn(
+            "Building a package will first run a complete verification",
+            ready_page.body.decode("utf-8", errors="replace"),
+        )
+
+    def test_package_export_busy_returns_conflict(self) -> None:
+        context = workspace_service.workspace_context(
+            "alice/sample",
+            "alice",
+            include_recent=False,
+        )
+        with patch(
+            "app.impl.run_export.export.start_export_job",
+            return_value=False,
+        ):
+            with self.assertRaises(HTTPException) as raised:
+                export_create(
+                    "alice/sample",
+                    "alice",
+                    format="domjudge",
+                )
+        self.assertEqual(raised.exception.status_code, 409)
+        self.assertTrue(int(context["problem"]["id"]) > 0)
 
     def test_run_verification_details_reads_verification_record(self) -> None:
         from app.impl.workspace.run_view_lifecycle_card import load_verification_detail_summary

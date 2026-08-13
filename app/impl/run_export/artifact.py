@@ -1,11 +1,12 @@
-from app.impl.auth.session import require_session_user
-
 from pathlib import Path
 from typing import Annotated
+from urllib.parse import quote
 
-from fastapi import HTTPException, Depends
-from fastapi.responses import FileResponse
+from fastapi import Depends, HTTPException
+from fastapi.responses import FileResponse, StreamingResponse
+from starlette.background import BackgroundTask
 
+from app.impl.auth.session import require_session_user
 from app.impl.runtime.dependency import runtime
 from app.impl.workspace.artifact import (
     assert_workspace_artifact_access,
@@ -81,32 +82,45 @@ def export_file(problem: str, user: Annotated[str, Depends(require_session_user)
     return FileResponse(file_path, filename=download_name)
 
 
-def materialization_file(
+def verified_revision_file(
     problem: str,
     user: Annotated[str, Depends(require_session_user)],
-    materialization_id: str,
+    verified_revision_id: str,
 ):
     user_ctx = global_user_ctx(user)
     problem_row = runtime().contest_service.problem_by_slug(problem)
     if problem_row is None:
         raise HTTPException(status_code=404, detail="problem not found")
     problem_id = int(problem_row["id"])
-    materialization = runtime().problem_package_service.materialization(
-        materialization_id
+    verified_revision = runtime().problem_package_service.verified_revision(
+        verified_revision_id
     )
-    materialization_access = runtime().access_query.package_materialization_context(
+    revision_access = runtime().access_query.verified_revision_context(
         actor_user_id=int(user_ctx["user"]["id"]),
         expected_problem_id=problem_id,
-        materialization=materialization,
+        verified_revision=verified_revision,
     )
-    if not materialization_access["can_download"]:
+    if not revision_access["can_download"]:
         raise HTTPException(status_code=404, detail="package not found")
     try:
-        materialization, file_path = runtime().problem_package_service.native_archive(
-            materialization_id
+        download = runtime().problem_package_service.open_verified_revision_download(
+            verified_revision_id
         )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=404, detail="package unavailable") from exc
     slug = Path(str(problem_row["slug"])).name or "problem"
-    filename = f"{slug}-native-v{materialization['revision_number']}.zip"
-    return FileResponse(file_path, filename=filename)
+    filename = (
+        f"{slug}-polygon-replica-v"
+        f"{download.verified_revision['revision_number']}.zip"
+    )
+    return StreamingResponse(
+        download.chunks(),
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f"attachment; filename*=utf-8''{quote(filename)}",
+            "Content-Length": str(download.verified_revision["archive_size_bytes"]),
+        },
+        background=BackgroundTask(download.close),
+    )

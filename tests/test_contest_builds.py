@@ -1,10 +1,18 @@
 import hashlib
-from collections.abc import Callable
+import json
+import zipfile
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from pathlib import Path
+from types import SimpleNamespace
+from typing import cast
 from unittest.mock import patch
 from urllib.parse import parse_qs, urlparse
-import zipfile
 
+from fastapi import HTTPException
+
+from app.service.contest.package import ContestPackageService
+from app.service.export.projection import PackageProjectionService
 from tests.contest_support import ContestActionBase
 from tests.db_helpers import (
     db_connection,
@@ -13,7 +21,7 @@ from tests.db_helpers import (
     db_fetch_one,
     read_contest_job_summary,
 )
-from tests.ui_support import runtime, contest_packages_build_start, uuid
+from tests.ui_support import contest_packages_build_start, runtime, uuid
 
 
 class TestContestBuilds(ContestActionBase):
@@ -25,17 +33,6 @@ class TestContestBuilds(ContestActionBase):
             "A",
             "revision-build-problem",
         )
-        workspace = Path(runtime.workspace_service.ensure_workspace(problem_slug, "alice"))
-        marker = workspace / "notes" / "published.txt"
-        marker.parent.mkdir(parents=True, exist_ok=True)
-        marker.write_text("published contest fixture\n", encoding="utf-8")
-        runtime.git_service.commit(
-            workspace,
-            "Publish contest build fixture",
-            "alice",
-            "alice@example.test",
-        )
-        runtime.git_service.push(workspace, "main")
         return contest_slug, contest_id, problem_id, problem_slug
 
     def _seed_materialization(
@@ -44,6 +41,7 @@ class TestContestBuilds(ContestActionBase):
         problem_id: int,
         source_commit: str,
         revision_number: int,
+        status: str = "available",
     ) -> str:
         materialization_id = f"pm-{uuid.uuid4().hex}"
         archive = (
@@ -54,7 +52,7 @@ class TestContestBuilds(ContestActionBase):
             / "native.zip"
         )
         archive.parent.mkdir(parents=True, exist_ok=True)
-        archive.write_bytes(f"native:{source_commit}".encode("ascii"))
+        archive.write_bytes(f"verified:{source_commit}".encode("ascii"))
         payload = archive.read_bytes()
         now = "2026-08-08T00:00:00+00:00"
         db_execute(
@@ -63,7 +61,7 @@ class TestContestBuilds(ContestActionBase):
                 id,problem_id,source_commit,revision_number,source_digest,
                 archive_rel_path,archive_sha256,archive_size_bytes,
                 verification_id,status,created_at,checked_at,unavailable_reason
-            ) VALUES(?,?,?,?,?,?,?,?,?,'available',?,?,'')
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
             """,
             [
                 materialization_id,
@@ -74,115 +72,397 @@ class TestContestBuilds(ContestActionBase):
                 archive.relative_to(runtime.settings.artifacts_root).as_posix(),
                 hashlib.sha256(payload).hexdigest(),
                 len(payload),
-                f"ver-{uuid.uuid4().int & ((1 << 63) - 1):x}",
+                f"ver-{uuid.uuid4().hex[:16]}",
+                status,
                 now,
                 now,
+                "" if status == "available" else "fixture unavailable",
             ],
         )
         return materialization_id
 
-    def _frozen_revisions(
+    def _freeze(self, contest_id: int, contest_slug: str) -> dict[str, object]:
+        actor = db_fetch_one("SELECT id FROM users WHERE username='alice'")
+        self.assertIsNotNone(actor)
+        return runtime.contest_service.freeze_build_job(
+            contest_id=contest_id,
+            actor_user_id=int(actor["id"]),
+            job_type="build",
+            summary={"job_type": "build", "contest_slug": contest_slug},
+        )
+
+    def test_missing_verified_revision_returns_409_without_creating_job(self) -> None:
+        contest_slug, contest_id, _problem_id, _problem_slug = self._contest_with_problem()
+
+        with self.assertRaises(HTTPException) as raised:
+            contest_packages_build_start(
+                contest=contest_slug,
+                user="alice",
+                outputs=["domjudge_bundle"],
+            )
+
+        self.assertEqual(raised.exception.status_code, 409)
+        self.assertIn("not_ready:", str(raised.exception.detail))
+        self.assertEqual(
+            db_fetch_all("SELECT id FROM contest_jobs WHERE contest_id=?", [contest_id]),
+            [],
+        )
+
+    def test_freeze_selects_latest_available_revision_and_ignores_newer_unavailable(
         self,
-        contest_id: int,
-        *,
-        source_commit: str,
-        revision_number: int,
-    ) -> list[dict[str, object]]:
-        rows = runtime.contest_service.contest_problems(contest_id)
-        return [
-            {
-                "contest_problem_id": int(row["contest_problem_id"]),
-                "position": int(row["position"]),
-                "label": str(row["idx"]),
-                "problem_id": int(row["problem_id"]),
-                "statement_folder": str(row["statement_folder"]),
-                "problem_slug": str(row["problem_slug"]),
-                "source_commit": source_commit,
-                "revision_number": revision_number,
-            }
-            for row in rows
-        ]
-
-    def test_build_freezes_current_revision_without_requiring_native(self) -> None:
+    ) -> None:
         contest_slug, contest_id, problem_id, _problem_slug = self._contest_with_problem()
-        published = runtime.problem_package_service.published_revision(problem_id)
-        runners: list[Callable[[], None]] = []
+        expected_id = self._seed_materialization(
+            problem_id=problem_id,
+            source_commit="b" * 40,
+            revision_number=8,
+        )
+        self._seed_materialization(
+            problem_id=problem_id,
+            source_commit="c" * 40,
+            revision_number=9,
+            status="unavailable",
+        )
 
-        def submit(*, fn, **_kwargs):
-            runners.append(fn)
+        frozen = self._freeze(contest_id, contest_slug)
+
+        self.assertEqual(frozen["outcome"], "created")
+        item = db_fetch_one(
+            """SELECT source_commit,revision_number,materialization_id,archive_sha256
+               FROM contest_build_items WHERE job_id=?""",
+            [frozen["job_id"]],
+        )
+        self.assertIsNotNone(item)
+        self.assertEqual(str(item["source_commit"]), "b" * 40)
+        self.assertEqual(int(item["revision_number"]), 8)
+        self.assertEqual(str(item["materialization_id"]), expected_id)
+        self.assertTrue(str(item["archive_sha256"]))
+
+    def test_freeze_atomically_reuses_active_job(self) -> None:
+        contest_slug, contest_id, problem_id, _problem_slug = self._contest_with_problem()
+        self._seed_materialization(
+            problem_id=problem_id,
+            source_commit="d" * 40,
+            revision_number=3,
+        )
+
+        first = self._freeze(contest_id, contest_slug)
+        second = self._freeze(contest_id, contest_slug)
+
+        self.assertEqual(first["outcome"], "created")
+        self.assertEqual(second["outcome"], "already_running")
+        self.assertEqual(second["job_id"], first["job_id"])
+        self.assertEqual(
+            len(
+                db_fetch_all(
+                    "SELECT id FROM contest_jobs WHERE contest_id=? AND job_type='build'",
+                    [contest_id],
+                )
+            ),
+            1,
+        )
+
+    def test_freeze_fails_immediately_when_sqlite_admission_is_busy(self) -> None:
+        contest_slug, contest_id, problem_id, _problem_slug = self._contest_with_problem()
+        self._seed_materialization(
+            problem_id=problem_id,
+            source_commit="e" * 40,
+            revision_number=3,
+        )
+
+        with db_connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            frozen = self._freeze(contest_id, contest_slug)
+
+        self.assertEqual(frozen["outcome"], "busy")
+        self.assertEqual(frozen["job_id"], "")
+
+    def test_all_outputs_share_one_reader_and_one_frozen_mapping(self) -> None:
+        contest_slug, contest_id, problem_id, _problem_slug = self._contest_with_problem()
+        materialization_id = self._seed_materialization(
+            problem_id=problem_id,
+            source_commit="f" * 40,
+            revision_number=7,
+        )
+        reader = SimpleNamespace(
+            root=Path(runtime.settings.artifacts_root),
+            manifest={"source_commit": "f" * 40},
+        )
+        opened: list[tuple[str, str]] = []
+
+        @contextmanager
+        def open_reader(
+            requested_id: str,
+            *,
+            expected_archive_sha256: str,
+        ) -> Iterator[object]:
+            opened.append((requested_id, expected_archive_sha256))
+            yield reader
+
+        def submit(
+            *, fn: Callable[[], None], **_kwargs: object
+        ) -> tuple[None, bool, str]:
+            fn()
             return None, True, "queued"
+
+        package_formats: list[str] = []
+
+        def staged_output(
+            *,
+            contest_slug: str,
+            job_id: str,
+            token: str,
+            artifact_type: str,
+            filename: str,
+        ) -> dict[str, object]:
+            path = (
+                runtime.contest_service.job_root(contest_slug, job_id)
+                / f"{token}.bin"
+            )
+            path.write_bytes(token.encode("ascii"))
+            return {
+                "artifact_id": "",
+                "error": "",
+                "_artifact_path": str(path),
+                "_artifact_type": artifact_type,
+                "_artifact_filename": filename,
+            }
+
+        def build_pdf(
+            *,
+            contest_slug: str,
+            job_id: str,
+            **_kwargs: object,
+        ) -> dict[str, object]:
+            return staged_output(
+                contest_slug=contest_slug,
+                job_id=job_id,
+                token="pdf",
+                artifact_type="contest-pdf",
+                filename="revision-build-english-statements.pdf",
+            )
+
+        def build_bundle(
+            *,
+            package_format: str,
+            readers: dict[str, object],
+            contest_slug: str,
+            job_id: str,
+            **_kwargs: object,
+        ) -> dict[str, object]:
+            self.assertIs(readers[materialization_id], reader)
+            package_formats.append(package_format)
+            token = package_format.replace("-", "_")
+            return staged_output(
+                contest_slug=contest_slug,
+                job_id=job_id,
+                token=token,
+                artifact_type=f"{package_format}-bundle",
+                filename=f"revision-build-{package_format}.zip",
+            )
 
         with (
             patch.object(runtime.worker_queue_service, "submit", side_effect=submit),
-            patch.object(runtime.export_service, "create_export") as create_export,
+            patch.object(runtime.problem_package_service, "open_reader", side_effect=open_reader),
+            patch.object(runtime.contest_snapshot_service, "create") as snapshot,
+            patch.object(
+                runtime.contest_statement_service,
+                "build_pdf",
+                side_effect=build_pdf,
+            ) as build_pdf,
+            patch.object(
+                runtime.contest_package_service,
+                "build_bundle",
+                side_effect=build_bundle,
+            ),
         ):
             response = contest_packages_build_start(
                 contest=contest_slug,
                 user="alice",
-                outputs=["icpc_bundle"],
+                outputs=[
+                    "statement_pdf",
+                    "domjudge_bundle",
+                    "icpc_2025_09_bundle",
+                ],
+                language="english",
             )
 
         self.assertEqual(response.status_code, 303)
         job_id = parse_qs(urlparse(str(response.headers["location"])).query)["job_id"][0]
-        job = db_fetch_one("SELECT status FROM contest_jobs WHERE id=?", [job_id])
-        self.assertIsNotNone(job)
-        self.assertEqual(str(job["status"]), "queued")
-        self.assertFalse(
-            (
-                runtime.contest_service.job_root(
-                    contest_slug,
-                    job_id,
-                    create=False,
-                )
-                / "contest-sources"
-            ).exists()
+        self.assertEqual(opened[0][0], materialization_id)
+        self.assertEqual(len(opened), 1)
+        snapshot.assert_called_once()
+        build_pdf.assert_called_once()
+        self.assertIs(build_pdf.call_args.kwargs["readers"][materialization_id], reader)
+        self.assertEqual(package_formats, ["domjudge", "icpc-2025-09"])
+        summary = read_contest_job_summary(contest_id, job_id)
+        self.assertEqual(
+            summary["successful_outputs"],
+            ["statement_pdf", "domjudge_bundle", "icpc_2025_09_bundle"],
         )
-        item = db_fetch_one(
-            """SELECT source_commit,revision_number,materialization_id,archive_sha256
-               FROM contest_build_items WHERE job_id=?""",
-            [job_id],
+
+    def test_package_only_build_does_not_snapshot_contest_sources(self) -> None:
+        contest_slug, _contest_id, problem_id, _problem_slug = self._contest_with_problem()
+        materialization_id = self._seed_materialization(
+            problem_id=problem_id,
+            source_commit="1" * 40,
+            revision_number=4,
         )
-        self.assertIsNotNone(item)
-        self.assertEqual(str(item["source_commit"]), published.source_commit)
-        self.assertEqual(int(item["revision_number"]), published.revision_number)
-        self.assertIsNone(item["materialization_id"])
-        self.assertIsNone(item["archive_sha256"])
-        create_export.assert_not_called()
 
-        def assert_worker_boundary(**_kwargs) -> None:
-            running = db_fetch_one("SELECT status FROM contest_jobs WHERE id=?", [job_id])
-            self.assertIsNotNone(running)
-            self.assertEqual(str(running["status"]), "running")
-            raise RuntimeError("stop after worker boundary")
+        @contextmanager
+        def open_reader(*_args: object, **_kwargs: object) -> Iterator[object]:
+            yield SimpleNamespace(root=Path("."), manifest={})
 
-        self.assertEqual(len(runners), 1)
+        def submit(
+            *, fn: Callable[[], None], **_kwargs: object
+        ) -> tuple[None, bool, str]:
+            fn()
+            return None, True, "queued"
+
+        def build_bundle(
+            *,
+            contest_slug: str,
+            job_id: str,
+            **_kwargs: object,
+        ) -> dict[str, object]:
+            path = runtime.contest_service.job_root(contest_slug, job_id) / "domjudge.zip"
+            path.write_bytes(b"domjudge bundle")
+            return {
+                "artifact_id": "",
+                "error": "",
+                "_artifact_path": str(path),
+                "_artifact_type": "domjudge-bundle",
+                "_artifact_filename": "revision-build-domjudge.zip",
+            }
+
         with (
+            patch.object(runtime.worker_queue_service, "submit", side_effect=submit),
+            patch.object(runtime.problem_package_service, "open_reader", side_effect=open_reader),
+            patch.object(runtime.contest_snapshot_service, "create") as snapshot,
             patch.object(
-                runtime.contest_snapshot_service, "create",
-                side_effect=assert_worker_boundary,
-            ),
-            self.assertRaisesRegex(RuntimeError, "stop after worker boundary"),
-        ):
-            runners[0]()
-        terminal = db_fetch_one("SELECT status FROM contest_jobs WHERE id=?", [job_id])
-        self.assertIsNotNone(terminal)
-        self.assertEqual(str(terminal["status"]), "failed")
-
-    def test_queue_rejection_fails_job_without_snapshotting_sources(self) -> None:
-        contest_slug, contest_id, _problem_id, _problem_slug = self._contest_with_problem()
-
-        with patch.object(
-            runtime.worker_queue_service,
-            "submit",
-            return_value=(None, False, "capacity"),
+                runtime.contest_package_service,
+                "build_bundle",
+                side_effect=build_bundle,
+            ) as build_bundle,
         ):
             response = contest_packages_build_start(
                 contest=contest_slug,
                 user="alice",
-                outputs=["icpc_bundle"],
+                outputs=["domjudge_bundle"],
             )
 
         self.assertEqual(response.status_code, 303)
+        snapshot.assert_not_called()
+        self.assertIn(materialization_id, build_bundle.call_args.kwargs["readers"])
+
+    def test_reader_exit_failure_discards_staged_output_without_publishing(self) -> None:
+        contest_slug, contest_id, problem_id, _problem_slug = self._contest_with_problem()
+        materialization_id = self._seed_materialization(
+            problem_id=problem_id,
+            source_commit="5" * 40,
+            revision_number=5,
+        )
+        actor = db_fetch_one("SELECT id FROM users WHERE username='alice'")
+        self.assertIsNotNone(actor)
+        staged_paths: list[Path] = []
+
+        @contextmanager
+        def open_reader(
+            requested_id: str,
+            *,
+            expected_archive_sha256: str,
+        ) -> Iterator[object]:
+            self.assertEqual(requested_id, materialization_id)
+            self.assertTrue(expected_archive_sha256)
+            yield SimpleNamespace(root=Path("."), manifest={})
+            raise RuntimeError("reader checksum changed on exit")
+
+        def build_bundle(
+            *,
+            contest_slug: str,
+            job_id: str,
+            **_kwargs: object,
+        ) -> dict[str, object]:
+            staged = (
+                runtime.contest_service.job_root(contest_slug, job_id)
+                / "staged.zip"
+            )
+            staged.write_bytes(b"staged contest output")
+            staged_paths.append(staged)
+            return {
+                "artifact_id": "",
+                "error": "",
+                "_artifact_path": str(staged),
+                "_artifact_type": "domjudge-bundle",
+                "_artifact_filename": "contest-domjudge.zip",
+            }
+
+        def submit(
+            *, fn: Callable[[], None], **_kwargs: object
+        ) -> tuple[None, bool, str]:
+            fn()
+            return None, True, "queued"
+
+        with (
+            patch.object(
+                runtime.problem_package_service,
+                "open_reader",
+                side_effect=open_reader,
+            ),
+            patch.object(
+                runtime.contest_package_service,
+                "build_bundle",
+                side_effect=build_bundle,
+            ),
+            patch.object(runtime.worker_queue_service, "submit", side_effect=submit),
+            self.assertRaisesRegex(RuntimeError, "reader checksum changed on exit"),
+        ):
+            runtime.contest_build_service.queue(
+                contest_id=contest_id,
+                contest_slug=contest_slug,
+                actor_user_id=int(actor["id"]),
+                outputs=("domjudge_bundle",),
+            )
+
+        self.assertEqual(len(staged_paths), 1)
+        self.assertFalse(staged_paths[0].exists())
+        self.assertEqual(
+            db_fetch_all(
+                "SELECT id FROM contest_artifacts WHERE contest_id=?",
+                [contest_id],
+            ),
+            [],
+        )
+        self.assertEqual(
+            runtime.contest_service.list_artifacts(contest_id, limit=10),
+            [],
+        )
+
+    def test_queue_submit_exception_terminalizes_frozen_job(self) -> None:
+        contest_slug, contest_id, problem_id, _problem_slug = self._contest_with_problem()
+        self._seed_materialization(
+            problem_id=problem_id,
+            source_commit="6" * 40,
+            revision_number=6,
+        )
+        actor = db_fetch_one("SELECT id FROM users WHERE username='alice'")
+        self.assertIsNotNone(actor)
+
+        with (
+            patch.object(
+                runtime.worker_queue_service,
+                "submit",
+                side_effect=RuntimeError("queue submission exploded"),
+            ),
+            self.assertRaisesRegex(RuntimeError, "queue submission exploded"),
+        ):
+            runtime.contest_build_service.queue(
+                contest_id=contest_id,
+                contest_slug=contest_slug,
+                actor_user_id=int(actor["id"]),
+                outputs=("domjudge_bundle",),
+            )
+
         job = db_fetch_one(
             """SELECT id,status,finished_at FROM contest_jobs
                WHERE contest_id=? ORDER BY created_at DESC,id DESC LIMIT 1""",
@@ -191,473 +471,166 @@ class TestContestBuilds(ContestActionBase):
         self.assertIsNotNone(job)
         self.assertEqual(str(job["status"]), "failed")
         self.assertTrue(str(job["finished_at"] or ""))
-        self.assertFalse(
-            (
-                runtime.contest_service.job_root(
-                    contest_slug,
-                    str(job["id"]),
-                    create=False,
-                )
-                / "contest-sources"
-            ).exists()
-        )
 
-    def test_requested_outputs_share_one_frozen_revision_mapping(self) -> None:
-        contest_slug, contest_id, problem_id, _problem_slug = self._contest_with_problem()
-        published = runtime.problem_package_service.published_revision(problem_id)
-        source_commit = published.source_commit
-        materialization_id = self._seed_materialization(
-            problem_id=problem_id,
-            source_commit=source_commit,
-            revision_number=published.revision_number,
-        )
-        materialization = runtime.problem_package_service.store.materialization(
-            materialization_id
-        )
-        self.assertIsNotNone(materialization)
-
-        def submit(*, fn, **_kwargs):
-            fn()
-            return None, True, "queued"
-
-        with (
-            patch.object(runtime.worker_queue_service, "submit", side_effect=submit),
-            patch.object(
-                runtime.contest_build_service,
-                "_materialize_revision",
-                return_value=materialization,
-            ),
-            patch.object(
-                runtime.contest_statement_service, "build_pdf",
-                return_value={"artifact_id": "ca-pdf", "error": ""},
-            ) as build_pdf,
-            patch.object(
-                runtime.contest_package_service, "build_bundle",
-                return_value={"artifact_id": "ca-icpc", "error": ""},
-            ) as build_icpc,
-        ):
-            response = contest_packages_build_start(
-                contest=contest_slug,
-                user="alice",
-                outputs=["statement_pdf", "icpc_bundle"],
-                language="english",
-            )
-
-        self.assertEqual(response.status_code, 303)
-        job_id = parse_qs(urlparse(str(response.headers["location"])).query)["job_id"][0]
-        job = db_fetch_one(
-            "SELECT status,source_generation FROM contest_jobs WHERE id=? AND contest_id=?",
-            [job_id, contest_id],
-        )
-        self.assertIsNotNone(job)
-        self.assertEqual(str(job["status"]), "ok")
-        items = db_fetch_all(
-            """
-            SELECT source_commit,revision_number,materialization_id,archive_sha256
-            FROM contest_build_items WHERE job_id=?
-            """,
-            [job_id],
-        )
-        self.assertEqual(len(items), 1)
-        self.assertEqual(str(items[0]["source_commit"]), source_commit)
-        self.assertEqual(int(items[0]["revision_number"]), published.revision_number)
-        self.assertEqual(str(items[0]["materialization_id"]), materialization_id)
-        self.assertTrue(str(items[0]["archive_sha256"]))
-        build_pdf.assert_called_once()
-        build_icpc.assert_called_once()
-        self.assertEqual(build_pdf.call_args.kwargs["job_id"], job_id)
-        self.assertEqual(build_icpc.call_args.kwargs["job_id"], job_id)
-        summary = read_contest_job_summary(contest_id, job_id)
-        self.assertEqual(summary["successful_outputs"], ["statement_pdf", "icpc_bundle"])
-
-    def test_build_materializes_current_revision_instead_of_reusing_older_native(self) -> None:
-        contest_slug, contest_id, problem_id, problem_slug = self._contest_with_problem()
-        older = runtime.problem_package_service.published_revision(problem_id)
-        older_materialization_id = self._seed_materialization(
-            problem_id=problem_id,
-            source_commit=older.source_commit,
-            revision_number=older.revision_number,
-        )
-        workspace = Path(runtime.workspace_service.ensure_workspace(problem_slug, "alice"))
-        marker = workspace / "notes" / "newer.txt"
-        marker.write_text("new published revision\n", encoding="utf-8")
-        runtime.git_service.commit(
-            workspace,
-            "Publish newer contest revision",
-            "alice",
-            "alice@example.test",
-        )
-        runtime.git_service.push(workspace, "main")
-        current = runtime.problem_package_service.published_revision(problem_id)
-        self.assertNotEqual(current.source_commit, older.source_commit)
-
-        observed_commits: list[str] = []
-
-        def materialize(*, revision, **_kwargs):
-            observed_commits.append(revision.source_commit)
-            materialization_id = self._seed_materialization(
-                problem_id=problem_id,
-                source_commit=revision.source_commit,
-                revision_number=revision.revision_number,
-            )
-            row = runtime.problem_package_service.store.materialization(
-                materialization_id
-            )
-            assert row is not None
-            return row
-
-        def submit(*, fn, **_kwargs):
-            fn()
-            return None, True, "queued"
-
-        with (
-            patch.object(runtime.worker_queue_service, "submit", side_effect=submit),
-            patch.object(
-                runtime.contest_build_service,
-                "_materialize_revision",
-                side_effect=materialize,
-            ),
-            patch.object(
-                runtime.contest_package_service, "build_bundle",
-                return_value={"artifact_id": "ca-icpc", "error": ""},
-            ),
-        ):
-            response = contest_packages_build_start(
-                contest=contest_slug,
-                user="alice",
-                outputs=["icpc_bundle"],
-            )
-
-        job_id = parse_qs(urlparse(str(response.headers["location"])).query)[
-            "job_id"
-        ][0]
-        item = db_fetch_one(
-            """SELECT source_commit,revision_number,materialization_id
-               FROM contest_build_items WHERE job_id=?""",
-            [job_id],
-        )
-        self.assertIsNotNone(item)
-        self.assertEqual(observed_commits, [current.source_commit])
-        self.assertEqual(str(item["source_commit"]), current.source_commit)
-        self.assertEqual(int(item["revision_number"]), current.revision_number)
-        self.assertNotEqual(str(item["materialization_id"]), older_materialization_id)
-
-    def test_build_freeze_rejects_changed_roster_without_creating_job(self) -> None:
-        contest_slug, contest_id, problem_id, _problem_slug = self._contest_with_problem()
-        published = runtime.problem_package_service.published_revision(problem_id)
-        revisions = self._frozen_revisions(
-            contest_id,
-            source_commit=published.source_commit,
-            revision_number=published.revision_number,
-        )
-        db_execute(
-            "UPDATE contest_problems SET label='Z' WHERE contest_id=?",
-            [contest_id],
-        )
-        actor = db_fetch_one("SELECT id FROM users WHERE username='alice'")
-        self.assertIsNotNone(actor)
-
-        frozen = runtime.contest_service.freeze_build_job(
-            contest_id=contest_id,
-            actor_user_id=int(actor["id"]),
-            job_type="build",
-            summary={"job_type": "build", "contest_slug": contest_slug},
-            revisions=revisions,
-        )
-
-        self.assertEqual(frozen["outcome"], "roster_changed")
-        jobs = db_fetch_all(
-            "SELECT id FROM contest_jobs WHERE contest_id=? AND job_type='build'",
-            [contest_id],
-        )
-        self.assertEqual(jobs, [])
-
-    def test_build_freeze_atomically_reuses_active_job(self) -> None:
+    def test_summary_write_failure_terminalizes_frozen_job(self) -> None:
         contest_slug, contest_id, problem_id, _problem_slug = self._contest_with_problem()
         self._seed_materialization(
             problem_id=problem_id,
-            source_commit="c" * 40,
-            revision_number=3,
+            source_commit="7" * 40,
+            revision_number=7,
         )
         actor = db_fetch_one("SELECT id FROM users WHERE username='alice'")
         self.assertIsNotNone(actor)
-        summary = {
-            "job_type": "build",
-            "contest_slug": contest_slug,
-            "status": "running",
-        }
 
-        first = runtime.contest_service.freeze_build_job(
-            contest_id=contest_id,
-            actor_user_id=int(actor["id"]),
-            job_type="build",
-            summary=summary,
-            revisions=self._frozen_revisions(
-                contest_id,
-                source_commit="c" * 40,
-                revision_number=3,
+        with (
+            patch.object(
+                runtime.contest_service,
+                "_write_job_summary",
+                side_effect=OSError("summary write failed"),
             ),
-        )
-        second = runtime.contest_service.freeze_build_job(
-            contest_id=contest_id,
-            actor_user_id=int(actor["id"]),
-            job_type="build",
-            summary=summary,
-            revisions=self._frozen_revisions(
-                contest_id,
-                source_commit="c" * 40,
-                revision_number=3,
-            ),
-        )
-
-        self.assertEqual(first["outcome"], "created")
-        self.assertEqual(second["outcome"], "already_running")
-        self.assertEqual(second["job_id"], first["job_id"])
-        rows = db_fetch_all(
-            "SELECT id FROM contest_jobs WHERE contest_id=? AND job_type='build'",
-            [contest_id],
-        )
-        self.assertEqual(len(rows), 1)
-
-    def test_build_freeze_fails_immediately_when_sqlite_admission_is_busy(self) -> None:
-        contest_slug, contest_id, problem_id, _problem_slug = self._contest_with_problem()
-        published = runtime.problem_package_service.published_revision(problem_id)
-        actor = db_fetch_one("SELECT id FROM users WHERE username='alice'")
-        self.assertIsNotNone(actor)
-
-        with db_connection() as connection:
-            connection.execute("BEGIN IMMEDIATE")
-            frozen = runtime.contest_service.freeze_build_job(
+            self.assertRaisesRegex(OSError, "summary write failed"),
+        ):
+            runtime.contest_service.freeze_build_job(
                 contest_id=contest_id,
                 actor_user_id=int(actor["id"]),
                 job_type="build",
                 summary={"job_type": "build", "contest_slug": contest_slug},
-                revisions=self._frozen_revisions(
-                    contest_id,
-                    source_commit=published.source_commit,
-                    revision_number=published.revision_number,
-                ),
             )
 
-        self.assertEqual(frozen["outcome"], "busy")
-        self.assertEqual(frozen["job_id"], "")
+        job = db_fetch_one(
+            """SELECT id,status,finished_at FROM contest_jobs
+               WHERE contest_id=? ORDER BY created_at DESC,id DESC LIMIT 1""",
+            [contest_id],
+        )
+        self.assertIsNotNone(job)
+        self.assertEqual(str(job["status"]), "failed")
+        self.assertTrue(str(job["finished_at"] or ""))
 
-    def test_package_worker_rejects_changed_frozen_native_sha(self) -> None:
+    def test_bundle_is_not_published_when_any_child_projection_fails(self) -> None:
         contest_slug, contest_id, problem_id, _problem_slug = self._contest_with_problem()
-        self._seed_materialization(
+        first_id = self._seed_materialization(
             problem_id=problem_id,
-            source_commit="d" * 40,
-            revision_number=4,
-        )
-        actor = db_fetch_one("SELECT id FROM users WHERE username='alice'")
-        self.assertIsNotNone(actor)
-        frozen = runtime.contest_service.freeze_build_job(
-            contest_id=contest_id,
-            actor_user_id=int(actor["id"]),
-            job_type="build",
-            summary={"job_type": "build", "contest_slug": contest_slug},
-            revisions=self._frozen_revisions(
-                contest_id,
-                source_commit="d" * 40,
-                revision_number=4,
-            ),
-        )
-        db_execute(
-            "UPDATE contest_build_items SET archive_sha256=? WHERE job_id=?",
-            ["f" * 64, frozen["job_id"]],
-        )
-
-        result = runtime.contest_package_service.build_bundle(
-            contest_id=contest_id,
-            contest_slug=contest_slug,
-            job_id=frozen["job_id"],
-        )
-
-        self.assertEqual(result["totals"]["failed"], 1)
-        error = str(result["results"][0]["error"])
-        self.assertIn("frozen Native archive checksum", error)
-        row = db_fetch_one(
-            "SELECT status FROM problem_package_materializations WHERE problem_id=?",
-            [problem_id],
-        )
-        self.assertIsNotNone(row)
-        self.assertEqual(str(row["status"]), "available")
-
-    def test_package_worker_rewrites_contest_owned_short_name(self) -> None:
-        contest_slug, contest_id, problem_id, problem_slug = (
-            self._contest_with_problem()
-        )
-        published = runtime.problem_package_service.published_revision(problem_id)
-        materialization_id = self._seed_materialization(
-            problem_id=problem_id,
-            source_commit=published.source_commit,
-            revision_number=published.revision_number,
-        )
-        actor = db_fetch_one("SELECT id FROM users WHERE username='alice'")
-        self.assertIsNotNone(actor)
-        frozen = runtime.contest_service.freeze_build_job(
-            contest_id=contest_id,
-            actor_user_id=int(actor["id"]),
-            job_type="build",
-            summary={"job_type": "build", "contest_slug": contest_slug},
-            revisions=self._frozen_revisions(
-                contest_id,
-                source_commit=published.source_commit,
-                revision_number=published.revision_number,
-            ),
-        )
-        canonical = Path(runtime.settings.artifacts_root) / "canonical-icpc.zip"
-        with zipfile.ZipFile(canonical, "w") as archive:
-            archive.writestr("problem.yaml", "name: {en: Sample}\n")
-            archive.writestr(
-                "domjudge-problem.ini",
-                "name = Sample\nshort-name = revision-build-problem\n",
-            )
-        canonical_digest = hashlib.sha256(canonical.read_bytes()).hexdigest()
-
-        materialization = runtime.problem_package_service.store.materialization(
-            materialization_id
-        )
-        self.assertIsNotNone(materialization)
-
-        def canonical_export(
-            requested_problem: str,
-            requested_type: str,
-            *,
-            materialization_id: str,
-            expected_archive_sha256: str | None = None,
-        ) -> tuple[str, Path]:
-            self.assertEqual(requested_problem, problem_slug)
-            self.assertEqual(requested_type, "icpc")
-            self.assertEqual(materialization_id, str(materialization["id"]))
-            self.assertEqual(
-                expected_archive_sha256,
-                str(materialization["archive_sha256"]),
-            )
-            return "export-canonical", canonical
-
-        with patch.object(
-            runtime.export_service,
-            "create_export",
-            side_effect=canonical_export,
-        ):
-            result = runtime.contest_package_service.build_bundle(
-                contest_id=contest_id,
-                contest_slug=contest_slug,
-                job_id=frozen["job_id"],
-            )
-
-        self.assertEqual(result["totals"]["success"], 1)
-        package_file = str(result["results"][0]["package_file"])
-        target = runtime.contest_service.job_root(
-            contest_slug,
-            frozen["job_id"],
-        ) / package_file
-        with zipfile.ZipFile(target, "r") as archive:
-            self.assertIn(
-                "short-name = A\n",
-                archive.read("domjudge-problem.ini").decode("utf-8"),
-            )
-        self.assertEqual(
-            hashlib.sha256(canonical.read_bytes()).hexdigest(),
-            canonical_digest,
-        )
-
-    def test_binding_rejects_replacement_of_an_already_frozen_native(self) -> None:
-        contest_slug, contest_id, problem_id, _problem_slug = self._contest_with_problem()
-        materialization_id = self._seed_materialization(
-            problem_id=problem_id,
-            source_commit="e" * 40,
+            source_commit="2" * 40,
             revision_number=5,
         )
         actor = db_fetch_one("SELECT id FROM users WHERE username='alice'")
         self.assertIsNotNone(actor)
-        frozen = runtime.contest_service.freeze_build_job(
+        _cp_id, second_problem_id, _slug = self.add_owned_problem(
+            contest_id,
+            int(actor["id"]),
+            "B",
+            "second-package-problem",
+        )
+        second_id = self._seed_materialization(
+            problem_id=second_problem_id,
+            source_commit="3" * 40,
+            revision_number=2,
+        )
+        frozen = self._freeze(contest_id, contest_slug)
+
+        class Projector:
+            def project(
+                self,
+                _reader: object,
+                *,
+                short_name: str | None,
+                target: Path,
+                **_kwargs: object,
+            ) -> None:
+                if short_name == "B":
+                    raise RuntimeError("projection failed")
+                (target / "problem.yaml").write_text("name: A\n", encoding="utf-8")
+
+        service = ContestPackageService(
+            runtime.contest_service,
+            cast(PackageProjectionService, Projector()),
+        )
+        readers = {
+            first_id: SimpleNamespace(root=Path("."), manifest={}),
+            second_id: SimpleNamespace(root=Path("."), manifest={}),
+        }
+
+        result = service.build_bundle(
             contest_id=contest_id,
-            actor_user_id=int(actor["id"]),
-            job_type="build",
-            summary={"job_type": "build", "contest_slug": contest_slug},
-            revisions=self._frozen_revisions(
-                contest_id,
-                source_commit="e" * 40,
-                revision_number=5,
+            contest_slug=contest_slug,
+            job_id=str(frozen["job_id"]),
+            package_format="domjudge",
+            readers=readers,
+        )
+
+        self.assertEqual(result["totals"]["success"], 1)
+        self.assertEqual(result["totals"]["failed"], 1)
+        self.assertEqual(result["artifact_id"], "")
+        self.assertEqual(
+            db_fetch_all(
+                "SELECT id FROM contest_artifacts WHERE job_id=?",
+                [frozen["job_id"]],
             ),
-        )
-        replacement_sha = "a" * 64
-        db_execute(
-            "UPDATE problem_package_materializations SET archive_sha256=? WHERE id=?",
-            [replacement_sha, materialization_id],
+            [],
         )
 
-        with self.assertRaisesRegex(ValueError, "frozen value"):
-            runtime.contest_service.bind_build_item_materialization(
-                job_id=frozen["job_id"],
-                contest_problem_id=int(
-                    self._frozen_revisions(
-                        contest_id,
-                        source_commit="e" * 40,
-                        revision_number=5,
-                    )[0]["contest_problem_id"]
-                ),
-                problem_id=problem_id,
-                source_commit="e" * 40,
-                materialization_id=materialization_id,
-                archive_sha256=replacement_sha,
-            )
-
-        item = db_fetch_one(
-            "SELECT archive_sha256 FROM contest_build_items WHERE job_id=?",
-            [frozen["job_id"]],
-        )
-        self.assertIsNotNone(item)
-        self.assertNotEqual(str(item["archive_sha256"]), replacement_sha)
-
-    def test_partial_output_does_not_change_the_frozen_revision(self) -> None:
-        contest_slug, contest_id, problem_id, _problem_slug = self._contest_with_problem()
-        published = runtime.problem_package_service.published_revision(problem_id)
-        materialization_id = self._seed_materialization(
+    def test_bundle_projects_directly_and_stages_frozen_identity(self) -> None:
+        contest_slug, contest_id, problem_id, problem_slug = self._contest_with_problem()
+        verified_revision_id = self._seed_materialization(
             problem_id=problem_id,
-            source_commit=published.source_commit,
-            revision_number=published.revision_number,
+            source_commit="4" * 40,
+            revision_number=6,
         )
-        materialization = runtime.problem_package_service.store.materialization(
-            materialization_id
+        frozen = self._freeze(contest_id, contest_slug)
+        calls: list[tuple[str, str | None]] = []
+
+        class Projector:
+            def project(
+                self,
+                _reader: object,
+                *,
+                package_format: str,
+                short_name: str | None,
+                target: Path,
+                **_kwargs: object,
+            ) -> None:
+                calls.append((package_format, short_name))
+                (target / "problem.yaml").write_text("name: Example\n", encoding="utf-8")
+
+        service = ContestPackageService(
+            runtime.contest_service,
+            cast(PackageProjectionService, Projector()),
         )
-        self.assertIsNotNone(materialization)
+        result = service.build_bundle(
+            contest_id=contest_id,
+            contest_slug=contest_slug,
+            job_id=str(frozen["job_id"]),
+            package_format="domjudge",
+            readers={
+                verified_revision_id: SimpleNamespace(root=Path("."), manifest={})
+            },
+        )
 
-        def submit(*, fn, **_kwargs):
-            fn()
-            return None, True, "queued"
-
-        with (
-            patch.object(runtime.worker_queue_service, "submit", side_effect=submit),
-            patch.object(
-                runtime.contest_build_service,
-                "_materialize_revision",
-                return_value=materialization,
+        self.assertEqual(calls, [("domjudge", "A")])
+        self.assertEqual(result["artifact_id"], "")
+        self.assertEqual(result["_artifact_type"], "domjudge-bundle")
+        self.assertEqual(
+            result["_artifact_filename"],
+            f"{contest_slug}-domjudge-packages-{frozen['job_id']}.zip",
+        )
+        self.assertEqual(
+            db_fetch_all(
+                "SELECT id FROM contest_artifacts WHERE job_id=?",
+                [frozen["job_id"]],
             ),
-            patch.object(
-                runtime.contest_statement_service, "build_pdf",
-                return_value={"artifact_id": "ca-pdf", "error": ""},
-            ),
-            patch.object(
-                runtime.contest_package_service, "build_bundle",
-                return_value={"artifact_id": "", "error": "conversion failed"},
-            ),
-        ):
-            response = contest_packages_build_start(
-                contest=contest_slug,
-                user="alice",
-                outputs=["statement_pdf", "icpc_bundle"],
+            [],
+        )
+        archive_path = Path(str(result["_artifact_path"]))
+        self.assertTrue(archive_path.is_file())
+        with zipfile.ZipFile(archive_path, "r") as archive:
+            manifest = json.loads(archive.read("manifest.json"))
+            self.assertEqual(manifest["format"], "domjudge")
+            self.assertEqual(manifest["problems"][0]["problem"], problem_slug)
+            self.assertEqual(
+                manifest["problems"][0]["verified_revision_id"],
+                verified_revision_id,
             )
-
-        job_id = parse_qs(urlparse(str(response.headers["location"])).query)["job_id"][0]
-        job = db_fetch_one("SELECT status FROM contest_jobs WHERE id=?", [job_id])
-        self.assertIsNotNone(job)
-        self.assertEqual(str(job["status"]), "partial")
-        frozen = db_fetch_one(
-            "SELECT materialization_id FROM contest_build_items WHERE job_id=?",
-            [job_id],
-        )
-        self.assertIsNotNone(frozen)
-        self.assertEqual(str(frozen["materialization_id"]), materialization_id)
+            self.assertTrue(manifest["problems"][0]["archive_sha256"])
+            child_name = manifest["problems"][0]["package"]
+            self.assertIn(child_name, archive.namelist())
+        archive_path.unlink()

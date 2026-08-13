@@ -1,5 +1,5 @@
-import shutil
 import shlex
+import shutil
 import stat
 import uuid
 from pathlib import Path
@@ -25,6 +25,7 @@ _SOURCE_LANGUAGE = {
     ".cc": "cpp",
     ".cpp": "cpp",
     ".cxx": "cpp",
+    ".c++": "cpp",
     ".py": "python3",
     ".java": "java",
 }
@@ -102,14 +103,15 @@ def problem_uuid(problem_slug: str) -> str:
     return str(uuid.uuid5(uuid.NAMESPACE_URL, f"polygon-replica/problem/{problem_slug}"))
 
 
-def problem_type(*, mode: str, pass_limit: int) -> tuple[str, str]:
-    if mode == "interactive" and pass_limit > 1:
-        return ("legacy", "interactive multi-pass")
+def problem_type(*, mode: str, pass_limit: int) -> str | list[str]:
+    """Return the PPF 2025-09 type for the canonical execution mode."""
+
+    parts = ["pass-fail"]
     if mode == "interactive":
-        return ("2025-09", "interactive")
+        parts.append("interactive")
     if pass_limit > 1:
-        return ("2025-09", "multi-pass")
-    return ("2025-09", "pass-fail")
+        parts.append("multi-pass")
+    return parts[0] if len(parts) == 1 else parts
 
 
 def render_problem_yaml(
@@ -124,7 +126,7 @@ def render_problem_yaml(
 ) -> str:
     if not names:
         raise ValueError("ICPC export requires at least one problem statement")
-    format_version, type_value = problem_type(mode=mode, pass_limit=pass_limit)
+    type_value = problem_type(mode=mode, pass_limit=pass_limit)
     name_value: str | dict[str, str]
     if list(names) == ["en"]:
         name_value = names["en"]
@@ -138,11 +140,60 @@ def render_problem_yaml(
     if pass_limit > 1:
         limits["validation_passes"] = pass_limit
     payload: dict[str, object] = {
-        "problem_format_version": format_version,
+        "problem_format_version": "2025-09",
         "type": type_value,
         "name": name_value,
         "uuid": problem_uuid(problem_slug),
         "version": source_commit,
+        "limits": limits,
+    }
+    return yaml.safe_dump(
+        payload,
+        allow_unicode=True,
+        default_flow_style=False,
+        sort_keys=False,
+        width=4096,
+    )
+
+
+def render_domjudge_problem_yaml(
+    *,
+    names: dict[str, str],
+    mode: str,
+    pass_limit: int,
+    time_limit_ms: int,
+    memory_limit_mb: int | None,
+) -> str:
+    """Render the legacy metadata shape consumed by supported DOMjudge releases."""
+
+    if not names:
+        raise ValueError("DOMjudge export requires at least one problem statement")
+    name_value: str | dict[str, str]
+    if "en" in names:
+        name_value = names["en"]
+    else:
+        name_value = names[next(iter(names))]
+    if mode == "interactive":
+        validation = "custom interactive"
+        legacy_type = "pass-fail multi-pass" if pass_limit > 1 else "pass-fail"
+    elif pass_limit > 1:
+        validation = "custom multi-pass"
+        legacy_type = "pass-fail"
+    else:
+        validation = "custom"
+        legacy_type = "pass-fail"
+    limits: dict[str, object] = {
+        "time_limit": max(0.001, time_limit_ms / 1000.0),
+    }
+    if memory_limit_mb is not None:
+        limits["memory"] = memory_limit_mb
+    if pass_limit > 1:
+        limits["validation_passes"] = pass_limit
+    payload: dict[str, object] = {
+        "problem_format_version": "legacy",
+        "type": legacy_type,
+        "name": name_value,
+        "validation": validation,
         "limits": limits,
     }
     return yaml.safe_dump(
@@ -199,21 +250,25 @@ def _program_command(source: Path, *, snapshot: Path, target_dir: Path) -> tuple
     suffix = source.suffix.lower()
     shutil.copy2(source, target_dir / source.name)
     quoted_name = shlex.quote(f"./{source.name}")
-    if suffix in {".cc", ".cpp", ".cxx"}:
+    if suffix in {".cc", ".cpp", ".cxx", ".c++"}:
         _copy_testlib(snapshot, target_dir)
         return (
             f"c++ -Wall -DDOMJUDGE -O2 -std=gnu++20 -o program.bin {quoted_name}\n",
             '"$program_dir/program.bin"',
         )
     if suffix == ".c":
-        return (f"cc -Wall -O2 -o program.bin {quoted_name}\n", '"$program_dir/program.bin"')
+        return (
+            f"cc -Wall -DDOMJUDGE -O2 -o program.bin {quoted_name}\n",
+            '"$program_dir/program.bin"',
+        )
     if suffix == ".py":
         return ("", f'python3 "$program_dir"/{shlex.quote(source.name)}')
     raise ValueError(f"unsupported ICPC validator language: {suffix or source.name}")
 
 
 def write_input_validator(*, snapshot: Path, package_root: Path, source: Path | None) -> None:
-    target_dir = package_root / "input_validators" / ("validator" if source is not None else "accept_all")
+    validator_name = "validator" if source is not None else "accept_all"
+    target_dir = package_root / "input_validators" / validator_name
     target_dir.mkdir(parents=True, exist_ok=True)
     if source is None:
         _write_executable(target_dir / "run", "#!/bin/sh\ncat >/dev/null\nexit 42\n")
@@ -227,6 +282,7 @@ def write_input_validator(*, snapshot: Path, package_root: Path, source: Path | 
     _write_executable(
         target_dir / "run",
         "#!/bin/sh\n"
+        "set +e\n"
         "program_dir=$(CDPATH= cd -- \"$(dirname -- \"$0\")\" && pwd)\n"
         f"{command} \"$@\"\n"
         "status=$?\n"
@@ -251,6 +307,7 @@ def write_output_validator(*, snapshot: Path, package_root: Path, source: Path |
     _write_executable(
         target_dir / "run",
         "#!/bin/sh\n"
+        "set +e\n"
         "program_dir=$(CDPATH= cd -- \"$(dirname -- \"$0\")\" && pwd)\n"
         f"{command} \"$@\"\n"
         "status=$?\n"

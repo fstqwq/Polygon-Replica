@@ -1,4 +1,4 @@
-"""Canonical Native package manifest creation and validation."""
+"""Verified revision manifest creation and validation."""
 
 import hashlib
 import json
@@ -14,54 +14,54 @@ from app.service.problem.test_spec import load_tests_spec
 from app.service.verification.identity import canonical_verification_id
 
 
-class NativeFileEntry(TypedDict):
+class VerifiedFileEntry(TypedDict):
     path: str
     sha256: str
     size: int
 
 
-class NativeTestEntry(TypedDict):
+class VerifiedTestEntry(TypedDict):
     id: str
     kind: str
     sample: bool
-    input: NativeFileEntry
-    answer: NotRequired[NativeFileEntry]
-    sample_input: NotRequired[NativeFileEntry]
-    sample_output: NotRequired[NativeFileEntry]
+    input: VerifiedFileEntry
+    answer: NotRequired[VerifiedFileEntry]
+    sample_input: NotRequired[VerifiedFileEntry]
+    sample_output: NotRequired[VerifiedFileEntry]
 
 
-class NativeManifest(TypedDict):
+class VerifiedRevisionManifest(TypedDict):
     source_commit: str
     revision_number: int
     source_digest: str
     mode: str
     pass_limit: int
     verification: dict[str, str]
-    tests: list[NativeTestEntry]
+    tests: list[VerifiedTestEntry]
 
 
 def canonical_rel_path(raw: str) -> str:
     """Return a safe canonical package-relative POSIX path."""
 
     if "\\" in raw:
-        raise ValueError(f"invalid Native package path: {raw}")
+        raise ValueError(f"invalid verified revision path: {raw}")
     path = PurePosixPath(raw)
     if path.is_absolute() or not path.parts:
-        raise ValueError(f"invalid Native package path: {raw}")
+        raise ValueError(f"invalid verified revision path: {raw}")
     if any(part in {"", ".", ".."} for part in path.parts):
-        raise ValueError(f"invalid Native package path: {raw}")
+        raise ValueError(f"invalid verified revision path: {raw}")
     if path.as_posix() != raw:
-        raise ValueError(f"non-canonical Native package path: {raw}")
+        raise ValueError(f"non-canonical verified revision path: {raw}")
     return path.as_posix()
 
 
-def describe_file(path: Path, *, root: Path) -> NativeFileEntry:
+def describe_file(path: Path, *, root: Path) -> VerifiedFileEntry:
     resolved_root = root.resolve()
     if path.is_symlink() or not path.is_file():
-        raise ValueError(f"Native payload is not a regular file: {path}")
+        raise ValueError(f"verified payload is not a regular file: {path}")
     resolved = path.resolve()
     if resolved_root not in resolved.parents:
-        raise ValueError(f"Native payload escapes package root: {path}")
+        raise ValueError(f"verified payload escapes package root: {path}")
     return {
         "path": resolved.relative_to(resolved_root).as_posix(),
         "sha256": sha256_file(resolved),
@@ -105,20 +105,20 @@ def source_digest(source_root: Path) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
-def dumps_manifest(manifest: NativeManifest) -> str:
+def dumps_manifest(manifest: VerifiedRevisionManifest) -> str:
     return json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
 
 
-def load_manifest(path: Path) -> NativeManifest:
+def load_manifest(path: Path) -> VerifiedRevisionManifest:
     if path.is_symlink() or not path.is_file():
-        raise ValueError("Native package test_data/manifest.json is missing")
+        raise ValueError("Polygon Replica package test_data/manifest.json is missing")
     try:
         text = path.read_text(encoding="utf-8")
     except UnicodeDecodeError as exc:
-        raise ValueError("Native package manifest must be UTF-8") from exc
+        raise ValueError("Polygon Replica package manifest must be UTF-8") from exc
     except OSError as exc:
-        raise ValueError(f"cannot read Native package manifest: {exc}") from exc
-    raw = loads_object(text, label="Native package manifest")
+        raise ValueError(f"cannot read Polygon Replica package manifest: {exc}") from exc
+    raw = loads_object(text, label="Polygon Replica package manifest")
     required = {
         "source_commit",
         "revision_number",
@@ -129,50 +129,50 @@ def load_manifest(path: Path) -> NativeManifest:
         "tests",
     }
     if set(raw) != required:
-        raise ValueError("Native package manifest has an unsupported shape")
+        raise ValueError("Polygon Replica package manifest has an unsupported shape")
     if not isinstance(raw["mode"], str) or raw["mode"] not in {
         "pass-fail",
         "interactive",
     }:
-        raise ValueError("Native package mode is invalid")
+        raise ValueError("Polygon Replica package mode is invalid")
     if not isinstance(raw["source_commit"], str) or not re.fullmatch(
         r"[0-9a-f]{40}", raw["source_commit"]
     ):
-        raise ValueError("Native package source_commit is invalid")
+        raise ValueError("Polygon Replica package source_commit is invalid")
     if (
         not isinstance(raw["revision_number"], int)
         or isinstance(raw["revision_number"], bool)
         or raw["revision_number"] < 1
     ):
-        raise ValueError("Native package revision_number is invalid")
+        raise ValueError("Polygon Replica package revision_number is invalid")
     if not isinstance(raw["source_digest"], str) or not re.fullmatch(
         r"[0-9a-f]{64}", raw["source_digest"]
     ):
-        raise ValueError("Native package source_digest is invalid")
+        raise ValueError("Polygon Replica package source_digest is invalid")
     if (
         not isinstance(raw["pass_limit"], int)
         or isinstance(raw["pass_limit"], bool)
         or raw["pass_limit"] < 1
     ):
-        raise ValueError("Native package pass_limit is invalid")
+        raise ValueError("Polygon Replica package pass_limit is invalid")
     verification = raw["verification"]
     if not isinstance(verification, dict) or set(verification) != {"id", "source"}:
-        raise ValueError("Native package verification provenance is invalid")
+        raise ValueError("Polygon Replica package verification provenance is invalid")
     if not all(isinstance(verification[key], str) and verification[key] for key in verification):
-        raise ValueError("Native package verification provenance is invalid")
+        raise ValueError("Polygon Replica package verification provenance is invalid")
     try:
         canonical_verification_id(verification["id"])
     except RuntimeError as exc:
-        raise ValueError("Native package verification provenance is invalid") from exc
+        raise ValueError("Polygon Replica package verification provenance is invalid") from exc
     tests = raw["tests"]
     if not isinstance(tests, list) or not tests:
-        raise ValueError("Native package must contain tests")
-    return cast(NativeManifest, raw)
+        raise ValueError("Polygon Replica package must contain tests")
+    return cast(VerifiedRevisionManifest, raw)
 
 
 def validate_manifest_files(
     package_root: Path,
-    manifest: NativeManifest,
+    manifest: VerifiedRevisionManifest,
     *,
     tests_spec_max_bytes: int,
     statement_sample_max_bytes: int,
@@ -198,18 +198,18 @@ def validate_manifest_files(
     }
     for test in manifest["tests"]:
         if not isinstance(test, dict):
-            raise ValueError("Native manifest test entry must be an object")
+            raise ValueError("verified revision test entry must be an object")
         if not {"id", "kind", "sample", "input"}.issubset(test) or not set(
             test
         ).issubset(allowed_test_keys):
-            raise ValueError("Native manifest test entry has an unsupported shape")
+            raise ValueError("verified revision test entry has an unsupported shape")
         if not isinstance(test["id"], str) or not isinstance(test["kind"], str):
-            raise ValueError("Native manifest test identity is invalid")
+            raise ValueError("verified revision test identity is invalid")
         if not isinstance(test["sample"], bool):
-            raise ValueError("Native manifest test sample flag is invalid")
+            raise ValueError("verified revision test sample flag is invalid")
         test_id = test["id"]
         if not test_id or test_id in test_ids:
-            raise ValueError("Native manifest test IDs must be non-empty and unique")
+            raise ValueError("verified revision test IDs must be non-empty and unique")
         test_ids.add(test_id)
         manifest_shape.append((test_id, test["kind"], test["sample"]))
     spec_shape = [
@@ -217,11 +217,11 @@ def validate_manifest_files(
         for test in spec
     ]
     if manifest_shape != spec_shape:
-        raise ValueError("Native manifest tests do not match tests/spec.json order")
+        raise ValueError("verified revision tests do not match tests/spec.json order")
     for test in manifest["tests"]:
         test_id = test["id"]
         if manifest["mode"] != "interactive" and "answer" not in test:
-            raise ValueError(f"Native manifest answer is required: {test_id}")
+            raise ValueError(f"verified answer is required: {test_id}")
         for key in ("input", "answer", "sample_input", "sample_output"):
             descriptor = test.get(key)
             if descriptor is None:
@@ -231,19 +231,19 @@ def validate_manifest_files(
                 "sha256",
                 "size",
             }:
-                raise ValueError(f"Native payload descriptor is invalid: {test_id}/{key}")
+                raise ValueError(f"verified payload descriptor is invalid: {test_id}/{key}")
             if not isinstance(descriptor["path"], str):
-                raise ValueError(f"Native payload path is invalid: {test_id}/{key}")
+                raise ValueError(f"verified payload path is invalid: {test_id}/{key}")
             if not isinstance(descriptor["sha256"], str) or not re.fullmatch(
                 r"[0-9a-f]{64}", descriptor["sha256"]
             ):
-                raise ValueError(f"Native payload checksum is invalid: {test_id}/{key}")
+                raise ValueError(f"verified payload checksum is invalid: {test_id}/{key}")
             if (
                 not isinstance(descriptor["size"], int)
                 or isinstance(descriptor["size"], bool)
                 or descriptor["size"] < 0
             ):
-                raise ValueError(f"Native payload size is invalid: {test_id}/{key}")
+                raise ValueError(f"verified payload size is invalid: {test_id}/{key}")
             rel = canonical_rel_path(descriptor["path"])
             file_name = {
                 "input": "input",
@@ -253,9 +253,9 @@ def validate_manifest_files(
             }[key]
             expected_rel = f"test_data/tests/{test_id}/{file_name}"
             if rel != expected_rel:
-                raise ValueError(f"Native manifest payload path is not canonical: {rel}")
+                raise ValueError(f"verified payload path is not canonical: {rel}")
             if rel in declared:
-                raise ValueError(f"Native manifest declares a payload twice: {rel}")
+                raise ValueError(f"verified revision declares a payload twice: {rel}")
             declared.add(rel)
             target = package_root / Path(*PurePosixPath(rel).parts)
             actual = describe_file(target, root=package_root)
@@ -263,12 +263,15 @@ def validate_manifest_files(
                 actual["sha256"] != descriptor["sha256"]
                 or actual["size"] != descriptor["size"]
             ):
-                raise ValueError(f"Native payload integrity check failed: {rel}")
+                raise ValueError(f"verified payload integrity check failed: {rel}")
         for display_key, judge_key in (("sample_input", "input"), ("sample_output", "answer")):
             display = test.get(display_key)
             judge = test.get(judge_key)
             if display is not None and judge is not None and display["sha256"] == judge["sha256"]:
-                raise ValueError(f"Native manifest stores a redundant display override: {test_id}/{display_key}")
+                raise ValueError(
+                    "verified revision stores a redundant display override: "
+                    f"{test_id}/{display_key}"
+                )
     data_root = package_root / "test_data"
     actual_files: set[str] = set()
     actual_directories: set[str] = set()
@@ -277,16 +280,20 @@ def validate_manifest_files(
             actual_directories.add(path.relative_to(package_root).as_posix())
             continue
         if path.is_symlink() or not path.is_file():
-            raise ValueError("Native test_data contains a non-regular entry")
+            raise ValueError("Polygon Replica package test_data contains a non-regular entry")
         actual_files.add(path.relative_to(package_root).as_posix())
     expected_files = {*declared, "test_data/manifest.json"}
     if actual_files != expected_files:
-        raise ValueError("Native test_data contains undeclared or missing payload files")
+        raise ValueError(
+            "Polygon Replica package test_data contains undeclared or missing payload files"
+        )
     expected_directories = {"test_data/tests"}
     expected_directories.update(
         f"test_data/tests/{test['id']}" for test in manifest["tests"]
     )
     if actual_directories != expected_directories:
-        raise ValueError("Native test_data contains undeclared or missing directories")
+        raise ValueError(
+            "Polygon Replica package test_data contains undeclared or missing directories"
+        )
     if source_digest(package_root) != manifest["source_digest"]:
-        raise ValueError("Native source tree digest does not match its Git revision")
+        raise ValueError("Polygon Replica package source tree does not match its Git revision")

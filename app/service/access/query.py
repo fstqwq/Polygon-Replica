@@ -388,17 +388,17 @@ class AccessQuery:
             ),
         }
 
-    def package_materialization_context(
+    def verified_revision_context(
         self,
         *,
         actor_user_id: int,
         expected_problem_id: int,
-        materialization: Mapping[str, object] | None,
+        verified_revision: Mapping[str, object] | None,
         problem_access: ProblemAccessContext | None = None,
     ) -> PackageJobAccessContext:
         matches_problem = (
-            materialization is not None
-            and int(materialization["problem_id"]) == int(expected_problem_id)
+            verified_revision is not None
+            and int(verified_revision["problem_id"]) == int(expected_problem_id)
         )
         access = (
             self.problem_context(expected_problem_id, actor_user_id)

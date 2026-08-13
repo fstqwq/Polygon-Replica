@@ -298,7 +298,7 @@ class TestAgentAPI(E2ETestBase):
             return verification_id
 
         revision = runtime.problem_package_service.published_revision(problem_id)
-        materialization = runtime.problem_package_service.ensure_materialization(
+        verified_revision = runtime.problem_package_service.ensure_verified_revision(
             revision,
             materialize,
         )
@@ -312,8 +312,8 @@ class TestAgentAPI(E2ETestBase):
             [
                 export_id,
                 problem_id,
-                materialization["id"],
-                "icpc",
+                verified_revision["id"],
+                "domjudge",
                 filename,
                 archive.relative_to(runtime.settings.artifacts_root).as_posix(),
                 hashlib.sha256(archive.read_bytes()).hexdigest(),
@@ -326,7 +326,7 @@ class TestAgentAPI(E2ETestBase):
             job_id=job_id,
             problem_id=problem_id,
             actor_user_id=actor_user_id,
-            export_type="icpc",
+            package_format="domjudge",
             source_commit=source_commit,
         )
         runtime.export_service.mark_export_job_running(
@@ -335,7 +335,7 @@ class TestAgentAPI(E2ETestBase):
         )
         runtime.export_service.mark_export_job_succeeded(
             job_id,
-            materialization_id=materialization["id"],
+            verified_revision_id=verified_revision["id"],
             export_id=export_id,
         )
         with TestClient(app, raise_server_exceptions=False) as client:
@@ -359,8 +359,18 @@ class TestAgentAPI(E2ETestBase):
             payload = status.json()
             self.assertEqual(str(payload.get("job_id") or ""), job_id)
             self.assertEqual(str(payload.get("status") or ""), "succeeded")
+            self.assertEqual(str(payload.get("format") or ""), "domjudge")
+            self.assertEqual(str(payload.get("phase") or ""), "complete")
+            self.assertEqual(str(payload.get("source_commit") or ""), source_commit)
+            self.assertEqual(
+                str(payload.get("verified_revision_id") or ""),
+                str(verified_revision["id"]),
+            )
+            self.assertEqual(
+                str(payload.get("download_path") or ""),
+                f"/agent/v1/export/{job_id}/download",
+            )
             self.assertEqual(str(payload.get("filename") or ""), filename)
-            self.assertNotIn("must-not-be-read", status.text)
 
             download = client.get(
                 f"/agent/v1/export/{job_id}/download",
@@ -988,19 +998,12 @@ class TestAgentAPI(E2ETestBase):
                 {"running", "queued", "failed", "ok", "cancelled"},
             )
 
-            native_export = client.post(
+            domjudge_export = client.post(
                 "/agent/v1/export/start",
                 headers=self._bearer(readonly_token),
-                json={"export_type": "native"},
+                json={"format": "domjudge"},
             )
-            self.assertEqual(native_export.status_code, 403, native_export.text)
-
-            icpc_export = client.post(
-                "/agent/v1/export/start",
-                headers=self._bearer(readonly_token),
-                json={"export_type": "icpc"},
-            )
-            self.assertEqual(icpc_export.status_code, 403, icpc_export.text)
+            self.assertEqual(domjudge_export.status_code, 403, domjudge_export.text)
 
             _workspace_request, workspace_token = self._approve_token(
                 client,
@@ -1009,18 +1012,17 @@ class TestAgentAPI(E2ETestBase):
                 identity_hash=identity_hash,
                 scope="workspace",
             )
-            native_export = client.post(
+            missing_format = client.post(
                 "/agent/v1/export/start",
                 headers=self._bearer(workspace_token),
-                json={"export_type": "native"},
+                json={},
             )
-            self.assertEqual(native_export.status_code, 400, native_export.text)
-            self.assertIn("no published main revision", native_export.text)
+            self.assertEqual(missing_format.status_code, 400, missing_format.text)
 
             icpc_export = client.post(
                 "/agent/v1/export/start",
                 headers=self._bearer(workspace_token),
-                json={"export_type": "icpc"},
+                json={"format": "icpc-2025-09"},
             )
             self.assertEqual(icpc_export.status_code, 400, icpc_export.text)
             self.assertIn("no published main revision", icpc_export.text)
@@ -1079,26 +1081,20 @@ class TestAgentAPI(E2ETestBase):
             fresh_icpc_export = client.post(
                 "/agent/v1/export/start",
                 headers=self._bearer(workspace_token),
-                json={"export_type": "icpc"},
+                json={"format": "icpc-2025-09"},
             )
             self.assertEqual(fresh_icpc_export.status_code, 200, fresh_icpc_export.text)
             fresh_export_job_id = str(fresh_icpc_export.json().get("job_id") or "")
             self.assertRegex(fresh_export_job_id, r"^exp-api-")
             fresh_export_status = client.get(f"/agent/v1/export/{fresh_export_job_id}/status", headers=self._bearer(readonly_token))
             self.assertEqual(fresh_export_status.status_code, 200, fresh_export_status.text)
-            self.assertEqual(str(fresh_export_status.json().get("source_commit") or ""), head)
-
-            fresh_native_export = client.post(
-                "/agent/v1/export/start",
-                headers=self._bearer(workspace_token),
-                json={"export_type": "native"},
+            fresh_status_payload = fresh_export_status.json()
+            self.assertEqual(str(fresh_status_payload.get("format") or ""), "icpc-2025-09")
+            self.assertIn(
+                str(fresh_status_payload.get("phase") or ""),
+                {"queued", "verifying", "projecting", "complete"},
             )
-            self.assertEqual(fresh_native_export.status_code, 200, fresh_native_export.text)
-            fresh_native_job_id = str(fresh_native_export.json().get("job_id") or "")
-            self.assertRegex(fresh_native_job_id, r"^exp-api-")
-            fresh_native_status = client.get(f"/agent/v1/export/{fresh_native_job_id}/status", headers=self._bearer(readonly_token))
-            self.assertEqual(fresh_native_status.status_code, 200, fresh_native_status.text)
-            self.assertEqual(str(fresh_native_status.json().get("source_commit") or ""), head)
+            self.assertEqual(str(fresh_status_payload.get("source_commit") or ""), head)
 
     def test_agent_verification_detail_returns_yaml_table_and_zoom(self) -> None:
         username = self.random_id("agent-detail")

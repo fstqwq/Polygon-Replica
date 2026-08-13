@@ -16,7 +16,7 @@ from app.service.importing.archive import (
     PROBLEM_ZIP_MAX_ENTRIES,
     contest_archive_policy,
 )
-from app.service.importing.native import NativePackageImportService
+from app.service.importing.polygon_replica import PolygonReplicaPackageImportService
 from app.service.importing.upload import spool_fileobj
 from app.service.importing.solution_behavior import polygon_solution_expected_from_tag
 from app.service.problem.build_config import BuildConfig, dumps_build_config
@@ -86,8 +86,8 @@ class TestPolygonPackageRules(unittest.TestCase):
                     archive.writestr(name, content)
         return payload.getvalue()
 
-    def _native_package(self) -> bytes:
-        with tempfile.TemporaryDirectory(prefix="native-package-") as raw:
+    def _polygon_replica_package(self) -> bytes:
+        with tempfile.TemporaryDirectory(prefix="polygon-replica-package-") as raw:
             root = Path(raw)
             for directory in (
                 "config",
@@ -146,7 +146,7 @@ class TestPolygonPackageRules(unittest.TestCase):
                 "mode": "pass-fail",
                 "pass_limit": 1,
                 "verification": {
-                    "id": canonical_test_verification_id("native-import"),
+                    "id": canonical_test_verification_id("package-import"),
                     "source": "published",
                 },
                 "tests": [
@@ -377,9 +377,9 @@ class TestPolygonPackageRules(unittest.TestCase):
             ):
                 source.read()
 
-    def test_native_import_validates_then_discards_materialized_test_data(self) -> None:
-        package = self._native_package()
-        with tempfile.TemporaryDirectory(prefix="native-ignore-") as temp:
+    def test_polygon_replica_import_discards_verified_test_data(self) -> None:
+        package = self._polygon_replica_package()
+        with tempfile.TemporaryDirectory(prefix="polygon-replica-ignore-") as temp:
             workspace = Path(temp) / "workspace"
             workspace.mkdir()
             git_metadata = workspace / ".git"
@@ -389,9 +389,9 @@ class TestPolygonPackageRules(unittest.TestCase):
                 "remove me\n", encoding="utf-8"
             )
             with archive_view_from_bytes(package) as archive:
-                NativePackageImportService().import_package(
+                PolygonReplicaPackageImportService().import_package(
                     workspace,
-                    "native.zip",
+                    "problem-polygon-replica-v1.zip",
                     archive,
                     text_limit_bytes=256 * 1024,
                     statement_sample_max_bytes=32 * 1024,
@@ -411,14 +411,14 @@ class TestPolygonPackageRules(unittest.TestCase):
                 ("test_data/manifest.json", b"not-json"),
             ]
         )
-        with tempfile.TemporaryDirectory(prefix="native-invalid-") as temp:
+        with tempfile.TemporaryDirectory(prefix="polygon-replica-invalid-") as temp:
             workspace = Path(temp) / "workspace"
             workspace.mkdir()
             with archive_view_from_bytes(malformed) as archive:
                 with self.assertRaisesRegex(ValueError, "manifest"):
-                    NativePackageImportService().import_package(
+                    PolygonReplicaPackageImportService().import_package(
                         workspace,
-                        "native.zip",
+                        "problem-polygon-replica-v1.zip",
                         archive,
                         text_limit_bytes=256 * 1024,
                         statement_sample_max_bytes=32 * 1024,
@@ -431,7 +431,7 @@ class TestPolygonPackageRules(unittest.TestCase):
                 ("solutions/large.cpp", b"x" * 1024),
             ]
         )
-        with tempfile.TemporaryDirectory(prefix="native-selected-") as temp:
+        with tempfile.TemporaryDirectory(prefix="polygon-replica-selected-") as temp:
             workspace = Path(temp) / "workspace"
             workspace.mkdir()
             with archive_view_from_bytes(
@@ -442,15 +442,15 @@ class TestPolygonPackageRules(unittest.TestCase):
                     ValueError,
                     "expanded zip payload is too large",
                 ):
-                    NativePackageImportService().import_package(
+                    PolygonReplicaPackageImportService().import_package(
                         workspace,
-                        "native.zip",
+                        "problem-polygon-replica-v1.zip",
                         archive,
                         text_limit_bytes=256 * 1024,
                         statement_sample_max_bytes=32 * 1024,
                         problem_config_limits=_PROBLEM_LIMITS,
                     )
             self.assertEqual(
-                list(workspace.parent.glob(".native-import-*")),
+                list(workspace.parent.glob(".polygon-replica-import-*")),
                 [],
             )

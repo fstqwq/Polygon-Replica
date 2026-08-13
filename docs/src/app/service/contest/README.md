@@ -1,36 +1,34 @@
 # `app/service/contest`
 
-Owns contest identity, membership, properties, problem roster, statement source
-and attachments, build jobs, selected build inputs, and derived-output records. It
-accepts canonical contest/problem identities and source payloads and returns
-access contexts, roster/build snapshots, and validated output download paths.
-Focused build services own build admission and terminal transitions, durable
-source snapshots, statement assembly and compilation, and Contest-specific
-package construction. HTTP adapters only validate request syntax, translate
-capability failures, and construct responses.
+Owns Contest identity, membership, typed metadata, ordered problem roster,
+statement source and attachments, build jobs, frozen build inputs, and
+Contest-owned derived products. Relational state lives in `contest_*` tables;
+durable authored content lives below the Contest source root; build products
+live below `artifacts_root/contests`.
 
 `ContestProblemQueryService` authorizes the complete roster in one batch before
-touching any workspace, then assembles workspace revision, Source review, and
-readiness rows. An unreadable problem never provisions or reads a workspace;
-one unavailable readable workspace degrades only its own row.
+touching a workspace and assembles its source-review and readiness rows. For
+package readiness it compares each current published revision with the highest
+available verified revision and reports `current`, `stale`, or `none`.
 
-Relational state lives in the `contest_*` tables. Statement source and
-attachments live below the contest source root; products live below the global
-`artifacts_root/contests` tree. Build jobs are frozen before asynchronous work
-is admitted, and cleanup may remove products without deleting the durable
-contest definition. Storage ownership is defined by the
-[storage protocol](../../../../protocol/storage.md). Build commands enforce
-Contest capability through the access query even when invoked outside HTTP,
-and source snapshots resolve paths only through the platform storage layout.
+Build admission uses one SQLite writer transaction to check active work, read
+the ordered roster and labels, select each problem's highest available verified
+revision, and insert the job and all build items with frozen archive checksums.
+A missing verified revision returns `not_ready` without a job, source snapshot,
+or Verification. Contest workers never prepare or repair a verified revision,
+call `ExportService`, or create problem-level export rows.
 
-New roster entries are admitted under the active `CONTEST_MAX_PROBLEMS` policy.
-The store serializes count, position allocation, and insert in one writer
-transaction. Existing contests above a newly lowered limit remain usable; only
-further additions are rejected.
+A job may request statement PDF, DOMjudge bundle, and ICPC 2025-09 bundle. Its
+verified-revision readers are opened once and shared across selected outputs.
+Statement assembly reads source, assets, and samples directly from those
+readers. Package bundles invoke the common pure projector for every problem;
+the DOMjudge projection receives the frozen roster label as its short name.
+Temporary child ZIPs exist only inside the Contest job and never enter the
+problem projection cache.
 
-Package builds consume canonical problem ICPC exports. The contest service
-safely stages each archive, rewrites only the legacy DOMjudge `short-name` to
-the frozen contest label, and repacks a contest-owned ZIP. These variants live
-under the contest job and never become problem export cache records. This
-trusted internal transformation streams payloads and validates archive
-structure and member safety without reapplying authenticated-upload budgets.
+Each bundle is all-or-nothing, while different output types are independent and
+can produce a `partial` job. Package-only work does not snapshot Contest source.
+Generated-data cleanup may remove jobs and products without deleting Contest
+metadata, membership, roster, or authored source. The exact lifecycle is owned
+by the [package protocol](../../../../protocol/package.md) and storage by the
+[storage protocol](../../../../protocol/storage.md).

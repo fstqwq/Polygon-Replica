@@ -5,6 +5,9 @@ from typing import TypedDict
 from app.db import DB, now_iso
 
 
+SUPPORTED_EXPORT_FORMATS = ("domjudge", "icpc-2025-09")
+
+
 class ExportJobRow(TypedDict):
     id: str
     problem_id: int
@@ -66,21 +69,14 @@ class ExportStore:
     def __init__(self, db: DB):
         self.db = db
 
-    def latest_source_commit(self, problem_id: int) -> str:
-        row = self.db.fetch_one(
-            """SELECT source_commit FROM export_jobs
-               WHERE problem_id=? AND status='succeeded'
-               ORDER BY finished_at DESC,created_at DESC,id DESC LIMIT 1""",
-            [int(problem_id)],
-        )
-        return "" if row is None else str(row["source_commit"])
-
     def latest_succeeded_export_job(
         self,
         problem_id: int,
         source_commit: str,
         export_type: str,
     ) -> ExportJobRow | None:
+        if export_type not in SUPPORTED_EXPORT_FORMATS:
+            return None
         row = self.db.fetch_one(
             """SELECT j.*,e.filename,e.sha256,e.size_bytes
                FROM export_jobs j JOIN exports e ON e.id=j.export_id
@@ -97,11 +93,15 @@ class ExportStore:
         *,
         limit: int,
     ) -> list[ExportJobRow]:
-        params: list[object] = [int(problem_id), max(1, int(limit))]
+        params: list[object] = [
+            int(problem_id),
+            *SUPPORTED_EXPORT_FORMATS,
+            max(1, int(limit)),
+        ]
         rows = self.db.fetch_all(
             """SELECT j.*,e.filename,e.sha256,e.size_bytes
                FROM export_jobs j LEFT JOIN exports e ON e.id=j.export_id
-               WHERE j.problem_id=?
+               WHERE j.problem_id=? AND j.export_type IN (?,?)
                ORDER BY j.created_at DESC,j.id DESC LIMIT ?""",
             params,
         )
@@ -112,11 +112,15 @@ class ExportStore:
         problem_id: int,
         job_id: str,
     ) -> ExportJobRow | None:
-        params: list[object] = [job_id, int(problem_id)]
+        params: list[object] = [
+            job_id,
+            int(problem_id),
+            *SUPPORTED_EXPORT_FORMATS,
+        ]
         row = self.db.fetch_one(
             """SELECT j.*,e.filename,e.sha256,e.size_bytes
                FROM export_jobs j LEFT JOIN exports e ON e.id=j.export_id
-               WHERE j.id=? AND j.problem_id=?""",
+               WHERE j.id=? AND j.problem_id=? AND j.export_type IN (?,?)""",
             params,
         )
         return None if row is None else _job_row(row)
@@ -151,6 +155,23 @@ class ExportStore:
             )
         self.db.write_transaction(transaction)
 
+    def mark_export_job_projecting(
+        self,
+        job_id: str,
+        *,
+        materialization_id: str,
+    ) -> None:
+        def transaction(connection) -> None:
+            cursor = connection.execute(
+                """UPDATE export_jobs SET materialization_id=?
+                   WHERE id=? AND status='running'""",
+                [materialization_id, job_id],
+            )
+            if int(cursor.rowcount or 0) != 1:
+                raise RuntimeError(f"export job is not running: {job_id}")
+
+        self.db.write_transaction(transaction)
+
     def mark_export_job_succeeded(
         self, job_id: str, *, materialization_id: str, export_id: str
     ) -> None:
@@ -178,8 +199,9 @@ class ExportStore:
         def transaction(connection) -> int:
             cursor = connection.execute(
                 """UPDATE export_jobs SET status='failed',error='interrupted by application restart',finished_at=?
-                   WHERE status IN ('queued','running')""",
-                [now_iso()],
+                   WHERE status IN ('queued','running')
+                     AND export_type IN (?,?)""",
+                [now_iso(), *SUPPORTED_EXPORT_FORMATS],
             )
             return max(0, int(cursor.rowcount))
         return self.db.write_transaction(transaction)
@@ -189,8 +211,9 @@ class ExportStore:
     ) -> ExportArchiveRow | None:
         row = self.db.fetch_one(
             """SELECT filename,export_type,archive_rel_path,materialization_id,sha256,size_bytes
-               FROM exports WHERE id=? AND problem_id=?""",
-            [export_id, int(problem_id)],
+               FROM exports
+               WHERE id=? AND problem_id=? AND export_type IN (?,?)""",
+            [export_id, int(problem_id), *SUPPORTED_EXPORT_FORMATS],
         )
         if row is None:
             return None
@@ -205,8 +228,9 @@ class ExportStore:
 
     def export_problem(self, export_id: str) -> dict[str, object] | None:
         row = self.db.fetch_one(
-            "SELECT id,problem_id FROM exports WHERE id=?",
-            [export_id],
+            """SELECT id,problem_id FROM exports
+               WHERE id=? AND export_type IN (?,?)""",
+            [export_id, *SUPPORTED_EXPORT_FORMATS],
         )
         return None if row is None else dict(row)
 
@@ -231,6 +255,8 @@ class ExportStore:
         materialization_id: str,
         export_type: str,
     ) -> str:
+        if export_type not in SUPPORTED_EXPORT_FORMATS:
+            return ""
         row = self.db.fetch_one(
             "SELECT id FROM exports WHERE materialization_id=? AND export_type=?",
             [materialization_id, export_type],

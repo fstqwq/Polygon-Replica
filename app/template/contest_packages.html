@@ -12,18 +12,36 @@
   {% elif problem_count <= 0 %}
   <p class="muted">Add a problem to start.</p>
   {% else %}
-  <div class="contest-build-grid">
-    <article class="contest-build-card">
-      <h3>Contest PDF</h3>
-      <p class="muted">
-        Compile all statements in <strong>{{ contest_statement_language }}</strong> into one PDF.
-      </p>
-      <form
-        class="form-stack"
-        method="post"
-        action="/contests/{{ ctx.contest.slug }}/packages/build/start"
-      >
-        <input type="hidden" name="outputs" value="statement_pdf" />
+  <form
+    class="form-stack"
+    method="post"
+    action="/contests/{{ ctx.contest.slug }}/packages/build/start"
+  >
+    <div class="contest-build-grid">
+      <article class="contest-build-card">
+        <h3>Outputs</h3>
+        <label>
+          <input type="checkbox" name="outputs" value="statement_pdf" checked />
+          Contest statement PDF
+        </label>
+        <label>
+          <input type="checkbox" name="outputs" value="domjudge_bundle" />
+          DOMjudge package bundle
+        </label>
+        <label>
+          <input type="checkbox" name="outputs" value="icpc_2025_09_bundle" />
+          ICPC Problem Package 2025-09 bundle
+        </label>
+        <p class="muted">
+          Package outputs use the latest available verified revision of every problem.
+          They do not run Verification.
+        </p>
+      </article>
+      <article class="contest-build-card">
+        <h3>PDF options</h3>
+        <p class="muted">
+          These settings apply only when the statement PDF is selected.
+        </p>
         <label for="contest-pdf-language">Language</label>
         <select id="contest-pdf-language" name="language">
           {% for language in contest_statement_language_options %}
@@ -36,21 +54,10 @@
           <input type="checkbox" name="insert_blank_pages" value="true" />
           Insert blank pages after odd statements
         </label>
-        <button class="btn primary-action" type="submit">Build Contest PDF</button>
-      </form>
-    </article>
-    <article class="contest-build-card">
-      <h3>ICPC Package Bundle</h3>
-      <p class="muted">
-        Freeze every published problem revision, build required packages, then create
-        one ICPC ZIP per problem and an outer bundle archive.
-      </p>
-      <form method="post" action="/contests/{{ ctx.contest.slug }}/packages/build/start">
-        <input type="hidden" name="outputs" value="icpc_bundle" />
-        <button class="btn" type="submit">Build ICPC Package Bundle</button>
-      </form>
-    </article>
-  </div>
+      </article>
+    </div>
+    <button class="btn primary-action" type="submit">Start Build</button>
+  </form>
   {% endif %}
 </section>
 
@@ -192,7 +199,7 @@
   {% set selected_outputs = selected_job.summary.get("outputs") or {} %}
   {% if selected_outputs %}
   {% for output_name, output_summary in selected_outputs.items() %}
-  <h3>{{ "Contest PDF" if output_name == "statement_pdf" else "ICPC Package Bundle" }}</h3>
+  <h3>{% if output_name == "statement_pdf" %}Contest PDF{% elif output_name == "domjudge_bundle" %}DOMjudge Package Bundle{% else %}ICPC 2025-09 Package Bundle{% endif %}</h3>
   {% if output_summary.get("language") %}
   <p><strong>Language:</strong> {{ output_summary.get("language") }}</p>
   {% endif %}

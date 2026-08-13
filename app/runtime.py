@@ -27,12 +27,8 @@ from app.service.verification.runtime_registry import VerificationRuntimeRegistr
 from app.service.verification.task_store import VerificationTaskStore
 from app.service.verification.judgehost_adapter import VerificationJudgehostAdapter
 from app.service.export.service import ExportService
-from app.service.problem_package.service import (
-    MaterializationRow,
-    ProblemPackageService,
-    PublishedRevision,
-)
-from app.service.problem_package.workflow import PublishedMaterializationWorkflow
+from app.service.problem_package.service import ProblemPackageService
+from app.service.problem_package.workflow import VerifiedRevisionWorkflow
 from app.service.problem.readiness import ProblemReadinessService
 from app.service.problem.query import ProblemSourceQueryService
 from app.service.repository.git import GitService
@@ -107,7 +103,7 @@ class ApplicationRuntime:  # pylint: disable=too-many-instance-attributes
     judgehost_task_service: Judgehost = field(init=False)
     export_service: ExportService = field(init=False)
     problem_package_service: ProblemPackageService = field(init=False)
-    published_materialization_workflow: PublishedMaterializationWorkflow = field(
+    verified_revision_workflow: VerifiedRevisionWorkflow = field(
         init=False
     )
     problem_readiness_service: ProblemReadinessService = field(init=False)
@@ -311,7 +307,7 @@ class ApplicationRuntime:  # pylint: disable=too-many-instance-attributes
             artifact_file_resolver=self.runtime_blob_store.descriptor,
             verification_id_allocator=self.verification_service.allocate_verification_id,
         )
-        self.published_materialization_workflow = PublishedMaterializationWorkflow(
+        self.verified_revision_workflow = VerifiedRevisionWorkflow(
             self.problem_package_service,
             self.verification_service,
             self.verification_workflow,
@@ -349,28 +345,16 @@ class ApplicationRuntime:  # pylint: disable=too-many-instance-attributes
         )
         self.contest_statement_service = ContestStatementService(
             self.contest_service,
-            self.problem_package_service,
             self.tex_compile_service,
             self.config_values,
         )
         self.contest_package_service = ContestPackageService(
             self.contest_service,
-            self.export_service,
+            self.export_service.projection_service,
         )
         self.contest_snapshot_service = ContestSourceSnapshotService(
             self.storage_layout,
         )
-
-        def materialize_contest_revision(
-            revision: PublishedRevision,
-            actor_user_id: int,
-            actor_username: str,
-        ) -> MaterializationRow:
-            return self.published_materialization_workflow.ensure(
-                revision=revision,
-                actor_user_id=actor_user_id,
-                actor_username=actor_username,
-            )
 
         self.contest_build_service = ContestBuildService(
             contest_service=self.contest_service,
@@ -380,7 +364,6 @@ class ApplicationRuntime:  # pylint: disable=too-many-instance-attributes
             contest_package_service=self.contest_package_service,
             snapshot_service=self.contest_snapshot_service,
             worker_queue=self.worker_queue_service,
-            materialize_revision=materialize_contest_revision,
         )
         cleanup_database = ArtifactCleanupDatabase(
             self.db,

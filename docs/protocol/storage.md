@@ -22,7 +22,7 @@ unavailable diagnostic payload.
 | SQLite database | identities, metadata, configuration, summaries, locators | durable; selected rows are maintenance-cleanable |
 | Workspace root | mutable per-user Git workspaces | durable source until explicitly removed |
 | Contest source root | contest statement source and attachments outside problem Git | durable source |
-| `artifacts_root` | exports and `contests/` build products | derived data; survives startup and is maintenance-cleanable |
+| `artifacts_root` | verified-revision archives, package projections, and `contests/` build products | derived data; survives startup and is maintenance-cleanable |
 | Cache root | preview/verification payloads, temporary snapshots, runtime blobs, JudgeFS data, workdirs, queue history, and import drafts | disposable cache; startup-cleared and maintenance-cleanable |
 | Backup root | the single application source backup and operator-managed contest migration archives | permanent and never cleared by application cleanup |
 
@@ -35,8 +35,8 @@ root and MUST NOT escape through `..`, absolute paths, or symlink traversal.
 `app.runtime.ApplicationRuntime` constructs one `StorageLayout` from these
 configured roots. That layout is the sole owner of application-derived locations for Git
 repositories, workspaces, verification and preview payloads, runtime snapshots
-and blobs, uploads and import drafts, exports, materializations, contest build
-outputs, staging data, worker history, and source backups. Domain services
+and blobs, uploads and import drafts, package projections, verified revisions,
+contest build outputs, staging data, worker history, and source backups. Domain services
 receive this layout instead of raw settings and do not concatenate configured
 roots independently.
 
@@ -59,13 +59,15 @@ as corruption or unavailability rather than accepted as ordinary state.
 
 Cache locators are observations of disposable data. A durable summary may keep
 such a locator after startup cleanup, and reads report the payload unavailable.
+Verification program input, output, official answer, feedback, transcript, and
+logs are all cache even when their owning verification summary row remains.
 
 All verification cache refs are indexed by the currently named
 `verification_task_artifacts` table. The canonical structured task result owns
 the execution evidence shape, while the ownership index authorizes and locates
 cache downloads without scanning that JSON. JudgeFS executable blobs and
-indexes are cache. Export and package rows carry archive locators below the
-physical `artifacts_root`. Contest outputs are stored below
+indexes are cache. Verified-revision and projection rows carry archive locators
+below the physical `artifacts_root`. Contest outputs are stored below
 `artifacts_root/contests`; the Contest
 source root owns only authored Contest content.
 
@@ -73,7 +75,8 @@ source root owns only authored Contest content.
 
 Before the worker queue starts, the application:
 
-1. fails interrupted package builds and export jobs;
+1. fails interrupted verified-revision builds and Package Export jobs, without
+   opening every completed archive;
 2. in one durable recovery transaction, fails unfinished verifications and
    cancels all of their open tasks; startup stops if that transaction fails;
 3. cancels unfinished preview, contest-job, and Judgehost runtime work;
@@ -91,7 +94,8 @@ are cleared. Cache deletion failure aborts startup before workers begin.
 Administrative cleanup closes both ordinary work admission and the Judgehost
 callback admission gate. It refuses to start while requests, callbacks, worker
 jobs, or queued/leased/reporting Judgehost work is active. It recreates
-the preview, verification, package, export, and contest-build metadata tables;
+the preview, verification, verified-revision, projection, export-job, and
+contest-build metadata tables;
 empties the entire `artifacts_root` and `cache_root`; resets process-local execution
 state; and vacuums SQLite. Recreating those explicitly registered cleanup-safe
 tables removes every row and any extra local columns in that domain. Unknown

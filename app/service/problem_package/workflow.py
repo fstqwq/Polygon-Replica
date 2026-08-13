@@ -1,4 +1,4 @@
-"""Published-revision Native materialization workflow."""
+"""Prepare one reusable verified published revision."""
 
 import os
 from pathlib import Path
@@ -7,9 +7,9 @@ from app.main_constant import SOLUTION_SOURCE_EXTENSIONS
 from app.service.problem.build_config import load_build_config
 from app.service.problem.solution_metadata import load_solution_desc
 from app.service.problem_package.service import (
-    MaterializationRow,
     ProblemPackageService,
     PublishedRevision,
+    VerifiedRevision,
 )
 from app.service.verification.lifecycle import VerificationAdmission
 from app.service.verification.service import VerificationService
@@ -77,8 +77,8 @@ def build_full_verification_targets(
     return targets, accepted_source
 
 
-class PublishedMaterializationWorkflow:
-    """Verify and materialize one published Git revision."""
+class VerifiedRevisionWorkflow:
+    """Run the one full verification that prepares a published revision."""
 
     def __init__(
         self,
@@ -96,7 +96,7 @@ class PublishedMaterializationWorkflow:
         revision: PublishedRevision,
         actor_user_id: int,
         actor_username: str,
-    ) -> MaterializationRow:
+    ) -> VerifiedRevision:
         problem_slug = revision.problem["slug"]
         problem_id = int(revision.problem["id"])
 
@@ -120,7 +120,7 @@ class PublishedMaterializationWorkflow:
                 )
             )
             if admission.outcome != "admitted":
-                raise RuntimeError("materialization verification id already exists")
+                raise RuntimeError("verified revision verification id already exists")
             self.verification_workflow.run(
                 problem_slug,
                 actor_username,
@@ -140,7 +140,7 @@ class PublishedMaterializationWorkflow:
             record = self.verification_service.verification_record(verification_id) or {}
             if str(record.get("status") or "") != VerificationStatus.OK.value:
                 error = str(record.get("fail_reason") or "full verification failed")
-                raise ValueError(f"Native materialization verification failed: {error}")
+                raise ValueError(f"verified revision verification failed: {error}")
             return verification_id
 
-        return self.package_service.ensure_materialization(revision, verify)
+        return self.package_service.ensure_verified_revision(revision, verify)

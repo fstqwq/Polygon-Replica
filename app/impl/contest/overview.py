@@ -28,19 +28,19 @@ def contest_overview_page(request: Request, contest: str, user: Annotated[str, D
         (len(str(row["slug_owner"])) + 1 for row in rows),
         default=0,
     )
-    package_ready_count = sum(
+    verified_ready_count = sum(
         1
         for row in rows
         if row["readiness"] is not None
         and row["readiness"]["package"]["state"] == "ready"
     )
-    package_stale_count = sum(
+    verified_stale_count = sum(
         1
         for row in rows
         if row["readiness"] is not None
         and row["readiness"]["package"]["state"] == "stale"
     )
-    package_none_count = len(rows) - package_ready_count - package_stale_count
+    verified_none_count = len(rows) - verified_ready_count - verified_stale_count
     return template_response(
         request,
         "contest_overview.html",
@@ -48,8 +48,8 @@ def contest_overview_page(request: Request, contest: str, user: Annotated[str, D
             "ctx": ctx,
             "problem_rows": rows,
             "owner_prefix_chars": owner_prefix_chars,
-            "package_ready_count": package_ready_count,
-            "package_stale_count": package_stale_count,
-            "package_none_count": package_none_count,
+            "verified_ready_count": verified_ready_count,
+            "verified_stale_count": verified_stale_count,
+            "verified_none_count": verified_none_count,
         },
     )

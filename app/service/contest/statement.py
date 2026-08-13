@@ -8,9 +8,9 @@ from app.main_util import problem_slug_leaf
 from app.service.contest.naming import problem_source_folder
 from app.service.contest.service import ContestService
 from app.service.problem.runtime_config import problem_config_limits
-from app.service.problem_package.service import ProblemPackageService
+from app.service.problem_package.service import VerifiedRevisionReader
 from app.service.problem_package.statement_samples import (
-    hydrate_native_statement_samples,
+    hydrate_verified_statement_samples,
 )
 from app.service.sandbox.base import ExecResult
 from app.service.statement.constant import DEFAULT_OLYMP_STY
@@ -55,17 +55,15 @@ _COLOR_DEFINITION_LINE_RE = re.compile(
 
 
 class ContestStatementService:
-    """Build contest statement sources and PDFs from frozen package inputs."""
+    """Build Contest PDFs from frozen verified revisions and durable sources."""
 
     def __init__(
         self,
         contest_service: ContestService,
-        package_service: ProblemPackageService,
         tex_compile_service: TexCompileService,
         config_values: ConfigValues,
     ) -> None:
         self._contest = contest_service
-        self._packages = package_service
         self._tex = tex_compile_service
         self._config = config_values
 
@@ -485,6 +483,7 @@ class ContestStatementService:
         entry: dict[str, object],
         source_folder: str,
         language: str,
+        reader: VerifiedRevisionReader,
     ) -> dict[str, object]:
         problem_slug = str(entry["problem_slug"])
         item: dict[str, object] = {
@@ -493,7 +492,7 @@ class ContestStatementService:
             "problem_slug": problem_slug,
             "source_folder": source_folder,
             "status": "failed",
-            "source_commit": "",
+            "source_commit": reader.manifest["source_commit"],
             "error": "",
         }
         if not source_folder:
@@ -501,45 +500,40 @@ class ContestStatementService:
             return item
         snapshot = self._config.snapshot()
         try:
-            with self._packages.open_reader(
-                str(entry["materialization_id"]),
-                expected_archive_sha256=str(entry["archive_sha256"]),
-            ) as native:
-                hydrate_native_statement_samples(
-                    native,
-                    tests_spec_max_bytes=int(snapshot["TEXTAREA_MAX_BYTES"]),
-                    statement_sample_max_bytes=int(
-                        snapshot["STATEMENT_SAMPLE_MAX_BYTES"]
-                    ),
-                )
-                target = self._compile_target(
-                    compile_root,
-                    "problems",
-                    source_folder,
-                    "statements",
-                    language,
-                )
-                render_statement_problem_assets_for_language(
-                    native.root,
-                    language,
-                    target,
-                    problem_title=statement_title_from_snapshot(
-                        native.root,
-                        fallback_title=problem_slug_leaf(problem_slug),
-                        language=language,
-                    ),
-                    tests_spec_max_bytes=int(snapshot["TEXTAREA_MAX_BYTES"]),
-                    statement_sample_max_bytes=int(
-                        snapshot["STATEMENT_SAMPLE_MAX_BYTES"]
-                    ),
-                    problem_limits=problem_config_limits(self._config),
-                )
-                item["preamble_lines"] = self._extract_color_definitions(
-                    native.root / "statement" / "olymp.sty"
-                )
-                item["source_commit"] = native.manifest["source_commit"]
-                item["materialization_id"] = str(entry["materialization_id"])
-                item["status"] = "success"
+            hydrate_verified_statement_samples(
+                reader,
+                tests_spec_max_bytes=int(snapshot["TEXTAREA_MAX_BYTES"]),
+                statement_sample_max_bytes=int(
+                    snapshot["STATEMENT_SAMPLE_MAX_BYTES"]
+                ),
+            )
+            target = self._compile_target(
+                compile_root,
+                "problems",
+                source_folder,
+                "statements",
+                language,
+            )
+            render_statement_problem_assets_for_language(
+                reader.root,
+                language,
+                target,
+                problem_title=statement_title_from_snapshot(
+                    reader.root,
+                    fallback_title=problem_slug_leaf(problem_slug),
+                    language=language,
+                ),
+                tests_spec_max_bytes=int(snapshot["TEXTAREA_MAX_BYTES"]),
+                statement_sample_max_bytes=int(
+                    snapshot["STATEMENT_SAMPLE_MAX_BYTES"]
+                ),
+                problem_limits=problem_config_limits(self._config),
+            )
+            item["preamble_lines"] = self._extract_color_definitions(
+                reader.root / "statement" / "olymp.sty"
+            )
+            item["verified_revision_id"] = str(entry["materialization_id"])
+            item["status"] = "success"
         except Exception as exc:  # Each problem is represented in the build report.
             item["error"] = str(exc)
         return item
@@ -565,6 +559,7 @@ class ContestStatementService:
         job_id: str,
         language: str,
         insert_blank_pages: bool,
+        readers: dict[str, VerifiedRevisionReader],
     ) -> dict[str, object]:
         job_root = self._contest.job_root(contest_slug, job_id)
         compile_root = (job_root / "contest-pdf-src").resolve()
@@ -598,6 +593,7 @@ class ContestStatementService:
                 entry=entry,
                 source_folder=problem_source_folder(entry, source_folders),
                 language=language,
+                reader=readers[str(entry["materialization_id"])],
             )
             for entry in entries
         ]
@@ -694,18 +690,13 @@ class ContestStatementService:
         pdf_dir.mkdir(parents=True, exist_ok=True)
         target_pdf = (pdf_dir / "statements.pdf").resolve()
         shutil.copy2(generated_pdf, target_pdf)
-        artifact_id = self._contest.record_artifact(
-            contest_id=contest_id,
-            job_id=job_id,
-            artifact_type="contest-pdf",
-            filename=f"{contest_slug}-{language}-statements.pdf",
-            artifact_path=target_pdf,
-        )
         summary.update(
             {
-                "artifact_id": artifact_id,
-                "filename": target_pdf.name,
-                "pdf_file": "contest-pdf/statements.pdf",
+                "artifact_id": "",
+                "filename": f"{contest_slug}-{language}-statements.pdf",
+                "_artifact_path": str(target_pdf),
+                "_artifact_type": "contest-pdf",
+                "_artifact_filename": f"{contest_slug}-{language}-statements.pdf",
             }
         )
         return summary

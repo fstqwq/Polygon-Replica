@@ -1,4 +1,4 @@
-"""SQLite persistence for immutable problem packages and builds."""
+"""SQLite persistence for verified revision archives and their builds."""
 
 from typing import TypedDict
 
@@ -108,7 +108,7 @@ class ProblemPackageStore:
         )
         return None if row is None else _materialization(row)
 
-    def problem_materializations(
+    def verified_revision_history(
         self,
         problem_id: int,
         *,
@@ -201,13 +201,6 @@ class ProblemPackageStore:
                 materialization = _materialization(row)
                 result[materialization["problem_id"]] = materialization
         return result
-
-    def all_available_materializations(self) -> list[MaterializationRow]:
-        rows = self.db.fetch_all(
-            """SELECT * FROM problem_package_materializations
-               WHERE status='available' ORDER BY problem_id,revision_number"""
-        )
-        return [_materialization(row) for row in rows]
 
     def create_or_retry_build(
         self,

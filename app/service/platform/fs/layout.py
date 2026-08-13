@@ -210,7 +210,7 @@ class StorageLayout:
         commit = self._normalize_token(source_commit, field_name="source_commit")
         return self._safe_relative(
             self.materialization_root,
-            f"{problem_id}/{commit}/native.zip",
+            f"{problem_id}/{commit}/verified-revision.zip",
             field_name="materialization",
         )
 

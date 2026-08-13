@@ -10,7 +10,8 @@
   with filesystem roots, locator consistency, and cleanup.
 - [Persistence](persistence.md) describes durable SQLite state and row
   lifecycles.
-- [Package](package.md) defines Native, Polygon, and ICPC archive boundaries.
+- [Package](package.md) defines Polygon, Polygon Replica, DOMjudge, and ICPC
+  archive boundaries plus verified revisions and projections.
 
 Python module placement is documented in the
 [application package map](../src/README.md).

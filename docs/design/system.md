@@ -20,9 +20,11 @@ The process topology and launcher constraints are described in
 
 ## State model
 
-Workspaces, official problem versions, verifications, problem packages, and
-Contest outputs form a one-way derivation chain. Their inputs, freeze points,
-invalidation rules, and cleanup behavior are described in
+Workspaces publish official problem versions. Package delivery then follows the
+single boundary `published source -> verified revision -> projections`.
+DOMjudge and ICPC packages, plus Contest statement and package outputs, consume
+the verified revision rather than a workspace or one another. Their inputs,
+freeze points, invalidation rules, and cleanup behavior are described in
 [state derivation and lifecycle](state-lifecycle.md). The authored workspace
 layout is defined by the
 [problem source protocol](../protocol/problem-source.md).

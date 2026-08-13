@@ -9,7 +9,7 @@ from app.service.problem.readiness import (
 )
 from app.service.problem_package.service import (
     ProblemPackageService,
-    PublishedPackageReadiness,
+    VerifiedRevisionReadiness,
 )
 from app.service.verification.service import VerificationService
 from app.service.verification.task_store import VerificationTaskStore
@@ -37,13 +37,13 @@ def _verification_row(
     }
 
 
-def _missing_package(problem_id: int) -> PublishedPackageReadiness:
+def _missing_package(problem_id: int) -> VerifiedRevisionReadiness:
     return {
         "problem_id": problem_id,
         "published_commit": "a" * 40,
         "published_revision_number": 1,
-        "materialized_revision_number": None,
-        "materialization_id": "",
+        "verified_revision_number": None,
+        "verified_revision_id": "",
         "status": "none",
         "missing_reason": "Package not built",
     }
@@ -83,16 +83,16 @@ class _VerificationRows:
 
 
 class _PackageRows:
-    def __init__(self, rows: dict[int, PublishedPackageReadiness]) -> None:
+    def __init__(self, rows: dict[int, VerifiedRevisionReadiness]) -> None:
         self.rows = rows
 
-    def published_readiness(self, problem_id: int) -> PublishedPackageReadiness:
+    def published_readiness(self, problem_id: int) -> VerifiedRevisionReadiness:
         return self.rows[problem_id]
 
     def published_readiness_many(
         self,
         problem_ids: list[int],
-    ) -> dict[int, PublishedPackageReadiness]:
+    ) -> dict[int, VerifiedRevisionReadiness]:
         return {problem_id: self.rows[problem_id] for problem_id in problem_ids}
 
 

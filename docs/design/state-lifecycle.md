@@ -12,14 +12,13 @@ new problem or imported package
               | publish
               v
    official problem version
-              +---- full verification ----> verified problem archive (Native)
+              +---- full verification ----> verified revision
                                                      |
-                                                     +----> ICPC problem package
-
-contest definition and source + selected official problem versions
-                              |
-                              v
-                  statement PDF or ICPC bundle
+                         +---------------------------+-------------------+
+                         |                 |                    |        |
+                         v                 v                    v        v
+             Polygon Replica package  DOMjudge package  ICPC 2025-09  Contest
+                                                                       outputs
 ```
 
 Generated tests, official answers, PDFs, logs, and packages never flow back
@@ -47,9 +46,11 @@ Persisted files belong to one of three classes:
 | Official problem version | A reviewed workspace published to the problem | Publish | Durable Git history |
 | Preview | One workspace and its statement/sample inputs | Preview request | Cache |
 | Workspace verification | One workspace snapshot and selected verification targets | Verification admission and activation | Cleanup-safe database record; program input, output, answer, feedback, transcript, and logs are cache |
-| Verified problem archive | One official problem version and a successful full verification of that exact source | Package build | Derived; reusable while its integrity check succeeds |
-| ICPC problem package | One verified problem archive | Export build | Derived; reusable for the same verified archive |
-| Contest output | Contest definition and source plus selected official problem versions | Contest build request | Derived |
+| Verified revision | One official problem version and a successful full verification of that exact source | Package export verification phase | Derived; reusable while its source snapshot and verified test data remain intact |
+| Polygon Replica package | One verified revision | Direct download | The verified revision's own downloadable serialization; no export job |
+| DOMjudge package | One verified revision; standalone exports use its canonical problem slug | Package projection | Derived; reusable for the same verified revision and format |
+| ICPC Problem Package 2025-09 | One verified revision | Package projection | Derived; reusable for the same verified revision |
+| Contest output | Contest definition/source where needed plus a frozen mapping of roster entries to verified revisions | Contest build request | Derived |
 
 SQLite records identities, relationships, lifecycle states, and filesystem
 locators. Large payloads live in their configured filesystem roots. Source and
@@ -95,41 +96,59 @@ cache. Completed result rows may remain for display, while their downloadable
 program input, output, answer, feedback, transcript, and logs become
 unavailable.
 
-## Package lifecycle
+## Verified revision and package lifecycle
 
-A package request first records the current official problem version. It never
+A Package Export request freezes the current official problem version. It never
 reads a user's changing workspace. For that version:
 
-1. An existing verified problem archive is integrity-checked and reused.
-2. If no archive exists, the service extracts the official source, runs the
-   complete verification required for packaging, and stores source, generated
-   inputs, and official answers in one archive.
-3. Native download returns that verified archive. ICPC export converts the same
-   archive directly.
+1. An existing verified revision is fully integrity-checked and reused.
+2. If none exists, the service extracts the published source, runs one complete
+   verification, and records the source snapshot, generated inputs, and
+   official answers as the verified revision.
+3. If the stored payload is unavailable or fails integrity checking, the
+   service invalidates it and its projections, then repeats the full
+   verification in that same export job.
+4. Once the verified revision is ready, the requested DOMjudge or ICPC 2025-09
+   projection is built or reused.
 
-The UI calls the verified Polygon Replica archive a **Native package**. It is a
-rebuildable delivery input, not another source revision.
+The Polygon Replica package is a direct download of the verified revision. It
+does not create an export job. A projection consumes only an integrity-checked
+verified-revision reader and caller-owned staging; it cannot read Git,
+workspaces, verification tables, or runtime cache, and cannot start
+verification.
 
-A failed integrity check marks the archive unavailable, removes its derived
-exports, and requires an explicit rebuild. Publishing a new official version
-leaves an older valid archive tied to its original version. A package request
-for the new version creates or reuses the archive belonging to that version.
+Publishing a newer official version leaves older verified revisions tied to
+their original versions. Package Export always targets the published version
+that was current when the request was accepted; history downloads are read-only.
+Only one Package Export for a problem/version can run at a time, and a competing
+request fails immediately rather than waiting.
 
 ## Contest build lifecycle
 
 Contest definitions, membership, problem order, labels, statement folders, and
 contest attachments are durable authoring state. A Contest build derives
-delivery products from that state and the official versions of its problems.
+delivery products from that state and verified problem revisions that already
+exist.
 
-Starting a build selects the official version of every problem in the roster.
-The build uses those versions and the contest content selected for that request;
-later edits belong to a later build. Missing or invalid problem packages fail
-the affected build rather than silently substituting different source.
+Build admission freezes the ordered roster and, for each problem, selects its
+highest available verified revision. That revision may trail the current
+published version. The readiness state is `current`, `stale`, or `none`; `none`
+rejects the build without creating a job. Contest admission and workers never
+run Verification, repair a verified revision, or create a problem-level export.
 
-Statement PDF and ICPC bundle are published independently. If one succeeds and
-the other fails, the successful output remains available and the job is
-`partial`; the system does not publish a bundle missing one of its requested
-problems.
+The build items store each selected verified revision's identity and archive
+checksum. Workers check both before and after reading it. A changed or corrupt
+payload fails the requested outputs instead of falling back to another
+revision.
+
+Statement PDF, DOMjudge bundle, and ICPC 2025-09 bundle are independent output
+choices. Statement compilation reads statement source, samples, and assets
+directly from the verified revision. Package bundles invoke the same pure
+projectors as single-problem export, with the frozen Contest label used as the
+DOMjudge short name. Child archives are temporary Contest-owned members and do
+not enter the problem export cache. Each bundle is all-or-nothing; successful
+outputs remain available when another requested output fails and the job becomes
+`partial`.
 
 ## Invalidation and cleanup
 
@@ -139,11 +158,12 @@ problems.
 | Publish | The current official version advances | Earlier versions and derived products already tied to them |
 | Remove access | The next authorization query denies the removed capability | Source and derived bytes are not deleted as a side effect |
 | Restart the application | Active jobs fail; runtime queues, leases, and cache payloads are cleared | Git history, workspaces, users, contests, and durable contest source |
-| Detect a missing or corrupt verified archive | The archive becomes unavailable and its derived exports are invalidated | Its official source version remains available for rebuild |
+| Detect a missing or corrupt verified revision payload | It becomes unavailable and its projections are invalidated; a Package Export may rebuild it | Its official source version remains available |
 | Run generated-data cleanup | Verification, package, export, preview, and Contest-build rows and files are removed | Git history, workspaces, users, problem metadata, contest definitions, Contest source, and operator backups |
 
-Cleanup removes the generated packages for an official problem version. The
-version remains in source history and can be packaged again.
+Cleanup removes verified revisions and projections for an official problem
+version. The version remains in source history and can be verified and packaged
+again.
 
 ## Design consequences
 

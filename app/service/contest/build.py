@@ -1,27 +1,16 @@
-from typing import Protocol
+from contextlib import ExitStack
+from pathlib import Path
 
 from app.service.access.query import AccessQuery
-from app.service.contest.model import ContestBuildRevision
 from app.service.contest.package import ContestPackageService
 from app.service.contest.service import ContestService
 from app.service.contest.snapshot import ContestSourceSnapshotService
 from app.service.contest.statement import ContestStatementService
 from app.service.platform.worker_queue import WorkerQueueService
 from app.service.problem_package.service import (
-    MaterializationRow,
     ProblemPackageService,
-    PublishedRevision,
+    VerifiedRevisionReader,
 )
-
-
-class MaterializePublishedRevision(Protocol):
-    def __call__(
-        self,
-        *,
-        revision: PublishedRevision,
-        actor_user_id: int,
-        actor_username: str,
-    ) -> MaterializationRow: ...
 
 
 class ContestBuildService:
@@ -37,7 +26,6 @@ class ContestBuildService:
         contest_package_service: ContestPackageService,
         snapshot_service: ContestSourceSnapshotService,
         worker_queue: WorkerQueueService,
-        materialize_revision: MaterializePublishedRevision,
     ) -> None:
         self._contest = contest_service
         self._access = access_query
@@ -46,7 +34,56 @@ class ContestBuildService:
         self._contest_packages = contest_package_service
         self._snapshots = snapshot_service
         self._workers = worker_queue
-        self._materialize_revision = materialize_revision
+
+    @staticmethod
+    def _staged_artifact_path(summary: dict[str, object]) -> Path | None:
+        value = summary.get("_artifact_path")
+        return Path(value) if isinstance(value, str) and value else None
+
+    @classmethod
+    def _discard_staged_outputs(
+        cls,
+        output_results: dict[str, dict[str, object]],
+    ) -> None:
+        for summary in output_results.values():
+            path = cls._staged_artifact_path(summary)
+            if path is not None:
+                path.unlink(missing_ok=True)
+
+    def _publish_output(
+        self,
+        *,
+        contest_id: int,
+        job_id: str,
+        summary: dict[str, object],
+    ) -> None:
+        path = self._staged_artifact_path(summary)
+        artifact_type = summary.get("_artifact_type")
+        filename = summary.get("_artifact_filename")
+        for key in ("_artifact_path", "_artifact_type", "_artifact_filename"):
+            summary.pop(key, None)
+        if path is None or not isinstance(artifact_type, str) or not artifact_type:
+            summary["artifact_id"] = ""
+            summary["error"] = "contest artifact staging metadata is incomplete"
+            return
+        if not isinstance(filename, str) or not filename:
+            summary["error"] = "contest artifact filename is missing"
+            path.unlink(missing_ok=True)
+            return
+        try:
+            summary["filename"] = filename
+            summary["artifact_id"] = self._contest.record_artifact(
+                contest_id=contest_id,
+                job_id=job_id,
+                artifact_type=artifact_type,
+                filename=filename,
+                artifact_path=path,
+            )
+        except Exception as exc:
+            summary["artifact_id"] = ""
+            summary["error"] = str(exc) or "contest artifact publication failed"
+        finally:
+            path.unlink(missing_ok=True)
 
     def queue(
         self,
@@ -54,7 +91,6 @@ class ContestBuildService:
         contest_id: int,
         contest_slug: str,
         actor_user_id: int,
-        actor_username: str,
         outputs: tuple[str, ...],
         language: str = "",
         insert_blank_pages: bool = False,
@@ -62,15 +98,22 @@ class ContestBuildService:
         access = self._access.contest_context(contest_id, actor_user_id)
         if not access["can_build"]:
             raise PermissionError(access["build_block_reason"])
-        unknown_outputs = set(outputs).difference(
-            {"statement_pdf", "icpc_bundle"}
-        )
+        supported_outputs = {
+            "statement_pdf",
+            "domjudge_bundle",
+            "icpc_2025_09_bundle",
+        }
+        unknown_outputs = set(outputs).difference(supported_outputs)
         if unknown_outputs:
             unknown = sorted(unknown_outputs)[0]
             raise ValueError(f"unsupported contest build output: {unknown}")
         requested_outputs = tuple(
             output
-            for output in ("statement_pdf", "icpc_bundle")
+            for output in (
+                "statement_pdf",
+                "domjudge_bundle",
+                "icpc_2025_09_bundle",
+            )
             if output in set(outputs)
         )
         if not requested_outputs:
@@ -88,40 +131,17 @@ class ContestBuildService:
         }
         if job_language:
             initial_summary["language"] = job_language
-        revisions: list[ContestBuildRevision] = []
-        for row in self._contest.contest_problems(contest_id):
-            try:
-                published = self._problem_packages.published_revision(
-                    int(row["problem_id"])
-                )
-            except (OSError, RuntimeError, ValueError) as exc:
-                return "", False, f"not_ready:{row['problem_slug']}: {exc}"
-            revisions.append(
-                {
-                    "contest_problem_id": int(row["contest_problem_id"]),
-                    "position": int(row["position"]),
-                    "label": str(row["idx"]),
-                    "problem_id": int(row["problem_id"]),
-                    "statement_folder": str(row["statement_folder"]),
-                    "problem_slug": str(row["problem_slug"]),
-                    "source_commit": published.source_commit,
-                    "revision_number": published.revision_number,
-                }
-            )
-        if not revisions:
-            return "", False, "not_ready:contest has no problems"
         frozen = self._contest.freeze_build_job(
             contest_id=contest_id,
             actor_user_id=actor_user_id,
             job_type="build",
             summary=initial_summary,
-            revisions=revisions,
         )
         job_id = str(frozen["job_id"])
         outcome = frozen["outcome"]
         if outcome == "already_running":
             return job_id, False, outcome
-        if outcome in {"busy", "roster_changed"}:
+        if outcome == "busy":
             return "", False, outcome
         if outcome == "not_ready":
             return "", False, "not_ready:" + ",".join(frozen["blocked_problems"])
@@ -130,8 +150,6 @@ class ContestBuildService:
             self._run(
                 contest_id=contest_id,
                 contest_slug=contest_slug,
-                actor_user_id=actor_user_id,
-                actor_username=actor_username,
                 job_id=job_id,
                 requested_outputs=requested_outputs,
                 language=job_language,
@@ -139,13 +157,27 @@ class ContestBuildService:
                 initial_summary=initial_summary,
             )
 
-        _future, queued, reason = self._workers.submit(
-            name=f"contest-build-{contest_id}",
-            fn=runner,
-            queue_name="contest-build",
-            dedupe_key=f"contest:{contest_id}:build",
-            job_type="contest-build",
-        )
+        try:
+            _future, queued, reason = self._workers.submit(
+                name=f"contest-build-{contest_id}",
+                fn=runner,
+                queue_name="contest-build",
+                dedupe_key=f"contest:{contest_id}:build",
+                job_type="contest-build",
+            )
+        except Exception as exc:
+            self._contest.update_job(
+                contest_id,
+                job_id,
+                "failed",
+                {
+                    "job_type": "build",
+                    "contest_slug": contest_slug,
+                    "error": str(exc) or "queue submission failed",
+                },
+                finished=True,
+            )
+            raise
         if not queued:
             self._contest.update_job(
                 contest_id,
@@ -165,8 +197,6 @@ class ContestBuildService:
         *,
         contest_id: int,
         contest_slug: str,
-        actor_user_id: int,
-        actor_username: str,
         job_id: str,
         requested_outputs: tuple[str, ...],
         language: str,
@@ -182,72 +212,76 @@ class ContestBuildService:
                 finished=False,
             )
             items = self._contest.build_items(job_id)
-            source_folder_map = {
-                int(entry["problem_id"]): str(entry["statement_folder"])
-                for entry in items
-                if entry["statement_folder"]
-            }
-            default_tex = (
-                self._statements.default_statements_tex(
+            if "statement_pdf" in requested_outputs:
+                source_folder_map = {
+                    int(entry["problem_id"]): str(entry["statement_folder"])
+                    for entry in items
+                    if entry["statement_folder"]
+                }
+                default_tex = self._statements.default_statements_tex(
                     contest_id=contest_id,
                     contest_slug=contest_slug,
                     language=language,
                     problem_entries=items,
                     source_folder_map=source_folder_map,
                 )
-                if language
-                else ""
-            )
-            self._snapshots.create(
-                contest_slug=contest_slug,
-                job_id=job_id,
-                language=language,
-                default_statements_tex=default_tex,
-            )
-            materializations = self._materialize_items(
-                job_id=job_id,
-                actor_user_id=actor_user_id,
-                actor_username=actor_username,
-            )
-            failed = [row for row in materializations if row["status"] != "success"]
-            if failed:
-                self._contest.update_job(
-                    contest_id,
-                    job_id,
-                    "failed",
-                    {
-                        **initial_summary,
-                        "phase": "materialization",
-                        "materializations": materializations,
-                        "error": "; ".join(
-                            f"{row['problem_slug']}: {row['error']}" for row in failed
-                        ),
-                    },
-                    finished=True,
+                self._snapshots.create(
+                    contest_slug=contest_slug,
+                    job_id=job_id,
+                    language=language,
+                    default_statements_tex=default_tex,
                 )
-                return
             output_results: dict[str, dict[str, object]] = {}
-            for output in requested_outputs:
-                try:
-                    if output == "statement_pdf":
-                        output_results[output] = self._statements.build_pdf(
-                            contest_id=contest_id,
-                            contest_slug=contest_slug,
-                            job_id=job_id,
-                            language=language,
-                            insert_blank_pages=insert_blank_pages,
+            try:
+                with ExitStack() as readers_stack:
+                    readers: dict[str, VerifiedRevisionReader] = {}
+                    for entry in items:
+                        materialization_id = str(entry["materialization_id"])
+                        readers[materialization_id] = readers_stack.enter_context(
+                            self._problem_packages.open_reader(
+                                materialization_id,
+                                expected_archive_sha256=str(entry["archive_sha256"]),
+                            )
                         )
-                    else:
-                        output_results[output] = self._contest_packages.build_bundle(
-                            contest_id=contest_id,
-                            contest_slug=contest_slug,
-                            job_id=job_id,
-                        )
-                except Exception as exc:
-                    output_results[output] = {
-                        "error": str(exc),
-                        "artifact_id": "",
-                    }
+                    for output in requested_outputs:
+                        try:
+                            if output == "statement_pdf":
+                                output_results[output] = self._statements.build_pdf(
+                                    contest_id=contest_id,
+                                    contest_slug=contest_slug,
+                                    job_id=job_id,
+                                    language=language,
+                                    insert_blank_pages=insert_blank_pages,
+                                    readers=readers,
+                                )
+                            else:
+                                projection_format = (
+                                    "domjudge"
+                                    if output == "domjudge_bundle"
+                                    else "icpc-2025-09"
+                                )
+                                output_results[output] = self._contest_packages.build_bundle(
+                                    contest_id=contest_id,
+                                    contest_slug=contest_slug,
+                                    job_id=job_id,
+                                    package_format=projection_format,
+                                    readers=readers,
+                                )
+                        except Exception as exc:
+                            output_results[output] = {
+                                "error": str(exc),
+                                "artifact_id": "",
+                            }
+            except Exception:
+                self._discard_staged_outputs(output_results)
+                raise
+            for summary in output_results.values():
+                if not summary.get("error"):
+                    self._publish_output(
+                        contest_id=contest_id,
+                        job_id=job_id,
+                        summary=summary,
+                    )
             successful = [
                 output
                 for output, summary in output_results.items()
@@ -261,7 +295,16 @@ class ContestBuildService:
                 status = "failed"
             final_summary: dict[str, object] = {
                 **initial_summary,
-                "materializations": materializations,
+                "verified_revisions": [
+                    {
+                        "problem_slug": str(entry["problem_slug"]),
+                        "revision_number": int(entry["revision_number"]),
+                        "source_commit": str(entry["source_commit"]),
+                        "verified_revision_id": str(entry["materialization_id"]),
+                        "archive_sha256": str(entry["archive_sha256"]),
+                    }
+                    for entry in items
+                ],
                 "outputs": output_results,
                 "successful_outputs": successful,
             }
@@ -287,47 +330,3 @@ class ContestBuildService:
                 finished=True,
             )
             raise
-
-    def _materialize_items(
-        self,
-        *,
-        job_id: str,
-        actor_user_id: int,
-        actor_username: str,
-    ) -> list[dict[str, object]]:
-        results: list[dict[str, object]] = []
-        for entry in self._contest.build_items(job_id):
-            result: dict[str, object] = {
-                "problem_id": int(entry["problem_id"]),
-                "problem_slug": str(entry["problem_slug"]),
-                "source_commit": str(entry["source_commit"]),
-                "revision_number": int(entry["revision_number"]),
-                "status": "failed",
-                "materialization_id": "",
-                "error": "",
-            }
-            try:
-                revision = self._problem_packages.published_revision_at(
-                    int(entry["problem_id"]),
-                    str(entry["source_commit"]),
-                    int(entry["revision_number"]),
-                )
-                materialization = self._materialize_revision(
-                    revision=revision,
-                    actor_user_id=actor_user_id,
-                    actor_username=actor_username,
-                )
-                self._contest.bind_build_item_materialization(
-                    job_id=job_id,
-                    contest_problem_id=int(entry["contest_problem_id"]),
-                    problem_id=int(entry["problem_id"]),
-                    source_commit=str(entry["source_commit"]),
-                    materialization_id=materialization["id"],
-                    archive_sha256=materialization["archive_sha256"],
-                )
-                result["status"] = "success"
-                result["materialization_id"] = materialization["id"]
-            except Exception as exc:
-                result["error"] = str(exc)
-            results.append(result)
-        return results

@@ -1,6 +1,6 @@
 from fastapi.responses import HTMLResponse
 
-from app.impl.run_export.artifact import artifact_file, export_file, materialization_file
+from app.impl.run_export.artifact import artifact_file, export_file, verified_revision_file
 from app.impl.run_export.export import export_create, export_page
 from app.impl.run_export.run import (
     run_cancel,
@@ -78,7 +78,8 @@ router.add_api_route(
     methods=["GET"],
 )
 router.add_api_route(
-    "/problems/{problem:path}/packages/{materialization_id}/native.zip",
-    materialization_file,
+    "/problems/{problem:path}/verified-revisions/{verified_revision_id}/package",
+    verified_revision_file,
     methods=["GET"],
+    name="verified_revision_file",
 )

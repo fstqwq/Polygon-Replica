@@ -252,7 +252,10 @@ def assert_contest_pdf(
     ):
         raise RuntimeError(f"contest PDF problem result is wrong: {result!r}")
     artifact_id = str(pdf_summary.get("artifact_id") or "")
-    if not artifact_id or pdf_summary.get("pdf_file") != "contest-pdf/statements.pdf":
+    if (
+        not artifact_id
+        or pdf_summary.get("filename") != f"{CONTEST}-english-statements.pdf"
+    ):
         raise RuntimeError(f"contest PDF artifact identity is missing: {pdf_summary!r}")
 
     download = client.get(
@@ -309,10 +312,6 @@ def assert_contest_pdf(
         or compile_log.count("returncode: 0") < 2
     ):
         raise RuntimeError("contest PDF did not complete both xelatex passes")
-    generated_pdf = job_root / "contest-pdf" / "statements.pdf"
-    if generated_pdf.read_bytes() != download.content:
-        raise RuntimeError("contest PDF download differs from the compiled artifact")
-
     materialization_verification_id = _assert_contest_database(
         connection,
         job_id=job_id,

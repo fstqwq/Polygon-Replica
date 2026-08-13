@@ -180,10 +180,10 @@ Review and Publish warning plus a canonical file that preserves the current
 selections. They then run the same generated test through a real Judgehost and
 observe generated input, accepted answer, AC, WA, CE, and public derived-output
 downloads. The `bleeding` project alone continues through the more expensive
-product tail: sample preview, commit, Native and ICPC exports, contest creation
-and statement PDF export, role-aware page walk, and concurrent Alice/Bob
-conflict resolution. This avoids repeating work that does not vary by
-Judgehost implementation.
+product tail: sample preview, commit, DOMjudge and ICPC 2025-09 Package Exports,
+direct Polygon Replica package download, Contest creation and statement/package
+builds, role-aware page walk, and concurrent Alice/Bob conflict resolution.
+This avoids repeating work that does not vary by Judgehost implementation.
 
 The deployed journey on `bleeding` then registers an outsider, a reader, and
 two writers. A role-aware page walk visits the stable HTML routes as anonymous,
