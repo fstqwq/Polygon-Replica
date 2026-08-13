@@ -1,0 +1,108 @@
+services:
+  mariadb:
+    image: mariadb:10.11
+    restart: "no"
+    command:
+      - --max-connections=1000
+      - --max-allowed-packet=512M
+      - --innodb_snapshot_isolation=OFF
+    environment:
+      MARIADB_ROOT_PASSWORD: domjudge-root
+      MARIADB_DATABASE: domjudge
+      MARIADB_USER: domjudge
+      MARIADB_PASSWORD: domjudge
+    healthcheck:
+      test: ["CMD-SHELL", "mariadb-admin ping -h 127.0.0.1 -uroot -pdomjudge-root --silent"]
+      interval: 2s
+      timeout: 3s
+      retries: 60
+    volumes:
+      - domjudge-db:/var/lib/mysql
+    networks:
+      - e2e
+
+  domserver:
+    image: domjudge/domserver:9.0.0
+    hostname: domserver
+    restart: "no"
+    environment:
+      CONTAINER_TIMEZONE: UTC
+      MYSQL_HOST: mariadb
+      MYSQL_ROOT_PASSWORD: domjudge-root
+      MYSQL_DATABASE: domjudge
+      MYSQL_USER: domjudge
+      MYSQL_PASSWORD: domjudge
+    depends_on:
+      mariadb:
+        condition: service_healthy
+    networks:
+      - e2e
+
+  app-judgehost:
+    image: domjudge/judgehost:9.0.0
+    privileged: true
+    cgroup: host
+    hostname: polygon-judgedaemon
+    restart: "no"
+    environment:
+      CONTAINER_TIMEZONE: UTC
+      DAEMON_ID: "0"
+      DOMSERVER_BASEURL: http://app:8001/
+      JUDGEDAEMON_USERNAME: judgehost
+      JUDGEDAEMON_PASSWORD: ${POLYGON_REPLICA_E2E_JUDGEHOST_TOKEN:?set by script}
+      RUN_USER_UID_GID: "60720"
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    networks:
+      - e2e
+    depends_on:
+      app:
+        condition: service_healthy
+
+  domserver-judgehost:
+    image: domjudge/judgehost:9.0.0
+    privileged: true
+    cgroup: host
+    hostname: domserver-judgedaemon
+    restart: "no"
+    environment:
+      CONTAINER_TIMEZONE: UTC
+      DAEMON_ID: "1"
+      DOMSERVER_BASEURL: http://domserver/
+      JUDGEDAEMON_USERNAME: judgehost
+      JUDGEDAEMON_PASSWORD: ${POLYGON_REPLICA_E2E_DOMJUDGE_JUDGEHOST_PASSWORD:?set by script}
+      RUN_USER_UID_GID: "60721"
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    networks:
+      - e2e
+    depends_on:
+      - domserver
+
+  e2e-domserver-900:
+    image: ${POLYGON_REPLICA_E2E_IMAGE:?set by script}
+    entrypoint: ["python3", "/opt/e2e/e2e_domserver_900.py"]
+    restart: "no"
+    environment:
+      PYTHONPATH: /opt/polygon-replica:/opt/e2e
+      POLYGON_REPLICA_E2E_APP_ORIGIN: http://app:8001
+      POLYGON_REPLICA_E2E_STATE_DIR: /var/backups/polygon-replica/e2e-domserver-state
+      POLYGON_REPLICA_E2E_ADMIN_PASSWORD: ${POLYGON_REPLICA_E2E_ADMIN_PASSWORD:?set by script}
+      POLYGON_REPLICA_E2E_JUDGEHOST_TOKEN: ${POLYGON_REPLICA_E2E_JUDGEHOST_TOKEN:?set by script}
+      POLYGON_REPLICA_E2E_JUDGEHOST_HOSTNAME: polygon-judgedaemon-0
+      POLYGON_REPLICA_E2E_SKILLS_ROOT: /opt/polygon-skills
+      POLYGON_REPLICA_E2E_SKILLS_COMMIT: ${POLYGON_REPLICA_E2E_SKILLS_COMMIT:?set by script}
+      POLYGON_REPLICA_E2E_DOMSERVER_ORIGIN: http://domserver
+      POLYGON_REPLICA_E2E_DOMSERVER_ADMIN_PASSWORD: >-
+        ${POLYGON_REPLICA_E2E_DOMSERVER_ADMIN_PASSWORD:?set by script}
+      POLYGON_REPLICA_E2E_OUTPUT_ROOT: /opt/e2e-output
+    volumes:
+      - .:/opt/e2e:ro
+      - ${POLYGON_REPLICA_E2E_SKILLS_HOST_ROOT:?set by script}:/opt/polygon-skills:ro
+      - ${POLYGON_REPLICA_E2E_OUTPUT_HOST_ROOT:?set by script}:/opt/e2e-output
+      - state:/var/backups/polygon-replica
+    networks:
+      - e2e
+
+volumes:
+  domjudge-db:

@@ -264,7 +264,7 @@ limits:
             )
             zf.writestr("roundtrip/data/secret/001.in", "1\n")
             for expected, rule in SUBMISSION_RULES.items():
-                rel = f"{rule['directory']}/{expected}.cpp"
+                rel = f"{rule['ppf_directory']}/{expected}.cpp"
                 source = f"int {expected.replace('-', '_')}() {{ return 0; }}\n"
                 if expected in {"tle_or_correct", "tle_or_re", "rejected"}:
                     results = ",".join(rule["domjudge_results"])
@@ -385,6 +385,35 @@ limits:
         self.assertEqual(
             (self.workspace / "solutions" / "ac.cpp").read_text(encoding="utf-8"),
             source,
+        )
+
+    def test_domjudge_mixed_annotation_restores_rejected_with_compile_error(
+        self,
+    ) -> None:
+        payload = io.BytesIO()
+        source = (
+            "// @EXPECTED_RESULTS@: WRONG-ANSWER,TIMELIMIT,RUN-ERROR,COMPILER-ERROR\n"
+            "int main() { broken }\n"
+        )
+        with zipfile.ZipFile(payload, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr("problem.yaml", "name: Mixed\nvalidation: default\n")
+            zf.writestr("data/secret/001.in", "1\n")
+            zf.writestr("submissions/accepted/ac.cpp", "int main() { return 0; }\n")
+            zf.writestr("submissions/mixed/rejected.cpp", source)
+
+        result = import_problem_package(
+            ICPCPackageImportService(),
+            self.workspace,
+            "mixed.zip",
+            payload.getvalue(),
+        )
+
+        self.assertFalse(result["warnings"])
+        imported = self.workspace / "solutions" / "rejected.cpp"
+        self.assertNotIn("@EXPECTED_RESULTS@", imported.read_text(encoding="utf-8"))
+        self.assertIn(
+            "expected: rejected",
+            imported.with_name("rejected.cpp.desc").read_text(encoding="utf-8"),
         )
 
     def test_import_icpc_package_interactive_type_sets_interactor_mode(self) -> None:

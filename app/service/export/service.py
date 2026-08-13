@@ -153,11 +153,13 @@ class ExportService:
         *,
         verified_revision_id: str,
         export_id: str,
+        warning: str,
     ) -> None:
         self._store.mark_export_job_succeeded(
             job_id,
             materialization_id=verified_revision_id,
             export_id=export_id,
+            warning=warning,
         )
 
     def mark_export_job_failed(self, job_id: str, error: str) -> None:
@@ -256,7 +258,7 @@ class ExportService:
         *,
         verified_revision_id: str,
         expected_archive_sha256: str | None = None,
-    ) -> tuple[str, Path]:
+    ) -> tuple[str, Path, str]:
         if package_format not in self.FORMATS:
             raise ValueError("unsupported package format")
         resolved_format: PackageFormat = package_format
@@ -280,7 +282,7 @@ class ExportService:
         *,
         verified_revision_id: str,
         expected_archive_sha256: str | None,
-    ) -> tuple[str, Path]:
+    ) -> tuple[str, Path, str]:
         problem_row = self._store.problem_export_row(problem)
         if problem_row is None:
             raise ValueError(f"unknown problem: {problem}")
@@ -310,13 +312,17 @@ class ExportService:
                 verified_revision_id,
                 expected_archive_sha256=expected_archive_sha256,
             ) as reader:
+                projection_plan = self.projection_service.plan(
+                    reader,
+                    package_format=package_format,
+                )
                 cached = self._cached_export_path(
                     problem_id=problem_row["id"],
                     materialization_id=verified_revision_id,
                     package_format=package_format,
                 )
                 if cached is not None:
-                    return cached
+                    return (*cached, projection_plan.warning)
                 self.projection_service.project(
                     reader,
                     package_format=package_format,
@@ -325,6 +331,7 @@ class ExportService:
                     short_name=(
                         public_slug if package_format == "domjudge" else None
                     ),
+                    plan=projection_plan,
                 )
                 self._make_archive(archive_partial, package_root)
                 output = self._export_path(problem_row["slug"], export_id, filename)
@@ -346,7 +353,7 @@ class ExportService:
                 published = True
             if output is None:
                 raise RuntimeError("package projection did not publish an archive")
-            return (export_id, output)
+            return (export_id, output, projection_plan.warning)
         except Exception:
             if published:
                 self._store.delete_export(export_id)

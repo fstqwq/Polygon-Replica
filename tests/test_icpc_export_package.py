@@ -131,7 +131,7 @@ class TestICPCExportPackage(unittest.TestCase):
 
     def test_submissions_yaml_preserves_all_expected_result_sets(self) -> None:
         entries = {
-            f"{rule['directory']}/{expected}.cpp": {
+            f"{rule['ppf_directory']}/{expected}.cpp": {
                 "language": "cpp",
                 "permitted": list(rule["permitted"]),
                 "required": list(rule["required"]),
@@ -147,6 +147,43 @@ class TestICPCExportPackage(unittest.TestCase):
         payload = annotated_submission(source, ("CORRECT", "TIMELIMIT"))
         self.assertTrue(payload.startswith(b"# @EXPECTED_RESULTS@: CORRECT,TIMELIMIT\n"))
         self.assertEqual(source.read_text(encoding="utf-8"), original)
+
+    def test_domjudge_submission_rules_separate_standard_and_mixed_results(self) -> None:
+        standard = {
+            "accepted": ("accepted", ("CORRECT",)),
+            "wrong_answer": (
+                "wrong_answer",
+                ("CORRECT", "WRONG-ANSWER"),
+            ),
+            "time_limit_exceeded": (
+                "time_limit_exceeded",
+                ("CORRECT", "TIMELIMIT"),
+            ),
+            "run_time_error": (
+                "run_time_error",
+                ("CORRECT", "RUN-ERROR"),
+            ),
+        }
+        mixed = {
+            "tle_or_correct": ("CORRECT", "TIMELIMIT"),
+            "tle_or_re": ("TIMELIMIT", "RUN-ERROR"),
+            "rejected": (
+                "WRONG-ANSWER",
+                "TIMELIMIT",
+                "RUN-ERROR",
+                "COMPILER-ERROR",
+            ),
+        }
+        for behavior, (directory, results) in standard.items():
+            with self.subTest(behavior=behavior):
+                rule = SUBMISSION_RULES[behavior]
+                self.assertEqual(rule["domjudge_directory"], directory)
+                self.assertEqual(rule["domjudge_results"], results)
+        for behavior, results in mixed.items():
+            with self.subTest(behavior=behavior):
+                rule = SUBMISSION_RULES[behavior]
+                self.assertEqual(rule["domjudge_directory"], "mixed")
+                self.assertEqual(rule["domjudge_results"], results)
 
     def test_validator_wrappers_map_exit_codes_and_preserve_output(self) -> None:
         validator = self.snapshot / "validator.py"
@@ -274,19 +311,22 @@ class TestICPCExportPackage(unittest.TestCase):
         strict = self.root / "strict"
         domjudge = self.root / "domjudge"
         with mock.patch.object(projector, "_write_statements", side_effect=write_statements):
-            projector.project(
+            strict_warning = projector.project(
                 reader,
                 package_format="icpc-2025-09",
                 target=strict,
                 canonical_problem_slug="owner/projected-problem",
             )
-            projector.project(
+            domjudge_warning = projector.project(
                 reader,
                 package_format="domjudge",
                 target=domjudge,
                 canonical_problem_slug="owner/projected-problem",
                 short_name="A",
             )
+
+        self.assertIn("solutions/mixed.cpp", strict_warning)
+        self.assertEqual(domjudge_warning, "")
 
         self.assertTrue((strict / "statement" / "problem.en.pdf").is_file())
         self.assertTrue((strict / "submissions" / "submissions.yaml").is_file())
@@ -298,8 +338,7 @@ class TestICPCExportPackage(unittest.TestCase):
             strict_metadata["type"],
             ["pass-fail", "interactive", "multi-pass"],
         )
-        strict_mixed = strict / "submissions" / "mixed_rejected" / "mixed.cpp"
-        self.assertEqual(strict_mixed.read_text(encoding="utf-8"), "int mixed;\n")
+        self.assertFalse((strict / "submissions" / "mixed_rejected" / "mixed.cpp").exists())
         self.assertEqual((strict / "data" / "secret" / "001.ans").read_bytes(), b"")
 
         self.assertTrue((domjudge / "problem_statement" / "problem.pdf").is_file())
@@ -317,10 +356,14 @@ class TestICPCExportPackage(unittest.TestCase):
             "short-name = A\n",
             (domjudge / "domjudge-problem.ini").read_text(encoding="utf-8"),
         )
-        domjudge_mixed = domjudge / "submissions" / "mixed_rejected" / "mixed.cpp"
+        self.assertIn(
+            "externalid = projected-problem\n",
+            (domjudge / "domjudge-problem.ini").read_text(encoding="utf-8"),
+        )
+        domjudge_mixed = domjudge / "submissions" / "mixed" / "mixed.cpp"
         self.assertTrue(
             domjudge_mixed.read_bytes().startswith(
-                b"// @EXPECTED_RESULTS@: CORRECT,WRONG-ANSWER,TIMELIMIT,RUN-ERROR\n"
+                b"// @EXPECTED_RESULTS@: WRONG-ANSWER,TIMELIMIT,RUN-ERROR,COMPILER-ERROR\n"
             )
         )
         for package_root in (strict, domjudge):
@@ -444,6 +487,18 @@ class TestICPCExportPackage(unittest.TestCase):
             "mode": mode,
             "pass_limit": pass_limit,
             "verification": {"id": "ver-projection", "source": "full"},
+            "solutions": [
+                {
+                    "source_path": "solutions/accepted.cpp",
+                    "expected_behavior": "accepted",
+                    "verdicts": ["AC"],
+                },
+                {
+                    "source_path": "solutions/mixed.cpp",
+                    "expected_behavior": "rejected",
+                    "verdicts": ["WA", "CE"],
+                },
+            ],
             "tests": [
                 {
                     "id": "001",

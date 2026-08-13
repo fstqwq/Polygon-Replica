@@ -337,6 +337,7 @@ class TestAgentAPI(E2ETestBase):
             job_id,
             verified_revision_id=verified_revision["id"],
             export_id=export_id,
+            warning="compile-error submission omitted",
         )
         with TestClient(app, raise_server_exceptions=False) as client:
             connect = self._connect_agent(client, auth_cookie)
@@ -361,6 +362,10 @@ class TestAgentAPI(E2ETestBase):
             self.assertEqual(str(payload.get("status") or ""), "succeeded")
             self.assertEqual(str(payload.get("format") or ""), "domjudge")
             self.assertEqual(str(payload.get("phase") or ""), "complete")
+            self.assertEqual(
+                str(payload.get("error") or ""),
+                "compile-error submission omitted",
+            )
             self.assertEqual(str(payload.get("source_commit") or ""), source_commit)
             self.assertEqual(
                 str(payload.get("verified_revision_id") or ""),

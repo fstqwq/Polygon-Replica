@@ -6,10 +6,16 @@ import os
 import re
 import stat
 from pathlib import Path, PurePosixPath
-from typing import NotRequired, TypedDict, cast
+from typing import Literal, NotRequired, TypedDict, cast
 
 from app.service.platform.hashing import sha256_file
+from app.service.problem.build_config import load_build_config
 from app.service.problem.json_codec import loads_object
+from app.service.problem.solution_metadata import (
+    load_solution_desc,
+    normalize_expected_behavior,
+)
+from app.service.problem.source_tree import solution_sources
 from app.service.problem.test_spec import load_tests_spec
 from app.service.verification.identity import canonical_verification_id
 
@@ -30,6 +36,22 @@ class VerifiedTestEntry(TypedDict):
     sample_output: NotRequired[VerifiedFileEntry]
 
 
+VerifiedSolutionVerdict = Literal["AC", "WA", "TLE", "RTE", "CE"]
+VERIFIED_SOLUTION_VERDICT_ORDER: tuple[VerifiedSolutionVerdict, ...] = (
+    "AC",
+    "WA",
+    "TLE",
+    "RTE",
+    "CE",
+)
+
+
+class VerifiedSolutionEntry(TypedDict):
+    source_path: str
+    expected_behavior: str
+    verdicts: list[VerifiedSolutionVerdict]
+
+
 class VerifiedRevisionManifest(TypedDict):
     source_commit: str
     revision_number: int
@@ -37,6 +59,7 @@ class VerifiedRevisionManifest(TypedDict):
     mode: str
     pass_limit: int
     verification: dict[str, str]
+    solutions: list[VerifiedSolutionEntry]
     tests: list[VerifiedTestEntry]
 
 
@@ -126,6 +149,7 @@ def load_manifest(path: Path) -> VerifiedRevisionManifest:
         "mode",
         "pass_limit",
         "verification",
+        "solutions",
         "tests",
     }
     if set(raw) != required:
@@ -164,6 +188,9 @@ def load_manifest(path: Path) -> VerifiedRevisionManifest:
         canonical_verification_id(verification["id"])
     except RuntimeError as exc:
         raise ValueError("Polygon Replica package verification provenance is invalid") from exc
+    solutions = raw["solutions"]
+    if not isinstance(solutions, list) or not solutions:
+        raise ValueError("Polygon Replica package must contain solutions")
     tests = raw["tests"]
     if not isinstance(tests, list) or not tests:
         raise ValueError("Polygon Replica package must contain tests")
@@ -180,6 +207,67 @@ def validate_manifest_files(
     """Verify every declared payload and reject undeclared materialized files."""
 
     declared: set[str] = set()
+    committed_solution_paths = list(solution_sources(package_root))
+    manifest_solution_paths: list[str] = []
+    build = load_build_config(package_root, problem_mode=manifest["mode"])
+    accepted_source = build.get("accepted_solution_source")
+    expected_behaviors = {
+        source_path: (
+            "accepted"
+            if source_path == accepted_source
+            else load_solution_desc(package_root, source_path)["expected_behavior"]
+        )
+        for source_path in committed_solution_paths
+    }
+    for solution in manifest["solutions"]:
+        if not isinstance(solution, dict) or set(solution) != {
+            "source_path",
+            "expected_behavior",
+            "verdicts",
+        }:
+            raise ValueError("verified revision solution entry has an unsupported shape")
+        source_path = solution["source_path"]
+        if not isinstance(source_path, str):
+            raise ValueError("verified revision solution path is invalid")
+        canonical_rel_path(source_path)
+        manifest_solution_paths.append(source_path)
+        expected_behavior = solution["expected_behavior"]
+        try:
+            normalized_behavior = normalize_expected_behavior(expected_behavior)
+        except ValueError as exc:
+            raise ValueError(
+                f"verified revision solution behavior is invalid: {source_path}"
+            ) from exc
+        if expected_behaviors.get(source_path) != normalized_behavior:
+            raise ValueError(
+                f"verified revision solution behavior does not match source: {source_path}"
+            )
+        verdicts = solution["verdicts"]
+        if not isinstance(verdicts, list) or not verdicts:
+            raise ValueError(
+                f"verified revision solution verdicts are incomplete: {source_path}"
+            )
+        if any(
+            not isinstance(verdict, str)
+            or verdict not in VERIFIED_SOLUTION_VERDICT_ORDER
+            for verdict in verdicts
+        ):
+            raise ValueError(
+                f"verified revision solution verdict is invalid: {source_path}"
+            )
+        canonical_verdicts = [
+            verdict
+            for verdict in VERIFIED_SOLUTION_VERDICT_ORDER
+            if verdict in verdicts
+        ]
+        if verdicts != canonical_verdicts:
+            raise ValueError(
+                f"verified revision solution verdicts are not canonical: {source_path}"
+            )
+    if manifest_solution_paths != committed_solution_paths:
+        raise ValueError(
+            "verified revision solutions do not match committed solution sources"
+        )
     test_ids: set[str] = set()
     spec = load_tests_spec(
         package_root / "tests" / "spec.json",

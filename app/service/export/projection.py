@@ -10,7 +10,7 @@ import hashlib
 import os
 import re
 import shutil
-from collections.abc import Iterator
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
@@ -28,8 +28,8 @@ from app.service.export.icpc_package import (
 )
 from app.service.problem.build_config import BuildConfig, load_build_config
 from app.service.problem.runtime_config import load_problem_config, problem_config_limits
-from app.service.problem.solution_metadata import load_solution_desc
 from app.service.problem.source_file import resolve_source
+from app.service.problem_package.manifest import VerifiedSolutionEntry
 from app.service.problem_package.service import VerifiedRevisionReader
 from app.service.problem_package.statement_samples import hydrate_verified_statement_samples
 from app.service.statement.context import statement_languages
@@ -41,10 +41,16 @@ from app.service.statement.title import statement_title_from_snapshot
 PackageFormat = Literal["domjudge", "icpc-2025-09"]
 
 
+@dataclass(frozen=True)
+class ProjectionPlan:
+    package_format: PackageFormat
+    solutions: tuple[VerifiedSolutionEntry, ...]
+    warning: str
+
+
 class PackageProjectionService:
     """Project a verified revision into one externally defined package layout."""
 
-    SOURCE_SUFFIX_ORDER = (".cpp", ".cc", ".cxx", ".c++", ".py", ".java")
     DOMJUDGE_COLOR_PALETTE = (
         "#e6194b",
         "#3cb44b",
@@ -82,11 +88,15 @@ class PackageProjectionService:
         target: Path,
         canonical_problem_slug: str,
         short_name: str | None = None,
-    ) -> None:
+        plan: ProjectionPlan | None = None,
+    ) -> str:
         """Write exactly one requested package layout to an empty target directory."""
 
         if package_format not in {"domjudge", "icpc-2025-09"}:
             raise ValueError(f"unsupported package format: {package_format}")
+        projection_plan = plan or self.plan(reader, package_format=package_format)
+        if projection_plan.package_format != package_format:
+            raise ValueError("package projection plan format does not match request")
         if package_format == "domjudge":
             resolved_short_name = self._domjudge_short_name(short_name)
             self.project_domjudge(
@@ -94,15 +104,47 @@ class PackageProjectionService:
                 target=target,
                 canonical_problem_slug=canonical_problem_slug,
                 short_name=resolved_short_name,
+                plan=projection_plan,
             )
-            return
+            return projection_plan.warning
         if short_name is not None:
             raise ValueError("ICPC 2025-09 projection does not accept a DOMjudge short-name")
         self.project_icpc_2025(
             reader,
             target=target,
             canonical_problem_slug=canonical_problem_slug,
+            plan=projection_plan,
         )
+        return projection_plan.warning
+
+    @staticmethod
+    def plan(
+        reader: VerifiedRevisionReader,
+        *,
+        package_format: PackageFormat,
+    ) -> ProjectionPlan:
+        solutions = tuple(reader.manifest["solutions"])
+        if package_format == "domjudge":
+            return ProjectionPlan(package_format, solutions, "")
+        if package_format != "icpc-2025-09":
+            raise ValueError(f"unsupported package format: {package_format}")
+        omitted = tuple(
+            solution["source_path"]
+            for solution in solutions
+            if "CE" in solution["verdicts"]
+        )
+        selected = tuple(
+            solution
+            for solution in solutions
+            if solution["source_path"] not in omitted
+        )
+        warning = (
+            "ICPC 2025-09 omitted submissions with compile-error results: "
+            + ", ".join(omitted)
+            if omitted
+            else ""
+        )
+        return ProjectionPlan(package_format, selected, warning)
 
     def project_icpc_2025(
         self,
@@ -110,15 +152,21 @@ class PackageProjectionService:
         *,
         target: Path,
         canonical_problem_slug: str,
-    ) -> None:
+        plan: ProjectionPlan | None = None,
+    ) -> str:
         """Write a strict ICPC Problem Package 2025-09 tree."""
 
         self._prepare_target(target)
+        projection_plan = plan or self.plan(reader, package_format="icpc-2025-09")
+        if projection_plan.package_format != "icpc-2025-09":
+            raise ValueError("package projection plan format does not match request")
         self._build_icpc_2025(
             reader,
             target=target,
             canonical_problem_slug=canonical_problem_slug,
+            plan=projection_plan,
         )
+        return projection_plan.warning
 
     def project_domjudge(
         self,
@@ -127,16 +175,22 @@ class PackageProjectionService:
         target: Path,
         canonical_problem_slug: str,
         short_name: str,
-    ) -> None:
+        plan: ProjectionPlan | None = None,
+    ) -> str:
         """Write a DOMjudge-compatible problem package tree."""
 
         self._prepare_target(target)
+        projection_plan = plan or self.plan(reader, package_format="domjudge")
+        if projection_plan.package_format != "domjudge":
+            raise ValueError("package projection plan format does not match request")
         self._build_domjudge(
             reader,
             target=target,
             canonical_problem_slug=canonical_problem_slug,
             short_name=self._domjudge_short_name(short_name),
+            plan=projection_plan,
         )
+        return projection_plan.warning
 
     @staticmethod
     def _prepare_target(target: Path) -> None:
@@ -156,6 +210,7 @@ class PackageProjectionService:
         *,
         target: Path,
         canonical_problem_slug: str,
+        plan: ProjectionPlan,
     ) -> None:
         snapshot = reader.root
         mode = reader.manifest["mode"]
@@ -206,11 +261,10 @@ class PackageProjectionService:
             validator=validator,
             output_validator=interactor if mode == "interactive" else checker,
         )
-        accepted_source = self._accepted_solution(build_config, "ICPC 2025-09")
         self._copy_submissions(
             snapshot,
             target,
-            accepted_source=accepted_source,
+            solutions=plan.solutions,
             include_submissions_yaml=True,
             annotate_mixed=False,
         )
@@ -223,6 +277,7 @@ class PackageProjectionService:
         target: Path,
         canonical_problem_slug: str,
         short_name: str,
+        plan: ProjectionPlan,
     ) -> None:
         snapshot = reader.root
         mode = reader.manifest["mode"]
@@ -263,7 +318,7 @@ class PackageProjectionService:
         (target / "domjudge-problem.ini").write_text(
             self._domjudge_problem_ini(
                 problem_name=problem_name,
-                external_id=canonical_problem_slug,
+                external_id=self._domjudge_external_id(canonical_problem_slug),
                 short_name=short_name,
                 time_limit_ms=problem_config["time_limit_ms"],
             ),
@@ -281,11 +336,10 @@ class PackageProjectionService:
             validator=validator,
             output_validator=interactor if mode == "interactive" else checker,
         )
-        accepted_source = self._accepted_solution(build_config, "DOMjudge")
         self._copy_submissions(
             snapshot,
             target,
-            accepted_source=accepted_source,
+            solutions=plan.solutions,
             include_submissions_yaml=False,
             annotate_mixed=True,
         )
@@ -450,19 +504,12 @@ class PackageProjectionService:
             source=output_validator,
         )
 
-    @staticmethod
-    def _accepted_solution(build_config: BuildConfig, format_name: str) -> str:
-        accepted_source = build_config.get("accepted_solution_source")
-        if accepted_source is None:
-            raise ValueError(f"{format_name} projection requires a main correct solution")
-        return accepted_source
-
     def _copy_submissions(
         self,
         snapshot: Path,
         package_root: Path,
         *,
-        accepted_source: str,
+        solutions: tuple[VerifiedSolutionEntry, ...],
         include_submissions_yaml: bool,
         annotate_mixed: bool,
     ) -> None:
@@ -470,17 +517,19 @@ class PackageProjectionService:
         submissions.mkdir(parents=True)
         metadata: dict[str, dict[str, object]] = {}
         accepted_count = 0
-        for source_file in self._solution_sources(snapshot / "solutions"):
-            source_rel = source_file.relative_to(snapshot).as_posix()
-            expected = (
-                "accepted"
-                if source_rel == accepted_source
-                else load_solution_desc(snapshot, source_rel)["expected_behavior"]
-            )
+        for solution in solutions:
+            source_rel = solution["source_path"]
+            source_file = resolve_source(snapshot, source_rel)
+            expected = solution["expected_behavior"]
             rule = SUBMISSION_RULES.get(expected)
             if rule is None:
                 continue
-            target_dir = submissions / rule["directory"]
+            directory = (
+                rule["domjudge_directory"]
+                if annotate_mixed
+                else rule["ppf_directory"]
+            )
+            target_dir = submissions / directory
             target_dir.mkdir(parents=True, exist_ok=True)
             target = self._unique_path(target_dir, source_file.name)
             if annotate_mixed and expected in {"tle_or_correct", "tle_or_re", "rejected"}:
@@ -506,22 +555,6 @@ class PackageProjectionService:
                 encoding="utf-8",
                 newline="\n",
             )
-
-    def _solution_sources(self, folder: Path) -> Iterator[Path]:
-        if folder.is_symlink() or not folder.is_dir():
-            return
-        suffix_rank = {
-            suffix: index for index, suffix in enumerate(self.SOURCE_SUFFIX_ORDER)
-        }
-        candidates: list[tuple[int, str]] = []
-        with os.scandir(folder) as entries:
-            for entry in entries:
-                rank = suffix_rank.get(Path(entry.name).suffix.lower())
-                if rank is None or not entry.is_file(follow_symlinks=False):
-                    continue
-                candidates.append((rank, entry.name))
-        for _rank, name in sorted(candidates, key=lambda item: (item[0], item[1])):
-            yield folder / name
 
     @staticmethod
     def _unique_path(parent: Path, filename: str) -> Path:
@@ -575,6 +608,15 @@ class PackageProjectionService:
         if "\n" in value or "\r" in value:
             raise ValueError("DOMjudge short-name must be a single line")
         return value
+
+    @classmethod
+    def _domjudge_external_id(cls, canonical_problem_slug: str) -> str:
+        token = re.sub(
+            r"[^A-Za-z0-9_.-]+",
+            "-",
+            cls._problem_slug_leaf(canonical_problem_slug),
+        ).strip("-.")
+        return token or "problem"
 
     @staticmethod
     def _ini_value(value: str) -> str:

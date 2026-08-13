@@ -62,9 +62,42 @@ jobs:
         path: .test-results/${{ matrix.group }}.json
         if-no-files-found: warn
 
-  e2e-real:
+  e2e-mock:
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    env:
+      POLYGON_REPLICA_E2E_IMAGE: polygon-replica-e2e-mock:${{ github.sha }}
+      POLYGON_REPLICA_E2E_IMAGE_PREBUILT: "1"
+    steps:
+    - uses: actions/checkout@v6
+      with:
+        persist-credentials: false
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v4
+    - name: Build E2E image
+      uses: docker/build-push-action@v7
+      with:
+        context: .
+        file: ./Dockerfile
+        load: true
+        tags: ${{ env.POLYGON_REPLICA_E2E_IMAGE }}
+        cache-from: type=gha,scope=e2e-mock
+        cache-to: type=gha,mode=max,scope=e2e-mock
+    - name: Configure sandbox namespaces
+      run: |
+        sudo sysctl -w kernel.unprivileged_userns_clone=1 || true
+        sudo sysctl -w user.max_user_namespaces=1048576
+        if sysctl -n kernel.apparmor_restrict_unprivileged_userns >/dev/null 2>&1; then
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+        fi
+    - name: Run Judgehost protocol E2E
+      run: bash tests/scripts/docker-e2e.sh
+
+  e2e-real-product:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
     permissions:
       contents: read
     env:
@@ -90,8 +123,8 @@ jobs:
         file: ./Dockerfile
         load: true
         tags: ${{ env.POLYGON_REPLICA_E2E_IMAGE }}
-        cache-from: type=gha,scope=e2e-real
-        cache-to: type=gha,mode=max,scope=e2e-real
+        cache-from: type=gha,scope=e2e-real-product
+        cache-to: type=gha,mode=max,scope=e2e-real-product
     - name: Configure sandbox namespaces
       run: |
         sudo sysctl -w kernel.unprivileged_userns_clone=1 || true
@@ -99,7 +132,59 @@ jobs:
         if sysctl -n kernel.apparmor_restrict_unprivileged_userns >/dev/null 2>&1; then
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
         fi
-    - name: Run Judgehost protocol E2E
-      run: bash tests/scripts/docker-e2e.sh
-    - name: Run official Judgehost 9.0.0 and bleeding E2E
+    - name: Run deployed product journey on official Judgehost 9.0.0
       run: bash tests/scripts/e2e-real.sh
+    - name: Upload failure logs
+      if: failure()
+      uses: actions/upload-artifact@v6
+      with:
+        name: e2e-real-product-logs
+        path: .e2e/e2e-real
+        if-no-files-found: warn
+
+  e2e-real-domserver-900:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    env:
+      POLYGON_REPLICA_E2E_IMAGE: polygon-replica-e2e-domserver:${{ github.sha }}
+      POLYGON_REPLICA_E2E_IMAGE_PREBUILT: "1"
+    steps:
+    - uses: actions/checkout@v6
+      with:
+        persist-credentials: false
+    - name: Check out latest Polygon Skills
+      uses: actions/checkout@v6
+      with:
+        repository: fstqwq/Polygon-Skills
+        path: .e2e/polygon-skills
+        fetch-depth: 1
+        persist-credentials: false
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v4
+    - name: Build E2E image
+      uses: docker/build-push-action@v7
+      with:
+        context: .
+        file: ./Dockerfile
+        load: true
+        tags: ${{ env.POLYGON_REPLICA_E2E_IMAGE }}
+        cache-from: type=gha,scope=e2e-real-domserver-900
+        cache-to: type=gha,mode=max,scope=e2e-real-domserver-900
+    - name: Configure Judgehost host requirements
+      run: |
+        sudo sysctl -w kernel.unprivileged_userns_clone=1 || true
+        sudo sysctl -w user.max_user_namespaces=1048576
+        if sysctl -n kernel.apparmor_restrict_unprivileged_userns >/dev/null 2>&1; then
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+        fi
+    - name: Import and execute three DOMjudge 9.0.0 package modes
+      run: bash tests/scripts/e2e-domserver-900.sh
+    - name: Upload failure diagnostics
+      if: failure()
+      uses: actions/upload-artifact@v6
+      with:
+        name: e2e-real-domserver-900-logs
+        path: .e2e/e2e-domserver-900
+        if-no-files-found: warn

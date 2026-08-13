@@ -80,7 +80,7 @@ container; this is part of its current deployment security boundary. The image
 uses the regular GIL-enabled CPython 3.14 image and installs the same TeX Gyre
 and Noto CJK template fonts explicitly. Required TeX
 database, format, and font-map initialization failures stop the image build.
-`docker-compose.e2e.yml` is test infrastructure, not a production retention
+`tests/docker_e2e/docker-compose.e2e.yml` is test infrastructure, not a production retention
 model.
 
 ## Operations

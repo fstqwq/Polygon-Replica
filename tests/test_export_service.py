@@ -92,6 +92,13 @@ class TestExportService(unittest.TestCase):
                     "id": materialization["verification_id"],
                     "source": "full-verification",
                 },
+                "solutions": [
+                    {
+                        "source_path": "solutions/accepted.cpp",
+                        "expected_behavior": "accepted",
+                        "verdicts": ["AC"],
+                    }
+                ],
                 "tests": [
                     {
                         "id": "001",

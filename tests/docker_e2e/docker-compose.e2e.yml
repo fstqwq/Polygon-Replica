@@ -5,7 +5,7 @@ services:
     restart: "no"
     network_mode: none
     volumes:
-      - ./tests/docker_e2e:/opt/e2e:ro
+      - .:/opt/e2e:ro
     security_opt:
       - seccomp=unconfined
       - apparmor=unconfined
@@ -26,7 +26,7 @@ services:
       POLYGON_REPLICA_E2E_STATE_DIR: /var/backups/polygon-replica/e2e-state
       POLYGON_REPLICA_E2E_JUDGEHOST_TOKEN: ${POLYGON_REPLICA_E2E_JUDGEHOST_TOKEN:?set by tests/scripts/docker-e2e.sh}
     volumes:
-      - ./tests/docker_e2e:/opt/e2e:ro
+      - .:/opt/e2e:ro
       - srv:/srv/polygon-replica
       - var:/var/lib/polygon-replica
       - cache:/tmp/polygon-replica
@@ -37,7 +37,7 @@ services:
 
   app:
     build:
-      context: .
+      context: ../..
       dockerfile: Dockerfile
     image: ${POLYGON_REPLICA_E2E_IMAGE:?set by tests/scripts/docker-e2e.sh}
     restart: unless-stopped
@@ -72,7 +72,7 @@ services:
       POLYGON_REPLICA_E2E_STATE_DIR: /var/backups/polygon-replica/e2e-state
       POLYGON_REPLICA_E2E_JUDGEHOST_TOKEN: ${POLYGON_REPLICA_E2E_JUDGEHOST_TOKEN:?set by tests/scripts/docker-e2e.sh}
     volumes:
-      - ./tests/docker_e2e:/opt/e2e:ro
+      - .:/opt/e2e:ro
       - state:/var/backups/polygon-replica
     networks:
       - e2e
@@ -96,7 +96,7 @@ services:
       POLYGON_REPLICA_E2E_CACHE_ROOT: /tmp/polygon-replica
       POLYGON_REPLICA_E2E_STATE_DIR: /var/backups/polygon-replica/e2e-state
     volumes:
-      - ./tests/docker_e2e:/opt/e2e:ro
+      - .:/opt/e2e:ro
       # SQLite WAL readers need directory access for the shared-memory file.
       # runner.py still opens the database with URI mode=ro.
       - var:/var/lib/polygon-replica

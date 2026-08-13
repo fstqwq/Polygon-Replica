@@ -28,6 +28,7 @@ _DOMJUDGE_RESULT_TO_PPF = {
     "WRONG-ANSWER": "WA",
     "TIMELIMIT": "TLE",
     "RUN-ERROR": "RTE",
+    "COMPILER-ERROR": "CE",
 }
 
 _ANNOTATION_BEHAVIOR_BY_RESULTS = {
@@ -36,7 +37,7 @@ _ANNOTATION_BEHAVIOR_BY_RESULTS = {
     frozenset({"AC", "TLE"}): "tle_or_correct",
     frozenset({"AC", "RTE"}): "run_time_error",
     frozenset({"TLE", "RTE"}): "tle_or_re",
-    frozenset({"AC", "WA", "TLE", "RTE"}): "rejected",
+    frozenset({"WA", "TLE", "RTE", "CE"}): "rejected",
 }
 
 
@@ -57,6 +58,7 @@ def submission_expected_from_group(raw_group: str) -> str:
         "mixed_tle_or_correct": "tle_or_correct",
         "mixed_tle_or_re": "tle_or_re",
         "mixed_rejected": "rejected",
+        "mixed": "unknown",
         "rejected": "rejected",
         "reject": "rejected",
     }

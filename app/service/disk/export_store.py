@@ -173,7 +173,12 @@ class ExportStore:
         self.db.write_transaction(transaction)
 
     def mark_export_job_succeeded(
-        self, job_id: str, *, materialization_id: str, export_id: str
+        self,
+        job_id: str,
+        *,
+        materialization_id: str,
+        export_id: str,
+        warning: str,
     ) -> None:
         now = now_iso()
 
@@ -183,8 +188,8 @@ class ExportStore:
                 raise RuntimeError(f"export job is not running: {job_id}")
             connection.execute(
                 """UPDATE export_jobs SET status='succeeded',materialization_id=?,
-                   export_id=?,error='',finished_at=? WHERE id=?""",
-                [materialization_id, export_id, now, job_id],
+                   export_id=?,error=?,finished_at=? WHERE id=?""",
+                [materialization_id, export_id, warning, now, job_id],
             )
         self.db.write_transaction(transaction)
 

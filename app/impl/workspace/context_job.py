@@ -231,7 +231,7 @@ def _run_export_create_worker(
             export_job_id,
             verified_revision_id=verified_revision["id"],
         )
-        export_id, _out = application_runtime.export_service.create_export(
+        export_id, _out, warning = application_runtime.export_service.create_export(
             problem,
             package_format,
             verified_revision_id=verified_revision["id"],
@@ -240,6 +240,7 @@ def _run_export_create_worker(
             export_job_id,
             verified_revision_id=verified_revision["id"],
             export_id=export_id,
+            warning=warning,
         )
     except Exception as exc:
         application_runtime.export_service.mark_export_job_failed(export_job_id, str(exc))

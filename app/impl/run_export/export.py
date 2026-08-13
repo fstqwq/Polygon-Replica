@@ -67,7 +67,11 @@ def export_page(
                 "source_display": (
                     f"v{revision_number}" if revision_number is not None else "unavailable"
                 ),
-                "detail": row["error"] or filename or row["status"],
+                "detail": (
+                    f"Warning: {row['error']}"
+                    if row["status"] == "succeeded" and row["error"]
+                    else row["error"] or filename or row["status"]
+                ),
                 "export_id": row["export_id"] if filename else "",
                 "filename": filename,
             }

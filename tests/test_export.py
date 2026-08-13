@@ -86,7 +86,12 @@ class TestPublishedRevisionExport(E2ETestBase):
             ],
         )
 
-    def _publish_problem(self, *, test_id: str = "001") -> tuple[Path, int, str]:
+    def _publish_problem(
+        self,
+        *,
+        test_id: str = "001",
+        extra_solutions: dict[str, str] | None = None,
+    ) -> tuple[Path, int, str]:
         workspace = Path(self._workspace_path())
         (workspace / "tests" / "manual").mkdir(parents=True, exist_ok=True)
         (workspace / "tests" / "manual" / f"{test_id}.in").write_text(
@@ -114,6 +119,13 @@ class TestPublishedRevisionExport(E2ETestBase):
         )
         accepted = workspace / "solutions" / "accepted.cpp"
         accepted.write_text("int main() { return 0; }\n", encoding="utf-8")
+        for filename, expected_behavior in (extra_solutions or {}).items():
+            source = workspace / "solutions" / filename
+            source.write_text("int main() { return 0; }\n", encoding="utf-8")
+            source.with_name(f"{source.name}.desc").write_text(
+                f"expected: {expected_behavior}\n",
+                encoding="utf-8",
+            )
         build = load_build_config(workspace)
         build["accepted_solution_source"] = "solutions/accepted.cpp"
         (workspace / "config" / "build.json").write_text(
@@ -140,6 +152,7 @@ class TestPublishedRevisionExport(E2ETestBase):
         *,
         input_bytes: bytes = b"1\n",
         answer_bytes: bytes = b"2\n",
+        solution_verdicts: dict[str, tuple[str, str]] | None = None,
     ):
         def build(
             _snapshot: Path,
@@ -193,6 +206,47 @@ class TestPublishedRevisionExport(E2ETestBase):
                     expected_behavior="accepted",
                 )
             ]
+            completions = [
+                TaskCompletion(
+                    task_id=task_id,
+                    status=VerificationTaskStatus.DONE,
+                    run_id="",
+                    judgehost_task_id="",
+                    result=execution_result("OK"),
+                    input_ref=input_ref,
+                    answer_ref=answer_ref,
+                )
+            ]
+            for index, (
+                source_path,
+                (expected_behavior, verdict),
+            ) in enumerate((solution_verdicts or {}).items(), start=1):
+                program_id = f"solution-{index}"
+                solution_task_id = verification_task_id(
+                    verification_id,
+                    program_id,
+                    "001.in",
+                )
+                tasks.append(
+                    PlannedTask(
+                        task_id=solution_task_id,
+                        predecessor_task_id=task_id,
+                        task_kind="solution-run",
+                        source_path=source_path,
+                        program_id=program_id,
+                        test_name="001.in",
+                        expected_behavior=expected_behavior,
+                    )
+                )
+                completions.append(
+                    TaskCompletion(
+                        task_id=solution_task_id,
+                        status=VerificationTaskStatus.DONE,
+                        run_id="",
+                        judgehost_task_id="",
+                        result=execution_result(verdict),
+                    )
+                )
             activation = activate_test_verification(
                 verification_id,
                 programs=verification_programs_for_tasks(tasks),
@@ -201,17 +255,7 @@ class TestPublishedRevisionExport(E2ETestBase):
             if activation.outcome != "activated":
                 raise AssertionError(f"unexpected activation outcome: {activation.outcome}")
             completion = runtime.verification_task_store.commit_task_completions(
-                [
-                    TaskCompletion(
-                        task_id=task_id,
-                        status=VerificationTaskStatus.DONE,
-                        run_id="",
-                        judgehost_task_id="",
-                        result=execution_result("OK"),
-                        input_ref=input_ref,
-                        answer_ref=answer_ref,
-                    )
-                ]
+                completions
             )
             if completion.parent_transition != "ok":
                 raise AssertionError(
@@ -369,6 +413,16 @@ class TestPublishedRevisionExport(E2ETestBase):
             manifest = json.loads(package.read("test_data/manifest.json"))
             self.assertEqual(manifest["source_commit"], commit)
             self.assertEqual(manifest["verification"]["id"], verified["verification_id"])
+            self.assertEqual(
+                manifest["solutions"],
+                [
+                    {
+                        "source_path": "solutions/accepted.cpp",
+                        "expected_behavior": "accepted",
+                        "verdicts": ["AC"],
+                    }
+                ],
+            )
 
     def test_valid_verified_revision_is_reused_without_verification(self) -> None:
         problem_id, _commit, first = self._verified_revision()
@@ -394,7 +448,7 @@ class TestPublishedRevisionExport(E2ETestBase):
             "compile_pdf",
             side_effect=self._compile_statement,
         ):
-            old_export_id, old_projection = runtime.export_service.create_export(
+            old_export_id, old_projection, _warning = runtime.export_service.create_export(
                 self.problem,
                 "domjudge",
                 verified_revision_id=first["id"],
@@ -463,18 +517,20 @@ class TestPublishedRevisionExport(E2ETestBase):
             "compile_pdf",
             side_effect=self._compile_statement,
         ):
-            domjudge_id, domjudge_archive = runtime.export_service.create_export(
+            domjudge_id, domjudge_archive, domjudge_warning = runtime.export_service.create_export(
                 self.problem,
                 "domjudge",
                 verified_revision_id=verified["id"],
             )
-            icpc_id, icpc_archive = runtime.export_service.create_export(
+            icpc_id, icpc_archive, icpc_warning = runtime.export_service.create_export(
                 self.problem,
                 "icpc-2025-09",
                 verified_revision_id=verified["id"],
             )
 
         self.assertNotEqual(domjudge_id, icpc_id)
+        self.assertEqual(domjudge_warning, "")
+        self.assertEqual(icpc_warning, "")
         self.assertIn("-domjudge-v", domjudge_archive.name)
         self.assertIn("-icpc-2025-09-v", icpc_archive.name)
         with zipfile.ZipFile(domjudge_archive, "r") as package:
@@ -495,18 +551,83 @@ class TestPublishedRevisionExport(E2ETestBase):
             self.assertEqual(metadata["problem_format_version"], "2025-09")
             self.assertEqual(metadata["version"], commit)
 
-        repeated_id, repeated_archive = runtime.export_service.create_export(
+        repeated_id, repeated_archive, repeated_warning = runtime.export_service.create_export(
             self.problem,
             "domjudge",
             verified_revision_id=verified["id"],
         )
         self.assertEqual((repeated_id, repeated_archive), (domjudge_id, domjudge_archive))
+        self.assertEqual(repeated_warning, domjudge_warning)
         rows = db_fetch_one(
             """SELECT COUNT(*) AS c FROM exports
                WHERE materialization_id=? AND export_type IN (?,?)""",
             [verified["id"], "domjudge", "icpc-2025-09"],
         )
         self.assertEqual(int(rows["c"]), 2)
+
+    def test_ppf_omits_compile_error_submission_and_reuses_warning_with_cache(
+        self,
+    ) -> None:
+        _workspace, problem_id, _commit = self._publish_problem(
+            extra_solutions={"rejected.cpp": "rejected"},
+        )
+        revision = runtime.problem_package_service.published_revision(problem_id)
+        verified = runtime.problem_package_service.ensure_verified_revision(
+            revision,
+            self._verification_builder(
+                problem_id,
+                solution_verdicts={
+                    "solutions/rejected.cpp": ("rejected", "CE"),
+                },
+            ),
+        )
+        with patch.object(
+            runtime.export_service.projection_service._tex_compile_service,
+            "compile_pdf",
+            side_effect=self._compile_statement,
+        ):
+            first_id, first_archive, first_warning = (
+                runtime.export_service.create_export(
+                    self.problem,
+                    "icpc-2025-09",
+                    verified_revision_id=verified["id"],
+                )
+            )
+        second_id, second_archive, second_warning = (
+            runtime.export_service.create_export(
+                self.problem,
+                "icpc-2025-09",
+                verified_revision_id=verified["id"],
+            )
+        )
+
+        self.assertEqual((second_id, second_archive), (first_id, first_archive))
+        self.assertEqual(second_warning, first_warning)
+        self.assertIn("solutions/rejected.cpp", first_warning)
+        with zipfile.ZipFile(first_archive) as package:
+            self.assertFalse(
+                any(name.endswith("/rejected.cpp") for name in package.namelist())
+            )
+
+    def test_incomplete_solution_verdict_prevents_verified_revision(self) -> None:
+        _workspace, problem_id, _commit = self._publish_problem(
+            extra_solutions={"broken.cpp": "rejected"},
+        )
+        revision = runtime.problem_package_service.published_revision(problem_id)
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "verification solution result is not a complete verdict",
+        ):
+            runtime.problem_package_service.ensure_verified_revision(
+                revision,
+                self._verification_builder(
+                    problem_id,
+                    solution_verdicts={
+                        "solutions/broken.cpp": ("rejected", "SK"),
+                    },
+                ),
+            )
 
     def test_export_publication_holds_verified_revision_operation(self) -> None:
         _problem_id, _commit, verified = self._verified_revision()
@@ -549,7 +670,7 @@ class TestPublishedRevisionExport(E2ETestBase):
                 side_effect=self._compile_statement,
             ),
         ):
-            export_id, archive = runtime.export_service.create_export(
+            export_id, archive, _warning = runtime.export_service.create_export(
                 self.problem,
                 "domjudge",
                 verified_revision_id=verified["id"],

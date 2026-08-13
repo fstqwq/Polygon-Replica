@@ -18,8 +18,9 @@ from pathlib import Path, PurePosixPath
 from typing import BinaryIO, Literal, TypedDict
 
 from app.db import DB, now_iso
-from app.service.platform.fs.op import extract_git_archive
+from app.service.execution.codec import execution_result_from_json
 from app.service.platform.fs.layout import StorageLayout
+from app.service.platform.fs.op import extract_git_archive
 from app.service.platform.git_process import run_git
 from app.service.platform.hashing import sha256_file
 from app.service.platform.runtime_blob_store import PayloadFile
@@ -30,7 +31,9 @@ from app.service.problem.runtime_config import (
 )
 from app.service.problem.source_tree import ProblemSourceTree, load_problem_source_tree
 from app.service.problem_package.manifest import (
+    VERIFIED_SOLUTION_VERDICT_ORDER,
     VerifiedRevisionManifest,
+    VerifiedSolutionEntry,
     VerifiedTestEntry,
     describe_file,
     dumps_manifest,
@@ -38,7 +41,13 @@ from app.service.problem_package.manifest import (
     source_digest,
     validate_manifest_files,
 )
-from app.service.problem_package.store import MaterializationRow, ProblemPackageStore, PublishedProblem
+from app.service.problem_package.store import (
+    MaterializationRow,
+    ProblemPackageStore,
+    PublishedProblem,
+    VerifiedSolutionResultRow,
+)
+from app.service.verification.result_match import run_verdict_short
 
 
 VerificationBuilder = Callable[[Path, str, int, str], str]
@@ -488,6 +497,67 @@ class ProblemPackageService:
             manifest_tests.append(item)
         return manifest_tests
 
+    def _materialize_solutions(
+        self,
+        *,
+        verification_id: str,
+        source_tree: ProblemSourceTree,
+    ) -> list[VerifiedSolutionEntry]:
+        rows_by_source: dict[str, list[VerifiedSolutionResultRow]] = {}
+        for row in self.store.verified_solution_result_rows(verification_id):
+            rows_by_source.setdefault(row["source_path"], []).append(row)
+        expected_test_names = {
+            f"{ordinal:03d}.in"
+            for ordinal, _test in enumerate(source_tree.tests, start=1)
+        }
+        solutions: list[VerifiedSolutionEntry] = []
+        for source_path in sorted(source_tree.solution_behaviors):
+            expected_behavior = source_tree.solution_behaviors[source_path]
+            rows = rows_by_source.pop(source_path, [])
+            if (
+                len(rows) != len(expected_test_names)
+                or {row["test_name"] for row in rows} != expected_test_names
+            ):
+                raise ValueError(
+                    f"verification solution results are incomplete: {source_path}"
+                )
+            observed: set[str] = set()
+            for row in rows:
+                if (
+                    row["final_status"] != "done"
+                    or row["expected_behavior"] != expected_behavior
+                ):
+                    raise ValueError(
+                        f"verification solution results are incomplete: {source_path}"
+                    )
+                verdict = run_verdict_short(
+                    execution_result_from_json(row["result_json"]).verdict.upper()
+                )
+                manifest_verdict = {"TL": "TLE", "RE": "RTE"}.get(
+                    verdict,
+                    verdict,
+                )
+                if manifest_verdict not in VERIFIED_SOLUTION_VERDICT_ORDER:
+                    raise ValueError(
+                        "verification solution result is not a complete verdict: "
+                        f"{source_path} / {row['test_name']}"
+                    )
+                observed.add(manifest_verdict)
+            solutions.append(
+                {
+                    "source_path": source_path,
+                    "expected_behavior": expected_behavior,
+                    "verdicts": [
+                        verdict
+                        for verdict in VERIFIED_SOLUTION_VERDICT_ORDER
+                        if verdict in observed
+                    ],
+                }
+            )
+        if rows_by_source:
+            raise ValueError("verification contains an unknown committed solution")
+        return solutions
+
     @staticmethod
     def _write_archive(source_root: Path, target: Path) -> None:
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -548,6 +618,10 @@ class ProblemPackageService:
                 mode=mode,
                 source_tree=source_tree,
             )
+            solutions = self._materialize_solutions(
+                verification_id=verification_id,
+                source_tree=source_tree,
+            )
             manifest: VerifiedRevisionManifest = {
                 "source_commit": revision.source_commit,
                 "revision_number": revision.revision_number,
@@ -555,6 +629,7 @@ class ProblemPackageService:
                 "mode": mode,
                 "pass_limit": pass_limit,
                 "verification": {"id": verification_id, "source": "full-verification"},
+                "solutions": solutions,
                 "tests": tests,
             }
             manifest_path = package_root / "test_data" / "manifest.json"

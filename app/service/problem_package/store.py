@@ -43,6 +43,15 @@ class MaterializationExportRow(TypedDict):
     archive_rel_path: str
 
 
+class VerifiedSolutionResultRow(TypedDict):
+    task_kind: str
+    source_path: str
+    test_name: str
+    expected_behavior: str
+    final_status: str
+    result_json: str
+
+
 def _materialization(row) -> MaterializationRow:
     return {
         "id": str(row["id"]),
@@ -385,6 +394,33 @@ class ProblemPackageStore:
                 [verification_id, f"{test_id}.in", role],
             )
         return "" if row is None else str(row["artifact_ref"] or "")
+
+    def verified_solution_result_rows(
+        self,
+        verification_id: str,
+    ) -> list[VerifiedSolutionResultRow]:
+        rows = self.db.fetch_all(
+            """
+            SELECT task_kind,source_path,test_name,expected_behavior,
+                   final_status,result_json
+            FROM verification_tasks
+            WHERE verification_id=?
+              AND task_kind IN ('main-correct','solution-run')
+            ORDER BY source_path,test_name,id
+            """,
+            [verification_id],
+        )
+        return [
+            {
+                "task_kind": str(row["task_kind"]),
+                "source_path": str(row["source_path"]),
+                "test_name": str(row["test_name"]),
+                "expected_behavior": str(row["expected_behavior"]),
+                "final_status": str(row["final_status"]),
+                "result_json": str(row["result_json"]),
+            }
+            for row in rows
+        ]
 
     def fail_interrupted_builds(self) -> int:
         def transaction(connection) -> int:

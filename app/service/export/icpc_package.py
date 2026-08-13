@@ -32,7 +32,8 @@ _SOURCE_LANGUAGE = {
 
 
 class SubmissionRule(TypedDict):
-    directory: str
+    ppf_directory: str
+    domjudge_directory: str
     permitted: tuple[str, ...]
     required: tuple[str, ...]
     domjudge_results: tuple[str, ...]
@@ -40,46 +41,58 @@ class SubmissionRule(TypedDict):
 
 SUBMISSION_RULES: dict[str, SubmissionRule] = {
     "accepted": {
-        "directory": "accepted",
+        "ppf_directory": "accepted",
+        "domjudge_directory": "accepted",
         "permitted": ("AC",),
         "required": ("AC",),
         "domjudge_results": ("CORRECT",),
     },
     "wrong_answer": {
-        "directory": "wrong_answer",
+        "ppf_directory": "wrong_answer",
+        "domjudge_directory": "wrong_answer",
         "permitted": ("AC", "WA"),
         "required": ("WA",),
         "domjudge_results": ("CORRECT", "WRONG-ANSWER"),
     },
     "time_limit_exceeded": {
-        "directory": "time_limit_exceeded",
+        "ppf_directory": "time_limit_exceeded",
+        "domjudge_directory": "time_limit_exceeded",
         "permitted": ("AC", "TLE"),
         "required": ("TLE",),
         "domjudge_results": ("CORRECT", "TIMELIMIT"),
     },
     "run_time_error": {
-        "directory": "run_time_error",
+        "ppf_directory": "run_time_error",
+        "domjudge_directory": "run_time_error",
         "permitted": ("AC", "RTE"),
         "required": ("RTE",),
         "domjudge_results": ("CORRECT", "RUN-ERROR"),
     },
     "tle_or_correct": {
-        "directory": "mixed_tle_or_correct",
+        "ppf_directory": "mixed_tle_or_correct",
+        "domjudge_directory": "mixed",
         "permitted": ("AC", "TLE"),
         "required": ("AC", "TLE"),
         "domjudge_results": ("CORRECT", "TIMELIMIT"),
     },
     "tle_or_re": {
-        "directory": "mixed_tle_or_re",
+        "ppf_directory": "mixed_tle_or_re",
+        "domjudge_directory": "mixed",
         "permitted": ("TLE", "RTE"),
         "required": ("TLE", "RTE"),
         "domjudge_results": ("TIMELIMIT", "RUN-ERROR"),
     },
     "rejected": {
-        "directory": "mixed_rejected",
+        "ppf_directory": "mixed_rejected",
+        "domjudge_directory": "mixed",
         "permitted": ("AC", "WA", "TLE", "RTE"),
         "required": ("WA", "TLE", "RTE"),
-        "domjudge_results": ("CORRECT", "WRONG-ANSWER", "TIMELIMIT", "RUN-ERROR"),
+        "domjudge_results": (
+            "WRONG-ANSWER",
+            "TIMELIMIT",
+            "RUN-ERROR",
+            "COMPILER-ERROR",
+        ),
     },
 }
 

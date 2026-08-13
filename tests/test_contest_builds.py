@@ -536,10 +536,11 @@ class TestContestBuilds(ContestActionBase):
                 short_name: str | None,
                 target: Path,
                 **_kwargs: object,
-            ) -> None:
+            ) -> str:
                 if short_name == "B":
                     raise RuntimeError("projection failed")
                 (target / "problem.yaml").write_text("name: A\n", encoding="utf-8")
+                return ""
 
         service = ContestPackageService(
             runtime.contest_service,
@@ -588,9 +589,10 @@ class TestContestBuilds(ContestActionBase):
                 short_name: str | None,
                 target: Path,
                 **_kwargs: object,
-            ) -> None:
+            ) -> str:
                 calls.append((package_format, short_name))
                 (target / "problem.yaml").write_text("name: Example\n", encoding="utf-8")
+                return "projection warning"
 
         service = ContestPackageService(
             runtime.contest_service,
@@ -607,6 +609,10 @@ class TestContestBuilds(ContestActionBase):
         )
 
         self.assertEqual(calls, [("domjudge", "A")])
+        self.assertEqual(
+            result["warnings"],
+            [{"problem": problem_slug, "message": "projection warning"}],
+        )
         self.assertEqual(result["artifact_id"], "")
         self.assertEqual(result["_artifact_type"], "domjudge-bundle")
         self.assertEqual(

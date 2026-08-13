@@ -69,13 +69,14 @@ class ContestPackageService:
                     "verified_revision_id": materialization_id,
                     "archive_sha256": str(entry["archive_sha256"]),
                     "package_file": "",
+                    "warning": "",
                     "error": "",
                 }
                 try:
                     reader = readers[materialization_id]
                     package_root = package_roots / str(entry["contest_problem_id"])
                     package_root.mkdir(parents=True, exist_ok=False)
-                    self._projector.project(
+                    item["warning"] = self._projector.project(
                         reader,
                         package_format=package_format,
                         target=package_root,
@@ -117,6 +118,16 @@ class ContestPackageService:
                 "artifact_id": "",
                 "filename": "",
             }
+            warnings = [
+                {
+                    "problem": str(row["problem_slug"]),
+                    "message": str(row["warning"]),
+                }
+                for row in results
+                if row["warning"]
+            ]
+            if warnings:
+                summary["warnings"] = warnings
             if failed:
                 errors = [str(row["error"]) for row in failed]
                 summary["error"] = errors[0] or "problem projection failed"

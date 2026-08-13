@@ -163,30 +163,22 @@ input/answer blobs, and the separate late-diagnostic snapshot through persisted
 state. The mock is a project-owned protocol fixture; the test does not clone or
 approve an upstream source tree.
 
-`tests/scripts/e2e-real.sh` adds the deployed authoring journey. It builds the
-application image once, pulls the official `domjudge/judgehost:9.0.0` and
-`domjudge/judgehost:bleeding` images, and starts two isolated Compose projects
-in parallel. CI does not compile DOMjudge. Each project has its own application,
-database, filesystems, network, Judgehost credentials, daemon id, and run-user
-id. A result is therefore attributable to exactly one Judgehost image. The
-script logs the pulled image digests for reproducibility; `bleeding`
-intentionally remains a floating upstream compatibility target.
-
-Both projects perform first-run setup, Judgehost configuration, problem
-creation, and every fixture file save through public HTTP and the latest
-Polygon Agent CLI checkout. Before execution, they install the previous
-`build.json` shape through the CLI, open the authoring workspace, and require a
+`tests/scripts/e2e-real.sh` runs the deployed authoring journey against the
+official `domjudge/judgehost:9.0.0` image. CI does not compile DOMjudge. The
+journey performs first-run setup, Judgehost configuration, problem creation,
+and every fixture file save through public HTTP and the latest Polygon Agent
+CLI checkout. Before execution, it installs the previous
+`build.json` shape through the CLI, opens the authoring workspace, and requires a
 Review and Publish warning plus a canonical file that preserves the current
-selections. They then run the same generated test through a real Judgehost and
-observe generated input, accepted answer, AC, WA, CE, and public derived-output
-downloads. The `bleeding` project alone continues through the more expensive
-product tail: sample preview, commit, DOMjudge and ICPC 2025-09 Package Exports,
-direct Polygon Replica package download, Contest creation and statement/package
-builds, role-aware page walk, and concurrent Alice/Bob conflict resolution.
-This avoids repeating work that does not vary by Judgehost implementation.
+selections. It then runs the generated test through a real Judgehost and
+observes generated input, accepted answer, AC, WA, CE, and public derived-output
+downloads. It continues through sample preview, commit, DOMjudge and ICPC
+2025-09 Package Exports, direct Polygon Replica package download, Contest
+creation and statement/package builds, role-aware page walk, concurrent
+Alice/Bob conflict resolution, maintenance cleanup, backup, and restart.
 
-The deployed journey on `bleeding` then registers an outsider, a reader, and
-two writers. A role-aware page walk visits the stable HTML routes as anonymous,
+The deployed journey registers an outsider, a reader, and two writers. A
+role-aware page walk visits the stable HTML routes as anonymous,
 outsider, reader, writer, and owner/system-administrator actors. It checks
 access outcomes and rejects unexpected server errors without pinning sentences,
 CSS selectors, or incidental markup. Pages that require a runtime identity are
@@ -199,9 +191,27 @@ through the public merge review and apply endpoints and publishes a linear child
 of Alice's revision. The assertions cover Git ancestry, workspace isolation,
 and selected file bytes rather than merge-page presentation.
 
+`tests/scripts/e2e-domserver-900.sh` is a separate package-consumer journey. It
+starts MariaDB 10.11, `domjudge/domserver:9.0.0`, one official Judgehost for
+Polygon Replica, and one official Judgehost for DOMserver. The latest Agent CLI
+creates and publishes pass-fail, interactive-only, and multi-pass-only fixtures.
+Polygon Replica verifies each published revision and exports a DOMjudge ZIP.
+The controller imports each ZIP through the DOMjudge API while the admin user is
+bound to a jury team. DOMserver therefore creates the package's jury submissions
+itself; its Judgehost executes them, and the controller checks the real results
+and runs DOMjudge's Judging verifier. The only accepted import danger messages
+are the three exact 9.0.0 mixed-directory annotation mismatches.
+
+Package structure, PPF 2025-09, combined interactive/multi-pass, cache behavior,
+warning propagation, and import round-trip are contract tests rather than part
+of the DOMserver journey. All Docker test definitions live in
+`tests/docker_e2e/`. The mock, deployed product, and DOMserver journeys run as
+independent CI jobs with a 15-minute outer limit.
+
 Run the isolated E2E from the repository root:
 
 ```bash
 bash tests/scripts/docker-e2e.sh
 bash tests/scripts/e2e-real.sh
+bash tests/scripts/e2e-domserver-900.sh
 ```

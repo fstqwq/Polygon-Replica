@@ -3,7 +3,7 @@ set -Eeuo pipefail
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 REPO_ROOT=$(cd -- "$SCRIPT_DIR/../.." && pwd)
-COMPOSE_FILE="$REPO_ROOT/docker-compose.e2e.yml"
+COMPOSE_FILE="$REPO_ROOT/tests/docker_e2e/docker-compose.e2e.yml"
 
 project_suffix="$(date -u +%Y%m%d%H%M%S)-$$-${RANDOM}"
 export COMPOSE_PROJECT_NAME="polygon-replica-e2e-${project_suffix}"

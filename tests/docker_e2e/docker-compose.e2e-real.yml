@@ -42,7 +42,7 @@ services:
       POLYGON_REPLICA_E2E_SKILLS_ROOT: /opt/polygon-skills
       POLYGON_REPLICA_E2E_SKILLS_COMMIT: ${POLYGON_REPLICA_E2E_SKILLS_COMMIT:?set by tests/scripts/e2e-real.sh}
     volumes:
-      - ./tests/docker_e2e:/opt/e2e:ro
+      - .:/opt/e2e:ro
       - ${POLYGON_REPLICA_E2E_SKILLS_HOST_ROOT:?set by tests/scripts/e2e-real.sh}:/opt/polygon-skills:ro
       - srv:/srv/polygon-replica:ro
       # SQLite WAL readers need directory access for the shared-memory file.
