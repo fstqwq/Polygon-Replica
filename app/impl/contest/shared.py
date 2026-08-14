@@ -1,16 +1,17 @@
 from pathlib import Path
 
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 
 from app.impl.auth.shared import redirect_response
+from app.impl.contest.workspace_scope import contest_workspace_context_for_contest_page
 from app.impl.runtime.dependency import runtime
-from app.impl.workspace.context_operation import normalize_contest_slug_required
 from app.impl.workspace.context import global_user_ctx
+from app.impl.workspace.context_operation import normalize_contest_slug_required
+from app.impl.workspace.problem_config import read_problem_config
+from app.service.platform.git_process import run_git
 from app.service.problem.runtime_config import (
     ProblemConfig, dumps_problem_config, problem_config_limits,
 )
-from app.service.platform.git_process import run_git
-from app.impl.workspace.problem_config import read_problem_config
 
 
 _CONTEST_PROPERTY_LOCATION = "location"
@@ -54,7 +55,13 @@ def _contest_manage_nav(contest_slug: str, active: str) -> list[dict[str, str | 
     ]
 
 
-def _contest_ctx(contest_slug: str, user: str, active_page: str) -> dict:
+def _contest_ctx(
+    contest_slug: str,
+    user: str,
+    active_page: str,
+    *,
+    request: Request | None = None,
+) -> dict:
     gctx = global_user_ctx(user)
     safe_slug = normalize_contest_slug_required(contest_slug)
     contest_row = runtime().contest_service.contest_context(safe_slug)
@@ -70,7 +77,7 @@ def _contest_ctx(contest_slug: str, user: str, active_page: str) -> dict:
             status_code=403,
             detail=str(read_block_reason) if read_block_reason is not None else "contest access required",
         )
-    return {
+    context = {
         "user": gctx["user"],
         "contest": {
             "id": int(contest_row["id"]),
@@ -92,6 +99,15 @@ def _contest_ctx(contest_slug: str, user: str, active_page: str) -> dict:
             active_page,
         ),
     }
+    if request is not None:
+        context["contest_workspace"] = contest_workspace_context_for_contest_page(
+            request,
+            contest_id=int(contest_row["id"]),
+            contest_slug=str(contest_row["slug"]),
+            contest_title=str(contest_row["title"]),
+            user_id=int(gctx["user"]["id"]),
+        )
+    return context
 
 
 

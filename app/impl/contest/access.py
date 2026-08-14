@@ -20,7 +20,7 @@ def contest_access_page(
     contest: str,
     user: Annotated[str, Depends(require_session_user)],
 ):
-    ctx = _contest_ctx(contest, user, "access")
+    ctx = _contest_ctx(contest, user, "access", request=request)
     contest_id = int(ctx["contest"]["id"])
     return template_response(
         request,

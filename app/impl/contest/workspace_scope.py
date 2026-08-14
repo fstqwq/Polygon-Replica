@@ -251,6 +251,59 @@ def add_contest_problem_hrefs(
     return result
 
 
+def contest_workspace_context_for_contest_page(
+    request: Request,
+    *,
+    contest_id: int,
+    contest_slug: str,
+    contest_title: str,
+    user_id: int,
+) -> ContestWorkspaceContext:
+    contest_problems = runtime().contest_service.contest_problems(contest_id)
+    problem_ids = [int(row["problem_id"]) for row in contest_problems]
+    access_by_problem = runtime().access_query.problem_contexts(problem_ids, user_id)
+    problem_rows: list[ContestWorkspaceProblem] = []
+    for ordinal, row in enumerate(contest_problems, start=1):
+        problem_id = int(row["problem_id"])
+        problem_slug = str(row["problem_slug"])
+        can_open = bool(access_by_problem[problem_id]["can_read"])
+        problem_rows.append(
+            {
+                "contest_problem_id": int(row["contest_problem_id"]),
+                "ordinal": ordinal,
+                "idx": str(row["idx"]),
+                "problem_id": problem_id,
+                "problem_slug": problem_slug,
+                "active": False,
+                "can_open": can_open,
+                "block_reason": None if can_open else "problem_access_denied",
+                "href": (
+                    build_contest_problem_href(
+                        request,
+                        problem_slug=problem_slug,
+                        contest_slug=contest_slug,
+                        section="statement",
+                    )
+                    if can_open
+                    else None
+                ),
+            }
+        )
+    contest_href = _contest_overview_href(request, contest_slug)
+    return {
+        "contest_id": contest_id,
+        "contest_slug": contest_slug,
+        "contest_title": contest_title,
+        "contest_href": contest_href,
+        "problem_count": len(problem_rows),
+        "active_contest_problem_id": 0,
+        "active_idx": "",
+        "section": "statement",
+        "exit_href": contest_href,
+        "problems": problem_rows,
+    }
+
+
 def _normalize_contest_query(value: str) -> str:
     if not value or value != value.strip():
         raise ValueError("invalid contest query parameter")

@@ -16,7 +16,7 @@ from app.impl.contest.shared import (
 
 
 def contest_properties_page(request: Request, contest: str, user: Annotated[str, Depends(require_session_user)]):
-    ctx = _contest_ctx(contest, user, "properties")
+    ctx = _contest_ctx(contest, user, "properties", request=request)
     contest_id = int(ctx["contest"]["id"])
     props = runtime().contest_service.properties_map(contest_id)
     return template_response(

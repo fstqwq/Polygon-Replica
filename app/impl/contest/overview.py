@@ -11,7 +11,7 @@ from app.impl.contest.shared import _contest_ctx
 
 
 def contest_overview_page(request: Request, contest: str, user: Annotated[str, Depends(require_session_user)]):
-    ctx = _contest_ctx(contest, user, "overview")
+    ctx = _contest_ctx(contest, user, "overview", request=request)
     contest_id = int(ctx["contest"]["id"])
     user_id = int(ctx["user"]["id"])
     rows = add_contest_problem_hrefs(

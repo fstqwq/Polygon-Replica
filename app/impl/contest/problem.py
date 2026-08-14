@@ -25,7 +25,7 @@ from app.impl.contest.shared import (
 
 
 def contest_problems_page(request: Request, contest: str, user: Annotated[str, Depends(require_session_user)], q: str = "", job_id: str = ""):
-    ctx = _contest_ctx(contest, user, "problems")
+    ctx = _contest_ctx(contest, user, "problems", request=request)
     contest_id = int(ctx["contest"]["id"])
     user_id = int(ctx["user"]["id"])
     rows = add_contest_problem_hrefs(

@@ -182,6 +182,36 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
         self.assertIsNotNone(row)
         return int(row["id"])
 
+    def test_contest_page_sidebar_includes_workspace_navigation(self) -> None:
+        contest_slug = f"workspace-card-{uuid.uuid4().hex[:8]}"
+        contest_title = "Contest Workspace Card"
+        self._create_contest(contest_slug, contest_title)
+        workspace_service.grant_repo_access("alice/sample", "alice", "owner")
+        add_response = contest_problems_add(
+            contest=contest_slug,
+            user="alice",
+            problem_slugs=["alice/sample"],
+            q="",
+        )
+        self.assertEqual(add_response.status_code, 303)
+
+        page = contest_overview_page(
+            _app_request(f"/contests/{contest_slug}/overview"),
+            contest_slug,
+            "alice",
+        )
+
+        self.assertEqual(page.status_code, 200)
+        html = page.body.decode("utf-8", errors="replace")
+        self.assertEqual(html.count('id="contest-workspace-title"'), 1)
+        self.assertIn(f'href="/contests/{contest_slug}/overview"', html)
+        self.assertIn(f">{contest_title}</a>", html)
+        self.assertIn("1 problem</p>", html)
+        self.assertIn(
+            f'href="/problems/alice/sample/statement?contest={contest_slug}"',
+            html,
+        )
+
     def test_system_admin_can_view_and_manage_all_contests(self) -> None:
         contest_slug = f"admin-contest-{uuid.uuid4().hex[:8]}"
         member_user = self.random_id("cmember")
