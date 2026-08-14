@@ -121,7 +121,7 @@ BASE_FIXTURE_FILES = {
         "int main(int argc, char **argv) { registerValidation(argc, argv); "
         f'int count = inf.readInt(1, {LARGE_VALUE_COUNT}, "count"); inf.readEoln(); '
         "for (int i = 0; i < count; ++i) { "
-        'inf.readLong(1, 7, "value"); '
+        'inf.readInt(1, 7, "value"); '
         "if (i + 1 < count) inf.readSpace(); } inf.readEoln(); "
         'int sentinel = inf.readInt(); inf.readEoln(); inf.readEof(); '
         'if (sentinel != 42) quitf(_fail, "E2E validator diagnostic: '
