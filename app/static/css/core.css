@@ -201,8 +201,10 @@ body.problem-layout:not(.verification-compact) {
   min-width: 0;
 }
 
-.contest-context-name {
+.contest-workspace-title {
+  margin: 0;
   font-size: var(--font-size-ui-xl);
+  font-weight: 700;
   line-height: 1.2;
 }
 
