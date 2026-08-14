@@ -536,6 +536,9 @@ class JudgehostPayloadPreparation:
             )
         else:
             verification_payload = dict(verification_payload_override)
+        verification_payload = self._materialize_verification_payload(
+            verification_payload
+        )
         safe_task_kind = task_plan.task_kind(
             {
                 "task_kind": task_kind,
@@ -579,6 +582,36 @@ class JudgehostPayloadPreparation:
             "verification_payload": verification_payload,
             "enqueued_at": now_iso(),
         }
+
+    def _materialize_verification_payload(
+        self,
+        verification_payload: dict[str, object],
+    ) -> dict[str, object]:
+        raw_tests = verification_payload.get("tests")
+        if raw_tests is None:
+            return verification_payload
+        if not isinstance(raw_tests, list):
+            raise RuntimeError("verification tests must be a list")
+        tests: list[dict[str, object]] = []
+        for raw_test in raw_tests:
+            if not isinstance(raw_test, dict) or any(
+                not isinstance(key, str) for key in raw_test
+            ):
+                raise RuntimeError("verification test must be an object")
+            test = dict(raw_test)
+            for field in ("input_file", "answer_file"):
+                try:
+                    descriptor = PayloadFile.from_payload(test.get(field))
+                    materialized = self._runtime_blob_store.put_file(descriptor)
+                except (OSError, ValueError) as exc:
+                    raise RuntimeError(
+                        f"verification test {field} is unavailable"
+                    ) from exc
+                test[field] = materialized.to_payload()
+            tests.append(test)
+        materialized_payload = dict(verification_payload)
+        materialized_payload["tests"] = tests
+        return materialized_payload
 
     def prepare_execution_template(
         self,

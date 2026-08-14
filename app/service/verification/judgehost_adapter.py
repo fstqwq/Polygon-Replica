@@ -185,7 +185,10 @@ class VerificationJudgehostAdapter:
     def case_leased(self, binding: CaseBinding) -> bool:
         if not self._binding_matches(binding):
             return False
-        return self._runtime_registry.case_leased(
+        delivered = self._runtime_registry.case_leased(
             binding.execution_scope_id,
             binding.task_id,
         )
+        if delivered:
+            return True
+        return self._task_store.set_task_leased(binding.task_id)

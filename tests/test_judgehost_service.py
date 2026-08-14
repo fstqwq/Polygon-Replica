@@ -349,25 +349,20 @@ class TestJudgehostService(E2ETestBase):
                     "compile_metadata": "",
                 },
             )
-            with patch(
-                "app.service.judgehost.finalization.service."
-                "JudgehostBatchFinalizer.finalize_batch_if_ready",
-                return_value=None,
-            ):
-                service.domjudge_add_judging_run(
-                    "judgehost-immediate-finalize",
-                    case_id,
-                    {
-                        "runresult": "correct",
-                        "runtime": "0.001",
-                        "output_run": base64.b64encode(b"ok\n").decode("ascii"),
-                        "output_diff": "",
-                        "output_error": "",
-                        "output_system": "",
-                        "metadata": base64.b64encode(metadata).decode("ascii"),
-                        "compare_metadata": "",
-                    },
-                )
+            service.domjudge_add_judging_run(
+                "judgehost-immediate-finalize",
+                case_id,
+                {
+                    "runresult": "correct",
+                    "runtime": "0.001",
+                    "output_run": base64.b64encode(b"ok\n").decode("ascii"),
+                    "output_diff": "",
+                    "output_error": "",
+                    "output_system": "",
+                    "metadata": base64.b64encode(metadata).decode("ascii"),
+                    "compare_metadata": "",
+                },
+            )
 
             deadline = time.monotonic() + 2.0
             while time.monotonic() < deadline:
@@ -1801,7 +1796,7 @@ class TestJudgehostService(E2ETestBase):
                 "app.service.judgehost.host.registry.now_iso",
                 return_value="2000-01-01T00:00:00+00:00",
             ):
-                service.record_host_peer_addr(host, "")
+                service.record_host_peer_addr(host, "127.0.0.1")
 
         def _hostnames() -> set[str]:
             return {
@@ -1962,7 +1957,10 @@ class TestJudgehostService(E2ETestBase):
 
         bad_task_row = service.task_snapshot_for_run(run_bad)
         self.assertIsNotNone(bad_task_row)
-        self.assertEqual(str(bad_task_row.get("status") or ""), service.STATUS_FAILED)
+        self.assertEqual(
+            str(bad_task_row.get("status") or ""),
+            VerificationTaskStatus.FAILED,
+        )
         self.assertIn(
             "no tests in judgehost payload", str(bad_task_row.get("error_text") or "")
         )

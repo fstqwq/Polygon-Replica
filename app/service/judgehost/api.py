@@ -299,7 +299,7 @@ class Judgehost:
         execution_template: dict[str, object] | None = None,
         service_class: str = "background",
     ) -> str:
-        return self._enqueue.enqueue_task(
+        task_id = self._enqueue.enqueue_task(
             problem=problem,
             username=username,
             artifact_verification_id=artifact_verification_id,
@@ -324,6 +324,8 @@ class Judgehost:
             service_class=service_class,
             admission_gate=self._admission_gate,
         )
+        self._finalize_admitted_task(task_id)
+        return task_id
 
     def enqueue_compile_only_task(
         self,
@@ -340,7 +342,7 @@ class Judgehost:
         verification_source: str = "compile.only",
         prepared_payload: dict[str, object] | None = None,
     ) -> str:
-        return self._enqueue.enqueue_compile_only_task(
+        task_id = self._enqueue.enqueue_compile_only_task(
             problem=problem,
             username=username,
             artifact_verification_id=artifact_verification_id,
@@ -354,6 +356,13 @@ class Judgehost:
             prepared_payload=prepared_payload,
             admission_gate=self._admission_gate,
         )
+        self._finalize_admitted_task(task_id)
+        return task_id
+
+    def _finalize_admitted_task(self, task_id: str) -> None:
+        batch = self._batch_runtime.batch_for_task(task_id)
+        if batch is not None:
+            self._batch_finalizer.finalize_batch_if_ready(batch["batch_id"])
 
     def set_admission_gate(self, gate: MaintenanceAdmissionGate | None) -> None:
         self._admission_gate = gate
