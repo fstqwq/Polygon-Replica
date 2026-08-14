@@ -11,26 +11,6 @@ Polygon Replica uses [DOMjudge](https://www.domjudge.org/) Judgehosts as its
 execution backend, giving multi-pass and interactive problems the same
 first-class verification workflow as conventional batch problems.
 
-## What you can do
-
-- Create a problem from scratch or import a Polygon package, an ICPC Problem
-  Package, or a Polygon Replica archive.
-- Edit statements, tests, generators, validators, checkers, interactors,
-  solutions, attachments, and configuration in a per-user workspace.
-- Compile multilingual LaTeX statements and preview samples.
-- Run generated and manual tests through trusted DOMjudge Judgehosts.
-- Verify accepted, wrong-answer, time-limit, runtime-error, and rejected
-  solutions against the same generated tests.
-- Review workspace changes and publish the next official version of a problem.
-- Verify an official version once, download its Polygon Replica package, and
-  project it into either a DOMjudge package or a strict ICPC Problem Package
-  2025-09 without rerunning the tests.
-- Organize problems into contests, manage contest membership, inspect
-  readiness, and build statement PDFs, DOMjudge bundles, or ICPC 2025-09
-  bundles from fixed verified revisions.
-- Use the browser-first workflow or automate editing, verification, export, and
-  downloads through the Agent API and Polygon Agent CLI.
-
 ## The workflow
 
 ```text
@@ -67,47 +47,12 @@ start a problem verification implicitly. A Contest can therefore use the
 latest verified revision even when it trails the newest published version, and
 its readiness page makes that distinction visible.
 
-## Quick start with Docker Compose
+## Installation
 
-Polygon Replica runs on Linux. The application sandbox uses unprivileged user
-namespaces, so enable them on the Docker host first:
-
-```bash
-sudo tee /etc/sysctl.d/99-polygon-replica-sandbox.conf >/dev/null <<'EOF'
-kernel.unprivileged_userns_clone = 1
-user.max_user_namespaces = 1048576
-EOF
-if test -f /proc/sys/kernel/apparmor_restrict_unprivileged_userns; then
-  echo 'kernel.apparmor_restrict_unprivileged_userns = 0' | \
-    sudo tee -a /etc/sysctl.d/99-polygon-replica-sandbox.conf
-fi
-sudo sysctl --system
-```
-
-Clone the repository, create the permanent backup bind, and start the app:
-
-```bash
-git clone https://github.com/fstqwq/Polygon-Replica.git
-cd Polygon-Replica
-
-sudo install -d -o 1000 -g 1000 -m 0700 /var/backups/polygon-replica
-umask 077
-printf '%s\n' \
-  'POLYGON_REPLICA_BACKUP_HOST_DIR=/var/backups/polygon-replica' >.env
-
-sudo docker compose up -d --build
-sudo docker compose logs --tail=200 app
-```
-
-Open <http://127.0.0.1:8001/>, complete first-run setup, and create the
-administrator. Then configure Judgehost credentials in Settings and use the
-generated command to start at least one Judgehost. Authoring and statement
-preview work without a Judgehost; verification and executable builds require
-one.
-
-For an Internet-facing installation, do not expose port 8001 directly. Follow
-the [deployment runbook](docs/operations/deployment.md) for a TLS proxy,
-systemd installation, persistent secrets, upgrades, backups, and recovery.
+Polygon Replica runs on Linux. Follow the
+[deployment runbook](docs/operations/deployment.md) for Docker Compose and
+systemd installations, sandbox prerequisites, Judgehost setup, TLS, upgrades,
+backups, and recovery.
 
 ## Documentation
 
