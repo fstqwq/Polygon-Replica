@@ -15,6 +15,37 @@ class BatchFinalization:
     def __init__(self, state: "BatchState") -> None:
         self._state = state
 
+    def _has_terminal_work_locked(self, batch_id: int) -> bool:
+        return any(
+            case.status in {"reported", "cancelled"}
+            and (not case.completion_acknowledged or bool(case.pending_diagnostics))
+            for case_id in self._state._case_ids_by_batch[batch_id]
+            if (case := self._state._cases.get(case_id)) is not None
+        )
+
+    def _needs_another_finalization_locked(self, batch_id: int) -> bool:
+        batch = self._state._batches[batch_id]
+        counts = self._state._batch_counts[batch_id]
+        terminal_transition_ready = (
+            batch.status == "open"
+            and batch.verification_id in self._state._closed_verification_ids
+            and counts.total > 0
+            and counts.terminal == counts.total
+            and batch.materialization_state != "materializing"
+        )
+        return bool(
+            terminal_transition_ready
+            or batch.status in {"finalize-pending", "finalizing"}
+            or self._has_terminal_work_locked(batch_id)
+        )
+
+    def _schedule_retry_locked(self, batch_id: int, *, delay_sec: float) -> None:
+        deadline = time.monotonic() + max(0.0, float(delay_sec))
+        current = self._state._finalization_retry_deadlines.get(batch_id)
+        if current is None or deadline < current:
+            self._state._finalization_retry_deadlines[batch_id] = deadline
+            heapq.heappush(self._state._finalization_retry_heap, (deadline, batch_id))
+
     def batch_finalize_row(self, batch_id: int) -> dict[str, object] | None:
         fields = (
             "execution_signature",
@@ -75,12 +106,7 @@ class BatchFinalization:
                     self._state._case_ids_by_batch[batch.batch_id]
                 )
             )
-            has_terminal_work = any(
-                case.status in {"reported", "cancelled"}
-                and (not case.completion_acknowledged or bool(case.pending_diagnostics))
-                for case_id in self._state._case_ids_by_batch[batch.batch_id]
-                if (case := self._state._cases.get(case_id)) is not None
-            )
+            has_terminal_work = self._has_terminal_work_locked(batch.batch_id)
             if not terminal_transition and not has_terminal_work:
                 return None
             if terminal_transition:
@@ -125,13 +151,7 @@ class BatchFinalization:
                 batch.status = "finalize-pending"
                 batch.updated_at = now_text
                 self._state._touch_batch_locked(batch)
-            deadline = time.monotonic() + max(0.0, float(delay_sec))
-            current = self._state._finalization_retry_deadlines.get(batch.batch_id)
-            if current is None or deadline < current:
-                self._state._finalization_retry_deadlines[batch.batch_id] = deadline
-                heapq.heappush(
-                    self._state._finalization_retry_heap, (deadline, batch.batch_id)
-                )
+            self._schedule_retry_locked(batch.batch_id, delay_sec=delay_sec)
             return True
 
     def complete_batch_finalization(self, claim: FinalizationClaim) -> bool:
@@ -139,6 +159,9 @@ class BatchFinalization:
 
         with self._state._lock:
             if claim.terminal_transition:
+                return False
+            batch = self._state._batches.get(claim.batch_id)
+            if batch is None:
                 return False
             if (
                 self._state._active_finalization_generation_by_batch.get(claim.batch_id)
@@ -148,7 +171,14 @@ class BatchFinalization:
             self._state._active_finalization_generation_by_batch.pop(
                 claim.batch_id, None
             )
-            self._state._finalization_retry_deadlines.pop(claim.batch_id, None)
+            if self._needs_another_finalization_locked(batch.batch_id):
+                # The claim contains an immutable snapshot. A callback or cache
+                # probe can publish another terminal Case while the snapshot is
+                # being persisted outside the runtime lock. Never let completion
+                # of the older snapshot clear that newer work.
+                self._schedule_retry_locked(batch.batch_id, delay_sec=0.0)
+            else:
+                self._state._finalization_retry_deadlines.pop(claim.batch_id, None)
             return True
 
     def schedule_batch_finalization_retry(
@@ -159,15 +189,12 @@ class BatchFinalization:
     ) -> bool:
         with self._state._lock:
             batch = self._state._batches.get(int(batch_id))
-            if batch is None or batch.status not in {"open", "finalize-pending"}:
+            if batch is None or (
+                batch.status not in {"open", "finalize-pending", "finalizing"}
+                and not self._has_terminal_work_locked(batch.batch_id)
+            ):
                 return False
-            deadline = time.monotonic() + max(0.0, float(delay_sec))
-            current = self._state._finalization_retry_deadlines.get(batch.batch_id)
-            if current is None or deadline < current:
-                self._state._finalization_retry_deadlines[batch.batch_id] = deadline
-                heapq.heappush(
-                    self._state._finalization_retry_heap, (deadline, batch.batch_id)
-                )
+            self._schedule_retry_locked(batch.batch_id, delay_sec=delay_sec)
             return True
 
     def due_batch_finalizations(self, *, limit: int) -> list[int]:
@@ -185,10 +212,10 @@ class BatchFinalization:
                     continue
                 self._state._finalization_retry_deadlines.pop(batch_id, None)
                 batch = self._state._batches.get(batch_id)
-                if batch is not None and batch.status in {
-                    "open",
-                    "finalize-pending",
-                }:
+                if batch is not None and (
+                    batch.status in {"open", "finalize-pending", "finalizing"}
+                    or self._has_terminal_work_locked(batch.batch_id)
+                ):
                     due.append(batch_id)
         return due
 

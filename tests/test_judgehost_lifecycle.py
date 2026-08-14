@@ -314,7 +314,10 @@ class TestJudgehostBatchRuntimeLifecycle(unittest.TestCase):
         self.assertIsNotNone(publication_claim)
         assert publication_claim is not None
         self.assertFalse(publication_claim.terminal_transition)
+        first_case_id = int(self.store.cases_for_batch(batch_id)[0]["id"])
+        self.assertTrue(self.store.acknowledge_case_completion(first_case_id))
         self.assertTrue(self.store.complete_batch_finalization(publication_claim))
+        self.assertEqual(self.store.due_batch_finalizations(limit=1), [])
 
         same_batch_id = _create_batch(
             self.store,
@@ -366,6 +369,75 @@ class TestJudgehostBatchRuntimeLifecycle(unittest.TestCase):
                 verification_program_id="solution-0",
             )
         self.assertEqual(len(self.store.cases_for_batch(batch_id)), 2)
+
+    def test_publication_claim_retries_terminal_case_that_arrives_during_io(
+        self,
+    ) -> None:
+        batch_id = _create_batch(
+            self.store,
+            task_id="task-publication-race",
+            run_id="run-publication-race",
+            case_rows=[
+                _case_row(
+                    "task-publication-race",
+                    "run-publication-race",
+                    "001.in",
+                    1,
+                ),
+                _case_row(
+                    "task-publication-race",
+                    "run-publication-race",
+                    "002.in",
+                    2,
+                ),
+            ],
+        )
+        _finish_pending_case(self.store, batch_id, "001.in")
+        first_case_id = int(
+            next(
+                row
+                for row in self.store.cases_for_batch(batch_id)
+                if row["test_name"] == "001.in"
+            )["id"]
+        )
+
+        publication_claim = self.store.claim_batch_finalization(
+            batch_id,
+            now_text=_NOW,
+        )
+        self.assertIsNotNone(publication_claim)
+        assert publication_claim is not None
+        self.assertFalse(publication_claim.terminal_transition)
+
+        # External publication owns an immutable snapshot. Simulate a second
+        # callback becoming terminal before that I/O finishes.
+        _finish_pending_case(self.store, batch_id, "002.in")
+        second_case_id = int(
+            next(
+                row
+                for row in self.store.cases_for_batch(batch_id)
+                if row["test_name"] == "002.in"
+            )["id"]
+        )
+        self.assertTrue(self.store.acknowledge_case_completion(first_case_id))
+        self.assertTrue(self.store.complete_batch_finalization(publication_claim))
+
+        self.assertEqual(
+            self.store.due_batch_finalizations(limit=1),
+            [batch_id],
+        )
+        next_claim = self.store.claim_batch_finalization(batch_id, now_text=_NOW)
+        self.assertIsNotNone(next_claim)
+        assert next_claim is not None
+        self.assertFalse(next_claim.terminal_transition)
+        self.assertFalse(
+            next(
+                row for row in next_claim.cases if int(row["id"]) == second_case_id
+            )["completion_acknowledged"]
+        )
+        self.assertTrue(self.store.acknowledge_case_completion(second_case_id))
+        self.assertTrue(self.store.complete_batch_finalization(next_claim))
+        self.assertEqual(self.store.due_batch_finalizations(limit=1), [])
 
     def test_batch_identity_is_program_not_execution_signature(self) -> None:
         first_batch = _create_batch(
