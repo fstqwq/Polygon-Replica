@@ -22,7 +22,6 @@ from pathlib import Path
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
-from starlette.formparsers import MultiPartParser
 
 from app.service.verification.payload import prepared_payload_for_uploaded_source
 from app.service.verification.plan import VerificationTestPlan
@@ -3282,7 +3281,7 @@ class TestJudgehostService(E2ETestBase):
             f"b-jh-large-{uuid.uuid4().hex[:8]}"
         )
         run_id = f"r-jh-large-{uuid.uuid4().hex[:8]}"
-        large_output = b"A" * (20 * 1024 * 1024)
+        large_output = b"A" * (2 * 1024 * 1024)
         metadata = b"cpu-time: 0.001\nwall-time: 0.001\nmemory-bytes: 4096\n"
 
         headers = {"Authorization": "Bearer test-token"}
@@ -3322,18 +3321,21 @@ class TestJudgehostService(E2ETestBase):
 
             add_resp = client.post(
                 f"/api/v4/judgehosts/add-judging-run/judgehost-large/{case_id}",
-                data={
-                    "runresult": "correct",
-                    "runtime": "0.001",
-                },
                 files={
+                    "runresult": (None, "correct"),
+                    "runtime": (None, "0.001"),
                     "output_run": (
-                        "program.out",
-                        large_output,
-                        "application/octet-stream",
+                        None,
+                        base64.b64encode(large_output).decode("ascii"),
                     ),
-                    "output_diff": ("judgemessage.txt", b"ok\n", "text/plain"),
-                    "metadata": ("program.meta", metadata, "text/plain"),
+                    "output_diff": (
+                        None,
+                        base64.b64encode(b"validator accepted\n").decode("ascii"),
+                    ),
+                    "metadata": (
+                        None,
+                        base64.b64encode(metadata).decode("ascii"),
+                    ),
                 },
                 headers=headers,
             )
@@ -3350,6 +3352,14 @@ class TestJudgehostService(E2ETestBase):
                 str(row["output_diff_ref"] or "").startswith("blob://sha256/")
             )
             self.assertTrue(str(row["metadata_ref"] or "").startswith("blob://sha256/"))
+            self.assertEqual(
+                runtime.runtime_blob_store.read(str(row["output_run_ref"])),
+                large_output,
+            )
+            self.assertEqual(
+                runtime.runtime_blob_store.read(str(row["output_diff_ref"])),
+                b"validator accepted\n",
+            )
 
     def test_judgehost_endpoints_reject_invalid_hostname_with_400(self) -> None:
         from app.main import app
@@ -3975,7 +3985,7 @@ class TestJudgehostService(E2ETestBase):
         filenames = {str(item.get("filename") or "") for item in files}
         self.assertIn("run", filenames)
 
-    def test_domjudge_large_multipart_keeps_starlette_file_spool_threshold(
+    def test_domjudge_oversized_plain_multipart_fails_with_a_durable_diagnostic(
         self,
     ) -> None:
         from app.main import app
@@ -3988,21 +3998,6 @@ class TestJudgehostService(E2ETestBase):
             JUDGEHOST_API_TOKEN="test-token",
             JUDGEHOST_API_USERNAME="judgehost",
         )
-        self.addCleanup(
-            setattr,
-            MultiPartParser,
-            "max_part_size",
-            int(getattr(MultiPartParser, "max_part_size", 0) or 0),
-        )
-        self.addCleanup(
-            setattr,
-            MultiPartParser,
-            "max_file_size",
-            int(getattr(MultiPartParser, "max_file_size", 0) or 0),
-        )
-        MultiPartParser.max_part_size = 1024 * 1024
-        MultiPartParser.max_file_size = 1024 * 1024
-
         verification_id = canonical_test_verification_id(
             f"b-jh-spool-{uuid.uuid4().hex[:8]}"
         )
@@ -4029,8 +4024,7 @@ class TestJudgehostService(E2ETestBase):
         case_id = int(tasks[0].get("judgetaskid") or 0)
         self.assertGreater(case_id, 0)
 
-        large_output = b"A" * (20 * 1024 * 1024)
-        metadata = b"cpu-time: 0.001\nwall-time: 0.001\nmemory-bytes: 4096\n"
+        oversized_output = base64.b64encode(b"B" * 2048).decode("ascii")
 
         with TestClient(app) as client:
             headers = {"Authorization": "Bearer test-token"}
@@ -4045,31 +4039,27 @@ class TestJudgehostService(E2ETestBase):
             )
             self.assertEqual(update_resp.status_code, 200)
 
-            add_resp = client.post(
-                f"/api/v4/judgehosts/add-judging-run/judgehost-spool/{case_id}",
-                data={
-                    "runresult": "correct",
-                    "runtime": "0.001",
-                },
-                files={
-                    "output_run": (
-                        "program.out",
-                        large_output,
-                        "application/octet-stream",
-                    ),
-                    "output_diff": ("judgemessage.txt", b"ok\n", "text/plain"),
-                    "metadata": ("program.meta", metadata, "text/plain"),
-                },
-                headers=headers,
-            )
-            self.assertEqual(add_resp.status_code, 200)
+            with patch(
+                "app.impl.judgehost.api._judgehost_form_part_limit_bytes",
+                return_value=1024,
+            ):
+                add_resp = client.post(
+                    f"/api/v4/judgehosts/add-judging-run/judgehost-spool/{case_id}",
+                    files={
+                        "runresult": (None, "correct"),
+                        "output_run": (None, oversized_output),
+                    },
+                    headers=headers,
+                )
+            self.assertEqual(add_resp.status_code, 413)
 
-        self.assertEqual(
-            int(getattr(MultiPartParser, "max_file_size", 0) or 0), 1024 * 1024
-        )
-        self.assertGreaterEqual(
-            int(getattr(MultiPartParser, "max_part_size", 0) or 0), 20 * 1024 * 1024
-        )
+        run_row = self._verification_run_row(run_id)
+        self.assertIsNotNone(run_row)
+        self.assertEqual(str(run_row["status"] or ""), "failed")
+        error_text = str(dict(run_row["summary"]).get("error") or "")
+        self.assertIn("Judgehost result callback was rejected", error_text)
+        self.assertIn("configured 1024-byte limit", error_text)
+        self.assertNotIn("failed without Judgehost diagnostics", error_text)
 
     def test_domjudge_build_solve_uses_problem_limits_when_run_config_missing(
         self,
@@ -5754,7 +5744,8 @@ class TestJudgehostService(E2ETestBase):
             and str(row["test_name"]) == "016.in"
         )
         self.assertEqual(
-            str(before["error_text"] or ""), "main correct failed on 016.in"
+            str(before["error_text"] or ""),
+            "main solution failed without Judgehost diagnostics for 016.in",
         )
         canonical_result = before["result"]
         verification_row_before = db_fetch_one(

@@ -170,9 +170,12 @@ and every fixture file save through public HTTP and the latest Polygon Agent
 CLI checkout. Before execution, it installs the previous
 `build.json` shape through the CLI, opens the authoring workspace, and requires a
 Review and Publish warning plus a canonical file that preserves the current
-selections. It then runs the generated test through a real Judgehost and
-observes generated input, accepted answer, AC, WA, CE, and public derived-output
-downloads. It continues through sample preview, commit, DOMjudge and ICPC
+selections. It then sends a generated input larger than one MiB through the real
+Judgehost multipart callback twice: the rejected form must retain the
+validator's explicit diagnostic on the Verification details page, and the
+corrected form must persist the complete input. The successful run also observes
+the accepted answer, AC, WA, CE, and public derived-output downloads. It
+continues through sample preview, commit, DOMjudge and ICPC
 2025-09 Package Exports, direct Polygon Replica package download, Contest
 creation and statement/package builds, role-aware page walk, concurrent
 Alice/Bob conflict resolution, maintenance cleanup, backup, and restart.

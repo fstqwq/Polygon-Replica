@@ -286,7 +286,7 @@ def assert_contest_pdf(
         / "english",
     )
     expected_samples = {
-        "sample.001.in": b"7\n",
+        "sample.001.in": b"1\n7\n42\n",
         "sample.001.ans": b"49\n",
     }
     for filename, expected in expected_samples.items():

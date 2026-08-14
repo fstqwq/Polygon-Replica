@@ -145,7 +145,10 @@ class VerificationTaskCompletionService:
         if not (report_ok and _accepted_verdict(result.verdict)):
             error_text = _final_error(
                 result,
-                fallback=f"validator rejected generated input for {test_name}",
+                fallback=(
+                    "generated input validation failed without Judgehost "
+                    f"diagnostics for {test_name}"
+                ),
             )
             return self._failed_completion(
                 task_row,
@@ -209,7 +212,10 @@ class VerificationTaskCompletionService:
         if not (report_ok and _accepted_verdict(result.verdict)):
             error_text = _final_error(
                 result,
-                fallback=f"main correct failed on {test_name}",
+                fallback=(
+                    "main solution failed without Judgehost diagnostics "
+                    f"for {test_name}"
+                ),
             )
             return self._failed_completion(
                 task_row,

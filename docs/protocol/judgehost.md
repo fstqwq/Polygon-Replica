@@ -41,6 +41,13 @@ The route definitions and transport parsing are owned by `app/route/judgehost_ro
 and `app/impl/judgehost/api.py`. Internal scheduling is not part of the external
 wire format. DOMjudge's array-valued `add-debug-info` payload is
 `multipart/form-data`; the endpoint accepts that official encoding.
+DOMjudge also sends result files as base64-encoded, non-file multipart fields.
+The server passes the configured encoded-field limit to each request parser;
+it does not rely on a process-global parser default. A malformed or oversized
+callback receives non-2xx and is never converted into an empty result. When the
+path identifies an active case, the server first persists a bounded internal
+failure describing why the callback was rejected, so Verification details do
+not replace a transport failure with a guessed checker or validator message.
 
 ## Leasing and evidence
 

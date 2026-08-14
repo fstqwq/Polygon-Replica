@@ -33,6 +33,7 @@ from runner import (
     _assert_tasks,
     _connect,
     _latest_verification,
+    _read_blob,
     _wait_for_verification,
 )
 
@@ -48,6 +49,10 @@ AGENT_SPECIAL_VERDICTS = {
     "solutions/wa.cpp": "WA",
     "solutions/ce.cpp": "CE",
 }
+LARGE_VALUE_COUNT = 600_000
+LARGE_VALID_GENERATOR_COMMAND = f"gen.py {LARGE_VALUE_COUNT} 0 42\n"
+LARGE_INVALID_GENERATOR_COMMAND = f"gen.py {LARGE_VALUE_COUNT} 0 13\n"
+LARGE_VALIDATOR_DIAGNOSTIC = "E2E validator diagnostic: sentinel must be 42"
 
 
 def _json_text(payload: object) -> str:
@@ -78,18 +83,31 @@ BASE_FIXTURE_FILES = {
         "}\n"
     ),
     "tests/spec.json": _json_text(
-        {"tests": [{"id": "001", "kind": "gen", "sample": True}]}
+        {
+            "tests": [
+                {"id": "001", "kind": "gen", "sample": True},
+                {"id": "002", "kind": "gen", "sample": False},
+            ]
+        }
     ),
-    "tests/generator/001.in": "gen.py 7\n",
+    "tests/generator/001.in": "gen.py 1 7 42\n",
+    "tests/generator/002.in": LARGE_VALID_GENERATOR_COMMAND,
     "generators/gen.py": (
         "#!/usr/bin/env python3\n"
         "import sys\n"
-        "print(sys.argv[1])\n"
+        "count = int(sys.argv[1])\n"
+        "value = sys.argv[2]\n"
+        "sentinel = sys.argv[3]\n"
+        "sys.stdout.write(f'{count}\\n')\n"
+        "sys.stdout.write((value + ' ') * (count - 1) + value + '\\n')\n"
+        "sys.stdout.write(sentinel + '\\n')\n"
     ),
     "solutions/main.cpp": (
         "#include <iostream>\n"
-        "int main() { long long value = 0; std::cin >> value; "
-        "std::cout << value * value << '\\n'; }\n"
+        "int main() { int count = 0; std::cin >> count; long long sum = 0; "
+        "for (int i = 0; i < count; ++i) { long long value = 0; "
+        "std::cin >> value; sum += value * value; } "
+        "std::cout << sum << '\\n'; }\n"
     ),
     "solutions/wa.cpp": (
         "#include <iostream>\n"
@@ -101,7 +119,13 @@ BASE_FIXTURE_FILES = {
     "validators/validate.cpp": (
         '#include "testlib.h"\n'
         "int main(int argc, char **argv) { registerValidation(argc, argv); "
-        "inf.readLong(); inf.readEoln(); inf.readEof(); }\n"
+        'int count = inf.readInt(1, 700000, "count"); inf.readEoln(); '
+        "for (int i = 0; i < count; ++i) { "
+        'inf.readLong(-1000000000LL, 1000000000LL, "value"); '
+        "if (i + 1 < count) inf.readSpace(); } inf.readEoln(); "
+        'int sentinel = inf.readInt(); inf.readEoln(); inf.readEof(); '
+        'if (sentinel != 42) quitf(_fail, "E2E validator diagnostic: '
+        'sentinel must be 42"); }\n'
     ),
 }
 
@@ -121,10 +145,12 @@ def _fixture_files() -> dict[str, str]:
             "statement/olymp.sty": (template_root / "olymp.sty").read_text(
                 encoding="utf-8"
             ),
-            "statement-sections/english/name.tex": "E2E Square\n",
-            "statement-sections/english/legend.tex": "Square the input integer.\n",
-            "statement-sections/english/input.tex": "One integer.\n",
-            "statement-sections/english/output.tex": "Its square.\n",
+            "statement-sections/english/name.tex": "E2E Sum of Squares\n",
+            "statement-sections/english/legend.tex": "Sum the squares of the values.\n",
+            "statement-sections/english/input.tex": (
+                "A count, its values, and the fixture sentinel.\n"
+            ),
+            "statement-sections/english/output.tex": "The sum of squared values.\n",
             "statement-sections/english/notes.tex": "\n",
         }
     )
@@ -800,8 +826,10 @@ def _assert_public_artifacts(
     verification_id: str,
 ) -> None:
     expected = {
-        "tests/001.in": b"7\n",
+        "tests/001.in": b"1\n7\n42\n",
         "ans/001.ans": b"49\n",
+        "tests/002.in": _large_generated_input(42),
+        "ans/002.ans": b"0\n",
     }
     for relative_path, content in expected.items():
         response = client.get(
@@ -811,6 +839,112 @@ def _assert_public_artifacts(
             raise RuntimeError(
                 f"public artifact {relative_path!r} was unavailable or incorrect"
             )
+
+
+def _large_generated_input(sentinel: int) -> bytes:
+    return (
+        f"{LARGE_VALUE_COUNT}\n".encode("ascii")
+        + (b"0 " * (LARGE_VALUE_COUNT - 1))
+        + b"0\n"
+        + f"{sentinel}\n".encode("ascii")
+    )
+
+
+def _upload_large_generator_command(command: str) -> None:
+    source = AGENT_TEMP / "large-generator-command.txt"
+    source.write_text(command, encoding="utf-8", newline="\n")
+    _agent_cli(
+        "upload",
+        "--problem",
+        PROBLEM,
+        "--workspace-path",
+        "tests/generator/002.in",
+        "--local-file",
+        str(source),
+    )
+
+
+def _assert_large_generation_failure(
+    client: httpx.Client,
+    connection: sqlite3.Connection,
+    *,
+    problem_id: int,
+    workspace_id: int,
+    previous_id: str,
+) -> str:
+    _upload_large_generator_command(LARGE_INVALID_GENERATOR_COMMAND)
+    started = _agent_cli("verify-start", "--problem", PROBLEM)
+    verification_id = str(started.get("verification_id") or "")
+    if not verification_id or started.get("status") != "queued":
+        raise RuntimeError(f"invalid-input Verification did not start: {started!r}")
+    waited = _agent_cli(
+        "verify-wait",
+        "--problem",
+        PROBLEM,
+        "--verification-id",
+        verification_id,
+        "--interval-sec",
+        "0.1",
+        "--timeout-sec",
+        "300",
+    )
+    if waited != {"verification_id": verification_id, "status": "failed"}:
+        raise RuntimeError(
+            f"invalid-input Verification did not fail as expected: {waited!r}"
+        )
+    verification = _wait_for_verification(
+        connection,
+        problem_id=problem_id,
+        workspace_id=workspace_id,
+        previous_id=previous_id,
+    )
+    fail_reason = str(verification["fail_reason"] or "")
+    if (
+        str(verification["id"]) != verification_id
+        or LARGE_VALIDATOR_DIAGNOSTIC not in fail_reason
+    ):
+        raise RuntimeError(
+            "large rejected generator output lost its validator diagnostic: "
+            f"{dict(verification)!r}"
+        )
+    task = connection.execute(
+        """
+        SELECT final_status,result_json
+        FROM verification_tasks
+        WHERE verification_id=? AND task_kind='generate-input' AND test_name='002.in'
+        """,
+        [verification_id],
+    ).fetchone()
+    if task is None or str(task["final_status"]) != "failed":
+        raise RuntimeError(f"large rejected generation task is missing: {task!r}")
+    result = json.loads(str(task["result_json"]))
+    passes = result.get("passes") if isinstance(result, dict) else None
+    final_pass = passes[-1] if isinstance(passes, list) and passes else None
+    artifacts = final_pass.get("artifacts") if isinstance(final_pass, dict) else None
+    output_ref = (
+        str(artifacts.get("output_ref") or "")
+        if isinstance(artifacts, dict)
+        else ""
+    )
+    if _read_blob(output_ref) != _large_generated_input(13):
+        raise RuntimeError("large rejected generator output was not persisted intact")
+    details = client.get(
+        f"/problems/{PROBLEM}/run/details",
+        params={"verification_id": verification_id},
+    )
+    if details.status_code != 200 or LARGE_VALIDATOR_DIAGNOSTIC not in details.text:
+        raise RuntimeError(
+            "Verification details omitted the real validator diagnostic: "
+            f"{details.status_code} {details.text[:1000]!r}"
+        )
+    misleading_fallbacks = (
+        "validator rejected generated input for 002.in",
+        "generated input validation failed without Judgehost diagnostics for 002.in",
+    )
+    if any(message in details.text for message in misleading_fallbacks):
+        raise RuntimeError("Verification details replaced real feedback with a fallback")
+    _upload_large_generator_command(LARGE_VALID_GENERATOR_COMMAND)
+    return verification_id
 
 
 def _assert_accepted_solution(
@@ -1366,6 +1500,13 @@ def verify_deployment() -> None:
                     previous_id=previous_id,
                 )
                 previous_id = sample_verification_id
+                previous_id = _assert_large_generation_failure(
+                    client,
+                    connection,
+                    problem_id=problem_id,
+                    workspace_id=workspace_id,
+                    previous_id=previous_id,
+                )
             started = _agent_cli(
                 "verify-start",
                 "--problem",
@@ -1417,7 +1558,12 @@ def verify_deployment() -> None:
                 special_verdicts=AGENT_SPECIAL_VERDICTS,
             )
             _assert_accepted_solution(connection, verification_id)
-            _assert_artifact_refs(connection, verification_id)
+            _assert_artifact_refs(
+                connection,
+                verification_id,
+                expected_input=b"1\n7\n42\n",
+                expected_answer=b"49\n",
+            )
             _assert_public_artifacts(client, verification_id)
         _assert_real_judgehost_executed(client)
 

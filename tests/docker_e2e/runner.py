@@ -183,7 +183,13 @@ def _assert_tasks(
             )
 
 
-def _assert_artifact_refs(connection: sqlite3.Connection, verification_id: str) -> None:
+def _assert_artifact_refs(
+    connection: sqlite3.Connection,
+    verification_id: str,
+    *,
+    expected_input: bytes = b"7\n",
+    expected_answer: bytes = b"49\n",
+) -> None:
     rows = connection.execute(
         """
         SELECT role,artifact_ref
@@ -198,9 +204,9 @@ def _assert_artifact_refs(connection: sqlite3.Connection, verification_id: str) 
         raise RuntimeError("verification omitted generated-test artifact refs")
     input_ref = refs["generated-input"]
     answer_ref = refs["accepted-answer"]
-    if _read_blob(input_ref) != b"7\n":
+    if _read_blob(input_ref) != expected_input:
         raise RuntimeError("generator input ref does not resolve to the expected output")
-    if _read_blob(answer_ref) != b"49\n":
+    if _read_blob(answer_ref) != expected_answer:
         raise RuntimeError("main-correct answer ref does not resolve to the expected output")
 
 

@@ -174,7 +174,10 @@ class JudgehostBatchFinalizer:
                 and task_kind == self._TASK_KIND_MAIN_CORRECT
                 and verdict != "OK"
             ):
-                internal_failure_error = feedback_text or f"main correct failed on {test_name}"
+                internal_failure_error = feedback_text or (
+                    "main solution failed without Judgehost diagnostics "
+                    f"for {test_name}"
+                )
         if cancelled_cases > 0 and not internal_failure_error:
             internal_failure_error = "judgehost task cancelled"
 

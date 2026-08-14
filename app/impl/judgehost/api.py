@@ -12,7 +12,6 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from starlette.background import BackgroundTask
 from starlette.concurrency import run_in_threadpool
 from starlette.datastructures import UploadFile
-from starlette.formparsers import MultiPartParser
 
 from app.impl.runtime.dependency import runtime
 from app.main_util import read_upload_bytes_limited
@@ -136,7 +135,7 @@ async def _coerce_form_value(key: str, value: str | UploadFile) -> str | bytes:
         try:
             raw = await read_upload_bytes_limited(
                 value,
-                max_bytes=_judgehost_form_part_limit_bytes(),
+                max_bytes=runtime().config_values.integer("UPLOAD_MAX_BYTES"),
                 label=f"multipart field {key}",
             )
         finally:
@@ -183,22 +182,36 @@ async def _request_payload(request: Request) -> JudgehostPayload:
     if ("application/x-www-form-urlencoded" in content_type) or (
         "multipart/form-data" in content_type
     ):
-        if "multipart/form-data" in content_type:
-            # Judgehost payloads may include >1MB parts (program output/logs).
-            part_limit_bytes = _judgehost_form_part_limit_bytes()
-            MultiPartParser.max_part_size = max(
-                int(getattr(MultiPartParser, "max_part_size", 0) or 0),
-                part_limit_bytes,
-            )
+        multipart = "multipart/form-data" in content_type
+        part_limit_bytes = _judgehost_form_part_limit_bytes() if multipart else 0
         try:
-            form = await request.form(max_files=4096, max_fields=4096)
+            if multipart:
+                form = await request.form(
+                    max_files=4096,
+                    max_fields=4096,
+                    max_part_size=part_limit_bytes,
+                )
+            else:
+                form = await request.form(max_files=4096, max_fields=4096)
         except Exception as exc:
+            raw_detail = getattr(exc, "detail", exc)
+            error_detail = str(raw_detail).strip() or "form parser rejected the payload"
+            oversized = "exceeded maximum size" in error_detail.lower()
+            public_detail = (
+                "multipart field exceeded the configured "
+                f"{part_limit_bytes}-byte limit"
+                if oversized
+                else f"invalid Judgehost form payload: {error_detail}"
+            )
             _logger.warning(
-                "judgehost multipart parse failed content_type=%s: %s",
+                "judgehost form parse failed content_type=%s: %s",
                 content_type,
                 exc,
             )
-            return {}
+            raise HTTPException(
+                status_code=413 if oversized else 400,
+                detail=public_detail,
+            ) from exc
         out: JudgehostPayload = {}
         items = form.multi_items()
         for key, value in items:
@@ -275,6 +288,51 @@ async def _run_service_call(fn, /, *args, **kwargs):
     if kwargs:
         return await run_in_threadpool(partial(fn, *args, **kwargs))
     return await run_in_threadpool(fn, *args)
+
+
+async def _persist_case_callback_rejection(
+    service,
+    *,
+    hostname: str,
+    judgetask_id: int,
+    detail: str,
+) -> None:
+    description = f"Judgehost result callback was rejected: {detail}"
+    try:
+        await _run_service_call(
+            service.domjudge_internal_error,
+            description=description,
+            hostname=hostname,
+            judgetask_id=judgetask_id,
+            payload={},
+        )
+    except Exception:
+        _logger.exception(
+            "failed to persist Judgehost callback rejection "
+            "hostname=%s judgetask_id=%s",
+            hostname,
+            judgetask_id,
+        )
+
+
+async def _case_callback_payload(
+    request: Request,
+    service,
+    *,
+    hostname: str,
+    judgetask_id: int,
+) -> JudgehostPayload:
+    try:
+        return await _request_payload(request)
+    except HTTPException as exc:
+        detail = str(exc.detail).strip() or "callback payload parsing failed"
+        await _persist_case_callback_rejection(
+            service,
+            hostname=hostname,
+            judgetask_id=judgetask_id,
+            detail=detail,
+        )
+        raise
 
 
 @contextmanager
@@ -489,7 +547,12 @@ async def domjudge_update_judging(request: Request, hostname: str, judgetask_id:
         if not admitted:
             return JSONResponse({})
         hostname = _validated_hostname(hostname)
-        payload = await _request_payload(request)
+        payload = await _case_callback_payload(
+            request,
+            service,
+            hostname=hostname,
+            judgetask_id=judgetask_id,
+        )
         await _run_service_call(
             service.domjudge_update_judging, hostname, judgetask_id, payload
         )
@@ -503,7 +566,20 @@ async def domjudge_add_judging_run(request: Request, hostname: str, judgetask_id
         if not admitted:
             return JSONResponse(1)
         hostname = _validated_hostname(hostname)
-        payload = await _request_payload(request)
+        payload = await _case_callback_payload(
+            request,
+            service,
+            hostname=hostname,
+            judgetask_id=judgetask_id,
+        )
+        if not _payload_text(payload, "runresult").strip():
+            await _persist_case_callback_rejection(
+                service,
+                hostname=hostname,
+                judgetask_id=judgetask_id,
+                detail="runresult is required",
+            )
+            raise HTTPException(status_code=400, detail="runresult is required")
         try:
             result = await _run_service_call(
                 service.domjudge_add_judging_run, hostname, judgetask_id, payload

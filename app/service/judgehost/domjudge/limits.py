@@ -51,10 +51,11 @@ def judgehost_form_part_limit_bytes(
         stored_log_limit_bytes(values),
         aux_display_limit_bytes(values),
     )
+    raw_part_limit_bytes = max(int(upload_max_bytes), int(payload_limit_bytes))
+    base64_part_limit_bytes = ((raw_part_limit_bytes + 2) // 3) * 4
     return max(
         int(default_part_limit_bytes),
-        int(upload_max_bytes),
-        int(payload_limit_bytes) + int(headroom_bytes),
+        base64_part_limit_bytes + int(headroom_bytes),
     )
 
 
