@@ -1,4 +1,4 @@
-﻿import heapq
+import heapq
 import threading
 import time
 from typing import Protocol

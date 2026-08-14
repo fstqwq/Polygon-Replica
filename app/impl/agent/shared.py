@@ -4,9 +4,9 @@ from fastapi import HTTPException, Request
 
 from app.impl.auth.session import session_identity
 from app.impl.runtime.dependency import runtime
-from app.service.repository.workspace import WorkspaceContext
 from app.service.agent.service import AgentTokenIdentity
-from app.service.disk.auth_store import AuthSessionIdentity
+from app.service.auth.model import AuthSessionIdentity
+from app.service.repository.workspace import WorkspaceContext
 
 
 def current_web_user(request: Request) -> AuthSessionIdentity:

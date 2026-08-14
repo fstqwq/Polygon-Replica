@@ -43,6 +43,7 @@ class ExecutableCache:
         files: tuple[tuple[str, bytes, bool], ...],
     ) -> dict[str, PayloadFile]:
         safe_kind, safe_hash = self._identity(kind, executable_hash)
+        cache_key = self._key_hash(safe_kind, safe_hash)
         file_payloads: dict[str, bytes] = {}
         manifest: list[dict[str, object]] = []
         for name, content, is_executable in sorted(files, key=lambda item: item[0]):
@@ -53,8 +54,8 @@ class ExecutableCache:
             manifest.append({"filename": safe_name, "is_executable": bool(is_executable)})
         entry = self._index.put(
             namespace=RuntimeCacheIndex.EXECUTABLE,
-            key_hash=self._key_hash(safe_kind, safe_hash),
-            signature=safe_hash,
+            key_hash=cache_key,
+            signature=cache_key,
             value={
                 "kind": safe_kind,
                 "executable_hash": safe_hash,
@@ -72,10 +73,11 @@ class ExecutableCache:
         executable_hash: str,
     ) -> tuple[ExecutableCacheFile, ...] | None:
         safe_kind, safe_hash = self._identity(kind, executable_hash)
+        cache_key = self._key_hash(safe_kind, safe_hash)
         entry = self._index.get(
             namespace=RuntimeCacheIndex.EXECUTABLE,
-            key_hash=self._key_hash(safe_kind, safe_hash),
-            signature=safe_hash,
+            key_hash=cache_key,
+            signature=cache_key,
         )
         if entry is None:
             return None

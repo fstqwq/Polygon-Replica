@@ -1,7 +1,7 @@
 from fastapi import HTTPException, Request
 
 from app.impl.runtime.dependency import runtime
-from app.service.disk.auth_store import AuthSessionIdentity, SudoSessionIdentity
+from app.service.auth.model import AuthSessionIdentity, SudoSessionIdentity
 
 
 

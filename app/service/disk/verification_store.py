@@ -1,8 +1,11 @@
-import sqlite3
-from typing import Literal, Mapping, TypedDict
+from typing import Literal, Mapping, Protocol, TypedDict
 
 from app.db import DB, now_iso
 from app.service.verification.lifecycle import AdmissionCommit, VerificationAdmission
+
+
+class _DatabaseRow(Protocol):
+    def __getitem__(self, key: str, /) -> object: ...
 from app.service.verification.types import (
     Kind,
     VerificationStatus,
@@ -216,7 +219,7 @@ class VerificationStore:
 
     @staticmethod
     def _workspace_row(
-        row: sqlite3.Row | Mapping[str, object],
+        row: _DatabaseRow | Mapping[str, object],
     ) -> WorkspaceVerificationRow:
         return {
             "id": str(row["id"]),

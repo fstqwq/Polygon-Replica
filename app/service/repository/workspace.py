@@ -16,7 +16,7 @@ from app.config import ConfigValues
 from app.db import DB
 from app.service.access.policy import repo_role
 from app.service.access.query import AccessQuery
-from app.service.access.model import ProblemParticipationRow
+from app.service.access.model import ProblemAclEntry, ProblemParticipationRow
 from app.main_constant import (
     PROBLEM_ID_MAX_LEN,
     PROBLEM_ID_RULE_MESSAGE,
@@ -25,7 +25,6 @@ from app.main_constant import (
     USER_IDENT_RE,
 )
 from app.service.disk.workspace_store import (
-    ProblemAclEntry,
     ProblemRow,
     UserRow,
     WorkspaceDiskStore,

@@ -2153,7 +2153,7 @@ class TestJudgehostScheduler(unittest.TestCase):
             rows = executable_cache.read(kind="run", executable_hash=executable_hash)
             self.assertIsNotNone(rows)
             assert rows is not None
-            self.assertEqual(rows[0]["payload"].path.read_bytes(), files[0][1])
+            self.assertEqual(rows[0].payload.path.read_bytes(), files[0][1])
 
             executable_path = first["run"].path
             executable_path.unlink()

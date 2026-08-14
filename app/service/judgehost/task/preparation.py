@@ -1,4 +1,4 @@
-﻿from app.main_constant import GENERAL_CONFIG_DEFAULTS, RUN_TEST_NAME_RE
+from app.main_constant import GENERAL_CONFIG_DEFAULTS, RUN_TEST_NAME_RE
 
 import json
 import re

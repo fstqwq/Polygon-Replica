@@ -2,15 +2,9 @@ import sqlite3
 from typing import TypedDict
 
 from app.db import DB, now_iso
+from app.service.access.model import ProblemAclEntry
 from app.service.verification.task_store import VerificationTaskStore
 from app.service.workspace.state import WorkspaceState
-
-
-class ProblemAclEntry(TypedDict):
-    username: str
-    role: str
-    created_at: str
-    is_system_admin: int
 
 
 class ProblemRow(TypedDict):

@@ -3,8 +3,7 @@ from collections.abc import Mapping
 from fastapi import HTTPException
 
 from app.impl.runtime.dependency import runtime
-from app.service.access.model import ProblemAccessContext
-from app.service.disk.workspace_store import ProblemAclEntry
+from app.service.access.model import ProblemAccessContext, ProblemAclEntry
 
 def workspace_access_context(problem_id: int, user_id: int) -> ProblemAccessContext:
     return runtime().access_query.problem_context(problem_id, user_id)

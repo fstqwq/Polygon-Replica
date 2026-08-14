@@ -286,6 +286,7 @@ def _discard_assignment_violations(
                 ),
             )
         )
+    violations.sort(key=lambda violation: violation.line)
     return violations
 
 
@@ -329,6 +330,7 @@ def _variadic_business_signature_violations(
                 ),
             )
         )
+    violations.sort(key=lambda violation: violation.line)
     return violations
 
 

@@ -647,7 +647,7 @@ class BatchCompletion:
                 "input_ref": case.input_ref,
                 "answer_ref": case.answer_ref,
                 "case_status": case.status,
-                "case_lease_owner": case.lease_owner or "",
+                "case_lease_owner": case.lease_owner,
                 "last_callback_hostname": case.last_callback_hostname,
                 "run_id": case.run_id,
                 "mode": batch.mode,

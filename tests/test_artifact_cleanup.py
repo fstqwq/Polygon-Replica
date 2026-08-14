@@ -1,4 +1,4 @@
-﻿import json
+import json
 import os
 import sqlite3
 import tarfile
@@ -1015,13 +1015,27 @@ class TestArtifactCleanup(unittest.TestCase):
 
     def test_task_registry_reports_reporting_separately_for_maintenance(self) -> None:
         registry = JudgehostTaskRegistry()
+        created_at = now_iso()
         registry.insert(
             {
                 "id": "judge-task",
                 "run_id": "judge-run",
                 "problem_slug": "admin/sample",
+                "username": "admin",
+                "artifact_verification_id": "",
+                "mode": "pass-fail",
                 "verification_id": "ver-1ad6e",
+                "verification_task_id": "task-1",
                 "status": "queued",
+                "payload": {},
+                "result": {},
+                "persist_verification_run": False,
+                "error_text": "",
+                "created_at": created_at,
+                "updated_at": created_at,
+                "completed_at": "",
+                "summary": {},
+                "enqueue_fingerprint": "fingerprint",
             }
         )
         registry.claim_reporting("judge-task", now_text=now_iso())

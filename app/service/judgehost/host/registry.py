@@ -92,9 +92,9 @@ class JudgehostHostRegistry:
         with self._lock:
             self._toolchains.setdefault(hostname, {})[telemetry.language_id] = telemetry
 
-    def host_rows(self) -> tuple[JudgehostHostRow, ...]:
+    def host_rows(self) -> list[JudgehostHostRow]:
         with self._lock:
-            return tuple(row.copy() for row in self._hosts.values())
+            return [row.copy() for row in self._hosts.values()]
 
     def toolchain_rows(self) -> dict[str, dict[str, HostToolchainTelemetry]]:
         with self._lock:

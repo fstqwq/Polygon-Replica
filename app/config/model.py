@@ -233,6 +233,14 @@ class ConfigValues:
             raise RuntimeError(f"normalized system config {key} is not an integer")
         return value
 
+    def floating(self, key: str) -> float:
+        """Return one canonical floating-point value."""
+
+        value = self.get(key)
+        if not isinstance(value, float):
+            raise RuntimeError(f"normalized system config {key} is not a float")
+        return value
+
     def text(self, key: str) -> str:
         """Return one canonical text value."""
 

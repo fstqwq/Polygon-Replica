@@ -6,6 +6,7 @@ from typing import TypedDict
 from app.db import DB, now_iso
 from app.config import ConfigValues
 from app.main_constant import SESSION_TOKEN_RE, USER_IDENT_RE
+from app.service.auth.model import AuthSessionIdentity, SudoSessionIdentity
 from app.service.platform.hashing import sha256_hex_text
 
 
@@ -38,20 +39,6 @@ class AuthAdminUserListRow(TypedDict):
     is_registered: int
     is_system_admin: int
     is_banned: int
-
-
-class AuthSessionIdentity(TypedDict):
-    session_id: str
-    user_id: int
-    username: str
-    token: str
-
-
-class SudoSessionIdentity(TypedDict):
-    sudo_session_id: str
-    user_id: int
-    scope: str
-    token: str
 
 
 class PendingRegistrationRow(TypedDict):

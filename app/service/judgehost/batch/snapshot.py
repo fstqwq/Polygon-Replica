@@ -64,7 +64,7 @@ def case_snapshot(case: CaseRecord) -> JudgehostCaseRow:
         input_ref=case.input_ref,
         answer_ref=case.answer_ref,
         status=case.status,
-        lease_owner=case.lease_owner or "",
+        lease_owner=case.lease_owner,
         cancel_requested=case.cancel_requested,
         runresult="" if result is None else result.runresult,
         runtime_sec=None if result is None else result.runtime_sec,

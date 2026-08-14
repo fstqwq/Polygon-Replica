@@ -3,7 +3,7 @@ from fastapi import Form, HTTPException, Request
 from app.impl.agent.shared import current_web_user
 from app.impl.auth.shared import json_redirect_response, redirect_response, template_response
 from app.impl.runtime.dependency import runtime
-from app.service.disk.auth_store import AuthSessionIdentity
+from app.service.auth.model import AuthSessionIdentity
 
 
 def _request_base_url(request: Request) -> str:

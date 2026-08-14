@@ -3,7 +3,7 @@ from typing import TypedDict
 
 from app.db import DB, is_sqlite_locked_error
 from app.main_util import problem_slug_leaf
-from app.service.contest.model import ContestBuildFreezeResult
+from app.service.contest.model import ContestBuildFreezeResult, ContestBuildItemRecord
 
 
 class ContestContextRecord(TypedDict):
@@ -103,20 +103,6 @@ class ContestBuildMaterializationRecord(TypedDict):
     id: str
     source_commit: str
     revision_number: int
-    archive_sha256: str
-
-
-class ContestBuildItemRecord(TypedDict):
-    contest_problem_id: int
-    position: int
-    label: str
-    idx: str
-    problem_id: int
-    problem_slug: str
-    statement_folder: str
-    source_commit: str
-    revision_number: int
-    materialization_id: str
     archive_sha256: str
 
 

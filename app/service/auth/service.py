@@ -1,9 +1,8 @@
 from app.config import ConfigValues
+from app.service.auth.model import AuthSessionIdentity, SudoSessionIdentity
 from app.service.disk.auth_store import (
-    AuthSessionIdentity,
     AuthStore,
     AuthUserRow,
-    SudoSessionIdentity,
 )
 from app.service.auth.password_hash import password_verifier_storage_hash
 

@@ -7,8 +7,8 @@ from pathlib import Path
 from app.config import ConfigValues
 from app.main_util import problem_slug_leaf
 from app.service.contest.naming import problem_source_folder
+from app.service.contest.model import ContestBuildItemRecord
 from app.service.contest.service import ContestService
-from app.service.disk.contest_store import ContestBuildItemRecord
 from app.service.problem.runtime_config import problem_config_limits
 from app.service.problem_package.service import VerifiedRevisionReader
 from app.service.problem_package.statement_samples import (

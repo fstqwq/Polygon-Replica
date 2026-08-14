@@ -10,9 +10,9 @@ from app.db import DB, now_iso
 from app.config import ConfigValues
 from app.service.access.policy import access_role, contest_role
 from app.service.access.query import AccessQuery
+from app.service.contest.model import ContestBuildItemRecord
 from app.service.contest.statement_meta import infer_contest_header_fields
 from app.service.disk.contest_store import (
-    ContestBuildItemRecord,
     ContestDiskStore,
     ContestJobRecord,
 )

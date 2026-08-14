@@ -143,7 +143,7 @@ class JudgehostCaseRow(TypedDict):
     input_ref: str
     answer_ref: str
     status: str
-    lease_owner: str
+    lease_owner: str | None
     cancel_requested: bool
     runresult: str
     runtime_sec: float | None
@@ -176,7 +176,7 @@ class CaseExecutionRow(TypedDict):
     input_ref: str
     answer_ref: str
     case_status: str
-    case_lease_owner: str
+    case_lease_owner: str | None
     last_callback_hostname: str
     run_id: str
     mode: str

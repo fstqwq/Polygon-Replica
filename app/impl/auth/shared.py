@@ -594,7 +594,7 @@ def login_rate_limit_check(key: str) -> None:
         if (
             window_start <= 0.0
             or now_monotonic - window_start
-            > runtime().config_values.integer("LOGIN_RATE_LIMIT_WINDOW_SEC")
+            > runtime().config_values.floating("LOGIN_RATE_LIMIT_WINDOW_SEC")
         ):
             runtime().login_rate_limit_state.pop(key, None)
 
@@ -609,7 +609,7 @@ def login_rate_limit_fail(key: str) -> None:
         if (
             window_start <= 0.0
             or now_monotonic - window_start
-            > runtime().config_values.integer("LOGIN_RATE_LIMIT_WINDOW_SEC")
+            > runtime().config_values.floating("LOGIN_RATE_LIMIT_WINDOW_SEC")
         ):
             state = {"window_start": now_monotonic, "failures": 0, "blocked_until": 0.0}
         failures = int(state.get("failures") or 0) + 1
@@ -617,7 +617,7 @@ def login_rate_limit_fail(key: str) -> None:
         if failures >= runtime().config_values.integer(
             "LOGIN_RATE_LIMIT_MAX_FAILURES"
         ):
-            state["blocked_until"] = now_monotonic + runtime().config_values.integer(
+            state["blocked_until"] = now_monotonic + runtime().config_values.floating(
                 "LOGIN_RATE_LIMIT_BLOCK_SEC"
             )
             state["window_start"] = now_monotonic

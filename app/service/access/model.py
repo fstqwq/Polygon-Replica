@@ -139,3 +139,10 @@ class ProblemParticipationRow(TypedDict):
     revision_behind_count: int | None
     updated_at: str
     last_updated_at: str
+
+
+class ProblemAclEntry(TypedDict):
+    username: str
+    role: str
+    created_at: str
+    is_system_admin: int

@@ -79,9 +79,12 @@ class ToolchainVersionCollector:
             raise RuntimeError(
                 f"unsupported judgehost toolchain language: {language_id}"
             )
+        lease_owner = case["lease_owner"]
+        if lease_owner is None:
+            raise RuntimeError("leased judgehost case has no owner")
         return _VersionContext(
             language_id=language_id,
-            lease_owner=case["lease_owner"],
+            lease_owner=lease_owner,
         )
 
     @staticmethod
