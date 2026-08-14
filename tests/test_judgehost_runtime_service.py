@@ -82,11 +82,13 @@ class TestJudgehostRuntimeService(DBTestBase):
                 task_kind="solution-run",
             )
 
-    def test_prepare_materializes_external_test_files_before_admission(self) -> None:
+    def test_prepare_materializes_external_payloads_before_admission(self) -> None:
         source_root = Path(self.settings.cache_root) / "prepared-test-files"
         source_root.mkdir(parents=True, exist_ok=True)
+        submission_path = source_root / "solution.cpp"
         input_path = source_root / "001.in"
         answer_path = source_root / "001.ans"
+        submission_path.write_bytes(b"int main(){return 0;}\n")
         input_path.write_bytes(b"input\n")
         answer_path.write_bytes(b"answer\n")
 
@@ -96,7 +98,8 @@ class TestJudgehostRuntimeService(DBTestBase):
             artifact_verification_id="",
             mode="pass-fail",
             submission_path=None,
-            upload_content=b"int main(){return 0;}\n",
+            upload_content=None,
+            upload_file=RuntimeBlobStore.describe_file(submission_path),
             upload_filename="solution.cpp",
             run_id=f"r-materialize-{uuid.uuid4().hex[:8]}",
             selected_tests=["001.in"],
@@ -127,6 +130,11 @@ class TestJudgehostRuntimeService(DBTestBase):
             },
         )
 
+        source_descriptor = dict(payload["source_file"])
+        source_blob_ref = str(source_descriptor["blob_ref"])
+        self.assertTrue(source_blob_ref.startswith("blob://sha256/"))
+        self.assertIsNotNone(self.runtime_blob_store.descriptor(source_blob_ref))
+
         verification_payload = dict(payload["verification_payload"])
         tests = list(verification_payload["tests"])
         prepared_test = dict(tests[0])
@@ -135,6 +143,64 @@ class TestJudgehostRuntimeService(DBTestBase):
             blob_ref = str(descriptor["blob_ref"])
             self.assertTrue(blob_ref.startswith("blob://sha256/"))
             self.assertIsNotNone(self.runtime_blob_store.descriptor(blob_ref))
+
+        submission_path.unlink()
+        input_path.unlink()
+        answer_path.unlink()
+        self.assertEqual(
+            self.runtime_blob_store.read(source_blob_ref),
+            b"int main(){return 0;}\n",
+        )
+
+    def test_prepare_reports_missing_submission_source_before_admission(self) -> None:
+        source_root = Path(self.settings.cache_root) / "missing-submission-source"
+        source_root.mkdir(parents=True, exist_ok=True)
+        source_path = source_root / "lost.cpp"
+        source_path.write_bytes(b"int main(){return 0;}\n")
+        descriptor = RuntimeBlobStore.describe_file(source_path)
+        source_path.unlink()
+
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "submission source payload is unavailable: lost.cpp",
+        ):
+            self.service.prepare_enqueue_payload(
+                problem=self.problem,
+                username=self.user,
+                artifact_verification_id="",
+                mode="pass-fail",
+                submission_path=None,
+                upload_content=None,
+                upload_file=descriptor,
+                upload_filename="lost.cpp",
+                run_id=f"r-missing-source-{uuid.uuid4().hex[:8]}",
+                selected_tests=["001.in"],
+                verification_id="ver-missing-submission-source",
+                verification_program_id=_PROGRAM_ID,
+                expected_behavior="accepted",
+                verification_source="run.execute",
+                verification_payload_override={
+                    "tests": [
+                        {
+                            "name": "001.in",
+                            "answer_name": "001.ans",
+                            "input_file": self.runtime_blob_store.put_bytes(
+                                b"input\n"
+                            ).to_payload(),
+                            "answer_file": self.runtime_blob_store.put_bytes(
+                                b"answer\n"
+                            ).to_payload(),
+                        }
+                    ],
+                    "run_config_json": '{"pass_limit":1}',
+                    "problem_limits": {
+                        "time_limit_ms": 2000,
+                        "memory_limit_mb": 1024,
+                        "pass_limit": 1,
+                    },
+                    "source_files": {},
+                },
+            )
 
     def test_set_host_enabled_preserves_status_shape(self) -> None:
         self.service.domjudge_register_host("judgehost-shape-check")

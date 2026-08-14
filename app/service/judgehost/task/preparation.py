@@ -489,7 +489,16 @@ class JudgehostPayloadPreparation:
         source_label: str
         source_file: PayloadFile
         if upload_file is not None:
-            source_file = upload_file
+            try:
+                source_file = self._runtime_blob_store.put_file(upload_file)
+            except OSError as exc:
+                source_label = self._normalize_text_with_default(
+                    upload_filename,
+                    default="submission.cpp",
+                )
+                raise RuntimeError(
+                    f"submission source payload is unavailable: {source_label}"
+                ) from exc
             source_bytes = self._runtime_blob_store.read(
                 source_file,
                 max_bytes=settings.max_submission_source_bytes,
@@ -1003,7 +1012,17 @@ class JudgehostPayloadPreparation:
         if source_label_override is not None:
             payload["source_label"] = source_label_override
         if extra_source_files_override is not None:
-            payload["extra_source_files"] = dict(extra_source_files_override)
+            materialized_extra_sources: dict[str, object] = {}
+            for name, raw_file in extra_source_files_override.items():
+                try:
+                    descriptor = PayloadFile.from_payload(raw_file)
+                    materialized = self._runtime_blob_store.put_file(descriptor)
+                except (OSError, ValueError) as exc:
+                    raise RuntimeError(
+                        f"extra source payload is unavailable: {name}"
+                    ) from exc
+                materialized_extra_sources[name] = materialized.to_payload()
+            payload["extra_source_files"] = materialized_extra_sources
         if manual_validate_only:
             payload["manual_validate_only"] = True
         payload["precomputed"] = (

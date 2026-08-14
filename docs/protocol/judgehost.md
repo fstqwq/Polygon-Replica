@@ -92,6 +92,12 @@ no verification task or coordinator binding and is exposed through its
 process-local Judgehost task. The owning result and transaction semantics are
 in the [execution protocol](execution.md#results-and-cache-payloads).
 
+Before task admission, submission sources, auxiliary compile sources, inputs,
+and answers are fixed in the runtime blob store. Batch state therefore owns
+content-addressed runtime descriptors rather than paths into a temporary Git
+snapshot. Removing a completed or failed Verification snapshot cannot break a
+later materialization of an already admitted task.
+
 After a batch is leased, dispatch reports its durable verification task through
 an injected `CaseLeaseSink`. Judgehost does not import or locate the
 verification coordinator. A missing process-local runtime is tolerated because
