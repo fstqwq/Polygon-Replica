@@ -26,6 +26,7 @@ from tests.ui_support import (
     contest_access_grant,
     contest_access_revoke,
     contest_overview_page,
+    contest_packages_page,
     contest_problems_add,
     contest_problems_change_general,
     contest_problems_page,
@@ -210,6 +211,19 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
         self.assertIn(
             f'href="/problems/alice/sample/statement?contest={contest_slug}"',
             html,
+        )
+
+        packages = contest_packages_page(
+            _app_request(f"/contests/{contest_slug}/packages"),
+            contest_slug,
+            "alice",
+        )
+        self.assertEqual(packages.status_code, 200)
+        self.assertEqual(
+            packages.body.decode("utf-8", errors="replace").count(
+                'id="contest-workspace-title"'
+            ),
+            1,
         )
 
     def test_system_admin_can_view_and_manage_all_contests(self) -> None:

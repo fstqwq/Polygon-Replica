@@ -365,8 +365,15 @@ def contest_statement_source_delete(
     )
 
 
-def contest_packages_page(request: Request, contest: str, user: Annotated[str, Depends(require_session_user)], job_id: str = "", language: str = "", source_path: str = ""):
-    ctx = _contest_ctx(contest, user, "packages")
+def contest_packages_page(
+    request: Request,
+    contest: str,
+    user: Annotated[str, Depends(require_session_user)],
+    job_id: str = "",
+    language: str = "",
+    source_path: str = "",
+):
+    ctx = _contest_ctx(contest, user, "packages", request=request)
     contest_id = int(ctx["contest"]["id"])
     requested_job_id = str(job_id).strip()
     current_language = _contest_statement_language(contest_id, language)
