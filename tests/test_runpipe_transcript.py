@@ -4,7 +4,7 @@ import io
 import unittest
 from decimal import Decimal
 
-from app.service.judgehost.runpipe_transcript import parse_runpipe_transcript
+from app.service.judgehost.callback.runpipe_transcript import parse_runpipe_transcript
 
 
 def _frame(milliseconds: int, direction: bytes, payload: bytes) -> bytes:
@@ -89,7 +89,10 @@ class TestRunpipeTranscript(unittest.TestCase):
 
         self.assertEqual(transcript["state"], "ok")
         self.assertEqual(
-            [(event["kind"], event["source"], event["payload_display"]) for event in transcript["events"]],
+            [
+                (event["kind"], event["source"], event["payload_display"])
+                for event in transcript["events"]
+            ],
             [
                 ("data", "interactor", "(empty)"),
                 ("eof", "interactor", "closed output"),

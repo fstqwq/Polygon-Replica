@@ -94,14 +94,18 @@ def _imported_symbol_set(module_name: str) -> set[str]:
 
 
 def _is_name_attr(node: ast.AST, *, name: str, attr: str) -> bool:
-    return isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name) and node.value.id == name and node.attr == attr
+    return (
+        isinstance(node, ast.Attribute)
+        and isinstance(node.value, ast.Name)
+        and node.value.id == name
+        and node.attr == attr
+    )
 
 
 def _is_db_handle(node: ast.AST) -> bool:
-    return (
-        isinstance(node, ast.Name)
-        and node.id == "db"
-    ) or _is_name_attr(node, name="config", attr="db")
+    return (isinstance(node, ast.Name) and node.id == "db") or _is_name_attr(
+        node, name="config", attr="db"
+    )
 
 
 class TestPublicContracts(unittest.TestCase):
@@ -115,9 +119,7 @@ class TestPublicContracts(unittest.TestCase):
             header = b"\n".join(payload.splitlines()[:5])
             has_pragma = _NON_ASCII_TEST_PRAGMA in header
             if has_pragma and (
-                not relative.parts
-                or relative.parts[0] != "tests"
-                or not has_non_ascii
+                not relative.parts or relative.parts[0] != "tests" or not has_non_ascii
             ):
                 invalid_pragmas.append(relative.as_posix())
             if has_non_ascii and not has_pragma:
@@ -157,7 +159,15 @@ class TestPublicContracts(unittest.TestCase):
                 refreshed.url("nested/space +&?#%.js"),
             )
 
-            for invalid_path in ["", "/nested/file.js", "nested//file.js", "nested/./file.js", "../file.js", "nested\\file.js", "missing.js"]:
+            for invalid_path in [
+                "",
+                "/nested/file.js",
+                "nested//file.js",
+                "nested/./file.js",
+                "../file.js",
+                "nested\\file.js",
+                "missing.js",
+            ]:
                 with self.subTest(invalid_path=invalid_path):
                     with self.assertRaises(ValueError):
                         manifest.url(invalid_path)
@@ -205,7 +215,13 @@ class TestPublicContracts(unittest.TestCase):
 
     def test_impl_modules_do_not_issue_direct_sql(self) -> None:
         offenders: list[str] = []
-        direct_sql_tokens = ("config" + ".db.", "." + "fetch_one(", "." + "fetch_all(", "." + "execute(", "write_" + "transaction(")
+        direct_sql_tokens = (
+            "config" + ".db.",
+            "." + "fetch_one(",
+            "." + "fetch_all(",
+            "." + "execute(",
+            "write_" + "transaction(",
+        )
         for path in _python_files_under(ROOT / "app" / "impl"):
             source = path.read_text(encoding="utf-8-sig")
             for token in direct_sql_tokens:
@@ -219,7 +235,12 @@ class TestPublicContracts(unittest.TestCase):
             tree = ast.parse(path.read_text(encoding="utf-8-sig"), filename=str(path))
             for node in ast.walk(tree):
                 if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
-                    if _is_db_handle(node.func.value) and node.func.attr in {"fetch_one", "fetch_all", "execute", "write_transaction"}:
+                    if _is_db_handle(node.func.value) and node.func.attr in {
+                        "fetch_one",
+                        "fetch_all",
+                        "execute",
+                        "write_transaction",
+                    }:
                         offenders.append(f"{path}:{node.lineno}:{node.func.attr}")
         self.assertEqual(offenders, [])
 
@@ -245,7 +266,7 @@ class TestPublicContracts(unittest.TestCase):
             ROOT / "app" / "service" / "auth" / "service.py",
             ROOT / "app" / "service" / "contest" / "service.py",
             ROOT / "app" / "service" / "export" / "service.py",
-            ROOT / "app" / "service" / "judgehost" / "dispatch.py",
+            ROOT / "app" / "service" / "judgehost" / "work" / "dispatch.py",
             ROOT / "app" / "service" / "judgehost" / "state.py",
             ROOT / "app" / "service" / "mail" / "smtp_config.py",
             ROOT / "app" / "service" / "repository" / "workspace.py",
@@ -261,13 +282,17 @@ class TestPublicContracts(unittest.TestCase):
             for node in ast.walk(tree):
                 if isinstance(node, ast.ImportFrom):
                     module_name = str(node.module or "")
-                    if module_name.startswith("app.service.disk.") or module_name.startswith("app.service.memory."):
+                    if module_name.startswith("app.service.disk.") or module_name.startswith(
+                        "app.service.memory."
+                    ):
                         if path not in allowed:
                             offenders.append(f"{path}:{node.lineno}:{module_name}")
                 if isinstance(node, ast.Import):
                     for alias in node.names:
                         module_name = alias.name
-                        if module_name.startswith("app.service.disk.") or module_name.startswith("app.service.memory."):
+                        if module_name.startswith("app.service.disk.") or module_name.startswith(
+                            "app.service.memory."
+                        ):
                             if path not in allowed:
                                 offenders.append(f"{path}:{node.lineno}:{module_name}")
         self.assertEqual(offenders, [])

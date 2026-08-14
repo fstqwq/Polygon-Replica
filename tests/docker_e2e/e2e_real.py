@@ -1465,7 +1465,7 @@ def verify_deployment() -> None:
         if persisted_head != head:
             raise RuntimeError("Agent commit response differs from the persisted head")
 
-        domjudge_job_id, domjudge_archive = _agent_export("domjudge")
+        job_id, domjudge_archive = _agent_export("domjudge")
         icpc_job_id, icpc_archive = _agent_export("icpc-2025-09")
 
         contest_job_id = start_contest_pdf(
@@ -1504,7 +1504,7 @@ def verify_deployment() -> None:
         f"variant={variant} "
         f"sample_verification={sample_verification_id} "
         f"verification={verification_id} head={head} "
-        f"domjudge_job={domjudge_job_id} domjudge_archive={domjudge_archive} "
+        f"domjudge_job={job_id} domjudge_archive={domjudge_archive} "
         f"icpc_job={icpc_job_id} icpc_archive={icpc_archive} "
         f"materialization_verification={materialization_verification_id} "
         f"contest_job={contest_job_id} artifact={artifact_id} "

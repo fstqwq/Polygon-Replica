@@ -6,15 +6,15 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
-from app.service.judgehost.batch_scheduler import BatchScheduler
-from app.service.judgehost.batch_scheduler_models import (
+from app.service.judgehost.batch.runtime import JudgehostBatchRuntime
+from app.service.judgehost.batch.model import (
     CaseReportTelemetry,
     CompileSubmission,
     ExecutionBatchSpec,
 )
-from app.service.judgehost.case_result import build_case_result
-from app.service.judgehost.identity import domjudge_submit_id
-from app.service.judgehost.toolchain_versions import (
+from app.service.judgehost.callback.case_result import build_case_result
+from app.service.judgehost.domjudge.identity import submit_id
+from app.service.judgehost.telemetry.toolchain_versions import (
     ToolchainTelemetryHandler,
     ToolchainVersionCollector,
     ToolchainVersionReport,
@@ -48,7 +48,7 @@ class TestToolchainVersionCollector(unittest.TestCase):
                 TOOLCHAIN_CPP_COMPILER="/opt/tool chains/clang++",
                 TOOLCHAIN_JAVA_COMPILER="javac-custom",
             ),
-            batch_scheduler=self.scheduler,
+            batch_runtime=self.scheduler,
             state_lock=threading.RLock(),
             host_toolchains={},
         )
@@ -72,9 +72,7 @@ class TestToolchainVersionCollector(unittest.TestCase):
         }
         self.scheduler.batch = {
             "batch_id": 11,
-            "compile_config_json": json.dumps(
-                {"toolchain_cmd_digest": toolchain_cmd_digest}
-            ),
+            "compile_config_json": json.dumps({"toolchain_cmd_digest": toolchain_cmd_digest}),
             "run_config_json": json.dumps({"language_id": language_id}),
         }
 
@@ -150,7 +148,9 @@ class TestToolchainVersionCollector(unittest.TestCase):
                 101,
                 hostname="judgehost-a",
                 compiler="not base64",
-                runner=self._encoded(b"x" * (ToolchainVersionCollector.MAX_VERSION_OUTPUT_BYTES + 1)),
+                runner=self._encoded(
+                    b"x" * (ToolchainVersionCollector.MAX_VERSION_OUTPUT_BYTES + 1)
+                ),
             )
         )
         self.assertEqual(self.state.host_toolchains, {})
@@ -287,7 +287,7 @@ def _result(test_name: str):
 
 class TestHostTelemetryStore(unittest.TestCase):
     def setUp(self) -> None:
-        self.scheduler = BatchScheduler(id_base=100)
+        self.scheduler = JudgehostBatchRuntime(id_base=100)
         self.sequence = 0
 
     def _batch(self, case_count: int) -> int:
@@ -305,7 +305,7 @@ class TestHostTelemetryStore(unittest.TestCase):
             compile_key=_COMPILE_KEY,
             compile_submission=CompileSubmission(
                 compile_key=_COMPILE_KEY,
-                submit_id=domjudge_submit_id(_COMPILE_KEY),
+                submit_id=submit_id(_COMPILE_KEY),
                 source_name="ac.cpp",
                 source_file=PayloadFile(
                     path=Path("/tmp/telemetry-ac.cpp"),

@@ -8,22 +8,25 @@ from app.service.platform.runtime_blob_store import RuntimeBlobStore
 from app.service.platform.runtime_cache_index import RuntimeCacheIndex
 from app.service.repository.workspace import WorkspaceService
 
-from app.service.judgehost.cleanup import JudgehostTerminalCleanup
-from app.service.judgehost.execution_port import JudgehostExecutionPort
+from app.service.judgehost.work.cleanup import JudgehostTerminalCleanup
+from app.service.judgehost.ports.execution_port import JudgehostExecutionPort
 from app.service.judgehost.core import JudgehostCore
-from app.service.judgehost.dispatch import DispatchHandler
-from app.service.judgehost.enqueue import TaskEnqueue
-from app.service.judgehost.finalization import JudgehostBatchFinalizer
-from app.service.judgehost.publication import (
+from app.service.judgehost.work.dispatch import DispatchHandler
+from app.service.judgehost.work.enqueue import TaskEnqueue
+from app.service.judgehost.work.finalization import JudgehostBatchFinalizer
+from app.service.judgehost.work.publication import (
     JudgehostCaseCompletionPublisher,
     JudgehostCaseDiagnosticPublisher,
 )
-from app.service.judgehost.public_status import PublicJudgehostStatus, PublicJudgehostStatusCache
-from app.service.judgehost.result import ResultProcessor
-from app.service.judgehost.runtime import parse_iso_utc
+from app.service.judgehost.telemetry.public_status import (
+    PublicJudgehostStatus,
+    PublicJudgehostStatusCache,
+)
+from app.service.judgehost.callback.result import ResultProcessor
+from app.service.judgehost.work.time import parse_iso_utc
 from app.service.judgehost.state import JudgehostState
-from app.service.judgehost.task_queue import TaskQueue
-from app.service.judgehost.toolkit import DomjudgeToolkit
+from app.service.judgehost.work.task_queue import TaskQueue
+from app.service.judgehost.domjudge.toolkit import DomjudgeToolkit
 
 
 class Judgehost:
@@ -86,7 +89,7 @@ class Judgehost:
         self._enqueue = TaskEnqueue(self._state, self._core, self._dispatch, self._toolkit)
         self._terminal_cleanup = JudgehostTerminalCleanup(
             self._state.task_registry,
-            self._state.batch_scheduler,
+            self._state.batch_runtime,
             self._state.execution_port,
         )
         self._public_status = PublicJudgehostStatusCache(
@@ -255,7 +258,7 @@ class Judgehost:
             raise RuntimeError("verification id is required")
         if not reason:
             raise RuntimeError("judgehost cancellation reason is required")
-        cancellation = self._state.batch_scheduler.request_verification_cancel(
+        cancellation = self._state.batch_runtime.request_verification_cancel(
             verification_id,
             now_text=now_iso(),
         )
@@ -264,7 +267,7 @@ class Judgehost:
             reason=reason,
         )
         for task_id in cancellation.task_ids:
-            batch_row = self._state.batch_scheduler.batch_for_task(task_id)
+            batch_row = self._state.batch_runtime.batch_for_task(task_id)
             if batch_row is not None:
                 self._batch_finalizer.finalize_task_if_ready(
                     task_id,
@@ -285,8 +288,8 @@ class Judgehost:
     def forget_problem_tasks(self, *args, **kwargs):
         return self._queue.forget_problem_tasks(*args, **kwargs)
 
-    def cancel_all_domjudge_batches(self) -> int:
-        batch_ids = self._queue.cancel_all_domjudge_batches()
+    def cancel_all_batches(self) -> int:
+        batch_ids = self._queue.cancel_all_batches()
         for batch_id in batch_ids:
             self._batch_finalizer.finalize_batch_if_ready(batch_id)
         return len(batch_ids)
@@ -295,7 +298,7 @@ class Judgehost:
         return self._queue.forget_domjudge_runs(*args, **kwargs)
 
     def schedule_verification_cleanup(self, verification_id: str) -> None:
-        ready_batch_ids = self._state.batch_scheduler.finish_verification_execution(
+        ready_batch_ids = self._state.batch_runtime.finish_verification_execution(
             verification_id,
             now_text=now_iso(),
         )
@@ -308,7 +311,7 @@ class Judgehost:
         verification_id: str,
         verification_program_ids: list[str],
     ) -> None:
-        ready_batch_ids = self._state.batch_scheduler.finish_programs(
+        ready_batch_ids = self._state.batch_runtime.finish_programs(
             verification_id,
             verification_program_ids,
             now_text=now_iso(),
@@ -333,10 +336,10 @@ class Judgehost:
         released_task_ids: set[str] = set()
         for hostname in stale_hosts:
             selected_task_ids: set[str] = set()
-            for case in self._state.batch_scheduler.cases_for_host(hostname):
+            for case in self._state.batch_runtime.cases_for_host(hostname):
                 if str(case["status"] or "") != "leased":
                     continue
-                batch = self._state.batch_scheduler.fetch_batch(int(case["batch_id"]))
+                batch = self._state.batch_runtime.fetch_batch(int(case["batch_id"]))
                 if batch is None or str(batch["verification_id"] or "") != verification_id:
                     continue
                 task_id = str(case["task_id"] or "")
@@ -344,7 +347,7 @@ class Judgehost:
                     selected_task_ids.add(task_id)
             if not selected_task_ids:
                 continue
-            release = self._state.batch_scheduler.release_host_leases(
+            release = self._state.batch_runtime.release_host_leases(
                 hostname,
                 now_text=now_text,
                 verification_id=verification_id,
@@ -503,16 +506,16 @@ class Judgehost:
         finally:
             self.schedule_verification_cleanup(runtime_verification_id)
 
-    def domjudge_case_output_for_task(self, task_id: str, test_name: str) -> tuple[str, int]:
-        row = self._state.batch_scheduler.case_output_for_task(task_id, test_name)
+    def case_output_for_task(self, task_id: str, test_name: str) -> tuple[str, int]:
+        row = self._state.batch_runtime.case_output_for_task(task_id, test_name)
         if row is None:
             return ("", 0)
         case_id = int(row["id"])
         output_ref = str(row["output_run_ref"])
         return (output_ref, case_id)
 
-    def domjudge_case_feedback_blob_for_task(self, task_id: str, test_name: str) -> bytes | None:
-        row = self._state.batch_scheduler.case_for_task(task_id, test_name)
+    def case_feedback_blob_for_task(self, task_id: str, test_name: str) -> bytes | None:
+        row = self._state.batch_runtime.case_for_task(task_id, test_name)
         if row is None:
             return None
         output_diff_ref = str(row["output_diff_ref"] or "")
@@ -526,4 +529,4 @@ class Judgehost:
         with self._state.state_lock:
             self._state.hosts_state.clear()
             self._state.host_toolchains.clear()
-        self._state.batch_scheduler.reset()
+        self._state.batch_runtime.reset()

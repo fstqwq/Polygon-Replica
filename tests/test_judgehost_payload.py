@@ -5,24 +5,24 @@ import unittest
 from pathlib import Path
 
 from app.config import build_config_values
-from app.service.judgehost.artifact_capture import decode_callback_blob
-from app.service.judgehost.diagnostic_payload import parse_diagnostic_payload
-from app.service.judgehost.limits import run_memory_limit_kb
-from app.service.judgehost.pass_bundle import BundledPass, PassBundle
-from app.service.judgehost.result_normalizer import (
+from app.service.judgehost.callback.artifact_capture import decode_callback_blob
+from app.service.judgehost.callback.diagnostic_payload import parse_diagnostic_payload
+from app.service.judgehost.domjudge.limits import run_memory_limit_kb
+from app.service.judgehost.callback.pass_bundle import BundledPass, PassBundle
+from app.service.judgehost.callback.result_normalizer import (
     CapturedCaseArtifact,
     CapturedJudgehostCase,
     normalize_captured_case,
     pass_cache_file_name,
 )
-from app.service.judgehost.runtime import (
-    domjudge_feedback_text_from_bytes,
-    domjudge_feedback_text_from_text,
-    domjudge_rewrite_untrusted_runresult,
+from app.service.judgehost.domjudge.result import (
+    bounded_feedback_bytes,
+    bounded_feedback_text,
+    rewrite_untrusted_runresult,
 )
-from app.service.judgehost.shared import domjudge_config_from_snapshot
-from app.service.judgehost.toolkit import DomjudgeToolkit
-from app.service.platform.hashing import domjudge_executable_hash
+from app.service.judgehost.domjudge.codec import config_payload
+from app.service.judgehost.domjudge.toolkit import DomjudgeToolkit
+from app.service.judgehost.domjudge.cache import executable_hash
 
 _DISPLAY_LIMIT_BYTES = 64 * 1024
 
@@ -36,10 +36,7 @@ class TestJudgehostPayload(unittest.TestCase):
             "program.out": b"answer\n",
             "program.err": b"",
             "system.out": b"",
-            "program.meta": (
-                b"cpu-time: 0.004\nwall-time: 0.005\n"
-                b"memory-bytes: 4096\n"
-            ),
+            "program.meta": (b"cpu-time: 0.004\nwall-time: 0.005\n" b"memory-bytes: 4096\n"),
             "compare.meta": b"exitcode: 42\n",
             "judgemessage.txt": b"",
             "teammessage.txt": b"",
@@ -210,8 +207,7 @@ class TestJudgehostPayload(unittest.TestCase):
             "program.err": b"",
             "system.out": b"",
             "program.meta": (
-                b"time-used: cpu-time\ncpu-time: 0.002\n"
-                b"wall-time: 0.003\nmemory-bytes: 2048\n"
+                b"time-used: cpu-time\ncpu-time: 0.002\n" b"wall-time: 0.003\nmemory-bytes: 2048\n"
             ),
             "compare.meta": b"exitcode: 42\n",
             "judgemessage.txt": b"",
@@ -285,7 +281,7 @@ class TestJudgehostPayload(unittest.TestCase):
             ("run", b"#!/bin/sh\necho ok\n", True),
             ("main.cpp", b"int main(){return 0;}\n", False),
         ]
-        got = domjudge_executable_hash(files)
+        got = executable_hash(files)
         rows = sorted(files, key=lambda item: str(item[0]))
         parts: list[str] = []
         for filename, content, is_exec in rows:
@@ -307,7 +303,7 @@ class TestJudgehostPayload(unittest.TestCase):
         for runresult, cpu_sec, run_config, expected in cases:
             with self.subTest(runresult=runresult, cpu_sec=cpu_sec):
                 self.assertEqual(
-                    domjudge_rewrite_untrusted_runresult(
+                    rewrite_untrusted_runresult(
                         runresult,
                         cpu_sec=cpu_sec,
                         run_cfg_obj=run_config,
@@ -376,6 +372,7 @@ class TestJudgehostPayload(unittest.TestCase):
             / "app"
             / "service"
             / "judgehost"
+            / "callback"
             / "diagnostic_payload.py"
         )
         tree = ast.parse(module_path.read_text(encoding="utf-8"))
@@ -388,7 +385,7 @@ class TestJudgehostPayload(unittest.TestCase):
         forbidden_prefixes = (
             "app.db",
             "app.impl",
-            "app.service.judgehost.batch_scheduler",
+            "app.service.judgehost.batch.state",
             "app.service.verification",
         )
         self.assertFalse(
@@ -401,7 +398,7 @@ class TestJudgehostPayload(unittest.TestCase):
 
     def test_feedback_text_preserves_lines_and_redacts_internal_paths(self) -> None:
         self.assertEqual(
-            domjudge_feedback_text_from_text(
+            bounded_feedback_text(
                 "\n\nfailed on pass 2\nignored",
                 limit_bytes=_DISPLAY_LIMIT_BYTES,
             ),
@@ -421,14 +418,14 @@ class TestJudgehostPayload(unittest.TestCase):
             "validator.cpp:4:35: error: expected ';' before 'inf'"
         )
         self.assertEqual(
-            domjudge_feedback_text_from_text(
+            bounded_feedback_text(
                 compile_output,
                 limit_bytes=_DISPLAY_LIMIT_BYTES,
             ),
             expected,
         )
         self.assertEqual(
-            domjudge_feedback_text_from_bytes(
+            bounded_feedback_bytes(
                 compile_output.encode("utf-8"),
                 limit_bytes=_DISPLAY_LIMIT_BYTES,
             ),
@@ -437,7 +434,7 @@ class TestJudgehostPayload(unittest.TestCase):
 
     def test_config_uses_kib_for_scripts_and_bytes_for_output_storage(self) -> None:
         snapshot = build_config_values().snapshot()
-        config = domjudge_config_from_snapshot(snapshot)
+        config = config_payload(snapshot)
         run_output_bytes = int(snapshot["RUN_EXEC_OUTPUT_KB"]) * 1024
         compile_output_kb = int(snapshot["TOOLCHAIN_COMPILE_OUTPUT_KB"])
         stored_log_limit_bytes = int(snapshot["JUDGEHOST_STORED_LOG_LIMIT_BYTES"])

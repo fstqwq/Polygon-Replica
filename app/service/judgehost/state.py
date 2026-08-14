@@ -4,14 +4,14 @@ from dataclasses import field
 from typing import Callable
 
 from app.config import ConfigValues
-from app.service.judgehost.execution_port import JudgehostExecutionPort
+from app.service.judgehost.ports.execution_port import JudgehostExecutionPort
 from app.service.platform.runtime_blob_store import RuntimeBlobStore
 from app.service.platform.runtime_cache_index import RuntimeCacheIndex
 from app.service.repository.workspace import WorkspaceService
 
-from app.service.judgehost.batch_scheduler import BatchScheduler
-from app.service.judgehost.task_registry import JudgehostTaskRegistry
-from app.service.judgehost.toolchain_versions import HostToolchainTelemetry
+from app.service.judgehost.batch.runtime import JudgehostBatchRuntime
+from app.service.judgehost.work.task_registry import JudgehostTaskRegistry
+from app.service.judgehost.telemetry.toolchain_versions import HostToolchainTelemetry
 
 
 @dataclass(frozen=True)
@@ -47,7 +47,7 @@ class JudgehostState:
     )
     hosts_state: dict[str, dict[str, object]] = field(default_factory=dict)
     host_toolchains: dict[str, dict[str, HostToolchainTelemetry]] = field(default_factory=dict)
-    batch_scheduler: BatchScheduler = field(default_factory=BatchScheduler)
+    batch_runtime: JudgehostBatchRuntime = field(default_factory=JudgehostBatchRuntime)
 
     def __post_init__(self) -> None:
         self.task_registry = JudgehostTaskRegistry()
@@ -62,11 +62,7 @@ class JudgehostState:
             wait_timeout_sec=int(snapshot["JUDGEHOST_WAIT_TIMEOUT_SEC"]),
             wait_poll_sec=float(snapshot["JUDGEHOST_WAIT_POLL_SEC"]),
             online_window_sec=int(snapshot["JUDGEHOST_ONLINE_WINDOW_SEC"]),
-            max_submission_source_bytes=int(
-                snapshot["JUDGEHOST_MAX_SUBMISSION_SOURCE_BYTES"]
-            ),
+            max_submission_source_bytes=int(snapshot["JUDGEHOST_MAX_SUBMISSION_SOURCE_BYTES"]),
             max_tests_per_task=int(snapshot["JUDGEHOST_MAX_TESTS_PER_TASK"]),
-            max_component_source_bytes=int(
-                snapshot["JUDGEHOST_MAX_COMPONENT_SOURCE_BYTES"]
-            ),
+            max_component_source_bytes=int(snapshot["JUDGEHOST_MAX_COMPONENT_SOURCE_BYTES"]),
         )

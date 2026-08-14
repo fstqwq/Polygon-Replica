@@ -3,15 +3,15 @@ import unittest
 from pathlib import Path
 
 from app.service.execution.identity import canonical_run_id, new_run_id
-from app.service.judgehost.batch_scheduler import BatchScheduler
-from app.service.judgehost.batch_scheduler_models import (
+from app.service.judgehost.batch.runtime import JudgehostBatchRuntime
+from app.service.judgehost.batch.model import (
     CompileSubmission,
     ExecutionBatchSpec,
 )
-from app.service.judgehost.identity import (
+from app.service.judgehost.domjudge.identity import (
     compile_key,
-    domjudge_job_id,
-    domjudge_submit_id,
+    job_id,
+    submit_id,
 )
 from app.service.platform.runtime_blob_store import PayloadFile
 from app.service.verification.identity import canonical_verification_id
@@ -30,10 +30,10 @@ class TestJudgehostIdentity(unittest.TestCase):
                 canonical_run_id(token)
 
     def test_verification_id_maps_directly_to_signed_64_bit_domain(self) -> None:
-        self.assertEqual(domjudge_job_id("ver-1"), 1)
-        self.assertEqual(domjudge_job_id("ver-7fffffffffffffff"), (1 << 63) - 1)
+        self.assertEqual(job_id("ver-1"), 1)
+        self.assertEqual(job_id("ver-7fffffffffffffff"), (1 << 63) - 1)
         with self.assertRaisesRegex(RuntimeError, "invalid verification id"):
-            domjudge_job_id("ver-8000000000000000")
+            job_id("ver-8000000000000000")
 
     def test_verification_id_rejects_noncanonical_tokens(self) -> None:
         for token in (
@@ -75,16 +75,16 @@ class TestJudgehostIdentity(unittest.TestCase):
                 self.assertNotEqual(compile_key(**variant), expected)
 
     def test_compile_key_maps_to_signed_64_bit_domain(self) -> None:
-        self.assertEqual(domjudge_submit_id("0" * 64), 0)
-        self.assertEqual(domjudge_submit_id(f"{(1 << 63) - 1:064x}"), (1 << 63) - 1)
-        self.assertEqual(domjudge_submit_id(f"{1 << 63:064x}"), 0)
+        self.assertEqual(submit_id("0" * 64), 0)
+        self.assertEqual(submit_id(f"{(1 << 63) - 1:064x}"), (1 << 63) - 1)
+        self.assertEqual(submit_id(f"{1 << 63:064x}"), 0)
         with self.assertRaisesRegex(RuntimeError, "invalid compile key"):
-            domjudge_submit_id("not-a-hash")
+            submit_id("not-a-hash")
 
     def test_scheduler_ids_start_above_process_base(self) -> None:
         source = b"int main() { return 0; }\n"
         compile_identity = "8" * 64
-        scheduler = BatchScheduler(id_base=123456)
+        scheduler = JudgehostBatchRuntime(id_base=123456)
         batch_id = scheduler.create_batch_with_cases(
             task_id="task-id-base",
             run_id="run-id-base",
@@ -95,7 +95,7 @@ class TestJudgehostIdentity(unittest.TestCase):
             compile_key=compile_identity,
             compile_submission=CompileSubmission(
                 compile_key=compile_identity,
-                submit_id=domjudge_submit_id(compile_identity),
+                submit_id=submit_id(compile_identity),
                 source_name="main.cpp",
                 source_file=PayloadFile(
                     path=Path("/tmp/test-judgehost-id-base.cpp"),

@@ -1,6 +1,6 @@
 import unittest
 
-from app.service.judgehost.public_status import project_public_status
+from app.service.judgehost.telemetry.public_status import project_public_status
 
 
 def _host(

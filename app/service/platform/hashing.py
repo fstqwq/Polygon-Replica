@@ -51,19 +51,6 @@ def md5_hex_text(text: str, *, errors: str = "strict") -> str:
     return hashlib.md5(str(text or "").encode("utf-8", errors=errors)).hexdigest()
 
 
-def domjudge_executable_hash(files: list[tuple[str, bytes, bool]]) -> str:
-    rows = sorted(files, key=lambda item: str(item[0]))
-    # DOMjudge judgedaemon computes executable hash as:
-    # md5(concat(md5(content) + filename + is_executable_bool_as_string))
-    # where true => "1", false => "".
-    parts: list[str] = []
-    for filename, content, is_exec in rows:
-        file_content_hash = md5_hex_bytes(bytes(content or b""))
-        exec_token = "1" if bool(is_exec) else ""
-        parts.append(f"{file_content_hash}{str(filename or '')}{exec_token}")
-    return md5_hex_text("".join(parts), errors="replace")
-
-
 def hmac_sha256_hex(secret: bytes, payload: bytes) -> str:
     return hmac.new(bytes(secret or b""), bytes(payload or b""), hashlib.sha256).hexdigest()
 
@@ -77,5 +64,4 @@ def sha256_file(path: Path, *, chunk_size: int = 1024 * 1024) -> str:
                 break
             hasher.update(chunk)
     return hasher.hexdigest()
-
 

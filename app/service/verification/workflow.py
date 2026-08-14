@@ -146,7 +146,7 @@ def _generate_feedback_by_test(
         judgehost_task_id = str(row["judgehost_task_id"] or "")
         if judgehost_task_id:
             try:
-                feedback_blob = judgehost.domjudge_case_feedback_blob_for_task(
+                feedback_blob = judgehost.case_feedback_blob_for_task(
                     judgehost_task_id,
                     test_name,
                 )

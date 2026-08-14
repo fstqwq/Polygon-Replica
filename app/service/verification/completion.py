@@ -1,8 +1,8 @@
 from collections.abc import Callable, Iterable
 
-from app.service.judgehost.case_result import CaseTerminalReport
-from app.service.judgehost.case_binding import CaseBinding
-from app.service.judgehost.completion import (
+from app.service.judgehost.ports.completion import CaseTerminalReport
+from app.service.judgehost.ports.case_binding import CaseBinding
+from app.service.judgehost.ports.completion import (
     CaseCompletionReport,
     DiagnosticAppendResult,
 )
@@ -58,9 +58,7 @@ def _accepted_verdict(verdict: str) -> bool:
 
 
 def _final_error(result: ExecutionResult, *, fallback: str) -> str:
-    return normalize_display_text(
-        result.outcome.error or result.feedback_text or fallback
-    )
+    return normalize_display_text(result.outcome.error or result.feedback_text or fallback)
 
 
 class VerificationTaskCompletionService:
@@ -87,10 +85,7 @@ class VerificationTaskCompletionService:
         return (
             report["task_id"] == judgehost_task_id
             and (not verification_id or verification_id == row_verification_id)
-            and (
-                not report_verification_id
-                or report_verification_id == row_verification_id
-            )
+            and (not report_verification_id or report_verification_id == row_verification_id)
             and report["run_id"] == task_row["run_id"]
         )
 
@@ -281,11 +276,9 @@ class VerificationTaskCompletionService:
                 result=result,
                 report_ok=report_ok,
             )
-        matched, completed, _observed_pass, mismatch_reason = (
-            verification_case_result_match(
-                task_row["expected_behavior"],
-                result,
-            )
+        matched, completed, _observed_pass, mismatch_reason = verification_case_result_match(
+            task_row["expected_behavior"],
+            result,
         )
         if matched:
             return TaskCompletion(
@@ -381,9 +374,7 @@ class VerificationTaskCompletionService:
             or task_row["judgehost_task_id"] != judgehost_task_id
         ):
             return False
-        cancel_reason = normalize_display_text(
-            reason or "verification cancelled by user"
-        )
+        cancel_reason = normalize_display_text(reason or "verification cancelled by user")
         self.commit(
             (
                 TaskCompletion(

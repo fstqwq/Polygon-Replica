@@ -7,9 +7,9 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable, Mapping
 
-from app.service.judgehost.batch_scheduler_models import CompileSubmission, ExecutionBatchSpec
-from app.service.judgehost.case_result import build_case_result
-from app.service.judgehost.identity import domjudge_submit_id
+from app.service.judgehost.batch.model import CompileSubmission, ExecutionBatchSpec
+from app.service.judgehost.callback.case_result import build_case_result
+from app.service.judgehost.domjudge.identity import submit_id
 from app.service.platform.runtime_blob_store import PayloadFile
 from tests.simulation.report import evaluate_assertions
 from tests.simulation.strategy import (
@@ -212,8 +212,7 @@ class JudgehostSimulation:
             for test_index in range(1, self.workload.tests_per_verification + 1):
                 previous: str | None = None
                 generated = (
-                    self.workload.generator_enabled
-                    and test_index > self.workload.manual_test_count
+                    self.workload.generator_enabled and test_index > self.workload.manual_test_count
                 )
                 if generated:
                     previous = self._add_node(
@@ -324,9 +323,7 @@ class JudgehostSimulation:
         self._nodes[node_id] = node
         verification.node_ids.append(node_id)
         program_identity = (node.verification_id, node.verification_program_id)
-        self._program_totals[program_identity] = (
-            self._program_totals.get(program_identity, 0) + 1
-        )
+        self._program_totals[program_identity] = self._program_totals.get(program_identity, 0) + 1
         for dependency_id in dependencies:
             self._nodes[dependency_id].children.append(node_id)
         return node_id
@@ -409,6 +406,7 @@ class JudgehostSimulation:
             self.scheduler,
             batch_id=batch_id,
             case_id=node.case_id,
+            compile_key=node.compile_key,
             case_duration_sec=node.case_duration_sec,
             compile_duration_sec=node.compile_duration_sec,
         )
@@ -567,9 +565,7 @@ class JudgehostSimulation:
         if not self.scheduler.record_compile_success(
             int(host.current_rows[0]["id"]),
             hostname=host.hostname,
-            receipt_generation=self._receipt_generation(
-                int(host.current_rows[0]["id"])
-            ),
+            receipt_generation=self._receipt_generation(int(host.current_rows[0]["id"])),
             compile_output_b64="",
             compile_metadata_b64="",
             updated_at=self._now_text(),
@@ -681,10 +677,7 @@ class JudgehostSimulation:
         self._program_completed[program_identity] = (
             self._program_completed.get(program_identity, 0) + 1
         )
-        if (
-            self._program_completed[program_identity]
-            == self._program_totals[program_identity]
-        ):
+        if self._program_completed[program_identity] == self._program_totals[program_identity]:
             ready = self.scheduler.finish_programs(
                 node.verification_id,
                 [node.verification_program_id],
@@ -775,7 +768,7 @@ class JudgehostSimulation:
     def _compile_submission(self, node: _Node) -> CompileSubmission:
         return CompileSubmission(
             compile_key=node.compile_key,
-            submit_id=domjudge_submit_id(node.compile_key),
+            submit_id=submit_id(node.compile_key),
             source_name=f"{node.program_key}.cpp",
             source_file=PayloadFile(
                 path=Path(f"/__judgehost_sim__/{node.compile_key}.cpp"),
@@ -934,9 +927,7 @@ class JudgehostSimulation:
             if row["completion_sec"] is not None
         ]
         foreground_makespan = [
-            float(row["makespan_sec"])
-            for row in foreground_rows
-            if row["makespan_sec"] is not None
+            float(row["makespan_sec"]) for row in foreground_rows if row["makespan_sec"] is not None
         ]
         average_utilization = statistics.fmean(row["utilization"] for row in host_rows)
         summary = {
@@ -951,9 +942,7 @@ class JudgehostSimulation:
             "foreground_wait_for_current_lease_sec": _round(
                 max(foreground_ready_to_lease, default=0.0)
             ),
-            "foreground_background_lease_count": (
-                self._background_leases_while_foreground_waited
-            ),
+            "foreground_background_lease_count": (self._background_leases_while_foreground_waited),
             "foreground_resume_count": sum(
                 row["resumed_previous_background"] is not None for row in foreground_rows
             ),
@@ -1043,9 +1032,7 @@ class JudgehostSimulation:
 
     def _foreground_waiting(self) -> bool:
         return any(
-            node.timing_kind == "foreground"
-            and node.state == "ready"
-            and node.leased_at is None
+            node.timing_kind == "foreground" and node.state == "ready" and node.leased_at is None
             for node in self._nodes.values()
         )
 

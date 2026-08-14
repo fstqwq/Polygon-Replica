@@ -118,15 +118,15 @@ def verification_programs_for_tasks(
 
 
 def judgehost_fetch_case(service, case_id: int):
-    return service.state.batch_scheduler.fetch_case(int(case_id))
+    return service.state.batch_runtime.fetch_case(int(case_id))
 
 
 def judgehost_fetch_batch(service, batch_id: int):
-    return service.state.batch_scheduler.fetch_batch(int(batch_id))
+    return service.state.batch_runtime.fetch_batch(int(batch_id))
 
 
 def judgehost_cases_for_run(service, run_id: str):
-    return service.state.batch_scheduler.cases_for_run(run_id)
+    return service.state.batch_runtime.cases_for_run(run_id)
 
 
 def read_preview_summary(preview_id: str) -> dict[str, object]:

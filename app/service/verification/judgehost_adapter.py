@@ -1,12 +1,12 @@
 from collections.abc import Callable
 
 from app.db import DB
-from app.service.judgehost.case_binding import (
+from app.service.judgehost.ports.case_binding import (
     CaseArtifactBinding,
     CaseArtifactSet,
     CaseBinding,
 )
-from app.service.judgehost.completion import (
+from app.service.judgehost.ports.completion import (
     CaseCompletionReport,
     DiagnosticAppendResult,
 )
@@ -86,11 +86,7 @@ class VerificationJudgehostAdapter:
                     str(row["test_name"]),
                     {"input_ref": "", "answer_ref": ""},
                 )
-                key = (
-                    "input_ref"
-                    if str(row["role"]) == "generated-input"
-                    else "answer_ref"
-                )
+                key = "input_ref" if str(row["role"]) == "generated-input" else "answer_ref"
                 if not refs[key]:
                     refs[key] = str(row["artifact_ref"])
             cases = tuple(

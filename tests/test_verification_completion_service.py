@@ -2,7 +2,7 @@ import json
 import sqlite3
 
 from app.service.execution.policy import normalize_execution_result
-from app.service.judgehost.case_binding import CaseBinding
+from app.service.judgehost.ports.case_binding import CaseBinding
 from app.service.verification.judgehost_adapter import VerificationJudgehostAdapter
 from app.service.verification.runtime_registry import VerificationRuntimeRegistry
 from app.service.verification.lifecycle import verification_task_id
@@ -21,9 +21,7 @@ from tests.verification_service_fixture import (
 
 class TestVerificationCompletionService(VerificationServiceTestBase):
     def test_judgehost_adapter_requires_the_exact_durable_case_binding(self) -> None:
-        verification_id = canonical_test_verification_id(
-            f"binding:{self.test_id}"
-        )
+        verification_id = canonical_test_verification_id(f"binding:{self.test_id}")
         self._insert_verification_row(verification_id)
         task_id = verification_task_id(
             verification_id,
@@ -66,9 +64,7 @@ class TestVerificationCompletionService(VerificationServiceTestBase):
             )
         )
         self.assertEqual(exposed, ["exposed"])
-        self.assertTrue(
-            adapter.unbind(task_id, judgehost_task_id="jt-binding")
-        )
+        self.assertTrue(adapter.unbind(task_id, judgehost_task_id="jt-binding"))
         for changed in (
             CaseBinding(
                 execution_scope_id="ver-1",
@@ -133,8 +129,12 @@ class TestVerificationCompletionService(VerificationServiceTestBase):
             final_result.fail_reason,
             "generate-input / generators/gen.cpp / 001.in: validator rejected generated input\nline 2 detail",
         )
-        self.assertEqual(final_result.error_text, "validator rejected generated input\nline 2 detail")
-        self.assertEqual(final_result.feedback_text, "validator rejected generated input\nline 2 detail")
+        self.assertEqual(
+            final_result.error_text, "validator rejected generated input\nline 2 detail"
+        )
+        self.assertEqual(
+            final_result.feedback_text, "validator rejected generated input\nline 2 detail"
+        )
         self.assertEqual(final_result.output_ref, output_file.blob_ref)
 
     def test_prepare_generate_input_truncation_does_not_set_input_ref(self) -> None:
@@ -170,7 +170,9 @@ class TestVerificationCompletionService(VerificationServiceTestBase):
         self.assertEqual(final_result.status, VerificationTaskStatus.FAILED)
         self.assertEqual(final_result.verdict, "FL")
         self.assertEqual(final_result.error_text, "generated input output was truncated for 020.in")
-        self.assertEqual(final_result.feedback_text, "generated input output was truncated for 020.in")
+        self.assertEqual(
+            final_result.feedback_text, "generated input output was truncated for 020.in"
+        )
         self.assertEqual(final_result.output_ref, output_file.blob_ref)
         self.assertEqual(
             final_result.fail_reason,
@@ -321,9 +323,7 @@ class TestVerificationCompletionService(VerificationServiceTestBase):
         self.assertEqual(completion.fail_reason, "")
 
     def test_task_store_caps_frontend_display_fields(self) -> None:
-        verification_id = canonical_test_verification_id(
-            f"display-cap:{self.test_id}"
-        )
+        verification_id = canonical_test_verification_id(f"display-cap:{self.test_id}")
         self._insert_verification_row(verification_id)
         task_store = self.verification_task_store
         task_id = verification_task_id(
@@ -348,26 +348,30 @@ class TestVerificationCompletionService(VerificationServiceTestBase):
             edges=[],
         )
         oversized = "x" * 5000
-        diagnostics_json = json.dumps([{"level": "error", "message": "y" * 5000}], separators=(",", ":"))
-        task_store.commit_task_completions((TaskCompletion(
-            task_id=task_id,
-            status=VerificationTaskStatus.FAILED,
-            run_id="r-cap",
-            judgehost_task_id="jt-cap",
-            result=normalize_execution_result(
-                verdict="CE",
-                answer_correct=True,
-                error=oversized,
-                feedback=oversized,
-                compile_log=oversized,
-                compile_diagnostics=json.loads(diagnostics_json),
-            ),
-            fail_reason=oversized,
-        ),))
+        diagnostics_json = json.dumps(
+            [{"level": "error", "message": "y" * 5000}], separators=(",", ":")
+        )
+        task_store.commit_task_completions(
+            (
+                TaskCompletion(
+                    task_id=task_id,
+                    status=VerificationTaskStatus.FAILED,
+                    run_id="r-cap",
+                    judgehost_task_id="jt-cap",
+                    result=normalize_execution_result(
+                        verdict="CE",
+                        answer_correct=True,
+                        error=oversized,
+                        feedback=oversized,
+                        compile_log=oversized,
+                        compile_diagnostics=json.loads(diagnostics_json),
+                    ),
+                    fail_reason=oversized,
+                ),
+            )
+        )
         row = next(
-            row
-            for row in task_store.list_rows(verification_id)
-            if str(row["id"]) == task_id
+            row for row in task_store.list_rows(verification_id) if str(row["id"]) == task_id
         )
         self.assertTrue(bool(row["answer_correct"]))
         limit = int(self.config_values.AUX_DISPLAY_TEXT_LIMIT_BYTES)
@@ -378,12 +382,12 @@ class TestVerificationCompletionService(VerificationServiceTestBase):
         diagnostics_rows = json.loads(str(row["diagnostics_json"] or "[]"))
         self.assertEqual(len(diagnostics_rows), 1)
         self.assertTrue(bool(diagnostics_rows[0].get("message_truncated")))
-        self.assertLessEqual(len(str(diagnostics_rows[0].get("message") or "").encode("utf-8")), limit)
+        self.assertLessEqual(
+            len(str(diagnostics_rows[0].get("message") or "").encode("utf-8")), limit
+        )
 
     def test_task_store_deduplicates_generated_content_and_skips_descendants(self) -> None:
-        verification_id = canonical_test_verification_id(
-            f"generated-dedup:{self.test_id}"
-        )
+        verification_id = canonical_test_verification_id(f"generated-dedup:{self.test_id}")
         self._insert_verification_row(verification_id)
         task_store = self.verification_task_store
         owner_id = verification_task_id(
@@ -455,28 +459,36 @@ class TestVerificationCompletionService(VerificationServiceTestBase):
                 (main_id, solution_id),
             ],
         )
-        task_store.commit_task_completions((TaskCompletion(
-            task_id=owner_id,
-            status=VerificationTaskStatus.DONE,
-            run_id="r-owner",
-            judgehost_task_id="jt-owner",
-            result=make_execution_result(
-                verdict="OK",
-                output_ref="blob://same-generated-input",
-            ),
-            input_ref="blob://same-generated-input",
-        ),))
-        task_store.commit_task_completions((TaskCompletion(
-            task_id=duplicate_id,
-            status=VerificationTaskStatus.DONE,
-            run_id="r-duplicate",
-            judgehost_task_id="jt-duplicate",
-            result=make_execution_result(
-                verdict="OK",
-                output_ref="blob://same-generated-input",
-            ),
-            input_ref="blob://same-generated-input",
-        ),))
+        task_store.commit_task_completions(
+            (
+                TaskCompletion(
+                    task_id=owner_id,
+                    status=VerificationTaskStatus.DONE,
+                    run_id="r-owner",
+                    judgehost_task_id="jt-owner",
+                    result=make_execution_result(
+                        verdict="OK",
+                        output_ref="blob://same-generated-input",
+                    ),
+                    input_ref="blob://same-generated-input",
+                ),
+            )
+        )
+        task_store.commit_task_completions(
+            (
+                TaskCompletion(
+                    task_id=duplicate_id,
+                    status=VerificationTaskStatus.DONE,
+                    run_id="r-duplicate",
+                    judgehost_task_id="jt-duplicate",
+                    result=make_execution_result(
+                        verdict="OK",
+                        output_ref="blob://same-generated-input",
+                    ),
+                    input_ref="blob://same-generated-input",
+                ),
+            )
+        )
         rows = {str(row["id"]): row for row in task_store.list_rows(verification_id)}
         self.assertEqual(str(rows[owner_id]["verdict"]), "OK")
         self.assertEqual(str(rows[duplicate_id]["verdict"]), "SK")
@@ -518,9 +530,7 @@ class TestVerificationCompletionService(VerificationServiceTestBase):
         )
 
     def test_completion_commit_persists_refs_failure_and_full_result_together(self) -> None:
-        verification_id = canonical_test_verification_id(
-            f"completion-evidence:{self.test_id}"
-        )
+        verification_id = canonical_test_verification_id(f"completion-evidence:{self.test_id}")
         self._insert_verification_row(verification_id)
         task_store = self.verification_task_store
         generate_id = verification_task_id(
@@ -592,25 +602,17 @@ class TestVerificationCompletionService(VerificationServiceTestBase):
             commit.committed_task_ids,
             frozenset({generate_id, main_id}),
         )
-        refs = self.verification_service.verification_test_artifacts(
-            verification_id
-        )["001.in"]
+        refs = self.verification_service.verification_test_artifacts(verification_id)["001.in"]
         self.assertEqual(refs["input_ref"], input_file.blob_ref)
         self.assertEqual(refs["answer_ref"], answer_file.blob_ref)
-        verification_row = self.verification_service.verification_record(
-            verification_id
-        )
+        verification_row = self.verification_service.verification_record(verification_id)
         assert verification_row is not None
         self.assertEqual(str(verification_row["status"]), "failed")
         self.assertEqual(
             str(verification_row["fail_reason"]),
             "first durable failure context",
         )
-        row = next(
-            row
-            for row in task_store.list_rows(verification_id)
-            if row["id"] == main_id
-        )
+        row = next(row for row in task_store.list_rows(verification_id) if row["id"] == main_id)
         persisted_result = row["result"]
         self.assertEqual(persisted_result.passes, main_result.passes)
         self.assertEqual(persisted_result.compile.log, main_result.compile.log)
@@ -631,10 +633,7 @@ class TestVerificationCompletionService(VerificationServiceTestBase):
             [verification_id, main_id],
         )
         self.assertEqual(
-            {
-                (int(item["pass_number"]), str(item["role"]))
-                for item in ownership
-            },
+            {(int(item["pass_number"]), str(item["role"])) for item in ownership},
             {
                 (0, "accepted-answer"),
                 *{
@@ -656,16 +655,13 @@ class TestVerificationCompletionService(VerificationServiceTestBase):
         final_output = next(
             item
             for item in ownership
-            if int(item["pass_number"]) == 2
-            and str(item["role"]) == "pass-output"
+            if int(item["pass_number"]) == 2 and str(item["role"]) == "pass-output"
         )
         self.assertEqual(str(final_output["artifact_ref"]), answer_file.blob_ref)
         self.assertEqual(str(final_output["download_filename"]), "001.out")
 
     def test_completion_commit_rolls_back_task_refs_failure_and_memory_state(self) -> None:
-        verification_id = canonical_test_verification_id(
-            f"completion-rollback:{self.test_id}"
-        )
+        verification_id = canonical_test_verification_id(f"completion-rollback:{self.test_id}")
         self._insert_verification_row(verification_id)
         task_store = self.verification_task_store
         task_id = verification_task_id(
@@ -717,9 +713,7 @@ class TestVerificationCompletionService(VerificationServiceTestBase):
             self._clear_completion_ref_abort()
 
         row = next(
-            row
-            for row in task_store.list_rows(verification_id)
-            if str(row["id"]) == task_id
+            row for row in task_store.list_rows(verification_id) if str(row["id"]) == task_id
         )
         self.assertEqual(row["status"], VerificationTaskStatus.PENDING)
         self.assertEqual(row["result"].verdict, "")
@@ -727,16 +721,12 @@ class TestVerificationCompletionService(VerificationServiceTestBase):
             self.verification_service.verification_test_artifacts(verification_id),
             {},
         )
-        verification_row = self.verification_service.verification_record(
-            verification_id
-        )
+        verification_row = self.verification_service.verification_record(verification_id)
         assert verification_row is not None
         self.assertEqual(str(verification_row["fail_reason"] or ""), "")
 
     def test_conflicting_completion_keeps_first_terminal_state_and_side_effects(self) -> None:
-        verification_id = canonical_test_verification_id(
-            f"completion-first-wins:{self.test_id}"
-        )
+        verification_id = canonical_test_verification_id(f"completion-first-wins:{self.test_id}")
         self._insert_verification_row(verification_id)
         task_store = self.verification_task_store
         task_id = verification_task_id(
@@ -799,19 +789,13 @@ class TestVerificationCompletionService(VerificationServiceTestBase):
         )
         self.assertEqual(retry.effective_completions[0].verdict, "OK")
         row = next(
-            row
-            for row in task_store.list_rows(verification_id)
-            if str(row["id"]) == task_id
+            row for row in task_store.list_rows(verification_id) if str(row["id"]) == task_id
         )
         self.assertEqual(row["status"], VerificationTaskStatus.DONE)
         self.assertEqual(row["verdict"], "OK")
-        refs = self.verification_service.verification_test_artifacts(
-            verification_id
-        )["001.in"]
+        refs = self.verification_service.verification_test_artifacts(verification_id)["001.in"]
         self.assertEqual(refs["input_ref"], "blob://first-output")
-        verification_row = self.verification_service.verification_record(
-            verification_id
-        )
+        verification_row = self.verification_service.verification_record(verification_id)
         assert verification_row is not None
         self.assertEqual(str(verification_row["status"]), "failed")
         self.assertEqual(
@@ -820,9 +804,7 @@ class TestVerificationCompletionService(VerificationServiceTestBase):
         )
 
     def test_late_diagnostic_preserves_terminal_evidence_and_failure(self) -> None:
-        verification_id = canonical_test_verification_id(
-            f"completion-diagnostic:{self.test_id}"
-        )
+        verification_id = canonical_test_verification_id(f"completion-diagnostic:{self.test_id}")
         self._insert_verification_row(verification_id)
         task_store = self.verification_task_store
         first_failure_id = verification_task_id(
@@ -892,8 +874,7 @@ class TestVerificationCompletionService(VerificationServiceTestBase):
                         error="first task failed",
                     ),
                     fail_reason=(
-                        "main-correct / solutions/accepted.cpp / 001.in: "
-                        "first task failed"
+                        "main-correct / solutions/accepted.cpp / 001.in: " "first task failed"
                     ),
                 ),
                 TaskCompletion(
@@ -916,10 +897,7 @@ class TestVerificationCompletionService(VerificationServiceTestBase):
         )
 
         self.assertEqual(outcome, "persisted")
-        rows = {
-            str(row["id"]): row
-            for row in task_store.list_rows(verification_id)
-        }
+        rows = {str(row["id"]): row for row in task_store.list_rows(verification_id)}
         persisted = rows[diagnostic_task_id]
         self.assertEqual(persisted["status"], VerificationTaskStatus.DONE)
         self.assertEqual(persisted["verdict"], "OK")
@@ -929,16 +907,11 @@ class TestVerificationCompletionService(VerificationServiceTestBase):
             original_result.compile.log,
         )
         self.assertEqual(
-            [
-                item["message"]
-                for item in persisted["result"].compile.diagnostics
-            ],
+            [item["message"] for item in persisted["result"].compile.diagnostics],
             [item["message"] for item in original_result.compile.diagnostics],
         )
         self.assertEqual(persisted["result"].warnings, original_result.warnings)
-        refs = self.verification_service.verification_test_artifacts(
-            verification_id
-        )["002.in"]
+        refs = self.verification_service.verification_test_artifacts(verification_id)["002.in"]
         self.assertEqual(refs["input_ref"], output_file.blob_ref)
         diagnostic = task_store.diagnostic_snapshot(diagnostic_task_id)
         self.assertEqual(len(diagnostic.items), 1)
@@ -953,9 +926,7 @@ class TestVerificationCompletionService(VerificationServiceTestBase):
             ),
             "duplicate",
         )
-        verification_row = self.verification_service.verification_record(
-            verification_id
-        )
+        verification_row = self.verification_service.verification_record(verification_id)
         assert verification_row is not None
         self.assertEqual(
             str(verification_row["fail_reason"]),

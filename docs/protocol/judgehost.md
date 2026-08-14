@@ -70,7 +70,7 @@ result bound to a verification task receives `1` only after the canonical
 `ExecutionResult` and verification completion transaction are durable.
 Persistence failure returns non-2xx so the daemon retries. The in-memory case is
 then marked `completion_acknowledged`. A custom-run case has no
-`verification_task_id`; its ACK follows scheduler decision capture and does not
+`verification_task_id`; its ACK follows batch-runtime decision capture and does not
 invoke the verification completion sink.
 A retry whose durable task is already terminal, or whose case is cancelled or
 retired, also receives `1`. Invalid hostnames and active
@@ -92,7 +92,7 @@ lease state is an overlay and the durable task decision remains authoritative.
 
 The internal verification-to-Judgehost boundary names the task's program
 identity `verification_program_id`; verification code uses the shorter
-`program_id`. The scheduler keys a program batch by
+`program_id`. The process-local batch runtime keys a program batch by
 `(verification_id, verification_program_id)`. Cases for additional tests join
 that batch only while its source, compile specification, and execution identity
 remain unchanged, so one verification program is compiled once and run against
@@ -116,7 +116,7 @@ wire shape merely to expose internal scheduling.
 A failed compile is terminal through `update-judging`; the DOMjudge daemon does
 not subsequently send `add-judging-run` for that task. A first final run report
 or an `internal-error` received while a case is active may likewise create its
-canonical decision. The scheduler claims these competing candidates under one
+canonical decision. The batch runtime claims these competing candidates under one
 lock. Once a final report owns a case's reporting phase, a later program failure
 cannot replace it; the SQLite completion transaction then supplies the durable
 first-wins boundary.
@@ -198,17 +198,17 @@ Every state-writing `/api/v4` callback first enters a service-level admission
 gate. Administrative cleanup closes that gate and proceeds only when the active
 callback count is zero. If cleanup closes it first, later callbacks receive the
 protocol-compatible idempotent response without accessing SQLite, runtime blobs,
-telemetry, or the scheduler: registration returns `[]`, version/update/debug
+telemetry, or the batch runtime: registration returns `[]`, version/update/debug
 returns `{}`, `add-judging-run` returns `1`, and `internal-error` returns `0`.
 If a callback enters first, cleanup reports busy with the
 `judgehost_callbacks` reason.
 
-Within the scheduler, a callback acquires an immutable case receipt before it
-releases the scheduler lock. Quiet cleanup removes a retired case only after all
+Within the batch runtime, a callback acquires an immutable case receipt before it
+releases the runtime lock. Quiet cleanup removes a retired case only after all
 work is terminal, all callback receipts are released, pending diagnostics are
 empty, and the verification has been quiet for 60 seconds. Thus callback-first
 waits for completion, while cleanup-first makes a later callback an ACK/no-op;
-no callback holds the scheduler lock while writing SQLite.
+no callback holds the runtime lock while writing SQLite.
 
 Startup has no receipt window to recover. It atomically terminalizes unfinished
 verification and task rows before deleting runtime blobs and Judgehost state;

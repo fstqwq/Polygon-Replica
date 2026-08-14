@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from app.service.judgehost.file_stream import DomjudgeDownloadFile, stream_domjudge_file_array
+from app.service.judgehost.domjudge.file_stream import DomjudgeDownloadFile, stream_domjudge_file_array
 from app.service.platform.runtime_blob_store import RuntimeBlobStore
 from app.service.platform.runtime_cache_index import RuntimeCacheIndex
 from app.service.verification.signature import verification_manifest

@@ -2,8 +2,8 @@ import io
 import tarfile
 import unittest
 
-from app.service.judgehost.case_result import decode_case_test_row
-from app.service.judgehost.pass_bundle import (
+from app.service.judgehost.callback.case_result import decode_case_test_row
+from app.service.judgehost.callback.pass_bundle import (
     InvalidPassBundle,
     parse_pass_bundle,
     split_pass_feedback,

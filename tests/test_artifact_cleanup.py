@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 from app.db import DB, now_iso
 from app.config import build_config_values
-from app.service.judgehost.task_registry import JudgehostTaskRegistry
+from app.service.judgehost.work.task_registry import JudgehostTaskRegistry
 from app.service.platform.fs.layout import StorageLayout
 from app.service.platform.maintenance.admission import MaintenanceAdmissionGate
 from app.service.platform.maintenance.artifact import ArtifactCleanupService

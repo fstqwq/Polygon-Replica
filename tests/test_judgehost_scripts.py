@@ -7,8 +7,8 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from app.config import build_config_values
-from app.service.judgehost.pass_bundle import parse_pass_bundle
-from app.service.judgehost.toolkit import DomjudgeToolkit
+from app.service.judgehost.callback.pass_bundle import parse_pass_bundle
+from app.service.judgehost.domjudge.toolkit import DomjudgeToolkit
 from app.service.platform.hashing import compile_command_digest
 
 

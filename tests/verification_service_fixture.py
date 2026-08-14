@@ -2,10 +2,8 @@ import sqlite3
 import uuid
 from pathlib import Path
 
-from app.service.judgehost.case_result import (
-    CaseTerminalReport,
-    build_case_terminal_report,
-)
+from app.service.judgehost.callback.case_result import build_case_terminal_report
+from app.service.judgehost.ports.completion import CaseTerminalReport
 from app.service.verification.completion import (
     VerificationTaskCompletionService,
 )
@@ -143,9 +141,7 @@ def multi_pass_result(final_output_ref: str) -> ExecutionResult:
         verdict="OK",
         answer_correct=True,
         compile_log="compiler telemetry",
-        compile_diagnostics=(
-            {"level": "warning", "message": "diagnostic"},
-        ),
+        compile_diagnostics=({"level": "warning", "message": "diagnostic"},),
         warnings=("runner telemetry",),
     )
 
@@ -184,12 +180,10 @@ class VerificationServiceTestBase(DBTestBase):
             self.storage_layout,
             self.config_values,
         )
-        self.verification_task_completion_service = (
-            VerificationTaskCompletionService(
-                self.verification_task_store,
-                self.runtime_blob_store,
-                lambda _verification_id, _commit: True,
-            )
+        self.verification_task_completion_service = VerificationTaskCompletionService(
+            self.verification_task_store,
+            self.runtime_blob_store,
+            lambda _verification_id, _commit: True,
         )
 
     @staticmethod
@@ -278,9 +272,7 @@ class VerificationServiceTestBase(DBTestBase):
             source_path=source_path,
             compile_spec=VerificationCompileSpec(
                 source_name=Path(source_path).name,
-                source_file=self.runtime_blob_store.put_bytes(
-                    b"int main(){return 0;}\n"
-                ),
+                source_file=self.runtime_blob_store.put_bytes(b"int main(){return 0;}\n"),
             ),
             expected_behavior=expected_behavior,
         )
@@ -299,9 +291,7 @@ class VerificationServiceTestBase(DBTestBase):
                     or previous.source_path != task.source_path
                     or previous.expected_behavior != task.expected_behavior
                 ):
-                    raise AssertionError(
-                        f"conflicting fixture program {task.program_id}"
-                    )
+                    raise AssertionError(f"conflicting fixture program {task.program_id}")
                 continue
             by_id[task.program_id] = task
             programs.append(
@@ -380,13 +370,9 @@ class VerificationServiceTestBase(DBTestBase):
         )
         self.assertEqual(activation.outcome, "activated")
         if accepted_completion is not None:
-            self.verification_task_store.commit_task_completions(
-                (accepted_completion,)
-            )
+            self.verification_task_store.commit_task_completions((accepted_completion,))
         for task_index, item in enumerate(tasks):
-            initial_status = str(
-                item.get("status") or VerificationTaskStatus.PENDING
-            )
+            initial_status = str(item.get("status") or VerificationTaskStatus.PENDING)
             if initial_status not in {
                 VerificationTaskStatus.QUEUED,
                 VerificationTaskStatus.LEASED,
@@ -399,9 +385,7 @@ class VerificationServiceTestBase(DBTestBase):
                 expected_program_id=str(item["program_id"]),
                 expected_test_name=str(item["test_name"]),
                 run_id=str(item.get("run_id") or f"r-test-{task_index}"),
-                judgehost_task_id=str(
-                    item.get("judgehost_task_id") or f"jt-{task_id}"
-                ),
+                judgehost_task_id=str(item.get("judgehost_task_id") or f"jt-{task_id}"),
                 expose=lambda: None,
             )
             self.assertTrue(bound)
@@ -420,9 +404,7 @@ class VerificationServiceTestBase(DBTestBase):
         )
 
     def _clear_activation_abort(self) -> None:
-        self.db.execute(
-            f"DROP TRIGGER IF EXISTS {_ACTIVATION_TASK_ABORT_TRIGGER}"
-        )
+        self.db.execute(f"DROP TRIGGER IF EXISTS {_ACTIVATION_TASK_ABORT_TRIGGER}")
 
     def _install_completion_ref_abort(self) -> None:
         self.db.execute(
@@ -436,9 +418,7 @@ class VerificationServiceTestBase(DBTestBase):
         )
 
     def _clear_completion_ref_abort(self) -> None:
-        self.db.execute(
-            f"DROP TRIGGER IF EXISTS {_COMPLETION_REF_ABORT_TRIGGER}"
-        )
+        self.db.execute(f"DROP TRIGGER IF EXISTS {_COMPLETION_REF_ABORT_TRIGGER}")
 
     def _install_verification_cancel_abort(self, verification_id: str) -> None:
         self.db.execute(
@@ -453,11 +433,7 @@ class VerificationServiceTestBase(DBTestBase):
         )
 
     def _clear_verification_cancel_abort(self) -> None:
-        self.db.execute(
-            f"DROP TRIGGER IF EXISTS {_VERIFICATION_CANCEL_ABORT_TRIGGER}"
-        )
+        self.db.execute(f"DROP TRIGGER IF EXISTS {_VERIFICATION_CANCEL_ABORT_TRIGGER}")
 
     def _verification_rows(self) -> list[sqlite3.Row]:
-        return self.db.fetch_all(
-            "SELECT * FROM verifications ORDER BY id"
-        )
+        return self.db.fetch_all("SELECT * FROM verifications ORDER BY id")

@@ -1,10 +1,12 @@
+import re
 import secrets
 from pathlib import Path
 
 from app.service.execution.identity import canonical_run_id
-from app.service.judgehost.shared import _HOSTNAME_RE, _SCHEDULING_TOKEN_RE
-
 from app.service.judgehost.state import JudgehostState
+
+_SCHEDULING_TOKEN_RE = re.compile(r"^[A-Za-z0-9._-]{1,80}$")
+_HOSTNAME_RE = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
 
 
 class InvalidJudgehostHostname(RuntimeError):

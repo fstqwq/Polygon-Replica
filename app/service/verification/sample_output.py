@@ -138,7 +138,7 @@ def _custom_input_expected_answer(
     verdict, message = _result_verdict(case_result)
     if verdict != "OK":
         raise RuntimeError(message or "accepted solution failed on custom sample input")
-    output_ref, _case_id = judgehost.domjudge_case_output_for_task(
+    output_ref, _case_id = judgehost.case_output_for_task(
         task_id,
         plan.test_name,
     )

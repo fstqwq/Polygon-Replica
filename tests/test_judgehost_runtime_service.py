@@ -5,13 +5,13 @@ from pathlib import Path
 from unittest.mock import patch
 
 from app.service.judgehost.api import Judgehost
-from app.service.judgehost.batch_scheduler_models import (
+from app.service.judgehost.batch.model import (
     CompileSubmission,
     ExecutionBatchSpec,
 )
-from app.service.judgehost.case_result import build_case_result
-from app.service.judgehost.identity import domjudge_submit_id
-from app.service.judgehost.toolchain_versions import HostToolchainTelemetry
+from app.service.judgehost.callback.case_result import build_case_result
+from app.service.judgehost.domjudge.identity import submit_id
+from app.service.judgehost.telemetry.toolchain_versions import HostToolchainTelemetry
 from app.service.platform.runtime_blob_store import PayloadFile
 from app.service.verification.completion import VerificationTaskCompletionService
 from app.service.verification.runtime_registry import VerificationRuntimeRegistry
@@ -117,7 +117,7 @@ class TestJudgehostRuntimeService(DBTestBase):
         content = b"int main() { return 0; }\n"
         return CompileSubmission(
             compile_key=compile_key,
-            submit_id=domjudge_submit_id(compile_key),
+            submit_id=submit_id(compile_key),
             source_name="std.cpp",
             source_file=PayloadFile(
                 path=Path("/tmp/test-judgehost-runtime-service.cpp"),
@@ -178,17 +178,11 @@ class TestJudgehostRuntimeService(DBTestBase):
         host = "judgehost-peer-display"
         self.service.domjudge_register_host(host)
         self.service.record_host_peer_addr(host, "203.0.113.10")
-        before = next(
-            item for item in self.service.status()["hosts"]
-            if item["hostname"] == host
-        )
+        before = next(item for item in self.service.status()["hosts"] if item["hostname"] == host)
         self.assertEqual(before["peer_addr"], "203.0.113.10")
 
         self.service.set_host_enabled(host, False)
-        after = next(
-            item for item in self.service.status()["hosts"]
-            if item["hostname"] == host
-        )
+        after = next(item for item in self.service.status()["hosts"] if item["hostname"] == host)
         self.assertEqual(after["peer_addr"], "203.0.113.10")
 
     def test_host_status_exposes_toolchains_and_reset_clears_them(self) -> None:
@@ -212,19 +206,13 @@ class TestJudgehostRuntimeService(DBTestBase):
                 ),
             }
 
-        row = next(
-            item for item in self.service.status()["hosts"]
-            if item["hostname"] == host
-        )
+        row = next(item for item in self.service.status()["hosts"] if item["hostname"] == host)
         self.assertEqual(
             [item["language_id"] for item in row["toolchains"]],
             ["cpp", "py"],
         )
         self.service.set_host_enabled(host, False)
-        disabled = next(
-            item for item in self.service.status()["hosts"]
-            if item["hostname"] == host
-        )
+        disabled = next(item for item in self.service.status()["hosts"] if item["hostname"] == host)
         self.assertEqual(disabled["toolchains"], row["toolchains"])
 
         self.service.reset_runtime_state()
@@ -240,18 +228,14 @@ class TestJudgehostRuntimeService(DBTestBase):
         )
         self.service.domjudge_register_host(host)
         with self.service.state.state_lock:
-            self.service.state.hosts_state[host]["last_seen_at"] = (
-                "2000-01-01T00:00:00+00:00"
-            )
+            self.service.state.hosts_state[host]["last_seen_at"] = "2000-01-01T00:00:00+00:00"
 
         with patch.object(
-            self.service.state.batch_scheduler,
+            self.service.state.batch_runtime,
             "cases_for_host",
             return_value=[],
         ) as cases_for_host:
-            released = self.service.reconcile_expired_verification_leases(
-                "ver-policy-window"
-            )
+            released = self.service.reconcile_expired_verification_leases("ver-policy-window")
 
         self.assertEqual(released, [])
         cases_for_host.assert_called_once_with(host)
@@ -270,11 +254,7 @@ class TestJudgehostRuntimeService(DBTestBase):
 
         result = self.service.wait_for_task_result(task_id, timeout_sec=1.0)
         self.assertEqual(result["artifact_path"], "")
-        run_root = (
-            self.storage_layout.resolve_verification_root(verification_id)
-            / "runs"
-            / run_id
-        )
+        run_root = self.storage_layout.resolve_verification_root(verification_id) / "runs" / run_id
         self.assertFalse(run_root.exists())
 
     def test_prepare_java_payload_uses_detected_entry_point(self) -> None:
@@ -300,7 +280,7 @@ class TestJudgehostRuntimeService(DBTestBase):
         )
         self.assertEqual(payload["source_name"], "TranslateMain.java")
         self.assertEqual(payload["entry_point"], "TranslateMain")
-        precomputed = dict(payload["domjudge_precomputed"])
+        precomputed = dict(payload["precomputed"])
         run_config = dict(precomputed["run_config"])
         self.assertEqual(run_config["entry_point"], "TranslateMain")
 
@@ -350,7 +330,7 @@ class TestJudgehostRuntimeService(DBTestBase):
             status=self.service.STATUS_LEASED,
         )
         compile_key = "8" * 64
-        batch_id = self.service.state.batch_scheduler.create_batch_with_cases(
+        batch_id = self.service.state.batch_runtime.create_batch_with_cases(
             task_id=task_id,
             run_id=run_id,
             verification_program_id=_PROGRAM_ID,
@@ -391,7 +371,7 @@ class TestJudgehostRuntimeService(DBTestBase):
                 }
             ],
         )
-        scheduler = self.service.state.batch_scheduler
+        scheduler = self.service.state.batch_runtime
         self.assertTrue(scheduler.claim_materialization(batch_id, now_text=_NOW))
         self.assertTrue(
             scheduler.finish_materialization(

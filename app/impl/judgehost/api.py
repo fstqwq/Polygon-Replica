@@ -16,10 +16,10 @@ from starlette.formparsers import MultiPartParser
 
 from app.impl.runtime.dependency import runtime
 from app.main_util import read_upload_bytes_limited
-from app.service.judgehost.batch_scheduler_models import CaseClaimBusy
+from app.service.judgehost.batch.model import CaseClaimBusy
 from app.service.judgehost.core import InvalidJudgehostHostname, normalize_judgehost_hostname
-from app.service.judgehost.limits import judgehost_form_part_limit_bytes
-from app.service.judgehost.file_stream import (
+from app.service.judgehost.domjudge.limits import judgehost_form_part_limit_bytes
+from app.service.judgehost.domjudge.file_stream import (
     DomjudgeDownloadFile,
     stream_domjudge_file_array,
     validate_domjudge_file_array,
@@ -162,7 +162,9 @@ async def _request_payload(request: Request) -> JudgehostPayload:
         except Exception:
             payload = {}
         return dict(payload)
-    if ("application/x-www-form-urlencoded" in content_type) or ("multipart/form-data" in content_type):
+    if ("application/x-www-form-urlencoded" in content_type) or (
+        "multipart/form-data" in content_type
+    ):
         if "multipart/form-data" in content_type:
             # Judgehost payloads may include >1MB parts (program output/logs).
             part_limit_bytes = _judgehost_form_part_limit_bytes()
@@ -173,7 +175,9 @@ async def _request_payload(request: Request) -> JudgehostPayload:
         try:
             form = await request.form(max_files=4096, max_fields=4096)
         except Exception as exc:
-            _logger.warning("judgehost multipart parse failed content_type=%s: %s", content_type, exc)
+            _logger.warning(
+                "judgehost multipart parse failed content_type=%s: %s", content_type, exc
+            )
             return {}
         out: JudgehostPayload = {}
         items = form.multi_items()
@@ -226,8 +230,6 @@ def _require_judgehost_auth(request: Request):
     if basic_user and basic_pass and service.check_api_basic(basic_user, basic_pass):
         return service
     raise HTTPException(status_code=401, detail="invalid judgehost credentials")
-
-
 
 
 def _int_or_none(raw: object) -> int | None:
@@ -431,7 +433,9 @@ async def domjudge_get_files_by_type(request: Request, file_type: str, item_id: 
 
 async def domjudge_get_version_commands(request: Request, judgetask_id: int):
     service = _require_judgehost_auth(request)
-    return JSONResponse(await _run_service_call(service.domjudge_get_version_commands, judgetask_id))
+    return JSONResponse(
+        await _run_service_call(service.domjudge_get_version_commands, judgetask_id)
+    )
 
 
 async def domjudge_check_versions(request: Request, judgetask_id: int):
@@ -472,7 +476,9 @@ async def domjudge_add_judging_run(request: Request, hostname: str, judgetask_id
         hostname = _validated_hostname(hostname)
         payload = await _request_payload(request)
         try:
-            result = await _run_service_call(service.domjudge_add_judging_run, hostname, judgetask_id, payload)
+            result = await _run_service_call(
+                service.domjudge_add_judging_run, hostname, judgetask_id, payload
+            )
         except CaseClaimBusy as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
         _record_host_peer_ip(service, request, hostname)

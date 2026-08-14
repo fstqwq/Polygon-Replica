@@ -166,7 +166,7 @@ class TestPreview(E2ETestBase):
             side_effect=_fake_wait_for_task_case_result,
         ), patch.object(
             runtime.judgehost_task_service,
-            "domjudge_case_output_for_task",
+            "case_output_for_task",
             side_effect=_fake_case_output,
         ), patch.object(
             runtime.judgehost_task_service,
@@ -303,7 +303,7 @@ class TestPreview(E2ETestBase):
             side_effect=_fake_wait_for_task_case_result,
         ), patch.object(
             runtime.judgehost_task_service,
-            "domjudge_case_output_for_task",
+            "case_output_for_task",
             side_effect=_fake_case_output,
         ), patch.object(
             runtime.judgehost_task_service,
