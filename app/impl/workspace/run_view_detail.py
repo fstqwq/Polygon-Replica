@@ -2035,28 +2035,8 @@ def build_run_detail_context(
 
     return {
         "verification_id": verification_id,
-        "owns_verification": verification_access["owns_verification"],
         "can_rejudge": verification_access["can_rejudge"],
-        "rejudge_block_reason": verification_access["rejudge_block_reason"],
         "can_cancel": verification_access["can_cancel"],
-        "cancel_disabled_reason": (
-            verification_access["cancel_block_reason"]
-            if verification_visible
-            and not verification_access["can_cancel"]
-            and bool(status_summary["has_running"])
-            else ""
-        ),
-        "verification_scope_notice": (
-            "Published verification \u00b7 the original record is read-only"
-            if verification_visible
-            and verification_record is not None
-            and verification_record["workspace_id"] is None
-            else (
-                "Verification from another workspace \u00b7 the original record is read-only"
-                if verification_visible and not verification_access["owns_verification"]
-                else ""
-            )
-        ),
         "detail_columns": columns,
         "detail_rows": detail_rows,
         "selected_program_ids": selected_program_ids,

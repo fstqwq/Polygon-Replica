@@ -1980,15 +1980,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             list_page.body.decode("utf-8", errors="replace")
         )
         self.assertIn(
-            "Published verification \u00b7 original is read-only",
-            list_html,
-        )
-        self.assertIn(
             f'name="verification_id" value="{published_id}"',
-            list_html,
-        )
-        self.assertIn(
-            "Cancel disabled (You are not the owner of this verification)",
             list_html,
         )
 
@@ -2001,10 +1993,6 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             "alice",
         )
         self.assertEqual(detail_page.status_code, 200)
-        self.assertIn(
-            "Published verification \u00b7 the original record is read-only",
-            unescape(detail_page.body.decode("utf-8", errors="replace")),
-        )
 
         with patch(
             "app.impl.run_export.run.start_verification_job",

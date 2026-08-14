@@ -30,7 +30,7 @@
     <td class="verification-list-created-cell">
       <a href="{{ problem_href('run_details_page', query={'verification_id': r.id}) }}"><span class="verification-list-created-date">{{ created_parts[0] }}</span>{% if created_parts|length > 1 %} <span class="verification-list-created-time">{{ created_parts[1] }}</span>{% endif %}</a>
     </td>
-    <td class="verification-list-source-cell">{{ r.source_display }}{% if r.published %}<br /><span class="muted">Published verification &#183; original is read-only</span>{% endif %}</td>
+    <td class="verification-list-source-cell">{{ r.source_display }}</td>
     <td class="verification-list-kind-cell">{{ r.kind }}</td>
     <td class="verification-list-status-cell">
       {% if r.status_tone == "warn" %}
@@ -59,8 +59,6 @@
         <input type="hidden" name="verification_id" value="{{ r.id }}" />
         <a href="#" class="linkish danger-link" data-submit-form="1">Cancel</a>
       </form>
-      {% elif r.cancel_disabled_reason %}
-      <span class="muted" title="{{ r.cancel_disabled_reason }}">Cancel disabled ({{ r.cancel_disabled_reason }})</span>
       {% endif %}
       {% if r.can_rejudge and not r.has_running %}
       <form
@@ -72,8 +70,6 @@
         <input type="hidden" name="verification_id" value="{{ r.id }}" />
         <a href="#" class="linkish danger-link" data-submit-form="1">Rejudge Without Cache</a>
       </form>
-      {% elif not r.has_running and r.rejudge_block_reason %}
-      <span class="muted" title="{{ r.rejudge_block_reason }}">Rejudge disabled</span>
       {% endif %}
     </td>
   </tr>

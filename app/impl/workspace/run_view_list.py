@@ -173,7 +173,6 @@ def _verification_row_to_list_item(
         status_display = "ok (has warning)"
     elif status == "ok" and sanity_status == "failed":
         status_display = "ok (sanity failed)"
-    published = row.get("workspace_id") is None
     if not access["can_view"]:
         return None
     return {
@@ -193,16 +192,8 @@ def _verification_row_to_list_item(
         "has_running": status == "running",
         "is_failed": status == "failed",
         "is_cancelled": status == "cancelled",
-        "published": published,
-        "owns_verification": access["owns_verification"],
         "can_rejudge": access["can_rejudge"],
-        "rejudge_block_reason": access["rejudge_block_reason"],
         "can_cancel": access["can_cancel"],
-        "cancel_disabled_reason": (
-            access["cancel_block_reason"]
-            if not access["can_cancel"] and status == "running"
-            else ""
-        ),
     }
 
 
