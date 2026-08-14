@@ -8,17 +8,7 @@ from typing import BinaryIO
 from fastapi import UploadFile
 
 from app.main_constant import CPP_SOURCE_EXTENSIONS, SOLUTION_SOURCE_EXTENSIONS
-from app.service.platform.workspace_path import (
-    contains_symlink_component,
-    normalize_workspace_rel_path,
-    safe_workspace_path,
-)
-
-__all__ = [
-    "contains_symlink_component",
-    "normalize_workspace_rel_path",
-    "safe_workspace_path",
-]
+from app.service.platform.workspace_path import normalize_workspace_rel_path
 
 
 GENERATOR_SOURCE_EXTENSIONS = SOLUTION_SOURCE_EXTENSIONS

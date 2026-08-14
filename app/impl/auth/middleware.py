@@ -2,17 +2,12 @@ import app.main_constant as _K
 
 from fastapi import Request
 
-from app.impl.auth.csrf import issue_password_form_csrf_token
 from app.impl.auth.session import session_user
 from app.impl.auth.shared import (
     _apply_security_headers,
     enforce_same_origin_state_change,
     login_redirect,
 )
-
-
-_ = (issue_password_form_csrf_token,)
-
 
 async def auth_middleware(request: Request, call_next):
     path = request.url.path

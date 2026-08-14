@@ -12,7 +12,7 @@ from urllib.parse import parse_qs, urlparse
 from fastapi import HTTPException
 
 from app.service.contest.package import ContestPackageService
-from app.service.export.projection import PackageProjectionService
+from app.service.export.adapters import PackageAdapterRegistry
 from tests.contest_support import ContestActionBase
 from tests.db_helpers import (
     db_connection,
@@ -506,7 +506,7 @@ class TestContestBuilds(ContestActionBase):
         self.assertEqual(str(job["status"]), "failed")
         self.assertTrue(str(job["finished_at"] or ""))
 
-    def test_bundle_is_not_published_when_any_child_projection_fails(self) -> None:
+    def test_bundle_is_not_published_when_any_child_package_fails(self) -> None:
         contest_slug, contest_id, problem_id, _problem_slug = self._contest_with_problem()
         first_id = self._seed_materialization(
             problem_id=problem_id,
@@ -528,8 +528,11 @@ class TestContestBuilds(ContestActionBase):
         )
         frozen = self._freeze(contest_id, contest_slug)
 
-        class Projector:
-            def project(
+        class Adapter:
+            format = "domjudge"
+            accepts_short_name = True
+
+            def build(
                 self,
                 _reader: object,
                 *,
@@ -538,13 +541,20 @@ class TestContestBuilds(ContestActionBase):
                 **_kwargs: object,
             ) -> str:
                 if short_name == "B":
-                    raise RuntimeError("projection failed")
+                    raise RuntimeError("package build failed")
                 (target / "problem.yaml").write_text("name: A\n", encoding="utf-8")
                 return ""
 
+        class Registry:
+            @staticmethod
+            def require(package_format: str) -> Adapter:
+                if package_format != "domjudge":
+                    raise ValueError("unsupported package format")
+                return Adapter()
+
         service = ContestPackageService(
             runtime.contest_service,
-            cast(PackageProjectionService, Projector()),
+            cast(PackageAdapterRegistry, Registry()),
         )
         readers = {
             first_id: SimpleNamespace(root=Path("."), manifest={}),
@@ -580,23 +590,32 @@ class TestContestBuilds(ContestActionBase):
         frozen = self._freeze(contest_id, contest_slug)
         calls: list[tuple[str, str | None]] = []
 
-        class Projector:
-            def project(
+        class Adapter:
+            format = "domjudge"
+            accepts_short_name = True
+
+            def build(
                 self,
                 _reader: object,
                 *,
-                package_format: str,
                 short_name: str | None,
                 target: Path,
                 **_kwargs: object,
             ) -> str:
-                calls.append((package_format, short_name))
+                calls.append((self.format, short_name))
                 (target / "problem.yaml").write_text("name: Example\n", encoding="utf-8")
-                return "projection warning"
+                return "package warning"
+
+        class Registry:
+            @staticmethod
+            def require(package_format: str) -> Adapter:
+                if package_format != "domjudge":
+                    raise ValueError("unsupported package format")
+                return Adapter()
 
         service = ContestPackageService(
             runtime.contest_service,
-            cast(PackageProjectionService, Projector()),
+            cast(PackageAdapterRegistry, Registry()),
         )
         result = service.build_bundle(
             contest_id=contest_id,
@@ -611,7 +630,7 @@ class TestContestBuilds(ContestActionBase):
         self.assertEqual(calls, [("domjudge", "A")])
         self.assertEqual(
             result["warnings"],
-            [{"problem": problem_slug, "message": "projection warning"}],
+            [{"problem": problem_slug, "message": "package warning"}],
         )
         self.assertEqual(result["artifact_id"], "")
         self.assertEqual(result["_artifact_type"], "domjudge-bundle")

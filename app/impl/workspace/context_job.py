@@ -190,10 +190,6 @@ def start_verification_job(
         raise
     return True
 
-# Referenced via dynamic re-export in workspace.api/public.
-_DYNAMIC_EXPORT_KEEP = (start_verification_job,)
-_ = len(_DYNAMIC_EXPORT_KEEP)
-
 def _export_key(problem_id: int, source_commit: str) -> str:
     return f"{int(problem_id)}:{source_commit}"
 
@@ -211,15 +207,15 @@ def _run_export_create_worker(
 ) -> None:
     if not export_job_id:
         raise ValueError("export_job_id is required")
-    package_format = requested_format
+    package_format = application_runtime.export_service.package_adapters.require_format(
+        requested_format
+    )
     effective_source_commit = revision.source_commit
     try:
         application_runtime.export_service.mark_export_job_running(
             export_job_id,
             source_commit=effective_source_commit,
         )
-        if package_format not in {'domjudge', 'icpc-2025-09'}:
-            raise ValueError('unsupported package format')
         if not effective_source_commit:
             raise ValueError('no committed revision; commit changes first')
         verified_revision = application_runtime.verified_revision_workflow.ensure(
@@ -227,7 +223,7 @@ def _run_export_create_worker(
             actor_user_id=actor_user_id,
             actor_username=user,
         )
-        application_runtime.export_service.mark_export_job_projecting(
+        application_runtime.export_service.mark_export_job_packaging(
             export_job_id,
             verified_revision_id=verified_revision["id"],
         )

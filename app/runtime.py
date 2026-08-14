@@ -350,7 +350,7 @@ class ApplicationRuntime:  # pylint: disable=too-many-instance-attributes
         )
         self.contest_package_service = ContestPackageService(
             self.contest_service,
-            self.export_service.projection_service,
+            self.export_service.package_adapters,
         )
         self.contest_snapshot_service = ContestSourceSnapshotService(
             self.storage_layout,

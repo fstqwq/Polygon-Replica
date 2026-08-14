@@ -174,7 +174,6 @@ def workspace_revision_info(
     workspace: Path,
     branch: str = "main",
     *,
-    fetch_remote: bool = False,
     workspace_head: str | None = None,
     workspace_dirty: bool | None = None,
 ) -> WorkspaceRevisionInfo:
@@ -182,8 +181,6 @@ def workspace_revision_info(
     if any((ch.isspace() for ch in safe_branch)):
         safe_branch = "main"
     safe_head = str(workspace_head or "").strip()
-    _ = fetch_remote
-    _ = workspace_dirty
     upstream_ref = f"origin/{safe_branch}"
     local_version = git_commit_count(workspace, "HEAD")
     local_commit = safe_head or git_commit_sha(workspace, "HEAD")

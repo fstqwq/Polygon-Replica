@@ -117,7 +117,7 @@ immediately instead of waiting.
 The job proceeds through these observable phases:
 
 ```text
-queued -> verifying -> projecting -> complete
+queued -> verifying -> packaging -> complete
 ```
 
 For the frozen commit, the worker:

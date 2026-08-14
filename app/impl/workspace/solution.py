@@ -3,7 +3,7 @@ import app.main_constant as _K
 import os
 from pathlib import Path
 
-from app.main_util import normalize_workspace_rel_path
+from app.service.platform.workspace_path import normalize_workspace_rel_path
 from app.service.problem.solution_metadata import (
     EXPECTED_BEHAVIOR_VALUES,
     expected_behavior_label,

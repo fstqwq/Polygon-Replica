@@ -19,14 +19,12 @@
   <p class="muted">Building a package will first run a complete verification of this published revision.</p>
   {% endif %}
   <div class="form-row">
+    {% for adapter in package_adapters %}
     <form method="post" action="{{ problem_href('export_create') }}">
-      <input type="hidden" name="format" value="domjudge" />
-      <button class="btn primary-action" type="submit" {% if not ctx.access.can_create_packages %}disabled title="{{ ctx.access.package_create_block_reason }}"{% endif %}>Build DOMjudge package</button>
+      <input type="hidden" name="format" value="{{ adapter.format }}" />
+      <button class="btn primary-action" type="submit" {% if not ctx.access.can_create_packages %}disabled title="{{ ctx.access.package_create_block_reason }}"{% endif %}>Build {{ adapter.display_name }} package</button>
     </form>
-    <form method="post" action="{{ problem_href('export_create') }}">
-      <input type="hidden" name="format" value="icpc-2025-09" />
-      <button class="btn primary-action" type="submit" {% if not ctx.access.can_create_packages %}disabled title="{{ ctx.access.package_create_block_reason }}"{% endif %}>Build ICPC 2025-09 package</button>
-    </form>
+    {% endfor %}
   </div>
   {% else %}
   <p class="muted">No published revision is available.</p>

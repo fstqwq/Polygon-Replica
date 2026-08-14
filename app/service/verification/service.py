@@ -607,9 +607,7 @@ class VerificationService:
         role: str,
         file_name: str,
         payload: bytes,
-        extra_tags: dict[str, object] | None = None,
     ) -> str:
-        _ = verification_id, test_name, role, file_name, extra_tags
         return self.runtime_blob_store.put_bytes(payload).blob_ref or ""
 
     def verification_test_artifacts(self, verification_id: str) -> dict[str, dict[str, str]]:

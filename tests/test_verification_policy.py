@@ -383,7 +383,7 @@ class TestVerificationPolicy(VerificationPolicyTestBase):
         self.assertEqual(solution[0].program_id, "solution-0")
 
     def test_natural_task_id_accepts_longest_legal_test_name(self) -> None:
-        from app.service.run.runtime import RUN_TEST_NAME_RE
+        from app.main_constant import RUN_TEST_NAME_RE
 
         test_name = "a" + ("b" * 127) + ".in"
         self.assertEqual(len(test_name), 131)

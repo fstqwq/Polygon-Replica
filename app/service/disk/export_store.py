@@ -5,9 +5,6 @@ from typing import TypedDict
 from app.db import DB, now_iso
 
 
-SUPPORTED_EXPORT_FORMATS = ("domjudge", "icpc-2025-09")
-
-
 class ExportJobRow(TypedDict):
     id: str
     problem_id: int
@@ -66,8 +63,12 @@ def _job_row(row) -> ExportJobRow:
 
 
 class ExportStore:
-    def __init__(self, db: DB):
+    def __init__(self, db: DB, *, package_formats: tuple[str, ...]):
+        if not package_formats:
+            raise ValueError("at least one package format is required")
         self.db = db
+        self._package_formats = package_formats
+        self._format_placeholders = ",".join("?" for _ in package_formats)
 
     def latest_succeeded_export_job(
         self,
@@ -75,7 +76,7 @@ class ExportStore:
         source_commit: str,
         export_type: str,
     ) -> ExportJobRow | None:
-        if export_type not in SUPPORTED_EXPORT_FORMATS:
+        if export_type not in self._package_formats:
             return None
         row = self.db.fetch_one(
             """SELECT j.*,e.filename,e.sha256,e.size_bytes
@@ -95,13 +96,16 @@ class ExportStore:
     ) -> list[ExportJobRow]:
         params: list[object] = [
             int(problem_id),
-            *SUPPORTED_EXPORT_FORMATS,
+            *self._package_formats,
             max(1, int(limit)),
         ]
         rows = self.db.fetch_all(
             """SELECT j.*,e.filename,e.sha256,e.size_bytes
                FROM export_jobs j LEFT JOIN exports e ON e.id=j.export_id
-               WHERE j.problem_id=? AND j.export_type IN (?,?)
+               WHERE j.problem_id=? AND j.export_type IN ("""
+            + self._format_placeholders
+            + ")"
+            + """
                ORDER BY j.created_at DESC,j.id DESC LIMIT ?""",
             params,
         )
@@ -115,12 +119,14 @@ class ExportStore:
         params: list[object] = [
             job_id,
             int(problem_id),
-            *SUPPORTED_EXPORT_FORMATS,
+            *self._package_formats,
         ]
         row = self.db.fetch_one(
             """SELECT j.*,e.filename,e.sha256,e.size_bytes
                FROM export_jobs j LEFT JOIN exports e ON e.id=j.export_id
-               WHERE j.id=? AND j.problem_id=? AND j.export_type IN (?,?)""",
+               WHERE j.id=? AND j.problem_id=? AND j.export_type IN ("""
+            + self._format_placeholders
+            + ")",
             params,
         )
         return None if row is None else _job_row(row)
@@ -155,7 +161,7 @@ class ExportStore:
             )
         self.db.write_transaction(transaction)
 
-    def mark_export_job_projecting(
+    def mark_export_job_packaging(
         self,
         job_id: str,
         *,
@@ -205,8 +211,10 @@ class ExportStore:
             cursor = connection.execute(
                 """UPDATE export_jobs SET status='failed',error='interrupted by application restart',finished_at=?
                    WHERE status IN ('queued','running')
-                     AND export_type IN (?,?)""",
-                [now_iso(), *SUPPORTED_EXPORT_FORMATS],
+                     AND export_type IN ("""
+                + self._format_placeholders
+                + ")",
+                [now_iso(), *self._package_formats],
             )
             return max(0, int(cursor.rowcount))
         return self.db.write_transaction(transaction)
@@ -217,8 +225,10 @@ class ExportStore:
         row = self.db.fetch_one(
             """SELECT filename,export_type,archive_rel_path,materialization_id,sha256,size_bytes
                FROM exports
-               WHERE id=? AND problem_id=? AND export_type IN (?,?)""",
-            [export_id, int(problem_id), *SUPPORTED_EXPORT_FORMATS],
+               WHERE id=? AND problem_id=? AND export_type IN ("""
+            + self._format_placeholders
+            + ")",
+            [export_id, int(problem_id), *self._package_formats],
         )
         if row is None:
             return None
@@ -234,8 +244,10 @@ class ExportStore:
     def export_problem(self, export_id: str) -> dict[str, object] | None:
         row = self.db.fetch_one(
             """SELECT id,problem_id FROM exports
-               WHERE id=? AND export_type IN (?,?)""",
-            [export_id, *SUPPORTED_EXPORT_FORMATS],
+               WHERE id=? AND export_type IN ("""
+            + self._format_placeholders
+            + ")",
+            [export_id, *self._package_formats],
         )
         return None if row is None else dict(row)
 
@@ -260,7 +272,7 @@ class ExportStore:
         materialization_id: str,
         export_type: str,
     ) -> str:
-        if export_type not in SUPPORTED_EXPORT_FORMATS:
+        if export_type not in self._package_formats:
             return ""
         row = self.db.fetch_one(
             "SELECT id FROM exports WHERE materialization_id=? AND export_type=?",

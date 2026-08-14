@@ -4218,7 +4218,6 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             role="output",
             file_name="001.out",
             payload=b"6\n",
-            extra_tags={"run_id": "tmp.cpp"},
         )
         other_output_ref = runtime.verification_service.store_verification_blob(
             verification_id=verification_id,
@@ -4226,7 +4225,6 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             role="other-output",
             file_name="other.out",
             payload=b"other output\n",
-            extra_tags={"run_id": "other.cpp"},
         )
         task_id = verification_task_id(
             verification_id,

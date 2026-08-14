@@ -534,7 +534,7 @@ async def agent_export_start(request: Request):
     identity = require_agent_token(request, min_scope="workspace")
     payload = await _read_json(request)
     package_format = str(payload.get("format") or "").strip().lower()
-    if package_format not in {"domjudge", "icpc-2025-09"}:
+    if not runtime().export_service.package_adapters.supports(package_format):
         return json_error_response("unsupported package format", status_code=400)
     try:
         export_job_id = f"exp-api-{new_run_id()}"

@@ -2,7 +2,7 @@ from pathlib import Path
 
 from fastapi import HTTPException
 
-from app.main_util import safe_workspace_path
+from app.service.platform.workspace_path import safe_workspace_path
 from app.service.problem.test_spec import (
     TESTS_SPEC_REL,
     dumps_tests_spec,

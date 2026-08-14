@@ -15,9 +15,11 @@ from app.service.problem_package.statement_samples import (
 from app.service.sandbox.base import ExecResult
 from app.service.statement.constant import DEFAULT_OLYMP_STY
 from app.service.statement.context import normalize_statement_language
-from app.service.statement.render import render_statement_problem_assets_for_language
+from app.service.statement.render import (
+    render_statement_problem_assets_for_language,
+    statement_title_from_snapshot,
+)
 from app.service.statement.tex_compile import TexCompileService
-from app.service.statement.title import statement_title_from_snapshot
 
 
 _EXTRACTBB_SUFFIXES = {".bmp", ".jpeg", ".jpg", ".pdf", ".png"}

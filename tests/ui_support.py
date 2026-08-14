@@ -13,6 +13,7 @@ from starlette.requests import Request
 
 import app.impl.auth.middleware as auth_middleware_module
 import app.impl.admin.panel as admin_panel_module
+from app.impl.auth.csrf import issue_password_form_csrf_token
 from app.impl.auth.password_envelope import password_envelope_store
 import app.impl.contest.access as contest_access_module
 import app.impl.contest.overview as contest_overview_module
@@ -88,7 +89,6 @@ def _api_attr(name: str):
 AUTH_COOKIE_NAME = runtime.config_values.AUTH_COOKIE_NAME
 FLASH_COOKIE_NAME = runtime.config_values.FLASH_COOKIE_NAME
 DEFAULT_CONFIG_VALUES = CONFIG_REGISTRY.defaults()
-issue_password_form_csrf_token = _api_attr("issue_password_form_csrf_token")
 session_user = _api_attr("session_user")
 workspace_revision_info = _api_attr("workspace_revision_info")
 auth_password_meta = _api_attr("auth_password_meta")
@@ -489,7 +489,6 @@ def _register_with_password_envelope(username: str, password: str, *, next_path:
         username=username,
         email=f"{username}@gmail.com",
         password="",
-        password_confirm="",
         key_id=envelope["key_id"],
         envelope_token=envelope["envelope_token"],
         encrypted_verifier=envelope["encrypted_verifier"],
@@ -544,7 +543,6 @@ def _setup_with_password_envelope(username: str, password: str, *, confirm_confi
         request=_post_request("/setup"),
         username=username,
         password="",
-        password_confirm="",
         key_id=envelope["key_id"],
         envelope_token=envelope["envelope_token"],
         encrypted_verifier=envelope["encrypted_verifier"],
@@ -615,7 +613,6 @@ def _settings_password_update_with_envelope(user: str, current_password: str, ne
         user=user,
         current_password="",
         new_password="",
-        new_password_confirm="",
         current_password_key_id=current_envelope["key_id"],
         current_password_envelope_token=current_envelope["envelope_token"],
         current_password_encrypted_verifier=current_envelope["encrypted_verifier"],
@@ -644,7 +641,6 @@ def _settings_admin_password_update_with_envelope(actor_user: str, target_user: 
         user=actor_user,
         target_username=target_user,
         new_password="",
-        new_password_confirm="",
         new_password_key_id=new_envelope["key_id"],
         new_password_envelope_token=new_envelope["envelope_token"],
         new_password_encrypted_verifier=new_envelope["encrypted_verifier"],

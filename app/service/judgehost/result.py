@@ -265,7 +265,7 @@ class ResultProcessor:
     ) -> list[DomjudgeDownloadFile]:
         requested_id = domjudge_parse_script_id(script_id)
         token = domjudge_lower_text(kind)
-        _ = domjudge_script_hash_field(token)
+        domjudge_script_hash_field(token)
         active_match = None if not hostname else self._domjudge_active_batch_script_hash(
             hostname=hostname,
             kind=token,

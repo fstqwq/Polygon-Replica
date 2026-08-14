@@ -86,8 +86,11 @@ The default import-policy gate scans Python files in `app/`, `tests/`, and
 
 - wildcard imports;
 - `from X import Y as Z`;
-- mesh-style relative imports such as `from .module import name`; and
-- dynamic application re-export chains.
+- mesh-style relative imports such as `from .module import name`;
+- dynamic application re-export chains;
+- dynamic `__all__` outside package initializers;
+- imported names exposed through `__all__` outside `__init__.py`; and
+- assignments to `_` that exist only to suppress unused-name checks.
 
 The broader static check also rejects cross-package private imports and simple
 forwarding shims in `app/`. The full public-contract suite enforces the

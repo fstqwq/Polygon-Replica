@@ -1,4 +1,4 @@
-from app.main_constant import GENERAL_CONFIG_DEFAULTS
+from app.main_constant import GENERAL_CONFIG_DEFAULTS, RUN_TEST_NAME_RE
 
 import json
 import re
@@ -21,7 +21,6 @@ from app.service.platform.runtime_blob_store import PayloadFile, RuntimeBlobStor
 from app.service.problem.build_config import load_build_config
 from app.service.problem.runtime_config import load_problem_config, problem_config_limits
 from app.service.problem.source_file import resolve_source
-from app.service.run.runtime import RUN_TEST_NAME_RE
 from app.service.platform.testlib_source import workspace_testlib_header
 
 from app.service.judgehost.core import JudgehostCore

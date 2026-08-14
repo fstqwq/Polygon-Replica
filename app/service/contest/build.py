@@ -255,7 +255,7 @@ class ContestBuildService:
                                     readers=readers,
                                 )
                             else:
-                                projection_format = (
+                                package_format = (
                                     "domjudge"
                                     if output == "domjudge_bundle"
                                     else "icpc-2025-09"
@@ -264,7 +264,7 @@ class ContestBuildService:
                                     contest_id=contest_id,
                                     contest_slug=contest_slug,
                                     job_id=job_id,
-                                    package_format=projection_format,
+                                    package_format=package_format,
                                     readers=readers,
                                 )
                         except Exception as exc:

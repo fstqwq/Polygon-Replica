@@ -34,11 +34,9 @@ class _VersionScheduler:
         self.batch: dict[str, object] | None = None
 
     def fetch_case(self, case_id: int) -> dict[str, object] | None:
-        _ = case_id
         return self.case
 
     def fetch_batch(self, batch_id: int) -> dict[str, object] | None:
-        _ = batch_id
         return self.batch
 
 
@@ -245,7 +243,6 @@ class TestToolchainVersionCollector(unittest.TestCase):
             task_id: str,
             run_id: str,
         ) -> None:
-            _ = (hostname, action, task_id, run_id)
             raise RuntimeError("host event store unavailable")
 
         handler = ToolchainTelemetryHandler(self.state, failing_sink)

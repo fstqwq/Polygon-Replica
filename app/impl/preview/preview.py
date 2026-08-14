@@ -23,11 +23,13 @@ from app.impl.workspace.context_operation import (
 )
 from app.main_util import (
     enforce_textarea_max_bytes,
-    normalize_workspace_rel_path,
     problem_slug_leaf,
-    safe_workspace_path,
     sanitize_log_text_for_ui,
     write_upload_file_limited,
+)
+from app.service.platform.workspace_path import (
+    normalize_workspace_rel_path,
+    safe_workspace_path,
 )
 from app.service.statement.constant import (
     STATEMENT_ASSETS_DIR,

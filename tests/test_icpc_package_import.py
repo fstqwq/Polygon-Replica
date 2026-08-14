@@ -9,9 +9,9 @@ from pathlib import Path
 
 import yaml
 
-from app.service.export.icpc_package import SUBMISSION_RULES
+from app.service.export.adapters.shared import SUBMISSION_RULES
 from app.service.importing.icpc import ICPCPackageImportService
-from app.service.statement.title import (
+from app.service.statement.render import (
     PROBLEM_TITLE_MAX_LEN,
     normalize_problem_title,
     statement_title_from_snapshot,

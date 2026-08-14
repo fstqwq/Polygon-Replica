@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import TypedDict
 from fastapi import HTTPException
 from app.impl.runtime.dependency import runtime
-from app.main_util import (
+from app.service.platform.workspace_path import (
     normalize_workspace_rel_path,
     safe_workspace_path,
 )

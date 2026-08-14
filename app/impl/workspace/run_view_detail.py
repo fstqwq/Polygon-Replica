@@ -85,7 +85,6 @@ _SANITY_CHECK_LABELS = {
 
 
 def _run_cell_text_tone(verdict: str, expected_behavior: str) -> str:
-    _ = verdict, expected_behavior
     return ""
 
 

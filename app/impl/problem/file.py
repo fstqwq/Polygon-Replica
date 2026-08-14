@@ -20,9 +20,9 @@ from app.impl.workspace.context_operation import (
     template_for_kind,
 )
 from app.impl.workspace.context_ui import page_ctx
-from app.main_util import (
+from app.main_util import problem_slug_leaf
+from app.service.platform.workspace_path import (
     normalize_workspace_rel_path,
-    problem_slug_leaf,
     safe_workspace_path,
 )
 from app.service.statement.constant import STATEMENT_DEFAULT_FILES

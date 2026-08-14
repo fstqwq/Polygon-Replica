@@ -105,7 +105,6 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
             "username": username,
             "email": email or f"{username}@gmail.com",
             "password": "",
-            "password_confirm": "",
             "key_id": envelope["key_id"],
             "envelope_token": envelope["envelope_token"],
             "encrypted_verifier": envelope["encrypted_verifier"],
@@ -341,7 +340,6 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
             user=username,
             current_password="",
             new_password="",
-            new_password_confirm="",
             current_password_key_id=current_as_new["key_id"],
             current_password_envelope_token=current_as_new["envelope_token"],
             current_password_encrypted_verifier=current_as_new["encrypted_verifier"],
@@ -404,7 +402,6 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
             username=username,
             email=f"{username}@gmail.com",
             password="",
-            password_confirm="",
             key_id=register_envelope["key_id"],
             envelope_token=register_envelope["envelope_token"],
             encrypted_verifier=register_envelope["encrypted_verifier"],
@@ -489,7 +486,6 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
             user=username,
             current_password="",
             new_password="",
-            new_password_confirm="",
             current_password_key_id=current_envelope["key_id"],
             current_password_envelope_token=current_envelope["envelope_token"],
             current_password_encrypted_verifier=current_envelope["encrypted_verifier"],
@@ -567,7 +563,6 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
             username="Alice_1",
             email="alice@gmail.com",
             password="StrongPass123",
-            password_confirm="StrongPass123",
             next="/",
         )
         self.assertEqual(invalid.status_code, 303)
@@ -582,7 +577,6 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
             username="ab",
             email="ab@gmail.com",
             password="StrongPass123",
-            password_confirm="StrongPass123",
             next="/",
         )
         self.assertEqual(too_short.status_code, 303)
@@ -595,7 +589,6 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
             username="abcdefghijklmnopq",
             email="abcdefghijklmnopq@gmail.com",
             password="StrongPass123",
-            password_confirm="StrongPass123",
             next="/",
         )
         self.assertEqual(too_long.status_code, 303)
@@ -641,7 +634,6 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
             username=username,
             email=f"{username}@gmail.com",
             password="",
-            password_confirm="",
             key_id=envelope["key_id"],
             envelope_token=envelope["envelope_token"],
             encrypted_verifier=envelope["encrypted_verifier"],
@@ -896,7 +888,6 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
             request=_post_request("/setup"),
             username=username,
             password="",
-            password_confirm="",
             key_id=envelope["key_id"],
             envelope_token=envelope["envelope_token"],
             encrypted_verifier=envelope["encrypted_verifier"],

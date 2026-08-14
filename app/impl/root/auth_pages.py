@@ -168,7 +168,6 @@ def setup_submit(
     request: Request,
     username: str=Form(...),
     password: str=Form(''),
-    password_confirm: str=Form(''),
     csrf_token: str=Form(''),
     key_id: str=Form(''),
     envelope_token: str=Form(''),
@@ -179,7 +178,6 @@ def setup_submit(
     next: str=Form('/'),
 ):
     enforce_same_origin_state_change(request)
-    _ = (password, password_confirm)
     try:
         if has_registered_users():
             raise ValueError('setup already completed')
@@ -288,7 +286,6 @@ def login_submit(
     next: str=Form('/'),
 ):
     enforce_same_origin_state_change(request)
-    _ = password
     raw_user = form_text(username).strip()
     password_csrf = form_text(csrf_token).strip()
     next_path = form_text(next)
@@ -358,7 +355,6 @@ def register_submit(
     username: str=Form(...),
     email: str=Form(''),
     password: str=Form(''),
-    password_confirm: str=Form(''),
     csrf_token: str=Form(''),
     key_id: str=Form(''),
     envelope_token: str=Form(''),
@@ -369,7 +365,6 @@ def register_submit(
     terms_accepted: str=Form(''),
 ):
     enforce_same_origin_state_change(request)
-    _ = (password, password_confirm)
     request_ip = _client_ip_for_auth_rate_limit(request)
     user_agent = _request_user_agent(request)
     try:
@@ -553,7 +548,6 @@ def sudo_submit(
     next: str = Form('/'),
 ):
     enforce_same_origin_state_change(request)
-    _ = password
     identity = session_identity(request)
     if identity is None:
         return redirect_response('/login', status_code=303)

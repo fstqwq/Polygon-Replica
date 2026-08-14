@@ -40,8 +40,10 @@ from app.service.statement.constant import (
     is_canonical_statement_section_entry,
     is_ignored_statement_section_entry,
 )
-from app.service.statement.render import default_olymp_sty_text
-from app.service.statement.title import normalize_problem_title
+from app.service.statement.render import (
+    default_olymp_sty_text,
+    normalize_problem_title,
+)
 from app.service.problem.test_spec import dumps_tests_spec
 
 

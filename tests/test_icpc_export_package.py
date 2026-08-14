@@ -13,17 +13,19 @@ from unittest import mock
 import yaml
 
 from app.config import ConfigValues
-from app.service.export.icpc_package import (
+from app.service.export.adapters.shared import (
     SUBMISSION_RULES,
     annotated_submission,
-    problem_uuid,
-    render_domjudge_problem_yaml,
-    render_problem_yaml,
-    render_submissions_yaml,
     write_input_validator,
     write_output_validator,
 )
-from app.service.export.projection import PackageProjectionService
+from app.service.export.adapters.domjudge import render_domjudge_problem_yaml
+from app.service.export.adapters.icpc_2025 import (
+    problem_uuid,
+    render_problem_yaml,
+    render_submissions_yaml,
+)
+from app.service.export.adapters import PackageAdapterRegistry
 from app.service.problem_package.manifest import VerifiedRevisionManifest, describe_file
 from app.service.problem_package.service import VerifiedRevisionReader
 from app.service.problem_package.store import MaterializationRow
@@ -276,8 +278,8 @@ class TestICPCExportPackage(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 42)
 
-    def test_projectors_publish_disjoint_strict_and_domjudge_layouts(self) -> None:
-        reader = self._projection_reader(mode="interactive", pass_limit=2)
+    def test_adapters_publish_disjoint_strict_and_domjudge_layouts(self) -> None:
+        reader = self._adapter_reader(mode="interactive", pass_limit=2)
         values = ConfigValues(
             {
                 "GENERAL_TIME_LIMIT_MIN_MS": 1,
@@ -291,7 +293,7 @@ class TestICPCExportPackage(unittest.TestCase):
             },
             normalizer=lambda raw: raw,
         )
-        projector = PackageProjectionService(values, mock.Mock())
+        adapters = PackageAdapterRegistry(values, mock.Mock())
 
         def write_statements(
             _snapshot: Path,
@@ -310,16 +312,28 @@ class TestICPCExportPackage(unittest.TestCase):
 
         strict = self.root / "strict"
         domjudge = self.root / "domjudge"
-        with mock.patch.object(projector, "_write_statements", side_effect=write_statements):
-            strict_warning = projector.project(
+        self.assertEqual(adapters.formats, ("domjudge", "icpc-2025-09"))
+        domjudge_adapter = adapters.require("domjudge")
+        strict_adapter = adapters.require("icpc-2025-09")
+        with (
+            mock.patch.object(
+                domjudge_adapter,
+                "write_statements",
+                side_effect=write_statements,
+            ),
+            mock.patch.object(
+                strict_adapter,
+                "write_statements",
+                side_effect=write_statements,
+            ),
+        ):
+            strict_warning = strict_adapter.build(
                 reader,
-                package_format="icpc-2025-09",
                 target=strict,
                 canonical_problem_slug="owner/projected-problem",
             )
-            domjudge_warning = projector.project(
+            domjudge_warning = domjudge_adapter.build(
                 reader,
-                package_format="domjudge",
                 target=domjudge,
                 canonical_problem_slug="owner/projected-problem",
                 short_name="A",
@@ -382,7 +396,7 @@ class TestICPCExportPackage(unittest.TestCase):
                 )
                 self.assertEqual(result.returncode, 42)
 
-    def _projection_reader(
+    def _adapter_reader(
         self,
         *,
         mode: str,
@@ -466,7 +480,7 @@ class TestICPCExportPackage(unittest.TestCase):
         input_path = test_root / "input"
         input_path.write_bytes(b"1\n")
         materialization: MaterializationRow = {
-            "id": "pm-projection",
+            "id": "pm-adapter",
             "problem_id": 1,
             "source_commit": "a" * 40,
             "revision_number": 3,
@@ -474,7 +488,7 @@ class TestICPCExportPackage(unittest.TestCase):
             "archive_rel_path": "materializations/verified.zip",
             "archive_sha256": "c" * 64,
             "archive_size_bytes": 1,
-            "verification_id": "ver-projection",
+            "verification_id": "ver-adapter",
             "status": "available",
             "created_at": "2026-01-01T00:00:00Z",
             "checked_at": "2026-01-01T00:00:00Z",
@@ -486,7 +500,7 @@ class TestICPCExportPackage(unittest.TestCase):
             "source_digest": materialization["source_digest"],
             "mode": mode,
             "pass_limit": pass_limit,
-            "verification": {"id": "ver-projection", "source": "full"},
+            "verification": {"id": "ver-adapter", "source": "full"},
             "solutions": [
                 {
                     "source_path": "solutions/accepted.cpp",

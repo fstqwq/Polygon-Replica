@@ -186,7 +186,6 @@ def build_case_result(
             compare_metadata_ref=compare_metadata_ref,
         ),
     )
-    _ = feedback_files
     return normalize_execution_result(
         passes=(*historical_passes, final_pass),
         verdict=verdict,

@@ -800,7 +800,6 @@ def admin_user_password_update(
     user: Annotated[str, Depends(require_session_user)],
     target_username: str = Form(""),
     new_password: str = Form(""),
-    new_password_confirm: str = Form(""),
     new_password_key_id: str = Form(""),
     new_password_envelope_token: str = Form(""),
     new_password_encrypted_verifier: str = Form(""),
@@ -809,7 +808,6 @@ def admin_user_password_update(
     new_password_iters: str = Form(""),
 ):
     _ctx, actor_user_id = _admin_user_context(user)
-    _ = (new_password, new_password_confirm)
     try:
         safe_target = _admin_target_username(target_username)
         if safe_target.lower() == form_text(user).strip().lower():

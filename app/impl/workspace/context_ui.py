@@ -14,7 +14,7 @@ from app.impl.contest.workspace_scope import (
 )
 from app.impl.runtime.dependency import runtime
 
-from app.main_util import normalize_workspace_rel_path
+from app.service.platform.workspace_path import normalize_workspace_rel_path
 from app.service.statement.constant import (
     STATEMENT_SECTIONS_DIR,
     is_ignored_statement_section_entry,
@@ -97,7 +97,6 @@ def page_ctx(
     include_workspace_changes: bool = True,
     contest_workspace: ContestWorkspaceContext | None = None,
 ) -> dict:
-    _ = include_branches
     try:
         problem_id, user_id = runtime().workspace_service.page_identity(problem, user)
         access = workspace_access_context(problem_id, user_id)
@@ -116,9 +115,9 @@ def page_ctx(
         actor_user_id=user_id,
         workspace_id=int(ctx['workspace']['id']),
     )
-    ctx['branches'] = ['main']
+    ctx['branches'] = ['main'] if include_branches else []
     ctx['branches_truncated'] = False
-    ctx['branch_limit'] = 1
+    ctx['branch_limit'] = 1 if include_branches else 0
     workspace_path = Path(ctx['workspace']['path'])
     auto_updated = False
     if refresh_status:

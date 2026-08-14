@@ -392,7 +392,6 @@ class WorkerQueueService:
         job_type: str,
         queue_name: str,
     ) -> tuple[WorkerFuture, bool, str]:
-        _ = (name, job_type, queue_name)
         future = WorkerFuture(f"wq-{uuid.uuid4().hex[:12]}")
         error = RuntimeError("maintenance in progress: worker admission is closed")
         future._mark_done(error)

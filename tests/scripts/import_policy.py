@@ -129,6 +129,157 @@ def _dynamic_reexport_detected(importer_module: str, source: str) -> bool:
     )
 
 
+def _imported_bindings(
+    importer_module: str,
+    tree: ast.Module,
+) -> dict[str, str]:
+    bindings: dict[str, str] = {}
+    for node in tree.body:
+        if isinstance(node, ast.ImportFrom):
+            source_module = _resolve_imported_module(importer_module, node)
+            for alias in node.names:
+                if alias.name == "*":
+                    continue
+                binding = alias.asname or alias.name
+                target = (
+                    f"{source_module}.{alias.name}"
+                    if source_module
+                    else alias.name
+                )
+                bindings[binding] = target
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                binding = alias.asname or alias.name.split(".", 1)[0]
+                bindings[binding] = alias.name
+    return bindings
+
+
+def _static_all_names(value: ast.expr) -> tuple[str, ...] | None:
+    if not isinstance(value, (ast.List, ast.Tuple, ast.Set)):
+        return None
+    names: list[str] = []
+    for item in value.elts:
+        if not isinstance(item, ast.Constant) or not isinstance(item.value, str):
+            return None
+        names.append(item.value)
+    return tuple(names)
+
+
+def _all_reexport_violations(
+    *,
+    relative: str,
+    importer_module: str,
+    tree: ast.Module,
+) -> list[Violation]:
+    """Reject imported symbols exposed through __all__ outside package initializers."""
+
+    if relative.endswith("/__init__.py"):
+        return []
+    imported = _imported_bindings(importer_module, tree)
+    violations: list[Violation] = []
+    for node in tree.body:
+        value: ast.expr | None = None
+        is_all_assignment = False
+        if isinstance(node, ast.Assign):
+            is_all_assignment = any(
+                isinstance(target, ast.Name) and target.id == "__all__"
+                for target in node.targets
+            )
+            value = node.value
+        elif isinstance(node, ast.AnnAssign):
+            is_all_assignment = (
+                isinstance(node.target, ast.Name) and node.target.id == "__all__"
+            )
+            value = node.value
+        elif isinstance(node, ast.AugAssign):
+            is_all_assignment = (
+                isinstance(node.target, ast.Name) and node.target.id == "__all__"
+            )
+        elif (
+            isinstance(node, ast.Expr)
+            and isinstance(node.value, ast.Call)
+            and isinstance(node.value.func, ast.Attribute)
+            and isinstance(node.value.func.value, ast.Name)
+            and node.value.func.value.id == "__all__"
+        ):
+            is_all_assignment = True
+        if not is_all_assignment:
+            continue
+        names = _static_all_names(value) if value is not None else None
+        if names is None:
+            violations.append(
+                Violation(
+                    rule="REEXPORT_ALL_DYNAMIC",
+                    file=relative,
+                    line=int(node.lineno),
+                    importer=importer_module,
+                    target=importer_module,
+                    message=(
+                        "non-__init__.py modules must not construct __all__ "
+                        "dynamically"
+                    ),
+                )
+            )
+            continue
+        for name in names:
+            target = imported.get(name)
+            if target is None:
+                continue
+            violations.append(
+                Violation(
+                    rule="REEXPORT_ALL_IMPORTED",
+                    file=relative,
+                    line=int(node.lineno),
+                    importer=importer_module,
+                    target=target,
+                    message=(
+                        f"non-__init__.py module re-exports imported name "
+                        f"through __all__: {name}"
+                    ),
+                )
+            )
+    return violations
+
+
+def _discard_assignment_violations(
+    *,
+    relative: str,
+    importer_module: str,
+    tree: ast.Module,
+) -> list[Violation]:
+    """Reject assignments that manufacture usage by assigning to `_`."""
+
+    violations: list[Violation] = []
+    for node in ast.walk(tree):
+        is_discard_assignment = (
+            isinstance(node, ast.Assign)
+            and any(
+                isinstance(target, ast.Name) and target.id == "_"
+                for target in node.targets
+            )
+        ) or (
+            isinstance(node, ast.AnnAssign)
+            and isinstance(node.target, ast.Name)
+            and node.target.id == "_"
+        )
+        if not is_discard_assignment:
+            continue
+        violations.append(
+            Violation(
+                rule="DISCARD_ASSIGNMENT",
+                file=relative,
+                line=int(node.lineno),
+                importer=importer_module,
+                target="_",
+                message=(
+                    "do not assign expressions to `_` to manufacture symbol usage; "
+                    "remove unused names or evaluate a required side effect directly"
+                ),
+            )
+        )
+    return violations
+
+
 def _is_module_or_child(module_name: str, owner: str) -> bool:
     return module_name == owner or module_name.startswith(f"{owner}.")
 
@@ -184,6 +335,21 @@ def collect_audit() -> tuple[list[Violation], list[list[str]], dict[str, object]
         source = _read_text(path)
         module = module_by_path[path]
         tree = ast.parse(source, filename=relative)
+
+        violations.extend(
+            _all_reexport_violations(
+                relative=relative,
+                importer_module=module,
+                tree=tree,
+            )
+        )
+        violations.extend(
+            _discard_assignment_violations(
+                relative=relative,
+                importer_module=module,
+                tree=tree,
+            )
+        )
 
         if _dynamic_reexport_detected(module, source):
             violations.append(

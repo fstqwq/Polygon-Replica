@@ -1,3 +1,4 @@
+import ast
 import json
 import subprocess
 import sys
@@ -12,6 +13,58 @@ IMPORT_POLICY_SCRIPT = ROOT / "tests" / "scripts" / "import_policy.py"
 
 
 class TestImportPolicy(unittest.TestCase):
+    def test_imported_all_reexports_are_limited_to_package_initializers(self) -> None:
+        source = """
+from app.service.owner import exported
+owned = 1
+__all__ = ["exported", "owned"]
+"""
+        tree = ast.parse(source)
+        violations = import_policy._all_reexport_violations(
+            relative="app/service/facade.py",
+            importer_module="app.service.facade",
+            tree=tree,
+        )
+        self.assertEqual(
+            [(item.rule, item.target) for item in violations],
+            [("REEXPORT_ALL_IMPORTED", "app.service.owner.exported")],
+        )
+        self.assertEqual(
+            import_policy._all_reexport_violations(
+                relative="app/service/facade/__init__.py",
+                importer_module="app.service.facade",
+                tree=tree,
+            ),
+            [],
+        )
+
+    def test_dynamic_all_is_rejected_outside_package_initializers(self) -> None:
+        tree = ast.parse('__all__ = list(public_names)\n')
+        violations = import_policy._all_reexport_violations(
+            relative="app/service/facade.py",
+            importer_module="app.service.facade",
+            tree=tree,
+        )
+        self.assertEqual(
+            [item.rule for item in violations],
+            ["REEXPORT_ALL_DYNAMIC"],
+        )
+
+    def test_discard_assignment_cannot_manufacture_symbol_usage(self) -> None:
+        tree = ast.parse(
+            "_ = (issue_password_form_csrf_token,)\n"
+            "value, _ = pair\n"
+        )
+        violations = import_policy._discard_assignment_violations(
+            relative="app/impl/auth/middleware.py",
+            importer_module="app.impl.auth.middleware",
+            tree=tree,
+        )
+        self.assertEqual(
+            [(item.rule, item.line) for item in violations],
+            [("DISCARD_ASSIGNMENT", 1)],
+        )
+
     def test_dynamic_reexport_detector_scoped_to_application_modules(self) -> None:
         source = """
 def _export_public(namespace, module):

@@ -67,7 +67,6 @@ def settings_password_update(
     user: Annotated[str, Depends(require_session_user)],
     current_password: str = Form(""),
     new_password: str = Form(""),
-    new_password_confirm: str = Form(""),
     current_password_key_id: str = Form(""),
     current_password_envelope_token: str = Form(""),
     current_password_encrypted_verifier: str = Form(""),
@@ -80,7 +79,6 @@ def settings_password_update(
 ):
     row = lookup_user_auth(user)
     message = "password updated"
-    _ = (current_password, new_password, new_password_confirm)
     if row is None:
         return redirect_response("/settings", status_code=303, message="user not found")
     try:

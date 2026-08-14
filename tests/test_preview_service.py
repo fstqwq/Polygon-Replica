@@ -55,7 +55,6 @@ class _LocalWorkspaceService:
         username: str,
         include_recent: bool = True,
     ) -> dict[str, object]:
-        _ = include_recent
         return {
             "problem": {"id": self.problem_id, "slug": problem},
             "user": {"username": username},
@@ -85,7 +84,6 @@ class _LocalWorkspaceService:
         workspace_head: str | None = None,
         workspace_dirty: bool | None = None,
     ) -> Path:
-        _ = (commit, workspace_head, workspace_dirty)
         snapshot = (
             self.settings.cache_root
             / "runtime"
@@ -143,7 +141,6 @@ class _VerificationArtifacts:
         *,
         sample_only: bool = False,
     ) -> str:
-        _ = (commit, ref)
         self.calls.append((problem, username, sample_only))
         return self.verification_id
 

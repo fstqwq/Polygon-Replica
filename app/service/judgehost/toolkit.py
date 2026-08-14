@@ -511,7 +511,6 @@ class DomjudgeToolkit:
         generate_mode: bool = False,
         manual_validate_only: bool = False,
     ) -> bytes:
-        _ = main_correct
         if interactive:
             return self.load_script_asset("interactive.run").encode("utf-8")
         if compile_only or manual_validate_only:

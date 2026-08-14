@@ -140,7 +140,6 @@ class _FakeCompletionService:
         *,
         notify: bool = True,
     ) -> CompletionCommit:
-        _ = notify
         return self._task_store.commit_task_completions(completions)
 
 
@@ -168,7 +167,6 @@ class _InMemoryTaskStore:
             ]
 
     def verification_is_running(self, verification_id: str) -> bool:
-        _ = verification_id
         with self._lock:
             return not self._fail_flag
 

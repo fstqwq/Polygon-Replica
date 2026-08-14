@@ -26,8 +26,28 @@ from app.service.statement.constant import (
     STATEMENT_TEMPLATE_REL,
     _read_required_text,
 )
-from app.service.statement.context import normalize_statement_language
+from app.service.statement.context import (
+    normalize_statement_language,
+    pick_statement_language,
+)
 from app.service.statement.ftl.renderer import render_ftl_template
+
+
+PROBLEM_TITLE_MAX_LEN = 255
+
+
+def normalize_problem_title(raw: object, *, fallback_title: str) -> str:
+    fallback = str(fallback_title).strip()
+    title = ("" if raw is None else str(raw).strip()) or fallback
+    if not title:
+        raise ValueError("problem title is required")
+    if "\n" in title or "\r" in title:
+        raise ValueError("problem title must be a single line")
+    if len(title) > PROBLEM_TITLE_MAX_LEN:
+        raise ValueError(
+            f"problem title is too long (max {PROBLEM_TITLE_MAX_LEN})"
+        )
+    return title
 
 
 def default_olymp_sty_text() -> str:
@@ -55,6 +75,23 @@ def statement_title_for_language(workspace: Path, language: str, fallback_title:
     title_from_section = _statement_section_text(workspace, language, "name.tex", fallback="").strip()
     fallback = str(fallback_title or "").strip() or default_statement_title_for_workspace(workspace)
     return title_from_section or fallback
+
+
+def statement_title_from_snapshot(
+    snapshot: Path,
+    *,
+    fallback_title: str,
+    language: str | None = None,
+) -> str:
+    selected_language = language or pick_statement_language(snapshot)
+    return normalize_problem_title(
+        statement_title_for_language(
+            snapshot,
+            selected_language,
+            fallback_title=fallback_title,
+        ),
+        fallback_title=fallback_title,
+    )
 
 
 def _safe_workspace_regular_file(workspace: Path, rel: Path) -> Path | None:

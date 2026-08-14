@@ -7,6 +7,7 @@ from typing import cast
 from typing import TypedDict
 
 from app.db import now_iso
+from app.main_constant import RUN_TEST_NAME_RE
 from app.service.judgehost.domjudge.cache import domjudge_hash_of_hashes
 from app.service.judgehost.domjudge.client import domjudge_script_id
 from app.service.judgehost.case_binding import CaseBinding
@@ -18,7 +19,6 @@ from app.service.judgehost.runtime import (
 from app.service.judgehost.limits import VERIFICATION_CASE_DISPATCH_BATCH_SIZE
 from app.service.platform.runtime_blob_store import PayloadFile
 from app.service.platform.maintenance.admission import MaintenanceAdmissionGate
-from app.service.run.runtime import RUN_TEST_NAME_RE
 
 from app.service.judgehost.core import JudgehostCore
 from app.service.judgehost.dispatch_cache import (

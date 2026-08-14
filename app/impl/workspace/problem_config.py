@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from app.impl.runtime.dependency import runtime
-from app.main_util import safe_workspace_path
+from app.service.platform.workspace_path import safe_workspace_path
 from app.service.problem.runtime_config import (
     PROBLEM_CONFIG_REL,
     ProblemConfig,

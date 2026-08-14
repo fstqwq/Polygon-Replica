@@ -1106,7 +1106,7 @@ class TestAgentAPI(E2ETestBase):
             self.assertEqual(str(fresh_status_payload.get("format") or ""), "icpc-2025-09")
             self.assertIn(
                 str(fresh_status_payload.get("phase") or ""),
-                {"queued", "verifying", "projecting", "complete"},
+                {"queued", "verifying", "packaging", "complete"},
             )
             self.assertEqual(str(fresh_status_payload.get("source_commit") or ""), head)
 

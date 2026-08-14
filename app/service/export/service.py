@@ -1,4 +1,4 @@
-"""Package export jobs and projections from verified revisions."""
+"""Package export jobs and adapters for verified revisions."""
 
 import os
 import re
@@ -11,7 +11,11 @@ from pathlib import Path
 from app.config import ConfigValues
 from app.db import DB
 from app.service.disk.export_store import ExportJobRow, ExportStore
-from app.service.export.projection import PackageFormat, PackageProjectionService
+from app.service.export.adapters import (
+    PackageAdapter,
+    PackageAdapterRegistry,
+    PackageFormat,
+)
 from app.service.platform.fs.layout import StorageLayout
 from app.service.platform.fs.op import extract_git_archive, remove_symlinks
 from app.service.platform.hashing import sha256_file
@@ -24,14 +28,12 @@ from app.service.problem_package.service import ProblemPackageService
 from app.service.statement.tex_compile import TexCompileService
 
 
-class ProjectionOperationBusy(RuntimeError):
-    """The same verified revision projection is already running."""
+class PackageBuildBusy(RuntimeError):
+    """The same verified revision package build is already running."""
 
 
 class ExportService:
-    """Persist user-visible package projection jobs and cache their archives."""
-
-    FORMATS: tuple[PackageFormat, ...] = ("domjudge", "icpc-2025-09")
+    """Persist user-visible package jobs and cache their archives."""
 
     def __init__(
         self,
@@ -41,24 +43,31 @@ class ExportService:
         problem_package_service: ProblemPackageService,
         config_values: ConfigValues,
     ) -> None:
-        self._store = ExportStore(db)
         self.storage_layout = storage_layout
         self.problem_package_service = problem_package_service
-        self.projection_service = PackageProjectionService(
+        self.package_adapters = PackageAdapterRegistry(
             config_values,
             tex_compile_service,
         )
-        self._projection_locks_guard = threading.Lock()
-        self._projection_locks: dict[tuple[str, str], threading.Lock] = {}
+        self._store = ExportStore(
+            db,
+            package_formats=tuple(self.package_adapters.formats),
+        )
+        self._package_locks_guard = threading.Lock()
+        self._package_locks: dict[tuple[str, str], threading.Lock] = {}
 
-    def _projection_lock(
+    @property
+    def package_formats(self) -> tuple[PackageFormat, ...]:
+        return self.package_adapters.formats
+
+    def _package_lock(
         self,
         verified_revision_id: str,
         package_format: PackageFormat,
     ) -> threading.Lock:
         key = (verified_revision_id, package_format)
-        with self._projection_locks_guard:
-            return self._projection_locks.setdefault(key, threading.Lock())
+        with self._package_locks_guard:
+            return self._package_locks.setdefault(key, threading.Lock())
 
     def export_archive_path(
         self,
@@ -123,26 +132,25 @@ class ExportService:
         package_format: str,
         source_commit: str,
     ) -> None:
-        if package_format not in self.FORMATS:
-            raise ValueError("unsupported package format")
+        resolved_format = self.package_adapters.require_format(package_format)
         self._store.create_export_job(
             job_id=job_id,
             problem_id=int(problem_id),
             actor_user_id=int(actor_user_id),
-            export_type=package_format,
+            export_type=resolved_format,
             source_commit=source_commit,
         )
 
     def mark_export_job_running(self, job_id: str, *, source_commit: str) -> None:
         self._store.mark_export_job_running(job_id, source_commit=source_commit)
 
-    def mark_export_job_projecting(
+    def mark_export_job_packaging(
         self,
         job_id: str,
         *,
         verified_revision_id: str,
     ) -> None:
-        self._store.mark_export_job_projecting(
+        self._store.mark_export_job_packaging(
             job_id,
             materialization_id=verified_revision_id,
         )
@@ -178,7 +186,7 @@ class ExportService:
         if not job["started_at"]:
             return "queued"
         if job["materialization_id"]:
-            return "projecting"
+            return "packaging"
         return "verifying"
 
     @staticmethod
@@ -244,11 +252,11 @@ class ExportService:
                     source = current / filename
                     if source.is_symlink() or not source.is_file():
                         raise ValueError(
-                            f"package projection produced a special file: {source}"
+                            f"package adapter produced a special file: {source}"
                         )
                     resolved = source.resolve()
                     if resolved_root not in resolved.parents:
-                        raise ValueError(f"package projection escaped staging: {source}")
+                        raise ValueError(f"package adapter escaped staging: {source}")
                     archive.write(source, source.relative_to(root).as_posix())
 
     def create_export(
@@ -259,16 +267,15 @@ class ExportService:
         verified_revision_id: str,
         expected_archive_sha256: str | None = None,
     ) -> tuple[str, Path, str]:
-        if package_format not in self.FORMATS:
-            raise ValueError("unsupported package format")
-        resolved_format: PackageFormat = package_format
-        lock = self._projection_lock(verified_revision_id, resolved_format)
+        adapter = self.package_adapters.require(package_format)
+        resolved_format = adapter.format
+        lock = self._package_lock(verified_revision_id, resolved_format)
         if not lock.acquire(blocking=False):
-            raise ProjectionOperationBusy("package projection already running")
+            raise PackageBuildBusy("package build already running")
         try:
             return self._create_export(
                 problem,
-                resolved_format,
+                adapter,
                 verified_revision_id=verified_revision_id,
                 expected_archive_sha256=expected_archive_sha256,
             )
@@ -278,11 +285,12 @@ class ExportService:
     def _create_export(
         self,
         problem: str,
-        package_format: PackageFormat,
+        adapter: PackageAdapter,
         *,
         verified_revision_id: str,
         expected_archive_sha256: str | None,
     ) -> tuple[str, Path, str]:
+        package_format = adapter.format
         problem_row = self._store.problem_export_row(problem)
         if problem_row is None:
             raise ValueError(f"unknown problem: {problem}")
@@ -312,26 +320,22 @@ class ExportService:
                 verified_revision_id,
                 expected_archive_sha256=expected_archive_sha256,
             ) as reader:
-                projection_plan = self.projection_service.plan(
-                    reader,
-                    package_format=package_format,
-                )
+                adapter_plan = adapter.plan(reader)
                 cached = self._cached_export_path(
                     problem_id=problem_row["id"],
                     materialization_id=verified_revision_id,
                     package_format=package_format,
                 )
                 if cached is not None:
-                    return (*cached, projection_plan.warning)
-                self.projection_service.project(
+                    return (*cached, adapter_plan.warning)
+                adapter.build(
                     reader,
-                    package_format=package_format,
                     target=package_root,
                     canonical_problem_slug=problem_row["slug"],
                     short_name=(
-                        public_slug if package_format == "domjudge" else None
+                        public_slug if adapter.accepts_short_name else None
                     ),
-                    plan=projection_plan,
+                    plan=adapter_plan,
                 )
                 self._make_archive(archive_partial, package_root)
                 output = self._export_path(problem_row["slug"], export_id, filename)
@@ -352,8 +356,8 @@ class ExportService:
                 )
                 published = True
             if output is None:
-                raise RuntimeError("package projection did not publish an archive")
-            return (export_id, output, projection_plan.warning)
+                raise RuntimeError("package adapter did not publish an archive")
+            return (export_id, output, adapter_plan.warning)
         except Exception:
             if published:
                 self._store.delete_export(export_id)

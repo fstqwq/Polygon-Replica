@@ -444,7 +444,7 @@ class TestPublishedRevisionExport(E2ETestBase):
         actor = db_fetch_one("SELECT id FROM users WHERE username=?", [self.user])
         self.assertIsNotNone(actor)
         with patch.object(
-            runtime.export_service.projection_service._tex_compile_service,
+            runtime.tex_compile_service,
             "compile_pdf",
             side_effect=self._compile_statement,
         ):
@@ -476,7 +476,7 @@ class TestPublishedRevisionExport(E2ETestBase):
             patch.object(runtime.worker_queue_service, "submit", side_effect=submit),
             patch.object(runtime.verified_revision_workflow, "ensure", side_effect=ensure),
             patch.object(
-                runtime.export_service.projection_service._tex_compile_service,
+                runtime.tex_compile_service,
                 "compile_pdf",
                 side_effect=self._compile_statement,
             ),
@@ -513,7 +513,7 @@ class TestPublishedRevisionExport(E2ETestBase):
     def test_domjudge_and_icpc_2025_are_independent_projections(self) -> None:
         _problem_id, commit, verified = self._verified_revision()
         with patch.object(
-            runtime.export_service.projection_service._tex_compile_service,
+            runtime.tex_compile_service,
             "compile_pdf",
             side_effect=self._compile_statement,
         ):
@@ -582,7 +582,7 @@ class TestPublishedRevisionExport(E2ETestBase):
             ),
         )
         with patch.object(
-            runtime.export_service.projection_service._tex_compile_service,
+            runtime.tex_compile_service,
             "compile_pdf",
             side_effect=self._compile_statement,
         ):
@@ -665,7 +665,7 @@ class TestPublishedRevisionExport(E2ETestBase):
                 side_effect=insert_while_rebuild_competes,
             ),
             patch.object(
-                runtime.export_service.projection_service._tex_compile_service,
+            runtime.tex_compile_service,
                 "compile_pdf",
                 side_effect=self._compile_statement,
             ),

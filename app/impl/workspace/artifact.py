@@ -4,9 +4,9 @@ from fastapi import HTTPException
 from fastapi.responses import FileResponse
 
 from app.impl.runtime.dependency import runtime
-from app.main_util import contains_symlink_component
 from app.service.platform.process import is_canonical_artifact_id
 from app.service.platform.runtime_blob_store import PayloadFile
+from app.service.platform.workspace_path import contains_symlink_component
 from app.service.verification.artifact import artifact_virtual_path
 
 
@@ -78,7 +78,6 @@ def verification_blob_virtual_rel(token: str, *, filename: str = "") -> str:
     safe_token = str(token or "").strip()
     if not safe_token:
         return ""
-    _ = filename
     return artifact_virtual_path(safe_token)
 
 

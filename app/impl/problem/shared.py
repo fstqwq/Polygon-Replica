@@ -17,8 +17,11 @@ from app.impl.workspace.context_operation import (
     write_build_config,
 )
 from app.impl.workspace.context_ui import page_ctx
-from app.main_util import normalize_component_source_path, normalize_workspace_rel_path
-from app.service.platform.workspace_path import safe_workspace_path
+from app.main_util import normalize_component_source_path
+from app.service.platform.workspace_path import (
+    normalize_workspace_rel_path,
+    safe_workspace_path,
+)
 
 MAIN_CORRECT_EXPECTED_VALUE = "main_correct"
 MAIN_CORRECT_EXPECTED_LABEL = "main correct solution (AC)"

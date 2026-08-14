@@ -14,13 +14,6 @@ from app.impl.workspace.context_job import start_export_job
 from app.impl.workspace.context_ui import page_ctx
 
 
-def _format_display(package_format: str) -> str:
-    return {
-        "domjudge": "DOMjudge",
-        "icpc-2025-09": "ICPC 2025-09",
-    }.get(package_format, package_format or "-")
-
-
 def export_page(
     request: Request,
     problem: str,
@@ -63,7 +56,9 @@ def export_page(
                 "created_at": row["created_at"],
                 "status": row["status"],
                 "phase": runtime().export_service.job_phase(row),
-                "format_display": _format_display(row["export_type"]),
+                "format_display": runtime()
+                .export_service.package_adapters.require(row["export_type"])
+                .display_name,
                 "source_display": (
                     f"v{revision_number}" if revision_number is not None else "unavailable"
                 ),
@@ -102,6 +97,7 @@ def export_page(
             "verified_readiness": readiness,
             "activity_rows": activity_rows,
             "verified_revisions": verified_revisions,
+            "package_adapters": runtime().export_service.package_adapters.adapters,
         },
     )
 
@@ -131,8 +127,9 @@ def export_create(
     package_format = format.lower()
     job_id = f"exp-{uuid.uuid4().hex[:12]}"
     try:
-        if package_format not in {"domjudge", "icpc-2025-09"}:
-            raise ValueError("unsupported package format")
+        package_format = runtime().export_service.package_adapters.require_format(
+            package_format
+        )
         started = start_export_job(
             runtime(),
             problem,

@@ -42,7 +42,6 @@ class TestMaintenanceAdmissionMiddleware(unittest.IsolatedAsyncioTestCase):
 
         async def downstream(scope, receive, send) -> None:
             nonlocal downstream_called
-            _ = (scope, receive, send)
             downstream_called = True
 
         async def receive() -> dict[str, object]:
@@ -179,7 +178,6 @@ class TestMaintenanceAdmissionMiddleware(unittest.IsolatedAsyncioTestCase):
         sent: list[dict[str, object]] = []
 
         async def downstream(scope, receive, send) -> None:
-            _ = (scope, receive)
             await send(
                 {
                     "type": "http.response.start",
@@ -238,7 +236,6 @@ class TestMaintenanceAdmissionMiddleware(unittest.IsolatedAsyncioTestCase):
 
         async def downstream(scope, receive, send) -> None:
             nonlocal downstream_called
-            _ = (scope, receive, send)
             downstream_called = True
 
         async def receive() -> dict[str, object]:
@@ -280,7 +277,6 @@ class TestMaintenanceAdmissionMiddleware(unittest.IsolatedAsyncioTestCase):
 
         async def downstream(scope, receive, send) -> None:
             nonlocal downstream_called
-            _ = (scope, receive)
             downstream_called = True
             await send({"type": "http.response.start", "status": 200, "headers": []})
             await send({"type": "http.response.body", "body": b"admin"})

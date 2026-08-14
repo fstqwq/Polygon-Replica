@@ -5,7 +5,7 @@ from pathlib import Path
 
 from app.service.contest.naming import problem_slug_file_token
 from app.service.contest.service import ContestService
-from app.service.export.projection import PackageFormat, PackageProjectionService
+from app.service.export.adapters import PackageAdapterRegistry, PackageFormat
 from app.service.problem_package.service import VerifiedRevisionReader
 
 
@@ -15,10 +15,10 @@ class ContestPackageService:
     def __init__(
         self,
         contest_service: ContestService,
-        projector: PackageProjectionService,
+        package_adapters: PackageAdapterRegistry,
     ) -> None:
         self._contest = contest_service
-        self._projector = projector
+        self._package_adapters = package_adapters
 
     @staticmethod
     def _zip_directory(destination: Path, source_dir: Path) -> Path:
@@ -40,10 +40,9 @@ class ContestPackageService:
         package_format: PackageFormat,
         readers: dict[str, VerifiedRevisionReader],
     ) -> dict[str, object]:
+        adapter = self._package_adapters.require(package_format)
         job_root = self._contest.job_root(contest_slug, job_id)
-        output_token = (
-            "domjudge" if package_format == "domjudge" else "icpc-2025-09"
-        )
+        output_token = adapter.format
         staging = job_root / f".{output_token}-bundle-staging"
         shutil.rmtree(staging, ignore_errors=True)
         package_roots = staging / "package-roots"
@@ -76,12 +75,11 @@ class ContestPackageService:
                     reader = readers[materialization_id]
                     package_root = package_roots / str(entry["contest_problem_id"])
                     package_root.mkdir(parents=True, exist_ok=False)
-                    item["warning"] = self._projector.project(
+                    item["warning"] = adapter.build(
                         reader,
-                        package_format=package_format,
                         target=package_root,
                         canonical_problem_slug=problem_slug,
-                        short_name=label if package_format == "domjudge" else None,
+                        short_name=label if adapter.accepts_short_name else None,
                     )
                     token = problem_slug_file_token(problem_slug)
                     filename = f"{label}-{token}.zip" if label else f"{token}.zip"
@@ -130,7 +128,7 @@ class ContestPackageService:
                 summary["warnings"] = warnings
             if failed:
                 errors = [str(row["error"]) for row in failed]
-                summary["error"] = errors[0] or "problem projection failed"
+                summary["error"] = errors[0] or "problem package build failed"
                 if len(failed) == len(results) and len(failed) > 1:
                     if len(set(errors)) == 1 and errors[0]:
                         summary["common_error"] = errors[0]
