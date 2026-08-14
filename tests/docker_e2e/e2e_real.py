@@ -50,8 +50,8 @@ AGENT_SPECIAL_VERDICTS = {
     "solutions/ce.cpp": "CE",
 }
 LARGE_VALUE_COUNT = 600_000
-LARGE_VALID_GENERATOR_COMMAND = f"gen.py {LARGE_VALUE_COUNT} 0 42\n"
-LARGE_INVALID_GENERATOR_COMMAND = f"gen.py {LARGE_VALUE_COUNT} 0 13\n"
+LARGE_VALID_GENERATOR_COMMAND = f"gen.py {LARGE_VALUE_COUNT} 1 42\n"
+LARGE_INVALID_GENERATOR_COMMAND = f"gen.py {LARGE_VALUE_COUNT} 1 13\n"
 LARGE_VALIDATOR_DIAGNOSTIC = "E2E validator diagnostic: sentinel must be 42"
 
 
@@ -844,8 +844,8 @@ def _assert_public_artifacts(
 def _large_generated_input(sentinel: int) -> bytes:
     return (
         f"{LARGE_VALUE_COUNT}\n".encode("ascii")
-        + (b"0 " * (LARGE_VALUE_COUNT - 1))
-        + b"0\n"
+        + (b"1 " * (LARGE_VALUE_COUNT - 1))
+        + b"1\n"
         + f"{sentinel}\n".encode("ascii")
     )
 
@@ -1529,7 +1529,17 @@ def verify_deployment() -> None:
                 "300",
             )
             if waited != {"verification_id": verification_id, "status": "ok"}:
-                raise RuntimeError(f"Agent verification failed: {waited!r}")
+                detail = _agent_cli(
+                    "verify-detail",
+                    "--problem",
+                    PROBLEM,
+                    "--verification-id",
+                    verification_id,
+                )
+                detail_text = str(detail.get("detail_text") or "")
+                raise RuntimeError(
+                    f"Agent verification failed: {waited!r}\n{detail_text[:8000]}"
+                )
             verification = _wait_for_verification(
                 connection,
                 problem_id=problem_id,
