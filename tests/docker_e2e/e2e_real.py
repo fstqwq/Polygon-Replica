@@ -119,9 +119,9 @@ BASE_FIXTURE_FILES = {
     "validators/validate.cpp": (
         '#include "testlib.h"\n'
         "int main(int argc, char **argv) { registerValidation(argc, argv); "
-        'int count = inf.readInt(1, 700000, "count"); inf.readEoln(); '
+        f'int count = inf.readInt(1, {LARGE_VALUE_COUNT}, "count"); inf.readEoln(); '
         "for (int i = 0; i < count; ++i) { "
-        'inf.readLong(-1000000000LL, 1000000000LL, "value"); '
+        'inf.readLong(1, 7, "value"); '
         "if (i + 1 < count) inf.readSpace(); } inf.readEoln(); "
         'int sentinel = inf.readInt(); inf.readEoln(); inf.readEof(); '
         'if (sentinel != 42) quitf(_fail, "E2E validator diagnostic: '
@@ -1561,8 +1561,17 @@ def verify_deployment() -> None:
                     f"successful verification retained a failure: {dict(verification)!r}"
                 )
             if str(verification["sanity_status"] or "") != "passed":
+                detail = _agent_cli(
+                    "verify-detail",
+                    "--problem",
+                    PROBLEM,
+                    "--verification-id",
+                    verification_id,
+                )
+                detail_text = str(detail.get("detail_text") or "")
                 raise RuntimeError(
-                    "Agent verification sanity checks did not pass"
+                    "Agent verification sanity checks did not pass:\n"
+                    f"{detail_text[:8000]}"
                 )
             _assert_tasks(
                 connection,

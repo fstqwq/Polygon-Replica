@@ -156,7 +156,10 @@ class TestJudgehostRuntimeService(DBTestBase):
         source_root = Path(self.settings.cache_root) / "missing-submission-source"
         source_root.mkdir(parents=True, exist_ok=True)
         source_path = source_root / "lost.cpp"
-        source_path.write_bytes(b"int main(){return 0;}\n")
+        source_path.write_text(
+            f"// {uuid.uuid4().hex}\nint main(){{return 0;}}\n",
+            encoding="utf-8",
+        )
         descriptor = RuntimeBlobStore.describe_file(source_path)
         source_path.unlink()
 
