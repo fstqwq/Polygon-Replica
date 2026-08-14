@@ -204,10 +204,24 @@ def _assert_artifact_refs(
         raise RuntimeError("verification omitted generated-test artifact refs")
     input_ref = refs["generated-input"]
     answer_ref = refs["accepted-answer"]
-    if _read_blob(input_ref) != expected_input:
-        raise RuntimeError("generator input ref does not resolve to the expected output")
-    if _read_blob(answer_ref) != expected_answer:
-        raise RuntimeError("main-correct answer ref does not resolve to the expected output")
+    actual_input = _read_blob(input_ref)
+    if actual_input != expected_input:
+        raise RuntimeError(
+            "generator input artifact differs from the verified output: "
+            f"verification_id={verification_id!r} ref={input_ref!r} "
+            f"expected_size={len(expected_input)} actual_size={len(actual_input)} "
+            f"expected_prefix={expected_input[:80]!r} "
+            f"actual_prefix={actual_input[:80]!r}"
+        )
+    actual_answer = _read_blob(answer_ref)
+    if actual_answer != expected_answer:
+        raise RuntimeError(
+            "main-correct answer artifact differs from the verified output: "
+            f"verification_id={verification_id!r} ref={answer_ref!r} "
+            f"expected_size={len(expected_answer)} actual_size={len(actual_answer)} "
+            f"expected_prefix={expected_answer[:80]!r} "
+            f"actual_prefix={actual_answer[:80]!r}"
+        )
 
 
 def _assert_preview_sample_materialization(

@@ -181,7 +181,12 @@ def _assert_contest_database(
             "solutions/ce.cpp": "CE",
         },
     )
-    _assert_artifact_refs(connection, verification_id)
+    _assert_artifact_refs(
+        connection,
+        verification_id,
+        expected_input=b"1\n7\n42\n",
+        expected_answer=b"49\n",
+    )
 
     artifact = connection.execute(
         """
