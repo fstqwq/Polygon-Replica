@@ -829,7 +829,7 @@ def _assert_public_artifacts(
         "tests/001.in": b"1\n7\n42\n",
         "ans/001.ans": b"49\n",
         "tests/002.in": _large_generated_input(42),
-        "ans/002.ans": b"0\n",
+        "ans/002.ans": f"{LARGE_VALUE_COUNT}\n".encode("ascii"),
     }
     for relative_path, content in expected.items():
         response = client.get(
