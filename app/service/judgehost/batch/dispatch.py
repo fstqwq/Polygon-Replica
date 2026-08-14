@@ -15,8 +15,10 @@ from app.service.judgehost.batch.model import (
     ExecutionBatchRecord,
     ExecutionBatchRow,
     ExecutionBatchSpec,
+    LeaseClaim,
     HostLeaseTelemetry,
     HostTelemetryRow,
+    MaterializationClaim,
     HostTelemetryState,
     JudgehostCaseRow,
 )
@@ -25,6 +27,7 @@ from app.service.judgehost.batch.policy import (
     SchedulingDecision,
     SchedulingSnapshot,
 )
+from app.service.judgehost.batch.snapshot import batch_snapshot, case_snapshot
 
 if TYPE_CHECKING:
     from app.service.judgehost.batch.state import BatchState
@@ -61,7 +64,8 @@ class BatchDispatch:
         retained = deque(
             batch_id
             for batch_id in queue_ids
-            if (batch := self._state._batches.get(batch_id)) is not None and batch.status == "open"
+            if (batch := self._state._batches.get(batch_id)) is not None
+            and batch.status == "open"
         )
         if retained:
             self._state._affinity_batches_by_host[hostname] = retained
@@ -90,7 +94,8 @@ class BatchDispatch:
             batch = self._state._batches.get(batch_id)
             if (
                 batch is not None
-                and self._state._batch_next_case_locked(batch, hostname=hostname) is not None
+                and self._state._batch_next_case_locked(batch, hostname=hostname)
+                is not None
             ):
                 return batch
         return None
@@ -126,9 +131,11 @@ class BatchDispatch:
             task_kinds = (
                 ("generate-input",)
                 if blocked.task_kind == "main-correct"
-                else self._state._PREREQUISITE_TASK_KINDS
-                if blocked.task_kind not in {"generate-input", "compile-only"}
-                else ()
+                else (
+                    self._state._PREREQUISITE_TASK_KINDS
+                    if blocked.task_kind not in {"generate-input", "compile-only"}
+                    else ()
+                )
             )
             for task_kind in task_kinds:
                 batch = self._peek_ready_prerequisite_locked(
@@ -223,7 +230,8 @@ class BatchDispatch:
             stolen = self._state._batches.get(stolen_batch_id)
             if (
                 stolen is None
-                or self._state._batch_next_case_locked(stolen, hostname=hostname) is None
+                or self._state._batch_next_case_locked(stolen, hostname=hostname)
+                is None
             ):
                 self._state._stolen_batch_by_host.pop(hostname, None)
                 stolen_batch_id = None
@@ -262,9 +270,13 @@ class BatchDispatch:
             leased_batch_id=leased_batch_id,
             foreground_batch_id=foreground_batch_id,
             affinity_batch_ids=affinity_ids,
-            affinity_ready_batch_id=(None if affinity_batch is None else affinity_batch.batch_id),
+            affinity_ready_batch_id=(
+                None if affinity_batch is None else affinity_batch.batch_id
+            ),
             stolen_batch_id=stolen_batch_id,
-            prerequisite_batch_id=(None if prerequisite is None else prerequisite.batch_id),
+            prerequisite_batch_id=(
+                None if prerequisite is None else prerequisite.batch_id
+            ),
             global_batch_id=None if global_batch is None else global_batch.batch_id,
             candidates=candidates,
         )
@@ -281,7 +293,10 @@ class BatchDispatch:
         if decision.batch_id not in candidate_ids:
             return None
         batch = self._state._batches.get(decision.batch_id)
-        if batch is None or self._state._batch_next_case_locked(batch, hostname=hostname) is None:
+        if (
+            batch is None
+            or self._state._batch_next_case_locked(batch, hostname=hostname) is None
+        ):
             return None
         if decision.increment_dispatch:
             self._dispatch_batch_locked(batch)
@@ -301,7 +316,7 @@ class BatchDispatch:
         with self._state._lock:
             affinity_ids = self._prune_host_context_locked(hostname)
             return [
-                self._state._batch_row(self._state._batches[batch_id])
+                batch_snapshot(self._state._batches[batch_id])
                 for batch_id in affinity_ids
                 if batch_id in self._state._batches
             ]
@@ -317,7 +332,7 @@ class BatchDispatch:
             )
             if selected is None:
                 return None
-            return self._state._batch_row(selected)
+            return batch_snapshot(selected)
 
     def wait_for_ready_batch(self, timeout_sec: float) -> bool:
         """Wait for one readiness transition without retaining the Scheduler lock."""
@@ -339,7 +354,11 @@ class BatchDispatch:
         """Return a case-state count without scanning a batch's cases."""
         with self._state._lock:
             counts = self._state._batch_counts.get(int(batch_id))
-            return 0 if counts is None else int(getattr(counts, self._state._status_attr(status)))
+            return (
+                0
+                if counts is None
+                else int(getattr(counts, self._state._status_attr(status)))
+            )
 
     def batch_dispatch_count(self, batch_id: int) -> int:
         """Return the process-local number of non-affinity dispatches."""
@@ -358,7 +377,7 @@ class BatchDispatch:
     def cases_for_host(self, hostname: str) -> list[JudgehostCaseRow]:
         with self._state._lock:
             return [
-                self._state._case_row(self._state._cases[case_id])
+                case_snapshot(self._state._cases[case_id])
                 for case_id in self._state._leased_case_ids_by_host.get(hostname, ())
                 if case_id in self._state._cases
             ]
@@ -376,7 +395,9 @@ class BatchDispatch:
             return
         with self._state._lock:
             self._state._drop_host_telemetry_batch_locked(hostname)
-            telemetry = self._state._host_telemetry.setdefault(hostname, HostTelemetryState())
+            telemetry = self._state._host_telemetry.setdefault(
+                hostname, HostTelemetryState()
+            )
             telemetry.active_batch = HostLeaseTelemetry(
                 batch_id=int(batch_id),
                 pending_case_ids=pending_case_ids,
@@ -396,7 +417,9 @@ class BatchDispatch:
                         None
                         if telemetry.last_judging is None
                         else {
-                            "verification_id": telemetry.last_judging["verification_id"],
+                            "verification_id": telemetry.last_judging[
+                                "verification_id"
+                            ],
                             "problem_slug": telemetry.last_judging["problem_slug"],
                             "task_kind": telemetry.last_judging["task_kind"],
                             "source_label": telemetry.last_judging["source_label"],
@@ -419,26 +442,12 @@ class BatchDispatch:
                 return None
             return self._state._compile_submissions_by_key.get(batch.compile_key)
 
-    def publish_materialized_compile_submission(
+    def claim_materialization(
         self,
-        compile_key: str,
-        submission: CompileSubmission,
-    ) -> None:
-        with self._state._lock:
-            original = self._state._compile_submissions_by_key.get(compile_key)
-            if original is None:
-                raise RuntimeError("compile submission disappeared during materialization")
-            if self._state._compile_submission_identity(
-                submission
-            ) != self._state._compile_submission_identity(
-                original
-            ) or not self._state._compile_submission_is_materialized(
-                submission
-            ):
-                raise RuntimeError("materialized compile submission identity changed")
-            self._state._compile_submissions_by_key[compile_key] = submission
-
-    def claim_materialization(self, batch_id: int, *, now_text: str) -> bool:
+        batch_id: int,
+        *,
+        now_text: str,
+    ) -> MaterializationClaim | None:
         with self._state._lock:
             batch = self._state._batches.get(int(batch_id))
             if (
@@ -446,35 +455,77 @@ class BatchDispatch:
                 or batch.status != "open"
                 or batch.materialization_state != "unmaterialized"
             ):
-                return False
-            self._state._mutate_batch_locked(
-                batch, materialization_state="materializing", updated_at=now_text
+                return None
+            spec = self._state._batch_specs.get(batch.batch_id)
+            submission = self._state._compile_submissions_by_key.get(batch.compile_key)
+            if spec is None or submission is None:
+                return None
+            generation = (
+                self._state._materialization_generation_by_batch.get(batch.batch_id, 0)
+                + 1
             )
-            return True
+            self._state._materialization_generation_by_batch[batch.batch_id] = (
+                generation
+            )
+            batch.materialization_state = "materializing"
+            batch.updated_at = now_text
+            self._state._touch_batch_locked(batch)
+            return MaterializationClaim(
+                batch_id=batch.batch_id,
+                generation=generation,
+                batch=batch_snapshot(batch),
+                spec=spec,
+                submission=submission,
+            )
 
     def finish_materialization(
         self,
-        batch_id: int,
+        claim: MaterializationClaim,
         *,
         success: bool,
+        materialized_submission: CompileSubmission | None,
         error_text: str,
         now_text: str,
     ) -> bool:
         with self._state._lock:
-            batch = self._state._batches.get(int(batch_id))
+            batch = self._state._batches.get(claim.batch_id)
             if (
                 batch is None
                 or batch.status != "open"
                 or batch.materialization_state != "materializing"
+                or self._state._materialization_generation_by_batch.get(claim.batch_id)
+                != claim.generation
             ):
                 return False
-            self._state._mutate_batch_locked(
-                batch,
-                materialization_state="ready" if success else "failed",
-                failure_runresult=batch.failure_runresult if success else "internal-error",
-                failure_text=batch.failure_text if success else error_text,
-                updated_at=now_text,
-            )
+            if success:
+                if materialized_submission is None:
+                    raise RuntimeError("materialized compile submission is required")
+                original = self._state._compile_submissions_by_key.get(
+                    batch.compile_key
+                )
+                if original is None:
+                    raise RuntimeError(
+                        "compile submission disappeared during materialization"
+                    )
+                if self._state._compile_submission_identity(
+                    materialized_submission
+                ) != self._state._compile_submission_identity(
+                    original
+                ) or not self._state._compile_submission_is_materialized(
+                    materialized_submission
+                ):
+                    raise RuntimeError(
+                        "materialized compile submission identity changed"
+                    )
+                self._state._compile_submissions_by_key[batch.compile_key] = (
+                    materialized_submission
+                )
+            batch.materialization_state = "ready" if success else "failed"
+            if not success:
+                batch.failure_runresult = "internal-error"
+                batch.failure_text = error_text
+            batch.updated_at = now_text
+            self._state._touch_batch_locked(batch)
             counts = self._state._batch_counts[batch.batch_id]
             if (
                 (
@@ -491,14 +542,14 @@ class BatchDispatch:
                 self._state._close_batch_locked(batch, updated_at=now_text)
             return True
 
-    def lease_cases(
+    def claim_lease(
         self,
         batch_id: int,
         *,
         hostname: str,
         limit: int,
         now_text: str,
-    ) -> list[JudgehostCaseRow]:
+    ) -> LeaseClaim | None:
         cap = max(1, min(256, int(limit)))
         with self._state._lock:
             batch = self._state._batches.get(int(batch_id))
@@ -508,22 +559,24 @@ class BatchDispatch:
                 or batch.materialization_state != "ready"
                 or batch.compile_state == "failed"
             ):
-                return []
+                return None
             first = self._state._peek_case_heap_locked(batch.batch_id, status="pending")
             if first is None:
-                return []
+                return None
             if (
                 self._state._scheduling_policy.single_compile_owner
                 and batch.compile_state == "unknown"
             ):
                 compile_owner = self._state._compile_owner_by_batch.get(batch.batch_id)
                 if compile_owner not in {None, hostname}:
-                    return []
+                    return None
                 self._state._compile_owner_by_batch[batch.batch_id] = hostname
                 cap = 1
             leased: list[JudgehostCaseRow] = []
             while len(leased) < cap:
-                case = self._state._peek_case_heap_locked(batch.batch_id, status="pending")
+                case = self._state._peek_case_heap_locked(
+                    batch.batch_id, status="pending"
+                )
                 if case is None:
                     break
                 heapq.heappop(self._state._runnable_heaps_by_batch[batch.batch_id])
@@ -535,6 +588,51 @@ class BatchDispatch:
                     updated_at=now_text,
                     refresh_batch=False,
                 )
-                leased.append(self._state._case_row(case))
+                leased.append(case_snapshot(case))
             self._state._refresh_batches_locked({batch.batch_id})
-            return leased
+            if not leased:
+                return None
+            return LeaseClaim(
+                batch_id=batch.batch_id,
+                hostname=hostname,
+                cases=tuple(leased),
+                generations=tuple(
+                    (row["id"], self._state._cases[row["id"]].claim_generation)
+                    for row in leased
+                ),
+            )
+
+    def commit_lease(self, claim: LeaseClaim) -> bool:
+        with self._state._lock:
+            return all(
+                (case := self._state._cases.get(case_id)) is not None
+                and case.status == "leased"
+                and case.lease_owner == claim.hostname
+                and case.claim_generation == generation
+                for case_id, generation in claim.generations
+            )
+
+    def abort_lease(self, claim: LeaseClaim, *, now_text: str) -> bool:
+        with self._state._lock:
+            affected: set[int] = set()
+            for case_id, generation in claim.generations:
+                case = self._state._cases.get(case_id)
+                if (
+                    case is None
+                    or case.status != "leased"
+                    or case.lease_owner != claim.hostname
+                    or case.claim_generation != generation
+                ):
+                    continue
+                status = "cancelled" if case.cancel_requested else "pending"
+                case.cancel_requested = False
+                self._state._transition_case_locked(
+                    case,
+                    status,
+                    lease_owner=None,
+                    updated_at=now_text,
+                    refresh_batch=False,
+                )
+                affected.add(case.batch_id)
+            self._state._refresh_batches_locked(affected, updated_at=now_text)
+            return bool(affected)

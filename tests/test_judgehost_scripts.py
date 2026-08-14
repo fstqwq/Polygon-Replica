@@ -1,4 +1,4 @@
-import os
+﻿import os
 import shutil
 import subprocess
 import tempfile
@@ -8,11 +8,16 @@ from types import SimpleNamespace
 
 from app.config import build_config_values
 from app.service.judgehost.callback.pass_bundle import parse_pass_bundle
-from app.service.judgehost.domjudge.toolkit import DomjudgeToolkit
+from app.service.judgehost.configuration import (
+    JudgehostConfiguration,
+    JudgehostSettings,
+)
+from app.service.judgehost.domjudge.scripts import DomjudgeScriptCatalog
 from app.service.platform.hashing import compile_command_digest
 
-
-config = SimpleNamespace(config_values=build_config_values(), judgehost_task_service=None)
+config = SimpleNamespace(
+    config_values=build_config_values(), judgehost_task_service=None
+)
 
 
 class TestJudgehostScripts(unittest.TestCase):
@@ -20,15 +25,16 @@ class TestJudgehostScripts(unittest.TestCase):
         self._root = tempfile.TemporaryDirectory(prefix="judgehost-scripts-")
         self.addCleanup(self._root.cleanup)
         config.config_values = build_config_values()
-        state = SimpleNamespace(
-            config_values=config.config_values,
-        )
-        config.judgehost_task_service = SimpleNamespace(toolkit=DomjudgeToolkit(state))
+        config.judgehost_task_service = SimpleNamespace(scripts=DomjudgeScriptCatalog())
+
+    @staticmethod
+    def _settings() -> JudgehostSettings:
+        return JudgehostConfiguration(config.config_values).snapshot()
 
     def _write_pass_capture(self, root: Path, *, max_bytes: int) -> Path:
         capture = root / "pass-capture"
-        toolkit = config.judgehost_task_service.toolkit
-        capture.write_bytes(toolkit.pass_capture_script(max_bytes=max_bytes))
+        toolkit = config.judgehost_task_service.scripts
+        capture.write_bytes(toolkit.pass_capture(max_bytes=max_bytes))
         os.chmod(capture, 0o755)
         return capture
 
@@ -56,8 +62,7 @@ class TestJudgehostScripts(unittest.TestCase):
                 "custom-program-field: retained\n"
             ).encode(),
             "compare.meta": (
-                "exitcode: 42\n"
-                f"custom-compare-field: pass-{number}\n"
+                "exitcode: 42\n" f"custom-compare-field: pass-{number}\n"
             ).encode(),
             "feedback/judgemessage.txt": f"judge {number}\n".encode(),
             "feedback/teammessage.txt": f"team {number}\n".encode(),
@@ -193,9 +198,11 @@ class TestJudgehostScripts(unittest.TestCase):
             )
             self.assertNotIn("judgemessage.txt", bundle.pass_files(2))
 
-    def test_domjudge_compare_script_uses_testlib_arg_convention_with_stdin_team_output(self) -> None:
+    def test_domjudge_compare_script_uses_testlib_arg_convention_with_stdin_team_output(
+        self,
+    ) -> None:
         service = config.judgehost_task_service
-        script_text = service.toolkit.compare_script().decode("utf-8")
+        script_text = service.scripts.compare().decode("utf-8")
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             run_script = root / "run"
@@ -207,30 +214,30 @@ class TestJudgehostScripts(unittest.TestCase):
             checker.write_text(
                 "#!/bin/sh\n"
                 "set -eu\n"
-                "if [ \"$#\" -lt 3 ]; then\n"
-                "  echo \"bad argc:$#\"\n"
+                'if [ "$#" -lt 3 ]; then\n'
+                '  echo "bad argc:$#"\n'
                 "  exit 3\n"
                 "fi\n"
-                "case \"$2\" in\n"
+                'case "$2" in\n'
                 "  */001.ans) ;;\n"
                 "  *)\n"
-                "    echo \"bad answer arg\"\n"
+                '    echo "bad answer arg"\n'
                 "    exit 3\n"
                 "    ;;\n"
                 "esac\n"
-                "case \"$3\" in\n"
+                'case "$3" in\n'
                 "  */feedback) ;;\n"
                 "  *)\n"
-                "    echo \"bad report output arg\"\n"
+                '    echo "bad report output arg"\n'
                 "    exit 3\n"
                 "    ;;\n"
                 "esac\n"
-                "read token || { echo \"Unexpected end of file - double expected\"; exit 43; }\n"
-                "if [ \"$token\" = \"20\" ]; then\n"
-                "  echo \"ok\"\n"
+                'read token || { echo "Unexpected end of file - double expected"; exit 43; }\n'
+                'if [ "$token" = "20" ]; then\n'
+                '  echo "ok"\n'
                 "  exit 42\n"
                 "fi\n"
-                "echo \"wrong answer\"\n"
+                'echo "wrong answer"\n'
                 "exit 43\n",
                 encoding="utf-8",
             )
@@ -247,12 +254,14 @@ class TestJudgehostScripts(unittest.TestCase):
                 check=False,
             )
             self.assertEqual(result.returncode, 42)
-            checker_log = (feedback / "checker.log").read_text(encoding="utf-8", errors="replace")
+            checker_log = (feedback / "checker.log").read_text(
+                encoding="utf-8", errors="replace"
+            )
             self.assertIn("ok", checker_log)
 
     def test_domjudge_compare_script_preserves_checker_fail_exit_code(self) -> None:
         service = config.judgehost_task_service
-        script_text = service.toolkit.compare_script().decode("utf-8")
+        script_text = service.scripts.compare().decode("utf-8")
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             run_script = root / "run"
@@ -264,7 +273,7 @@ class TestJudgehostScripts(unittest.TestCase):
             checker.write_text(
                 "#!/bin/sh\n"
                 "set -eu\n"
-                "echo \"FAIL Can not write to the result file (test case 1)\"\n"
+                'echo "FAIL Can not write to the result file (test case 1)"\n'
                 "exit 3\n",
                 encoding="utf-8",
             )
@@ -281,12 +290,16 @@ class TestJudgehostScripts(unittest.TestCase):
             )
             self.assertEqual(result.returncode, 3)
             self.assertIn("FAIL Can not write to the result file", result.stderr)
-            judge_message = (feedback / "judgemessage.txt").read_text(encoding="utf-8", errors="replace")
+            judge_message = (feedback / "judgemessage.txt").read_text(
+                encoding="utf-8", errors="replace"
+            )
             self.assertIn("FAIL Can not write to the result file", judge_message)
 
-    def test_domjudge_compare_script_preserves_existing_judgemessage_on_checker_fail(self) -> None:
+    def test_domjudge_compare_script_preserves_existing_judgemessage_on_checker_fail(
+        self,
+    ) -> None:
         service = config.judgehost_task_service
-        script_text = service.toolkit.compare_script().decode("utf-8")
+        script_text = service.scripts.compare().decode("utf-8")
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             run_script = root / "run"
@@ -298,8 +311,8 @@ class TestJudgehostScripts(unittest.TestCase):
             checker.write_text(
                 "#!/bin/sh\n"
                 "set -eu\n"
-                "mkdir -p \"$3\"\n"
-                "echo \"FAIL checker detailed message\" >\"$3/judgemessage.txt\"\n"
+                'mkdir -p "$3"\n'
+                'echo "FAIL checker detailed message" >"$3/judgemessage.txt"\n'
                 "exit 3\n",
                 encoding="utf-8",
             )
@@ -316,12 +329,16 @@ class TestJudgehostScripts(unittest.TestCase):
             )
             self.assertEqual(result.returncode, 3)
             self.assertIn("FAIL checker detailed message", result.stderr)
-            judge_message = (feedback / "judgemessage.txt").read_text(encoding="utf-8", errors="replace")
+            judge_message = (feedback / "judgemessage.txt").read_text(
+                encoding="utf-8", errors="replace"
+            )
             self.assertIn("FAIL checker detailed message", judge_message)
 
-    def test_domjudge_compare_script_in_main_correct_mode_uses_self_answer(self) -> None:
+    def test_domjudge_compare_script_in_main_correct_mode_uses_self_answer(
+        self,
+    ) -> None:
         service = config.judgehost_task_service
-        script_text = service.toolkit.compare_script(main_correct=True).decode("utf-8")
+        script_text = service.scripts.compare(main_correct=True).decode("utf-8")
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             run_script = root / "run"
@@ -344,7 +361,7 @@ class TestJudgehostScripts(unittest.TestCase):
 
     def test_domjudge_compare_script_in_main_correct_mode_runs_checker(self) -> None:
         service = config.judgehost_task_service
-        script_text = service.toolkit.compare_script(main_correct=True).decode("utf-8")
+        script_text = service.scripts.compare(main_correct=True).decode("utf-8")
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             run_script = root / "run"
@@ -355,9 +372,9 @@ class TestJudgehostScripts(unittest.TestCase):
             run_script.write_text(script_text, encoding="utf-8")
             checker.write_text(
                 "#!/bin/sh\n"
-                "ans=$(cat \"$2\")\n"
+                'ans=$(cat "$2")\n'
                 "out=$(cat)\n"
-                "[ \"$ans\" = \"$out\" ] || exit 43\n"
+                '[ "$ans" = "$out" ] || exit 43\n'
                 "printf 'checker ok\\n' >\"$3/judgemessage.txt\"\n"
                 "exit 42\n",
                 encoding="utf-8",
@@ -376,7 +393,9 @@ class TestJudgehostScripts(unittest.TestCase):
                 cwd=root,
             )
             self.assertEqual(result.returncode, 42, result.stderr)
-            judge_message = (feedback / "judgemessage.txt").read_text(encoding="utf-8", errors="replace")
+            judge_message = (feedback / "judgemessage.txt").read_text(
+                encoding="utf-8", errors="replace"
+            )
             self.assertIn("checker ok", judge_message)
 
     def test_domjudge_compile_script_uses_configurable_flags(self) -> None:
@@ -387,14 +406,19 @@ class TestJudgehostScripts(unittest.TestCase):
         patched["TOOLCHAIN_CPP_COMPILER"] = "clang++"
         patched["TOOLCHAIN_JAVA_COMPILER"] = "javac-custom"
         patched["TOOLCHAIN_JUDGEHOST_CPP_COMPILE_FLAGS"] = "-O3 -std=gnu++20 -DNDEBUG"
-        patched["TOOLCHAIN_JUDGEHOST_JAVA_COMPILE_FLAGS"] = "--release 17 -encoding UTF-8"
+        patched["TOOLCHAIN_JUDGEHOST_JAVA_COMPILE_FLAGS"] = (
+            "--release 17 -encoding UTF-8"
+        )
         patched["TOOLCHAIN_JUDGEHOST_PYTHON_COMPILE_FLAGS"] = "-X dev"
         config.config_values.replace(patched)
 
-        c_script = service.toolkit.compile_script("submission.c").decode("utf-8")
-        cpp_script = service.toolkit.compile_script("submission.cpp").decode("utf-8")
-        java_script = service.toolkit.compile_script("submission.java").decode("utf-8")
-        py_script = service.toolkit.compile_script("submission.py").decode("utf-8")
+        settings = self._settings()
+        c_script = service.scripts.compile(settings, "submission.c").decode("utf-8")
+        cpp_script = service.scripts.compile(settings, "submission.cpp").decode("utf-8")
+        java_script = service.scripts.compile(settings, "submission.java").decode(
+            "utf-8"
+        )
+        py_script = service.scripts.compile(settings, "submission.py").decode("utf-8")
         self.assertIn(
             'exec gcc -O2 -std=gnu11 -pipe -I. "$MAIN" -o "$DEST" -lm',
             c_script,
@@ -407,7 +431,10 @@ class TestJudgehostScripts(unittest.TestCase):
         self.assertIn('-sourcepath . -d . "$@"', java_script)
         self.assertIn('"$PY" -X dev -m py_compile "$MAIN"', py_script)
 
-        public_specs = {spec["language_id"]: spec for spec in service.toolkit.public_compile_specs()}
+        public_specs = {
+            spec["language_id"]: spec
+            for spec in service.scripts.public_compile_specs(settings)
+        }
         self.assertEqual(public_specs["c"]["command"], "gcc")
         self.assertEqual(
             public_specs["c"]["arguments"],
@@ -425,36 +452,41 @@ class TestJudgehostScripts(unittest.TestCase):
         self.assertEqual(public_specs["cpp"]["command"], "clang++")
 
     def test_domjudge_compile_digest_uses_the_canonical_compile_spec(self) -> None:
-        toolkit = config.judgehost_task_service.toolkit
+        toolkit = config.judgehost_task_service.scripts
 
         self.assertEqual(
-            toolkit.toolchain_cmd_digest("submission.c"),
+            toolkit.toolchain_cmd_digest(self._settings(), "submission.c"),
             compile_command_digest(
                 "gcc",
                 ["-O2", "-std=gnu11", "-pipe", "-I.", "-lm"],
             ),
         )
         self.assertNotEqual(
-            toolkit.toolchain_cmd_digest("submission.c"),
-            toolkit.toolchain_cmd_digest("submission.cpp"),
+            toolkit.toolchain_cmd_digest(self._settings(), "submission.c"),
+            toolkit.toolchain_cmd_digest(self._settings(), "submission.cpp"),
         )
 
     def test_domjudge_java_compile_script_uses_detect_main_contract(self) -> None:
         service = config.judgehost_task_service
-        java_script = service.toolkit.compile_script("submission.java").decode("utf-8")
-        java_compile_only_script = service.toolkit.compile_script(
+        java_script = service.scripts.compile(
+            self._settings(), "submission.java"
+        ).decode("utf-8")
+        java_compile_only_script = service.scripts.compile(
+            self._settings(),
             "submission.java",
             compile_only=True,
         ).decode("utf-8")
         self.assertIn("trying to detect main class", java_script)
-        self.assertIn('DetectMain.java', java_script)
+        self.assertIn("DetectMain.java", java_script)
         self.assertIn('java -cp "$COMPILESCRIPTDIR" DetectMain', java_script)
         self.assertIn("trying to detect main class", java_compile_only_script)
-        self.assertIn('DetectMain.java', java_compile_only_script)
+        self.assertIn("DetectMain.java", java_compile_only_script)
 
     def test_domjudge_python_compile_script_works_without_entry_point_env(self) -> None:
         service = config.judgehost_task_service
-        script_text = service.toolkit.compile_script("submission.py").decode("utf-8")
+        script_text = service.scripts.compile(self._settings(), "submission.py").decode(
+            "utf-8"
+        )
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             script = root / "run"
@@ -479,9 +511,11 @@ class TestJudgehostScripts(unittest.TestCase):
             self.assertIn("exec ", launcher)
             self.assertIn("submission.py", launcher)
 
-    def test_domjudge_interactive_run_script_uses_official_runpipe_wrapper(self) -> None:
+    def test_domjudge_interactive_run_script_uses_official_runpipe_wrapper(
+        self,
+    ) -> None:
         service = config.judgehost_task_service
-        script_text = service.toolkit.run_script(True, main_correct=False).decode("utf-8")
+        script_text = service.scripts.run(True, main_correct=False).decode("utf-8")
         self.assertIn("runpipe", script_text)
         self.assertIn("runjury", script_text)
         self.assertIn("TESTOUT", script_text)
@@ -490,24 +524,34 @@ class TestJudgehostScripts(unittest.TestCase):
 
     def test_domjudge_cpp_executable_build_script_comes_from_asset(self) -> None:
         service = config.judgehost_task_service
-        script_text = service.toolkit.cpp_executable_build_script(
+        script_text = service.scripts.cpp_executable_build(
+            self._settings(),
             "interactor.cpp",
             role="interactor",
         ).decode("utf-8")
         self.assertIn("#!/bin/sh", script_text)
-        self.assertIn("Auto-generated build script for interactor by Polygon2DOMjudge", script_text)
-        self.assertIn("g++ -Wall -DDOMJUDGE -O2 interactor.cpp -std=gnu++20 -o interactor", script_text)
+        self.assertIn(
+            "Auto-generated build script for interactor by Polygon2DOMjudge",
+            script_text,
+        )
+        self.assertIn(
+            "g++ -Wall -DDOMJUDGE -O2 interactor.cpp -std=gnu++20 -o interactor",
+            script_text,
+        )
         self.assertIn("cp interactive.runjury run", script_text)
         self.assertIn("chmod +x run interactor", script_text)
         self.assertNotIn("chmod +x run interactor pass-capture", script_text)
 
-    def test_domjudge_cpp_interactor_build_does_not_mutate_auxiliary_payload(self) -> None:
+    def test_domjudge_cpp_interactor_build_does_not_mutate_auxiliary_payload(
+        self,
+    ) -> None:
         service = config.judgehost_task_service
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             build_script = root / "build"
             build_script.write_bytes(
-                service.toolkit.cpp_executable_build_script(
+                service.scripts.cpp_executable_build(
+                    self._settings(),
                     "interactor.cpp",
                     role="interactor",
                 )
@@ -516,7 +560,9 @@ class TestJudgehostScripts(unittest.TestCase):
                 "int main(){return 0;}\n",
                 encoding="utf-8",
             )
-            (root / "interactive.runjury").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            (root / "interactive.runjury").write_text(
+                "#!/bin/sh\nexit 0\n", encoding="utf-8"
+            )
             pass_capture = root / "pass-capture"
             pass_capture.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
             os.chmod(build_script, 0o755)
@@ -557,7 +603,9 @@ class TestJudgehostScripts(unittest.TestCase):
             continuation = self._run_pass_capture(capture, first, 42)
             self.assertEqual(continuation.returncode, 0, continuation.stderr)
             self.assertEqual(first_team.read_bytes(), b"team 1\n")
-            self.assertFalse(any(".polygon-pass" in path.name for path in first.rglob("*")))
+            self.assertFalse(
+                any(".polygon-pass" in path.name for path in first.rglob("*"))
+            )
 
             second = self._write_domjudge_pass(
                 testcase,
@@ -592,12 +640,16 @@ class TestJudgehostScripts(unittest.TestCase):
             assert bundle is not None
             self.assertEqual(bundle.final_pass_number, 3)
             self.assertEqual(bundle.pass_files(1)["input"], b"actual first input\n")
-            self.assertEqual(bundle.pass_files(1)["program.out"], b"actual first output\n")
+            self.assertEqual(
+                bundle.pass_files(1)["program.out"], b"actual first output\n"
+            )
             self.assertEqual(bundle.pass_files(1)["program.meta"], first_program_meta)
             self.assertEqual(bundle.pass_files(1)["compare.meta"], first_compare_meta)
             self.assertEqual(bundle.pass_files(1)["teammessage.txt"], b"team 1\n")
             self.assertEqual(bundle.pass_files(2)["input"], b"next input\n")
-            self.assertEqual(bundle.pass_files(2)["teammessage.txt"], b"second team message\n")
+            self.assertEqual(
+                bundle.pass_files(2)["teammessage.txt"], b"second team message\n"
+            )
             self.assertEqual(bundle.pass_files(3)["input"], b"third input\n")
             self.assertEqual(
                 bundle.pass_files(3)["teammessage.txt"],
@@ -667,7 +719,7 @@ class TestJudgehostScripts(unittest.TestCase):
             )
 
     def test_pass_capture_has_no_history_copy_or_content_identity_layer(self) -> None:
-        script = config.judgehost_task_service.toolkit.pass_capture_script(
+        script = config.judgehost_task_service.scripts.pass_capture(
             max_bytes=1024 * 1024,
         ).decode("utf-8")
         self.assertNotRegex(script, r"\bcp\b")
@@ -696,7 +748,7 @@ class TestJudgehostScripts(unittest.TestCase):
             executable.mkdir()
             wrapper = executable / "run"
             wrapper.write_text(
-                config.judgehost_task_service.toolkit.load_script_asset("normal.run"),
+                config.judgehost_task_service.scripts.load("normal.run"),
                 encoding="utf-8",
             )
             (executable / "pass-capture").write_bytes(capture.read_bytes())
@@ -731,7 +783,9 @@ class TestJudgehostScripts(unittest.TestCase):
             )
 
             self.assertEqual(result.returncode, 17, result.stderr)
-            self.assertEqual(mode_log.read_text(encoding="utf-8").splitlines(), ["700", "600"])
+            self.assertEqual(
+                mode_log.read_text(encoding="utf-8").splitlines(), ["700", "600"]
+            )
             self.assertEqual(first.stat().st_mode & 0o777, 0o711)
             self.assertEqual((first / "feedback").stat().st_mode & 0o777, 0o711)
             self.assertEqual(execdir.stat().st_mode & 0o777, 0o700)
@@ -759,9 +813,13 @@ class TestJudgehostScripts(unittest.TestCase):
             self.assertEqual(bundle.pass_files(1)["input"], b"input 1\n")
             self.assertEqual(bundle.pass_files(1)["teammessage.txt"], b"team 1\n")
 
-    def test_pass_capture_represents_absent_domjudge_team_messages_as_empty(self) -> None:
+    def test_pass_capture_represents_absent_domjudge_team_messages_as_empty(
+        self,
+    ) -> None:
         for interactive in (False, True):
-            with self.subTest(interactive=interactive), tempfile.TemporaryDirectory() as tmp:
+            with self.subTest(
+                interactive=interactive
+            ), tempfile.TemporaryDirectory() as tmp:
                 root = Path(tmp)
                 capture = self._write_pass_capture(root, max_bytes=1024 * 1024)
                 testcase = root / "testcase"
@@ -902,7 +960,9 @@ class TestJudgehostScripts(unittest.TestCase):
 
     def test_pass_capture_missing_metadata_preserves_genuine_team_message(self) -> None:
         for missing_metadata in ("program.meta", "compare.meta"):
-            with self.subTest(missing_metadata=missing_metadata), tempfile.TemporaryDirectory() as tmp:
+            with self.subTest(
+                missing_metadata=missing_metadata
+            ), tempfile.TemporaryDirectory() as tmp:
                 root = Path(tmp)
                 capture = self._write_pass_capture(root, max_bytes=1024 * 1024)
                 testcase = root / "testcase"
@@ -927,7 +987,9 @@ class TestJudgehostScripts(unittest.TestCase):
 
     def test_pass_capture_rejects_invalid_sibling_layouts(self) -> None:
         for invalid_layout in ("missing", "noncanonical", "symlink"):
-            with self.subTest(invalid_layout=invalid_layout), tempfile.TemporaryDirectory() as tmp:
+            with self.subTest(
+                invalid_layout=invalid_layout
+            ), tempfile.TemporaryDirectory() as tmp:
                 root = Path(tmp)
                 capture = self._write_pass_capture(root, max_bytes=1024 * 1024)
                 testcase = root / "testcase"
@@ -967,12 +1029,18 @@ class TestJudgehostScripts(unittest.TestCase):
                 check=False,
             )
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertEqual((final / "feedback/teammessage.txt").read_bytes(), original)
+            self.assertEqual(
+                (final / "feedback/teammessage.txt").read_bytes(), original
+            )
             self.assertEqual(list(outside.iterdir()), [])
 
-    def test_pass_capture_tar_or_atomic_replace_failure_preserves_team_message(self) -> None:
+    def test_pass_capture_tar_or_atomic_replace_failure_preserves_team_message(
+        self,
+    ) -> None:
         for failed_command in ("tar", "mv"):
-            with self.subTest(failed_command=failed_command), tempfile.TemporaryDirectory() as tmp:
+            with self.subTest(
+                failed_command=failed_command
+            ), tempfile.TemporaryDirectory() as tmp:
                 root = Path(tmp)
                 capture = self._write_pass_capture(root, max_bytes=1024 * 1024)
                 final = self._write_domjudge_pass(
@@ -1002,22 +1070,24 @@ class TestJudgehostScripts(unittest.TestCase):
                 )
 
     def test_compare_and_interactive_wrappers_preserve_real_exit_status(self) -> None:
-        toolkit = config.judgehost_task_service.toolkit
+        toolkit = config.judgehost_task_service.scripts
         for script_name, executable_name in (
             ("normal.compare", "checker"),
             ("main.compare", "checker"),
             ("interactive.runjury", "interactor"),
         ):
-            with self.subTest(script_name=script_name), tempfile.TemporaryDirectory() as tmp:
+            with self.subTest(
+                script_name=script_name
+            ), tempfile.TemporaryDirectory() as tmp:
                 root = Path(tmp)
                 executable_dir = root / "executable"
                 executable_dir.mkdir()
                 wrapper = executable_dir / "run"
-                wrapper.write_text(toolkit.load_script_asset(script_name), encoding="utf-8")
+                wrapper.write_text(toolkit.load(script_name), encoding="utf-8")
                 executable = executable_dir / executable_name
                 executable.write_text("#!/bin/sh\nexit 43\n", encoding="utf-8")
                 capture = executable_dir / "pass-capture"
-                capture.write_bytes(toolkit.pass_capture_script(max_bytes=1024 * 1024))
+                capture.write_bytes(toolkit.pass_capture(max_bytes=1024 * 1024))
                 for path in (wrapper, executable, capture):
                     os.chmod(path, 0o755)
                 final = self._write_domjudge_pass(root / "testcase", "1")
@@ -1042,23 +1112,19 @@ class TestJudgehostScripts(unittest.TestCase):
             root = Path(tmp)
             executable_dir = root / "executable"
             executable_dir.mkdir()
-            toolkit = config.judgehost_task_service.toolkit
+            toolkit = config.judgehost_task_service.scripts
             wrapper = executable_dir / "run"
             wrapper.write_text(
-                toolkit.load_script_asset("normal.compare"),
+                toolkit.load("normal.compare"),
                 encoding="utf-8",
             )
             checker = executable_dir / "checker"
             checker.write_text(
-                "#!/bin/sh\n"
-                '[ "$#" -eq 3 ] || exit 1\n'
-                "exit 42\n",
+                "#!/bin/sh\n" '[ "$#" -eq 3 ] || exit 1\n' "exit 42\n",
                 encoding="utf-8",
             )
             capture = executable_dir / "pass-capture"
-            capture.write_bytes(
-                toolkit.pass_capture_script(max_bytes=1024 * 1024)
-            )
+            capture.write_bytes(toolkit.pass_capture(max_bytes=1024 * 1024))
             for path in (wrapper, checker, capture):
                 os.chmod(path, 0o755)
             final = self._write_domjudge_pass(root / "testcase", "1")
@@ -1081,20 +1147,22 @@ class TestJudgehostScripts(unittest.TestCase):
 
             self.assertEqual(result.returncode, 42, result.stderr)
 
-    def test_interactive_capture_reads_history_without_opening_pass_directories(self) -> None:
+    def test_interactive_capture_reads_history_without_opening_pass_directories(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             testcase = root / "testcase"
             executable = root / "executable"
             executable.mkdir()
-            toolkit = config.judgehost_task_service.toolkit
+            toolkit = config.judgehost_task_service.scripts
             wrapper = executable / "run"
             wrapper.write_text(
-                toolkit.load_script_asset("interactive.runjury"),
+                toolkit.load("interactive.runjury"),
                 encoding="utf-8",
             )
             capture = executable / "pass-capture"
-            capture.write_bytes(toolkit.pass_capture_script(max_bytes=1024 * 1024))
+            capture.write_bytes(toolkit.pass_capture(max_bytes=1024 * 1024))
             interactor = executable / "interactor"
             interactor.write_text(
                 "#!/bin/sh\n"
@@ -1167,9 +1235,11 @@ class TestJudgehostScripts(unittest.TestCase):
             self.assertEqual(bundle.final_pass_number, 2)
             self.assertEqual(bundle.pass_files(1)["input"], b"input 1\n")
 
-    def test_domjudge_generate_run_script_executes_submission_runner_with_payload_args(self) -> None:
+    def test_domjudge_generate_run_script_executes_submission_runner_with_payload_args(
+        self,
+    ) -> None:
         service = config.judgehost_task_service
-        script_text = service.toolkit.run_script(
+        script_text = service.scripts.run(
             False,
             main_correct=False,
             compile_only=False,
@@ -1183,8 +1253,10 @@ class TestJudgehostScripts(unittest.TestCase):
             submission_runner = root / "program"
             run_script.write_text(script_text, encoding="utf-8")
             os.chmod(run_script, 0o755)
-            test_in.write_text("\"$SUBMISSION_BIN\" 7\n", encoding="utf-8")
-            submission_runner.write_text("#!/bin/sh\nprintf 'runner:%s\\n' \"$1\"\n", encoding="utf-8")
+            test_in.write_text('"$SUBMISSION_BIN" 7\n', encoding="utf-8")
+            submission_runner.write_text(
+                "#!/bin/sh\nprintf 'runner:%s\\n' \"$1\"\n", encoding="utf-8"
+            )
             os.chmod(submission_runner, 0o755)
             result = subprocess.run(
                 [str(run_script), str(test_in), str(prog_out), str(submission_runner)],
@@ -1196,9 +1268,11 @@ class TestJudgehostScripts(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(prog_out.read_text(encoding="utf-8"), "runner:7\n")
 
-    def test_domjudge_generate_run_script_handles_option_like_payload_args(self) -> None:
+    def test_domjudge_generate_run_script_handles_option_like_payload_args(
+        self,
+    ) -> None:
         service = config.judgehost_task_service
-        script_text = service.toolkit.run_script(
+        script_text = service.scripts.run(
             False,
             main_correct=False,
             compile_only=False,
@@ -1212,8 +1286,10 @@ class TestJudgehostScripts(unittest.TestCase):
             submission_runner = root / "program"
             run_script.write_text(script_text, encoding="utf-8")
             os.chmod(run_script, 0o755)
-            test_in.write_text("\"$SUBMISSION_BIN\" -n\n", encoding="utf-8")
-            submission_runner.write_text("#!/bin/sh\nprintf '%s\\n' \"$1\"\n", encoding="utf-8")
+            test_in.write_text('"$SUBMISSION_BIN" -n\n', encoding="utf-8")
+            submission_runner.write_text(
+                "#!/bin/sh\nprintf '%s\\n' \"$1\"\n", encoding="utf-8"
+            )
             os.chmod(submission_runner, 0o755)
             result = subprocess.run(
                 [str(run_script), str(test_in), str(prog_out), str(submission_runner)],
@@ -1225,9 +1301,11 @@ class TestJudgehostScripts(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(prog_out.read_text(encoding="utf-8"), "-n\n")
 
-    def test_domjudge_generate_run_script_preserves_wrapper_command_vector_when_appending_payload(self) -> None:
+    def test_domjudge_generate_run_script_preserves_wrapper_command_vector_when_appending_payload(
+        self,
+    ) -> None:
         service = config.judgehost_task_service
-        script_text = service.toolkit.run_script(
+        script_text = service.scripts.run(
             False,
             main_correct=False,
             compile_only=False,
@@ -1241,18 +1319,26 @@ class TestJudgehostScripts(unittest.TestCase):
             wrapper = root / "wrapper"
             run_script.write_text(script_text, encoding="utf-8")
             os.chmod(run_script, 0o755)
-            test_in.write_text("\"$SUBMISSION_BIN\" 7 8\n", encoding="utf-8")
+            test_in.write_text('"$SUBMISSION_BIN" 7 8\n', encoding="utf-8")
             wrapper.write_text(
                 "#!/bin/sh\n"
                 "set -eu\n"
-                "for arg in \"$@\"; do\n"
+                'for arg in "$@"; do\n'
                 "  printf '%s\\n' \"$arg\"\n"
                 "done\n",
                 encoding="utf-8",
             )
             os.chmod(wrapper, 0o755)
             result = subprocess.run(
-                [str(run_script), str(test_in), str(prog_out), str(wrapper), "A", "B", "C"],
+                [
+                    str(run_script),
+                    str(test_in),
+                    str(prog_out),
+                    str(wrapper),
+                    "A",
+                    "B",
+                    "C",
+                ],
                 text=True,
                 capture_output=True,
                 check=False,
@@ -1266,7 +1352,7 @@ class TestJudgehostScripts(unittest.TestCase):
 
     def test_domjudge_generate_run_script_supports_plain_argument_payload(self) -> None:
         service = config.judgehost_task_service
-        script_text = service.toolkit.run_script(
+        script_text = service.scripts.run(
             False,
             main_correct=False,
             compile_only=False,
@@ -1281,7 +1367,9 @@ class TestJudgehostScripts(unittest.TestCase):
             run_script.write_text(script_text, encoding="utf-8")
             os.chmod(run_script, 0o755)
             test_in.write_text("9\n", encoding="utf-8")
-            submission_runner.write_text("#!/bin/sh\nprintf 'plain:%s\\n' \"$1\"\n", encoding="utf-8")
+            submission_runner.write_text(
+                "#!/bin/sh\nprintf 'plain:%s\\n' \"$1\"\n", encoding="utf-8"
+            )
             os.chmod(submission_runner, 0o755)
             result = subprocess.run(
                 [str(run_script), str(test_in), str(prog_out), str(submission_runner)],
@@ -1293,9 +1381,11 @@ class TestJudgehostScripts(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(prog_out.read_text(encoding="utf-8"), "plain:9\n")
 
-    def test_domjudge_generate_run_script_accepts_submission_bin_only_payload(self) -> None:
+    def test_domjudge_generate_run_script_accepts_submission_bin_only_payload(
+        self,
+    ) -> None:
         service = config.judgehost_task_service
-        script_text = service.toolkit.run_script(
+        script_text = service.scripts.run(
             False,
             main_correct=False,
             compile_only=False,
@@ -1313,11 +1403,11 @@ class TestJudgehostScripts(unittest.TestCase):
             unrelated_cwd.mkdir(parents=True, exist_ok=True)
             run_script.write_text(script_text, encoding="utf-8")
             os.chmod(run_script, 0o755)
-            test_in.write_text("\"$SUBMISSION_BIN\"\n", encoding="utf-8")
+            test_in.write_text('"$SUBMISSION_BIN"\n', encoding="utf-8")
             submission_runner.write_text(
                 "#!/bin/sh\n"
                 "set -eu\n"
-                "if [ \"$#\" -eq 0 ]; then\n"
+                'if [ "$#" -eq 0 ]; then\n'
                 "  printf 'no-extra-args\\n'\n"
                 "  exit 0\n"
                 "fi\n"
@@ -1337,7 +1427,7 @@ class TestJudgehostScripts(unittest.TestCase):
 
     def test_domjudge_generate_run_script_marks_nondeterministic_output(self) -> None:
         service = config.judgehost_task_service
-        script_text = service.toolkit.run_script(
+        script_text = service.scripts.run(
             False,
             main_correct=False,
             compile_only=False,
@@ -1358,9 +1448,9 @@ class TestJudgehostScripts(unittest.TestCase):
                 "set -eu\n"
                 "state=counter\n"
                 "count=0\n"
-                "if [ -f \"$state\" ]; then count=$(cat \"$state\"); fi\n"
+                'if [ -f "$state" ]; then count=$(cat "$state"); fi\n'
                 "count=$((count + 1))\n"
-                "printf '%s' \"$count\" >\"$state\"\n"
+                'printf \'%s\' "$count" >"$state"\n'
                 "printf '%s\\n' \"$count\"\n",
                 encoding="utf-8",
             )
@@ -1378,9 +1468,11 @@ class TestJudgehostScripts(unittest.TestCase):
             self.assertTrue((root / "program.out.repeatability-failed").exists())
             self.assertFalse(list(root.glob("program.out.repeat.[0-9]*")))
 
-    def test_domjudge_generate_compare_script_rejects_repeatability_marker(self) -> None:
+    def test_domjudge_generate_compare_script_rejects_repeatability_marker(
+        self,
+    ) -> None:
         service = config.judgehost_task_service
-        script_text = service.toolkit.compare_script(generate_mode=True).decode("utf-8")
+        script_text = service.scripts.compare(generate_mode=True).decode("utf-8")
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             compare_script = root / "run"
@@ -1398,7 +1490,13 @@ class TestJudgehostScripts(unittest.TestCase):
             validator.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
             os.chmod(validator, 0o755)
             result = subprocess.run(
-                [str(compare_script), str(test_in), str(test_ans), str(feedback), str(team_out)],
+                [
+                    str(compare_script),
+                    str(test_in),
+                    str(test_ans),
+                    str(feedback),
+                    str(team_out),
+                ],
                 text=True,
                 capture_output=True,
                 check=False,
@@ -1412,7 +1510,7 @@ class TestJudgehostScripts(unittest.TestCase):
 
     def test_domjudge_generate_compare_script_runs_validator(self) -> None:
         service = config.judgehost_task_service
-        script_text = service.toolkit.compare_script(generate_mode=True).decode("utf-8")
+        script_text = service.scripts.compare(generate_mode=True).decode("utf-8")
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             compare_script = root / "run"
@@ -1430,13 +1528,19 @@ class TestJudgehostScripts(unittest.TestCase):
                 "#!/bin/sh\n"
                 "set -eu\n"
                 "read -r token || exit 1\n"
-                "[ \"$token\" = \"42\" ] || exit 1\n",
+                '[ "$token" = "42" ] || exit 1\n',
                 encoding="utf-8",
             )
             os.chmod(validator, 0o755)
 
             ok = subprocess.run(
-                [str(compare_script), str(test_in), str(test_ans), str(feedback), str(team_out)],
+                [
+                    str(compare_script),
+                    str(test_in),
+                    str(test_ans),
+                    str(feedback),
+                    str(team_out),
+                ],
                 text=True,
                 capture_output=True,
                 check=False,
@@ -1446,7 +1550,13 @@ class TestJudgehostScripts(unittest.TestCase):
 
             team_out.write_text("41\n", encoding="utf-8")
             bad = subprocess.run(
-                [str(compare_script), str(test_in), str(test_ans), str(feedback), str(team_out)],
+                [
+                    str(compare_script),
+                    str(test_in),
+                    str(test_ans),
+                    str(feedback),
+                    str(team_out),
+                ],
                 text=True,
                 capture_output=True,
                 check=False,
@@ -1456,7 +1566,7 @@ class TestJudgehostScripts(unittest.TestCase):
 
     def test_domjudge_generate_compare_script_writes_testlib_overview_log(self) -> None:
         service = config.judgehost_task_service
-        script_text = service.toolkit.compare_script(generate_mode=True).decode("utf-8")
+        script_text = service.scripts.compare(generate_mode=True).decode("utf-8")
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             compare_script = root / "run"
@@ -1475,34 +1585,47 @@ class TestJudgehostScripts(unittest.TestCase):
                 "set -eu\n"
                 "overview=''\n"
                 "while [ $# -gt 0 ]; do\n"
-                "  if [ \"$1\" = \"--testOverviewLogFileName\" ]; then\n"
+                '  if [ "$1" = "--testOverviewLogFileName" ]; then\n'
                 "    shift\n"
-                "    overview=\"$1\"\n"
+                '    overview="$1"\n'
                 "  fi\n"
                 "  shift || true\n"
                 "done\n"
                 "read -r token || exit 1\n"
-                "[ \"$token\" = \"42\" ] || exit 1\n"
-                "[ -n \"$overview\" ] || exit 1\n"
-                "printf '\"n\": min-value-hit\\nconstant-bounds \"n\": 1 3\\nvariable \"n\"\\n' >\"$overview\"\n",
+                '[ "$token" = "42" ] || exit 1\n'
+                '[ -n "$overview" ] || exit 1\n'
+                'printf \'"n": min-value-hit\\nconstant-bounds "n": 1 3\\nvariable "n"\\n\' >"$overview"\n',
                 encoding="utf-8",
             )
             os.chmod(validator, 0o755)
 
             ok = subprocess.run(
-                [str(compare_script), str(test_in), str(test_ans), str(feedback), str(team_out)],
+                [
+                    str(compare_script),
+                    str(test_in),
+                    str(test_ans),
+                    str(feedback),
+                    str(team_out),
+                ],
                 text=True,
                 capture_output=True,
                 check=False,
                 cwd=root,
             )
             self.assertEqual(ok.returncode, 42, ok.stderr)
-            judge_message = (feedback / "judgemessage.txt").read_text(encoding="utf-8", errors="replace")
-            self.assertEqual(judge_message, '"n": min-value-hit\nconstant-bounds "n": 1 3\nvariable "n"\n')
+            judge_message = (feedback / "judgemessage.txt").read_text(
+                encoding="utf-8", errors="replace"
+            )
+            self.assertEqual(
+                judge_message,
+                '"n": min-value-hit\nconstant-bounds "n": 1 3\nvariable "n"\n',
+            )
 
-    def test_domjudge_generate_compare_script_prefers_feedback_program_out_over_stdin(self) -> None:
+    def test_domjudge_generate_compare_script_prefers_feedback_program_out_over_stdin(
+        self,
+    ) -> None:
         service = config.judgehost_task_service
-        script_text = service.toolkit.compare_script(generate_mode=True).decode("utf-8")
+        script_text = service.scripts.compare(generate_mode=True).decode("utf-8")
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             compare_script = root / "run"
@@ -1513,21 +1636,21 @@ class TestJudgehostScripts(unittest.TestCase):
             os.chmod(compare_script, 0o755)
             feedback.mkdir(parents=True, exist_ok=True)
             (feedback / "program.out").write_text("42\n", encoding="utf-8")
-            test_in.write_text("\"$SUBMISSION_BIN\"\n", encoding="utf-8")
+            test_in.write_text('"$SUBMISSION_BIN"\n', encoding="utf-8")
             test_ans.write_text("", encoding="utf-8")
             validator = root / "validator"
             validator.write_text(
                 "#!/bin/sh\n"
                 "set -eu\n"
                 "read -r token || exit 1\n"
-                "[ \"$token\" = \"42\" ] || exit 1\n",
+                '[ "$token" = "42" ] || exit 1\n',
                 encoding="utf-8",
             )
             os.chmod(validator, 0o755)
 
             ok = subprocess.run(
                 [str(compare_script), str(test_in), str(test_ans), str(feedback)],
-                input="\"$SUBMISSION_BIN\"\n",
+                input='"$SUBMISSION_BIN"\n',
                 text=True,
                 capture_output=True,
                 check=False,
@@ -1535,9 +1658,11 @@ class TestJudgehostScripts(unittest.TestCase):
             )
             self.assertEqual(ok.returncode, 42, ok.stderr)
 
-    def test_domjudge_generate_compare_script_prefers_cwd_program_out_over_stdin(self) -> None:
+    def test_domjudge_generate_compare_script_prefers_cwd_program_out_over_stdin(
+        self,
+    ) -> None:
         service = config.judgehost_task_service
-        script_text = service.toolkit.compare_script(generate_mode=True).decode("utf-8")
+        script_text = service.scripts.compare(generate_mode=True).decode("utf-8")
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             compare_script = root / "run"
@@ -1548,21 +1673,21 @@ class TestJudgehostScripts(unittest.TestCase):
             os.chmod(compare_script, 0o755)
             feedback.mkdir(parents=True, exist_ok=True)
             (root / "program.out").write_text("42\n", encoding="utf-8")
-            test_in.write_text("\"$SUBMISSION_BIN\"\n", encoding="utf-8")
+            test_in.write_text('"$SUBMISSION_BIN"\n', encoding="utf-8")
             test_ans.write_text("", encoding="utf-8")
             validator = root / "validator"
             validator.write_text(
                 "#!/bin/sh\n"
                 "set -eu\n"
                 "read -r token || exit 1\n"
-                "[ \"$token\" = \"42\" ] || exit 1\n",
+                '[ "$token" = "42" ] || exit 1\n',
                 encoding="utf-8",
             )
             os.chmod(validator, 0o755)
 
             ok = subprocess.run(
                 [str(compare_script), str(test_in), str(test_ans), str(feedback)],
-                input="\"$SUBMISSION_BIN\"\n",
+                input='"$SUBMISSION_BIN"\n',
                 text=True,
                 capture_output=True,
                 check=False,
@@ -1570,9 +1695,11 @@ class TestJudgehostScripts(unittest.TestCase):
             )
             self.assertEqual(ok.returncode, 42, ok.stderr)
 
-    def test_domjudge_generate_compare_script_prefers_program_out_next_to_feedback_over_stdin(self) -> None:
+    def test_domjudge_generate_compare_script_prefers_program_out_next_to_feedback_over_stdin(
+        self,
+    ) -> None:
         service = config.judgehost_task_service
-        script_text = service.toolkit.compare_script(generate_mode=True).decode("utf-8")
+        script_text = service.scripts.compare(generate_mode=True).decode("utf-8")
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             scripts_dir = root / "scripts"
@@ -1586,21 +1713,21 @@ class TestJudgehostScripts(unittest.TestCase):
             (work_dir / "program.out").write_text("42\n", encoding="utf-8")
             test_in = work_dir / "001.in"
             test_ans = work_dir / "001.ans"
-            test_in.write_text("\"$SUBMISSION_BIN\"\n", encoding="utf-8")
+            test_in.write_text('"$SUBMISSION_BIN"\n', encoding="utf-8")
             test_ans.write_text("", encoding="utf-8")
             validator = scripts_dir / "validator"
             validator.write_text(
                 "#!/bin/sh\n"
                 "set -eu\n"
                 "read -r token || exit 1\n"
-                "[ \"$token\" = \"42\" ] || exit 1\n",
+                '[ "$token" = "42" ] || exit 1\n',
                 encoding="utf-8",
             )
             os.chmod(validator, 0o755)
 
             ok = subprocess.run(
                 [str(compare_script), str(test_in), str(test_ans), str(feedback)],
-                input="\"$SUBMISSION_BIN\"\n",
+                input='"$SUBMISSION_BIN"\n',
                 text=True,
                 capture_output=True,
                 check=False,
@@ -1608,9 +1735,11 @@ class TestJudgehostScripts(unittest.TestCase):
             )
             self.assertEqual(ok.returncode, 42, ok.stderr)
 
-    def test_domjudge_generate_compare_script_compiles_validator_from_readonly_script_dir(self) -> None:
+    def test_domjudge_generate_compare_script_compiles_validator_from_readonly_script_dir(
+        self,
+    ) -> None:
         service = config.judgehost_task_service
-        script_text = service.toolkit.compare_script(generate_mode=True).decode("utf-8")
+        script_text = service.scripts.compare(generate_mode=True).decode("utf-8")
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             scripts_dir = root / "scripts"
@@ -1627,7 +1756,7 @@ class TestJudgehostScripts(unittest.TestCase):
             os.chmod(compare_script, 0o755)
             validator_src.write_text(
                 "#include <cstdio>\n"
-                "int main(){ long long x=0; if(std::scanf(\"%lld\", &x)!=1) return 1; return x==42 ? 0 : 1; }\n",
+                'int main(){ long long x=0; if(std::scanf("%lld", &x)!=1) return 1; return x==42 ? 0 : 1; }\n',
                 encoding="utf-8",
             )
             test_in.write_text("", encoding="utf-8")
@@ -1635,7 +1764,13 @@ class TestJudgehostScripts(unittest.TestCase):
             team_out.write_text("42\n", encoding="utf-8")
             os.chmod(scripts_dir, 0o555)
             ok = subprocess.run(
-                [str(compare_script), str(test_in), str(test_ans), str(feedback), str(team_out)],
+                [
+                    str(compare_script),
+                    str(test_in),
+                    str(test_ans),
+                    str(feedback),
+                    str(team_out),
+                ],
                 text=True,
                 capture_output=True,
                 check=False,
@@ -1645,13 +1780,17 @@ class TestJudgehostScripts(unittest.TestCase):
 
     def test_domjudge_run_script_compile_only_branch_uses_skip_run_copy(self) -> None:
         service = config.judgehost_task_service
-        script_text = service.toolkit.run_script(False, main_correct=False, compile_only=True).decode("utf-8")
+        script_text = service.scripts.run(
+            False, main_correct=False, compile_only=True
+        ).decode("utf-8")
         self.assertIn('cat "$TESTIN" >"$PROGOUT"', script_text)
         self.assertIn('"$@" </dev/null >/dev/null', script_text)
 
-    def test_domjudge_run_script_manual_validate_branch_copies_input_to_output(self) -> None:
+    def test_domjudge_run_script_manual_validate_branch_copies_input_to_output(
+        self,
+    ) -> None:
         service = config.judgehost_task_service
-        script_text = service.toolkit.run_script(
+        script_text = service.scripts.run(
             False,
             main_correct=False,
             compile_only=False,
@@ -1681,13 +1820,24 @@ class TestJudgehostScripts(unittest.TestCase):
 
     def test_domjudge_compile_script_matches_official_wrapper_shape(self) -> None:
         service = config.judgehost_task_service
-        script_text = service.toolkit.compile_script("submission.cpp").decode("utf-8")
-        self.assertIn('exec g++ -x c++ -Wall -O2 -std=gnu++20 -static -pipe -DDOMJUDGE -I. "$MAIN" -o "$DEST"', script_text)
+        script_text = service.scripts.compile(
+            self._settings(), "submission.cpp"
+        ).decode("utf-8")
+        self.assertIn(
+            'exec g++ -x c++ -Wall -O2 -std=gnu++20 -static -pipe -DDOMJUDGE -I. "$MAIN" -o "$DEST"',
+            script_text,
+        )
 
-    def test_domjudge_compile_only_cpp_script_compiles_then_writes_noop_program(self) -> None:
+    def test_domjudge_compile_only_cpp_script_compiles_then_writes_noop_program(
+        self,
+    ) -> None:
         service = config.judgehost_task_service
-        compile_text = service.toolkit.compile_script("submission.cpp", compile_only=True).decode("utf-8")
-        run_text = service.toolkit.run_script(False, main_correct=False, compile_only=True).decode("utf-8")
+        compile_text = service.scripts.compile(
+            self._settings(), "submission.cpp", compile_only=True
+        ).decode("utf-8")
+        run_text = service.scripts.run(
+            False, main_correct=False, compile_only=True
+        ).decode("utf-8")
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             compile_script = root / "compile-wrapper"
@@ -1729,7 +1879,8 @@ class TestJudgehostScripts(unittest.TestCase):
 
     def test_domjudge_skip_compile_creates_noop_executable(self) -> None:
         service = config.judgehost_task_service
-        script_text = service.toolkit.compile_script(
+        script_text = service.scripts.compile(
+            self._settings(),
             "manual_validate.cpp",
             manual_validate_only=True,
         ).decode("utf-8")

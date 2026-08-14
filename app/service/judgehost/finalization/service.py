@@ -1,22 +1,25 @@
 import logging
-from typing import Protocol, cast
+from typing import Protocol
 
+from app.service.judgehost.configuration import JudgehostConfiguration
 from app.db import now_iso
 from app.service.judgehost.batch.model import (
     CaseResult,
     ExecutionBatchRow,
+    FinalizationClaim,
     HostLeaseRelease,
     JudgehostCaseRow,
 )
-from app.service.judgehost.callback.case_result import decode_case_test_row
-from app.service.judgehost.core import JudgehostCore
+from app.service.judgehost.batch.runtime import JudgehostBatchRuntime
+from app.service.judgehost.domjudge.case_result import decode_case_test_row
 from app.service.judgehost.domjudge.result import (
     bounded_feedback_text,
 )
-from app.service.judgehost.domjudge.codec import decode_text
-from app.service.judgehost.state import JudgehostState
-from app.service.judgehost.work.task_queue import TaskQueue
-from app.service.judgehost.domjudge.toolkit import DomjudgeToolkit
+from app.service.judgehost.domjudge.codec import decode_base64, decode_text
+from app.service.judgehost.domjudge import task_plan
+from app.service.judgehost.finalization.terminalization import JudgehostTaskTerminalization
+from app.service.judgehost.task.registry import JudgehostTaskRegistry
+from app.service.judgehost.task.summary import load_run_summary
 from app.service.platform.error_text import aux_display_text_limit_bytes
 
 logger = logging.getLogger(__name__)
@@ -68,28 +71,34 @@ class JudgehostBatchFinalizer:
 
     def __init__(
         self,
-        state: JudgehostState,
-        core: JudgehostCore,
-        queue: TaskQueue,
-        toolkit: DomjudgeToolkit,
+        batch_runtime: JudgehostBatchRuntime,
+        tasks: JudgehostTaskRegistry,
+        configuration: JudgehostConfiguration,
+        task_terminalization: JudgehostTaskTerminalization,
         publisher: TerminalCasePublisher,
     ) -> None:
-        self._s = state
-        self._core = core
-        self._queue = queue
-        self._toolkit = toolkit
+        self._batch_runtime = batch_runtime
+        self._tasks = tasks
+        self._configuration = configuration
+        self._task_terminalization = task_terminalization
         self._publisher = publisher
 
     def _display_text_limit_bytes(self) -> int:
-        return aux_display_text_limit_bytes(self._s.config_values.snapshot())
+        return aux_display_text_limit_bytes(self._configuration.snapshot().values)
+
+    def _task_payload(self, task_id: str) -> dict[str, object]:
+        row = self._tasks.get(task_id)
+        return {} if row is None else row["payload"].copy()
 
     def finalize_host_lease_release(self, release: HostLeaseRelease) -> None:
+        display_limit = self._display_text_limit_bytes()
         for task_id in release.terminal_task_ids:
-            batch_row = self._s.batch_runtime.batch_for_task(task_id)
+            batch_row = self._batch_runtime.batch_for_task(task_id)
             if batch_row is not None:
-                self.finalize_task_if_ready(
+                self._finalize_task_if_ready(
                     task_id,
                     batch_row=batch_row,
+                    display_limit_bytes=display_limit,
                 )
         for batch_id in release.terminal_batch_ids:
             self.finalize_batch_if_ready(batch_id)
@@ -102,12 +111,13 @@ class JudgehostBatchFinalizer:
         case_results: list[tuple[JudgehostCaseRow, CaseResult | None]],
         force_failed: bool,
         error_text: str,
+        display_limit_bytes: int,
     ) -> dict[str, object]:
-        task_row = self._core.task_by_id(task_id)
+        task_row = self._tasks.get(task_id)
         if task_row is None:
             raise RuntimeError("judgehost task not found")
-        task_payload = self._core.task_payload(task_id)
-        task_kind = self._toolkit.task_kind(task_payload)
+        task_payload = self._task_payload(task_id)
+        task_kind = task_plan.task_kind(task_payload)
         compile_only = task_kind == self._TASK_KIND_COMPILE_ONLY
         compile_success_raw = batch_row["compile_success"]
         compile_success = None if compile_success_raw is None else int(compile_success_raw)
@@ -170,7 +180,7 @@ class JudgehostBatchFinalizer:
 
         compile_log = ""
         compile_diagnostics: list[dict[str, object]] = []
-        compile_text = self._toolkit.b64_decode(batch_row["compile_output_b64"]).decode(
+        compile_text = decode_base64(batch_row["compile_output_b64"]).decode(
             "utf-8", errors="replace"
         )
         compile_error_summary = ""
@@ -182,7 +192,7 @@ class JudgehostBatchFinalizer:
             compile_error_task = (
                 bounded_feedback_text(
                     message,
-                    limit_bytes=self._display_text_limit_bytes(),
+                    limit_bytes=display_limit_bytes,
                 )
                 or "compilation failed"
             )
@@ -200,7 +210,10 @@ class JudgehostBatchFinalizer:
         run_status = "failed" if force_failed or compile_success == 0 or cancelled_cases else "ok"
         if not force_failed and internal_failure_error:
             run_status = "failed"
-        summary = self._queue.load_run_summary(decode_text(raw=task_row["run_id"]))
+        summary = load_run_summary(
+            self._tasks,
+            decode_text(raw=task_row["run_id"]),
+        )
         summary["tests"] = tests
         summary["compile_log"] = compile_log
         summary["compile_diagnostics"] = compile_diagnostics
@@ -246,17 +259,34 @@ class JudgehostBatchFinalizer:
         force_failed: bool = False,
         error_text: str = "",
     ) -> bool:
+        return self._finalize_task_if_ready(
+            task_id,
+            batch_row=batch_row,
+            force_failed=force_failed,
+            error_text=error_text,
+            display_limit_bytes=self._display_text_limit_bytes(),
+        )
+
+    def _finalize_task_if_ready(
+        self,
+        task_id: str,
+        *,
+        batch_row: ExecutionBatchRow,
+        display_limit_bytes: int,
+        force_failed: bool = False,
+        error_text: str = "",
+    ) -> bool:
         safe_task_id = task_id
-        if not self._s.batch_runtime.task_cases_terminal(safe_task_id):
+        if not self._batch_runtime.task_cases_terminal(safe_task_id):
             return False
-        case_results = self._s.batch_runtime.task_case_results(safe_task_id)
+        case_results = self._batch_runtime.task_case_results(safe_task_id)
         cases = [row for row, _result in case_results]
         if any(
             case["status"] == "reported" and not bool(case["completion_acknowledged"])
             for case in cases
         ):
             return False
-        task_row = self._s.task_registry.get(safe_task_id)
+        task_row = self._tasks.get(safe_task_id)
         if task_row is None:
             return False
         task_status = decode_text(lower=True, raw=task_row["status"])
@@ -270,6 +300,7 @@ class JudgehostBatchFinalizer:
             case_results=case_results,
             force_failed=force_failed,
             error_text=error_text,
+            display_limit_bytes=display_limit_bytes,
         )
         for case_row in cases:
             if case_row["status"] != "cancelled":
@@ -285,7 +316,7 @@ class JudgehostBatchFinalizer:
             )
             if not published:
                 return False
-        self._queue.finalize_task(
+        self._task_terminalization.finalize_task(
             task_id=safe_task_id,
             payload=payload,
         )
@@ -300,6 +331,7 @@ class JudgehostBatchFinalizer:
         require_complete_batch: bool,
         force_failed: bool,
         error_text: str,
+        display_limit_bytes: int,
     ) -> bool:
         if require_complete_batch and any(
             row["status"] not in {"reported", "cancelled"} for row in cases
@@ -342,11 +374,12 @@ class JudgehostBatchFinalizer:
         task_ids = list(dict.fromkeys(task_id for row in cases if (task_id := row["task_id"])))
         for task_id in task_ids:
             try:
-                self.finalize_task_if_ready(
+                self._finalize_task_if_ready(
                     task_id,
                     batch_row=batch_row,
                     force_failed=force_failed,
                     error_text=error_text,
+                    display_limit_bytes=display_limit_bytes,
                 )
             except Exception:
                 logger.exception(
@@ -363,23 +396,24 @@ class JudgehostBatchFinalizer:
         *,
         runresult: str,
         error_text: str,
+        display_limit_bytes: int,
     ) -> None:
-        batch_row = self._s.batch_runtime.fetch_batch(int(batch_id))
+        batch_row = self._batch_runtime.fetch_batch(int(batch_id))
         if batch_row is None:
             return
         feedback = error_text.strip()
         if runresult == "compiler-error" and not feedback:
-            compile_blob = self._toolkit.b64_decode(batch_row["compile_output_b64"])
+            compile_blob = decode_base64(batch_row["compile_output_b64"])
             feedback = (
                 bounded_feedback_text(
                     compile_blob.decode("utf-8", errors="replace"),
-                    limit_bytes=self._display_text_limit_bytes(),
+                    limit_bytes=display_limit_bytes,
                 )
                 or "compilation failed"
             )
         if not feedback:
             feedback = runresult.replace("-", " ")
-        self._s.batch_runtime.record_batch_failure(
+        self._batch_runtime.record_batch_failure(
             int(batch_id),
             runresult=runresult,
             error_text=feedback,
@@ -390,16 +424,23 @@ class JudgehostBatchFinalizer:
         self,
         batch_id: int,
         *,
+        claim: FinalizationClaim | None = None,
         delay_sec: float = 0.25,
     ) -> None:
-        self._s.batch_runtime.schedule_batch_finalization_retry(
-            int(batch_id),
+        if claim is None:
+            self._batch_runtime.schedule_batch_finalization_retry(
+                int(batch_id),
+                delay_sec=delay_sec,
+            )
+            return
+        self._batch_runtime.abort_batch_finalization(
+            claim,
             now_text=now_iso(),
             delay_sec=delay_sec,
         )
 
     def retry_due_finalizations(self, *, limit: int = 1) -> None:
-        for batch_id in self._s.batch_runtime.due_batch_finalizations(limit=limit):
+        for batch_id in self._batch_runtime.due_batch_finalizations(limit=limit):
             self.finalize_batch_if_ready(batch_id)
 
     def finalize_batch_if_ready(
@@ -410,7 +451,8 @@ class JudgehostBatchFinalizer:
         error_text: str = "",
         require_completion_ack: bool = False,
     ) -> None:
-        current = self._s.batch_runtime.fetch_batch(int(batch_id))
+        display_limit = self._display_text_limit_bytes()
+        current = self._batch_runtime.fetch_batch(int(batch_id))
         if current is None:
             return
         if force_failed:
@@ -418,59 +460,72 @@ class JudgehostBatchFinalizer:
                 int(batch_id),
                 runresult="internal-error",
                 error_text=error_text,
+                display_limit_bytes=display_limit,
             )
         elif current["failure_runresult"]:
             self._request_batch_failure(
                 int(batch_id),
                 runresult=current["failure_runresult"],
                 error_text=current["failure_text"],
+                display_limit_bytes=display_limit,
             )
-        current = self._s.batch_runtime.fetch_batch(int(batch_id))
-        if current is None:
-            return
-        current_cases = self._s.batch_runtime.cases_for_batch(int(batch_id))
-        if not self._publish_and_finalize_ready_tasks(
-            batch_id=int(batch_id),
-            batch_row=current,
-            cases=current_cases,
-            require_complete_batch=bool(current["failure_runresult"]),
-            force_failed=force_failed,
-            error_text=error_text,
-        ):
-            self._schedule_retry(int(batch_id))
-            if require_completion_ack:
-                raise RuntimeError("verification task completion is not durably acknowledged")
-            return
-        self._s.batch_runtime.clear_batch_finalization_retry(int(batch_id))
-        claim = self._s.batch_runtime.claim_batch_finalization(
+        claim = self._batch_runtime.claim_batch_finalization(
             int(batch_id),
             now_text=now_iso(),
         )
         if claim is None:
+            refreshed = self._batch_runtime.fetch_batch(int(batch_id))
+            if (
+                require_completion_ack
+                and refreshed is not None
+                and refreshed["status"] in {"finalize-pending", "finalizing"}
+            ):
+                raise RuntimeError(
+                    "verification task completion is not durably acknowledged"
+                )
             return
         try:
-            batch_row = claim["batch"]
-            cases = claim["cases"]
+            batch_row = claim.batch
+            cases = claim.cases
+            if not self._publish_and_finalize_ready_tasks(
+                batch_id=claim.batch_id,
+                batch_row=batch_row,
+                cases=list(cases),
+                require_complete_batch=bool(batch_row["failure_runresult"]),
+                force_failed=force_failed,
+                error_text=error_text,
+                display_limit_bytes=display_limit,
+            ):
+                if require_completion_ack:
+                    raise RuntimeError(
+                        "verification task completion is not durably acknowledged"
+                    )
+                self._schedule_retry(claim.batch_id, claim=claim)
+                return
+            if not claim.terminal_transition:
+                if not self._batch_runtime.complete_batch_finalization(claim):
+                    raise RuntimeError(
+                        "judgehost publication claim disappeared before commit"
+                    )
+                return
             task_ids = list(dict.fromkeys(task_id for row in cases if (task_id := row["task_id"])))
-            task_rows = {task_id: self._s.task_registry.get(task_id) for task_id in task_ids}
+            task_rows = {task_id: self._tasks.get(task_id) for task_id in task_ids}
             unfinished_task_ids = [
                 task_id
                 for task_id, task_row in task_rows.items()
                 if task_row is None
-                or decode_text(lower=True, raw=task_row["status"]) not in {"completed", "failed"}
+                or decode_text(lower=True, raw=task_row["status"])
+                not in {"completed", "failed"}
             ]
             if unfinished_task_ids:
-                unfinished_statuses = {
-                    task_id: (
+                unfinished_statuses: dict[str, str] = {}
+                for task_id in unfinished_task_ids:
+                    task_row = task_rows[task_id]
+                    unfinished_statuses[task_id] = (
                         "<missing>"
-                        if task_rows[task_id] is None
-                        else decode_text(
-                            lower=True,
-                            raw=cast(dict[str, object], task_rows[task_id])["status"],
-                        )
+                        if task_row is None
+                        else decode_text(lower=True, raw=task_row["status"])
                     )
-                    for task_id in unfinished_task_ids
-                }
                 transient_statuses = set(unfinished_statuses.values()) <= {
                     self.STATUS_ENQUEUING,
                     self.STATUS_REPORTING,
@@ -482,18 +537,19 @@ class JudgehostBatchFinalizer:
                     int(batch_id),
                     unfinished_statuses,
                 )
-                self._schedule_retry(int(batch_id))
+                if require_completion_ack:
+                    raise RuntimeError(
+                        "verification task completion is not durably acknowledged"
+                    )
+                self._schedule_retry(int(batch_id), claim=claim)
                 return
             compile_success = batch_row["compile_success"]
             compile_failed = compile_success is not None and int(compile_success) == 0
             has_cancelled_cases = any(row["status"] == "cancelled" for row in cases)
             has_failed_tasks = any(
-                decode_text(
-                    lower=True,
-                    raw=cast(dict[str, object], task_rows[task_id])["status"],
-                )
-                == self.STATUS_FAILED
-                for task_id in task_ids
+                row is not None
+                and decode_text(lower=True, raw=row["status"]) == self.STATUS_FAILED
+                for row in task_rows.values()
             )
             finished_at = now_iso()
             terminal_status = (
@@ -501,8 +557,8 @@ class JudgehostBatchFinalizer:
                 if force_failed or compile_failed or has_cancelled_cases or has_failed_tasks
                 else "completed"
             )
-            updated = self._s.batch_runtime.set_batch_terminal_status(
-                int(batch_id),
+            updated = self._batch_runtime.set_batch_terminal_status(
+                claim,
                 status=terminal_status,
                 completed_at=finished_at,
                 updated_at=finished_at,
@@ -512,9 +568,13 @@ class JudgehostBatchFinalizer:
                     "DOMjudge batch finalization claim disappeared batch_id=%s",
                     int(batch_id),
                 )
-                self._schedule_retry(int(batch_id))
+                if require_completion_ack:
+                    raise RuntimeError(
+                        "verification task completion is not durably acknowledged"
+                    )
+                self._schedule_retry(int(batch_id), claim=claim)
                 return
-            self._s.batch_runtime.clear_batch_finalization_retry(int(batch_id))
+            self._batch_runtime.clear_batch_finalization_retry(int(batch_id))
         except Exception:
-            self._schedule_retry(int(batch_id))
+            self._schedule_retry(int(batch_id), claim=claim)
             raise

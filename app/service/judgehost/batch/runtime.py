@@ -12,11 +12,13 @@ from app.service.judgehost.batch.model import (
     CaseReportTelemetry,
     CaseResult,
     CompileSubmission,
-    ExecutionBatchFinalizationClaim,
+    FinalizationClaim,
     ExecutionBatchRow,
     ExecutionBatchSpec,
     HostLeaseRelease,
     HostTelemetryRow,
+    MaterializationClaim,
+    LeaseClaim,
     JudgehostCaseRow,
     PendingCaseDiagnostic,
     ProgramTerminalClaim,
@@ -47,6 +49,12 @@ class JudgehostBatchRuntime:
 
     def reset(self) -> None:
         self._maintenance.reset()
+
+    def activity_counts(self) -> dict[str, int]:
+        return self._state.activity_counts()
+
+    def pending_finalization_ids(self) -> tuple[int, ...]:
+        return self._state.pending_finalization_ids()
 
     def host_context_batches(self, hostname: str) -> list[ExecutionBatchRow]:
         return self._dispatch.host_context_batches(hostname)
@@ -101,7 +109,9 @@ class JudgehostBatchRuntime:
     def task_has_cache_pending_cases(self, task_id: str) -> bool:
         return self._state.task_has_cache_pending_cases(task_id)
 
-    def task_case_results(self, task_id: str) -> list[tuple[JudgehostCaseRow, CaseResult | None]]:
+    def task_case_results(
+        self, task_id: str
+    ) -> list[tuple[JudgehostCaseRow, CaseResult | None]]:
         return self._state.task_case_results(task_id)
 
     def fetch_batch(self, batch_id: int) -> ExecutionBatchRow | None:
@@ -113,13 +123,19 @@ class JudgehostBatchRuntime:
     def forget_scope(self, verification_id: str) -> None:
         self._admission.forget_scope(verification_id)
 
-    def finish_verification_execution(self, verification_id: str, *, now_text: str) -> list[int]:
-        return self._admission.finish_verification_execution(verification_id, now_text=now_text)
+    def finish_verification_execution(
+        self, verification_id: str, *, now_text: str
+    ) -> list[int]:
+        return self._admission.finish_verification_execution(
+            verification_id, now_text=now_text
+        )
 
     def request_verification_cancel(
         self, verification_id: str, *, now_text: str
     ) -> VerificationCancellation:
-        return self._maintenance.request_verification_cancel(verification_id, now_text=now_text)
+        return self._maintenance.request_verification_cancel(
+            verification_id, now_text=now_text
+        )
 
     def finish_programs(
         self,
@@ -138,19 +154,26 @@ class JudgehostBatchRuntime:
     def compile_submission_for_batch(self, batch_id: int) -> CompileSubmission | None:
         return self._dispatch.compile_submission_for_batch(batch_id)
 
-    def publish_materialized_compile_submission(
-        self, compile_key: str, submission: CompileSubmission
-    ) -> None:
-        self._dispatch.publish_materialized_compile_submission(compile_key, submission)
-
-    def claim_materialization(self, batch_id: int, *, now_text: str) -> bool:
+    def claim_materialization(
+        self, batch_id: int, *, now_text: str
+    ) -> MaterializationClaim | None:
         return self._dispatch.claim_materialization(batch_id, now_text=now_text)
 
     def finish_materialization(
-        self, batch_id: int, *, success: bool, error_text: str, now_text: str
+        self,
+        claim: MaterializationClaim,
+        *,
+        success: bool,
+        materialized_submission: CompileSubmission | None,
+        error_text: str,
+        now_text: str,
     ) -> bool:
         return self._dispatch.finish_materialization(
-            batch_id, success=success, error_text=error_text, now_text=now_text
+            claim,
+            success=success,
+            materialized_submission=materialized_submission,
+            error_text=error_text,
+            now_text=now_text,
         )
 
     def batch_for_task(self, task_id: str) -> ExecutionBatchRow | None:
@@ -245,30 +268,48 @@ class JudgehostBatchRuntime:
     def activate_task_cases(self, task_id: str, *, now_text: str) -> bool:
         return self._admission.activate_task_cases(task_id, now_text=now_text)
 
-    def discard_staged_task_cases(self, task_id: str, *, batch_id: int | None = None) -> int:
+    def discard_staged_task_cases(
+        self, task_id: str, *, batch_id: int | None = None
+    ) -> int:
         return self._admission.discard_staged_task_cases(task_id, batch_id=batch_id)
 
-    def lease_cases(
+    def claim_lease(
         self, batch_id: int, *, hostname: str, limit: int, now_text: str
-    ) -> list[JudgehostCaseRow]:
-        return self._dispatch.lease_cases(
+    ) -> LeaseClaim | None:
+        return self._dispatch.claim_lease(
             batch_id, hostname=hostname, limit=limit, now_text=now_text
         )
+
+    def commit_lease(self, claim: LeaseClaim) -> bool:
+        return self._dispatch.commit_lease(claim)
+
+    def abort_lease(self, claim: LeaseClaim, *, now_text: str) -> bool:
+        return self._dispatch.abort_lease(claim, now_text=now_text)
 
     def batch_finalize_row(self, batch_id: int) -> dict[str, object] | None:
         return self._finalization.batch_finalize_row(batch_id)
 
     def claim_batch_finalization(
         self, batch_id: int, *, now_text: str
-    ) -> ExecutionBatchFinalizationClaim | None:
+    ) -> FinalizationClaim | None:
         return self._finalization.claim_batch_finalization(batch_id, now_text=now_text)
 
     def schedule_batch_finalization_retry(
-        self, batch_id: int, *, now_text: str, delay_sec: float = 0.25
+        self, batch_id: int, *, delay_sec: float = 0.25
     ) -> bool:
         return self._finalization.schedule_batch_finalization_retry(
-            batch_id, now_text=now_text, delay_sec=delay_sec
+            batch_id, delay_sec=delay_sec
         )
+
+    def abort_batch_finalization(
+        self, claim: FinalizationClaim, *, now_text: str, delay_sec: float = 0.25
+    ) -> bool:
+        return self._finalization.abort_batch_finalization(
+            claim, now_text=now_text, delay_sec=delay_sec
+        )
+
+    def complete_batch_finalization(self, claim: FinalizationClaim) -> bool:
+        return self._finalization.complete_batch_finalization(claim)
 
     def due_batch_finalizations(self, *, limit: int) -> list[int]:
         return self._finalization.due_batch_finalizations(limit=limit)
@@ -277,10 +318,15 @@ class JudgehostBatchRuntime:
         self._finalization.clear_batch_finalization_retry(batch_id)
 
     def set_batch_terminal_status(
-        self, batch_id: int, *, status: str, completed_at: str, updated_at: str
+        self,
+        claim: FinalizationClaim,
+        *,
+        status: str,
+        completed_at: str,
+        updated_at: str,
     ) -> bool:
         return self._finalization.set_batch_terminal_status(
-            batch_id, status=status, completed_at=completed_at, updated_at=updated_at
+            claim, status=status, completed_at=completed_at, updated_at=updated_at
         )
 
     def record_compile_success(
@@ -358,7 +404,9 @@ class JudgehostBatchRuntime:
     def case_execution_row(self, case_id: int) -> CaseExecutionRow | None:
         return self._completion.case_execution_row(case_id)
 
-    def case_output_for_task(self, task_id: str, test_name: str) -> dict[str, object] | None:
+    def case_output_for_task(
+        self, task_id: str, test_name: str
+    ) -> dict[str, object] | None:
         return self._completion.case_output_for_task(task_id, test_name)
 
     def case_for_task(self, task_id: str, test_name: str) -> dict[str, object] | None:
@@ -432,7 +480,9 @@ class JudgehostBatchRuntime:
             report_telemetry=report_telemetry,
         )
 
-    def finish_cache_miss(self, case_id: int, *, generation: int, updated_at: str) -> bool:
+    def finish_cache_miss(
+        self, case_id: int, *, generation: int, updated_at: str
+    ) -> bool:
         return self._completion.finish_cache_miss(
             case_id, generation=generation, updated_at=updated_at
         )
@@ -442,7 +492,9 @@ class JudgehostBatchRuntime:
     ) -> dict[int, str]:
         return self._completion.finish_cache_claims(outcomes, updated_at=updated_at)
 
-    def abort_case_claim(self, case_id: int, *, generation: int, updated_at: str) -> bool:
+    def abort_case_claim(
+        self, case_id: int, *, generation: int, updated_at: str
+    ) -> bool:
         return self._completion.abort_case_claim(
             case_id, generation=generation, updated_at=updated_at
         )
@@ -477,10 +529,14 @@ class JudgehostBatchRuntime:
             now_text=now_text,
         )
 
-    def pending_case_diagnostics(self, case_id: int) -> tuple[PendingCaseDiagnostic, ...]:
+    def pending_case_diagnostics(
+        self, case_id: int
+    ) -> tuple[PendingCaseDiagnostic, ...]:
         return self._completion.pending_case_diagnostics(case_id)
 
-    def acknowledge_case_diagnostic(self, case_id: int, diagnostic: PendingCaseDiagnostic) -> bool:
+    def acknowledge_case_diagnostic(
+        self, case_id: int, diagnostic: PendingCaseDiagnostic
+    ) -> bool:
         return self._completion.acknowledge_case_diagnostic(case_id, diagnostic)
 
     def case_debug_context(self, case_id: int) -> dict[str, object] | None:

@@ -175,9 +175,9 @@ class ContestStatementService:
         return "\n".join(lines) + "\n"
 
     @staticmethod
-    def _compile_target(root: Path, *parts: str) -> Path:
+    def _compile_target(root: Path, relative: Path) -> Path:
         safe_root = root.resolve()
-        target = (root / Path(*parts)).resolve()
+        target = (root / relative).resolve()
         if safe_root not in target.parents:
             raise RuntimeError("invalid contest compile path")
         return target
@@ -290,11 +290,11 @@ class ContestStatementService:
                 continue
             problem_tex = self._compile_target(
                 compile_root,
-                "problems",
-                str(row["source_folder"]),
-                "statements",
-                language,
-                "problem.tex",
+                Path("problems")
+                / str(row["source_folder"])
+                / "statements"
+                / language
+                / "problem.tex",
             )
             for library in self._hoist_tikz_libraries(problem_tex):
                 if library not in tikz_libraries:
@@ -432,7 +432,7 @@ class ContestStatementService:
         }
         result = {"HOME": str(compile_root)}
         for name, part in paths.items():
-            path = self._compile_target(compile_root, part)
+            path = self._compile_target(compile_root, Path(part))
             path.mkdir(parents=True, exist_ok=True)
             result[name] = str(path)
         return result
@@ -458,13 +458,12 @@ class ContestStatementService:
                         f"contest statement source is not regular: {source_path}"
                     )
                 relative = source_path.relative_to(source_snapshot)
-                target = self._compile_target(compile_root, *relative.parts)
+                target = self._compile_target(compile_root, relative)
                 target.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(source_path, target)
         statements_root = self._compile_target(
             compile_root,
-            "statements",
-            language,
+            Path("statements") / language,
         )
         statements_root.mkdir(parents=True, exist_ok=True)
         olymp_sty = statements_root / "olymp.sty"
@@ -511,10 +510,7 @@ class ContestStatementService:
             )
             target = self._compile_target(
                 compile_root,
-                "problems",
-                source_folder,
-                "statements",
-                language,
+                Path("problems") / source_folder / "statements" / language,
             )
             render_statement_problem_assets_for_language(
                 reader.root,
@@ -623,10 +619,10 @@ class ContestStatementService:
         for row in results:
             problem_root = self._compile_target(
                 compile_root,
-                "problems",
-                str(row["source_folder"]),
-                "statements",
-                language,
+                Path("problems")
+                / str(row["source_folder"])
+                / "statements"
+                / language,
             )
             for mp_file in sorted(problem_root.glob("*.mp")):
                 result = self._run_tex(

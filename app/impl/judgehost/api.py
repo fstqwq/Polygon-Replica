@@ -17,14 +17,16 @@ from starlette.formparsers import MultiPartParser
 from app.impl.runtime.dependency import runtime
 from app.main_util import read_upload_bytes_limited
 from app.service.judgehost.batch.model import CaseClaimBusy
-from app.service.judgehost.core import InvalidJudgehostHostname, normalize_judgehost_hostname
+from app.service.judgehost.validation import (
+    InvalidJudgehostHostname,
+    normalize_judgehost_hostname,
+)
 from app.service.judgehost.domjudge.limits import judgehost_form_part_limit_bytes
 from app.service.judgehost.domjudge.file_stream import (
     DomjudgeDownloadFile,
     stream_domjudge_file_array,
     validate_domjudge_file_array,
 )
-
 
 JudgehostPayload = dict[str, str | bytes]
 
@@ -45,7 +47,9 @@ def _extract_basic_credentials(request: Request) -> tuple[str, str]:
     if not raw:
         return ("", "")
     try:
-        decoded = base64.b64decode(raw, validate=False).decode("utf-8", errors="replace")
+        decoded = base64.b64decode(raw, validate=False).decode(
+            "utf-8", errors="replace"
+        )
     except Exception:
         return ("", "")
     if ":" not in decoded:
@@ -176,7 +180,9 @@ async def _request_payload(request: Request) -> JudgehostPayload:
             form = await request.form(max_files=4096, max_fields=4096)
         except Exception as exc:
             _logger.warning(
-                "judgehost multipart parse failed content_type=%s: %s", content_type, exc
+                "judgehost multipart parse failed content_type=%s: %s",
+                content_type,
+                exc,
             )
             return {}
         out: JudgehostPayload = {}
@@ -222,7 +228,9 @@ def _require_judgehost_auth(request: Request):
     if not service.enabled():
         raise HTTPException(status_code=404, detail="judgehost API is disabled")
     if not service.auth_token_configured():
-        raise HTTPException(status_code=503, detail="judgehost API token is not configured")
+        raise HTTPException(
+            status_code=503, detail="judgehost API token is not configured"
+        )
     token = _extract_bearer_token(request)
     if token and service.check_api_token(token):
         return service
@@ -463,7 +471,9 @@ async def domjudge_update_judging(request: Request, hostname: str, judgetask_id:
             return JSONResponse({})
         hostname = _validated_hostname(hostname)
         payload = await _request_payload(request)
-        await _run_service_call(service.domjudge_update_judging, hostname, judgetask_id, payload)
+        await _run_service_call(
+            service.domjudge_update_judging, hostname, judgetask_id, payload
+        )
         _record_host_peer_ip(service, request, hostname)
         return JSONResponse({})
 

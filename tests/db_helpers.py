@@ -95,9 +95,7 @@ def verification_programs_for_tasks(
                 or existing.source_path != task.source_path
                 or existing.expected_behavior != task.expected_behavior
             ):
-                raise AssertionError(
-                    f"conflicting fixture program {task.program_id}"
-                )
+                raise AssertionError(f"conflicting fixture program {task.program_id}")
             continue
         task_by_program_id[task.program_id] = task
         programs.append(
@@ -118,19 +116,21 @@ def verification_programs_for_tasks(
 
 
 def judgehost_fetch_case(service, case_id: int):
-    return service.state.batch_runtime.fetch_case(int(case_id))
+    return service.case_snapshot(int(case_id))
 
 
 def judgehost_fetch_batch(service, batch_id: int):
-    return service.state.batch_runtime.fetch_batch(int(batch_id))
+    return service.batch_snapshot(int(batch_id))
 
 
 def judgehost_cases_for_run(service, run_id: str):
-    return service.state.batch_runtime.cases_for_run(run_id)
+    return service.run_case_snapshots(run_id)
 
 
 def read_preview_summary(preview_id: str) -> dict[str, object]:
-    row = db_fetch_one("SELECT summary_json FROM previews WHERE id=?", [str(preview_id).strip()])
+    row = db_fetch_one(
+        "SELECT summary_json FROM previews WHERE id=?", [str(preview_id).strip()]
+    )
     if row is None:
         return {}
     text = str(row["summary_json"] or "")
@@ -157,10 +157,15 @@ def write_preview_summary(preview_id: str, summary: dict[str, object]) -> None:
 
 
 def read_contest_job_summary(contest_id: int, job_id: str) -> dict[str, object]:
-    contest_row = db_fetch_one("SELECT slug FROM contests WHERE id=?", [int(contest_id)])
+    contest_row = db_fetch_one(
+        "SELECT slug FROM contests WHERE id=?", [int(contest_id)]
+    )
     if contest_row is None:
         return {}
-    path = runtime.contest_service.job_root(str(contest_row["slug"]), str(job_id).strip()) / "summary.json"
+    path = (
+        runtime.contest_service.job_root(str(contest_row["slug"]), str(job_id).strip())
+        / "summary.json"
+    )
     try:
         text = path.read_text(encoding="utf-8")
     except OSError:
@@ -174,11 +179,18 @@ def read_contest_job_summary(contest_id: int, job_id: str) -> dict[str, object]:
     return payload if isinstance(payload, dict) else {}
 
 
-def write_contest_job_summary(contest_id: int, job_id: str, summary: dict[str, object]) -> None:
-    contest_row = db_fetch_one("SELECT slug FROM contests WHERE id=?", [int(contest_id)])
+def write_contest_job_summary(
+    contest_id: int, job_id: str, summary: dict[str, object]
+) -> None:
+    contest_row = db_fetch_one(
+        "SELECT slug FROM contests WHERE id=?", [int(contest_id)]
+    )
     if contest_row is None:
         raise AssertionError(f"contest missing: {contest_id}")
-    path = runtime.contest_service.job_root(str(contest_row["slug"]), str(job_id).strip()) / "summary.json"
+    path = (
+        runtime.contest_service.job_root(str(contest_row["slug"]), str(job_id).strip())
+        / "summary.json"
+    )
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         json.dumps(summary, ensure_ascii=True, separators=(",", ":")),

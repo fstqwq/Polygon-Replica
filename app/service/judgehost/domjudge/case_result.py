@@ -186,7 +186,9 @@ def build_case_result(
     )
 
 
-def decode_case_test_row(result: ExecutionResult, *, test_name: str) -> dict[str, object]:
+def decode_case_test_row(
+    result: ExecutionResult, *, test_name: str
+) -> dict[str, object]:
     passes = [
         build_execution_test_pass_row(
             verdict=pass_result.verdict,
@@ -222,9 +224,13 @@ def decode_case_test_row(result: ExecutionResult, *, test_name: str) -> dict[str
     return build_execution_test_row(
         test_name=test_name,
         verdict=result.outcome.verdict,
-        time_ms=0 if usage.runtime_sec is None else int(round(usage.runtime_sec * 1000.0)),
+        time_ms=(
+            0 if usage.runtime_sec is None else int(round(usage.runtime_sec * 1000.0))
+        ),
         time_user_ms=0 if usage.cpu_sec is None else int(round(usage.cpu_sec * 1000.0)),
-        time_wall_ms=0 if usage.wall_sec is None else int(round(usage.wall_sec * 1000.0)),
+        time_wall_ms=(
+            0 if usage.wall_sec is None else int(round(usage.wall_sec * 1000.0))
+        ),
         memory_kb=usage.memory_kb,
         message=result.outcome.feedback,
         output_ref=result.output_run_ref,

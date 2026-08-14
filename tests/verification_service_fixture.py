@@ -2,7 +2,7 @@ import sqlite3
 import uuid
 from pathlib import Path
 
-from app.service.judgehost.callback.case_result import build_case_terminal_report
+from app.service.judgehost.domjudge.case_result import build_case_terminal_report
 from app.service.judgehost.ports.completion import CaseTerminalReport
 from app.service.verification.completion import (
     VerificationTaskCompletionService,
@@ -28,7 +28,6 @@ from app.service.verification.task_completion import TaskCompletion
 from app.service.verification.types import VerificationTaskStatus
 
 from tests.db_fixture import DBTestBase
-
 
 _ACTIVATION_TASK_ABORT_TRIGGER = "test_abort_verification_activation_task_insert"
 _COMPLETION_REF_ABORT_TRIGGER = "test_abort_verification_completion_ref_insert"
@@ -272,7 +271,9 @@ class VerificationServiceTestBase(DBTestBase):
             source_path=source_path,
             compile_spec=VerificationCompileSpec(
                 source_name=Path(source_path).name,
-                source_file=self.runtime_blob_store.put_bytes(b"int main(){return 0;}\n"),
+                source_file=self.runtime_blob_store.put_bytes(
+                    b"int main(){return 0;}\n"
+                ),
             ),
             expected_behavior=expected_behavior,
         )
@@ -291,7 +292,9 @@ class VerificationServiceTestBase(DBTestBase):
                     or previous.source_path != task.source_path
                     or previous.expected_behavior != task.expected_behavior
                 ):
-                    raise AssertionError(f"conflicting fixture program {task.program_id}")
+                    raise AssertionError(
+                        f"conflicting fixture program {task.program_id}"
+                    )
                 continue
             by_id[task.program_id] = task
             programs.append(
@@ -393,44 +396,38 @@ class VerificationServiceTestBase(DBTestBase):
                 self.verification_task_store.set_task_leased(task_id)
 
     def _install_activation_abort(self) -> None:
-        self.db.execute(
-            f"""
+        self.db.execute(f"""
             CREATE TRIGGER {_ACTIVATION_TASK_ABORT_TRIGGER}
             BEFORE INSERT ON verification_tasks
             BEGIN
                 SELECT RAISE(ABORT, 'forced activation task failure');
             END
-            """
-        )
+            """)
 
     def _clear_activation_abort(self) -> None:
         self.db.execute(f"DROP TRIGGER IF EXISTS {_ACTIVATION_TASK_ABORT_TRIGGER}")
 
     def _install_completion_ref_abort(self) -> None:
-        self.db.execute(
-            f"""
+        self.db.execute(f"""
             CREATE TRIGGER {_COMPLETION_REF_ABORT_TRIGGER}
             BEFORE INSERT ON verification_task_artifacts
             BEGIN
                 SELECT RAISE(ABORT, 'forced artifact ref failure');
             END
-            """
-        )
+            """)
 
     def _clear_completion_ref_abort(self) -> None:
         self.db.execute(f"DROP TRIGGER IF EXISTS {_COMPLETION_REF_ABORT_TRIGGER}")
 
     def _install_verification_cancel_abort(self, verification_id: str) -> None:
-        self.db.execute(
-            f"""
+        self.db.execute(f"""
             CREATE TRIGGER {_VERIFICATION_CANCEL_ABORT_TRIGGER}
             BEFORE UPDATE OF status ON verifications
             WHEN NEW.id='{verification_id}' AND NEW.status='cancelled'
             BEGIN
                 SELECT RAISE(ABORT, 'forced cancellation failure');
             END
-            """
-        )
+            """)
 
     def _clear_verification_cancel_abort(self) -> None:
         self.db.execute(f"DROP TRIGGER IF EXISTS {_VERIFICATION_CANCEL_ABORT_TRIGGER}")

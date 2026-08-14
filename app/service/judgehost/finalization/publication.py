@@ -1,63 +1,33 @@
-from app.db import now_iso
-from app.service.judgehost.batch.model import ProgramTerminalClaim
+from app.service.judgehost.batch.runtime import JudgehostBatchRuntime
 from app.service.judgehost.ports.case_binding import CaseBinding
-from app.service.judgehost.ports.completion import CaseCompletionReport
-from app.service.judgehost.state import JudgehostState
-from app.service.judgehost.work.task_queue import TaskQueue
-from app.service.platform.error_text import aux_display_text_limit_bytes
+from app.service.judgehost.ports.completion import (
+    CaseCompletionReport,
+    CaseCompletionSink,
+    CaseDiagnosticSink,
+)
+from app.service.judgehost.task.registry import JudgehostTaskRegistry
+from app.service.judgehost.task.result_view import project_task_case_result
 
 
 class JudgehostCaseDiagnosticPublisher:
     """Stage primary diagnostics and persist diagnostics after a decision."""
 
-    def __init__(self, state: JudgehostState) -> None:
-        self._s = state
-
-    def claim_internal_error(
+    def __init__(
         self,
-        case_id: int,
-        *,
-        hostname: str,
-        failure_text: str,
-        diagnostic_text: str,
-        receipt_generation: int,
-    ) -> ProgramTerminalClaim:
-        return self._s.batch_runtime.claim_internal_error(
-            int(case_id),
-            hostname=hostname,
-            failure_text=failure_text,
-            diagnostic_text=diagnostic_text,
-            receipt_generation=receipt_generation,
-            diagnostic_limit_bytes=aux_display_text_limit_bytes(self._s.config_values.snapshot()),
-            updated_at=now_iso(),
-        )
-
-    def record_debug_info(
-        self,
-        case_id: int,
-        *,
-        hostname: str,
-        text: str,
-        receipt_generation: int,
-    ) -> str | None:
-        return self._s.batch_runtime.record_case_diagnostic(
-            int(case_id),
-            kind="debug-info",
-            hostname=hostname,
-            text=text,
-            receipt_generation=receipt_generation,
-            diagnostic_limit_bytes=aux_display_text_limit_bytes(self._s.config_values.snapshot()),
-            now_text=now_iso(),
-        )
+        batch_runtime: JudgehostBatchRuntime,
+        execution_port: CaseDiagnosticSink,
+    ) -> None:
+        self._batch_runtime = batch_runtime
+        self._execution_port = execution_port
 
     def flush_pending(self, case_id: int) -> None:
-        case = self._s.batch_runtime.fetch_case(int(case_id))
+        case = self._batch_runtime.fetch_case(int(case_id))
         if case is None or not bool(case["completion_acknowledged"]):
             return
         verification_task_id = case["verification_task_id"]
         if not verification_task_id:
             return
-        batch = self._s.batch_runtime.fetch_batch(int(case["batch_id"]))
+        batch = self._batch_runtime.fetch_batch(int(case["batch_id"]))
         if batch is None:
             return
         binding = CaseBinding(
@@ -66,8 +36,8 @@ class JudgehostCaseDiagnosticPublisher:
             task_id=verification_task_id,
             test_name=case["test_name"],
         )
-        for diagnostic in self._s.batch_runtime.pending_case_diagnostics(int(case_id)):
-            outcome = self._s.execution_port.append(
+        for diagnostic in self._batch_runtime.pending_case_diagnostics(int(case_id)):
+            outcome = self._execution_port.append(
                 binding=binding,
                 kind=diagnostic.kind,
                 hostname=diagnostic.hostname,
@@ -76,7 +46,7 @@ class JudgehostCaseDiagnosticPublisher:
             )
             if outcome.outcome not in {"persisted", "duplicate"}:
                 raise RuntimeError("verification task rejected a pending judgehost diagnostic")
-            self._s.batch_runtime.acknowledge_case_diagnostic(
+            self._batch_runtime.acknowledge_case_diagnostic(
                 int(case_id),
                 diagnostic,
             )
@@ -87,29 +57,33 @@ class JudgehostCaseCompletionPublisher:
 
     def __init__(
         self,
-        state: JudgehostState,
-        queue: TaskQueue,
+        batch_runtime: JudgehostBatchRuntime,
+        execution_port: CaseCompletionSink,
+        tasks: JudgehostTaskRegistry,
         diagnostic_publisher: JudgehostCaseDiagnosticPublisher,
     ) -> None:
-        self._s = state
-        self._queue = queue
+        self._batch_runtime = batch_runtime
+        self._execution_port = execution_port
+        self._tasks = tasks
         self._diagnostic_publisher = diagnostic_publisher
 
     def _reported_case_completion(
         self,
         case_id: int,
     ) -> CaseCompletionReport | None:
-        case = self._s.batch_runtime.fetch_case(int(case_id))
+        case = self._batch_runtime.fetch_case(int(case_id))
         if case is None:
             return None
-        batch = self._s.batch_runtime.fetch_batch(int(case["batch_id"]))
+        batch = self._batch_runtime.fetch_batch(int(case["batch_id"]))
         if batch is None:
             return None
         judgehost_task_id = case["task_id"]
         test_name = case["test_name"]
         if not judgehost_task_id or not test_name:
             return None
-        report = self._queue.poll_task_case_result(
+        report = project_task_case_result(
+            self._tasks,
+            self._batch_runtime,
             judgehost_task_id,
             test_name,
         )
@@ -139,11 +113,11 @@ class JudgehostCaseCompletionPublisher:
             reports.append(report)
         if not reports:
             return True
-        if not self._s.execution_port.reported_many(tuple(reports)):
+        if not self._execution_port.reported_many(tuple(reports)):
             return False
-        self._s.batch_runtime.acknowledge_case_completions(list(unique_case_ids))
+        self._batch_runtime.acknowledge_case_completions(list(unique_case_ids))
         return all(
-            (case := self._s.batch_runtime.fetch_case(case_id)) is not None
+            (case := self._batch_runtime.fetch_case(case_id)) is not None
             and bool(case["completion_acknowledged"])
             for case_id in unique_case_ids
         )
@@ -155,7 +129,7 @@ class JudgehostCaseCompletionPublisher:
         task_id: str,
         reason: str,
     ) -> bool:
-        return self._s.execution_port.cancelled(
+        return self._execution_port.cancelled(
             binding,
             task_id,
             reason,
@@ -167,7 +141,7 @@ class JudgehostCaseCompletionPublisher:
         *,
         reason: str = "",
     ) -> bool:
-        case = self._s.batch_runtime.fetch_case(int(case_id))
+        case = self._batch_runtime.fetch_case(int(case_id))
         if case is None:
             return True
         status = case["status"]
@@ -177,7 +151,7 @@ class JudgehostCaseCompletionPublisher:
             if status == "reported":
                 accepted = self.publish_reported_cases((int(case_id),))
             else:
-                batch = self._s.batch_runtime.fetch_batch(int(case["batch_id"]))
+                batch = self._batch_runtime.fetch_batch(int(case["batch_id"]))
                 if batch is None:
                     return False
                 accepted = self._publish_cancelled(
@@ -191,7 +165,7 @@ class JudgehostCaseCompletionPublisher:
                     reason=reason,
                 )
                 if accepted:
-                    self._s.batch_runtime.acknowledge_case_completion(int(case_id))
+                    self._batch_runtime.acknowledge_case_completion(int(case_id))
             if not accepted:
                 raise RuntimeError("verification task completion was rejected")
         self._diagnostic_publisher.flush_pending(int(case_id))

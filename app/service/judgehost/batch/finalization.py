@@ -2,7 +2,8 @@ import heapq
 import time
 from typing import TYPE_CHECKING
 
-from app.service.judgehost.batch.model import ExecutionBatchFinalizationClaim
+from app.service.judgehost.batch.model import FinalizationClaim
+from app.service.judgehost.batch.snapshot import batch_snapshot, case_snapshot
 
 if TYPE_CHECKING:
     from app.service.judgehost.batch.state import BatchState
@@ -33,17 +34,25 @@ class BatchFinalization:
         )
         with self._state._lock:
             batch = self._state._batches.get(int(batch_id))
-            return None if batch is None else {field: getattr(batch, field) for field in fields}
+            return (
+                None
+                if batch is None
+                else {field: getattr(batch, field) for field in fields}
+            )
 
     def claim_batch_finalization(
         self,
         batch_id: int,
         *,
         now_text: str,
-    ) -> ExecutionBatchFinalizationClaim | None:
+    ) -> FinalizationClaim | None:
         with self._state._lock:
             batch = self._state._batches.get(int(batch_id))
-            if batch is None:
+            if (
+                batch is None
+                or batch.batch_id
+                in self._state._active_finalization_generation_by_batch
+            ):
                 return None
             counts = self._state._batch_counts[batch.batch_id]
             if (
@@ -54,55 +63,120 @@ class BatchFinalization:
                 and batch.materialization_state != "materializing"
             ):
                 self._state._close_batch_locked(batch, updated_at=now_text)
-            if (
-                batch.status != "finalize-pending"
-                or counts.total == 0
-                or counts.terminal != counts.total
-                or batch.materialization_state == "materializing"
-            ):
-                return None
-            self._state._mutate_batch_locked(batch, status="finalizing", updated_at=now_text)
-            cases = [
-                self._state._case_row(row)
+            terminal_transition = (
+                batch.status == "finalize-pending"
+                and counts.total > 0
+                and counts.terminal == counts.total
+                and batch.materialization_state != "materializing"
+            )
+            cases = tuple(
+                case_snapshot(row)
                 for row in self._state._sorted_cases_locked(
                     self._state._case_ids_by_batch[batch.batch_id]
                 )
-            ]
-            return {"batch": self._state._batch_row(batch), "cases": cases}
+            )
+            has_terminal_work = any(
+                case.status in {"reported", "cancelled"}
+                and (not case.completion_acknowledged or bool(case.pending_diagnostics))
+                for case_id in self._state._case_ids_by_batch[batch.batch_id]
+                if (case := self._state._cases.get(case_id)) is not None
+            )
+            if not terminal_transition and not has_terminal_work:
+                return None
+            if terminal_transition:
+                batch.status = "finalizing"
+                batch.updated_at = now_text
+                self._state._touch_batch_locked(batch)
+            generation = (
+                self._state._finalization_generation_by_batch.get(batch.batch_id, 0) + 1
+            )
+            self._state._finalization_generation_by_batch[batch.batch_id] = generation
+            self._state._active_finalization_generation_by_batch[batch.batch_id] = (
+                generation
+            )
+            return FinalizationClaim(
+                batch_id=batch.batch_id,
+                generation=generation,
+                terminal_transition=terminal_transition,
+                batch=batch_snapshot(batch),
+                cases=cases,
+            )
 
-    def schedule_batch_finalization_retry(
+    def abort_batch_finalization(
         self,
-        batch_id: int,
+        claim: FinalizationClaim,
         *,
         now_text: str,
         delay_sec: float = 0.25,
     ) -> bool:
         with self._state._lock:
-            batch = self._state._batches.get(int(batch_id))
-            if batch is None or batch.status not in {
-                "open",
-                "finalize-pending",
-                "finalizing",
-            }:
+            batch = self._state._batches.get(claim.batch_id)
+            if batch is None:
                 return False
-            if batch.status == "finalizing":
-                self._state._mutate_batch_locked(
-                    batch,
-                    status="finalize-pending",
-                    updated_at=now_text,
-                )
+            if (
+                self._state._active_finalization_generation_by_batch.get(claim.batch_id)
+                != claim.generation
+            ):
+                return False
+            self._state._active_finalization_generation_by_batch.pop(
+                claim.batch_id, None
+            )
+            if claim.terminal_transition and batch.status == "finalizing":
+                batch.status = "finalize-pending"
+                batch.updated_at = now_text
+                self._state._touch_batch_locked(batch)
             deadline = time.monotonic() + max(0.0, float(delay_sec))
             current = self._state._finalization_retry_deadlines.get(batch.batch_id)
             if current is None or deadline < current:
                 self._state._finalization_retry_deadlines[batch.batch_id] = deadline
-                heapq.heappush(self._state._finalization_retry_heap, (deadline, batch.batch_id))
+                heapq.heappush(
+                    self._state._finalization_retry_heap, (deadline, batch.batch_id)
+                )
+            return True
+
+    def complete_batch_finalization(self, claim: FinalizationClaim) -> bool:
+        """Release a publication-only claim after all external work succeeds."""
+
+        with self._state._lock:
+            if claim.terminal_transition:
+                return False
+            if (
+                self._state._active_finalization_generation_by_batch.get(claim.batch_id)
+                != claim.generation
+            ):
+                return False
+            self._state._active_finalization_generation_by_batch.pop(
+                claim.batch_id, None
+            )
+            self._state._finalization_retry_deadlines.pop(claim.batch_id, None)
+            return True
+
+    def schedule_batch_finalization_retry(
+        self,
+        batch_id: int,
+        *,
+        delay_sec: float = 0.25,
+    ) -> bool:
+        with self._state._lock:
+            batch = self._state._batches.get(int(batch_id))
+            if batch is None or batch.status not in {"open", "finalize-pending"}:
+                return False
+            deadline = time.monotonic() + max(0.0, float(delay_sec))
+            current = self._state._finalization_retry_deadlines.get(batch.batch_id)
+            if current is None or deadline < current:
+                self._state._finalization_retry_deadlines[batch.batch_id] = deadline
+                heapq.heappush(
+                    self._state._finalization_retry_heap, (deadline, batch.batch_id)
+                )
             return True
 
     def due_batch_finalizations(self, *, limit: int) -> list[int]:
         due: list[int] = []
         now = time.monotonic()
         with self._state._lock:
-            while self._state._finalization_retry_heap and len(due) < max(0, int(limit)):
+            while self._state._finalization_retry_heap and len(due) < max(
+                0, int(limit)
+            ):
                 deadline, batch_id = self._state._finalization_retry_heap[0]
                 if deadline > now:
                     break
@@ -124,22 +198,31 @@ class BatchFinalization:
 
     def set_batch_terminal_status(
         self,
-        batch_id: int,
+        claim: FinalizationClaim,
         *,
         status: str,
         completed_at: str,
         updated_at: str,
     ) -> bool:
         with self._state._lock:
-            batch = self._state._batches.get(int(batch_id))
-            if batch is None or batch.status != "finalizing":
+            batch = self._state._batches.get(claim.batch_id)
+            if (
+                batch is None
+                or batch.status != "finalizing"
+                or not claim.terminal_transition
+                or self._state._active_finalization_generation_by_batch.get(
+                    claim.batch_id
+                )
+                != claim.generation
+            ):
                 return False
-            self._state._mutate_batch_locked(
-                batch,
-                status=status,
-                completed_at=completed_at,
-                updated_at=updated_at,
-            )
+            batch.status = status
+            batch.completed_at = completed_at
+            batch.updated_at = updated_at
+            self._state._touch_batch_locked(batch)
             self._state._finalization_retry_deadlines.pop(batch.batch_id, None)
+            self._state._active_finalization_generation_by_batch.pop(
+                batch.batch_id, None
+            )
             self._state._discard_batch_telemetry_locked(batch.batch_id)
             return True

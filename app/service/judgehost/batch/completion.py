@@ -15,7 +15,8 @@ from app.service.judgehost.batch.model import (
     ProgramTerminalClaim,
     ProgramTerminalClaimOutcome,
 )
-from app.service.judgehost.callback.case_result import build_case_result
+from app.service.judgehost.batch.snapshot import case_snapshot
+from app.service.judgehost.domjudge.case_result import build_case_result
 from app.service.judgehost.domjudge.result import verdict_from_runresult
 from app.service.platform.error_text import bounded_display_text
 from app.service.platform.hashing import canonical_json, sha256_hex_json
@@ -277,25 +278,25 @@ class BatchCompletion:
             if batch.failure_runresult or batch.compile_state == "failed":
                 return True
             if batch.compile_state == "succeeded":
-                evidence: dict[str, object] = {}
+                evidence_changed = False
                 if not batch.compile_output_b64 and compile_output_b64:
-                    evidence["compile_output_b64"] = compile_output_b64
+                    batch.compile_output_b64 = compile_output_b64
+                    evidence_changed = True
                 if not batch.compile_metadata_b64 and compile_metadata_b64:
-                    evidence["compile_metadata_b64"] = compile_metadata_b64
-                if evidence:
-                    evidence["updated_at"] = updated_at
-                    self._state._mutate_batch_locked(batch, **evidence)
+                    batch.compile_metadata_b64 = compile_metadata_b64
+                    evidence_changed = True
+                if evidence_changed:
+                    batch.updated_at = updated_at
+                    self._state._touch_batch_locked(batch)
                 return True
             if batch.status != "open" or case.status not in {"leased", "reporting"}:
                 return False
-            self._state._mutate_batch_locked(
-                batch,
-                compile_success=1,
-                compile_state="succeeded",
-                compile_output_b64=compile_output_b64,
-                compile_metadata_b64=compile_metadata_b64,
-                updated_at=updated_at,
-            )
+            batch.compile_success = 1
+            batch.compile_state = "succeeded"
+            batch.compile_output_b64 = compile_output_b64
+            batch.compile_metadata_b64 = compile_metadata_b64
+            batch.updated_at = updated_at
+            self._state._touch_batch_locked(batch)
             return True
 
     def claim_compile_failure(
@@ -348,7 +349,11 @@ class BatchCompletion:
                     case_id=case.id,
                     batch_id=batch.batch_id,
                 )
-            if batch.status != "open" or case.status != "leased" or case.lease_owner != hostname:
+            if (
+                batch.status != "open"
+                or case.status != "leased"
+                or case.lease_owner != hostname
+            ):
                 return self._program_terminal_claim(
                     "rejected",
                     case_id=case.id,
@@ -380,12 +385,10 @@ class BatchCompletion:
                         contradiction,
                         failure_text,
                     )
-                self._state._mutate_batch_locked(
-                    batch,
-                    failure_runresult="internal-error",
-                    failure_text=contradiction,
-                    updated_at=updated_at,
-                )
+                batch.failure_runresult = "internal-error"
+                batch.failure_text = contradiction
+                batch.updated_at = updated_at
+                self._state._touch_batch_locked(batch)
                 self._install_program_failure_locked(
                     batch,
                     updated_at=updated_at,
@@ -396,16 +399,14 @@ class BatchCompletion:
                     batch_id=batch.batch_id,
                 )
             feedback = failure_text or "compilation failed"
-            self._state._mutate_batch_locked(
-                batch,
-                compile_success=0,
-                compile_state="failed",
-                compile_output_b64=compile_output_b64,
-                compile_metadata_b64=compile_metadata_b64,
-                failure_runresult="compiler-error",
-                failure_text=feedback,
-                updated_at=updated_at,
-            )
+            batch.compile_success = 0
+            batch.compile_state = "failed"
+            batch.compile_output_b64 = compile_output_b64
+            batch.compile_metadata_b64 = compile_metadata_b64
+            batch.failure_runresult = "compiler-error"
+            batch.failure_text = feedback
+            batch.updated_at = updated_at
+            self._state._touch_batch_locked(batch)
             self._install_program_failure_locked(
                 batch,
                 compile_log=compile_log,
@@ -428,7 +429,10 @@ class BatchCompletion:
         if not case.verification_task_id:
             return "not-applicable"
         limit = max(1, int(limit_bytes))
-        if any(existing.digest == diagnostic.digest for existing in case.pending_diagnostics):
+        if any(
+            existing.digest == diagnostic.digest
+            for existing in case.pending_diagnostics
+        ):
             return "duplicate"
         retained = [*case.pending_diagnostics, diagnostic]
         while len(retained) > 1 and (
@@ -529,7 +533,11 @@ class BatchCompletion:
                     case_id=case.id,
                     batch_id=batch.batch_id,
                 )
-            if batch.status != "open" or case.status != "leased" or case.lease_owner != hostname:
+            if (
+                batch.status != "open"
+                or case.status != "leased"
+                or case.lease_owner != hostname
+            ):
                 return self._program_terminal_claim(
                     "rejected",
                     case_id=case.id,
@@ -580,13 +588,11 @@ class BatchCompletion:
                         program_feedback,
                         case.debug_text,
                     )
-            self._state._mutate_batch_locked(
-                batch,
-                failure_runresult="internal-error",
-                failure_text=program_feedback,
-                program_failure_diagnostic_digest=diagnostic_digest,
-                updated_at=updated_at,
-            )
+            batch.failure_runresult = "internal-error"
+            batch.failure_text = program_feedback
+            batch.program_failure_diagnostic_digest = diagnostic_digest
+            batch.updated_at = updated_at
+            self._state._touch_batch_locked(batch)
             self._install_program_failure_locked(batch, updated_at=updated_at)
             return self._program_terminal_claim(
                 "claimed",
@@ -609,18 +615,18 @@ class BatchCompletion:
             if batch.program_failure_result is not None:
                 return True
             if not batch.failure_runresult:
-                self._state._mutate_batch_locked(
-                    batch,
-                    failure_runresult=runresult,
-                    failure_text=error_text,
-                    updated_at=updated_at,
-                )
-            elif batch.failure_runresult == runresult and error_text and not batch.failure_text:
-                self._state._mutate_batch_locked(
-                    batch,
-                    failure_text=error_text,
-                    updated_at=updated_at,
-                )
+                batch.failure_runresult = runresult
+                batch.failure_text = error_text
+                batch.updated_at = updated_at
+                self._state._touch_batch_locked(batch)
+            elif (
+                batch.failure_runresult == runresult
+                and error_text
+                and not batch.failure_text
+            ):
+                batch.failure_text = error_text
+                batch.updated_at = updated_at
+                self._state._touch_batch_locked(batch)
             self._install_program_failure_locked(batch, updated_at=updated_at)
             return True
 
@@ -659,7 +665,9 @@ class BatchCompletion:
             }
             return row
 
-    def case_output_for_task(self, task_id: str, test_name: str) -> dict[str, object] | None:
+    def case_output_for_task(
+        self, task_id: str, test_name: str
+    ) -> dict[str, object] | None:
         with self._state._lock:
             case_id = self._state._latest_case_id_by_task_test.get((task_id, test_name))
             if case_id is None:
@@ -679,7 +687,7 @@ class BatchCompletion:
             case = self._state._cases[case_id]
             batch = self._state._batches[case.batch_id]
             return {
-                **self._state._case_row(case),
+                **case_snapshot(case),
                 "batch_id": batch.batch_id,
                 "batch_status": batch.status,
                 "compile_success": batch.compile_success,
@@ -721,7 +729,9 @@ class BatchCompletion:
 
     def release_case_callback_receipt(self, receipt_id: int) -> None:
         with self._state._lock:
-            case_id = self._state._case_id_by_callback_receipt.pop(int(receipt_id), None)
+            case_id = self._state._case_id_by_callback_receipt.pop(
+                int(receipt_id), None
+            )
             if case_id is None:
                 raise RuntimeError("unknown judgehost callback receipt")
             case = self._state._cases.get(case_id)
@@ -784,15 +794,17 @@ class BatchCompletion:
             ):
                 return False
             batch = self._state._batches.get(case.batch_id)
-            if batch is None or batch.status != "open" or batch.compile_state == "failed":
+            if (
+                batch is None
+                or batch.status != "open"
+                or batch.compile_state == "failed"
+            ):
                 return False
             if batch.compile_state == "unknown":
-                self._state._mutate_batch_locked(
-                    batch,
-                    compile_success=1,
-                    compile_state="succeeded",
-                    updated_at=updated_at,
-                )
+                batch.compile_success = 1
+                batch.compile_state = "succeeded"
+                batch.updated_at = updated_at
+                self._state._touch_batch_locked(batch)
             return batch.compile_state == "succeeded"
 
     def claim_cache_cases(
@@ -809,7 +821,9 @@ class BatchCompletion:
             if batch is None or batch.status != "open":
                 return claimed
             while len(claimed) < max(0, int(limit)):
-                case = self._state._peek_case_heap_locked(batch.batch_id, status="cache-pending")
+                case = self._state._peek_case_heap_locked(
+                    batch.batch_id, status="cache-pending"
+                )
                 if case is None:
                     break
                 heapq.heappop(self._state._cache_heaps_by_batch[batch.batch_id])
@@ -829,7 +843,7 @@ class BatchCompletion:
                     test_name=case.test_name,
                     cancel_requested=case.cancel_requested,
                 )
-                claimed.append((claim, self._state._case_row(case)))
+                claimed.append((claim, case_snapshot(case)))
             self._state._refresh_batches_locked({batch.batch_id}, updated_at=now_text)
         return claimed
 
@@ -879,7 +893,10 @@ class BatchCompletion:
             ):
                 return None
             if report_telemetry is not None:
-                if case.status != "reporting" or case.lease_owner != report_telemetry.hostname:
+                if (
+                    case.status != "reporting"
+                    or case.lease_owner != report_telemetry.hostname
+                ):
                     return None
                 self._state._record_case_telemetry_locked(case, report_telemetry)
             return self._finish_claim_locked(case, result=result, updated_at=updated_at)
@@ -1105,7 +1122,9 @@ class BatchCompletion:
                 )
                 affected_batch_ids.add(case.batch_id)
                 aborted += 1
-            self._state._refresh_batches_locked(affected_batch_ids, updated_at=updated_at)
+            self._state._refresh_batches_locked(
+                affected_batch_ids, updated_at=updated_at
+            )
         return aborted
 
     def acknowledge_case_completion(self, case_id: int) -> bool:
@@ -1123,7 +1142,10 @@ class BatchCompletion:
         with self._state._lock:
             for case_id in dict.fromkeys(int(raw_case_id) for raw_case_id in case_ids):
                 case = self._state._cases.get(case_id)
-                if case is None or case.status not in self._state._TERMINAL_CASE_STATUSES:
+                if (
+                    case is None
+                    or case.status not in self._state._TERMINAL_CASE_STATUSES
+                ):
                     continue
                 if not case.completion_acknowledged:
                     case.completion_acknowledged = True
@@ -1173,7 +1195,9 @@ class BatchCompletion:
             case.debug_text = self._merge_debug_text(case.debug_text, item.text)
             return "primary"
 
-    def pending_case_diagnostics(self, case_id: int) -> tuple[PendingCaseDiagnostic, ...]:
+    def pending_case_diagnostics(
+        self, case_id: int
+    ) -> tuple[PendingCaseDiagnostic, ...]:
         with self._state._lock:
             case = self._state._cases.get(int(case_id))
             return () if case is None else tuple(case.pending_diagnostics)

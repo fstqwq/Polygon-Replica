@@ -2,13 +2,13 @@ import hashlib
 import heapq
 import random
 import statistics
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable, Mapping
 
 from app.service.judgehost.batch.model import CompileSubmission, ExecutionBatchSpec
-from app.service.judgehost.callback.case_result import build_case_result
+from app.service.judgehost.domjudge.case_result import build_case_result
 from app.service.judgehost.domjudge.identity import submit_id
 from app.service.platform.runtime_blob_store import PayloadFile
 from tests.simulation.report import evaluate_assertions
@@ -19,7 +19,6 @@ from tests.simulation.strategy import (
     register_simulated_case,
 )
 from tests.simulation.workload import DurationRange, Workload
-
 
 _BASE_TIME = datetime(2026, 1, 1, tzinfo=timezone.utc)
 _TERMINAL_BATCH_STATUSES = {"completed", "failed"}
@@ -77,7 +76,12 @@ class _Host:
     state: str = "idle"
     state_since: float = 0.0
     state_times: dict[str, float] = field(
-        default_factory=lambda: {"idle": 0.0, "compile": 0.0, "execute": 0.0, "disconnected": 0.0}
+        default_factory=lambda: {
+            "idle": 0.0,
+            "compile": 0.0,
+            "execute": 0.0,
+            "disconnected": 0.0,
+        }
     )
     local_compile_cache: set[tuple[str, str]] = field(default_factory=set)
     compile_keys_seen: set[tuple[str, str]] = field(default_factory=set)
@@ -115,7 +119,9 @@ class JudgehostSimulation:
         self._case_node_ids: dict[int, str] = {}
         self._batch_ids: set[int] = set()
         self._batch_hosts: dict[int, set[str]] = {}
-        self._hosts = [_Host(hostname=f"host-{index + 1}") for index in range(workload.host_count)]
+        self._hosts = [
+            _Host(hostname=f"host-{index + 1}") for index in range(workload.host_count)
+        ]
         self._waiting_hosts: set[str] = set()
         self._active_case_ids: set[int] = set()
         self._leased_case_ids: set[int] = set()
@@ -145,7 +151,9 @@ class JudgehostSimulation:
         for event in self.workload.host_disconnect_events:
             host = self._hosts[event.host_index]
             self._schedule(event.at_sec, "host_disconnect", host.hostname)
-            self._schedule(event.at_sec + event.duration_sec, "host_reconnect", host.hostname)
+            self._schedule(
+                event.at_sec + event.duration_sec, "host_reconnect", host.hostname
+            )
         for host in self._hosts:
             self._schedule(0.0, "host_fetch", host.hostname, host.epoch)
 
@@ -196,11 +204,14 @@ class JudgehostSimulation:
             verification_id = f"ver-{verification_index + 1:x}"
             verification = _Verification(
                 verification_id=verification_id,
-                arrival_sec=verification_index * self.workload.verification_arrival_gap_sec,
+                arrival_sec=verification_index
+                * self.workload.verification_arrival_gap_sec,
             )
             self._verifications[verification_id] = verification
             slow_count = int(
-                round(self.workload.solution_count * self.workload.slow_solution_fraction)
+                round(
+                    self.workload.solution_count * self.workload.slow_solution_fraction
+                )
             )
             slow_programs = set(
                 self._rng.sample(
@@ -212,7 +223,8 @@ class JudgehostSimulation:
             for test_index in range(1, self.workload.tests_per_verification + 1):
                 previous: str | None = None
                 generated = (
-                    self.workload.generator_enabled and test_index > self.workload.manual_test_count
+                    self.workload.generator_enabled
+                    and test_index > self.workload.manual_test_count
                 )
                 if generated:
                     previous = self._add_node(
@@ -253,7 +265,9 @@ class JudgehostSimulation:
                 )
             verification.critical_path_sec = self._critical_path(verification.node_ids)
             verification.remaining_node_count = len(verification.node_ids)
-        for foreground_index, task in enumerate(self.workload.foreground_tasks, start=1):
+        for foreground_index, task in enumerate(
+            self.workload.foreground_tasks, start=1
+        ):
             verification = _Verification(
                 verification_id=f"ver-f{foreground_index:08x}",
                 arrival_sec=task.arrival_sec,
@@ -292,9 +306,11 @@ class JudgehostSimulation:
         scheduler_kind = (
             "compile-only"
             if timing_kind == "foreground"
-            else timing_kind
-            if timing_kind in {"generate-input", "main-correct"}
-            else "solution-run"
+            else (
+                timing_kind
+                if timing_kind in {"generate-input", "main-correct"}
+                else "solution-run"
+            )
         )
         service_class = "foreground" if timing_kind == "foreground" else "background"
         node = _Node(
@@ -323,7 +339,9 @@ class JudgehostSimulation:
         self._nodes[node_id] = node
         verification.node_ids.append(node_id)
         program_identity = (node.verification_id, node.verification_program_id)
-        self._program_totals[program_identity] = self._program_totals.get(program_identity, 0) + 1
+        self._program_totals[program_identity] = (
+            self._program_totals.get(program_identity, 0) + 1
+        )
         for dependency_id in dependencies:
             self._nodes[dependency_id].children.append(node_id)
         return node_id
@@ -333,7 +351,9 @@ class JudgehostSimulation:
         for node_id in node_ids:
             node = self._nodes[node_id]
             parent_total = max((totals[parent] for parent in node.parents), default=0.0)
-            totals[node_id] = parent_total + node.case_duration_sec + node.compile_duration_sec
+            totals[node_id] = (
+                parent_total + node.case_duration_sec + node.compile_duration_sec
+            )
         return max(totals.values(), default=0.0)
 
     def _verification_arrival(self, verification_id: object) -> None:
@@ -387,7 +407,9 @@ class JudgehostSimulation:
         node.batch_id = batch_id
         self._batch_ids.add(batch_id)
         self._batch_hosts.setdefault(batch_id, set())
-        if not self.scheduler.activate_task_cases(node.task_id, now_text=self._now_text()):
+        if not self.scheduler.activate_task_cases(
+            node.task_id, now_text=self._now_text()
+        ):
             self._violate(f"failed to activate {node.node_id}")
             return
         claims = self.scheduler.claim_cache_cases(
@@ -458,19 +480,37 @@ class JudgehostSimulation:
         batch_is_foreground = str(batch["service_class"]) == "foreground"
         self._trace_event("batch_selected", host=host.hostname, batch_id=batch_id)
         if str(batch["materialization_state"]) != "ready":
-            if self.scheduler.claim_materialization(batch_id, now_text=self._now_text()):
+            materialization = self.scheduler.claim_materialization(
+                batch_id,
+                now_text=self._now_text(),
+            )
+            if materialization is not None:
+                materialized_submission = replace(
+                    materialization.submission,
+                    source_file=replace(
+                        materialization.submission.source_file,
+                        blob_ref=(
+                            "blob://sha256/"
+                            f"{materialization.submission.source_file.identity}"
+                        ),
+                    ),
+                )
                 self.scheduler.finish_materialization(
-                    batch_id,
+                    materialization,
                     success=True,
+                    materialized_submission=materialized_submission,
                     error_text="",
                     now_text=self._now_text(),
                 )
-        rows = self.scheduler.lease_cases(
+        lease = self.scheduler.claim_lease(
             batch_id,
             hostname=host.hostname,
             limit=self.workload.fetch_batch_size,
             now_text=self._now_text(),
         )
+        rows = [] if lease is None else list(lease.cases)
+        if lease is not None and not self.scheduler.commit_lease(lease):
+            rows = []
         if not rows:
             self._schedule(self._now, "host_fetch", host.hostname, host.epoch)
             return
@@ -547,7 +587,11 @@ class JudgehostSimulation:
         compile_key: object,
     ) -> None:
         host = self._host(str(hostname))
-        if not host.enabled or host.epoch != int(epoch) or host.current_batch_id != int(batch_id):
+        if (
+            not host.enabled
+            or host.epoch != int(epoch)
+            or host.current_batch_id != int(batch_id)
+        ):
             return
         key = tuple(compile_key) if isinstance(compile_key, tuple) else None
         if key is None or len(key) != 2:
@@ -565,7 +609,9 @@ class JudgehostSimulation:
         if not self.scheduler.record_compile_success(
             int(host.current_rows[0]["id"]),
             hostname=host.hostname,
-            receipt_generation=self._receipt_generation(int(host.current_rows[0]["id"])),
+            receipt_generation=self._receipt_generation(
+                int(host.current_rows[0]["id"])
+            ),
             compile_output_b64="",
             compile_metadata_b64="",
             updated_at=self._now_text(),
@@ -677,7 +723,10 @@ class JudgehostSimulation:
         self._program_completed[program_identity] = (
             self._program_completed.get(program_identity, 0) + 1
         )
-        if self._program_completed[program_identity] == self._program_totals[program_identity]:
+        if (
+            self._program_completed[program_identity]
+            == self._program_totals[program_identity]
+        ):
             ready = self.scheduler.finish_programs(
                 node.verification_id,
                 [node.verification_program_id],
@@ -712,17 +761,21 @@ class JudgehostSimulation:
                     and str(batch["verification_id"]) == verification.verification_id
                 ):
                     self._finalize_batch(batch_id)
-            self._trace_event("verification_finished", verification_id=verification.verification_id)
+            self._trace_event(
+                "verification_finished", verification_id=verification.verification_id
+            )
 
     def _finalize_batch(self, batch_id: int) -> None:
         batch = self.scheduler.fetch_batch(batch_id)
         if batch is None or str(batch["status"]) in _TERMINAL_BATCH_STATUSES:
             return
-        claim = self.scheduler.claim_batch_finalization(batch_id, now_text=self._now_text())
+        claim = self.scheduler.claim_batch_finalization(
+            batch_id, now_text=self._now_text()
+        )
         if claim is None:
             return
         if not self.scheduler.set_batch_terminal_status(
-            batch_id,
+            claim,
             status="completed",
             completed_at=self._now_text(),
             updated_at=self._now_text(),
@@ -827,7 +880,10 @@ class JudgehostSimulation:
         dangling_batches = []
         for batch_id in sorted(self._batch_ids):
             batch = self.scheduler.fetch_batch(batch_id)
-            if batch is not None and str(batch["status"]) not in _TERMINAL_BATCH_STATUSES:
+            if (
+                batch is not None
+                and str(batch["status"]) not in _TERMINAL_BATCH_STATUSES
+            ):
                 dangling_batches.append(batch_id)
         if dangling_batches:
             self._violate(f"non-terminal Batches: {dangling_batches[:8]}")
@@ -857,7 +913,9 @@ class JudgehostSimulation:
             if verification.foreground:
                 continue
             finished = verification.finished_sec
-            completion = None if finished is None else finished - verification.arrival_sec
+            completion = (
+                None if finished is None else finished - verification.arrival_sec
+            )
             first_progress = (
                 None
                 if verification.first_progress_sec is None
@@ -883,9 +941,13 @@ class JudgehostSimulation:
             if node.timing_kind != "foreground":
                 continue
             arrival = self._verifications[node.verification_id].arrival_sec
-            ready_to_lease = None if node.leased_at is None else node.leased_at - arrival
+            ready_to_lease = (
+                None if node.leased_at is None else node.leased_at - arrival
+            )
             ready_to_compile = (
-                None if node.compile_started_at is None else node.compile_started_at - arrival
+                None
+                if node.compile_started_at is None
+                else node.compile_started_at - arrival
             )
             foreground_rows.append(
                 {
@@ -895,7 +957,9 @@ class JudgehostSimulation:
                     "ready_to_compile_start_sec": _optional_round(ready_to_compile),
                     "completion_sec": _optional_round(node.completed_at),
                     "makespan_sec": _optional_round(
-                        None if node.completed_at is None else node.completed_at - arrival
+                        None
+                        if node.completed_at is None
+                        else node.completed_at - arrival
                     ),
                     "wait_for_current_lease_sec": _optional_round(ready_to_lease),
                     "hostname": node.leased_hostname,
@@ -927,24 +991,33 @@ class JudgehostSimulation:
             if row["completion_sec"] is not None
         ]
         foreground_makespan = [
-            float(row["makespan_sec"]) for row in foreground_rows if row["makespan_sec"] is not None
+            float(row["makespan_sec"])
+            for row in foreground_rows
+            if row["makespan_sec"] is not None
         ]
         average_utilization = statistics.fmean(row["utilization"] for row in host_rows)
         summary = {
             "makespan_sec": _round(makespan),
             "background_makespan_sec": _round(background_makespan),
-            "foreground_ready_to_lease_sec": _round(max(foreground_ready_to_lease, default=0.0)),
+            "foreground_ready_to_lease_sec": _round(
+                max(foreground_ready_to_lease, default=0.0)
+            ),
             "foreground_ready_to_compile_start_sec": _round(
                 max(foreground_ready_to_compile, default=0.0)
             ),
-            "foreground_completion_sec": _round(max(foreground_completion, default=0.0)),
+            "foreground_completion_sec": _round(
+                max(foreground_completion, default=0.0)
+            ),
             "foreground_makespan_sec": _round(max(foreground_makespan, default=0.0)),
             "foreground_wait_for_current_lease_sec": _round(
                 max(foreground_ready_to_lease, default=0.0)
             ),
-            "foreground_background_lease_count": (self._background_leases_while_foreground_waited),
+            "foreground_background_lease_count": (
+                self._background_leases_while_foreground_waited
+            ),
             "foreground_resume_count": sum(
-                row["resumed_previous_background"] is not None for row in foreground_rows
+                row["resumed_previous_background"] is not None
+                for row in foreground_rows
             ),
             "foreground_resume_same_batch_count": sum(
                 row["resumed_previous_background"] is True for row in foreground_rows
@@ -955,17 +1028,28 @@ class JudgehostSimulation:
             "cache_hit_count": self._cache_hit_count,
             "leased_case_count": len(self._leased_case_ids),
             "lease_attempt_count": self._lease_attempt_count,
-            "duplicate_lease_count": self._lease_attempt_count - len(self._leased_case_ids),
+            "duplicate_lease_count": self._lease_attempt_count
+            - len(self._leased_case_ids),
             "duplicate_report_count": self._duplicate_report_count,
             "compile_count": self._compile_count,
             "minimum_compile_count": len(minimum_compile_keys),
-            "duplicate_compile_count": max(0, self._compile_count - len(minimum_compile_keys)),
+            "duplicate_compile_count": max(
+                0, self._compile_count - len(minimum_compile_keys)
+            ),
             "compile_time_sec": _round(self._compile_time_sec),
-            "ready_to_lease_p50_sec": _round(_percentile(self._ready_to_lease_sec, 0.50)),
-            "ready_to_lease_p95_sec": _round(_percentile(self._ready_to_lease_sec, 0.95)),
-            "ready_to_lease_max_sec": _round(max(self._ready_to_lease_sec, default=0.0)),
+            "ready_to_lease_p50_sec": _round(
+                _percentile(self._ready_to_lease_sec, 0.50)
+            ),
+            "ready_to_lease_p95_sec": _round(
+                _percentile(self._ready_to_lease_sec, 0.95)
+            ),
+            "ready_to_lease_max_sec": _round(
+                max(self._ready_to_lease_sec, default=0.0)
+            ),
             "average_host_utilization": _round(average_utilization),
-            "program_switch_count": sum(row["program_switch_count"] for row in host_rows),
+            "program_switch_count": sum(
+                row["program_switch_count"] for row in host_rows
+            ),
             "empty_fetch_count": self._empty_fetch_count,
             "poll_backoff_sec": _round(self._poll_backoff_sec),
             "long_poll_wake_count": self._long_poll_wake_count,
@@ -987,13 +1071,16 @@ class JudgehostSimulation:
             "foreground_tasks": foreground_rows,
             "hosts": host_rows,
             "batch_host_counts": {
-                str(batch_id): len(hosts) for batch_id, hosts in sorted(self._batch_hosts.items())
+                str(batch_id): len(hosts)
+                for batch_id, hosts in sorted(self._batch_hosts.items())
             },
             "unfinished_cases": unfinished,
             "dangling_batches": dangling_batches,
             "invariant_violations": list(self._invariant_violations),
         }
-        report["assertion_failures"] = evaluate_assertions(report, self.workload.assertions)
+        report["assertion_failures"] = evaluate_assertions(
+            report, self.workload.assertions
+        )
         if self._trace_enabled:
             report["trace"] = self._trace
         return report
@@ -1005,7 +1092,9 @@ class JudgehostSimulation:
 
     def _schedule(self, at_sec: float, kind: str, *payload: object) -> None:
         self._event_sequence += 1
-        heapq.heappush(self._events, (float(at_sec), self._event_sequence, kind, payload))
+        heapq.heappush(
+            self._events, (float(at_sec), self._event_sequence, kind, payload)
+        )
 
     def _trace_event(self, kind: str, **fields: object) -> None:
         if self._trace_enabled:
@@ -1020,7 +1109,9 @@ class JudgehostSimulation:
                 return host
         raise KeyError(hostname)
 
-    def _transition_host(self, host: _Host, state: str, *, at_sec: float | None = None) -> None:
+    def _transition_host(
+        self, host: _Host, state: str, *, at_sec: float | None = None
+    ) -> None:
         now = self._now if at_sec is None else float(at_sec)
         elapsed = max(0.0, now - host.state_since)
         host.state_times[host.state] += elapsed
@@ -1032,7 +1123,9 @@ class JudgehostSimulation:
 
     def _foreground_waiting(self) -> bool:
         return any(
-            node.timing_kind == "foreground" and node.state == "ready" and node.leased_at is None
+            node.timing_kind == "foreground"
+            and node.state == "ready"
+            and node.leased_at is None
             for node in self._nodes.values()
         )
 

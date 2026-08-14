@@ -34,9 +34,7 @@ def configure_interactive_workspace(
         mode="interactive",
         pass_limit=pass_limit,
     )
-    problem_path.write_text(
-        json.dumps(problem, indent=2) + "\n", encoding="utf-8"
-    )
+    problem_path.write_text(json.dumps(problem, indent=2) + "\n", encoding="utf-8")
     interactor = workspace / "interactors/interactor.cpp"
     interactor.parent.mkdir(parents=True, exist_ok=True)
     interactor.write_text(
@@ -121,14 +119,18 @@ _cleanup_stale_testsuite_roots(exclude=suite_root())
 
 def ensure_local_env() -> None:
     root = suite_root()
-    os.environ["POLYGON_REPLICA_DB"] = str(root / "var" / "lib" / "polygon-replica" / "metadata.db")
+    os.environ["POLYGON_REPLICA_DB"] = str(
+        root / "var" / "lib" / "polygon-replica" / "metadata.db"
+    )
     os.environ["POLYGON_REPLICA_BARE_ROOT"] = str(root / "srv" / "git")
     os.environ["POLYGON_REPLICA_WORKSPACE_ROOT"] = str(root / "srv" / "workspaces")
     os.environ["POLYGON_REPLICA_RUN_ROOT"] = str(root / "srv" / "runs")
     os.environ["POLYGON_REPLICA_ARTIFACTS_ROOT"] = str(
         root / "var" / "lib" / "polygon-replica" / "artifacts"
     )
-    os.environ["POLYGON_REPLICA_CACHE_ROOT"] = str(root / "var" / "cache" / "polygon-replica")
+    os.environ["POLYGON_REPLICA_CACHE_ROOT"] = str(
+        root / "var" / "cache" / "polygon-replica"
+    )
     os.environ["POLYGON_REPLICA_CONTEST_SOURCE_ROOT"] = str(
         root / "var" / "lib" / "polygon-replica" / "contest-sources"
     )
@@ -143,7 +145,6 @@ import app.impl.auth.password_envelope as password_envelope_module  # noqa: E402
 from app.impl.auth.password_envelope import PasswordEnvelopeStore  # noqa: E402
 from cryptography.hazmat.primitives.asymmetric import rsa  # noqa: E402
 
-
 # Full-runtime tests exercise the envelope protocol, not RSA key generation cost.
 # Install the test store before importing app.main, which imports every HTTP
 # implementation module that consumes this process-owned store.
@@ -154,7 +155,6 @@ password_envelope_module.password_envelope_store = PasswordEnvelopeStore(
 
 from app.main import runtime  # noqa: E402
 
-
 _COMPLETION_REF_ABORT_TRIGGER = "test_abort_verification_completion_ref_insert"
 _ACTIVATION_TASK_ABORT_TRIGGER = "test_abort_verification_activation_task_insert"
 _STARTUP_RECOVERY_ABORT_TRIGGER = "test_abort_verification_startup_recovery"
@@ -163,68 +163,58 @@ _STARTUP_RECOVERY_ABORT_TRIGGER = "test_abort_verification_startup_recovery"
 def install_completion_ref_abort_fault() -> None:
     """Force completion commits to fail while inserting artifact refs."""
 
-    runtime.db.execute(
-        f"""
+    runtime.db.execute(f"""
         CREATE TRIGGER {_COMPLETION_REF_ABORT_TRIGGER}
         BEFORE INSERT ON verification_task_artifacts
         BEGIN
             SELECT RAISE(ABORT, 'forced artifact ref failure');
         END
-        """
-    )
+        """)
 
 
 def clear_completion_ref_abort_fault() -> None:
     """Remove the completion fault installed by the matching test helper."""
 
-    runtime.db.execute(
-        f"DROP TRIGGER IF EXISTS {_COMPLETION_REF_ABORT_TRIGGER}"
-    )
+    runtime.db.execute(f"DROP TRIGGER IF EXISTS {_COMPLETION_REF_ABORT_TRIGGER}")
 
 
 def install_activation_task_abort_fault() -> None:
     """Force activation to fail while inserting its immutable task graph."""
 
-    runtime.db.execute(
-        f"""
+    runtime.db.execute(f"""
         CREATE TRIGGER {_ACTIVATION_TASK_ABORT_TRIGGER}
         BEFORE INSERT ON verification_tasks
         BEGIN
             SELECT RAISE(ABORT, 'forced activation task failure');
         END
-        """
-    )
+        """)
 
 
 def clear_activation_task_abort_fault() -> None:
     """Remove the activation fault installed by the matching test helper."""
 
-    runtime.db.execute(
-        f"DROP TRIGGER IF EXISTS {_ACTIVATION_TASK_ABORT_TRIGGER}"
-    )
+    runtime.db.execute(f"DROP TRIGGER IF EXISTS {_ACTIVATION_TASK_ABORT_TRIGGER}")
 
 
 def install_startup_recovery_abort_fault() -> None:
     """Force startup recovery to roll back its aggregate transition."""
 
-    runtime.db.execute(
-        f"""
+    runtime.db.execute(f"""
         CREATE TRIGGER {_STARTUP_RECOVERY_ABORT_TRIGGER}
         BEFORE UPDATE OF status ON verifications
         WHEN OLD.status IN ('queued','running')
         BEGIN
             SELECT RAISE(ABORT, 'forced startup recovery failure');
         END
-        """
-    )
+        """)
 
 
 def clear_startup_recovery_abort_fault() -> None:
     """Remove the startup recovery fault installed by the matching helper."""
 
-    runtime.db.execute(
-        f"DROP TRIGGER IF EXISTS {_STARTUP_RECOVERY_ABORT_TRIGGER}"
-    )
+    runtime.db.execute(f"DROP TRIGGER IF EXISTS {_STARTUP_RECOVERY_ABORT_TRIGGER}")
+
+
 from app.config import ConfigValues  # noqa: E402
 from app.impl.runtime.dependency import bind_application  # noqa: E402
 from app.main import app  # noqa: E402
@@ -267,7 +257,9 @@ def override_config_values(
     test_case.addCleanup(values.replace, previous)
 
 
-def _wait_for_worker_group(lock_attr: str, workers_attr: str, timeout_sec: float = 300.0) -> None:
+def _wait_for_worker_group(
+    lock_attr: str, workers_attr: str, timeout_sec: float = 300.0
+) -> None:
     deadline = time.monotonic() + max(0.0, float(timeout_sec))
     while True:
         lock = getattr(runtime, lock_attr)
@@ -281,15 +273,20 @@ def _wait_for_worker_group(lock_attr: str, workers_attr: str, timeout_sec: float
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             return
-        runtime.worker_queue_service.wait_for_futures(workers, timeout_sec=min(0.2, remaining))
+        runtime.worker_queue_service.wait_for_futures(
+            workers, timeout_sec=min(0.2, remaining)
+        )
 
 
 def _wait_for_verification_workers(timeout_sec: float = 300.0) -> None:
-    _wait_for_worker_group("verification_lock", "verification_workers", timeout_sec=timeout_sec)
+    _wait_for_worker_group(
+        "verification_lock", "verification_workers", timeout_sec=timeout_sec
+    )
 
 
 def _wait_for_export_workers(timeout_sec: float = 300.0) -> None:
     _wait_for_worker_group("export_lock", "export_workers", timeout_sec=timeout_sec)
+
 
 db = runtime.db
 export_service = runtime.export_service
@@ -366,7 +363,9 @@ class RuntimeDBTestBase(unittest.TestCase):
 
     def _artifact_root(self, artifact_id: str) -> Path:
         problem = str(getattr(self, "problem", "alice/sample"))
-        return Path(os.environ["POLYGON_REPLICA_ARTIFACTS_ROOT"]) / problem / artifact_id
+        return (
+            Path(os.environ["POLYGON_REPLICA_ARTIFACTS_ROOT"]) / problem / artifact_id
+        )
 
 
 class WorkspaceTestBase(RuntimeDBTestBase):
@@ -374,7 +373,9 @@ class WorkspaceTestBase(RuntimeDBTestBase):
 
     allow_worker_submit = False
 
-    def _seed_workspace(self, problem: str, user: str, *, profile: str = "full") -> Path:
+    def _seed_workspace(
+        self, problem: str, user: str, *, profile: str = "full"
+    ) -> Path:
         if profile not in {"repository", "statement", "verification", "full"}:
             raise ValueError(f"unknown workspace seed profile: {profile}")
         workspace_service.ensure_problem(problem)
@@ -434,7 +435,9 @@ class WorkspaceTestBase(RuntimeDBTestBase):
             )
         statement_style = ws / "statement/olymp.sty"
         if not statement_style.exists():
-            statement_style.write_text("% minimal olymp style for tests\n", encoding="utf-8")
+            statement_style.write_text(
+                "% minimal olymp style for tests\n", encoding="utf-8"
+            )
         for rel, content in {
             "statement-sections/english/name.tex": "Sample Problem\n",
             "statement-sections/english/legend.tex": "Legend.\n",
@@ -461,14 +464,18 @@ class WorkspaceTestBase(RuntimeDBTestBase):
         )
         testlib = ws / "third_party/testlib/testlib.h"
         if not testlib.exists():
-            source = maintained_testlib_header(repo_root=Path(__file__).resolve().parents[1])
+            source = maintained_testlib_header(
+                repo_root=Path(__file__).resolve().parents[1]
+            )
             testlib.write_bytes(source.read_bytes())
 
     def _workspace_path(self) -> Path:
         problem = str(getattr(self, "problem", "alice/sample"))
         user = str(getattr(self, "user", "alice"))
         try:
-            ctx = workspace_service.workspace_context(problem, user, include_recent=False)
+            ctx = workspace_service.workspace_context(
+                problem, user, include_recent=False
+            )
         except Exception:
             return self._seed_workspace(problem, user)
         return Path(str(ctx["workspace"]["path"]))
@@ -480,7 +487,9 @@ class WorkspaceTestBase(RuntimeDBTestBase):
             submit_guard = patch.object(
                 runtime.worker_queue_service,
                 "submit",
-                side_effect=AssertionError("workspace tests may not submit worker jobs"),
+                side_effect=AssertionError(
+                    "workspace tests may not submit worker jobs"
+                ),
             )
             submit_guard.start()
             self.addCleanup(submit_guard.stop)
@@ -520,14 +529,6 @@ class E2ETestBase(WorkerTestBase):
 
     def setUp(self) -> None:
         super().setUp()
-        old_long_poll = runtime.judgehost_task_service.state.fetch_long_poll_sec
-        runtime.judgehost_task_service.state.fetch_long_poll_sec = 0.0
-        self.addCleanup(
-            setattr,
-            runtime.judgehost_task_service.state,
-            "fetch_long_poll_sec",
-            old_long_poll,
-        )
         if self.seed_primary_workspace:
             self._seed_workspace(self.problem, self.user)
         if self.seed_default_workspace:

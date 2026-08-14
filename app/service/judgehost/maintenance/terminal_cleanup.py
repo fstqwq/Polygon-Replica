@@ -1,9 +1,9 @@
-import heapq
+﻿import heapq
 import threading
 import time
 from typing import Protocol
 
-from app.service.judgehost.work.task_registry import JudgehostTaskRegistry
+from app.service.judgehost.task.registry import JudgehostTaskRegistry
 
 
 class _RuntimeCaseStore(Protocol):

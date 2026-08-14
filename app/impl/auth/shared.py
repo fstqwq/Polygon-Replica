@@ -2,6 +2,7 @@ import base64
 import json
 import re
 import time
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from urllib.parse import parse_qsl, quote_plus, urlencode, urlparse, urlunparse
 
@@ -260,11 +261,16 @@ def redirect_response(url: str, status_code: int = 303, message: str = "") -> Re
     return response
 
 
-def json_redirect_response(url: str, message: str = "", **payload: object) -> JSONResponse:
+def json_redirect_response(
+    url: str,
+    message: str = "",
+    *,
+    payload: Mapping[str, object] | None = None,
+) -> JSONResponse:
     target = _sanitize_redirect_target(url)
     safe_message = _normalize_flash_message(message)
     body: dict[str, object] = {"ok": True, "redirect": target, "message": safe_message}
-    if payload:
+    if payload is not None:
         body.update(payload)
     response = JSONResponse(body)
     if safe_message:
@@ -273,11 +279,12 @@ def json_redirect_response(url: str, message: str = "", **payload: object) -> JS
     return response
 
 
-def json_error_response(message: str = "", status_code: int = 400, **payload: object) -> JSONResponse:
+def json_error_response(
+    message: str = "",
+    status_code: int = 400,
+) -> JSONResponse:
     safe_message = _normalize_flash_message(message) or "request failed"
     body: dict[str, object] = {"ok": False, "error": safe_message}
-    if payload:
-        body.update(payload)
     response = JSONResponse(body, status_code=status_code)
     _apply_security_headers(response)
     return response

@@ -1,3 +1,7 @@
+import base64
+import binascii
+import json
+import re
 from collections.abc import Mapping
 from pathlib import Path
 from app.service.judgehost.domjudge.limits import (
@@ -5,7 +9,23 @@ from app.service.judgehost.domjudge.limits import (
     config_int,
     run_output_kb,
 )
-from app.service.judgehost.state import JudgehostHostRow
+
+_CONTEST_ID_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+
+
+def decode_json_object(raw: object) -> dict[str, object]:
+    text = decode_text(raw=raw)
+    if not text:
+        return {}
+    payload = json.loads(text)
+    if not isinstance(payload, dict):
+        raise RuntimeError("DOMjudge JSON value must be an object")
+    result: dict[str, object] = {}
+    for key, value in payload.items():
+        if not isinstance(key, str):
+            raise RuntimeError("DOMjudge JSON object keys must be strings")
+        result[key] = value
+    return result
 
 
 def decode_text(
@@ -32,28 +52,27 @@ def decode_basename(*, raw: object, default: str = "") -> str:
     return Path(token).name
 
 
-def hosts_payload(hosts_state: dict[str, JudgehostHostRow]) -> list[dict[str, object]]:
-    rows = sorted(
-        (dict(row) for row in hosts_state.values()),
-        key=lambda item: (
-            decode_text(raw=item.get("last_seen_at")),
-            decode_text(raw=item.get("hostname")),
-        ),
-        reverse=True,
-    )
-    out: list[dict[str, object]] = []
-    for row in rows:
-        token = decode_text(raw=row.get("hostname"))
-        if not token:
-            continue
-        out.append(
-            {
-                "hostname": token,
-                "enabled": bool(row.get("enabled", True)),
-                "polltime": decode_text(raw=row.get("last_seen_at")),
-            }
-        )
-    return out
+def decode_contest_id(raw: object) -> str:
+    token = decode_text(raw=raw)
+    return token if _CONTEST_ID_RE.fullmatch(token) else "local"
+
+
+def decode_base64(text: str | bytes | bytearray | memoryview | None) -> bytes:
+    if text is None:
+        return b""
+    if isinstance(text, str):
+        raw = text.strip()
+    else:
+        try:
+            raw = bytes(text).decode("ascii").strip()
+        except UnicodeDecodeError as exc:
+            raise RuntimeError("DOMjudge payload must be base64 ASCII text") from exc
+    if not raw:
+        return b""
+    try:
+        return base64.b64decode(raw, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise RuntimeError("DOMjudge payload is not valid base64") from exc
 
 
 def config_payload(values: Mapping[str, object]) -> dict[str, object]:

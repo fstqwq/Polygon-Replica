@@ -5,7 +5,7 @@ import re
 from pathlib import Path
 from typing import TypedDict, cast
 
-from app.service.judgehost.callback.case_result import decode_case_test_row
+from app.service.judgehost.domjudge.case_result import decode_case_test_row
 from app.service.platform.error_text import bounded_display_text
 from app.service.verification.lifecycle import (
     VerificationSnapshot,
@@ -17,7 +17,6 @@ from app.service.verification.task_store import (
     VerificationTaskRow,
 )
 from app.service.verification.types import VerificationTaskStatus
-
 
 _SOLUTION_TASK_KINDS = frozenset(("solution-run", "main-correct"))
 _TEST_NAME_RE = re.compile(r"^(\d+)\.in$")
@@ -140,7 +139,9 @@ def _program_rows(
                 if late:
                     test_row["message"] = bounded_display_text(
                         "\n\n".join(
-                            item for item in (str(test_row.get("message") or ""), late) if item
+                            item
+                            for item in (str(test_row.get("message") or ""), late)
+                            if item
                         ),
                         limit_bytes=display_limit,
                     )
@@ -198,7 +199,9 @@ def _program_rows(
         }
         if run_config:
             summary["run_config"] = run_config
-        if any(row["status"] == VerificationTaskStatus.CANCELLED for row in program_tasks):
+        if any(
+            row["status"] == VerificationTaskStatus.CANCELLED for row in program_tasks
+        ):
             summary["cancelled"] = True
             if record["status"] in {"failed", "cancelled"} and verification_error:
                 summary["error"] = summary["error"] or verification_error
@@ -238,14 +241,18 @@ def build_verification_detail_read_model(
         "task_graph": bool(tasks),
         "task_counts": runtime_counts,
         "running_tasks": app.service.verification.read_model.running_tasks(read_rows),
-        "source_paths": app.service.verification.read_model.solution_source_paths(read_rows),
+        "source_paths": app.service.verification.read_model.solution_source_paths(
+            read_rows
+        ),
         "program_ids": app.service.verification.read_model.program_ids(read_rows),
         "has_running": bool(
             int(runtime_counts["pending"])
             or int(runtime_counts["queued"])
             or int(runtime_counts["running"])
         ),
-        "test_names": list(dict.fromkeys(row["test_name"] for row in tasks if row["test_name"])),
+        "test_names": list(
+            dict.fromkeys(row["test_name"] for row in tasks if row["test_name"])
+        ),
     }
     mode = str(details.get("mode") or "")
     if mode not in {"pass-fail", "interactive"}:

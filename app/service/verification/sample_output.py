@@ -310,9 +310,33 @@ class VerificationSampleOutputService:
         self._judgehost = judgehost
         self._runtime_blob_store = runtime_blob_store
 
-    def validate(self, **kwargs: object) -> SampleOutputValidationResult:
+    def validate(
+        self,
+        *,
+        problem: str,
+        user: str,
+        verification_id: str,
+        mode: str,
+        logs_dir: Path,
+        test_plans: list[VerificationTestPlan],
+        accepted_source_label: str = "",
+        accepted_source_name: str = "",
+        accepted_source_file: PayloadFile | None = None,
+        run_verification_payload_base: dict[str, object] | None = None,
+        bypass_case_result_cache: bool = False,
+    ) -> SampleOutputValidationResult:
         return validate_custom_sample_outputs(
-            **kwargs,
+            problem=problem,
+            user=user,
+            verification_id=verification_id,
+            mode=mode,
+            logs_dir=logs_dir,
+            test_plans=test_plans,
+            accepted_source_label=accepted_source_label,
+            accepted_source_name=accepted_source_name,
+            accepted_source_file=accepted_source_file,
+            run_verification_payload_base=run_verification_payload_base,
+            bypass_case_result_cache=bypass_case_result_cache,
             judgehost=self._judgehost,
             runtime_blob_store=self._runtime_blob_store,
         )

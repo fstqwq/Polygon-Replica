@@ -2,7 +2,7 @@ import io
 import tarfile
 import unittest
 
-from app.service.judgehost.callback.case_result import decode_case_test_row
+from app.service.judgehost.domjudge.case_result import decode_case_test_row
 from app.service.judgehost.callback.pass_bundle import (
     InvalidPassBundle,
     parse_pass_bundle,
@@ -91,7 +91,9 @@ def _complete_pass_entries(number: int) -> list[tuple[str, bytes]]:
 
 
 class TestExecutionResult(unittest.TestCase):
-    def test_round_trip_sorts_passes_numerically_and_aggregates_each_usage(self) -> None:
+    def test_round_trip_sorts_passes_numerically_and_aggregates_each_usage(
+        self,
+    ) -> None:
         passes = [
             _pass(
                 number,
@@ -111,7 +113,9 @@ class TestExecutionResult(unittest.TestCase):
         self.assertEqual(result.outcome.usage.cpu_sec, 0.1)
         self.assertEqual(result.outcome.usage.wall_sec, 0.2)
         self.assertEqual(result.outcome.usage.memory_kb, 100)
-        self.assertEqual(execution_result_from_json(execution_result_json(result)), result)
+        self.assertEqual(
+            execution_result_from_json(execution_result_json(result)), result
+        )
 
     def test_missing_usage_in_any_pass_makes_only_that_aggregate_null(self) -> None:
         result = normalize_execution_result(
@@ -137,7 +141,9 @@ class TestExecutionResult(unittest.TestCase):
             (ExecutionWarning(message="capture unavailable"),),
         )
         self.assertEqual(result.compile.diagnostics[0]["message"], "compile failed")
-        self.assertEqual(execution_result_from_json(execution_result_json(result)), result)
+        self.assertEqual(
+            execution_result_from_json(execution_result_json(result)), result
+        )
 
     def test_ordinary_and_interactive_single_and_multi_pass_shapes(self) -> None:
         ordinary = normalize_execution_result(
@@ -161,27 +167,42 @@ class TestExecutionResult(unittest.TestCase):
 
         self.assertEqual(len(ordinary.passes), 1)
         self.assertEqual(len(ordinary_multi.passes), 2)
-        self.assertTrue(all(item.artifacts.output_ref for item in ordinary_multi.passes))
-        self.assertTrue(all(not item.artifacts.transcript_ref for item in ordinary_multi.passes))
+        self.assertTrue(
+            all(item.artifacts.output_ref for item in ordinary_multi.passes)
+        )
+        self.assertTrue(
+            all(not item.artifacts.transcript_ref for item in ordinary_multi.passes)
+        )
         self.assertEqual(len(interactive.passes), 1)
         self.assertEqual(len(interactive_multi.passes), 2)
-        self.assertTrue(all(item.artifacts.transcript_ref for item in interactive_multi.passes))
-        self.assertTrue(all(not item.artifacts.output_ref for item in interactive_multi.passes))
+        self.assertTrue(
+            all(item.artifacts.transcript_ref for item in interactive_multi.passes)
+        )
+        self.assertTrue(
+            all(not item.artifacts.output_ref for item in interactive_multi.passes)
+        )
 
         row = decode_case_test_row(interactive_multi, test_name="001.in")
         projected_passes = row["passes"]
         assert isinstance(projected_passes, list)
         self.assertEqual([item["pass"] for item in projected_passes], [1, 2])
-        self.assertTrue(all(item["capture_status"] == CAPTURE_COMPLETE for item in projected_passes))
+        self.assertTrue(
+            all(item["capture_status"] == CAPTURE_COMPLETE for item in projected_passes)
+        )
         self.assertTrue(all(item["input_ref"] for item in projected_passes))
         self.assertTrue(all(item["transcript_ref"] for item in projected_passes))
         self.assertTrue(all(not item["output_ref"] for item in projected_passes))
         self.assertTrue(all(item["judge_message_ref"] for item in projected_passes))
 
-    def test_pass_numbers_must_be_contiguous_and_artifact_modes_are_exclusive(self) -> None:
+    def test_pass_numbers_must_be_contiguous_and_artifact_modes_are_exclusive(
+        self,
+    ) -> None:
         with self.assertRaisesRegex(ValueError, "contiguous"):
             normalize_execution_result(
-                passes=(_pass(1, usage=ExecutionUsage()), _pass(3, usage=ExecutionUsage()))
+                passes=(
+                    _pass(1, usage=ExecutionUsage()),
+                    _pass(3, usage=ExecutionUsage()),
+                )
             )
         invalid = _pass(1, usage=ExecutionUsage())
         invalid = ExecutionPassResult(

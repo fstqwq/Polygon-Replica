@@ -2,14 +2,14 @@ import hashlib
 import tempfile
 import threading
 import unittest
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import patch
 
 from app.config import build_config_values
-from app.service.judgehost.work.cleanup import JudgehostTerminalCleanup
-from app.service.judgehost.callback.case_result import build_case_result
+from app.service.judgehost.maintenance.terminal_cleanup import JudgehostTerminalCleanup
+from app.service.judgehost.domjudge.case_result import build_case_result
 from app.service.judgehost.domjudge.identity import script_id
 from app.service.judgehost.batch.runtime import JudgehostBatchRuntime
 from app.service.judgehost.batch.model import (
@@ -17,16 +17,19 @@ from app.service.judgehost.batch.model import (
     CaseResult,
     CompileSubmission,
     ExecutionBatchSpec,
+    JudgehostCaseRow,
 )
 from app.service.judgehost.domjudge.identity import submit_id
-from app.service.judgehost.work.task_registry import JudgehostTaskRegistry
-from app.service.judgehost.domjudge.toolkit import DomjudgeToolkit
+from app.service.judgehost.task.registry import JudgehostTaskRegistry
+from app.service.judgehost.cache.executable import ExecutableCache
 from app.service.platform.runtime_blob_store import PayloadFile, RuntimeBlobStore
 from app.service.platform.runtime_cache_index import RuntimeCacheIndex
 
 
 def _case_result(test_name: str, *, runresult: str = "correct", verdict: str = "OK"):
-    artifact_ref = "blob://sha256/" + hashlib.sha256(test_name.encode("utf-8")).hexdigest()
+    artifact_ref = (
+        "blob://sha256/" + hashlib.sha256(test_name.encode("utf-8")).hexdigest()
+    )
     return build_case_result(
         test_name=test_name,
         runresult=runresult,
@@ -98,6 +101,50 @@ def _submission_for_key(compile_key: str) -> CompileSubmission:
         extra_source_items=(),
         compile_files=(),
     )
+
+
+def _materialize_batch(
+    scheduler: JudgehostBatchRuntime,
+    batch_id: int,
+    *,
+    now_text: str,
+) -> None:
+    claim = scheduler.claim_materialization(batch_id, now_text=now_text)
+    assert claim is not None
+    materialized = replace(
+        claim.submission,
+        source_file=replace(
+            claim.submission.source_file,
+            blob_ref=f"blob://sha256/{claim.submission.source_file.identity}",
+        ),
+    )
+    assert scheduler.finish_materialization(
+        claim,
+        success=True,
+        materialized_submission=materialized,
+        error_text="",
+        now_text=now_text,
+    )
+
+
+def _lease_cases(
+    scheduler: JudgehostBatchRuntime,
+    batch_id: int,
+    *,
+    hostname: str,
+    limit: int,
+    now_text: str,
+) -> list[JudgehostCaseRow]:
+    claim = scheduler.claim_lease(
+        batch_id,
+        hostname=hostname,
+        limit=limit,
+        now_text=now_text,
+    )
+    if claim is None:
+        return []
+    assert scheduler.commit_lease(claim)
+    return list(claim.cases)
 
 
 def _task_row(index: int, *, verification_id: str = "ver-1") -> dict[str, object]:
@@ -238,15 +285,10 @@ def _create_ready_batch(
             generation=claim.generation,
             updated_at=now_text,
         )
-    scheduler.claim_materialization(batch_id, now_text=now_text)
-    scheduler.finish_materialization(
-        batch_id,
-        success=True,
-        error_text="",
-        now_text=now_text,
-    )
+    _materialize_batch(scheduler, batch_id, now_text=now_text)
     setup_hostname = f"compile-setup-{batch_id}"
-    setup_case = scheduler.lease_cases(
+    setup_case = _lease_cases(
+        scheduler,
         batch_id,
         hostname=setup_hostname,
         limit=1,
@@ -273,16 +315,95 @@ def _create_ready_batch(
 
 class TestJudgehostScheduler(unittest.TestCase):
     @staticmethod
-    def _runtime_toolkit(
+    def _runtime_cache(
         temp_root: Path,
-    ) -> tuple[DomjudgeToolkit, RuntimeBlobStore, RuntimeCacheIndex]:
+    ) -> tuple[ExecutableCache, RuntimeBlobStore, RuntimeCacheIndex]:
         blob_store = RuntimeBlobStore(temp_root / "blobs")
         cache_index = RuntimeCacheIndex(blob_store)
-        state = SimpleNamespace(
-            runtime_blob_store=blob_store,
-            runtime_cache_index=cache_index,
+        return (ExecutableCache(cache_index), blob_store, cache_index)
+
+    def test_materialization_claim_is_single_owner_and_failure_is_atomic(self) -> None:
+        scheduler = JudgehostBatchRuntime(id_base=100)
+        batch_id, now_text = _create_staged_batch(
+            scheduler,
+            task_id="task-materialization-failure",
+            run_id="run-materialization-failure",
+            ordinals=[1],
         )
-        return (DomjudgeToolkit(state), blob_store, cache_index)
+        claim = scheduler.claim_materialization(batch_id, now_text=now_text)
+        self.assertIsNotNone(claim)
+        assert claim is not None
+        self.assertIsNone(
+            scheduler.claim_materialization(batch_id, now_text=now_text)
+        )
+        self.assertEqual(scheduler.activity_counts()["materializations"], 1)
+
+        self.assertTrue(
+            scheduler.finish_materialization(
+                claim,
+                success=False,
+                materialized_submission=None,
+                error_text="runtime blob write failed",
+                now_text=now_text,
+            )
+        )
+        self.assertFalse(
+            scheduler.finish_materialization(
+                claim,
+                success=False,
+                materialized_submission=None,
+                error_text="stale retry",
+                now_text=now_text,
+            )
+        )
+        batch = scheduler.fetch_batch(batch_id)
+        self.assertIsNotNone(batch)
+        assert batch is not None
+        self.assertEqual(batch["materialization_state"], "failed")
+        self.assertEqual(batch["failure_text"], "runtime blob write failed")
+        self.assertEqual(scheduler.activity_counts()["materializations"], 0)
+        submission = scheduler.compile_submission_for_batch(batch_id)
+        self.assertIsNotNone(submission)
+        assert submission is not None
+        self.assertIsNone(submission.source_file.blob_ref)
+
+    def test_lease_claim_blocks_duplicate_and_abort_restores_ready_case(self) -> None:
+        scheduler = JudgehostBatchRuntime(id_base=100)
+        batch_id = _create_ready_batch(
+            scheduler,
+            task_id="task-lease-abort",
+            run_id="run-lease-abort",
+            ordinals=[1],
+        )
+        now_text = datetime.now(timezone.utc).isoformat()
+        first = scheduler.claim_lease(
+            batch_id,
+            hostname="host-a",
+            limit=1,
+            now_text=now_text,
+        )
+        self.assertIsNotNone(first)
+        assert first is not None
+        self.assertIsNone(
+            scheduler.claim_lease(
+                batch_id,
+                hostname="host-b",
+                limit=1,
+                now_text=now_text,
+            )
+        )
+        self.assertTrue(scheduler.abort_lease(first, now_text=now_text))
+
+        second = scheduler.claim_lease(
+            batch_id,
+            hostname="host-b",
+            limit=1,
+            now_text=now_text,
+        )
+        self.assertIsNotNone(second)
+        assert second is not None
+        self.assertEqual(second.cases[0]["id"], first.cases[0]["id"])
+        self.assertTrue(scheduler.commit_lease(second))
 
     def test_default_entity_ids_use_nanosecond_base_and_survive_reset(self) -> None:
         with patch(
@@ -335,7 +456,9 @@ class TestJudgehostScheduler(unittest.TestCase):
         self.assertIsNone(scheduler.batch_for_task("boundary-overflow"))
         self.assertEqual(len(scheduler.cases_for_batch(batch_id)), 1)
 
-    def test_nanosecond_restart_bases_do_not_overlap_at_supported_creation_rate(self) -> None:
+    def test_nanosecond_restart_bases_do_not_overlap_at_supported_creation_rate(
+        self,
+    ) -> None:
         with patch(
             "app.service.judgehost.batch.state.time.time_ns",
             side_effect=[2_000_000, 2_000_100],
@@ -354,13 +477,19 @@ class TestJudgehostScheduler(unittest.TestCase):
             run_id="run-new-process",
             ordinals=[1],
         )
-        old_ids = {old_batch, *(int(row["id"]) for row in old_scheduler.cases_for_batch(old_batch))}
-        new_ids = {new_batch, *(int(row["id"]) for row in new_scheduler.cases_for_batch(new_batch))}
+        old_ids = {
+            old_batch,
+            *(int(row["id"]) for row in old_scheduler.cases_for_batch(old_batch)),
+        }
+        new_ids = {
+            new_batch,
+            *(int(row["id"]) for row in new_scheduler.cases_for_batch(new_batch)),
+        }
         self.assertTrue(old_ids.isdisjoint(new_ids))
 
     def test_materialized_compile_source_outlives_snapshot_descriptor(self) -> None:
         scheduler = JudgehostBatchRuntime(id_base=100)
-        _create_staged_batch(
+        batch_id, now_text = _create_staged_batch(
             scheduler,
             task_id="task-source-a",
             run_id="run-source-a",
@@ -374,7 +503,9 @@ class TestJudgehostScheduler(unittest.TestCase):
             snapshot_source.parent.mkdir(parents=True)
             snapshot_source.write_bytes(_COMPILE_KEY.encode("ascii"))
             blob_store = RuntimeBlobStore(root / "runtime" / "blobs")
-            stored_source = blob_store.put_file(RuntimeBlobStore.describe_file(snapshot_source))
+            stored_source = blob_store.put_file(
+                RuntimeBlobStore.describe_file(snapshot_source)
+            )
             materialized = CompileSubmission(
                 compile_key=_COMPILE_KEY,
                 submit_id=submit_id(_COMPILE_KEY),
@@ -383,13 +514,28 @@ class TestJudgehostScheduler(unittest.TestCase):
                 extra_source_items=(),
                 compile_files=(),
             )
-            scheduler.publish_materialized_compile_submission(_COMPILE_KEY, materialized)
+            claim = scheduler.claim_materialization(batch_id, now_text=now_text)
+            self.assertIsNotNone(claim)
+            assert claim is not None
+            self.assertTrue(
+                scheduler.finish_materialization(
+                    claim,
+                    success=True,
+                    materialized_submission=materialized,
+                    error_text="",
+                    now_text=now_text,
+                )
+            )
             snapshot_source.unlink()
 
-            source = scheduler.source_submission(str(materialized.submit_id), contest_id="local")
+            source = scheduler.source_submission(
+                str(materialized.submit_id), contest_id="local"
+            )
             self.assertIsNotNone(source)
             assert source is not None
-            self.assertEqual(source.source_file.path.read_bytes(), _COMPILE_KEY.encode("ascii"))
+            self.assertEqual(
+                source.source_file.path.read_bytes(), _COMPILE_KEY.encode("ascii")
+            )
 
             # A later Verification may describe the same source from another snapshot.
             _create_staged_batch(
@@ -401,9 +547,11 @@ class TestJudgehostScheduler(unittest.TestCase):
                 compile_key=_COMPILE_KEY,
             )
 
-    def test_materialized_submission_remains_canonical_when_program_appends(self) -> None:
+    def test_materialized_submission_remains_canonical_when_program_appends(
+        self,
+    ) -> None:
         scheduler = JudgehostBatchRuntime(id_base=100)
-        batch_id, _now_text = _create_staged_batch(
+        batch_id, now_text = _create_staged_batch(
             scheduler,
             task_id="task-warm-a",
             run_id="run-warm-a",
@@ -424,7 +572,18 @@ class TestJudgehostScheduler(unittest.TestCase):
                 extra_source_items=(),
                 compile_files=(),
             )
-            scheduler.publish_materialized_compile_submission(_COMPILE_KEY, materialized)
+            claim = scheduler.claim_materialization(batch_id, now_text=now_text)
+            self.assertIsNotNone(claim)
+            assert claim is not None
+            self.assertTrue(
+                scheduler.finish_materialization(
+                    claim,
+                    success=True,
+                    materialized_submission=materialized,
+                    error_text="",
+                    now_text=now_text,
+                )
+            )
 
             appended_batch_id, _ = _create_staged_batch(
                 scheduler,
@@ -488,17 +647,23 @@ class TestJudgehostScheduler(unittest.TestCase):
             service_class="foreground",
             scope=2,
         )
-        self.assertEqual(scheduler.select_ready_batch("host-a")["batch_id"], foreground_id)
+        self.assertEqual(
+            scheduler.select_ready_batch("host-a")["batch_id"], foreground_id
+        )
         self.assertEqual(scheduler.batch_dispatch_count(foreground_id), 1)
-        foreground = scheduler.lease_cases(
+        foreground = _lease_cases(
+            scheduler,
             foreground_id,
             hostname="host-a",
             limit=2,
             now_text=datetime.now(timezone.utc).isoformat(),
         )
         self.assertEqual([row["ordinal"] for row in foreground], [3])
-        self.assertEqual(scheduler.select_ready_batch("host-b")["batch_id"], background_id)
-        background = scheduler.lease_cases(
+        self.assertEqual(
+            scheduler.select_ready_batch("host-b")["batch_id"], background_id
+        )
+        background = _lease_cases(
+            scheduler,
             background_id,
             hostname="host-b",
             limit=3,
@@ -556,7 +721,8 @@ class TestJudgehostScheduler(unittest.TestCase):
         )
         self.assertEqual(scheduler.select_ready_batch("host-a")["batch_id"], batch_id)
         self.assertEqual(scheduler.batch_dispatch_count(batch_id), 1)
-        leased = scheduler.lease_cases(
+        leased = _lease_cases(
+            scheduler,
             batch_id,
             hostname="host-a",
             limit=1,
@@ -594,7 +760,8 @@ class TestJudgehostScheduler(unittest.TestCase):
             ordinals=[2],
         )
         self.assertEqual(scheduler.select_ready_batch("host-a")["batch_id"], first_id)
-        first_case = scheduler.lease_cases(
+        first_case = _lease_cases(
+            scheduler,
             first_id,
             hostname="host-a",
             limit=1,
@@ -629,7 +796,9 @@ class TestJudgehostScheduler(unittest.TestCase):
         scheduler.activate_task_cases("affinity-first-later", now_text=now_text)
         self.assertEqual(scheduler.select_ready_batch("host-a")["batch_id"], first_id)
 
-    def test_host_release_clears_local_queue_without_resetting_dispatch_order(self) -> None:
+    def test_host_release_clears_local_queue_without_resetting_dispatch_order(
+        self,
+    ) -> None:
         scheduler = JudgehostBatchRuntime(id_base=138)
         first_id = _create_ready_batch(
             scheduler,
@@ -644,7 +813,8 @@ class TestJudgehostScheduler(unittest.TestCase):
             ordinals=[2],
         )
         self.assertEqual(scheduler.select_ready_batch("host-a")["batch_id"], first_id)
-        leased = scheduler.lease_cases(
+        leased = _lease_cases(
+            scheduler,
             first_id,
             hostname="host-a",
             limit=2,
@@ -669,11 +839,14 @@ class TestJudgehostScheduler(unittest.TestCase):
         for row in leased:
             released = scheduler.fetch_case(int(row["id"]))
             assert released is not None
-            self.assertEqual((released["status"], released["lease_owner"]), ("pending", None))
+            self.assertEqual(
+                (released["status"], released["lease_owner"]), ("pending", None)
+            )
         self.assertEqual(scheduler.host_context_batches("host-a"), [])
         self.assertEqual(scheduler.select_ready_batch("host-b")["batch_id"], other_id)
         self.assertEqual(scheduler.select_ready_batch("host-c")["batch_id"], first_id)
-        reassigned = scheduler.lease_cases(
+        reassigned = _lease_cases(
+            scheduler,
             first_id,
             hostname="host-c",
             limit=1,
@@ -706,7 +879,8 @@ class TestJudgehostScheduler(unittest.TestCase):
             run_id="run-released-reporting",
             ordinals=[1],
         )
-        case = scheduler.lease_cases(
+        case = _lease_cases(
+            scheduler,
             batch_id,
             hostname="host-a",
             limit=1,
@@ -751,7 +925,8 @@ class TestJudgehostScheduler(unittest.TestCase):
             run_id="run-released-reporting-success",
             ordinals=[1],
         )
-        case = scheduler.lease_cases(
+        case = _lease_cases(
+            scheduler,
             batch_id,
             hostname="host-a",
             limit=1,
@@ -788,7 +963,8 @@ class TestJudgehostScheduler(unittest.TestCase):
             run_id="run-released-cancelled",
             ordinals=[1],
         )
-        case = scheduler.lease_cases(
+        case = _lease_cases(
+            scheduler,
             batch_id,
             hostname="host-a",
             limit=1,
@@ -808,7 +984,10 @@ class TestJudgehostScheduler(unittest.TestCase):
         self.assertEqual(scheduler.fetch_case(int(case["id"]))["status"], "cancelled")
         self.assertEqual(scheduler.batch_case_count(batch_id, status="pending"), 0)
         self.assertEqual(
-            scheduler.lease_cases(batch_id, hostname="host-b", limit=1, now_text="later"), []
+            _lease_cases(
+                scheduler, batch_id, hostname="host-b", limit=1, now_text="later"
+            ),
+            [],
         )
 
     def test_host_release_cancelled_reporting_aborts_to_cancelled(self) -> None:
@@ -819,7 +998,8 @@ class TestJudgehostScheduler(unittest.TestCase):
             run_id="run-released-reporting-cancelled",
             ordinals=[1],
         )
-        case = scheduler.lease_cases(
+        case = _lease_cases(
+            scheduler,
             batch_id,
             hostname="host-a",
             limit=1,
@@ -851,7 +1031,9 @@ class TestJudgehostScheduler(unittest.TestCase):
         self.assertEqual(scheduler.fetch_case(claim.case_id)["status"], "cancelled")
         self.assertTrue(scheduler.task_cases_terminal("released-reporting-cancelled"))
 
-    def test_contradictory_compile_failure_stays_on_unique_execution_batch(self) -> None:
+    def test_contradictory_compile_failure_stays_on_unique_execution_batch(
+        self,
+    ) -> None:
         scheduler = JudgehostBatchRuntime(id_base=144)
         batch_id = _create_ready_batch(
             scheduler,
@@ -861,7 +1043,8 @@ class TestJudgehostScheduler(unittest.TestCase):
             execution_signature="sticky-failure",
             verification_program_id="solution-0",
         )
-        case = scheduler.lease_cases(
+        case = _lease_cases(
+            scheduler,
             batch_id,
             hostname="host-a",
             limit=1,
@@ -890,7 +1073,9 @@ class TestJudgehostScheduler(unittest.TestCase):
         )
 
         self.assertEqual(same_batch_id, batch_id)
-        self.assertEqual(scheduler.fetch_batch(batch_id)["failure_runresult"], "internal-error")
+        self.assertEqual(
+            scheduler.fetch_batch(batch_id)["failure_runresult"], "internal-error"
+        )
         self.assertEqual(len(scheduler.cases_for_batch(batch_id)), 2)
         self.assertTrue(
             scheduler.record_compile_success(
@@ -915,7 +1100,8 @@ class TestJudgehostScheduler(unittest.TestCase):
             run_id="run-final-before-compile-failure",
             ordinals=[1],
         )
-        case = scheduler.lease_cases(
+        case = _lease_cases(
+            scheduler,
             batch_id,
             hostname="host-a",
             limit=1,
@@ -966,7 +1152,8 @@ class TestJudgehostScheduler(unittest.TestCase):
             run_id="run-cancel-before-compile-failure",
             ordinals=[1],
         )
-        case = scheduler.lease_cases(
+        case = _lease_cases(
+            scheduler,
             batch_id,
             hostname="host-a",
             limit=1,
@@ -1001,7 +1188,8 @@ class TestJudgehostScheduler(unittest.TestCase):
             run_id="run-internal-error-retry",
             ordinals=[1],
         )
-        case = scheduler.lease_cases(
+        case = _lease_cases(
+            scheduler,
             batch_id,
             hostname="host-a",
             limit=1,
@@ -1058,7 +1246,8 @@ class TestJudgehostScheduler(unittest.TestCase):
             run_id="run-late-compile-evidence",
             ordinals=[1],
         )
-        case = scheduler.lease_cases(
+        case = _lease_cases(
+            scheduler,
             batch_id,
             hostname="host-a",
             limit=1,
@@ -1122,7 +1311,8 @@ class TestJudgehostScheduler(unittest.TestCase):
             ordinals=[1],
             case_rows=[case_row],
         )
-        case = scheduler.lease_cases(
+        case = _lease_cases(
+            scheduler,
             batch_id,
             hostname="host-a",
             limit=1,
@@ -1177,7 +1367,8 @@ class TestJudgehostScheduler(unittest.TestCase):
             run_id="run-released-compile-failure",
             ordinals=[1],
         )
-        case = scheduler.lease_cases(
+        case = _lease_cases(
+            scheduler,
             batch_id,
             hostname="host-a",
             limit=1,
@@ -1250,7 +1441,8 @@ class TestJudgehostScheduler(unittest.TestCase):
             ordinals=[3],
         )
 
-        leased = scheduler.lease_cases(
+        leased = _lease_cases(
+            scheduler,
             first_id,
             hostname="direct-host",
             limit=1,
@@ -1259,7 +1451,9 @@ class TestJudgehostScheduler(unittest.TestCase):
 
         self.assertEqual([row["ordinal"] for row in leased], [1])
         self.assertEqual(scheduler.host_context_batches("direct-host"), [])
-        self.assertEqual(scheduler.select_ready_batch("other-host")["batch_id"], first_id)
+        self.assertEqual(
+            scheduler.select_ready_batch("other-host")["batch_id"], first_id
+        )
 
     def test_blocked_affinity_helps_same_verification_main_correct_first(self) -> None:
         scheduler = JudgehostBatchRuntime(id_base=165)
@@ -1270,8 +1464,11 @@ class TestJudgehostScheduler(unittest.TestCase):
             ordinals=[1],
             verification_id="ver-a",
         )
-        self.assertEqual(scheduler.select_ready_batch("host-a")["batch_id"], solution_id)
-        solution_case = scheduler.lease_cases(
+        self.assertEqual(
+            scheduler.select_ready_batch("host-a")["batch_id"], solution_id
+        )
+        solution_case = _lease_cases(
+            scheduler,
             solution_id,
             hostname="host-a",
             limit=1,
@@ -1328,8 +1525,11 @@ class TestJudgehostScheduler(unittest.TestCase):
                 ordinals=[index + 1],
             )
             affinity_ids.append(batch_id)
-            self.assertEqual(scheduler.select_ready_batch("host-a")["batch_id"], batch_id)
-            case = scheduler.lease_cases(
+            self.assertEqual(
+                scheduler.select_ready_batch("host-a")["batch_id"], batch_id
+            )
+            case = _lease_cases(
+                scheduler,
                 batch_id,
                 hostname="host-a",
                 limit=1,
@@ -1487,7 +1687,8 @@ class TestJudgehostScheduler(unittest.TestCase):
             run_id="run-reporting",
             ordinals=[1],
         )
-        case = scheduler.lease_cases(
+        case = _lease_cases(
+            scheduler,
             batch_id,
             hostname="host-a",
             limit=1,
@@ -1541,7 +1742,9 @@ class TestJudgehostScheduler(unittest.TestCase):
             "cancelled",
         )
         self.assertTrue(scheduler.task_cases_terminal("reporting"))
-        scheduler.finish_verification_execution("ver-1", now_text="2026-08-03T00:00:04+00:00")
+        scheduler.finish_verification_execution(
+            "ver-1", now_text="2026-08-03T00:00:04+00:00"
+        )
         self.assertEqual(scheduler.fetch_batch(batch_id)["status"], "finalize-pending")
 
     def test_unknown_compile_batch_can_lease_to_multiple_hosts(self) -> None:
@@ -1564,21 +1767,17 @@ class TestJudgehostScheduler(unittest.TestCase):
                 generation=cache_claim.generation,
                 updated_at=now_text,
             )
-        scheduler.claim_materialization(batch_id, now_text=now_text)
-        scheduler.finish_materialization(
-            batch_id,
-            success=True,
-            error_text="",
-            now_text=now_text,
-        )
+        _materialize_batch(scheduler, batch_id, now_text=now_text)
 
-        first = scheduler.lease_cases(
+        first = _lease_cases(
+            scheduler,
             batch_id,
             hostname="host-a",
             limit=1,
             now_text=now_text,
         )
-        second = scheduler.lease_cases(
+        second = _lease_cases(
+            scheduler,
             batch_id,
             hostname="host-b",
             limit=1,
@@ -1606,7 +1805,8 @@ class TestJudgehostScheduler(unittest.TestCase):
             )
         )
         self.assertEqual(scheduler.fetch_batch(batch_id)["compile_state"], "succeeded")
-        followers = scheduler.lease_cases(
+        followers = _lease_cases(
+            scheduler,
             batch_id,
             hostname="host-c",
             limit=8,
@@ -1634,14 +1834,9 @@ class TestJudgehostScheduler(unittest.TestCase):
             generation=cache_claim.generation,
             updated_at=now_text,
         )
-        scheduler.claim_materialization(batch_id, now_text=now_text)
-        scheduler.finish_materialization(
-            batch_id,
-            success=True,
-            error_text="",
-            now_text=now_text,
-        )
-        case = scheduler.lease_cases(
+        _materialize_batch(scheduler, batch_id, now_text=now_text)
+        case = _lease_cases(
+            scheduler,
             batch_id,
             hostname="host-a",
             limit=1,
@@ -1741,7 +1936,9 @@ class TestJudgehostScheduler(unittest.TestCase):
             updated_at=now_text,
         )
         self.assertEqual(set(outcomes.values()), {"pending"})
-        self.assertEqual(len(scheduler.cases_for_batch(batch_id, status="pending")), 255)
+        self.assertEqual(
+            len(scheduler.cases_for_batch(batch_id, status="pending")), 255
+        )
         self.assertEqual(scheduler.select_ready_batch("host-a")["batch_id"], batch_id)
 
     def test_bulk_cache_abort_refreshes_each_batch_once(self) -> None:
@@ -1795,12 +1992,18 @@ class TestJudgehostScheduler(unittest.TestCase):
             run_id="run-second-script-user",
             ordinals=[1],
         )
-        self.assertTrue(scheduler.activate_task_cases("first-script-user", now_text=now_text))
-        self.assertTrue(scheduler.activate_task_cases("second-script-user", now_text=now_text))
+        self.assertTrue(
+            scheduler.activate_task_cases("first-script-user", now_text=now_text)
+        )
+        self.assertTrue(
+            scheduler.activate_task_cases("second-script-user", now_text=now_text)
+        )
         compile_hash = "1" * 32
         compile_id = int(script_id(compile_hash))
 
-        self.assertEqual(scheduler.active_script_hashes("compile", compile_id), {compile_hash})
+        self.assertEqual(
+            scheduler.active_script_hashes("compile", compile_id), {compile_hash}
+        )
         for batch_id in (first_batch, second_batch):
             self.assertTrue(
                 scheduler.record_batch_failure(
@@ -1810,7 +2013,9 @@ class TestJudgehostScheduler(unittest.TestCase):
                     updated_at=now_text,
                 )
             )
-            self.assertEqual(scheduler.active_script_hashes("compile", compile_id), {compile_hash})
+            self.assertEqual(
+                scheduler.active_script_hashes("compile", compile_id), {compile_hash}
+            )
         self.assertCountEqual(
             scheduler.finish_verification_execution("ver-1", now_text=now_text),
             [first_batch, second_batch],
@@ -1848,7 +2053,8 @@ class TestJudgehostScheduler(unittest.TestCase):
             batch = scheduler.select_ready_batch(hostname)
             if batch is None:
                 return
-            rows = scheduler.lease_cases(
+            rows = _lease_cases(
+                scheduler,
                 int(batch["batch_id"]),
                 hostname=hostname,
                 limit=16,
@@ -1857,7 +2063,9 @@ class TestJudgehostScheduler(unittest.TestCase):
             with lock:
                 leased_ids.extend(int(row["id"]) for row in rows)
 
-        threads = [threading.Thread(target=_worker, args=(index,)) for index in range(16)]
+        threads = [
+            threading.Thread(target=_worker, args=(index,)) for index in range(16)
+        ]
         for thread in threads:
             thread.start()
         for thread in threads:
@@ -1880,7 +2088,7 @@ class TestJudgehostScheduler(unittest.TestCase):
 
     def test_runtime_cache_hit_does_not_open_payload_files(self) -> None:
         with tempfile.TemporaryDirectory(prefix="runtime-cache-") as temp_dir:
-            _toolkit, _blobs, cache = self._runtime_toolkit(Path(temp_dir))
+            _executable_cache, _blobs, cache = self._runtime_cache(Path(temp_dir))
             cache.put(
                 namespace=RuntimeCacheIndex.RESULT,
                 key_hash="1" * 64,
@@ -1888,7 +2096,9 @@ class TestJudgehostScheduler(unittest.TestCase):
                 value={"verdict": "OK"},
                 files={"program.out": b"large output"},
             )
-            with patch.object(Path, "open", side_effect=AssertionError("payload was opened")):
+            with patch.object(
+                Path, "open", side_effect=AssertionError("payload was opened")
+            ):
                 entry = cache.get(
                     namespace=RuntimeCacheIndex.RESULT,
                     key_hash="1" * 64,
@@ -1898,7 +2108,7 @@ class TestJudgehostScheduler(unittest.TestCase):
 
     def test_cache_deletion_keeps_referenced_blob(self) -> None:
         with tempfile.TemporaryDirectory(prefix="runtime-cache-delete-") as temp_dir:
-            _toolkit, blobs, cache = self._runtime_toolkit(Path(temp_dir))
+            _executable_cache, blobs, cache = self._runtime_cache(Path(temp_dir))
             entry = cache.put(
                 namespace=RuntimeCacheIndex.RESULT,
                 key_hash="3" * 64,
@@ -1922,40 +2132,35 @@ class TestJudgehostScheduler(unittest.TestCase):
             self.assertEqual(blobs.read(output), b"answer\n")
 
     def test_executable_cache_reuses_valid_entry_and_repairs_damage(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="runtime-executable-cache-") as temp_dir:
-            toolkit, _blobs, cache = self._runtime_toolkit(Path(temp_dir))
+        with tempfile.TemporaryDirectory(
+            prefix="runtime-executable-cache-"
+        ) as temp_dir:
+            executable_cache, _blobs, cache = self._runtime_cache(Path(temp_dir))
             executable_hash = "a" * 32
             files = [("run", b"#!/bin/sh\nexit 0\n", True)]
             with patch.object(cache, "put", wraps=cache.put) as publish_entry:
-                toolkit.store_executable_cache(
+                first = executable_cache.store(
                     kind="run",
                     executable_hash=executable_hash,
                     files=files,
                 )
-                toolkit.store_executable_cache(
+                executable_cache.store(
                     kind="run",
                     executable_hash=executable_hash,
                     files=files,
                 )
             self.assertEqual(publish_entry.call_count, 2)
-            rows = toolkit.read_executable_cache(kind="run", executable_hash=executable_hash)
+            rows = executable_cache.read(kind="run", executable_hash=executable_hash)
             self.assertIsNotNone(rows)
             assert rows is not None
             self.assertEqual(rows[0]["payload"].path.read_bytes(), files[0][1])
 
-            key_hash = toolkit._executable_cache_key_hash("run", executable_hash)
-            entry = cache.get(
-                namespace=RuntimeCacheIndex.EXECUTABLE,
-                key_hash=key_hash,
-                signature=toolkit._EXECUTABLE_CACHE_SIGNATURE,
-            )
-            assert entry is not None
-            executable_path = entry.files["run"].path
+            executable_path = first["run"].path
             executable_path.unlink()
             self.assertIsNone(
-                toolkit.read_executable_cache(kind="run", executable_hash=executable_hash)
+                executable_cache.read(kind="run", executable_hash=executable_hash)
             )
-            toolkit.store_executable_cache(
+            executable_cache.store(
                 kind="run",
                 executable_hash=executable_hash,
                 files=files,
@@ -1964,7 +2169,7 @@ class TestJudgehostScheduler(unittest.TestCase):
 
     def test_different_cache_keys_publish_concurrently(self) -> None:
         with tempfile.TemporaryDirectory(prefix="runtime-cache-parallel-") as temp_dir:
-            _toolkit, blobs, cache = self._runtime_toolkit(Path(temp_dir))
+            _executable_cache, blobs, cache = self._runtime_cache(Path(temp_dir))
             barrier = threading.Barrier(2)
             errors: list[Exception] = []
             original = blobs.put_bytes
@@ -1986,7 +2191,9 @@ class TestJudgehostScheduler(unittest.TestCase):
                     errors.append(exc)
 
             with patch.object(blobs, "put_bytes", side_effect=_publish):
-                threads = [threading.Thread(target=_put, args=(token,)) for token in ("1", "2")]
+                threads = [
+                    threading.Thread(target=_put, args=(token,)) for token in ("1", "2")
+                ]
                 for thread in threads:
                     thread.start()
                 for thread in threads:

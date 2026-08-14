@@ -215,10 +215,9 @@ For a final `add-judging-run` callback, Judgehost first captures cache payloads
 and refs, then a dependency-light normalizer produces the canonical case
 `ExecutionResult` owned by `app.service.execution`. Compile failure arrives
 through `update-judging`, and a
-missing case has no complete final callback. Canonical scheduler and task-queue
-helpers construct those failure results from stored compile/case evidence; the
-batch finalizer publishes and aggregates terminal case results into the task
-report. Verification preserves
+missing case has no complete final callback. Pure task-result projection builds
+those failure results from stored compile/case evidence; finalization publishes
+and aggregates terminal case results into the task report. Verification preserves
 that report instead of rebuilding compile data, passes, warnings, or payload
 evidence from summary fields.
 
@@ -247,7 +246,7 @@ coordinator exists or a notification is repeated.
 Compile failure reported through `update-judging`, the first final run report,
 and an internal error received while a case is active can create the canonical
 terminal result. Their first decision claim is serialized under the Judgehost
-scheduler lock; a program failure can finish unclaimed cases but cannot replace
+batch-runtime lock; a program failure can finish unclaimed cases but cannot replace
 a final result whose case is already reporting. SQLite first-wins completion is
 the second durable guard. Evidence received after that decision does not amend it.
 Terminal `add-debug-info` and `internal-error` callbacks append normalized

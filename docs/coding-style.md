@@ -90,7 +90,15 @@ The default import-policy gate scans Python files in `app/`, `tests/`, and
 - dynamic application re-export chains;
 - dynamic `__all__` outside package initializers;
 - imported names exposed through `__all__` outside `__init__.py`; and
-- assignments to `_` that exist only to suppress unused-name checks.
+- assignments to `_` that exist only to suppress unused-name checks; and
+- `*args` or `**kwargs` on application business operations, where an exact
+  typed signature must reject unknown arguments.
+
+Variadic parameters remain valid only on explicitly identified framework
+adapters, generic call adapters, and command wrappers whose actual contract is
+forwarding an arbitrary argument sequence. Ordinary facades, services, and
+handlers do not use variadic parameters to absorb misspelled or obsolete
+inputs.
 
 The broader static check also rejects cross-package private imports and simple
 forwarding shims in `app/`. The full public-contract suite enforces the

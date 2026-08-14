@@ -21,7 +21,7 @@ from app.service.judgehost.domjudge.result import (
     rewrite_untrusted_runresult,
 )
 from app.service.judgehost.domjudge.codec import config_payload
-from app.service.judgehost.domjudge.toolkit import DomjudgeToolkit
+from app.service.judgehost.domjudge.codec import decode_base64
 from app.service.judgehost.domjudge.cache import executable_hash
 
 _DISPLAY_LIMIT_BYTES = 64 * 1024
@@ -36,7 +36,9 @@ class TestJudgehostPayload(unittest.TestCase):
             "program.out": b"answer\n",
             "program.err": b"",
             "system.out": b"",
-            "program.meta": (b"cpu-time: 0.004\nwall-time: 0.005\n" b"memory-bytes: 4096\n"),
+            "program.meta": (
+                b"cpu-time: 0.004\nwall-time: 0.005\n" b"memory-bytes: 4096\n"
+            ),
             "compare.meta": b"exitcode: 42\n",
             "judgemessage.txt": b"",
             "teammessage.txt": b"",
@@ -207,7 +209,8 @@ class TestJudgehostPayload(unittest.TestCase):
             "program.err": b"",
             "system.out": b"",
             "program.meta": (
-                b"time-used: cpu-time\ncpu-time: 0.002\n" b"wall-time: 0.003\nmemory-bytes: 2048\n"
+                b"time-used: cpu-time\ncpu-time: 0.002\n"
+                b"wall-time: 0.003\nmemory-bytes: 2048\n"
             ),
             "compare.meta": b"exitcode: 42\n",
             "judgemessage.txt": b"",
@@ -314,12 +317,12 @@ class TestJudgehostPayload(unittest.TestCase):
     def test_base64_decoder_requires_base64_text(self) -> None:
         blob = b"ok\n"
         encoded = base64.b64encode(blob).decode("ascii")
-        self.assertEqual(DomjudgeToolkit.b64_decode(encoded), blob)
-        self.assertEqual(DomjudgeToolkit.b64_decode(encoded.encode("ascii")), blob)
+        self.assertEqual(decode_base64(encoded), blob)
+        self.assertEqual(decode_base64(encoded.encode("ascii")), blob)
         with self.assertRaises(RuntimeError):
-            DomjudgeToolkit.b64_decode(b"binary-artifact")
+            decode_base64(b"binary-artifact")
         with self.assertRaises(RuntimeError):
-            DomjudgeToolkit.b64_decode("%not-base64%")
+            decode_base64("%not-base64%")
 
     def test_callback_blob_keeps_raw_upload_contract(self) -> None:
         blob = b"binary-artifact"

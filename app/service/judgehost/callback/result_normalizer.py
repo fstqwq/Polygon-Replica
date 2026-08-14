@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from typing import Mapping
 
 from app.service.judgehost.batch.model import CaseResult
-from app.service.judgehost.callback.case_result import build_case_result
+from app.service.judgehost.domjudge.case_result import build_case_result
 from app.service.judgehost.callback.pass_bundle import PassBundle
 from app.service.judgehost.domjudge.result import (
     feedback_text_and_files,
@@ -18,7 +18,6 @@ from app.service.execution.model import (
     ExecutionUsage,
     PassArtifacts,
 )
-
 
 _PASS_CACHE_FILE_NAMES = {
     "input": "input",
@@ -120,7 +119,9 @@ def normalize_captured_case(
         return "" if artifact is None else artifact.blob_ref
 
     refs_to_content = {
-        artifact.blob_ref: artifact.content for artifact in artifacts.values() if artifact.blob_ref
+        artifact.blob_ref: artifact.content
+        for artifact in artifacts.values()
+        if artifact.blob_ref
     }
 
     metadata_blob = _content("program.meta")
@@ -145,7 +146,9 @@ def normalize_captured_case(
         mem_bytes = parse_int(program_meta.get("memory-bytes"), 0)
         memory_kb = max(0, int(mem_bytes // 1024))
     if compare_meta_blob:
-        compare_meta = parse_metadata(compare_meta_blob.decode("utf-8", errors="replace"))
+        compare_meta = parse_metadata(
+            compare_meta_blob.decode("utf-8", errors="replace")
+        )
         compare_exit_code = parse_int(compare_meta.get("exitcode"), -1)
 
     runresult = rewrite_untrusted_runresult(
@@ -153,7 +156,10 @@ def normalize_captured_case(
         cpu_sec=cpu_sec,
         run_cfg_obj=dict(captured.run_config),
     )
-    if runresult in {"compare-error", "run-error", "internal-error"} and compare_exit_code < 0:
+    if (
+        runresult in {"compare-error", "run-error", "internal-error"}
+        and compare_exit_code < 0
+    ):
         time_result = program_meta.get("time-result", "")
         signal_num = parse_int(program_meta.get("signal"), 0)
         output_limit_kb = parse_int(
@@ -164,9 +170,9 @@ def normalize_captured_case(
         stdout_bytes = parse_int(program_meta.get("stdout-bytes"), 0)
         output_truncated = program_meta.get("output-truncated", "")
         timed_out = "timelimit" in time_result or signal_num == 14
-        output_limited = (output_limit_bytes > 0 and stdout_bytes >= output_limit_bytes) or (
-            output_truncated in {"1", "true", "yes", "on"} and stdout_bytes > 0
-        )
+        output_limited = (
+            output_limit_bytes > 0 and stdout_bytes >= output_limit_bytes
+        ) or (output_truncated in {"1", "true", "yes", "on"} and stdout_bytes > 0)
         if timed_out:
             runresult = "timelimit"
         elif output_limited:
@@ -219,7 +225,9 @@ def normalize_captured_case(
         for bundled_pass in captured.pass_bundle.passes[:-1]:
             files = bundled_pass.files
             usage = _program_meta_usage(files["program.meta"])
-            compare_meta = parse_metadata(files["compare.meta"].decode("utf-8", errors="replace"))
+            compare_meta = parse_metadata(
+                files["compare.meta"].decode("utf-8", errors="replace")
+            )
             historical_compare_exit = parse_int(
                 compare_meta.get("exitcode"),
                 -1,
@@ -265,7 +273,9 @@ def normalize_captured_case(
                     runresult="correct",
                     verdict="OK",
                     score_text="",
-                    answer_correct=_answer_correct_from_compare_exit_code(historical_compare_exit),
+                    answer_correct=_answer_correct_from_compare_exit_code(
+                        historical_compare_exit
+                    ),
                     usage=usage,
                     feedback=historical_feedback,
                     artifacts=PassArtifacts(
@@ -342,7 +352,9 @@ def normalize_captured_case(
         pass_number=final_pass_number,
         historical_passes=tuple(historical_passes),
         warnings=() if not capture_warning else (capture_warning,),
-        usage=(_program_meta_usage(metadata_blob) if metadata_blob else ExecutionUsage()),
+        usage=(
+            _program_meta_usage(metadata_blob) if metadata_blob else ExecutionUsage()
+        ),
     )
     return NormalizedJudgehostCase(
         result=result,

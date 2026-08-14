@@ -3,12 +3,10 @@ import json
 import threading
 import time
 import unittest
+from dataclasses import replace
 from pathlib import Path
-from types import SimpleNamespace
-from unittest.mock import patch
 
-from app.service.judgehost.api import Judgehost
-from app.service.judgehost.callback.case_result import build_case_result
+from app.service.judgehost.domjudge.case_result import build_case_result
 from app.service.judgehost.batch.runtime import JudgehostBatchRuntime
 from app.service.judgehost.batch.model import (
     CaseReportTelemetry,
@@ -18,15 +16,8 @@ from app.service.judgehost.batch.model import (
     JudgehostCaseRow,
 )
 from app.service.judgehost.domjudge.identity import submit_id
-from app.service.judgehost.callback.result import ResultProcessor
 from app.service.platform.runtime_blob_store import PayloadFile
 from app.service.platform.rwlock import WriterPriorityRWLock
-from app.service.verification.completion import VerificationTaskCompletionService
-from app.service.verification.runtime_registry import VerificationRuntimeRegistry
-from app.service.verification.judgehost_adapter import VerificationJudgehostAdapter
-
-from tests.db_fixture import DBTestBase
-
 
 _NOW = "2026-07-29T00:00:00+00:00"
 _HASH = "1" * 64
@@ -79,10 +70,15 @@ def _receipt_generation(store: JudgehostBatchRuntime, case_id: int) -> int:
     return receipt.claim_generation
 
 
-def _finish_pending_case(store: JudgehostBatchRuntime, batch_id: int, test_name: str) -> None:
-    case = next(row for row in store.cases_for_batch(batch_id) if row["test_name"] == test_name)
+def _finish_pending_case(
+    store: JudgehostBatchRuntime, batch_id: int, test_name: str
+) -> None:
+    case = next(
+        row for row in store.cases_for_batch(batch_id) if row["test_name"] == test_name
+    )
     hostname = f"host-{test_name}"
-    leased = store.lease_cases(
+    leased = _lease_cases(
+        store,
         batch_id,
         hostname=hostname,
         limit=1,
@@ -145,7 +141,9 @@ def _create_batch(
         task_id=task_id,
         run_id=run_id,
         verification_program_id=(
-            verification_program_id if verification_program_id is not None else f"program-{task_id}"
+            verification_program_id
+            if verification_program_id is not None
+            else f"program-{task_id}"
         ),
         execution_signature=signature,
         task_kind="solution-run",
@@ -171,17 +169,56 @@ def _create_batch(
         case_rows=case_rows,
     )
     if store.fetch_batch(batch_id)["materialization_state"] == "unmaterialized":
-        assert store.claim_materialization(batch_id, now_text=_NOW)
+        claim = store.claim_materialization(batch_id, now_text=_NOW)
+        assert claim is not None
+        materialized_submission = replace(
+            claim.submission,
+            source_file=replace(
+                claim.submission.source_file,
+                blob_ref=f"blob://sha256/{claim.submission.source_file.identity}",
+            ),
+            extra_source_items=tuple(
+                (
+                    name,
+                    replace(
+                        payload,
+                        blob_ref=f"blob://sha256/{payload.identity}",
+                    ),
+                )
+                for name, payload in claim.submission.extra_source_items
+            ),
+        )
         assert store.finish_materialization(
-            batch_id,
+            claim,
             success=True,
+            materialized_submission=materialized_submission,
             error_text="",
             now_text=_NOW,
         )
     return batch_id
 
 
-class TestJudgehostStateLifecycle(unittest.TestCase):
+def _lease_cases(
+    store: JudgehostBatchRuntime,
+    batch_id: int,
+    *,
+    hostname: str,
+    limit: int,
+    now_text: str,
+) -> list[JudgehostCaseRow]:
+    claim = store.claim_lease(
+        batch_id,
+        hostname=hostname,
+        limit=limit,
+        now_text=now_text,
+    )
+    if claim is None:
+        return []
+    assert store.commit_lease(claim)
+    return list(claim.cases)
+
+
+class TestJudgehostBatchRuntimeLifecycle(unittest.TestCase):
     def setUp(self) -> None:
         self.store = JudgehostBatchRuntime(id_base=100)
 
@@ -195,7 +232,8 @@ class TestJudgehostStateLifecycle(unittest.TestCase):
                 _case_row("task-cancel-receipt", "run-cancel-receipt", "002.in", 2),
             ],
         )
-        leased = self.store.lease_cases(
+        leased = _lease_cases(
+            self.store,
             batch_id,
             hostname="host-a",
             limit=1,
@@ -213,13 +251,18 @@ class TestJudgehostStateLifecycle(unittest.TestCase):
         cancellation = self.store.request_verification_cancel("ver-1", now_text=_NOW)
         self.assertEqual(cancellation.cancelled_case_count, 1)
         self.assertEqual(cancellation.awaiting_receipt_count, 1)
-        rows = {str(row["test_name"]): row for row in self.store.cases_for_batch(batch_id)}
+        rows = {
+            str(row["test_name"]): row for row in self.store.cases_for_batch(batch_id)
+        }
         self.assertEqual(rows["001.in"]["status"], "leased")
         self.assertEqual(rows["001.in"]["lease_owner"], "host-a")
         self.assertTrue(rows["001.in"]["cancel_requested"])
         self.assertEqual(rows["002.in"]["status"], "cancelled")
         self.assertEqual(
-            self.store.lease_cases(batch_id, hostname="host-b", limit=2, now_text=_NOW), []
+            _lease_cases(
+                self.store, batch_id, hostname="host-b", limit=2, now_text=_NOW
+            ),
+            [],
         )
 
         claim = self.store.claim_case_reporting(
@@ -264,7 +307,14 @@ class TestJudgehostStateLifecycle(unittest.TestCase):
         )
         _finish_pending_case(self.store, batch_id, "001.in")
         self.assertEqual(self.store.fetch_batch(batch_id)["status"], "open")
-        self.assertIsNone(self.store.claim_batch_finalization(batch_id, now_text=_NOW))
+        publication_claim = self.store.claim_batch_finalization(
+            batch_id,
+            now_text=_NOW,
+        )
+        self.assertIsNotNone(publication_claim)
+        assert publication_claim is not None
+        self.assertFalse(publication_claim.terminal_transition)
+        self.assertTrue(self.store.complete_batch_finalization(publication_claim))
 
         same_batch_id = _create_batch(
             self.store,
@@ -301,7 +351,10 @@ class TestJudgehostStateLifecycle(unittest.TestCase):
             self.store.finish_programs("ver-1", ["solution-0"], now_text=_NOW),
             [batch_id],
         )
-        self.assertIsNotNone(self.store.claim_batch_finalization(batch_id, now_text=_NOW))
+        terminal_claim = self.store.claim_batch_finalization(batch_id, now_text=_NOW)
+        self.assertIsNotNone(terminal_claim)
+        assert terminal_claim is not None
+        self.assertTrue(terminal_claim.terminal_transition)
         self.assertIsNone(self.store.claim_batch_finalization(batch_id, now_text=_NOW))
         with self.assertRaisesRegex(RuntimeError, "verification program is closed"):
             _create_batch(
@@ -319,7 +372,9 @@ class TestJudgehostStateLifecycle(unittest.TestCase):
             self.store,
             task_id="task-program-first",
             run_id="run-program-first",
-            case_rows=[_case_row("task-program-first", "run-program-first", "001.in", 1)],
+            case_rows=[
+                _case_row("task-program-first", "run-program-first", "001.in", 1)
+            ],
             execution_signature="shared-execution",
             verification_program_id="solution-0",
         )
@@ -327,7 +382,9 @@ class TestJudgehostStateLifecycle(unittest.TestCase):
             self.store,
             task_id="task-program-second",
             run_id="run-program-second",
-            case_rows=[_case_row("task-program-second", "run-program-second", "001.in", 1)],
+            case_rows=[
+                _case_row("task-program-second", "run-program-second", "001.in", 1)
+            ],
             execution_signature="shared-execution",
             verification_program_id="solution-1",
         )
@@ -372,7 +429,9 @@ class TestJudgehostStateLifecycle(unittest.TestCase):
                 self.store,
                 task_id="task-first-batch",
                 run_id="run-first-batch",
-                case_rows=[_case_row("task-first-batch", "run-first-batch", "002.in", 2)],
+                case_rows=[
+                    _case_row("task-first-batch", "run-first-batch", "002.in", 2)
+                ],
                 execution_signature="signature-task-second-batch",
                 verification_program_id="solution-new",
             )
@@ -430,7 +489,9 @@ class TestJudgehostStateLifecycle(unittest.TestCase):
         self.assertEqual(removed_batches, 1)
         self.assertIsNone(self.store.fetch_batch(batch_id))
 
-    def test_quiet_cleanup_waits_for_callback_receipt_and_pending_diagnostic(self) -> None:
+    def test_quiet_cleanup_waits_for_callback_receipt_and_pending_diagnostic(
+        self,
+    ) -> None:
         case_spec = _case_row("task-pinned", "run-pinned", "001.in", 1)
         case_spec["verification_task_id"] = "verification-task-pinned"
         batch_id = _create_batch(
@@ -468,36 +529,6 @@ class TestJudgehostStateLifecycle(unittest.TestCase):
         self.assertEqual(self.store.forget_runs_if_quiet(["run-pinned"]), 1)
         self.assertIsNone(self.store.fetch_case(case_id))
 
-    def test_callback_receipt_release_notifies_cleanup_after_unpin(self) -> None:
-        case_spec = _case_row("task-release", "run-release", "001.in", 1)
-        case_spec["verification_task_id"] = "verification-task-release"
-        batch_id = _create_batch(
-            self.store,
-            task_id="task-release",
-            run_id="run-release",
-            case_rows=[case_spec],
-        )
-        _finish_pending_case(self.store, batch_id, "001.in")
-        case_id = int(self.store.cases_for_batch(batch_id)[0]["id"])
-        self.assertTrue(self.store.acknowledge_case_completion(case_id))
-        receipt = self.store.acquire_case_callback_receipt(case_id)
-        assert receipt is not None
-        cleanup_results: list[int | None] = []
-
-        def touch_after_release(verification_id: str) -> None:
-            self.assertEqual(verification_id, "ver-1")
-            cleanup_results.append(self.store.forget_runs_if_quiet(["run-release"]))
-
-        processor = object.__new__(ResultProcessor)
-        processor._s = SimpleNamespace(
-            batch_runtime=self.store,
-            touch_verification_runtime=touch_after_release,
-        )
-        processor._release_case_callback_receipt(receipt)
-
-        self.assertEqual(cleanup_results, [1])
-        self.assertIsNone(self.store.fetch_case(case_id))
-
     def test_quiet_cleanup_does_not_remove_active_finalization_claim(self) -> None:
         batch_id = _create_batch(
             self.store,
@@ -515,7 +546,9 @@ class TestJudgehostStateLifecycle(unittest.TestCase):
         self.assertIsNone(self.store.forget_runs_if_quiet(["run-finalizing"]))
         self.assertIsNotNone(self.store.fetch_batch(batch_id))
 
-    def test_stale_callback_receipt_cannot_write_into_a_new_same_host_lease(self) -> None:
+    def test_stale_callback_receipt_cannot_write_into_a_new_same_host_lease(
+        self,
+    ) -> None:
         case_spec = _case_row("task-stale", "run-stale", "001.in", 1)
         case_spec["verification_task_id"] = "verification-task-stale"
         batch_id = _create_batch(
@@ -524,7 +557,8 @@ class TestJudgehostStateLifecycle(unittest.TestCase):
             run_id="run-stale",
             case_rows=[case_spec],
         )
-        first_lease = self.store.lease_cases(
+        first_lease = _lease_cases(
+            self.store,
             batch_id,
             hostname="host-a",
             limit=1,
@@ -535,7 +569,8 @@ class TestJudgehostStateLifecycle(unittest.TestCase):
         assert stale_receipt is not None
 
         self.store.release_host_leases("host-a", now_text=_NOW)
-        second_lease = self.store.lease_cases(
+        second_lease = _lease_cases(
+            self.store,
             batch_id,
             hostname="host-a",
             limit=1,
@@ -672,7 +707,9 @@ class TestJudgehostStateLifecycle(unittest.TestCase):
             [item.text for item in diagnostics],
         )
 
-    def test_verification_index_cancels_multiple_batches_without_history_scan(self) -> None:
+    def test_verification_index_cancels_multiple_batches_without_history_scan(
+        self,
+    ) -> None:
         batch_ids = []
         for sequence in range(2):
             task_id = f"task-shared-run-{sequence}"
@@ -689,7 +726,10 @@ class TestJudgehostStateLifecycle(unittest.TestCase):
         cancellation = self.store.request_verification_cancel("ver-1", now_text=_NOW)
         self.assertEqual(list(cancellation.batch_ids), batch_ids)
         self.assertEqual(
-            [self.store.cases_for_batch(batch_id)[0]["status"] for batch_id in batch_ids],
+            [
+                self.store.cases_for_batch(batch_id)[0]["status"]
+                for batch_id in batch_ids
+            ],
             ["cancelled", "cancelled"],
         )
 
@@ -704,7 +744,9 @@ class TestJudgehostStateLifecycle(unittest.TestCase):
             ],
         )
         batch = self.store.fetch_batch(batch_id)
-        cases = self.store.lease_cases(batch_id, hostname="host-a", limit=1, now_text=_NOW)
+        cases = _lease_cases(
+            self.store, batch_id, hostname="host-a", limit=1, now_text=_NOW
+        )
 
         self.assertIsNotNone(batch)
         self.assertEqual(set(batch), set(ExecutionBatchRow.__annotations__))
@@ -769,610 +811,3 @@ class TestWriterPriorityRWLock(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "non-reentrant"):
                 with lock.write_lock():
                     pass
-
-
-class TestJudgehostLifecycle(DBTestBase):
-    def _service(self) -> Judgehost:
-        completion_service = VerificationTaskCompletionService(
-            self.verification_task_store,
-            self.runtime_blob_store,
-            lambda _verification_id, _commit: False,
-        )
-        runtime_registry = VerificationRuntimeRegistry()
-        service = Judgehost(
-            self.workspace_service,
-            self.config_values,
-            execution_port=VerificationJudgehostAdapter(
-                self.db,
-                self.verification_task_store,
-                completion_service,
-                runtime_registry,
-            ),
-            runtime_blob_store=self.runtime_blob_store,
-            runtime_cache_index=self.runtime_cache_index,
-        )
-        self.config_values.replace(
-            {
-                **self.config_values.snapshot(),
-                "JUDGEHOST_ENABLE": True,
-                "JUDGEHOST_API_TOKEN": "test-token",
-                "JUDGEHOST_API_USERNAME": "judgehost",
-            }
-        )
-        return service
-
-    @staticmethod
-    def _add_task(service: Judgehost, task_id: str, run_id: str) -> None:
-        service.state.task_registry.insert(
-            {
-                "id": task_id,
-                "run_id": run_id,
-                "problem_slug": "owner/problem",
-                "username": "owner",
-                "artifact_verification_id": "",
-                "verification_id": "",
-                "mode": "pass-fail",
-                "status": service.STATUS_LEASED,
-                "payload": {
-                    "task_kind": "solution-run",
-                    "verification_source": "run.execute",
-                    "source_path": "solutions/ac.cpp",
-                },
-                "result": {},
-                "persist_verification_run": False,
-                "error_text": "",
-                "created_at": _NOW,
-                "updated_at": _NOW,
-                "completed_at": "",
-                "summary": {
-                    "source": "solutions/ac.cpp",
-                    "tests": [],
-                    "compile_diagnostics": [],
-                },
-                "enqueue_fingerprint": "",
-            }
-        )
-
-    @staticmethod
-    def _task(service: Judgehost, task_id: str) -> dict[str, object]:
-        row = service.state.task_registry.get(task_id)
-        assert row is not None
-        return row
-
-    @staticmethod
-    def _report_case(store: JudgehostBatchRuntime, case_id: int, hostname: str) -> bool:
-        claim = store.claim_case_reporting(
-            case_id,
-            hostname=hostname,
-            receipt_generation=_receipt_generation(store, case_id),
-            now_text=_NOW,
-        )
-        if claim is None:
-            return False
-        return (
-            store.commit_case_result(
-                case_id,
-                generation=claim.generation,
-                result=_result(claim.test_name),
-                updated_at=_NOW,
-            )
-            == "reported"
-        )
-
-    def test_task_waits_for_all_own_cases_before_batch_cleanup(self) -> None:
-        service = self._service()
-        store = service.state.batch_runtime
-        task_id, run_id = "task-two-cases", "run-two-cases"
-        self._add_task(service, task_id, run_id)
-        batch_id = _create_batch(
-            store,
-            task_id=task_id,
-            run_id=run_id,
-            case_rows=[
-                _case_row(task_id, run_id, "001.in", 1),
-                _case_row(task_id, run_id, "002.in", 2),
-            ],
-        )
-        cases = store.lease_cases(batch_id, hostname="host-a", limit=2, now_text=_NOW)
-        self.assertTrue(
-            store.record_compile_success(
-                int(cases[0]["id"]),
-                hostname="host-a",
-                receipt_generation=_receipt_generation(
-                    store,
-                    int(cases[0]["id"]),
-                ),
-                compile_output_b64="",
-                compile_metadata_b64="",
-                updated_at=_NOW,
-            )
-        )
-
-        self.assertTrue(self._report_case(store, int(cases[0]["id"]), "host-a"))
-        service.batch_finalizer.finalize_batch_if_ready(batch_id)
-        self.assertEqual(self._task(service, task_id)["status"], service.STATUS_LEASED)
-        self.assertEqual(store.fetch_batch(batch_id)["status"], "open")
-
-        self.assertTrue(self._report_case(store, int(cases[1]["id"]), "host-a"))
-        service.batch_finalizer.finalize_batch_if_ready(batch_id)
-        self.assertEqual(self._task(service, task_id)["status"], service.STATUS_COMPLETED)
-        self.assertEqual(store.fetch_batch(batch_id)["status"], "open")
-
-        service.schedule_verification_cleanup("ver-1")
-        self.assertEqual(store.fetch_batch(batch_id)["status"], "completed")
-
-    def test_reporting_abort_finalizes_deferred_cancel(self) -> None:
-        service = self._service()
-        store = service.state.batch_runtime
-        task_id, run_id = "task-abort-cancel", "run-abort-cancel"
-        self._add_task(service, task_id, run_id)
-        batch_id = _create_batch(
-            store,
-            task_id=task_id,
-            run_id=run_id,
-            case_rows=[_case_row(task_id, run_id, "001.in", 1)],
-        )
-        case = store.lease_cases(batch_id, hostname="host-a", limit=1, now_text=_NOW)[0]
-
-        def _cancel_then_fail(*_args, **_kwargs) -> int:
-            cancellation = store.request_verification_cancel("ver-1", now_text=_NOW)
-            self.assertEqual(list(cancellation.batch_ids), [batch_id])
-            raise RuntimeError("artifact write failed")
-
-        with patch.object(
-            service.result,
-            "_process_judging_run",
-            side_effect=_cancel_then_fail,
-        ), self.assertRaisesRegex(RuntimeError, "artifact write failed"):
-            service.domjudge_add_judging_run("host-a", int(case["id"]), {})
-
-        service.schedule_verification_cleanup("ver-1")
-        self.assertEqual(store.fetch_batch(batch_id)["status"], "failed")
-        self.assertEqual(self._task(service, task_id)["status"], service.STATUS_FAILED)
-
-    def test_cancelled_leased_case_callback_is_accepted_as_receipt(self) -> None:
-        service = self._service()
-        store = service.state.batch_runtime
-        task_id, run_id = "task-cancelled-receipt", "run-cancelled-receipt"
-        self._add_task(service, task_id, run_id)
-        batch_id = _create_batch(
-            store,
-            task_id=task_id,
-            run_id=run_id,
-            case_rows=[_case_row(task_id, run_id, "001.in", 1)],
-        )
-        case = store.lease_cases(batch_id, hostname="host-a", limit=1, now_text=_NOW)[0]
-        case_id = int(case["id"])
-        store.record_batch_leased(
-            "host-a",
-            batch_id,
-            [case_id],
-            leased_monotonic=1.0,
-        )
-
-        cancellation = service.request_verification_cancel(
-            "ver-1",
-            "verification cancelled by user",
-        )
-        self.assertEqual(cancellation["awaiting_receipts"], 1)
-        self.assertEqual(store.fetch_case(case_id)["status"], "leased")
-
-        with patch.object(
-            service.state.execution_port,
-            "cancelled",
-            side_effect=RuntimeError("transient cancellation publication failure"),
-        ), self.assertRaisesRegex(
-            RuntimeError,
-            "transient cancellation publication failure",
-        ):
-            service.domjudge_add_judging_run("host-a", case_id, {})
-        self.assertEqual(store.fetch_batch(batch_id)["status"], "finalize-pending")
-        self.assertFalse(store.fetch_case(case_id)["completion_acknowledged"])
-        self.assertEqual(service.domjudge_add_judging_run("host-a", case_id, {}), 1)
-        self.assertEqual(store.fetch_case(case_id)["status"], "cancelled")
-        self.assertEqual(self._task(service, task_id)["status"], service.STATUS_FAILED)
-        self.assertEqual(store.fetch_batch(batch_id)["status"], "failed")
-        telemetry = store.host_telemetry_snapshot()["host-a"]
-        self.assertEqual(telemetry["judged_case_count"], 1)
-        self.assertIsNotNone(telemetry["recent_avg_per_case_sec"])
-        self.assertEqual(service.domjudge_add_judging_run("host-a", case_id, {}), 1)
-
-    def test_unknown_callback_is_acknowledged(self) -> None:
-        service = self._service()
-        self.assertEqual(service.domjudge_add_judging_run("host-a", 987654, {}), 1)
-
-    def test_callback_from_non_owner_is_rejected(self) -> None:
-        service = self._service()
-        store = service.state.batch_runtime
-        task_id, run_id = "task-owner", "run-owner"
-        self._add_task(service, task_id, run_id)
-        batch_id = _create_batch(
-            store,
-            task_id=task_id,
-            run_id=run_id,
-            case_rows=[_case_row(task_id, run_id, "001.in", 1)],
-        )
-        case = store.lease_cases(batch_id, hostname="host-a", limit=1, now_text=_NOW)[0]
-        with self.assertRaisesRegex(RuntimeError, "does not own"):
-            service.domjudge_add_judging_run("host-b", int(case["id"]), {})
-
-    def test_terminal_callback_from_non_owner_is_rejected(self) -> None:
-        service = self._service()
-        store = service.state.batch_runtime
-        task_id, run_id = "task-terminal-owner", "run-terminal-owner"
-        self._add_task(service, task_id, run_id)
-        batch_id = _create_batch(
-            store,
-            task_id=task_id,
-            run_id=run_id,
-            case_rows=[_case_row(task_id, run_id, "001.in", 1)],
-        )
-        _finish_pending_case(store, batch_id, "001.in")
-        case = store.cases_for_batch(batch_id)[0]
-
-        with self.assertRaisesRegex(RuntimeError, "does not own"):
-            service.domjudge_add_judging_run(
-                "host-b",
-                int(case["id"]),
-                {},
-            )
-        with self.assertRaisesRegex(RuntimeError, "does not own"):
-            service.domjudge_update_judging(
-                "host-b",
-                int(case["id"]),
-                {"compile_success": "1"},
-            )
-
-    def test_cancelled_leased_case_registration_finalizes_without_callback(self) -> None:
-        service = self._service()
-        store = service.state.batch_runtime
-        task_id, run_id = "task-cancelled-register", "run-cancelled-register"
-        self._add_task(service, task_id, run_id)
-        batch_id = _create_batch(
-            store,
-            task_id=task_id,
-            run_id=run_id,
-            case_rows=[_case_row(task_id, run_id, "001.in", 1)],
-        )
-        case = store.lease_cases(
-            batch_id,
-            hostname="host-a",
-            limit=1,
-            now_text=_NOW,
-        )[0]
-        case_id = int(case["id"])
-
-        cancellation = service.request_verification_cancel(
-            "ver-1",
-            "verification cancelled by user",
-        )
-        self.assertEqual(cancellation["awaiting_receipts"], 1)
-        returned = service.domjudge_register_host("host-a")
-
-        self.assertEqual(len(returned), 1)
-        self.assertEqual(store.fetch_case(case_id)["status"], "cancelled")
-        self.assertEqual(self._task(service, task_id)["status"], service.STATUS_FAILED)
-        self.assertEqual(store.fetch_batch(batch_id)["status"], "failed")
-        self.assertEqual(store.lease_cases(batch_id, hostname="host-b", limit=1, now_text=_NOW), [])
-        self.assertEqual(service.domjudge_register_host("host-a"), [])
-
-    def test_grouped_batch_finalizes_each_task_once_across_hosts(self) -> None:
-        service = self._service()
-        store = service.state.batch_runtime
-        first_task, first_run = "task-group-a", "run-group-a"
-        second_task, second_run = "task-group-b", "run-group-b"
-        self._add_task(service, first_task, first_run)
-        self._add_task(service, second_task, second_run)
-        batch_id = _create_batch(
-            store,
-            task_id=first_task,
-            run_id=first_run,
-            execution_signature="shared-group",
-            verification_program_id="solution-0",
-            case_rows=[_case_row(first_task, first_run, "001.in", 1)],
-        )
-        appended_batch = _create_batch(
-            store,
-            task_id=second_task,
-            run_id=second_run,
-            case_rows=[_case_row(second_task, second_run, "002.in", 1)],
-            execution_signature="shared-group",
-            verification_program_id="solution-0",
-        )
-        self.assertEqual(appended_batch, batch_id)
-        self.assertTrue(store.activate_task_cases(second_task, now_text=_NOW))
-        second_case_id = int(store.cases_for_task(second_task)[0]["id"])
-        cache_claims = store.claim_cache_cases(
-            batch_id,
-            hostname="cache-setup",
-            limit=1,
-            now_text=_NOW,
-        )
-        self.assertEqual([claim.case_id for claim, _row in cache_claims], [second_case_id])
-        self.assertTrue(
-            store.finish_cache_miss(
-                second_case_id,
-                generation=cache_claims[0][0].generation,
-                updated_at=_NOW,
-            )
-        )
-        self.assertEqual(store.batch_for_task(second_task)["batch_id"], batch_id)
-        first_case = store.lease_cases(batch_id, hostname="host-a", limit=1, now_text=_NOW)[0]
-        second_case = store.lease_cases(batch_id, hostname="host-b", limit=1, now_text=_NOW)[0]
-        self.assertTrue(
-            store.record_compile_success(
-                int(first_case["id"]),
-                hostname="host-a",
-                receipt_generation=_receipt_generation(
-                    store,
-                    int(first_case["id"]),
-                ),
-                compile_output_b64="",
-                compile_metadata_b64="",
-                updated_at=_NOW,
-            )
-        )
-        self.assertEqual(store.case_execution_row(int(first_case["id"]))["run_id"], first_run)
-        self.assertEqual(store.case_execution_row(int(second_case["id"]))["run_id"], second_run)
-        self.assertEqual(self._task(service, second_task)["status"], service.STATUS_LEASED)
-
-        self.assertFalse(self._report_case(store, int(first_case["id"]), "host-b"))
-        self.assertTrue(self._report_case(store, int(first_case["id"]), "host-a"))
-        service.batch_finalizer.finalize_batch_if_ready(batch_id)
-        self.assertEqual(self._task(service, first_task)["status"], service.STATUS_COMPLETED)
-        self.assertEqual(self._task(service, second_task)["status"], service.STATUS_LEASED)
-        self.assertIsNotNone(service.state.task_registry.get(first_task))
-
-        self.assertTrue(self._report_case(store, int(second_case["id"]), "host-b"))
-        service.batch_finalizer.finalize_batch_if_ready(batch_id)
-
-        service.schedule_verification_cleanup("ver-1")
-
-        self.assertEqual(
-            {first_task, second_task},
-            {
-                task_id
-                for task_id in (first_task, second_task)
-                if self._task(service, task_id)["status"] == service.STATUS_COMPLETED
-            },
-        )
-        self.assertEqual(store.fetch_batch(batch_id)["status"], "completed")
-
-    def test_finalizing_batch_retries_incomplete_steps_before_cleanup(self) -> None:
-        service = self._service()
-        store = service.state.batch_runtime
-        task_id, run_id = "task-finalize-retry", "run-finalize-retry"
-        self._add_task(service, task_id, run_id)
-        batch_id = _create_batch(
-            store,
-            task_id=task_id,
-            run_id=run_id,
-            case_rows=[_case_row(task_id, run_id, "001.in", 1)],
-        )
-        case_row = store.lease_cases(batch_id, hostname="host-a", limit=1, now_text=_NOW)[0]
-        self.assertTrue(self._report_case(store, int(case_row["id"]), "host-a"))
-        store.finish_verification_execution("ver-1", now_text=_NOW)
-
-        with patch.object(
-            service.state.execution_port,
-            "reported_many",
-            side_effect=RuntimeError("transient publish failure"),
-        ), patch("app.service.judgehost.callback.result.logger.exception"):
-            service.batch_finalizer.finalize_batch_if_ready(batch_id)
-
-        self.assertEqual(store.fetch_batch(batch_id)["status"], "finalize-pending")
-        self.assertEqual(self._task(service, task_id)["status"], service.STATUS_LEASED)
-
-        with patch.object(
-            service.queue,
-            "finalize_task",
-            side_effect=RuntimeError("transient aggregation failure"),
-        ), patch("app.service.judgehost.callback.result.logger.exception"), patch(
-            "app.service.judgehost.callback.result.logger.error"
-        ):
-            service.batch_finalizer.finalize_batch_if_ready(batch_id)
-
-        self.assertEqual(store.fetch_batch(batch_id)["status"], "finalize-pending")
-        self.assertEqual(self._task(service, task_id)["status"], service.STATUS_LEASED)
-
-        service.batch_finalizer.finalize_batch_if_ready(batch_id)
-
-        self.assertEqual(store.fetch_batch(batch_id)["status"], "completed")
-        self.assertEqual(self._task(service, task_id)["status"], service.STATUS_COMPLETED)
-
-    def test_cache_compile_failure_and_cancel_use_common_finalizer(self) -> None:
-        for scenario in ("cache", "compile-failure", "cancel"):
-            with self.subTest(scenario=scenario):
-                service = self._service()
-                store = service.state.batch_runtime
-                task_id, run_id = f"task-{scenario}", f"run-{scenario}"
-                self._add_task(service, task_id, run_id)
-                batch_id = _create_batch(
-                    store,
-                    task_id=task_id,
-                    run_id=run_id,
-                    case_rows=[
-                        _case_row(
-                            task_id,
-                            run_id,
-                            "001.in",
-                            1,
-                            status="cache-pending" if scenario == "cache" else "pending",
-                        ),
-                        *(
-                            [_case_row(task_id, run_id, "002.in", 2)]
-                            if scenario in {"compile-failure", "cancel"}
-                            else []
-                        ),
-                    ],
-                )
-                if scenario == "cache":
-                    case_id = int(store.cases_for_batch(batch_id)[0]["id"])
-                    cache_claim = store.claim_cache_cases(
-                        batch_id,
-                        hostname="cache",
-                        limit=1,
-                        now_text=_NOW,
-                    )[0][0]
-                    self.assertEqual(
-                        store.commit_case_result(
-                            case_id,
-                            generation=cache_claim.generation,
-                            result=_result("001.in"),
-                            updated_at=_NOW,
-                        ),
-                        "reported",
-                    )
-                elif scenario == "compile-failure":
-                    first_lease = store.lease_cases(
-                        batch_id,
-                        hostname="host-a",
-                        limit=1,
-                        now_text=_NOW,
-                    )
-                    second_lease = store.lease_cases(
-                        batch_id,
-                        hostname="host-b",
-                        limit=1,
-                        now_text=_NOW,
-                    )
-                    self.assertEqual((len(first_lease), len(second_lease)), (1, 1))
-                    compile_failure = store.claim_compile_failure(
-                        int(first_lease[0]["id"]),
-                        hostname="host-a",
-                        receipt_generation=_receipt_generation(
-                            store,
-                            int(first_lease[0]["id"]),
-                        ),
-                        compile_output_b64="",
-                        compile_metadata_b64="",
-                        failure_text="compilation failed",
-                        compile_log="compilation failed",
-                        compile_diagnostics=(),
-                        updated_at=_NOW,
-                    )
-                    self.assertEqual(compile_failure.outcome, "claimed")
-                else:
-                    leased = store.lease_cases(
-                        batch_id,
-                        hostname="host-a",
-                        limit=1,
-                        now_text=_NOW,
-                    )
-                    self.assertEqual(len(leased), 1)
-
-                with patch.object(
-                    service.state.execution_port,
-                    "cancelled",
-                    wraps=service.state.execution_port.cancelled,
-                ) as publish_case:
-                    if scenario == "cancel":
-                        cancellation = service.request_verification_cancel(
-                            "ver-1",
-                            "verification cancelled by user",
-                        )
-                        self.assertEqual(cancellation["cancelled_cases"], 1)
-                        self.assertEqual(cancellation["awaiting_receipts"], 1)
-                        self.assertEqual(
-                            self._task(service, task_id)["status"],
-                            service.STATUS_LEASED,
-                        )
-                        leased_case = next(
-                            row
-                            for row in store.cases_for_task(task_id)
-                            if row["status"] == "leased"
-                        )
-                        claim = store.claim_case_reporting(
-                            int(leased_case["id"]),
-                            hostname="host-a",
-                            receipt_generation=_receipt_generation(
-                                store,
-                                int(leased_case["id"]),
-                            ),
-                            now_text=_NOW,
-                        )
-                        self.assertIsNotNone(claim)
-                        self.assertTrue(
-                            store.commit_cancelled_receipt(
-                                int(leased_case["id"]),
-                                generation=claim.generation,
-                                updated_at=_NOW,
-                                report_telemetry=CaseReportTelemetry(
-                                    hostname="host-a",
-                                    reported_at=_NOW,
-                                    reported_monotonic=1.0,
-                                    verification_id="ver-1",
-                                    problem_slug="alice/sample",
-                                    task_kind="solution-run",
-                                    source_label="solution.cpp",
-                                    test_name=str(leased_case["test_name"]),
-                                ),
-                            )
-                        )
-                        service.batch_finalizer.finalize_batch_if_ready(batch_id)
-                    else:
-                        service.batch_finalizer.finalize_batch_if_ready(batch_id)
-                service.schedule_verification_cleanup("ver-1")
-                expected = (
-                    service.STATUS_COMPLETED if scenario == "cache" else service.STATUS_FAILED
-                )
-                self.assertEqual(self._task(service, task_id)["status"], expected)
-                self.assertEqual(
-                    store.fetch_batch(batch_id)["status"],
-                    "completed" if scenario == "cache" else "failed",
-                )
-                if scenario == "cancel":
-                    self.assertEqual(publish_case.call_count, 2)
-                self.assertTrue(
-                    all(
-                        row["status"] in {"reported", "cancelled"}
-                        for row in store.cases_for_task(task_id)
-                    )
-                )
-
-    def test_run_id_is_idempotent_only_for_identical_payload(self) -> None:
-        service = self._service()
-        sequence = 0
-
-        def build_payload(**kwargs) -> dict[str, object]:
-            nonlocal sequence
-            sequence += 1
-            return {
-                "source_name": "solution.cpp",
-                "source_label": "solution.cpp",
-                "source_file": _compile_submission().source_file.to_payload(),
-                "task_kind": "solution-run",
-                "verification_payload": {},
-                "selected_tests": list(kwargs["selected_tests"]),
-                "enqueued_at": f"{_NOW}-{sequence}",
-            }
-
-        args = {
-            "problem": self.problem,
-            "username": self.user,
-            "artifact_verification_id": "artifact",
-            "mode": "pass-fail",
-            "submission_path": "solutions/ac.cpp",
-            "upload_content": None,
-            "upload_filename": None,
-            "run_id": "run-idempotent",
-            "selected_tests": ["001.in"],
-            "verification_id": "ver-1d3e0",
-            "verification_program_id": "solution-0",
-            "expected_behavior": "accepted",
-            "verification_source": "run.execute",
-        }
-        with (
-            patch.object(service.enqueue, "_build_task_payload", side_effect=build_payload),
-            patch.object(
-                service.enqueue,
-                "_precomputed_fields_from_payload",
-                return_value={"run_config": {"pass_limit": 1}},
-            ),
-            patch.object(service.dispatch, "stage_task", return_value=123),
-            patch.object(service.state.batch_runtime, "activate_task_cases", return_value=1),
-        ):
-            task_id = service.enqueue_task(**args)
-            self.assertEqual(service.enqueue_task(**args), task_id)
-            with self.assertRaisesRegex(RuntimeError, "run id reused with different payload"):
-                service.enqueue_task(**{**args, "selected_tests": ["002.in"]})

@@ -193,9 +193,13 @@ class CaseExecutionRow(TypedDict):
     compile_success: int | None
 
 
-class ExecutionBatchFinalizationClaim(TypedDict):
+@dataclass(frozen=True, slots=True)
+class FinalizationClaim:
+    batch_id: int
+    generation: int
+    terminal_transition: bool
     batch: ExecutionBatchRow
-    cases: list[JudgehostCaseRow]
+    cases: tuple[JudgehostCaseRow, ...]
 
 
 @dataclass
@@ -314,6 +318,23 @@ class CaseClaim:
     task_id: str
     test_name: str
     cancel_requested: bool
+
+
+@dataclass(frozen=True, slots=True)
+class MaterializationClaim:
+    batch_id: int
+    generation: int
+    batch: ExecutionBatchRow
+    spec: ExecutionBatchSpec
+    submission: CompileSubmission
+
+
+@dataclass(frozen=True, slots=True)
+class LeaseClaim:
+    batch_id: int
+    hostname: str
+    cases: tuple[JudgehostCaseRow, ...]
+    generations: tuple[tuple[int, int], ...]
 
 
 @dataclass(frozen=True)

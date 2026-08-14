@@ -26,22 +26,30 @@ class BatchMaintenance:
         token = verification_id or "__direct__"
         with self._state._lock:
             self._state._closed_verification_ids.add(token)
-            batch_ids = tuple(sorted(self._state._batch_ids_by_verification.get(token, ())))
+            batch_ids = tuple(
+                sorted(self._state._batch_ids_by_verification.get(token, ()))
+            )
             batch_id_set = set(batch_ids)
             task_ids: set[str] = set()
             awaiting_task_ids: set[str] = set()
             cancelled_count = 0
             awaiting_receipt_count = 0
 
-            for hostname, queue_ids in tuple(self._state._affinity_batches_by_host.items()):
-                retained = deque(batch_id for batch_id in queue_ids if batch_id not in batch_id_set)
+            for hostname, queue_ids in tuple(
+                self._state._affinity_batches_by_host.items()
+            ):
+                retained = deque(
+                    batch_id for batch_id in queue_ids if batch_id not in batch_id_set
+                )
                 if retained:
                     self._state._affinity_batches_by_host[hostname] = retained
                 else:
                     self._state._affinity_batches_by_host.pop(hostname, None)
             for batch_id in batch_ids:
                 batch = self._state._batches[batch_id]
-                self._state._closed_program_keys.add((token, batch.verification_program_id))
+                self._state._closed_program_keys.add(
+                    (token, batch.verification_program_id)
+                )
                 for case_id in tuple(self._state._case_ids_by_batch.get(batch_id, ())):
                     case = self._state._cases[case_id]
                     task_ids.add(case.task_id)
@@ -87,7 +95,9 @@ class BatchMaintenance:
                 self._state._drop_host_telemetry_batch_locked(hostname)
                 self._state._stolen_batch_by_host.pop(hostname, None)
             affinity_ids = (
-                () if verification_id else self._state._affinity_batches_by_host.pop(hostname, ())
+                ()
+                if verification_id
+                else self._state._affinity_batches_by_host.pop(hostname, ())
             )
             context_batch_ids = set(affinity_ids)
             affected_batch_ids = set(context_batch_ids)
@@ -99,7 +109,8 @@ class BatchMaintenance:
                     not verification_id
                     or (
                         batch_id in self._state._batches
-                        and self._state._batches[batch_id].verification_id == verification_id
+                        and self._state._batches[batch_id].verification_id
+                        == verification_id
                     )
                 )
             }
@@ -113,7 +124,9 @@ class BatchMaintenance:
                 if not verification_id
                 or (
                     case_id in self._state._cases
-                    and self._state._batches[self._state._cases[case_id].batch_id].verification_id
+                    and self._state._batches[
+                        self._state._cases[case_id].batch_id
+                    ].verification_id
                     == verification_id
                 )
             ]
@@ -218,12 +231,13 @@ class BatchMaintenance:
                 for case_id in self._state._case_ids_by_run.get(run_id, ())
             }
             cases = [
-                self._state._cases[case_id] for case_id in case_ids if case_id in self._state._cases
+                self._state._cases[case_id]
+                for case_id in case_ids
+                if case_id in self._state._cases
             ]
             if any(
-                self._state._batches[batch_id].status == "finalizing"
+                batch_id in self._state._active_finalization_generation_by_batch
                 for batch_id in affected_batches
-                if batch_id in self._state._batches
             ):
                 return None
             if any(

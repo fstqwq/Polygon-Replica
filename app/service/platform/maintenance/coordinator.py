@@ -11,7 +11,6 @@ from typing import Callable, Iterator, Literal, Protocol
 from app.db import now_iso
 from app.service.platform.maintenance.admission import MaintenanceAdmissionGate
 
-
 logger = logging.getLogger(__name__)
 
 MaintenanceStatus = Literal["idle", "running", "succeeded", "failed"]
@@ -110,9 +109,7 @@ class MaintenanceCoordinator:
                 if name != "inflight_requests"
             }
             if any(count > 0 for count in runtime_busy.values()):
-                raise ValueError(
-                    "cannot delete problem while runtime jobs are active"
-                )
+                raise ValueError("cannot delete problem while runtime jobs are active")
             yield
 
     def snapshot(self, *, exclude_current_request: bool = False) -> dict[str, object]:
@@ -210,6 +207,9 @@ class MaintenanceCoordinator:
             "judgehost_leased": int(judgehost.get("leased", 0)),
             "judgehost_reporting": int(judgehost.get("reporting", 0)),
             "judgehost_callbacks": int(judgehost.get("callbacks", 0)),
+            "judgehost_cache_probes": int(judgehost.get("cache_probes", 0)),
+            "judgehost_materializations": int(judgehost.get("materializations", 0)),
+            "judgehost_finalizations": int(judgehost.get("finalizations", 0)),
             "inflight_requests": self._gate.active_requests_locked(),
         }
 
@@ -322,9 +322,7 @@ class MaintenanceCoordinator:
                 self._snapshot.finished_at = now_iso()
                 self._snapshot.error = str(exc)
                 self._snapshot.result = (
-                    dict(failure_result)
-                    if isinstance(failure_result, dict)
-                    else {}
+                    dict(failure_result) if isinstance(failure_result, dict) else {}
                 )
                 self._gate.open_locked()
             return

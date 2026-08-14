@@ -1,3 +1,5 @@
+"""Safe public projection of host registry state."""
+
 import re
 import time
 from pathlib import PurePosixPath
@@ -245,13 +247,13 @@ def project_public_status(
 class PublicJudgehostStatusCache:
     def __init__(
         self,
-        status_provider: Callable[[], dict[str, object]],
-        compile_spec_provider: Callable[[], list[dict[str, object]]],
+        source_provider: Callable[
+            [], tuple[dict[str, object], list[dict[str, object]]]
+        ],
         *,
         ttl_sec: float = 2.0,
     ) -> None:
-        self._status_provider = status_provider
-        self._compile_spec_provider = compile_spec_provider
+        self._source_provider = source_provider
         self._ttl_sec = max(0.0, float(ttl_sec))
         self._cached: PublicJudgehostStatus | None = None
         self._cached_at = 0.0
@@ -259,9 +261,10 @@ class PublicJudgehostStatusCache:
     def snapshot(self) -> PublicJudgehostStatus:
         now = time.monotonic()
         if self._cached is None or now - self._cached_at > self._ttl_sec:
+            raw_status, raw_compile_specs = self._source_provider()
             self._cached = project_public_status(
-                self._status_provider(),
-                self._compile_spec_provider(),
+                raw_status,
+                raw_compile_specs,
             )
             self._cached_at = now
         return {

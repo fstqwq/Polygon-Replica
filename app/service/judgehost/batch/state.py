@@ -12,7 +12,6 @@ import statistics
 import threading
 import time
 from collections import defaultdict, deque
-from dataclasses import asdict
 from collections.abc import Iterable
 
 from app.service.judgehost.domjudge.identity import script_id
@@ -35,14 +34,16 @@ from app.service.judgehost.batch.policy import (
     SchedulingPolicy,
 )
 from app.service.judgehost.batch.ready_index import ReadyBatchIndex, ReadyBatchKey
+from app.service.judgehost.batch.snapshot import batch_snapshot, case_snapshot
 
 
 class BatchState:
     """Canonical process-local state for execution batches and cases.
 
     Every mutable record and derived index belongs to this object and is guarded
-    by its single re-entrant lock. Capability services compose this state; it is
-    never exposed through ``JudgehostState``.
+    by its single re-entrant lock. Capability services compose this state. It is
+    private to ``JudgehostBatchRuntime`` and is never exposed by the
+    public Judgehost facade.
     """
 
     _MAX_ENTITY_ID = (1 << 63) - 1
@@ -110,6 +111,9 @@ class BatchState:
         self._sequence = itertools.count()
         self._scope_sequence_by_verification: dict[str, int] = {}
         self._batch_specs: dict[int, ExecutionBatchSpec] = {}
+        self._materialization_generation_by_batch: dict[int, int] = {}
+        self._finalization_generation_by_batch: dict[int, int] = {}
+        self._active_finalization_generation_by_batch: dict[int, int] = {}
         # Materialization replaces the descriptor in this canonical map. Keeping
         # raw and materialized copies separately made warm program appends
         # observe a compile key without its submission.
@@ -119,9 +123,11 @@ class BatchState:
         self._batch_ids_by_verification: dict[str, set[int]] = defaultdict(set)
         self._verification_by_job_id: dict[int, str] = {}
         self._ready_batches = ReadyBatchIndex()
-        self._cache_heaps_by_batch: dict[int, list[tuple[int, int, int, int]]] = defaultdict(list)
-        self._runnable_heaps_by_batch: dict[int, list[tuple[int, int, int, int]]] = defaultdict(
-            list
+        self._cache_heaps_by_batch: dict[int, list[tuple[int, int, int, int]]] = (
+            defaultdict(list)
+        )
+        self._runnable_heaps_by_batch: dict[int, list[tuple[int, int, int, int]]] = (
+            defaultdict(list)
         )
         self._affinity_batches_by_host: dict[str, deque[int]] = defaultdict(deque)
         self._ready_prerequisites: dict[tuple[str, str], ReadyBatchIndex] = {}
@@ -132,7 +138,9 @@ class BatchState:
         self._next_callback_receipt_id = itertools.count(1)
         self._case_id_by_callback_receipt: dict[int, int] = {}
         self._scheduling_policy = (
-            ProductionSchedulingPolicy() if scheduling_policy is None else scheduling_policy
+            ProductionSchedulingPolicy()
+            if scheduling_policy is None
+            else scheduling_policy
         )
         self._stolen_batch_by_host: dict[str, int] = {}
         self._compile_owner_by_batch: dict[int, str] = {}
@@ -173,6 +181,9 @@ class BatchState:
             self._task_case_counts.clear()
             self._scope_sequence_by_verification.clear()
             self._batch_specs.clear()
+            self._materialization_generation_by_batch.clear()
+            self._finalization_generation_by_batch.clear()
+            self._active_finalization_generation_by_batch.clear()
             self._compile_submissions_by_key.clear()
             self._compile_key_by_submit_id.clear()
             self._batch_ids_by_compile_key.clear()
@@ -194,57 +205,45 @@ class BatchState:
             self._ready_generation += 1
             self._ready_condition.notify_all()
 
+    def activity_counts(self) -> dict[str, int]:
+        with self._lock:
+            return {
+                "cache_probes": sum(
+                    counts.cache_probing for counts in self._batch_counts.values()
+                ),
+                "materializations": sum(
+                    batch.materialization_state == "materializing"
+                    for batch in self._batches.values()
+                ),
+                "leases": sum(counts.leased for counts in self._batch_counts.values()),
+                "callbacks": len(self._case_id_by_callback_receipt),
+                "reporting": sum(
+                    counts.reporting for counts in self._batch_counts.values()
+                ),
+                "finalizations": len(self._active_finalization_generation_by_batch),
+            }
+
+    def pending_finalization_ids(self) -> tuple[int, ...]:
+        with self._lock:
+            return tuple(
+                sorted(
+                    batch.batch_id
+                    for batch in self._batches.values()
+                    if batch.status == "finalize-pending"
+                )
+            )
+
     @staticmethod
     def _priority(batch: ExecutionBatchRecord) -> int:
         return 0 if batch.service_class == "foreground" else 1
 
     @staticmethod
-    def _batch_row(batch: ExecutionBatchRecord) -> ExecutionBatchRow:
-        row = asdict(batch)
-        row.pop("dispatch_count")
-        row.pop("program_failure_result")
-        row.pop("program_failure_diagnostic_digest")
-        return row  # type: ignore[return-value]
-
-    @staticmethod
-    def _case_row(case: CaseRecord) -> JudgehostCaseRow:
-        result = case.result
-        row = asdict(case)
-        row.pop("heap_generation")
-        row.pop("result")
-        row.pop("terminal_result")
-        row.pop("requeue_on_abort")
-        row.pop("claim_generation")
-        row.pop("callback_receipt_count")
-        row.pop("pending_diagnostics")
-        result_fields = (
-            "runresult",
-            "runtime_sec",
-            "cpu_sec",
-            "wall_sec",
-            "memory_kb",
-            "output_run_ref",
-            "output_error_ref",
-            "output_system_ref",
-            "output_diff_ref",
-            "metadata_ref",
-            "compare_metadata_ref",
-            "team_message_ref",
-            "score_text",
-        )
-        if result is None:
-            for field in result_fields:
-                row[field] = None
-        else:
-            for field in result_fields:
-                row[field] = getattr(result, field)
-        return row  # type: ignore[return-value]
-
-    @staticmethod
     def _status_attr(status: str) -> str:
         return status.replace("-", "_")
 
-    def _case_heap_locked(self, case: CaseRecord) -> list[tuple[int, int, int, int]] | None:
+    def _case_heap_locked(
+        self, case: CaseRecord
+    ) -> list[tuple[int, int, int, int]] | None:
         if case.status == "cache-pending":
             return self._cache_heaps_by_batch[case.batch_id]
         if case.status == "pending":
@@ -376,12 +375,9 @@ class BatchState:
     def _touch_batch_locked(self, batch: ExecutionBatchRecord) -> None:
         self._push_batch_ready_locked(batch)
 
-    def _mutate_batch_locked(self, batch: ExecutionBatchRecord, **changes: object) -> None:
-        for field, value in changes.items():
-            setattr(batch, field, value)
-        self._touch_batch_locked(batch)
-
-    def _close_batch_locked(self, batch: ExecutionBatchRecord, *, updated_at: str) -> None:
+    def _close_batch_locked(
+        self, batch: ExecutionBatchRecord, *, updated_at: str
+    ) -> None:
         if batch.status != "open":
             return
         self._index_batch_scripts_locked(batch, -1)
@@ -389,7 +385,9 @@ class BatchState:
         batch.updated_at = updated_at
         self._touch_batch_locked(batch)
 
-    def _index_batch_scripts_locked(self, batch: ExecutionBatchRecord, delta: int) -> None:
+    def _index_batch_scripts_locked(
+        self, batch: ExecutionBatchRecord, delta: int
+    ) -> None:
         for kind, script_hash in (
             ("compile", batch.compile_hash),
             ("run", batch.run_hash),
@@ -477,7 +475,8 @@ class BatchState:
         ):
             self._close_batch_locked(batch, updated_at=updated_at)
         if refresh_batch and (
-            old_status in self._READY_CASE_STATUSES or status in self._READY_CASE_STATUSES
+            old_status in self._READY_CASE_STATUSES
+            or status in self._READY_CASE_STATUSES
         ):
             self._refresh_batches_locked({batch.batch_id})
 
@@ -596,7 +595,9 @@ class BatchState:
         case: CaseRecord,
         report: CaseReportTelemetry,
     ) -> None:
-        telemetry = self._host_telemetry.setdefault(report.hostname, HostTelemetryState())
+        telemetry = self._host_telemetry.setdefault(
+            report.hostname, HostTelemetryState()
+        )
         telemetry.judged_case_count += 1
         if (
             telemetry.last_judging_monotonic is None
@@ -627,29 +628,37 @@ class BatchState:
             return
         elapsed = max(0.0, lease.latest_reported_monotonic - lease.leased_monotonic)
         telemetry.recent_batch_avg_sec.append(elapsed / lease.case_count)
-        telemetry.recent_avg_per_case_sec = float(statistics.median(telemetry.recent_batch_avg_sec))
+        telemetry.recent_avg_per_case_sec = float(
+            statistics.median(telemetry.recent_batch_avg_sec)
+        )
         self._drop_host_telemetry_batch_locked(report.hostname)
 
     def cases_for_batch(
         self, batch_id: int, *, status: str | None = None
     ) -> list[JudgehostCaseRow]:
         with self._lock:
-            rows = self._sorted_cases_locked(self._case_ids_by_batch.get(int(batch_id), []))
+            rows = self._sorted_cases_locked(
+                self._case_ids_by_batch.get(int(batch_id), [])
+            )
             if status:
                 rows = [row for row in rows if row.status == status]
-            return [self._case_row(row) for row in rows]
+            return [case_snapshot(row) for row in rows]
 
     def cases_for_task(self, task_id: str) -> list[JudgehostCaseRow]:
         with self._lock:
             return [
-                self._case_row(row)
-                for row in self._sorted_cases_locked(self._case_ids_by_task.get(task_id, []))
+                case_snapshot(row)
+                for row in self._sorted_cases_locked(
+                    self._case_ids_by_task.get(task_id, [])
+                )
             ]
 
     def task_cases_terminal(self, task_id: str) -> bool:
         with self._lock:
             counts = self._task_case_counts.get(task_id)
-            return bool(counts is not None and counts.total > 0 and counts.remaining == 0)
+            return bool(
+                counts is not None and counts.total > 0 and counts.remaining == 0
+            )
 
     def task_has_cache_pending_cases(self, task_id: str) -> bool:
         with self._lock:
@@ -659,40 +668,48 @@ class BatchState:
                 if case_id in self._cases
             )
 
-    def task_case_results(self, task_id: str) -> list[tuple[JudgehostCaseRow, CaseResult | None]]:
+    def task_case_results(
+        self, task_id: str
+    ) -> list[tuple[JudgehostCaseRow, CaseResult | None]]:
         with self._lock:
             return [
-                (self._case_row(case), case.result)
-                for case in self._sorted_cases_locked(self._case_ids_by_task.get(task_id, ()))
+                (case_snapshot(case), case.result)
+                for case in self._sorted_cases_locked(
+                    self._case_ids_by_task.get(task_id, ())
+                )
             ]
 
     def fetch_batch(self, batch_id: int) -> ExecutionBatchRow | None:
         with self._lock:
             batch = self._batches.get(int(batch_id))
-            return None if batch is None else self._batch_row(batch)
+            return None if batch is None else batch_snapshot(batch)
 
     def batch_for_task(self, task_id: str) -> ExecutionBatchRow | None:
         with self._lock:
             batch_id = self._batch_id_by_task.get(task_id)
-            return None if batch_id is None else self._batch_row(self._batches[batch_id])
+            return (
+                None if batch_id is None else batch_snapshot(self._batches[batch_id])
+            )
 
     def batch_for_run(self, run_id: str) -> ExecutionBatchRow | None:
         with self._lock:
             batch_ids = self._batch_ids_by_run.get(run_id)
             if not batch_ids:
                 return None
-            return self._batch_row(self._batches[max(batch_ids)])
+            return batch_snapshot(self._batches[max(batch_ids)])
 
     def fetch_case(self, case_id: int) -> JudgehostCaseRow | None:
         with self._lock:
             case = self._cases.get(int(case_id))
-            return None if case is None else self._case_row(case)
+            return None if case is None else case_snapshot(case)
 
     def cases_for_run(self, run_id: str) -> list[JudgehostCaseRow]:
         with self._lock:
             return [
-                self._case_row(row)
-                for row in self._sorted_cases_locked(self._case_ids_by_run.get(run_id, []))
+                case_snapshot(row)
+                for row in self._sorted_cases_locked(
+                    self._case_ids_by_run.get(run_id, [])
+                )
             ]
 
     def source_submission(
@@ -780,9 +797,13 @@ class BatchState:
         if not cases:
             return
         if any(case.callback_receipt_count > 0 for case in cases):
-            raise RuntimeError("cannot remove a judgehost case with an active callback receipt")
+            raise RuntimeError(
+                "cannot remove a judgehost case with an active callback receipt"
+            )
         if any(case.pending_diagnostics for case in cases):
-            raise RuntimeError("cannot remove a judgehost case with pending diagnostics")
+            raise RuntimeError(
+                "cannot remove a judgehost case with pending diagnostics"
+            )
         affected_batch_ids = {case.batch_id for case in cases}
         affected_task_ids = {case.task_id for case in cases}
         affected_run_ids = {case.run_id for case in cases}
@@ -820,7 +841,9 @@ class BatchState:
             retained = self._case_ids_by_task[task_id].difference(case_ids)
             if retained:
                 self._case_ids_by_task[task_id] = retained
-                self._batch_id_by_task[task_id] = self._cases[next(iter(retained))].batch_id
+                self._batch_id_by_task[task_id] = self._cases[
+                    next(iter(retained))
+                ].batch_id
             else:
                 self._case_ids_by_task.pop(task_id, None)
                 self._batch_id_by_task.pop(task_id, None)
@@ -869,6 +892,9 @@ class BatchState:
         self._case_ids_by_batch.pop(batch_id, None)
         self._batch_counts.pop(batch_id, None)
         self._batch_specs.pop(batch_id, None)
+        self._materialization_generation_by_batch.pop(batch_id, None)
+        self._finalization_generation_by_batch.pop(batch_id, None)
+        self._active_finalization_generation_by_batch.pop(batch_id, None)
         self._cache_heaps_by_batch.pop(batch_id, None)
         self._runnable_heaps_by_batch.pop(batch_id, None)
         self._empty_batch_ids.discard(batch_id)

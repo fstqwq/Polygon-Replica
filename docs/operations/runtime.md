@@ -6,7 +6,7 @@ first use, upgrades, and recovery are covered by the
 
 ## Supported topology
 
-Run one application process. The scheduler, host registry, runtime cache,
+Run one application process. The batch/task runtime, host registry, runtime cache,
 authentication throttling, and worker queue contain process-local state, so
 multiple uvicorn workers or application replicas are not supported.
 
@@ -104,4 +104,4 @@ workspaces, Contest source, and backup roots are outside that inventory.
 Both exclusive operations close Judgehost callback admission as well as
 ordinary work admission. They remain busy until in-flight callbacks have
 released their receipts; callbacks arriving after the gate closes are
-acknowledged without touching scheduler, database, or blob state.
+acknowledged without touching batch runtime, database, or blob state.

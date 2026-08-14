@@ -9,6 +9,15 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 
+_VARIADIC_APPLICATION_ADAPTERS = frozenset(
+    {
+        ("app.impl.judgehost.api", "_run_service_call"),
+        ("app.impl.contest.workspace_scope", "__call__"),
+        ("app.route.problem_scoped_router", "add_api_route"),
+        ("app.service.repository.merge", "_git"),
+    }
+)
+
 
 @dataclass(frozen=True)
 class Violation:
@@ -280,6 +289,49 @@ def _discard_assignment_violations(
     return violations
 
 
+def _variadic_business_signature_violations(
+    *,
+    relative: str,
+    importer_module: str,
+    tree: ast.Module,
+) -> list[Violation]:
+    """Reject variadic signatures on ordinary application operations."""
+
+    if not _is_module_or_child(importer_module, "app"):
+        return []
+    violations: list[Violation] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        if node.args.vararg is None and node.args.kwarg is None:
+            continue
+        identity = (importer_module, node.name)
+        if identity in _VARIADIC_APPLICATION_ADAPTERS:
+            continue
+        parameters = ", ".join(
+            token
+            for token, present in (
+                ("*args", node.args.vararg is not None),
+                ("**kwargs", node.args.kwarg is not None),
+            )
+            if present
+        )
+        violations.append(
+            Violation(
+                rule="VARIADIC_BUSINESS_SIGNATURE",
+                file=relative,
+                line=int(node.lineno),
+                importer=importer_module,
+                target=node.name,
+                message=(
+                    f"application operation `{node.name}` declares {parameters}; "
+                    "use an exact typed signature so unknown arguments fail"
+                ),
+            )
+        )
+    return violations
+
+
 def _is_module_or_child(module_name: str, owner: str) -> bool:
     return module_name == owner or module_name.startswith(f"{owner}.")
 
@@ -345,6 +397,13 @@ def collect_audit() -> tuple[list[Violation], list[list[str]], dict[str, object]
         )
         violations.extend(
             _discard_assignment_violations(
+                relative=relative,
+                importer_module=module,
+                tree=tree,
+            )
+        )
+        violations.extend(
+            _variadic_business_signature_violations(
                 relative=relative,
                 importer_module=module,
                 tree=tree,

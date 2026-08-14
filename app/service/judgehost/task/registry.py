@@ -1,6 +1,6 @@
 import threading
 from collections import defaultdict
-from typing import NotRequired, TypedDict
+from typing import Literal, NotRequired, TypedDict
 
 from app.service.platform.rwlock import WriterPriorityRWLock
 
@@ -171,6 +171,30 @@ class JudgehostTaskRegistry:
         self._notify()
         return snapshot
 
+    def mark_leased(
+        self,
+        task_id: str,
+        *,
+        now_text: str,
+    ) -> Literal["claimed", "active", "rejected"]:
+        """Apply the task overlay for a Case lease without hiding conflicts."""
+
+        changed = False
+        with self._lock.write_lock():
+            row = self._tasks.get(task_id)
+            if row is None:
+                return "rejected"
+            if row["status"] == "leased":
+                return "active"
+            if row["status"] != "queued":
+                return "rejected"
+            self._set_status(row, "leased")
+            row["updated_at"] = now_text
+            changed = True
+        if changed:
+            self._notify()
+        return "claimed"
+
     def claim_reporting(self, task_id: str, *, now_text: str) -> JudgehostTaskRow | None:
         with self._lock.write_lock():
             row = self._tasks.get(task_id)
@@ -186,6 +210,18 @@ class JudgehostTaskRegistry:
             row["updated_at"] = now_text
         self._notify()
         return snapshot
+
+    def abort_lease(self, task_id: str, *, now_text: str) -> bool:
+        with self._lock.write_lock():
+            row = self._tasks.get(task_id)
+            if row is None or row["status"] != "leased":
+                return False
+            self._status_counts["leased"] -= 1
+            self._status_counts["queued"] += 1
+            row["status"] = "queued"
+            row["updated_at"] = now_text
+        self._notify()
+        return True
 
     def restore_reporting(self, task_id: str, snapshot: JudgehostTaskRow, *, now_text: str) -> bool:
         with self._lock.write_lock():

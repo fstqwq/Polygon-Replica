@@ -65,6 +65,42 @@ __all__ = ["exported", "owned"]
             [("DISCARD_ASSIGNMENT", 1)],
         )
 
+    def test_business_operations_require_exact_signatures(self) -> None:
+        tree = ast.parse(
+            "class Facade:\n"
+            "    def languages(self, *args, **kwargs):\n"
+            "        return []\n"
+            "\n"
+            "async def status(**kwargs):\n"
+            "    return kwargs\n"
+        )
+        violations = import_policy._variadic_business_signature_violations(
+            relative="app/service/facade.py",
+            importer_module="app.service.facade",
+            tree=tree,
+        )
+        self.assertEqual(
+            [(item.rule, item.target, item.line) for item in violations],
+            [
+                ("VARIADIC_BUSINESS_SIGNATURE", "languages", 2),
+                ("VARIADIC_BUSINESS_SIGNATURE", "status", 5),
+            ],
+        )
+
+    def test_generic_variadic_adapters_are_explicit(self) -> None:
+        tree = ast.parse(
+            "async def _run_service_call(fn, /, *args, **kwargs):\n"
+            "    return await fn(*args, **kwargs)\n"
+        )
+        self.assertEqual(
+            import_policy._variadic_business_signature_violations(
+                relative="app/impl/judgehost/api.py",
+                importer_module="app.impl.judgehost.api",
+                tree=tree,
+            ),
+            [],
+        )
+
     def test_dynamic_reexport_detector_scoped_to_application_modules(self) -> None:
         source = """
 def _export_public(namespace, module):

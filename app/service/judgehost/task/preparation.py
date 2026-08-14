@@ -1,14 +1,14 @@
-from app.main_constant import GENERAL_CONFIG_DEFAULTS, RUN_TEST_NAME_RE
+﻿from app.main_constant import GENERAL_CONFIG_DEFAULTS, RUN_TEST_NAME_RE
 
 import json
 import re
-import uuid
 from typing import cast
 from pathlib import Path
 
 from app.db import now_iso
 from app.service.judgehost.domjudge.cache import executable_hash, submission_source_hash
 from app.service.judgehost.domjudge.limits import (
+    config_int,
     compile_output_kb,
     run_memory_limit_kb,
     run_output_kb,
@@ -21,36 +21,46 @@ from app.service.platform.runtime_blob_store import PayloadFile, RuntimeBlobStor
 from app.service.problem.build_config import load_build_config
 from app.service.problem.runtime_config import (
     load_problem_config,
-    problem_config_limits,
 )
 from app.service.problem.source_file import resolve_source
 from app.service.platform.testlib_source import workspace_testlib_header
 
-from app.service.judgehost.core import JudgehostCore
-from app.service.judgehost.ports.case_binding import CaseBinding
-from app.service.judgehost.work.dispatch import DispatchHandler
-from app.service.judgehost.state import JudgehostState
-from app.service.judgehost.domjudge.toolkit import DomjudgeToolkit
-from app.service.judgehost.work.task_registry import JudgehostTaskRow
+from app.service.judgehost.configuration import (
+    JudgehostConfiguration,
+    JudgehostSettings,
+)
+from app.service.judgehost.validation import (
+    normalize_run_id,
+    normalize_verification_program_id,
+    read_bounded_file,
+    safe_workspace_source,
+)
+from app.service.judgehost.ports.case_binding import CaseBindingPort
+from app.service.judgehost.domjudge.cache import blob_set_hash
+from app.service.judgehost.domjudge.scripts import (
+    DomjudgeScriptCatalog,
+    language_extensions,
+)
+from app.service.judgehost.domjudge import task_plan
+from app.service.repository.workspace import WorkspaceService
 
 
-class TaskEnqueue:
-    STATUS_QUEUED = "queued"
-    STATUS_ENQUEUING = "enqueuing"
-    STATUS_FAILED = "failed"
+class JudgehostPayloadPreparation:
     _TASK_KIND_COMPILE_ONLY = "compile-only"
 
     def __init__(
         self,
-        state: JudgehostState,
-        core: JudgehostCore,
-        dispatch: DispatchHandler,
-        toolkit: DomjudgeToolkit,
+        workspace_service: WorkspaceService,
+        runtime_blob_store: RuntimeBlobStore,
+        execution_port: CaseBindingPort,
+        scripts: DomjudgeScriptCatalog,
+        configuration: JudgehostConfiguration,
     ) -> None:
-        self._s = state
-        self._core = core
-        self._dispatch = dispatch
-        self._toolkit = toolkit
+        self._workspace_service = workspace_service
+        self._runtime_blob_store = runtime_blob_store
+        self._execution_port = execution_port
+        self._scripts = scripts
+        self._configuration = configuration
 
     _JAVA_CLASS_DECL_RE = re.compile(
         r"\b(?P<public>public\s+)?(?:(?:abstract|final|static|strictfp|sealed|non-sealed)\s+)*class\s+(?P<name>[A-Za-z_$][A-Za-z0-9_$]*)\b"
@@ -66,12 +76,12 @@ class TaskEnqueue:
 
     @staticmethod
     def _normalize_text_with_default(value: object, *, default: str) -> str:
-        text = TaskEnqueue._normalize_text(value)
+        text = JudgehostPayloadPreparation._normalize_text(value)
         return text if text else default
 
     @staticmethod
     def _normalize_status(value: object) -> str:
-        return TaskEnqueue._normalize_text(value).lower()
+        return JudgehostPayloadPreparation._normalize_text(value).lower()
 
     @staticmethod
     def _json_object(text: str) -> dict[str, object]:
@@ -92,7 +102,7 @@ class TaskEnqueue:
             return []
         normalized: list[str] = []
         for raw in values:
-            token = TaskEnqueue._normalize_text(raw)
+            token = JudgehostPayloadPreparation._normalize_text(raw)
             if not token:
                 continue
             if matcher is not None and not matcher.fullmatch(token):
@@ -100,6 +110,9 @@ class TaskEnqueue:
             if token not in normalized:
                 normalized.append(token)
         return normalized
+
+    def normalize_tests(self, values: list[str] | None) -> list[str]:
+        return self._normalize_list(values, matcher=RUN_TEST_NAME_RE)
 
     @staticmethod
     def _strip_java_noncode(source_text: str) -> str:
@@ -294,7 +307,7 @@ class TaskEnqueue:
         return (f"{entry_point}.java", entry_point)
 
     @staticmethod
-    def _enqueue_fingerprint(payload: dict[str, object]) -> str:
+    def enqueue_fingerprint(payload: dict[str, object]) -> str:
         stable_payload = dict(payload)
         stable_payload.pop("enqueued_at", None)
         # Precomputed executable fields contain bytes and are derived entirely
@@ -303,7 +316,7 @@ class TaskEnqueue:
         return sha256_hex_json(stable_payload, ensure_ascii=False)
 
     @staticmethod
-    def _precomputed_pass_limit(payload: dict[str, object]) -> int:
+    def precomputed_pass_limit(payload: dict[str, object]) -> int:
         precomputed = payload.get("precomputed")
         if not isinstance(precomputed, dict):
             raise RuntimeError("precomputed execution payload is required")
@@ -315,8 +328,8 @@ class TaskEnqueue:
             raise RuntimeError("precomputed pass limit must be a positive integer")
         return pass_limit
 
-    def _verification_id(self, verification_id: str) -> str:
-        token = TaskEnqueue._normalize_text(verification_id)
+    def verification_id(self, verification_id: str) -> str:
+        token = JudgehostPayloadPreparation._normalize_text(verification_id)
         if not token:
             raise RuntimeError("execution scope id is required")
         return token
@@ -328,25 +341,25 @@ class TaskEnqueue:
         workspace: Path,
         mode: str,
         selected_tests: list[str],
+        settings: JudgehostSettings,
     ) -> dict[str, object]:
-        safe_verification_id = TaskEnqueue._normalize_text(artifact_verification_id)
+        safe_verification_id = JudgehostPayloadPreparation._normalize_text(artifact_verification_id)
         if not safe_verification_id:
             return {}
 
-        policy = self._s.config_policy()
         wanted_tests: list[str] = []
         if selected_tests:
             for raw in selected_tests:
-                token = Path(TaskEnqueue._normalize_text(raw)).name
+                token = Path(JudgehostPayloadPreparation._normalize_text(raw)).name
                 if not RUN_TEST_NAME_RE.fullmatch(token):
                     continue
                 if token in wanted_tests:
                     continue
                 wanted_tests.append(token)
-        artifact_set = self._s.execution_port.load_artifacts(
+        artifact_set = self._execution_port.load_artifacts(
             safe_verification_id,
             tuple(wanted_tests),
-            limit=policy.max_tests_per_task,
+            limit=settings.max_tests_per_task,
         )
 
         tests_payload: list[dict[str, object]] = []
@@ -355,14 +368,14 @@ class TaskEnqueue:
             input_ref = artifact.input_ref
             if not input_ref:
                 continue
-            input_file = self._s.runtime_blob_store.descriptor(input_ref)
+            input_file = self._runtime_blob_store.descriptor(input_ref)
             if input_file is None:
                 continue
             ans_name = f"{Path(test_name).stem}.ans"
             answer_ref = artifact.answer_ref
-            answer_file = self._s.runtime_blob_store.put_bytes(b"")
+            answer_file = self._runtime_blob_store.put_bytes(b"")
             if answer_ref:
-                resolved_answer = self._s.runtime_blob_store.descriptor(answer_ref)
+                resolved_answer = self._runtime_blob_store.descriptor(answer_ref)
                 if resolved_answer is not None:
                     answer_file = resolved_answer
             tests_payload.append(
@@ -379,12 +392,12 @@ class TaskEnqueue:
         build_cfg = load_build_config(workspace)
         problem_cfg = load_problem_config(
             workspace,
-            limits=problem_config_limits(self._s.config_values),
+            limits=settings.problem_config_limits,
         )
         problem_time_limit_ms = problem_cfg["time_limit_ms"]
         problem_memory_limit_mb = problem_cfg["memory_limit_mb"]
 
-        requested_mode = TaskEnqueue._normalize_status(mode)
+        requested_mode = JudgehostPayloadPreparation._normalize_status(mode)
         if requested_mode != problem_cfg["mode"]:
             raise RuntimeError("execution mode does not match config/problem.json")
         interactive_mode = requested_mode == "interactive"
@@ -423,9 +436,9 @@ class TaskEnqueue:
         sources_payload: dict[str, dict[str, object]] = {}
         for name, source_path in source_files.items():
             descriptor = RuntimeBlobStore.describe_file(source_path)
-            if descriptor.size > policy.max_component_source_bytes:
+            if descriptor.size > settings.max_component_source_bytes:
                 raise RuntimeError(f"{name} payload exceeds size limit")
-            sources_payload[name] = self._s.runtime_blob_store.put_file(descriptor).to_payload()
+            sources_payload[name] = self._runtime_blob_store.put_file(descriptor).to_payload()
 
         return {
             "tests": tests_payload,
@@ -456,6 +469,7 @@ class TaskEnqueue:
         expected_behavior: str,
         verification_source: str,
         run_id: str,
+        settings: JudgehostSettings,
         task_kind: str = "",
         bypass_case_result_cache: bool = False,
         compile_only: bool = False,
@@ -465,7 +479,7 @@ class TaskEnqueue:
         if (
             upload_content is None and upload_file is None
         ) or verification_payload_override is None:
-            ctx = self._s.workspace_service.workspace_context(
+            ctx = self._workspace_service.workspace_context(
                 problem, username, include_recent=False
             )
             workspace = Path(ctx["workspace"]["path"])
@@ -474,38 +488,37 @@ class TaskEnqueue:
         source_name: str
         source_label: str
         source_file: PayloadFile
-        policy = self._s.config_policy()
         if upload_file is not None:
             source_file = upload_file
-            source_bytes = self._s.runtime_blob_store.read(
+            source_bytes = self._runtime_blob_store.read(
                 source_file,
-                max_bytes=policy.max_submission_source_bytes,
+                max_bytes=settings.max_submission_source_bytes,
             )
-            source_name = TaskEnqueue._normalize_text_with_default(
+            source_name = JudgehostPayloadPreparation._normalize_text_with_default(
                 upload_filename, default="submission.cpp"
             )
             source_label = source_name
         elif upload_content is not None:
             source_bytes = upload_content
-            source_file = self._s.runtime_blob_store.put_bytes(source_bytes)
-            source_name = TaskEnqueue._normalize_text_with_default(
+            source_file = self._runtime_blob_store.put_bytes(source_bytes)
+            source_name = JudgehostPayloadPreparation._normalize_text_with_default(
                 upload_filename, default="submission.cpp"
             )
             source_label = source_name
         else:
             if workspace is None:
                 raise RuntimeError("workspace is required for submission source lookup")
-            source_path = self._core.safe_workspace_source(
-                workspace, TaskEnqueue._normalize_text(submission_path)
+            source_path = safe_workspace_source(
+                workspace, JudgehostPayloadPreparation._normalize_text(submission_path)
             )
-            source_bytes = self._core.safe_read_bytes(
+            source_bytes = read_bounded_file(
                 source_path,
-                max_bytes=policy.max_submission_source_bytes,
+                max_bytes=settings.max_submission_source_bytes,
                 label="submission payload",
             )
-            source_file = self._s.runtime_blob_store.put_bytes(source_bytes)
+            source_file = self._runtime_blob_store.put_bytes(source_bytes)
             source_name = source_path.name
-            source_label = TaskEnqueue._normalize_text(submission_path) or source_name
+            source_label = JudgehostPayloadPreparation._normalize_text(submission_path) or source_name
         source_name, entry_point = self._normalize_submission_source(
             source_name=source_name,
             source_bytes=source_bytes,
@@ -519,10 +532,11 @@ class TaskEnqueue:
                 workspace=workspace,
                 mode=mode,
                 selected_tests=selected_tests,
+                settings=settings,
             )
         else:
             verification_payload = dict(verification_payload_override)
-        safe_task_kind = self._toolkit.task_kind(
+        safe_task_kind = task_plan.task_kind(
             {
                 "task_kind": task_kind,
                 "verification_source": verification_source,
@@ -530,6 +544,17 @@ class TaskEnqueue:
             }
         )
         compile_only_flag = safe_task_kind == self._TASK_KIND_COMPILE_ONLY
+        if compile_only_flag:
+            empty = self._runtime_blob_store.put_bytes(b"").to_payload()
+            verification_payload = dict(verification_payload)
+            verification_payload["tests"] = [
+                {
+                    "name": "compile-only.in",
+                    "input_file": empty,
+                    "answer_name": "compile-only.ans",
+                    "answer_file": empty,
+                }
+            ]
         return {
             "type": "verification.run",
             "run_id": run_id,
@@ -537,7 +562,7 @@ class TaskEnqueue:
             "username": username,
             "artifact_verification_id": artifact_verification_id,
             "mode": mode,
-            "submission_path": TaskEnqueue._normalize_text(submission_path),
+            "submission_path": JudgehostPayloadPreparation._normalize_text(submission_path),
             "source_name": source_name,
             "source_label": source_label,
             "source_file": source_file.to_payload(),
@@ -569,10 +594,10 @@ class TaskEnqueue:
         manual_validate_only: bool = False,
         compile_only: bool = False,
     ) -> dict[str, object]:
-        policy = self._s.config_policy()
-        upload_content = self._s.runtime_blob_store.read(
+        settings = self._configuration.snapshot()
+        upload_content = self._runtime_blob_store.read(
             upload_file,
-            max_bytes=policy.max_submission_source_bytes,
+            max_bytes=settings.max_submission_source_bytes,
         )
         source_name, entry_point = self._normalize_submission_source(
             source_name=upload_filename,
@@ -595,16 +620,20 @@ class TaskEnqueue:
             }
         if manual_validate_only:
             payload["manual_validate_only"] = True
-        return self._precomputed_fields_from_payload(payload)
+        return self._prepare_execution_template_payload(payload, settings=settings)
 
-    def _precomputed_fields_from_payload(self, payload: dict[str, object]) -> dict[str, object]:
-        config_snapshot = self._s.config_values.snapshot()
-        policy = self._s.config_policy()
+    def _prepare_execution_template_payload(
+        self,
+        payload: dict[str, object],
+        *,
+        settings: JudgehostSettings,
+    ) -> dict[str, object]:
+        config_snapshot = settings.values
         source_name = decode_basename(raw=payload.get("source_name"), default="submission.cpp")
         source_file = PayloadFile.from_payload(payload["source_file"])
-        source_bytes = self._s.runtime_blob_store.read(
+        source_bytes = self._runtime_blob_store.read(
             source_file,
-            max_bytes=policy.max_submission_source_bytes,
+            max_bytes=settings.max_submission_source_bytes,
         )
         if not source_bytes:
             raise RuntimeError("submission source payload is empty")
@@ -615,15 +644,15 @@ class TaskEnqueue:
         extra_source_items: list[tuple[str, bytes]] = []
         for raw_name, raw_file in sorted(
             extra_sources_obj.items(),
-            key=lambda item: TaskEnqueue._normalize_text(item[0]),
+            key=lambda item: JudgehostPayloadPreparation._normalize_text(item[0]),
         ):
             safe_name = decode_basename(raw=raw_name)
             if (not safe_name) or safe_name == source_name:
                 continue
             descriptor = PayloadFile.from_payload(raw_file)
-            blob = self._s.runtime_blob_store.read(
+            blob = self._runtime_blob_store.read(
                 descriptor,
-                max_bytes=policy.max_submission_source_bytes,
+                max_bytes=settings.max_submission_source_bytes,
             )
             if not blob:
                 continue
@@ -641,7 +670,7 @@ class TaskEnqueue:
         if problem_limits_obj is None:
             problem_limits_obj = {}
         mode = decode_text(lower=True, raw=payload.get("mode"), default="pass-fail")
-        compile_only, generate_mode, main_correct = self._toolkit.execution_modes(payload)
+        compile_only, generate_mode, main_correct = task_plan.execution_modes(payload)
         manual_validate_only = parse_bool(payload.get("manual_validate_only"), default=False)
         configured_pass_limit = max(
             1,
@@ -651,18 +680,18 @@ class TaskEnqueue:
             ),
         )
         pass_limit = configured_pass_limit
-        compile_timeout = int(config_snapshot["TOOLCHAIN_COMPILE_TIMEOUT_SEC"])
-        compile_mem_mb = int(config_snapshot["TOOLCHAIN_COMPILE_MEMORY_MB"])
+        compile_timeout = config_int(config_snapshot, "TOOLCHAIN_COMPILE_TIMEOUT_SEC")
+        compile_mem_mb = config_int(config_snapshot, "TOOLCHAIN_COMPILE_MEMORY_MB")
         compile_output_limit_kb = compile_output_kb(config_snapshot)
         run_output_limit_kb = run_output_kb(config_snapshot)
         pass_bundle_max_bytes = min(
             8 * 1024 * 1024,
             max(1024, int(run_output_limit_kb * 1024 * 3 // 4)),
         )
-        pass_capture_script = self._toolkit.pass_capture_script(
+        pass_capture_script = self._scripts.pass_capture(
             max_bytes=pass_bundle_max_bytes,
         )
-        run_process_limit = int(config_snapshot["RUN_EXEC_PROCESS_LIMIT"])
+        run_process_limit = config_int(config_snapshot, "RUN_EXEC_PROCESS_LIMIT")
         default_cfg = GENERAL_CONFIG_DEFAULTS
         run_tl_ms = parse_int(
             run_cfg_obj.get("time_limit_ms"),
@@ -689,9 +718,9 @@ class TaskEnqueue:
             raw_file = sources_obj.get(name)
             if raw_file is None:
                 return b""
-            return self._s.runtime_blob_store.read(
+            return self._runtime_blob_store.read(
                 PayloadFile.from_payload(raw_file),
-                max_bytes=policy.max_component_source_bytes,
+                max_bytes=settings.max_component_source_bytes,
             )
 
         checker_source_bytes = _source_bytes("checker.cpp")
@@ -699,11 +728,11 @@ class TaskEnqueue:
         interactor_source_bytes = _source_bytes("interactor.cpp")
         testlib_header_bytes = _source_bytes("testlib.h")
         if checker_source_bytes:
-            checker_source_bytes = self._toolkit.force_cpp_define(checker_source_bytes)
+            checker_source_bytes = task_plan.force_cpp_define(checker_source_bytes)
         if validator_source_bytes:
-            validator_source_bytes = self._toolkit.force_cpp_define(validator_source_bytes)
+            validator_source_bytes = task_plan.force_cpp_define(validator_source_bytes)
         if interactor_source_bytes:
-            interactor_source_bytes = self._toolkit.force_cpp_define(interactor_source_bytes)
+            interactor_source_bytes = task_plan.force_cpp_define(interactor_source_bytes)
         has_interactor_payload = bool(interactor_source_bytes)
         interactive = (not compile_only) and (not generate_mode) and mode == "interactive"
         if (
@@ -717,7 +746,8 @@ class TaskEnqueue:
         compile_files: list[tuple[str, bytes, bool]] = [
             (
                 "run",
-                self._toolkit.compile_script(
+                self._scripts.compile(
+                    settings,
                     source_name,
                     manual_validate_only=manual_validate_only,
                     compile_only=compile_only,
@@ -725,11 +755,11 @@ class TaskEnqueue:
                 True,
             )
         ]
-        if self._toolkit.language_extensions(source_name)[0] == "java":
+        if language_extensions(source_name)[0] == "java":
             compile_files.append(
                 (
                     "DetectMain.java",
-                    self._toolkit.load_script_asset("DetectMain.java").encode("utf-8"),
+                    self._scripts.load("DetectMain.java").encode("utf-8"),
                     False,
                 )
             )
@@ -743,7 +773,8 @@ class TaskEnqueue:
                 run_files.append(
                     (
                         "build",
-                        self._toolkit.cpp_executable_build_script(
+                        self._scripts.cpp_executable_build(
+                            settings,
                             "interactor.cpp", role="interactor"
                         ),
                         True,
@@ -753,7 +784,7 @@ class TaskEnqueue:
                 run_files.append(
                     (
                         "interactive.runjury",
-                        self._toolkit.load_script_asset("interactive.runjury").encode("utf-8"),
+                        self._scripts.load("interactive.runjury").encode("utf-8"),
                         True,
                     )
                 )
@@ -763,13 +794,13 @@ class TaskEnqueue:
             else:
                 raise RuntimeError("interactive mode requires interactor payload")
             compare_files.append(
-                ("run", self._toolkit.compare_script(main_correct=main_correct), True)
+                ("run", self._scripts.compare(main_correct=main_correct), True)
             )
         else:
             run_files.append(
                 (
                     "run",
-                    self._toolkit.run_script(
+                    self._scripts.run(
                         False,
                         main_correct=main_correct,
                         compile_only=compile_only,
@@ -783,11 +814,11 @@ class TaskEnqueue:
                 run_files.append(("pass-capture", pass_capture_script, True))
             if compile_only:
                 compare_files.append(
-                    ("run", self._toolkit.compare_script(main_correct=False), True)
+                    ("run", self._scripts.compare(main_correct=False), True)
                 )
             elif generate_mode:
                 compare_files.append(
-                    ("run", self._toolkit.compare_script(generate_mode=True), True)
+                    ("run", self._scripts.compare(generate_mode=True), True)
                 )
                 if validator_source_bytes:
                     compare_files.append(("validator.cpp", validator_source_bytes, False))
@@ -797,7 +828,7 @@ class TaskEnqueue:
                 compare_files.append(
                     (
                         "run",
-                        self._toolkit.compare_script(main_correct=main_correct),
+                        self._scripts.compare(main_correct=main_correct),
                         True,
                     )
                 )
@@ -814,11 +845,12 @@ class TaskEnqueue:
             hash_blobs.extend(
                 f"{name}\0".encode("utf-8") + blob for name, blob in extra_source_items
             )
-            source_hash = self._toolkit.set_hash_from_blobs(hash_blobs)
+            source_hash = blob_set_hash(hash_blobs)
         compile_hash = executable_hash(compile_files)
         run_hash = executable_hash(run_files)
         compare_hash = executable_hash(compare_files)
-        toolchain_cmd_digest = self._toolkit.toolchain_cmd_digest(
+        toolchain_cmd_digest = self._scripts.toolchain_cmd_digest(
+            settings,
             source_name,
             manual_validate_only=manual_validate_only,
         )
@@ -829,7 +861,7 @@ class TaskEnqueue:
             "hash": compile_hash,
             "toolchain_cmd_digest": toolchain_cmd_digest,
             "filter_compiler_files": False,
-            "language_extensions": list(self._toolkit.language_extensions(source_name)[1]),
+            "language_extensions": list(language_extensions(source_name)[1]),
             "script_timelimit": compile_timeout,
             "script_memory_limit": int(compile_mem_mb * 1024),
             "script_filesize_limit": int(compile_output_limit_kb),
@@ -843,7 +875,7 @@ class TaskEnqueue:
             "process_limit": run_process_limit,
             "entry_point": entry_point or None,
             "pass_limit": pass_limit,
-            "language_id": self._toolkit.language_extensions(source_name)[0],
+            "language_id": language_extensions(source_name)[0],
         }
         if source_name.lower().endswith(".java") and (not entry_point):
             entry_point = self._detect_java_entry_point(source_name, source_bytes)
@@ -900,121 +932,17 @@ class TaskEnqueue:
         task_kind: str = "",
         bypass_case_result_cache: bool = False,
         compile_only: bool = False,
-    ) -> dict[str, object]:
-        selected = self._normalize_list(selected_tests, matcher=RUN_TEST_NAME_RE)
-        safe_run_id = self._core.normalize_run_id(run_id)
-        safe_verification_program_id = self._core.normalize_verification_program_id(
-            verification_program_id
-        )
-        payload = self._build_task_payload(
-            problem=problem,
-            username=username,
-            artifact_verification_id=artifact_verification_id,
-            mode=mode,
-            submission_path=submission_path,
-            upload_content=upload_content,
-            upload_file=upload_file,
-            upload_filename=upload_filename,
-            selected_tests=selected,
-            verification_id=verification_id,
-            verification_task_id=str(verification_task_id or ""),
-            verification_program_id=safe_verification_program_id,
-            expected_behavior=expected_behavior,
-            verification_source=verification_source,
-            task_kind=task_kind,
-            run_id=safe_run_id,
-            bypass_case_result_cache=bool(bypass_case_result_cache),
-            compile_only=bool(compile_only),
-        )
-        payload["precomputed"] = self._precomputed_fields_from_payload(payload)
-        payload["execution_signature"] = self._toolkit.execution_signature(payload)
-        return payload
-
-    def _initial_summary(
-        self,
-        *,
-        run_id: str,
-        task_id: str,
-        mode: str,
-        pass_limit: int,
-        source_label: str,
-        selected_tests: list[str],
-        verification_id: str,
-        expected_behavior: str,
-        verification_source: str,
-        task_kind: str = "",
-        compile_only: bool = False,
-    ) -> dict[str, object]:
-        safe_task_kind = self._toolkit.task_kind(
-            {
-                "task_kind": task_kind,
-                "verification_source": verification_source,
-                "compile_only": bool(compile_only),
-            }
-        )
-        summary: dict[str, object] = {
-            "mode": mode,
-            "pass_limit": max(1, int(pass_limit)),
-            "source": source_label,
-            "selected_tests": list(selected_tests),
-            "selected_tests_count": len(selected_tests),
-            "verification_source": TaskEnqueue._normalize_text_with_default(
-                verification_source, default="run.execute"
-            ),
-            "task_kind": safe_task_kind,
-            "tests": [],
-            "compile_log": "",
-            "compile_diagnostics": [],
-            "toolchain_digest": "judgehost",
-            "limits": {},
-            "usage": {},
-            "judgehost": {
-                "task_id": task_id,
-                "status": self.STATUS_QUEUED,
-            },
-        }
-        if safe_task_kind == self._TASK_KIND_COMPILE_ONLY:
-            summary["compile_only"] = True
-        return summary
-
-    def enqueue_task(
-        self,
-        *,
-        problem: str,
-        username: str,
-        artifact_verification_id: str,
-        mode: str,
-        submission_path: str | None,
-        upload_content: bytes | None,
-        upload_file: PayloadFile | None = None,
-        upload_filename: str | None,
-        run_id: str | None = None,
-        selected_tests: list[str] | None,
-        verification_id: str,
-        verification_task_id: str = "",
-        verification_program_id: str,
-        expected_behavior: str,
-        verification_source: str,
-        task_kind: str = "",
-        bypass_case_result_cache: bool = False,
-        compile_only: bool = False,
-        persist_verification_run: bool = False,
-        prepared_payload: dict[str, object] | None = None,
+        verification_payload_override: dict[str, object] | None = None,
+        payload_overrides: dict[str, object] | None = None,
         execution_template: dict[str, object] | None = None,
-        service_class: str = "background",
-    ) -> str:
-        safe_run_id = self._core.normalize_run_id(run_id if run_id else verification_id)
-        safe_verification_program_id = self._core.normalize_verification_program_id(
+    ) -> dict[str, object]:
+        settings = self._configuration.snapshot()
+        selected = self.normalize_tests(selected_tests)
+        safe_run_id = normalize_run_id(run_id)
+        safe_verification_program_id = normalize_verification_program_id(
             verification_program_id
         )
-        safe_verification_id = self._verification_id(verification_id)
-        safe_verification_task_id = str(verification_task_id or "")
-        selected = self._normalize_list(selected_tests, matcher=RUN_TEST_NAME_RE)
-        verification_payload_override = None
-        if prepared_payload is not None and "verification_payload" in prepared_payload:
-            verification_payload_override = dict(
-                cast(dict[str, object], prepared_payload["verification_payload"])
-            )
+        safe_verification_id = self.verification_id(verification_id)
         payload = self._build_task_payload(
             problem=problem,
             username=username,
@@ -1026,7 +954,7 @@ class TaskEnqueue:
             upload_filename=upload_filename,
             selected_tests=selected,
             verification_id=safe_verification_id,
-            verification_task_id=safe_verification_task_id,
+            verification_task_id=str(verification_task_id or ""),
             verification_program_id=safe_verification_program_id,
             expected_behavior=expected_behavior,
             verification_source=verification_source,
@@ -1035,234 +963,14 @@ class TaskEnqueue:
             bypass_case_result_cache=bool(bypass_case_result_cache),
             compile_only=bool(compile_only),
             verification_payload_override=verification_payload_override,
+            settings=settings,
         )
-        if prepared_payload is not None:
-            payload.update(dict(prepared_payload))
+        if payload_overrides is not None:
+            payload.update(payload_overrides)
         payload["precomputed"] = (
-            self._precomputed_fields_from_payload(payload)
-            if execution_template is None
-            else dict(execution_template)
+            dict(execution_template)
+            if execution_template is not None
+            else self._prepare_execution_template_payload(payload, settings=settings)
         )
-        payload["execution_signature"] = self._toolkit.execution_signature(payload)
-        safe_task_kind = self._toolkit.task_kind(payload)
-        payload["run_id"] = safe_run_id
-        payload["problem"] = problem
-        payload["username"] = username
-        payload["artifact_verification_id"] = artifact_verification_id
-        payload["mode"] = mode
-        payload["submission_path"] = TaskEnqueue._normalize_text(submission_path)
-        payload["selected_tests"] = list(selected)
-        payload["verification_id"] = safe_verification_id
-        payload["verification_task_id"] = safe_verification_task_id
-        payload["verification_program_id"] = safe_verification_program_id
-        payload["expected_behavior"] = expected_behavior
-        payload["verification_source"] = verification_source
-        payload["task_kind"] = safe_task_kind
-        payload["bypass_case_result_cache"] = bool(bypass_case_result_cache)
-        payload["compile_only"] = bool(safe_task_kind == self._TASK_KIND_COMPILE_ONLY)
-        safe_service_class = service_class.strip().lower()
-        if safe_service_class not in {"foreground", "background"}:
-            raise RuntimeError("invalid judgehost service class")
-        payload["service_class"] = safe_service_class
-        enqueue_fingerprint = self._enqueue_fingerprint(payload)
-        task_id = ""
-        summary: dict[str, object] | None = None
-        while True:
-            existing_task = self._s.task_registry.get_for_run(safe_run_id)
-            if existing_task is not None:
-                existing_fingerprint = str(existing_task.get("enqueue_fingerprint") or "")
-                if existing_fingerprint != enqueue_fingerprint:
-                    raise RuntimeError("judgehost run id reused with different payload")
-                existing_task_id = str(existing_task["id"])
-                existing_status = TaskEnqueue._normalize_status(existing_task["status"])
-                if existing_status != self.STATUS_ENQUEUING:
-                    return existing_task_id
-                generation = self._s.task_registry.change_generation()
-                self._s.task_registry.wait_for_change(generation, 0.05)
-                continue
-            task_id = f"jt-{uuid.uuid4().hex[:12]}"
-            source_label_obj = payload.get("source_label")
-            if source_label_obj is None:
-                source_label_obj = payload.get("source_name")
-            source_label = str(source_label_obj) if source_label_obj is not None else "upload"
-            summary = self._initial_summary(
-                run_id=safe_run_id,
-                task_id=task_id,
-                mode=mode,
-                pass_limit=self._precomputed_pass_limit(payload),
-                source_label=source_label,
-                selected_tests=selected,
-                verification_id=safe_verification_id,
-                expected_behavior=expected_behavior,
-                verification_source=verification_source,
-                task_kind=safe_task_kind,
-                compile_only=bool(safe_task_kind == self._TASK_KIND_COMPILE_ONLY),
-            )
-            now_text = now_iso()
-            task_row: JudgehostTaskRow = {
-                "id": task_id,
-                "run_id": safe_run_id,
-                "problem_slug": str(problem),
-                "username": str(username),
-                "artifact_verification_id": str(artifact_verification_id),
-                "mode": str(mode),
-                "verification_id": safe_verification_id,
-                "verification_task_id": safe_verification_task_id,
-                "status": self.STATUS_ENQUEUING,
-                "payload": dict(payload),
-                "result": {},
-                "persist_verification_run": bool(persist_verification_run),
-                "error_text": "",
-                "created_at": now_text,
-                "updated_at": now_text,
-                "completed_at": "",
-                "summary": dict(summary),
-                "enqueue_fingerprint": enqueue_fingerprint,
-            }
-            try:
-                self._s.task_registry.insert(task_row)
-            except RuntimeError as exc:
-                if str(exc) != "judgehost task already exists":
-                    raise
-                continue
-            break
-
-        if summary is None or not task_id:
-            raise RuntimeError("failed to allocate judgehost task")
-
-        batch_id = 0
-        try:
-            batch_id = self._dispatch.stage_task(
-                {"task_id": task_id, "run_id": safe_run_id, "payload": dict(payload)}
-            )
-        except Exception as exc:
-            finished_at = now_iso()
-            self._s.task_registry.transition(
-                task_id,
-                expected={self.STATUS_ENQUEUING},
-                status=self.STATUS_FAILED,
-                updates={
-                    "result": {"run_status": "failed", "error": str(exc)},
-                    "error_text": str(exc),
-                    "updated_at": finished_at,
-                    "completed_at": finished_at,
-                },
-            )
-            raise
-        queued = self._s.task_registry.transition(
-            task_id,
-            expected={self.STATUS_ENQUEUING},
-            status=self.STATUS_QUEUED,
-            updates={"updated_at": now_iso()},
-        )
-        if queued is None:
-            self._s.batch_runtime.discard_staged_task_cases(
-                task_id,
-                batch_id=batch_id,
-            )
-            raise RuntimeError("judgehost task staging lost its queued transition")
-
-        def _expose_staged_cases() -> None:
-            if not self._dispatch.activate_task_cases(task_id):
-                raise RuntimeError("judgehost task staged no cases")
-
-        try:
-            if safe_verification_task_id:
-                bindings = tuple(
-                    CaseBinding(
-                        execution_scope_id=safe_verification_id,
-                        program_id=safe_verification_program_id,
-                        task_id=safe_verification_task_id,
-                        test_name=str(case["test_name"]),
-                    )
-                    for case in self._s.batch_runtime.cases_for_task(task_id)
-                )
-                exposed = self._s.execution_port.bind_and_expose(
-                    bindings,
-                    run_id=safe_run_id,
-                    judgehost_task_id=task_id,
-                    expose=_expose_staged_cases,
-                )
-            else:
-                _expose_staged_cases()
-                exposed = True
-        except Exception as exc:
-            finished_at = now_iso()
-            self._s.batch_runtime.discard_staged_task_cases(
-                task_id,
-                batch_id=batch_id,
-            )
-            self._s.task_registry.transition(
-                task_id,
-                expected={self.STATUS_QUEUED},
-                status=self.STATUS_FAILED,
-                updates={
-                    "result": {"run_status": "failed", "error": str(exc)},
-                    "error_text": str(exc),
-                    "updated_at": finished_at,
-                    "completed_at": finished_at,
-                },
-            )
-            raise
-        if not exposed:
-            finished_at = now_iso()
-            self._s.batch_runtime.discard_staged_task_cases(
-                task_id,
-                batch_id=batch_id,
-            )
-            self._s.task_registry.transition(
-                task_id,
-                expected={self.STATUS_QUEUED},
-                status=self.STATUS_FAILED,
-                updates={
-                    "result": {
-                        "run_status": "failed",
-                        "error": "verification task refused judgehost runtime binding",
-                    },
-                    "error_text": "verification task refused judgehost runtime binding",
-                    "updated_at": finished_at,
-                    "completed_at": finished_at,
-                },
-            )
-            raise RuntimeError("verification task refused judgehost runtime binding")
-        self._dispatch.complete_task_exposure(
-            task_id=task_id,
-            batch_id=batch_id,
-        )
-        return task_id
-
-    def enqueue_compile_only_task(
-        self,
-        *,
-        problem: str,
-        username: str,
-        artifact_verification_id: str,
-        upload_content: bytes,
-        upload_filename: str,
-        run_id: str,
-        verification_id: str,
-        verification_program_id: str,
-        expected_behavior: str = "compile",
-        verification_source: str = "compile.only",
-        prepared_payload: dict[str, object] | None = None,
-    ) -> str:
-        return self.enqueue_task(
-            problem=problem,
-            username=username,
-            artifact_verification_id=artifact_verification_id,
-            mode="pass-fail",
-            submission_path=None,
-            upload_content=bytes(upload_content),
-            upload_filename=upload_filename or "submission.cpp",
-            run_id=run_id,
-            selected_tests=[],
-            verification_id=TaskEnqueue._normalize_text(verification_id),
-            verification_program_id=verification_program_id,
-            expected_behavior=expected_behavior or "compile",
-            verification_source=verification_source or "compile.only",
-            task_kind=self._TASK_KIND_COMPILE_ONLY,
-            compile_only=True,
-            persist_verification_run=False,
-            prepared_payload=(None if prepared_payload is None else dict(prepared_payload)),
-            service_class="foreground",
-        )
+        payload["execution_signature"] = task_plan.execution_signature(payload)
+        return payload

@@ -1,4 +1,4 @@
-import json
+﻿import json
 import os
 import sqlite3
 import tarfile
@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 from app.db import DB, now_iso
 from app.config import build_config_values
-from app.service.judgehost.work.task_registry import JudgehostTaskRegistry
+from app.service.judgehost.task.registry import JudgehostTaskRegistry
 from app.service.platform.fs.layout import StorageLayout
 from app.service.platform.maintenance.admission import MaintenanceAdmissionGate
 from app.service.platform.maintenance.artifact import ArtifactCleanupService
@@ -94,9 +94,11 @@ class TestArtifactCleanup(unittest.TestCase):
         self.verification_task_store = VerificationTaskStore(self.db)
         self.access_query = AccessQuery(self.db)
         self.workspace_service = WorkspaceService(
-            self.db, self.storage_layout,
+            self.db,
+            self.storage_layout,
             access_query=self.access_query,
-            verification_task_store=self.verification_task_store, config_values=self.config_values,
+            verification_task_store=self.verification_task_store,
+            config_values=self.config_values,
         )
         self.workspace_service.ensure_problem("admin/sample")
         self.workspace_service.ensure_user("admin")
@@ -119,7 +121,9 @@ class TestArtifactCleanup(unittest.TestCase):
             "admin",
             "owner",
         )
-        self.runtime_blob_store = RuntimeBlobStore(self.storage_layout.runtime_blob_root)
+        self.runtime_blob_store = RuntimeBlobStore(
+            self.storage_layout.runtime_blob_root
+        )
         self.runtime_cache_index = RuntimeCacheIndex(self.runtime_blob_store)
         self.worker_queue = _WorkerQueueStub()
         self.judgehost = _JudgehostStub()
@@ -212,27 +216,21 @@ class TestArtifactCleanup(unittest.TestCase):
         self._execute(
             "INSERT INTO verification_source_paths VALUES('ver-c1ea4',0,'solutions/ac.cpp')"
         )
-        self._execute(
-            """
+        self._execute("""
             INSERT INTO verification_sanity_checks(
                 verification_id,ordinal,check_name,status,checked_count
             ) VALUES('ver-c1ea4',0,'sample','passed',1)
-            """
-        )
-        self._execute(
-            """
+            """)
+        self._execute("""
             INSERT INTO verification_sanity_check_messages(
                 verification_id,check_name,ordinal,severity,test_name,message
             ) VALUES('ver-c1ea4','sample',0,'info','001.in','ok')
-            """
-        )
-        self._execute(
-            """
+            """)
+        self._execute("""
             INSERT INTO verification_tests_meta(
                 verification_id,ordinal,test_name
             ) VALUES('ver-c1ea4',0,'001.in')
-            """
-        )
+            """)
         self._execute(
             """
             INSERT INTO verification_tasks(
@@ -327,7 +325,7 @@ class TestArtifactCleanup(unittest.TestCase):
                     """,
                     (self.actor_user_id, now),
                 ).lastrowid
-            )
+            ),
         )
         self.contest_id = int(cursor_id)
         self._execute(
@@ -416,7 +414,9 @@ class TestArtifactCleanup(unittest.TestCase):
         durable_paths = {
             "git": self.settings.bare_root / "durable-marker",
             "workspace": self.workspace / "durable-marker",
-            "contest": self.settings.contest_source_root / "cleanup-contest" / "statement.pdf",
+            "contest": self.settings.contest_source_root
+            / "cleanup-contest"
+            / "statement.pdf",
             "backup": self.settings.backup_root / "contest-backup.tar.gz",
         }
         for label, path in durable_paths.items():
@@ -446,8 +446,7 @@ class TestArtifactCleanup(unittest.TestCase):
         )
         self.assertEqual(usage["total_files"], 2)
         expected_table_rows = {
-            table: self._count(table)
-            for table in usage["table_rows"]
+            table: self._count(table) for table in usage["table_rows"]
         }
         self.assertEqual(usage["table_rows"], expected_table_rows)
         self.assertEqual(usage["artifact_rows"], sum(expected_table_rows.values()))
@@ -532,25 +531,26 @@ class TestArtifactCleanup(unittest.TestCase):
                     "SELECT name FROM sqlite_master WHERE type='index'"
                 ).fetchall()
             }
-        self.assertTrue(
-            set(REDUNDANT_DATABASE_INDEXES).isdisjoint(remaining_indexes)
-        )
+        self.assertTrue(set(REDUNDANT_DATABASE_INDEXES).isdisjoint(remaining_indexes))
         system_config = isolated_db_fetch_one(
             self.db,
-            "SELECT value_json FROM system_config WHERE key='cleanup-test-setting'"
+            "SELECT value_json FROM system_config WHERE key='cleanup-test-setting'",
         )
         self.assertIsNotNone(system_config)
         self.assertEqual(str(system_config["value_json"]), "true")
         smtp_config = isolated_db_fetch_one(
-            self.db,
-            "SELECT host,port,password_ciphertext FROM smtp_config WHERE id=1"
+            self.db, "SELECT host,port,password_ciphertext FROM smtp_config WHERE id=1"
         )
         self.assertIsNotNone(smtp_config)
         self.assertEqual(str(smtp_config["host"]), "smtp.example.test")
         self.assertEqual(int(smtp_config["port"]), 2525)
         self.assertEqual(str(smtp_config["password_ciphertext"]), "ciphertext")
         self.assertEqual(
-            [path for path in self.settings.artifacts_root.rglob("*") if path.is_file()],
+            [
+                path
+                for path in self.settings.artifacts_root.rglob("*")
+                if path.is_file()
+            ],
             [],
         )
         self.assertEqual(
@@ -679,9 +679,7 @@ class TestArtifactCleanup(unittest.TestCase):
         self.assertTrue(started.accepted)
         self.assertEqual(self.maintenance_gate.state(), "draining")
         self.assertFalse(self.maintenance_gate.enter_request())
-        self.assertTrue(
-            self.maintenance_gate.enter_control_request()[0]
-        )
+        self.assertTrue(self.maintenance_gate.enter_control_request()[0])
         self.maintenance_gate.leave_request()
         self.assertEqual(started.busy["worker_running"], 1)
 
@@ -701,9 +699,7 @@ class TestArtifactCleanup(unittest.TestCase):
             restart_process=exited.set,
         )
 
-        not_drained = coordinator.restart_when_idle(
-            actor_user_id=self.actor_user_id
-        )
+        not_drained = coordinator.restart_when_idle(actor_user_id=self.actor_user_id)
         self.assertEqual(not_drained.reason, "drain_required")
         coordinator.begin_drain()
         self.judgehost.leased = 1
@@ -782,14 +778,11 @@ class TestArtifactCleanup(unittest.TestCase):
 
     def test_filesystem_failure_keeps_database_deletion(self) -> None:
         self._seed_generated_data()
-        artifact_file = (
-            self.settings.artifacts_root
-            / "generated"
-            / "artifact.bin"
-        )
+        artifact_file = self.settings.artifacts_root / "generated" / "artifact.bin"
         cache_file = self.settings.cache_root / "generated" / "cache.bin"
         operation_id = "cleanup-filesystem-failure"
         started_at = now_iso()
+
         def partially_clear(_root: Path) -> int:
             artifact_file.unlink()
             raise OSError("forced filesystem failure")
@@ -813,11 +806,7 @@ class TestArtifactCleanup(unittest.TestCase):
 
     def test_database_transaction_failure_preserves_rows_and_files(self) -> None:
         self._seed_generated_data()
-        artifact_file = (
-            self.settings.artifacts_root
-            / "generated"
-            / "artifact.bin"
-        )
+        artifact_file = self.settings.artifacts_root / "generated" / "artifact.bin"
         operation_id = "cleanup-database-failure"
         started_at = now_iso()
         with patch.object(
@@ -836,7 +825,9 @@ class TestArtifactCleanup(unittest.TestCase):
         self.assertEqual(self._count("exports"), 1)
         self.assertTrue(artifact_file.is_file())
 
-    def test_vacuum_failure_allows_safe_rerun_after_files_and_rows_are_removed(self) -> None:
+    def test_vacuum_failure_allows_safe_rerun_after_files_and_rows_are_removed(
+        self,
+    ) -> None:
         self._seed_generated_data()
         operation_id = "cleanup-vacuum-failure"
         started_at = now_iso()
@@ -854,14 +845,16 @@ class TestArtifactCleanup(unittest.TestCase):
 
         self.assertEqual(self._count("verifications"), 0)
         self.assertEqual(
-            [path for path in self.settings.artifacts_root.rglob("*") if path.is_file()],
+            [
+                path
+                for path in self.settings.artifacts_root.rglob("*")
+                if path.is_file()
+            ],
             [],
         )
         restarted_coordinator = self._coordinator()
         self._begin_drain(restarted_coordinator)
-        retried = restarted_coordinator.start_cleanup(
-            actor_user_id=self.actor_user_id
-        )
+        retried = restarted_coordinator.start_cleanup(actor_user_id=self.actor_user_id)
         self.assertTrue(retried.accepted, retried.reason)
         retry_worker = restarted_coordinator._worker
         self.assertIsNotNone(retry_worker)
@@ -904,7 +897,10 @@ class TestArtifactCleanup(unittest.TestCase):
                 any(name.startswith(f"{workspace_prefix}/.git") for name in names)
             )
             self.assertTrue(
-                any(name.startswith("bare/") and name.endswith("/HEAD") for name in names)
+                any(
+                    name.startswith("bare/") and name.endswith("/HEAD")
+                    for name in names
+                )
             )
             manifest_file = archive.extractfile("manifest.json")
             self.assertIsNotNone(manifest_file)
@@ -962,7 +958,9 @@ class TestArtifactCleanup(unittest.TestCase):
 
         self.assertEqual(self.source_backup.latest_path.read_bytes(), previous)
         self.assertEqual(self.source_backup.sidecar_path.read_bytes(), previous_sidecar)
-        self.assertEqual(self.source_backup.latest_archive_path(), self.source_backup.latest_path)
+        self.assertEqual(
+            self.source_backup.latest_archive_path(), self.source_backup.latest_path
+        )
 
     def test_source_backup_summary_is_metadata_only_but_download_verifies(
         self,
@@ -994,9 +992,7 @@ class TestArtifactCleanup(unittest.TestCase):
             "run",
             side_effect=blocking_backup,
         ):
-            started = coordinator.start_source_backup(
-                actor_user_id=self.actor_user_id
-            )
+            started = coordinator.start_source_backup(actor_user_id=self.actor_user_id)
             self.assertTrue(started.accepted)
             self.assertTrue(running.wait(timeout=2))
             self.assertFalse(self.maintenance_gate.is_open())

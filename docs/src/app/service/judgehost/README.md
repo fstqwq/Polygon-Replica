@@ -29,53 +29,79 @@ reports, executable/result cache indexes, and batch state do not persist across
 process startup. Callback admission and per-case receipts linearize maintenance
 and quiet cleanup.
 
-`JudgehostBatchRuntime` is the only batch-state boundary exposed by
-`JudgehostState`. It owns one canonical `BatchState` and composes admission,
+`JudgehostBatchRuntime` owns one canonical `BatchState` and composes admission,
 dispatch, completion, finalization, and maintenance capabilities around the
 same re-entrant lock. Canonical batch/case records, leases, callback receipts,
-finalization retries, and derived ready indexes therefore transition under one
+materialization and finalization claims, retries, and derived ready indexes
+therefore transition under one
 linearization boundary. A scheduling policy receives an immutable candidate
 snapshot and returns a decision; it never owns canonical state or leases.
+
+The other process-local owners are `JudgehostTaskRegistry`, for task identity,
+lifecycle, indexes, and wait generation, and `JudgehostHostRegistry`, for host
+presence, enablement, peer telemetry, and toolchain reports. The public
+`Judgehost` facade constructs these owners directly. No context bag exposes
+their mutable storage.
+
+Dependencies flow in one direction: these resource owners are consumed by
+typed cache, storage, protocol, and execution-port adapters; independent
+admission, dispatch, callback, finalization, query, and maintenance use cases
+consume only the owners and adapters they need; the public `Judgehost` facade
+sequences their typed outcomes. A use case does not call a sibling use case.
 
 The package layout follows those responsibilities instead of keeping the
 implementation flat:
 
 - `batch/` owns the aggregate, canonical state, atomic capabilities, immutable
   model snapshots, ready index, and pure scheduling policies.
-- `work/` owns enqueue, dispatch payload preparation, cache probing,
-  publication, finalization orchestration, task history, and terminal cleanup.
-- `callback/` owns callback parsing, bounded artifact capture, pass bundles,
-  result normalization, transcripts, and canonical execution-result helpers.
+- `task/` owns payload preparation, task admission, task identity, read-only
+  result projection and queries, retention, and the atomic handoff
+  into batch topology. No task lifecycle object combines these operations.
+- `dispatch/` owns cache probing, payload materialization, host selection, and
+  typed lease claim/commit/abort.
+- `finalization/` owns durable case publication, task terminalization, batch
+  finalization claims, and retry.
+- `maintenance/` owns cancellation, terminal cleanup, retention, and
+  process-local reset coordination.
+- `host/` owns host presence, the toolchain-version callback handshake,
+  telemetry collection, and the public host-status projection without exposing
+  its registry.
+- `cache/` owns executable and case-result cache storage contracts.
+- `callback/` owns execution-result and diagnostic callback parsing, bounded
+  artifact capture, pass bundles, result normalization, and transcripts.
 - `ports/` defines the typed binding, lease, diagnostic, and completion ports
   supplied by verification.
 - `domjudge/` owns protocol codecs and projections, DOMjudge numeric IDs and
-  executable identities, result interpretation, file streaming, the
-  compile/run toolkit, and the executable scripts served to Judgehost. Generic
-  hashing and text normalization do not acquire DOMjudge-specific wrappers;
-  untyped protocol fields are decoded once and canonical internal records are
-  consumed directly.
-- `telemetry/` records toolchain reports and produces the public host-status
-  projection.
-
-The top-level `api.py`, `core.py`, and `state.py` are the composition and public
-service boundary. They construct one diagnostic publisher, completion
-publisher, and batch finalizer, then inject those boundaries into callback and
-dispatch orchestration. Final `add-judging-run` payloads are converted by the
+  executable identities, result interpretation, source/testcase/executable
+  file streaming, the
+  compile/run script catalog, canonical case-result conversion, and the
+  executable scripts served to Judgehost. Generic hashing and text
+  normalization do not acquire DOMjudge-specific wrappers; untyped protocol
+  fields are decoded once and canonical internal records are consumed directly.
+The top-level `api.py` is the composition and public service boundary. It
+constructs owners, adapters, and independent use cases and sequences their
+typed outcomes. Dispatch and callback ingestion do not invoke finalization;
+the facade completes finalization before returning the existing wire response.
+Final `add-judging-run` payloads are converted by the
 dependency-light case normalizer. `callback/artifact_capture.py` selects the
 bounded callback files, validates historical pass bundles, and writes runtime
 cache blobs without choosing a verdict or publishing a completion.
 `callback/diagnostic_payload.py` reduces already bounded debug and
 internal-error fields to canonical diagnostic text without depending on
 persistence, runtime composition, scheduling, or verification.
-`telemetry/toolchain_versions.py` owns the optional version-command handshake
+`host/toolchain_versions.py` owns the optional version-command handshake
 and process-local telemetry recording.
 
 `callback/result.py` retains callback receipts, lease-owner and generation
-validation, claim ordering, normalization, durable publication, batch
-finalization, and acknowledgement ordering. Runtime state is claimed under the
-batch lock; SQLite, filesystem, cache, and execution-port work occurs after
-that lock is released; the result is then committed or aborted against the
-claim generation. Runtime and task-queue canonical helpers build
+validation, claim ordering, normalization, and canonical result commit. It
+returns terminal batch and touched-verification identities to the facade
+instead of calling finalization, durable publication, or quiet cleanup. The
+facade finalizes durable work before refreshing the cleanup deadline and
+returning the protocol acknowledgement. Runtime state is claimed under the
+batch lock; filesystem
+and cache work occurs after that lock is released; the result is then committed
+or aborted against the claim generation. Task query and terminalization use
+cases build
 compile-failure and missing-case results because those paths have no final run
 callback; the batch finalizer publishes and aggregates them. Quiet cleanup also
 rejects a batch with an active finalization claim, so it cannot remove state

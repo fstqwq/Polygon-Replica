@@ -11,6 +11,7 @@ from app.service.judgehost.batch.model import (
     JudgehostCaseRow,
     StatusCounts,
 )
+from app.service.judgehost.batch.snapshot import case_snapshot
 from app.service.judgehost.domjudge.identity import script_id
 from app.service.judgehost.domjudge.identity import job_id, submit_id
 
@@ -439,7 +440,7 @@ class BatchAdmission:
             if existing_batch_id is None:
                 continue
             existing_rows = [
-                self._state._case_row(self._state._cases[case_id])
+                case_snapshot(self._state._cases[case_id])
                 for case_id in self._state._case_ids_by_task[case_task_id]
             ]
             requested = sorted((self._case_identity(case) for case in requested_rows), key=repr)

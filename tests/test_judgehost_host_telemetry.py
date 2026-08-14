@@ -1,27 +1,30 @@
 import base64
 import hashlib
 import json
-import threading
 import unittest
+from dataclasses import replace
 from pathlib import Path
-from types import SimpleNamespace
+from unittest.mock import patch
 
+from app.config import build_config_values
 from app.service.judgehost.batch.runtime import JudgehostBatchRuntime
 from app.service.judgehost.batch.model import (
     CaseReportTelemetry,
     CompileSubmission,
     ExecutionBatchSpec,
+    JudgehostCaseRow,
 )
-from app.service.judgehost.callback.case_result import build_case_result
+from app.service.judgehost.domjudge.case_result import build_case_result
+from app.service.judgehost.configuration import JudgehostConfiguration
 from app.service.judgehost.domjudge.identity import submit_id
-from app.service.judgehost.telemetry.toolchain_versions import (
+from app.service.judgehost.host.registry import JudgehostHostRegistry
+from app.service.judgehost.host.toolchain_versions import (
     ToolchainTelemetryHandler,
     ToolchainVersionCollector,
     ToolchainVersionReport,
 )
 from app.service.platform.hashing import compile_command_digest
 from app.service.platform.runtime_blob_store import PayloadFile
-
 
 _NOW = "2026-08-03T01:00:00+00:00"
 _HASH = "1" * 64
@@ -43,16 +46,21 @@ class _VersionScheduler:
 class TestToolchainVersionCollector(unittest.TestCase):
     def setUp(self) -> None:
         self.scheduler = _VersionScheduler()
-        self.state = SimpleNamespace(
-            config_values=SimpleNamespace(
-                TOOLCHAIN_CPP_COMPILER="/opt/tool chains/clang++",
-                TOOLCHAIN_JAVA_COMPILER="javac-custom",
-            ),
-            batch_runtime=self.scheduler,
-            state_lock=threading.RLock(),
-            host_toolchains={},
+        self.config_values = build_config_values()
+        self.config_values.replace(
+            {
+                **self.config_values.snapshot(),
+                "TOOLCHAIN_CPP_COMPILER": "/opt/tool chains/clang++",
+                "TOOLCHAIN_JAVA_COMPILER": "javac-custom",
+            }
         )
-        self.collector = ToolchainVersionCollector(self.state)
+        self.hosts = JudgehostHostRegistry()
+        self.configuration = JudgehostConfiguration(self.config_values)
+        self.collector = ToolchainVersionCollector(
+            self.scheduler,
+            self.configuration,
+            self.hosts,
+        )
         self._lease("cpp")
 
     def _lease(
@@ -72,7 +80,9 @@ class TestToolchainVersionCollector(unittest.TestCase):
         }
         self.scheduler.batch = {
             "batch_id": 11,
-            "compile_config_json": json.dumps({"toolchain_cmd_digest": toolchain_cmd_digest}),
+            "compile_config_json": json.dumps(
+                {"toolchain_cmd_digest": toolchain_cmd_digest}
+            ),
             "run_config_json": json.dumps({"language_id": language_id}),
         }
 
@@ -92,15 +102,21 @@ class TestToolchainVersionCollector(unittest.TestCase):
 
         self._lease("java")
         java = self.collector.version_commands(101)
-        self.assertIn("exec javac-custom -version 2>&1", str(java["compiler_version_command"]))
+        self.assertIn(
+            "exec javac-custom -version 2>&1", str(java["compiler_version_command"])
+        )
         self.assertIn("exec java -version 2>&1", str(java["runner_version_command"]))
 
         self._lease("py")
         python = self.collector.version_commands(101)
         compiler_script = str(python["compiler_version_command"])
         self.assertEqual(python["runner_version_command"], compiler_script)
-        self.assertLess(compiler_script.index("pypy3"), compiler_script.index("python3"))
-        self.assertLess(compiler_script.index("python3"), compiler_script.index("python;"))
+        self.assertLess(
+            compiler_script.index("pypy3"), compiler_script.index("python3")
+        )
+        self.assertLess(
+            compiler_script.index("python3"), compiler_script.index("python;")
+        )
 
     def test_version_commands_require_an_active_non_skip_lease(self) -> None:
         self.scheduler.case = None
@@ -125,7 +141,7 @@ class TestToolchainVersionCollector(unittest.TestCase):
             )
         )
 
-        telemetry = self.state.host_toolchains["judgehost-a"]["cpp"]
+        telemetry = self.hosts.toolchain_rows()["judgehost-a"]["cpp"]
         self.assertEqual(telemetry.language_id, "cpp")
         self.assertEqual(telemetry.compiler, "command=/usr/bin/g++\ng++ 14\ufffd\ufffd")
         self.assertEqual(telemetry.runner, "")
@@ -141,7 +157,7 @@ class TestToolchainVersionCollector(unittest.TestCase):
                 runner="",
             )
         )
-        self.assertEqual(self.state.host_toolchains, {})
+        self.assertEqual(self.hosts.toolchain_rows(), {})
 
         self.assertFalse(
             self.collector.record_report(
@@ -153,9 +169,11 @@ class TestToolchainVersionCollector(unittest.TestCase):
                 ),
             )
         )
-        self.assertEqual(self.state.host_toolchains, {})
+        self.assertEqual(self.hosts.toolchain_rows(), {})
 
-    def test_latest_language_report_overwrites_without_removing_other_languages(self) -> None:
+    def test_latest_language_report_overwrites_without_removing_other_languages(
+        self,
+    ) -> None:
         self.collector.record_report(
             101,
             hostname="judgehost-a",
@@ -176,16 +194,16 @@ class TestToolchainVersionCollector(unittest.TestCase):
             runner=self._encoded(b"java 21"),
         )
 
-        toolchains = self.state.host_toolchains["judgehost-a"]
+        toolchains = self.hosts.toolchain_rows()["judgehost-a"]
         self.assertEqual(set(toolchains), {"cpp", "java"})
         self.assertEqual(toolchains["cpp"].compiler, "g++ 14")
         self.assertEqual(toolchains["java"].runner, "java 21")
 
     def test_handler_records_versions_event_after_telemetry(self) -> None:
-        events: list[dict[str, object]] = []
         handler = ToolchainTelemetryHandler(
-            self.state,
-            lambda **event: events.append(event),
+            self.scheduler,
+            self.configuration,
+            self.hosts,
         )
 
         handler.record_report(
@@ -199,23 +217,17 @@ class TestToolchainVersionCollector(unittest.TestCase):
             )
         )
 
-        self.assertEqual(
-            events,
-            [
-                {
-                    "hostname": "judgehost-a",
-                    "action": "versions",
-                    "task_id": "task-101",
-                    "run_id": "run-101",
-                }
-            ],
-        )
+        host = self.hosts.host_rows()[0]
+        self.assertEqual(host["hostname"], "judgehost-a")
+        self.assertEqual(host["last_action"], "versions")
+        self.assertEqual(host["last_task_id"], "task-101")
+        self.assertEqual(host["last_run_id"], "run-101")
 
     def test_handler_contains_optional_telemetry_failures(self) -> None:
-        events: list[dict[str, object]] = []
         handler = ToolchainTelemetryHandler(
-            self.state,
-            lambda **event: events.append(event),
+            self.scheduler,
+            self.configuration,
+            self.hosts,
         )
         assert self.scheduler.batch is not None
         self.scheduler.batch["compile_config_json"] = "not-json"
@@ -232,33 +244,33 @@ class TestToolchainVersionCollector(unittest.TestCase):
             )
         )
 
-        self.assertEqual(events, [])
-        self.assertEqual(self.state.host_toolchains, {})
+        self.assertEqual(self.hosts.host_rows(), [])
+        self.assertEqual(self.hosts.toolchain_rows(), {})
 
     def test_handler_contains_host_event_sink_failure(self) -> None:
-        def failing_sink(
-            *,
-            hostname: str,
-            action: str,
-            task_id: str,
-            run_id: str,
-        ) -> None:
-            raise RuntimeError("host event store unavailable")
-
-        handler = ToolchainTelemetryHandler(self.state, failing_sink)
-
-        handler.record_report(
-            ToolchainVersionReport(
-                judgetask_id=101,
-                hostname="judgehost-a",
-                compiler=self._encoded(b"g++ 14"),
-                runner="",
-                task_id="task-101",
-                run_id="run-101",
-            )
+        handler = ToolchainTelemetryHandler(
+            self.scheduler,
+            self.configuration,
+            self.hosts,
         )
 
-        telemetry = self.state.host_toolchains["judgehost-a"]["cpp"]
+        with patch.object(
+            self.hosts,
+            "record_event",
+            side_effect=RuntimeError("host event store unavailable"),
+        ):
+            handler.record_report(
+                ToolchainVersionReport(
+                    judgetask_id=101,
+                    hostname="judgehost-a",
+                    compiler=self._encoded(b"g++ 14"),
+                    runner="",
+                    task_id="task-101",
+                    run_id="run-101",
+                )
+            )
+
+        telemetry = self.hosts.toolchain_rows()["judgehost-a"]["cpp"]
         self.assertEqual(telemetry.compiler, "g++ 14")
 
 
@@ -349,16 +361,44 @@ class TestHostTelemetryStore(unittest.TestCase):
                 for index in range(1, case_count + 1)
             ],
         )
-        self.assertTrue(self.scheduler.claim_materialization(batch_id, now_text=_NOW))
+        claim = self.scheduler.claim_materialization(batch_id, now_text=_NOW)
+        self.assertIsNotNone(claim)
+        assert claim is not None
+        materialized_submission = replace(
+            claim.submission,
+            source_file=replace(
+                claim.submission.source_file,
+                blob_ref=f"blob://sha256/{claim.submission.source_file.identity}",
+            ),
+        )
         self.assertTrue(
             self.scheduler.finish_materialization(
-                batch_id,
+                claim,
                 success=True,
+                materialized_submission=materialized_submission,
                 error_text="",
                 now_text=_NOW,
             )
         )
         return batch_id
+
+    def _lease_cases(
+        self,
+        batch_id: int,
+        *,
+        hostname: str,
+        limit: int,
+    ) -> list[JudgehostCaseRow]:
+        claim = self.scheduler.claim_lease(
+            batch_id,
+            hostname=hostname,
+            limit=limit,
+            now_text=_NOW,
+        )
+        if claim is None:
+            return []
+        self.assertTrue(self.scheduler.commit_lease(claim))
+        return list(claim.cases)
 
     def _report(self, hostname: str, case_id: int, at: float) -> None:
         row = self.scheduler.fetch_case(case_id)
@@ -395,12 +435,16 @@ class TestHostTelemetryStore(unittest.TestCase):
 
     def test_complete_fetch_batch_samples_immediately(self) -> None:
         batch_id = self._batch(2)
-        rows = self.scheduler.lease_cases(batch_id, hostname="host-a", limit=2, now_text=_NOW)
+        rows = self._lease_cases(batch_id, hostname="host-a", limit=2)
         case_ids = [int(row["id"]) for row in rows]
-        self.scheduler.record_batch_leased("host-a", batch_id, case_ids, leased_monotonic=10.0)
+        self.scheduler.record_batch_leased(
+            "host-a", batch_id, case_ids, leased_monotonic=10.0
+        )
         self._report("host-a", case_ids[0], 11.0)
         self.assertIsNone(
-            self.scheduler.host_telemetry_snapshot()["host-a"]["recent_avg_per_case_sec"]
+            self.scheduler.host_telemetry_snapshot()["host-a"][
+                "recent_avg_per_case_sec"
+            ]
         )
         self._report("host-a", case_ids[1], 14.0)
 
@@ -411,11 +455,13 @@ class TestHostTelemetryStore(unittest.TestCase):
 
     def test_shared_batch_keeps_host_samples_independent(self) -> None:
         batch_id = self._batch(5)
-        host_a = self.scheduler.lease_cases(batch_id, hostname="host-a", limit=2, now_text=_NOW)
-        host_b = self.scheduler.lease_cases(batch_id, hostname="host-b", limit=3, now_text=_NOW)
+        host_a = self._lease_cases(batch_id, hostname="host-a", limit=2)
+        host_b = self._lease_cases(batch_id, hostname="host-b", limit=3)
         for hostname, rows, end in (("host-a", host_a, 4.0), ("host-b", host_b, 9.0)):
             case_ids = [int(row["id"]) for row in rows]
-            self.scheduler.record_batch_leased(hostname, batch_id, case_ids, leased_monotonic=0.0)
+            self.scheduler.record_batch_leased(
+                hostname, batch_id, case_ids, leased_monotonic=0.0
+            )
             for case_id in case_ids:
                 self._report(hostname, case_id, end)
 
@@ -426,9 +472,11 @@ class TestHostTelemetryStore(unittest.TestCase):
     def test_median_uses_only_last_ten_fetch_batches(self) -> None:
         for duration in range(1, 12):
             batch_id = self._batch(1)
-            row = self.scheduler.lease_cases(batch_id, hostname="host-a", limit=1, now_text=_NOW)[0]
+            row = self._lease_cases(batch_id, hostname="host-a", limit=1)[0]
             case_id = int(row["id"])
-            self.scheduler.record_batch_leased("host-a", batch_id, [case_id], leased_monotonic=0.0)
+            self.scheduler.record_batch_leased(
+                "host-a", batch_id, [case_id], leased_monotonic=0.0
+            )
             self._report("host-a", case_id, float(duration))
 
         row = self.scheduler.host_telemetry_snapshot()["host-a"]
@@ -437,16 +485,20 @@ class TestHostTelemetryStore(unittest.TestCase):
 
     def test_host_release_discards_incomplete_fetch_batch(self) -> None:
         first_batch = self._batch(2)
-        rows = self.scheduler.lease_cases(first_batch, hostname="host-a", limit=2, now_text=_NOW)
+        rows = self._lease_cases(first_batch, hostname="host-a", limit=2)
         case_ids = [int(row["id"]) for row in rows]
-        self.scheduler.record_batch_leased("host-a", first_batch, case_ids, leased_monotonic=0.0)
+        self.scheduler.record_batch_leased(
+            "host-a", first_batch, case_ids, leased_monotonic=0.0
+        )
         self._report("host-a", case_ids[0], 1.0)
         self.scheduler.release_host_leases("host-a", now_text=_NOW)
 
         second_batch = self._batch(1)
-        row = self.scheduler.lease_cases(second_batch, hostname="host-a", limit=1, now_text=_NOW)[0]
+        row = self._lease_cases(second_batch, hostname="host-a", limit=1)[0]
         case_id = int(row["id"])
-        self.scheduler.record_batch_leased("host-a", second_batch, [case_id], leased_monotonic=2.0)
+        self.scheduler.record_batch_leased(
+            "host-a", second_batch, [case_id], leased_monotonic=2.0
+        )
         self._report("host-a", case_id, 5.0)
 
         telemetry = self.scheduler.host_telemetry_snapshot()["host-a"]

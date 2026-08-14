@@ -62,13 +62,18 @@ from app.service.platform.source_backup import SourceBackupService
 from app.service.repository import workspace
 from app.setting import Settings
 
+
 @dataclass
-class ApplicationRuntime:  # pylint: disable=too-many-instance-attributes
+class ApplicationRuntime:  # pylint: disable=too-many-instance-attributes,invalid-name
     """Own every concrete service and process-scoped coordination primitive."""
 
     settings: Settings
-    TEMPLATE_ROOT: Path = Path(__file__).resolve().parent / "template"  # pylint: disable=invalid-name
-    STATIC_ROOT: Path = Path(__file__).resolve().parent / "static"  # pylint: disable=invalid-name
+    TEMPLATE_ROOT: Path = (
+        Path(__file__).resolve().parent / "template"
+    )  # pylint: disable=invalid-name
+    STATIC_ROOT: Path = (
+        Path(__file__).resolve().parent / "static"
+    )  # pylint: disable=invalid-name
     config_values: ConfigValues = field(init=False)
     db: DB = field(init=False)  # pylint: disable=invalid-name
     schema_error: SchemaRequirementsError | None = field(init=False, default=None)
@@ -103,9 +108,7 @@ class ApplicationRuntime:  # pylint: disable=too-many-instance-attributes
     judgehost_task_service: Judgehost = field(init=False)
     export_service: ExportService = field(init=False)
     problem_package_service: ProblemPackageService = field(init=False)
-    verified_revision_workflow: VerifiedRevisionWorkflow = field(
-        init=False
-    )
+    verified_revision_workflow: VerifiedRevisionWorkflow = field(init=False)
     problem_readiness_service: ProblemReadinessService = field(init=False)
     problem_source_query_service: ProblemSourceQueryService = field(init=False)
     worker_queue_service: WorkerQueueService = field(init=False)
@@ -134,7 +137,9 @@ class ApplicationRuntime:  # pylint: disable=too-many-instance-attributes
     verification_workers: set[WorkerFuture] = field(default_factory=set)
     verification_inflight: set[str] = field(default_factory=set)
     login_rate_limit_lock: threading.Lock = field(default_factory=threading.Lock)
-    login_rate_limit_state: dict[str, dict[str, float | int]] = field(default_factory=dict)
+    login_rate_limit_state: dict[str, dict[str, float | int]] = field(
+        default_factory=dict
+    )
     password_form_csrf_secret: bytes = field(init=False)
 
     def _resolve_password_form_csrf_secret(self) -> bytes:
@@ -159,19 +164,13 @@ class ApplicationRuntime:  # pylint: disable=too-many-instance-attributes
 
     def _cleanup_problem_judgehost_runtime(self, problem_slug: str) -> None:
         """Remove Judgehost state owned by one deleted problem."""
-        task_rows = self.judgehost_task_service.state.task_registry.snapshots()
-        run_ids = sorted(
-            {
-                str(row["run_id"])
-                for row in task_rows
-                if str(row["problem_slug"]) == problem_slug
-                and str(row["run_id"])
-            }
-        )
+        run_ids = self.judgehost_task_service.problem_run_ids(problem_slug)
         self.judgehost_task_service.forget_domjudge_runs(run_ids)
         self.judgehost_task_service.forget_problem_tasks(problem_slug)
 
-    def reload_config(self, *, include_restart_required: bool = False) -> dict[str, object]:
+    def reload_config(
+        self, *, include_restart_required: bool = False
+    ) -> dict[str, object]:
         """Refresh mutable runtime configuration from its durable store."""
         runtime_overrides = self.system_config_service.refresh(
             include_restart_required=include_restart_required,
@@ -187,7 +186,9 @@ class ApplicationRuntime:  # pylint: disable=too-many-instance-attributes
         self.static_assets = StaticAssetManifest(self.STATIC_ROOT)
         self.templates.env.globals["static_asset_url"] = self.static_assets.url
         self.config_values = build_config_values()
-        self.db = DB(self.storage_layout.database_path, config_values=self.config_values)
+        self.db = DB(
+            self.storage_layout.database_path, config_values=self.config_values
+        )
         try:
             self.db.init()
         except SchemaRequirementsError as exc:
@@ -196,14 +197,18 @@ class ApplicationRuntime:  # pylint: disable=too-many-instance-attributes
         self.verification_task_store = VerificationTaskStore(self.db)
         self.system_config_service = SystemConfigService(self.db)
         self.smtp_config_service = SmtpConfigService(self.db)
-        runtime_overrides = self.system_config_service.refresh(include_restart_required=True)
+        runtime_overrides = self.system_config_service.refresh(
+            include_restart_required=True
+        )
         effective = build_config_values(runtime_overrides)
         self.config_values.replace(effective.snapshot())
         self.auth_service = AuthService(
             AuthStore(self.db, config_values=self.config_values),
             config_values=self.config_values,
         )
-        self.runtime_state_service = RuntimeStateService(self.db, RuntimeStateStore(self.db))
+        self.runtime_state_service = RuntimeStateService(
+            self.db, RuntimeStateStore(self.db)
+        )
         self.access_query = AccessQuery(self.db)
         self.workspace_service = workspace.WorkspaceService(
             self.db,
@@ -212,7 +217,9 @@ class ApplicationRuntime:  # pylint: disable=too-many-instance-attributes
             verification_task_store=self.verification_task_store,
             config_values=self.config_values,
         )
-        self.agent_service = AgentService(self.db, self.workspace_service, self.access_query)
+        self.agent_service = AgentService(
+            self.db, self.workspace_service, self.access_query
+        )
         self.contest_service = ContestService(
             self.db,
             self.storage_layout,
@@ -230,8 +237,12 @@ class ApplicationRuntime:  # pylint: disable=too-many-instance-attributes
             self.workspace_service,
             config_values=self.config_values,
         )
-        self.workspace_mutation_service = WorkspaceMutationService(self.workspace_service)
-        self.runtime_blob_store = RuntimeBlobStore(self.storage_layout.runtime_blob_root)
+        self.workspace_mutation_service = WorkspaceMutationService(
+            self.workspace_service
+        )
+        self.runtime_blob_store = RuntimeBlobStore(
+            self.storage_layout.runtime_blob_root
+        )
         self.runtime_cache_index = RuntimeCacheIndex(self.runtime_blob_store)
         self.verification_runtime_registry = VerificationRuntimeRegistry()
         self.verification_task_completion_service = VerificationTaskCompletionService(
@@ -393,12 +404,8 @@ class ApplicationRuntime:  # pylint: disable=too-many-instance-attributes
             worker_queue_service=self.worker_queue_service,
             judgehost_task_service=self.judgehost_task_service,
         )
-        self.worker_queue_service.set_admission_gate(
-            self.maintenance_admission_gate
-        )
-        self.judgehost_task_service.set_admission_gate(
-            self.maintenance_admission_gate
-        )
+        self.worker_queue_service.set_admission_gate(self.maintenance_admission_gate)
+        self.judgehost_task_service.set_admission_gate(self.maintenance_admission_gate)
         self.workspace_service.configure_problem_deletion_runtime(
             guard=self.maintenance_service.problem_deletion_guard,
             cleanup_problem_runtime=self._cleanup_problem_judgehost_runtime,

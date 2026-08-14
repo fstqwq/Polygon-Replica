@@ -1,4 +1,4 @@
-from app.service.judgehost.work.task_registry import JudgehostTaskRow
+﻿from app.service.judgehost.task.registry import JudgehostTaskRow
 
 _HEAVY_PAYLOAD_KEYS = {
     "precomputed",
