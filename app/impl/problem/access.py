@@ -35,7 +35,10 @@ def workspace_access_revoke(problem: str, user: Annotated[str, Depends(require_s
         safe_target = normalize_username_required(target_user)
         problem_id = int(ctx["problem"]["id"])
         result = runtime().workspace_service.revoke_repo_access_for_problem_id(problem_id, safe_target)
-        redirect_to_problems = int(result["target_user_id"]) == int(ctx["user"]["id"])
+        target_user_id = result["target_user_id"]
+        if not isinstance(target_user_id, int) or isinstance(target_user_id, bool):
+            raise RuntimeError("revoked access user id must be an integer")
+        redirect_to_problems = target_user_id == int(ctx["user"]["id"])
         msg = f"access removed: {safe_target}"
     except ValueError as exc:
         msg = str(exc)

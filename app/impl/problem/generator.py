@@ -86,7 +86,11 @@ def generators_page(request: Request, problem: str, user: Annotated[str, Depends
     try:
         repo_abs = safe_workspace_path(workspace, selected_source)
         if repo_abs.exists() and repo_abs.is_file() and (not repo_abs.is_symlink()):
-            repo_content, repo_content_truncated = runtime().git_service.read_file_limited(workspace, selected_source, runtime().config_values.WORKSPACE_FILE_VIEW_CHAR_LIMIT)
+            repo_content, repo_content_truncated = runtime().git_service.read_file_limited(
+                workspace,
+                selected_source,
+                runtime().config_values.integer("WORKSPACE_FILE_VIEW_CHAR_LIMIT"),
+            )
     except HTTPException:
         repo_content = ''
         repo_content_truncated = False
@@ -131,7 +135,7 @@ def generator_save_source(
         safe_content = enforce_textarea_max_bytes(
             content,
             label='generator source',
-            max_bytes=int(runtime().config_values.TEXTAREA_MAX_BYTES),
+            max_bytes=runtime().config_values.integer("TEXTAREA_MAX_BYTES"),
         )
         with runtime().workspace_service.workspace_lock(workspace):
             target_abs = safe_workspace_path(workspace, target)

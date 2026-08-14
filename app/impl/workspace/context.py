@@ -1,8 +1,20 @@
 import app.main_constant as _K
 
 from fastapi import HTTPException
+from typing import TypedDict
 
 from app.impl.runtime.dependency import runtime
+
+
+class PageUser(TypedDict):
+    id: int
+    username: str
+    is_system_admin: int
+
+
+class GlobalUserPageContext(TypedDict):
+    user: PageUser
+    default_problem: str
 
 
 
@@ -48,7 +60,7 @@ def global_user_ctx(
     user_ident_re=None,
     username_rule_message: str | None = None,
     default_problem_selector=None,
-) -> dict:
+) -> GlobalUserPageContext:
     if user_ident_re is None:
         user_ident_re = _K.USER_IDENT_RE
     if username_rule_message is None:
@@ -67,11 +79,17 @@ def global_user_ctx(
         row = runtime().workspace_service.global_user_context(safe_user)
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+    user_id = row["id"]
+    is_system_admin = row["is_system_admin"]
+    if not isinstance(user_id, int) or isinstance(user_id, bool):
+        raise RuntimeError("global user id must be an integer")
+    if not isinstance(is_system_admin, int) or isinstance(is_system_admin, bool):
+        raise RuntimeError("global admin flag must be an integer")
     return {
         "user": {
-            "id": int(row["id"]),
+            "id": user_id,
             "username": str(row["username"]),
-            "is_system_admin": int(row["is_system_admin"]),
+            "is_system_admin": is_system_admin,
         },
-        "default_problem": selector(safe_user),
+        "default_problem": str(selector(safe_user) or ""),
     }

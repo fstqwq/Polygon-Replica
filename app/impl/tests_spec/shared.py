@@ -11,6 +11,7 @@ from app.impl.workspace.test_spec import (
     write_tests_spec,
 )
 from app.service.problem.test_spec import (
+    TestSpecEntry,
     next_test_id,
     normalize_gen_command,
     normalize_sample_input,
@@ -22,13 +23,16 @@ from app.service.problem.test_spec import (
 
 
 def tests_spec_gen_script_context(workspace: Path) -> dict[str, object]:
-    limits = runtime().config_values.snapshot()
     lines: list[str] = []
     with runtime().workspace_service.workspace_lock(workspace):
         entries, _spec_path = read_tests_spec(
             workspace,
-            document_max_bytes=int(limits["TEXTAREA_MAX_BYTES"]),
-            sample_max_bytes=int(limits["STATEMENT_SAMPLE_MAX_BYTES"]),
+            document_max_bytes=runtime().config_values.integer(
+                "TEXTAREA_MAX_BYTES"
+            ),
+            sample_max_bytes=runtime().config_values.integer(
+                "STATEMENT_SAMPLE_MAX_BYTES"
+            ),
         )
         for entry in entries:
             kind = kind.strip().lower() if isinstance(kind := entry.get("kind"), str) else ""
@@ -52,30 +56,33 @@ def parse_gen_script_lines(raw: object) -> list[str]:
     return commands
 
 
-def tests_spec_sample_input_value(raw: object | None, fallback: object = "") -> str:
+def tests_spec_sample_input_value(raw: str | None, fallback: str = "") -> str:
     value = fallback if raw is None else tests_spec_form_text(raw)
     return normalize_sample_input(
         value,
-        max_bytes=int(runtime().config_values.STATEMENT_SAMPLE_MAX_BYTES),
+        max_bytes=runtime().config_values.integer("STATEMENT_SAMPLE_MAX_BYTES"),
     )
 
 
-def tests_spec_sample_output_value(raw: object | None, fallback: object = "") -> str:
+def tests_spec_sample_output_value(raw: str | None, fallback: str = "") -> str:
     value = fallback if raw is None else tests_spec_form_text(raw)
     return normalize_sample_output(
         value,
-        max_bytes=int(runtime().config_values.STATEMENT_SAMPLE_MAX_BYTES),
+        max_bytes=runtime().config_values.integer("STATEMENT_SAMPLE_MAX_BYTES"),
     )
 
 
-def tests_spec_sample_output_validate_value(raw: object | list[object] | None, fallback: object = True) -> bool:
+def tests_spec_sample_output_validate_value(
+    raw: list[str] | bool | str | None,
+    fallback: bool | str | None = True,
+) -> bool:
     if isinstance(raw, list):
         if not raw:
             return tests_spec_bool_flag(fallback)
         return tests_spec_bool_flag(tests_spec_form_text(raw[-1]))
     if raw is None:
         return tests_spec_bool_flag(fallback)
-    return tests_spec_bool_flag(tests_spec_form_text(raw))
+    return tests_spec_bool_flag(raw)
 
 
 def tests_spec_row(
@@ -87,7 +94,7 @@ def tests_spec_row(
     sample_output: str = "",
     sample_output_validate: bool = True,
     index: int = 0,
-) -> dict:
+) -> TestSpecEntry:
     payload: dict[str, object] = {
         "id": normalize_test_id(test_id),
         "kind": normalize_test_kind(kind),
@@ -104,7 +111,9 @@ def tests_spec_row(
     return normalize_tests_spec_entry(
         payload,
         index=index,
-        sample_max_bytes=int(runtime().config_values.STATEMENT_SAMPLE_MAX_BYTES),
+        sample_max_bytes=runtime().config_values.integer(
+            "STATEMENT_SAMPLE_MAX_BYTES"
+        ),
     )
 
 
@@ -119,11 +128,12 @@ def tests_spec_add_single_entry(
     sample_output: str,
     sample_output_validate: bool,
 ) -> tuple[int, str]:
-    limits = runtime().config_values.snapshot()
     entries, spec_path = read_tests_spec(
         workspace,
-        document_max_bytes=int(limits["TEXTAREA_MAX_BYTES"]),
-        sample_max_bytes=int(limits["STATEMENT_SAMPLE_MAX_BYTES"]),
+        document_max_bytes=runtime().config_values.integer("TEXTAREA_MAX_BYTES"),
+        sample_max_bytes=runtime().config_values.integer(
+            "STATEMENT_SAMPLE_MAX_BYTES"
+        ),
     )
     safe_test_id = normalize_test_id(requested_id) if requested_id else next_test_id(entries)
     if any((row.get("id") == safe_test_id for row in entries)):
@@ -142,8 +152,10 @@ def tests_spec_add_single_entry(
     write_tests_spec(
         spec_path,
         entries,
-        document_max_bytes=int(limits["TEXTAREA_MAX_BYTES"]),
-        sample_max_bytes=int(limits["STATEMENT_SAMPLE_MAX_BYTES"]),
+        document_max_bytes=runtime().config_values.integer("TEXTAREA_MAX_BYTES"),
+        sample_max_bytes=runtime().config_values.integer(
+            "STATEMENT_SAMPLE_MAX_BYTES"
+        ),
     )
     tests_spec_write_payload(workspace, safe_test_id, kind, payload)
     return len(entries), safe_test_id

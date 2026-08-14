@@ -17,6 +17,7 @@ from app.impl.workspace.context_job import start_verification_job
 from app.impl.workspace.context_ui import page_ctx
 from app.impl.workspace.context_job_helper import allocate_verification_id
 from app.impl.workspace.context_operation import (
+    RunSolutionOption,
     dedupe_preserve_order,
     run_solution_options_context,
     run_test_options_context,
@@ -41,6 +42,22 @@ from app.impl.run_export.query import (
 from app.service.verification.types import ACTIVE
 
 logger = logging.getLogger(__name__)
+
+
+def _context_section(
+    context: dict[str, object], key: str
+) -> dict[str, object]:
+    value = context.get(key)
+    if not isinstance(value, dict):
+        raise RuntimeError(f"problem page context {key} is missing")
+    return value
+
+
+def _context_int(section: dict[str, object], key: str) -> int:
+    value = section.get(key)
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise RuntimeError(f"problem page context {key} must be an integer")
+    return value
 
 
 def _upload_filename_token(raw: str) -> str:
@@ -298,7 +315,7 @@ def run_cancel(problem: str, user: Annotated[str, Depends(require_session_user)]
 
 def _build_dag_targets(
     *,
-    solution_options: list[dict[str, object]],
+    solution_options: list[RunSolutionOption],
     accepted_solution_path: str,
     selected_solution_paths: list[str],
     uploaded: bool,
@@ -383,16 +400,19 @@ def _start_run_verification(
         upload_filename=upload_filename,
         upload_content=upload_content,
     )
-    workspace_head = str(ctx["workspace"].get("head_commit") or "")
-    workspace_dirty = bool(ctx["workspace"].get("dirty"))
+    workspace_context = _context_section(ctx, "workspace")
+    user_context = _context_section(ctx, "user")
+    problem_context = _context_section(ctx, "problem")
+    workspace_head = str(workspace_context.get("head_commit") or "")
+    workspace_dirty = bool(workspace_context.get("dirty"))
     try:
         started = start_verification_job(
             runtime(),
             problem,
             user,
-            actor_user_id=int(ctx["user"]["id"]),
-            problem_id=int(ctx["problem"]["id"]),
-            workspace_id=int(ctx["workspace"]["id"]),
+            actor_user_id=_context_int(user_context, "id"),
+            problem_id=_context_int(problem_context, "id"),
+            workspace_id=_context_int(workspace_context, "id"),
             workspace_head=workspace_head,
             workspace_dirty=workspace_dirty,
             targets=dag_targets,
@@ -495,7 +515,7 @@ def run_execute(
                 upload_content = read_fileobj_bytes_limited(
                     submission_upload.file,
                     label='submission upload',
-                    max_bytes=int(runtime().config_values.UPLOAD_MAX_BYTES),
+                    max_bytes=runtime().config_values.integer("UPLOAD_MAX_BYTES"),
                 )
                 uploaded = True
         selected_solution_paths = dedupe_preserve_order(

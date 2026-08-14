@@ -42,7 +42,7 @@ def contest_problems_page(request: Request, contest: str, user: Annotated[str, D
     available_rows = runtime().contest_service.available_problems(
         contest_id,
         user_id,
-        limit=int(runtime().config_values.API_PROBLEMS_LIST_LIMIT),
+        limit=runtime().config_values.integer("API_PROBLEMS_LIST_LIMIT"),
         query=query,
     )
     available_display_rows: list[dict[str, object]] = []
@@ -259,11 +259,14 @@ def _failed_general_job_payload(
     if retry_job["job_type"] != "change-general":
         raise ValueError("retry job type is invalid")
     summary = retry_job["summary"]
-    if not isinstance(summary, dict) or not isinstance(summary.get("results"), list):
+    if not isinstance(summary, dict):
+        raise ValueError("retry job report is invalid")
+    retry_results = summary.get("results")
+    if not isinstance(retry_results, list):
         raise ValueError("retry job report is invalid")
     selected_ids: list[int] = []
     requested_map: dict[int, dict[str, object]] = {}
-    for result in summary["results"]:
+    for result in retry_results:
         if not isinstance(result, dict) or result.get("status") != "failed":
             continue
         problem_id = result.get("problem_id")
@@ -316,20 +319,28 @@ def _apply_general_changes(
             "memory_limit_mb": str(_K.GENERAL_CONFIG_DEFAULTS["memory_limit_mb"]),
         }
         requested = requested_map.get(pid, defaults)
+        requested_time_limit = requested.get("time_limit_ms")
+        requested_memory_limit = requested.get("memory_limit_mb")
         result = _run_problem_general_update(
             contest_slug=str(contest_ctx["slug"]),
             actor_username=str(user_ctx["username"]),
             actor_user_id=actor_user_id,
             problem_id=pid,
             problem_slug=str(row["problem_slug"]),
-            requested_time_limit_ms=requested["time_limit_ms"] if isinstance(requested.get("time_limit_ms"), str) else "",
-            requested_memory_limit_mb=requested["memory_limit_mb"] if isinstance(requested.get("memory_limit_mb"), str) else "",
+            requested_time_limit_ms=(
+                requested_time_limit if isinstance(requested_time_limit, str) else ""
+            ),
+            requested_memory_limit_mb=(
+                requested_memory_limit
+                if isinstance(requested_memory_limit, str)
+                else ""
+            ),
         )
         results.append(result)
     success_count = sum((1 for row in results if isinstance(row.get("status"), str) and row["status"] == "success"))
     failed_count = sum((1 for row in results if isinstance(row.get("status"), str) and row["status"] == "failed"))
     skipped_count = sum((1 for row in results if isinstance(row.get("status"), str) and row["status"] == "skipped"))
-    summary = {
+    summary: dict[str, object] = {
         "contest_slug": str(contest_ctx["slug"]),
         "job_type": "change-general",
         "results": results,

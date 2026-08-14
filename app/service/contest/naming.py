@@ -1,4 +1,5 @@
 import re
+from collections.abc import Mapping
 
 
 def problem_slug_file_token(problem_slug: str) -> str:
@@ -7,7 +8,7 @@ def problem_slug_file_token(problem_slug: str) -> str:
 
 
 def problem_source_folder(
-    entry: dict[str, object],
+    entry: Mapping[str, object],
     source_folder_map: dict[int, str],
 ) -> str:
     raw_problem_id = entry["problem_id"]

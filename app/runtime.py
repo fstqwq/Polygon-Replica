@@ -144,7 +144,7 @@ class ApplicationRuntime:  # pylint: disable=too-many-instance-attributes,invali
 
     def _resolve_password_form_csrf_secret(self) -> bytes:
         """Resolve the runtime-owned form secret from canonical configuration."""
-        configured = str(self.config_values.PASSWORD_FORM_CSRF_SECRET or "").strip()
+        configured = self.config_values.text("PASSWORD_FORM_CSRF_SECRET").strip()
         if configured:
             return configured.encode("utf-8")
         existing = bytes(getattr(self, "password_form_csrf_secret", b"") or b"")
@@ -346,11 +346,11 @@ class ApplicationRuntime:  # pylint: disable=too-many-instance-attributes,invali
             config_values=self.config_values,
         )
         self.worker_queue_service = WorkerQueueService(
-            worker_count=int(self.config_values.WORKER_QUEUE_THREADS),
-            history_limit=int(self.config_values.WORKER_QUEUE_HISTORY_LIMIT),
-            queue_capacity=int(self.config_values.WORKER_QUEUE_CAPACITY),
-            durable_history_limit=int(
-                self.config_values.WORKER_QUEUE_DURABLE_HISTORY_LIMIT
+            worker_count=self.config_values.integer("WORKER_QUEUE_THREADS"),
+            history_limit=self.config_values.integer("WORKER_QUEUE_HISTORY_LIMIT"),
+            queue_capacity=self.config_values.integer("WORKER_QUEUE_CAPACITY"),
+            durable_history_limit=self.config_values.integer(
+                "WORKER_QUEUE_DURABLE_HISTORY_LIMIT"
             ),
             durable_log_path=self.storage_layout.worker_history_path,
         )

@@ -1,4 +1,38 @@
 import re
+from typing import Literal, TypeAlias, TypedDict
+
+
+class TextNode(TypedDict):
+    type: Literal["text"]
+    value: str
+
+
+class ExpressionNode(TypedDict):
+    type: Literal["expr"]
+    expr: str
+
+
+class AssignmentNode(TypedDict):
+    type: Literal["assign"]
+    name: str
+    expr: str
+
+
+class ConditionalNode(TypedDict):
+    type: Literal["if"]
+    branches: list[tuple[str | None, list["FtlNode"]]]
+
+
+class ListNode(TypedDict):
+    type: Literal["list"]
+    expr: str
+    item: str
+    children: list["FtlNode"]
+
+
+FtlNode: TypeAlias = (
+    TextNode | ExpressionNode | AssignmentNode | ConditionalNode | ListNode
+)
 
 
 FTL_LIST_RE = re.compile(r"^list\s+(.+?)\s+as\s+([A-Za-z_][A-Za-z0-9_]*)$", re.DOTALL)
@@ -111,8 +145,8 @@ def _parse_nodes(
     pos: int,
     stop_tags: set[str],
     stop_closing_tags: set[str],
-) -> tuple[list[dict[str, object]], int, str, str]:
-    nodes: list[dict[str, object]] = []
+) -> tuple[list[FtlNode], int, str, str]:
+    nodes: list[FtlNode] = []
     n = len(text)
     while pos < n:
         next_expr = text.find("${", pos)
@@ -171,7 +205,7 @@ def _parse_nodes(
                 continue
             if low.startswith("if "):
                 cond = body[3:].strip()
-                branches: list[tuple[str | None, list[dict[str, object]]]] = []
+                branches: list[tuple[str | None, list[FtlNode]]] = []
                 inner, pos, stop_tag, stop_arg = _parse_nodes(text, pos, {"elseif", "else"}, {"if"})
                 branches.append((cond, inner))
                 while stop_tag in {"elseif", "else"}:
@@ -205,4 +239,3 @@ def _parse_nodes(
             nodes.append({"type": "text", "value": f"<#{body}>"})
             continue
     return (nodes, pos, "", "")
-

@@ -152,14 +152,20 @@ def judgehost_compile_check_error(
         return message
 
     backend = application_runtime.judgehost_task_service
-    display_limit_bytes = int(
-        application_runtime.config_values.AUX_DISPLAY_TEXT_LIMIT_BYTES
+    display_limit_bytes = application_runtime.config_values.integer(
+        "AUX_DISPLAY_TEXT_LIMIT_BYTES"
     )
     try:
         if (not backend.enabled()) or (not backend.auth_token_configured()):
             return _with_path("judge backend unavailable for compile check")
         status_obj = backend.status()
-        hosts_online = int(status_obj.get("hosts_online", 0)) if isinstance(status_obj, dict) else 0
+        hosts_online_value = status_obj.get("hosts_online", 0)
+        hosts_online = (
+            hosts_online_value
+            if isinstance(hosts_online_value, int)
+            and not isinstance(hosts_online_value, bool)
+            else 0
+        )
         if hosts_online <= 0:
             return _with_path("judge backend offline for compile check")
     except Exception:

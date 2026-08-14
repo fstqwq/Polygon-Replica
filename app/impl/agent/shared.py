@@ -1,17 +1,19 @@
 from pathlib import Path
-from typing import cast
 
 from fastapi import HTTPException, Request
 
 from app.impl.auth.session import session_identity
 from app.impl.runtime.dependency import runtime
+from app.service.repository.workspace import WorkspaceContext
+from app.service.agent.service import AgentTokenIdentity
+from app.service.disk.auth_store import AuthSessionIdentity
 
 
-def current_web_user(request: Request) -> dict[str, object]:
+def current_web_user(request: Request) -> AuthSessionIdentity:
     identity = session_identity(request)
     if identity is None:
         raise HTTPException(status_code=401, detail="login required")
-    return dict(identity)
+    return identity
 
 
 def bearer_token(request: Request) -> str:
@@ -21,7 +23,11 @@ def bearer_token(request: Request) -> str:
     return raw[7:].strip()
 
 
-def require_agent_token(request: Request, *, min_scope: str):
+def require_agent_token(
+    request: Request,
+    *,
+    min_scope: str,
+) -> AgentTokenIdentity:
     token = bearer_token(request)
     if not token:
         raise HTTPException(status_code=401, detail="missing bearer token")
@@ -33,13 +39,15 @@ def require_agent_token(request: Request, *, min_scope: str):
         raise HTTPException(status_code=403, detail=str(exc)) from exc
 
 
-def workspace_context_for_identity(identity) -> dict[str, object]:
+def workspace_context_for_identity(
+    identity: AgentTokenIdentity,
+) -> WorkspaceContext:
     ctx = runtime().workspace_service.workspace_context(identity.problem_slug, identity.username, include_recent=False)
     if int(ctx["problem"]["id"]) != int(identity.problem_id):
         raise HTTPException(status_code=403, detail="problem context mismatch")
     if int(ctx["user"]["id"]) != int(identity.user_id):
         raise HTTPException(status_code=403, detail="user context mismatch")
-    workspace_row = cast(dict[str, object], ctx["workspace"])
+    workspace_row = ctx["workspace"]
     workspace = Path(str(workspace_row["path"])).resolve()
     try:
         with runtime().workspace_service.workspace_lock(workspace):
@@ -52,6 +60,7 @@ def workspace_context_for_identity(identity) -> dict[str, object]:
     return ctx
 
 
-def workspace_path_for_identity(identity) -> Path:
+def workspace_path_for_identity(identity: AgentTokenIdentity) -> Path:
     ctx = workspace_context_for_identity(identity)
-    return Path(str(ctx["workspace"]["path"])).resolve()
+    workspace_row = ctx["workspace"]
+    return Path(str(workspace_row["path"])).resolve()

@@ -10,12 +10,13 @@ from collections.abc import Callable
 from contextlib import contextmanager
 from pathlib import Path, PurePosixPath
 import re
-from typing import ContextManager
+from typing import ContextManager, TypedDict
 
 from app.config import ConfigValues
 from app.db import DB
 from app.service.access.policy import repo_role
 from app.service.access.query import AccessQuery
+from app.service.access.model import ProblemParticipationRow
 from app.main_constant import (
     PROBLEM_ID_MAX_LEN,
     PROBLEM_ID_RULE_MESSAGE,
@@ -23,7 +24,13 @@ from app.main_constant import (
     USERNAME_RULE_MESSAGE,
     USER_IDENT_RE,
 )
-from app.service.disk.workspace_store import WorkspaceDiskStore
+from app.service.disk.workspace_store import (
+    ProblemAclEntry,
+    ProblemRow,
+    UserRow,
+    WorkspaceDiskStore,
+    WorkspaceRecentVerificationRow,
+)
 from app.service.platform.fs.op import copytree, ensure_dir, extract_git_archive, remove_symlinks
 from app.service.platform.testlib_source import maintained_testlib_header
 from app.service.platform.workspace_path import is_hidden_workspace_path
@@ -33,6 +40,19 @@ from app.service.problem.runtime_config import (
     dumps_problem_config,
     problem_config_limits,
 )
+
+
+class GlobalUserContext(TypedDict):
+    id: int
+    username: str
+    is_system_admin: int
+
+
+class WorkspaceContext(TypedDict):
+    problem: ProblemRow
+    user: UserRow
+    workspace: WorkspaceState
+    latest_artifact_verification: WorkspaceRecentVerificationRow | None
 from app.service.problem.test_spec import dumps_default_tests_spec
 from app.service.platform.fs.layout import StorageLayout
 from app.service.platform.git_process import run_git
@@ -238,7 +258,7 @@ class WorkspaceService:
         row = self._store.ensure_problem_row(slug=slug, repo_name=repo_name)
         self._cache_put(self._problem_cache, slug, dict(row), self.PROBLEM_CACHE_MAX_ENTRIES)
 
-    def ensure_user(self, username: str):
+    def ensure_user(self, username: str) -> UserRow:
         username = self._validate_identifier(username, "user")
         cached = self._cache_get(self._user_cache, username)
         if cached is not None:
@@ -249,15 +269,25 @@ class WorkspaceService:
             if cached_id > 0:
                 row = self._store.user_row_by_id_username(cached_id, username)
                 if row is not None:
-                    cached_row = dict(row)
-                    self._cache_put(self._user_cache, username, cached_row, self.USER_CACHE_MAX_ENTRIES)
+                    cached_row = UserRow(**row)
+                    self._cache_put(
+                        self._user_cache,
+                        username,
+                        dict(cached_row),
+                        self.USER_CACHE_MAX_ENTRIES,
+                    )
                     return cached_row
             self._cache_evict(self._user_cache, username)
-        row_dict = dict(self._store.ensure_user_row(username))
-        self._cache_put(self._user_cache, username, row_dict, self.USER_CACHE_MAX_ENTRIES)
+        row_dict = UserRow(**self._store.ensure_user_row(username))
+        self._cache_put(
+            self._user_cache,
+            username,
+            dict(row_dict),
+            self.USER_CACHE_MAX_ENTRIES,
+        )
         return row_dict
 
-    def known_user(self, username: str) -> dict[str, object]:
+    def known_user(self, username: str) -> UserRow:
         safe_username = self._validate_identifier(username, "user")
         cached = self._cache_get(self._user_cache, safe_username)
         if cached is not None:
@@ -268,15 +298,25 @@ class WorkspaceService:
             if cached_id > 0:
                 row = self._store.user_row_by_id_username(cached_id, safe_username)
                 if row is not None:
-                    cached_row = dict(row)
-                    self._cache_put(self._user_cache, safe_username, cached_row, self.USER_CACHE_MAX_ENTRIES)
+                    cached_row = UserRow(**row)
+                    self._cache_put(
+                        self._user_cache,
+                        safe_username,
+                        dict(cached_row),
+                        self.USER_CACHE_MAX_ENTRIES,
+                    )
                     return cached_row
             self._cache_evict(self._user_cache, safe_username)
         row = self._store.user_row_by_username(safe_username)
         if row is None:
             raise ValueError(f"user {safe_username} not found; ask them to register first")
-        row_dict = dict(row)
-        self._cache_put(self._user_cache, safe_username, row_dict, self.USER_CACHE_MAX_ENTRIES)
+        row_dict = UserRow(**row)
+        self._cache_put(
+            self._user_cache,
+            safe_username,
+            dict(row_dict),
+            self.USER_CACHE_MAX_ENTRIES,
+        )
         return row_dict
 
     def grant_repo_access(self, problem: str, username: str, role: str) -> None:
@@ -285,7 +325,7 @@ class WorkspaceService:
         safe_role = repo_role(role)
         self._store.upsert_repo_access(int(p["id"]), int(u["id"]), safe_role)
 
-    def _problem_row(self, slug: str):
+    def _problem_row(self, slug: str) -> ProblemRow:
         slug = self._validate_identifier(slug, "problem")
         cached = self._cache_get(self._problem_cache, slug)
         if cached is not None:
@@ -296,15 +336,25 @@ class WorkspaceService:
             if cached_id > 0:
                 row = self._store.problem_row_by_id_slug(cached_id, slug)
                 if row is not None:
-                    cached_row = dict(row)
-                    self._cache_put(self._problem_cache, slug, cached_row, self.PROBLEM_CACHE_MAX_ENTRIES)
+                    cached_row = ProblemRow(**row)
+                    self._cache_put(
+                        self._problem_cache,
+                        slug,
+                        dict(cached_row),
+                        self.PROBLEM_CACHE_MAX_ENTRIES,
+                    )
                     return cached_row
             self._cache_evict(self._problem_cache, slug)
         row = self._store.problem_row_by_slug(slug)
         if row is None:
             raise ValueError(f"Unknown problem: {slug}")
-        row_dict = dict(row)
-        self._cache_put(self._problem_cache, slug, row_dict, self.PROBLEM_CACHE_MAX_ENTRIES)
+        row_dict = ProblemRow(**row)
+        self._cache_put(
+            self._problem_cache,
+            slug,
+            dict(row_dict),
+            self.PROBLEM_CACHE_MAX_ENTRIES,
+        )
         return row_dict
 
     def page_identity(self, problem: str, username: str) -> tuple[int, int]:
@@ -316,12 +366,12 @@ class WorkspaceService:
             raise ValueError(f"Unknown user: {username}")
         return (problem_id, user_id)
 
-    def global_user_context(self, username: str) -> dict[str, object]:
+    def global_user_context(self, username: str) -> GlobalUserContext:
         ensured = self.ensure_user(self._validate_identifier(username, "user"))
         return {
-            "id": int(ensured["id"]),
-            "username": str(ensured["username"]),
-            "is_system_admin": int(ensured["is_system_admin"]),
+            "id": ensured["id"],
+            "username": ensured["username"],
+            "is_system_admin": ensured["is_system_admin"],
         }
 
     def known_user_id(self, username: str) -> int | None:
@@ -380,7 +430,12 @@ class WorkspaceService:
             return []
         return self._store.problem_slugs_by_leaf(safe_leaf, limit=max(1, int(limit)))
 
-    def participating_problem_rows(self, user_id: int, *, limit: int) -> list[dict[str, object]]:
+    def participating_problem_rows(
+        self,
+        user_id: int,
+        *,
+        limit: int,
+    ) -> list[ProblemParticipationRow]:
         return list(
             self.access_query.participating_problem_rows(
                 user_id,
@@ -391,7 +446,7 @@ class WorkspaceService:
     def workspace_path(self, problem_id: int, workspace_id: int) -> str:
         return self._store.workspace_path(int(problem_id), int(workspace_id))
 
-    def access_entries(self, problem_id: int) -> list[dict[str, str]]:
+    def access_entries(self, problem_id: int) -> list[ProblemAclEntry]:
         entries = self._store.problem_acl_entries(int(problem_id))
         for entry in entries:
             repo_role(entry["role"])
@@ -712,7 +767,9 @@ class WorkspaceService:
             break
         return branch, head, dirty
 
-    def workspace_context(self, problem: str, username: str, include_recent: bool = True) -> dict:
+    def workspace_context(
+        self, problem: str, username: str, include_recent: bool = True
+    ) -> WorkspaceContext:
         p = self._problem_row(problem)
         u = self._user_row(username)
         ws = self._store.workspace_row(int(p["id"]), int(u["id"]))
@@ -730,7 +787,7 @@ class WorkspaceService:
         git_dir = ws_path / ".git"
         if not git_dir.exists() or not git_dir.is_dir():
             raise RuntimeError(f"workspace git metadata missing for {problem}/{username}")
-        latest_artifact_verification = None
+        latest_artifact_verification: WorkspaceRecentVerificationRow | None = None
         if include_recent:
             recent_verification = self._store.latest_workspace_artifact_verification(int(ws["id"]))
             if recent_verification is not None:
@@ -740,9 +797,9 @@ class WorkspaceService:
                     "created_at": recent_verification["created_at"],
                 }
         return {
-            "problem": dict(p),
-            "user": dict(u),
-            "workspace": dict(ws),
+            "problem": p,
+            "user": u,
+            "workspace": ws,
             "latest_artifact_verification": latest_artifact_verification,
         }
 

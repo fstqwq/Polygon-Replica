@@ -85,7 +85,7 @@ def files_page(request: Request, problem: str, user: Annotated[str, Depends(requ
     auto_message = ''
     files, files_truncated = runtime().workspace_file_service.list_paths(
         workspace,
-        limit=runtime().config_values.WORKSPACE_FILE_LIST_LIMIT,
+        limit=runtime().config_values.integer("WORKSPACE_FILE_LIST_LIMIT"),
         require_allowed_root=False,
     )
     if requested_dir is None and selected:
@@ -111,7 +111,9 @@ def files_page(request: Request, problem: str, user: Annotated[str, Depends(requ
         selected_view = runtime().workspace_file_service.file_view(
             workspace,
             selected,
-            char_limit=runtime().config_values.WORKSPACE_FILE_VIEW_CHAR_LIMIT,
+            char_limit=runtime().config_values.integer(
+                "WORKSPACE_FILE_VIEW_CHAR_LIMIT"
+            ),
             require_allowed_root=False,
         )
         if selected_view.is_dir:

@@ -137,9 +137,13 @@ class VerifiedRevisionWorkflow:
                 snapshot_root_override=snapshot,
                 retain_snapshot_override=True,
             )
-            record = self.verification_service.verification_record(verification_id) or {}
-            if str(record.get("status") or "") != VerificationStatus.OK.value:
-                error = str(record.get("fail_reason") or "full verification failed")
+            record = self.verification_service.verification_record(verification_id)
+            if record is None or record["status"] != VerificationStatus.OK:
+                error = (
+                    "full verification failed"
+                    if record is None
+                    else record["fail_reason"] or "full verification failed"
+                )
                 raise ValueError(f"verified revision verification failed: {error}")
             return verification_id
 

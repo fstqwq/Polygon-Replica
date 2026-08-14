@@ -16,6 +16,7 @@ from app.service.problem.solution_metadata import (
     normalize_expected_behavior,
 )
 from app.service.problem.source_tree import solution_sources
+from app.service.problem.runtime_config import ProblemMode
 from app.service.problem.test_spec import load_tests_spec
 from app.service.verification.identity import canonical_verification_id
 
@@ -56,7 +57,7 @@ class VerifiedRevisionManifest(TypedDict):
     source_commit: str
     revision_number: int
     source_digest: str
-    mode: str
+    mode: ProblemMode
     pass_limit: int
     verification: dict[str, str]
     solutions: list[VerifiedSolutionEntry]
@@ -352,7 +353,14 @@ def validate_manifest_files(
                 or actual["size"] != descriptor["size"]
             ):
                 raise ValueError(f"verified payload integrity check failed: {rel}")
-        for display_key, judge_key in (("sample_input", "input"), ("sample_output", "answer")):
+        display_pairs: tuple[
+            tuple[
+                Literal["sample_input", "sample_output"],
+                Literal["input", "answer"],
+            ],
+            ...,
+        ] = (("sample_input", "input"), ("sample_output", "answer"))
+        for display_key, judge_key in display_pairs:
             display = test.get(display_key)
             judge = test.get(judge_key)
             if display is not None and judge is not None and display["sha256"] == judge["sha256"]:

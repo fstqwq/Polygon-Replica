@@ -91,13 +91,14 @@ class ProblemSourceQueryService:
         self._config_values = config_values
 
     def _tests(self, workspace: Path) -> tuple[list[TestSpecEntry], Path]:
-        values = self._config_values.snapshot()
         path = workspace / TESTS_SPEC_REL
         return (
             load_tests_spec(
                 path,
-                document_max_bytes=int(values["TEXTAREA_MAX_BYTES"]),
-                sample_max_bytes=int(values["STATEMENT_SAMPLE_MAX_BYTES"]),
+                document_max_bytes=self._config_values.integer("TEXTAREA_MAX_BYTES"),
+                sample_max_bytes=self._config_values.integer(
+                    "STATEMENT_SAMPLE_MAX_BYTES"
+                ),
             ),
             path,
         )
@@ -124,12 +125,13 @@ class ProblemSourceQueryService:
             preview_source = ""
             manual_large = (
                 entry["kind"] == "manual"
-                and payload_size > int(values.TESTS_SPEC_MANUAL_INLINE_EDIT_MAX_BYTES)
+                and payload_size
+                > values.integer("TESTS_SPEC_MANUAL_INLINE_EDIT_MAX_BYTES")
             )
             preview_limit = 0
             preview_clipped = False
             if manual_large:
-                preview_limit = int(values.TESTS_SPEC_MANUAL_PREVIEW_BYTES)
+                preview_limit = values.integer("TESTS_SPEC_MANUAL_PREVIEW_BYTES")
                 assert payload_abs is not None
                 preview_source, preview_clipped = _file_head_text(
                     payload_abs,
@@ -148,8 +150,8 @@ class ProblemSourceQueryService:
                 if manual_large
                 else _inline_text_preview(
                     preview_source,
-                    int(values.TESTS_SPEC_PREVIEW_CHARS),
-                    int(values.TESTS_SPEC_PREVIEW_LINES),
+                    values.integer("TESTS_SPEC_PREVIEW_CHARS"),
+                    values.integer("TESTS_SPEC_PREVIEW_LINES"),
                 )
             )
             rows.append(
@@ -259,7 +261,7 @@ class ProblemSourceQueryService:
         build_config: BuildConfig | None = None,
     ) -> tuple[list[SolutionSourceRow], bool]:
         sources = solution_sources(workspace)
-        limit = int(self._config_values.SOLUTION_LIST_LIMIT)
+        limit = self._config_values.integer("SOLUTION_LIST_LIMIT")
         accepted_source = (
             self.accepted_solution_source(workspace)
             if build_config is None
@@ -284,7 +286,7 @@ class ProblemSourceQueryService:
         default_path = self.accepted_solution_source(workspace)
         if default_path not in {row["source_path"] for row in entries}:
             default_path = ""
-        options = [
+        options: list[RunSolutionOption] = [
             {
                 "path": row["source_path"],
                 "label": (
@@ -305,7 +307,7 @@ class ProblemSourceQueryService:
             entries, _path = self._tests(workspace)
         except ValueError:
             return [], False, ""
-        limit = int(self._config_values.RUN_TEST_SELECTOR_LIMIT)
+        limit = self._config_values.integer("RUN_TEST_SELECTOR_LIMIT")
         options: list[RunTestOption] = []
         for index, row in enumerate(entries[:limit], start=1):
             parts = [f'id={row["id"]}', row["kind"]]

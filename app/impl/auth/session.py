@@ -1,6 +1,7 @@
 from fastapi import HTTPException, Request
 
 from app.impl.runtime.dependency import runtime
+from app.service.disk.auth_store import AuthSessionIdentity, SudoSessionIdentity
 
 
 
@@ -24,13 +25,15 @@ def revoke_sudo_sessions_for_user(user_id: int) -> None:
     runtime().auth_service.revoke_sudo_sessions_for_user(int(user_id))
 
 
-def session_identity(request: Request) -> dict | None:
-    raw = str(request.cookies.get(runtime().config_values.AUTH_COOKIE_NAME, "")).strip()
+def session_identity(request: Request) -> AuthSessionIdentity | None:
+    cookie_name = runtime().config_values.text("AUTH_COOKIE_NAME")
+    raw = str(request.cookies.get(cookie_name, "")).strip()
     return runtime().auth_service.session_identity(raw)
 
 
-def _sudo_identity(request: Request, scope: str) -> dict | None:
-    raw = str(request.cookies.get(runtime().config_values.SUDO_COOKIE_NAME, "")).strip()
+def _sudo_identity(request: Request, scope: str) -> SudoSessionIdentity | None:
+    cookie_name = runtime().config_values.text("SUDO_COOKIE_NAME")
+    raw = str(request.cookies.get(cookie_name, "")).strip()
     return runtime().auth_service.sudo_session_identity(raw, str(scope or ""))
 
 

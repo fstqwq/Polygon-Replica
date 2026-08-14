@@ -1,7 +1,7 @@
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import cast
+from typing import TypedDict, cast
 
 from app.db import now_iso
 from app.service.execution.policy import normalize_execution_result
@@ -73,7 +73,10 @@ def build_graph(
         source_path = str(target.get("path") or "")
         if not source_path:
             continue
-        expected_behavior = normalize_expected_behavior(target.get("expected_behavior") or "unknown")
+        expected_value = target.get("expected_behavior")
+        expected_behavior = normalize_expected_behavior(
+            expected_value if isinstance(expected_value, str) else "unknown"
+        )
         if source_path == accepted_source_path and expected_behavior == "accepted":
             if str(target.get("program_id") or "") != "accepted":
                 raise RuntimeError(
@@ -272,7 +275,18 @@ def _task_running_entry(row: VerificationTaskRow) -> dict[str, str]:
     }
 
 
-def _empty_counts() -> dict[str, object]:
+class VerificationTaskCounts(TypedDict):
+    total: int
+    pending: int
+    queued: int
+    running: int
+    done: int
+    failed: int
+    cancelled: int
+    by_kind: dict[str, dict[str, int]]
+
+
+def _empty_counts() -> VerificationTaskCounts:
     by_kind = {
         TASK_GENERATE_INPUT: {status: 0 for status in ("pending", "queued", "running", "done", "failed", "cancelled")},
         TASK_MAIN_CORRECT: {status: 0 for status in ("pending", "queued", "running", "done", "failed", "cancelled")},
@@ -290,18 +304,28 @@ def _empty_counts() -> dict[str, object]:
     }
 
 
-def _task_counts(rows: list[VerificationTaskRow]) -> dict[str, object]:
+def _task_counts(rows: list[VerificationTaskRow]) -> VerificationTaskCounts:
     counts = _empty_counts()
-    by_kind = cast(dict[str, dict[str, int]], counts["by_kind"])
+    by_kind = counts["by_kind"]
     for row in rows:
         status = str(row["status"])
         display_status = status
         if status == VerificationTaskStatus.LEASED:
             display_status = "running"
         task_kind = str(row["task_kind"])
-        counts["total"] = int(counts["total"]) + 1
-        if display_status in counts:
-            counts[display_status] = int(counts[display_status]) + 1
+        counts["total"] += 1
+        if display_status == "pending":
+            counts["pending"] += 1
+        elif display_status == "queued":
+            counts["queued"] += 1
+        elif display_status == "running":
+            counts["running"] += 1
+        elif display_status == "done":
+            counts["done"] += 1
+        elif display_status == "failed":
+            counts["failed"] += 1
+        elif display_status == "cancelled":
+            counts["cancelled"] += 1
         kind_counts = by_kind.get(task_kind)
         if kind_counts is not None and display_status in kind_counts:
             kind_counts[display_status] = int(kind_counts[display_status]) + 1
@@ -384,8 +408,14 @@ def _program_summary(
         elif status in {VerificationTaskStatus.DONE, VerificationTaskStatus.FAILED}:
             test_row = _task_row_to_test_row(row)
             tests.append(test_row)
-            max_time_ms = max(max_time_ms, int(test_row.get("time_user_ms") or 0))
-            max_memory_kb = max(max_memory_kb, int(test_row.get("memory_kb") or 0))
+            time_user_ms = test_row["time_user_ms"]
+            memory_kb = test_row["memory_kb"]
+            if not isinstance(time_user_ms, int) or isinstance(time_user_ms, bool):
+                raise RuntimeError("verification test CPU time must be an integer")
+            if not isinstance(memory_kb, int) or isinstance(memory_kb, bool):
+                raise RuntimeError("verification test memory must be an integer")
+            max_time_ms = max(max_time_ms, time_user_ms)
+            max_memory_kb = max(max_memory_kb, memory_kb)
         if (not compile_log) and str(row["compile_log"] or ""):
             compile_log = str(row["compile_log"] or "")
         task_diagnostics_json = str(row["diagnostics_json"] or "[]")
@@ -460,7 +490,7 @@ def verification_summary_from_tasks(
     parent_status: VerificationStatus,
     fail_reason: str,
     display_limit: int,
-) -> tuple[str, dict[str, object], dict[str, object]]:
+) -> tuple[str, dict[str, object], VerificationTaskCounts]:
     solution_programs = visible_programs(programs)
     counts = _task_counts(rows)
     running_tasks = [
@@ -469,7 +499,9 @@ def verification_summary_from_tasks(
         if row["status"] == VerificationTaskStatus.LEASED
     ]
     first_solution_error = ""
-    has_pending_or_running = bool(int(counts["pending"]) or int(counts["queued"]) or int(counts["running"]))
+    has_pending_or_running = bool(
+        counts["pending"] or counts["queued"] or counts["running"]
+    )
     all_matched = True
     for program in solution_programs:
         grouped_rows = [row for row in rows if str(row["program_id"] or "") == program.program_id]
@@ -508,13 +540,13 @@ def verification_summary_from_tasks(
     elif has_pending_or_running:
         verification_status = VerificationStatus.RUNNING.value
         verification_error = ""
-    elif int(counts["cancelled"]) > 0:
+    elif counts["cancelled"] > 0:
         verification_status = VerificationStatus.FAILED.value
         verification_error = fail_reason or "verification task cancelled"
     elif solution_programs and all_matched:
         verification_status = VerificationStatus.OK.value
         verification_error = ""
-    elif (not solution_programs) and int(counts["total"]) > 0:
+    elif (not solution_programs) and counts["total"] > 0:
         verification_status = VerificationStatus.OK.value
         verification_error = ""
     else:

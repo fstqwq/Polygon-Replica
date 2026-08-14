@@ -40,7 +40,7 @@ def interactor_page(request: Request, problem: str, user: Annotated[str, Depends
         default_filename='interactor.cpp',
         starter_content=template_for_kind('interactor'),
     )
-    return template_response(request, 'interactor.html', {'ctx': ctx, 'interactor_status': interactor_status, 'editor': editor, 'content_char_limit': runtime().config_values.WORKSPACE_FILE_VIEW_CHAR_LIMIT})
+    return template_response(request, 'interactor.html', {'ctx': ctx, 'interactor_status': interactor_status, 'editor': editor, 'content_char_limit': runtime().config_values.integer("WORKSPACE_FILE_VIEW_CHAR_LIMIT")})
 
 def interactor_rename_source(
     problem: str,
@@ -79,7 +79,7 @@ def interactor_save_source(
         safe_content = enforce_textarea_max_bytes(
             content,
             label='interactor source',
-            max_bytes=int(runtime().config_values.TEXTAREA_MAX_BYTES),
+            max_bytes=runtime().config_values.integer("TEXTAREA_MAX_BYTES"),
         )
         with runtime().workspace_service.workspace_lock(workspace):
             target_abs = safe_workspace_path(workspace, target)

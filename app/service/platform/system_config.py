@@ -81,7 +81,7 @@ class SystemConfigService:
             buckets.items(),
             key=lambda item: (self._category_index(item[0]), item[0].lower()),
         ):
-            rows.sort(key=lambda row: row["key"])
+            rows.sort(key=self._config_row_key)
             sections.append(
                 {
                     "category": category,
@@ -114,6 +114,13 @@ class SystemConfigService:
         if current:
             parts.append("".join(current))
         return "-".join(parts) or "misc"
+
+    @staticmethod
+    def _config_row_key(row: dict[str, object]) -> str:
+        key = row["key"]
+        if not isinstance(key, str):
+            raise RuntimeError("system configuration row key is not text")
+        return key
 
     def validate_patch(self, payload: dict[str, object]) -> SystemConfigPatchPreview:
         with self._lock:

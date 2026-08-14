@@ -29,14 +29,6 @@ from app.service.problem.runtime_config import (
 from app.service.platform.workspace_path import safe_workspace_path
 
 
-_BUILD_SOURCE_KEYS = (
-    'accepted_solution_source',
-    'validator_source',
-    'checker_source',
-    'interactor_source',
-)
-
-
 def _cleanup_build_config_for_mode(
     workspace: Path,
     mode: ProblemMode,
@@ -57,10 +49,18 @@ def _cleanup_build_config_for_mode(
     build_cfg = inspected["config"]
     original = dict(build_cfg)
 
-    for key in _BUILD_SOURCE_KEYS:
-        source = build_cfg.get(key)
-        if source and (not workspace_rel_file_exists(workspace, str(source))):
-            build_cfg.pop(key, None)
+    accepted_source = build_cfg.get("accepted_solution_source")
+    if accepted_source and not workspace_rel_file_exists(workspace, accepted_source):
+        build_cfg.pop("accepted_solution_source", None)
+    validator_source = build_cfg.get("validator_source")
+    if validator_source and not workspace_rel_file_exists(workspace, validator_source):
+        build_cfg.pop("validator_source", None)
+    checker_source = build_cfg.get("checker_source")
+    if checker_source and not workspace_rel_file_exists(workspace, checker_source):
+        build_cfg.pop("checker_source", None)
+    interactor_source = build_cfg.get("interactor_source")
+    if interactor_source and not workspace_rel_file_exists(workspace, interactor_source):
+        build_cfg.pop("interactor_source", None)
 
     if (
         build_cfg != original

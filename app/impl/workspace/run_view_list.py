@@ -106,15 +106,26 @@ def _run_timeout_ms_from_summary(summary: dict | None) -> int:
     if not isinstance(run_cfg, dict):
         return 0
     mode = normalize_problem_mode(run_cfg.get("mode"), str(_K.GENERAL_CONFIG_DEFAULTS["mode"]))
-    time_limit_ms = coerce_int(run_cfg.get("time_limit_ms"), 0, 0, int(runtime().config_values.GENERAL_TIME_LIMIT_MAX_MS))
+    time_limit_ms = coerce_int(
+        run_cfg.get("time_limit_ms"),
+        0,
+        0,
+        runtime().config_values.integer("GENERAL_TIME_LIMIT_MAX_MS"),
+    )
     if time_limit_ms <= 0:
         return 0
     if mode == "interactive":
         pass_limit = coerce_int(run_cfg.get("pass_limit"), 1, 1, 100)
         if pass_limit > 1:
-            return time_limit_ms + int(runtime().config_values.RUN_WALL_TIME_SLACK_PASS_LIMIT_SEC) * 1000
-        return time_limit_ms + int(runtime().config_values.RUN_WALL_TIME_SLACK_INTERACTIVE_SEC) * 1000
-    return time_limit_ms + int(runtime().config_values.RUN_WALL_TIME_SLACK_PASS_FAIL_SEC) * 1000
+            return time_limit_ms + runtime().config_values.integer(
+                "RUN_WALL_TIME_SLACK_PASS_LIMIT_SEC"
+            ) * 1000
+        return time_limit_ms + runtime().config_values.integer(
+            "RUN_WALL_TIME_SLACK_INTERACTIVE_SEC"
+        ) * 1000
+    return time_limit_ms + runtime().config_values.integer(
+        "RUN_WALL_TIME_SLACK_PASS_FAIL_SEC"
+    ) * 1000
 
 
 def _normalized_verification_status(status: str) -> str:

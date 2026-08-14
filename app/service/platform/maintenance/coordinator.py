@@ -282,7 +282,7 @@ class MaintenanceCoordinator:
         if thread_error is None:
             return MaintenanceStart(True, "started", {})
 
-        details = {
+        details: dict[str, object] = {
             "operation_id": operation_id,
             "started_at": started_at,
             "finished_at": now_iso(),

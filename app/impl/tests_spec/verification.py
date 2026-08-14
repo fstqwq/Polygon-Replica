@@ -35,7 +35,7 @@ def verification_start(problem: str, user: Annotated[str, Depends(require_sessio
             raise ValueError('main correct solution is required')
         if not workspace_rel_file_exists(workspace, accepted_source):
             raise ValueError('main correct solution source does not exist')
-        targets: list[dict[str, str]] = []
+        targets: list[dict[str, object]] = []
         for row in solution_options:
             if not isinstance(source_path := row.get('path'), str):
                 continue

@@ -12,6 +12,7 @@ from app.service.platform.maintenance.plan import (
     CLEANUP_FILESYSTEM_CLASSES,
     REDUNDANT_DATABASE_INDEXES,
     ArtifactUsageSnapshot,
+    CleanupFilesystemClass,
 )
 from app.service.platform.runtime_blob_store import RuntimeBlobStore
 from app.service.platform.runtime_cache_index import RuntimeCacheIndex
@@ -98,7 +99,7 @@ class ArtifactCleanupService:
         }
         database_bytes_before = self._database.storage_bytes()
         reclaimed_bytes: dict[str, int] = {}
-        filesystem_bytes_before: dict[str, int] = {}
+        filesystem_bytes_before: dict[CleanupFilesystemClass, int] = {}
         result["database_bytes_before"] = database_bytes_before
         result["reclaimed_bytes"] = reclaimed_bytes
 
@@ -159,10 +160,10 @@ class ArtifactCleanupService:
             logger.info("artifact cleanup succeeded", extra={"result": result})
             return result
         except Exception as exc:
-            for label, before in filesystem_bytes_before.items():
-                root = self._filesystem.roots(CLEANUP_FILESYSTEM_CLASSES)[label]
-                reclaimed_bytes[label] = max(
-                    int(reclaimed_bytes.get(label, 0)),
+            for root_label, before in filesystem_bytes_before.items():
+                root = self._filesystem.roots(CLEANUP_FILESYSTEM_CLASSES)[root_label]
+                reclaimed_bytes[root_label] = max(
+                    int(reclaimed_bytes.get(root_label, 0)),
                     int(before) - self._filesystem.tree_bytes(root),
                 )
             result["finished_at"] = now_iso()

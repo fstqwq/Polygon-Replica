@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from app.service.judgehost.api import Judgehost
+from app.service.judgehost.ports.completion import CaseTerminalReport
 from app.service.platform.runtime_blob_store import PayloadFile
 from app.service.platform.runtime_blob_store import RuntimeBlobStore
 from app.service.verification.plan import VerificationTestPlan
@@ -50,11 +51,19 @@ def _validation_source_bytes(sample_output_text: str) -> bytes:
     return source_text.encode("utf-8")
 
 
-def _result_verdict(case_result: dict[str, object]) -> tuple[str, str]:
-    summary = dict(case_result.get("summary") or {})
-    tests = list(summary.get("tests") or [])
-    if tests:
-        first = dict(tests[0] or {})
+def _first_test_result(case_result: CaseTerminalReport) -> dict[str, object] | None:
+    tests = case_result["summary"].get("tests")
+    if not isinstance(tests, list) or not tests:
+        return None
+    first = tests[0]
+    if not isinstance(first, dict):
+        return None
+    return first
+
+
+def _result_verdict(case_result: CaseTerminalReport) -> tuple[str, str]:
+    first = _first_test_result(case_result)
+    if first is not None:
         verdict = str(first.get("verdict") or "FL").upper()
         message = str(first.get("message") or "")
         if message:
@@ -63,19 +72,20 @@ def _result_verdict(case_result: dict[str, object]) -> tuple[str, str]:
     return ("FL", str(case_result.get("error") or "judgehost sample validation failed"))
 
 
-def _result_output_ref(case_result: dict[str, object]) -> str:
-    summary = dict(case_result.get("summary") or {})
-    tests = list(summary.get("tests") or [])
-    if not tests:
+def _result_output_ref(case_result: CaseTerminalReport) -> str:
+    first = _first_test_result(case_result)
+    if first is None:
         return ""
-    first = dict(tests[0] or {})
     output_ref = str(first.get("output_ref") or "")
     if output_ref:
         return output_ref
-    passes = list(first.get("passes") or [])
-    if not passes:
+    passes = first.get("passes")
+    if not isinstance(passes, list) or not passes:
         return ""
-    return str(dict(passes[-1] or {}).get("output_ref") or "")
+    final_pass = passes[-1]
+    if not isinstance(final_pass, dict):
+        return ""
+    return str(final_pass.get("output_ref") or "")
 
 
 def _custom_input_expected_answer(

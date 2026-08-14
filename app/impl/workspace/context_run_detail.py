@@ -1,6 +1,7 @@
 import app.main_constant as _K
 
 import re
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import TypedDict, cast
 
@@ -53,7 +54,7 @@ def _run_detail_preview_unavailable(message: str = 'missing') -> RunDetailPrevie
         'available': False,
         'text': '',
         'truncated': False,
-        'limit': int(runtime().config_values.RUN_DETAIL_PREVIEW_MAX_BYTES),
+        'limit': runtime().config_values.integer("RUN_DETAIL_PREVIEW_MAX_BYTES"),
         'download_verification_id': '',
         'download_rel_path': '',
         'message': message,
@@ -65,7 +66,7 @@ def _run_detail_preview_from_bytes(
     verification_id: str = "",
     rel_path: str = "",
 ) -> RunDetailPreview:
-    limit = int(runtime().config_values.RUN_DETAIL_PREVIEW_MAX_BYTES)
+    limit = runtime().config_values.integer("RUN_DETAIL_PREVIEW_MAX_BYTES")
     data = blob
     clipped = len(data) > limit
     head = data[:limit]
@@ -85,9 +86,16 @@ def _run_detail_preview_from_bytes(
 def _nonnegative_int_or_none(raw: object) -> int | None:
     if raw is None:
         return None
-    try:
-        value = int(raw)
-    except Exception:
+    if isinstance(raw, bool):
+        return None
+    if isinstance(raw, int):
+        value = raw
+    elif isinstance(raw, str):
+        try:
+            value = int(raw)
+        except ValueError:
+            return None
+    else:
         return None
     return value if value >= 0 else None
 
@@ -95,9 +103,16 @@ def _nonnegative_int_or_none(raw: object) -> int | None:
 def _positive_int_or_none(raw: object) -> int | None:
     if raw is None:
         return None
-    try:
-        value = int(raw)
-    except Exception:
+    if isinstance(raw, bool):
+        return None
+    if isinstance(raw, int):
+        value = raw
+    elif isinstance(raw, str):
+        try:
+            value = int(raw)
+        except ValueError:
+            return None
+    else:
         return None
     return value if value > 0 else None
 
@@ -155,18 +170,33 @@ def _truncate_inline_text(value: str, max_chars: int) -> tuple[str, bool]:
         return (text, False)
     return (text[:cap] + f'... [truncated; showing first {cap} characters]', True)
 
-def _normalize_diagnostics(entries: list[DiagnosticEntry], message_limit: int) -> list[DiagnosticEntry]:
+def _normalize_diagnostics(
+    entries: Sequence[Mapping[str, object]],
+    message_limit: int,
+) -> list[DiagnosticEntry]:
     normalized: list[DiagnosticEntry] = []
     for item in entries:
-        message = item.get("message")
-        if message is None:
-            message = ""
+        message_raw = item.get("message")
+        if message_raw is not None and not isinstance(message_raw, str):
+            raise RuntimeError("diagnostic message must be text")
+        message = message_raw or ""
         msg, msg_truncated = _truncate_inline_text(message, message_limit)
         persisted_truncated = item.get('message_truncated')
         if persisted_truncated is None:
             persisted_truncated = False
+        elif not isinstance(persisted_truncated, bool):
+            raise RuntimeError("diagnostic message_truncated must be boolean")
         persisted_limit = _positive_int_or_none(item.get('message_limit'))
-        row: DiagnosticEntry = dict(item)
+        level_raw = item.get('level')
+        if level_raw is not None and not isinstance(level_raw, str):
+            raise RuntimeError("diagnostic level must be text")
+        file_raw = item.get('file')
+        if file_raw is not None and not isinstance(file_raw, str):
+            raise RuntimeError("diagnostic file must be text")
+        can_link_raw = item.get('can_link')
+        if can_link_raw is not None and not isinstance(can_link_raw, bool):
+            raise RuntimeError("diagnostic can_link must be boolean")
+        row: DiagnosticEntry = {}
         row['message'] = msg
         row['message_truncated'] = msg_truncated or persisted_truncated
         if msg_truncated:
@@ -175,16 +205,13 @@ def _normalize_diagnostics(entries: list[DiagnosticEntry], message_limit: int) -
             row['message_limit'] = persisted_limit
         else:
             row['message_limit'] = message_limit
-        level = row.get('level')
-        row['level'] = level if level is not None and level.strip() else 'error'
-        file_path = row.get('file')
-        row['file'] = '' if file_path is None else file_path
-        line_value = _nonnegative_int_or_none(row.get('line'))
+        row['level'] = level_raw if level_raw is not None and level_raw.strip() else 'error'
+        row['file'] = '' if file_raw is None else file_raw
+        line_value = _nonnegative_int_or_none(item.get('line'))
         row['line'] = 0 if line_value is None else line_value
-        column_value = _nonnegative_int_or_none(row.get('column'))
+        column_value = _nonnegative_int_or_none(item.get('column'))
         row['column'] = 0 if column_value is None else column_value
-        can_link = row.get('can_link')
-        row['can_link'] = False if can_link is None else bool(can_link)
+        row['can_link'] = False if can_link_raw is None else can_link_raw
         normalized.append(row)
     return normalized
 
@@ -207,7 +234,7 @@ def _diagnostic_file_display(file_path: str) -> str:
 def _decorate_compile_diagnostics(entries: list[DiagnosticEntry]) -> list[DiagnosticEntry]:
     decorated: list[DiagnosticEntry] = []
     for item in entries:
-        row: DiagnosticEntry = dict(item)
+        row = item.copy()
         file_text = row.get("file")
         if file_text is None:
             file_text = ""
@@ -307,7 +334,10 @@ def _summarize_rejudge_unavailable_reason(reasons: list[str]) -> str:
     hidden = len(unique_reasons) - 2
     return f'{unique_reasons[0]}; {unique_reasons[1]}; +{hidden} more'
 
-def _run_rejudge_context_for_entries(entries: list[dict[str, object]], workspace: Path) -> dict[str, str | list[str]]:
+def _run_rejudge_context_for_entries(
+    entries: Sequence[Mapping[str, object]],
+    workspace: Path,
+) -> dict[str, str | list[str]]:
     if not entries:
         return {'paths': [], 'unavailable_reason': 'no reusable solutions source'}
     statuses = [
@@ -320,7 +350,8 @@ def _run_rejudge_context_for_entries(entries: list[dict[str, object]], workspace
     unavailable_reasons: list[str] = []
     all_reusable = True
     for item in entries:
-        source = cast(str | None, item.get("source")) if item.get("source") is not None else ""
+        source_value = item.get("source")
+        source = source_value if isinstance(source_value, str) else ""
         safe_solution, unavailable_reason = _run_rejudge_source_context(source, workspace)
         if safe_solution:
             reusable_paths.append(safe_solution)
@@ -339,7 +370,17 @@ def _run_rejudge_context_for_entries(entries: list[dict[str, object]], workspace
         'unavailable_reason': _summarize_rejudge_unavailable_reason(unavailable_reasons),
     }
 
-def _verification_status_summary(entries: list[dict[str, object]]) -> dict[str, object]:
+class VerificationStatusSummary(TypedDict):
+    status: str
+    is_failed: bool
+    has_running: bool
+    matched_count: int
+    total_count: int
+
+
+def _verification_status_summary(
+    entries: Sequence[Mapping[str, object]],
+) -> VerificationStatusSummary:
     statuses = [
         cast(str | None, item.get("status")) if item.get("status") is not None else ""
         for item in entries

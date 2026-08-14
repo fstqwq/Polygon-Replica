@@ -1,5 +1,6 @@
 import json
 import shlex
+from collections.abc import Sequence
 from pathlib import Path, PurePosixPath
 from typing import Literal, TypedDict
 
@@ -86,11 +87,11 @@ def spec_data_filename(test_id: str) -> str:
     return f"{normalize_test_id(test_id)}.in"
 
 
-def normalize_test_kind(raw: object) -> str:
+def normalize_test_kind(raw: object) -> TestKind:
     kind = str(raw or "").strip().lower()
     if kind not in {"manual", "gen"}:
         raise ValueError("test kind must be manual or gen")
-    return kind
+    return "manual" if kind == "manual" else "gen"
 
 
 def payload_dir_rel_for_kind(kind: str) -> Path:
@@ -282,9 +283,7 @@ def normalize_tests_spec_entry(
     raw_kind = raw.get("kind")
     if not isinstance(raw_kind, str):
         raise ValueError(f"tests[{index}] kind must be manual or gen")
-    kind = raw_kind.strip().lower()
-    if kind not in {"manual", "gen"}:
-        raise ValueError(f"tests[{index}] kind must be manual or gen")
+    kind = normalize_test_kind(raw_kind)
     sample = _normalize_sample_flag(raw.get("sample", False))
     sample_input = normalize_sample_input(
         raw.get("sample_input", ""),
@@ -380,7 +379,7 @@ def loads_tests_spec(
         raw_kind = entry_payload["kind"]
         if not isinstance(raw_kind, str) or raw_kind not in {"manual", "gen"}:
             raise ValueError(f"{label}.kind: must be 'manual' or 'gen'")
-        kind: TestKind = raw_kind
+        kind: TestKind = "manual" if raw_kind == "manual" else "gen"
         sample = entry_payload.get("sample", False)
         if not isinstance(sample, bool):
             raise ValueError(f"{label}.sample: must be a boolean")
@@ -457,7 +456,7 @@ def load_tests_spec(
 
 
 def dumps_tests_spec(
-    entries: list[TestSpecEntry],
+    entries: Sequence[object],
     *,
     document_max_bytes: int,
     sample_max_bytes: int,

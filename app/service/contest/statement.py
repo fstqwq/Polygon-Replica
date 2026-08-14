@@ -1,12 +1,14 @@
 import os
 import re
 import shutil
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 from app.config import ConfigValues
 from app.main_util import problem_slug_leaf
 from app.service.contest.naming import problem_source_folder
 from app.service.contest.service import ContestService
+from app.service.disk.contest_store import ContestBuildItemRecord
 from app.service.problem.runtime_config import problem_config_limits
 from app.service.problem_package.service import VerifiedRevisionReader
 from app.service.problem_package.statement_samples import (
@@ -120,7 +122,7 @@ class ContestStatementService:
         contest_id: int,
         contest_slug: str,
         language: str,
-        problem_entries: list[dict[str, object]],
+        problem_entries: Sequence[Mapping[str, object]],
         source_folder_map: dict[int, str],
     ) -> str:
         contest = self._contest.contest_context(contest_slug)
@@ -299,7 +301,10 @@ class ContestStatementService:
             for library in self._hoist_tikz_libraries(problem_tex):
                 if library not in tikz_libraries:
                     tikz_libraries.append(library)
-            for raw_line in list(row.get("preamble_lines") or []):
+            preamble_lines = row.get("preamble_lines")
+            if not isinstance(preamble_lines, list):
+                preamble_lines = []
+            for raw_line in preamble_lines:
                 line = str(raw_line).strip()
                 if line and line not in color_definitions:
                     color_definitions.append(line)
@@ -481,7 +486,7 @@ class ContestStatementService:
         self,
         *,
         compile_root: Path,
-        entry: dict[str, object],
+        entry: ContestBuildItemRecord,
         source_folder: str,
         language: str,
         reader: VerifiedRevisionReader,
@@ -499,13 +504,12 @@ class ContestStatementService:
         if not source_folder:
             item["error"] = f"contest source folder missing for {problem_slug}"
             return item
-        snapshot = self._config.snapshot()
         try:
             hydrate_verified_statement_samples(
                 reader,
-                tests_spec_max_bytes=int(snapshot["TEXTAREA_MAX_BYTES"]),
-                statement_sample_max_bytes=int(
-                    snapshot["STATEMENT_SAMPLE_MAX_BYTES"]
+                tests_spec_max_bytes=self._config.integer("TEXTAREA_MAX_BYTES"),
+                statement_sample_max_bytes=self._config.integer(
+                    "STATEMENT_SAMPLE_MAX_BYTES"
                 ),
             )
             target = self._compile_target(
@@ -521,9 +525,9 @@ class ContestStatementService:
                     fallback_title=problem_slug_leaf(problem_slug),
                     language=language,
                 ),
-                tests_spec_max_bytes=int(snapshot["TEXTAREA_MAX_BYTES"]),
-                statement_sample_max_bytes=int(
-                    snapshot["STATEMENT_SAMPLE_MAX_BYTES"]
+                tests_spec_max_bytes=self._config.integer("TEXTAREA_MAX_BYTES"),
+                statement_sample_max_bytes=self._config.integer(
+                    "STATEMENT_SAMPLE_MAX_BYTES"
                 ),
                 problem_limits=problem_config_limits(self._config),
             )

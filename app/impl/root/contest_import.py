@@ -336,11 +336,16 @@ def _build_problem_slug_review_rows(
     draft_rows: list[dict[str, object]],
     requested_overrides: dict[int, str],
 ) -> tuple[list[dict[str, object]], bool]:
+    def sequence(row: dict[str, object]) -> int:
+        value = row.get("seq")
+        if isinstance(value, bool) or not isinstance(value, int):
+            return 0
+        return value
+
     rows: list[dict[str, object]] = []
     requested_tokens: list[str] = []
     for row in draft_rows:
-        seq_obj = row.get("seq")
-        seq = int(seq_obj) if seq_obj is not None else 0
+        seq = sequence(row)
         fallback_obj = row.get("suggested_slug")
         fallback = str(fallback_obj).strip() if fallback_obj is not None else ""
         requested_raw = requested_overrides.get(seq, fallback)
@@ -356,8 +361,7 @@ def _build_problem_slug_review_rows(
         duplicate_counts[token] = int(duplicate_counts.get(token, 0)) + 1
     has_error = False
     for idx, row in enumerate(draft_rows):
-        seq_obj = row.get("seq")
-        seq = int(seq_obj) if seq_obj is not None else 0
+        seq = sequence(row)
         requested = requested_tokens[idx]
         valid = bool(requested and _PROBLEM_SEGMENT_RE.fullmatch(requested))
         full_requested = _problem_full_slug(owner, requested) if valid else ""

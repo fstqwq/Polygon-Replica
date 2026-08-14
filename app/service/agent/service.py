@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 from app.db import DB, now_iso
 from app.service.access.policy import stronger_agent_scope
 from app.service.access.query import AccessQuery
-from app.service.agent.store import AgentStore
+from app.service.agent.store import AgentSessionRow, AgentStore
 from app.service.platform.hashing import canonical_json, sha256_hex_text
 from app.service.repository.workspace import WorkspaceService
 
@@ -83,13 +83,18 @@ class AgentService:
             raise ValueError("problem is required")
         return safe_problem
 
-    def _require_active_session(self, *, agent_session_id: str, identity_hash: str) -> dict[str, object]:
+    def _require_active_session(
+        self,
+        *,
+        agent_session_id: str,
+        identity_hash: str,
+    ) -> AgentSessionRow:
         session = self._store.session_by_id(agent_session_id)
         if session is None or str(session.get("revoked_at") or ""):
             raise PermissionError("agent session is invalid")
         if str(session.get("identity_hash") or "") != str(identity_hash or ""):
             raise PermissionError("agent identity mismatch")
-        return dict(session)
+        return session
 
     def _touch_session(self, session_id: str, *, last_seen_at: str | None = None) -> str:
         now_text = now_iso() if last_seen_at is None else last_seen_at
@@ -114,7 +119,7 @@ class AgentService:
             if not effective_scope:
                 continue
             problem_slug = str(token_row["problem_slug"] or "")
-            candidate = {
+            candidate: dict[str, object] = {
                 "problem": problem_slug,
                 "scope": effective_scope,
                 "expires_at": expires_at_text or None,

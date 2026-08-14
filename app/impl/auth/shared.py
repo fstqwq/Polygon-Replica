@@ -8,6 +8,7 @@ from urllib.parse import parse_qsl, quote_plus, urlencode, urlparse, urlunparse
 
 from fastapi import HTTPException, Request
 from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.templating import Jinja2Templates
 
 import app.main_constant as _K
 from app.impl.contest.workspace_scope import (
@@ -17,7 +18,7 @@ from app.impl.runtime.dependency import runtime
 from app.service.platform.hashing import hmac_sha256_hex, sha256_hex_bytes
 
 
-def install_template_filters(templates: object) -> None:
+def install_template_filters(templates: Jinja2Templates) -> None:
     """Install the common display filters on one runtime-owned environment."""
 
     templates.env.filters["local_time"] = _format_local_time
@@ -138,8 +139,9 @@ def _normalize_flash_message(raw: object) -> str:
     if text and text[-1] not in ".!?":
         if re.search(r"[A-Za-z0-9\)]$", text):
             text += "."
-    if len(text) > runtime().config_values.FLASH_MESSAGE_MAX_LEN:
-        text = text[: runtime().config_values.FLASH_MESSAGE_MAX_LEN].rstrip()
+    max_length = runtime().config_values.integer("FLASH_MESSAGE_MAX_LEN")
+    if len(text) > max_length:
+        text = text[:max_length].rstrip()
     return text
 
 
@@ -182,7 +184,7 @@ def _decode_flash_queue(raw_cookie: str) -> list[str]:
         if not normalized:
             continue
         queue.append(normalized)
-        if len(queue) >= runtime().config_values.FLASH_QUEUE_MAX_ITEMS:
+        if len(queue) >= runtime().config_values.integer("FLASH_QUEUE_MAX_ITEMS"):
             break
     return queue
 
@@ -194,7 +196,9 @@ def _encode_flash_queue(queue: list[str]) -> str:
         if not normalized:
             continue
         safe_items.append(normalized)
-        if len(safe_items) >= runtime().config_values.FLASH_QUEUE_MAX_ITEMS:
+        if len(safe_items) >= runtime().config_values.integer(
+            "FLASH_QUEUE_MAX_ITEMS"
+        ):
             break
     if not safe_items:
         return ""
@@ -206,20 +210,20 @@ def set_flash_cookie(response, queue: list[str]) -> None:
     encoded = _encode_flash_queue(queue)
     if not encoded:
         response.delete_cookie(
-            runtime().config_values.FLASH_COOKIE_NAME,
+            runtime().config_values.text("FLASH_COOKIE_NAME"),
             path="/",
-            secure=runtime().config_values.AUTH_COOKIE_SECURE,
+            secure=runtime().config_values.boolean("AUTH_COOKIE_SECURE"),
             httponly=True,
             samesite="lax",
         )
         return
     response.set_cookie(
-        runtime().config_values.FLASH_COOKIE_NAME,
+        runtime().config_values.text("FLASH_COOKIE_NAME"),
         encoded,
         httponly=True,
         samesite="lax",
-        secure=runtime().config_values.AUTH_COOKIE_SECURE,
-        max_age=runtime().config_values.FLASH_COOKIE_MAX_AGE,
+        secure=runtime().config_values.boolean("AUTH_COOKIE_SECURE"),
+        max_age=runtime().config_values.integer("FLASH_COOKIE_MAX_AGE"),
         path="/",
     )
 
@@ -337,7 +341,10 @@ def template_response(request: Request, template_name: str, context: dict | None
             backend_render_ms = int(round(elapsed_ms))
     if "backend_render_ms" not in payload:
         payload["backend_render_ms"] = backend_render_ms
-    raw_cookie = str(request.cookies.get(runtime().config_values.FLASH_COOKIE_NAME, "") or "").strip()
+    raw_cookie = str(
+        request.cookies.get(runtime().config_values.text("FLASH_COOKIE_NAME"), "")
+        or ""
+    ).strip()
     queue = _decode_flash_queue(raw_cookie)
     fallback_message = _normalize_flash_message(payload.get("message", ""))
     ctx = payload.get("ctx")
@@ -385,7 +392,14 @@ def normalize_password_verifier_hex(value: str) -> str:
 
 def normalize_password_iters(value: object) -> int:
     try:
-        iters = int(value)
+        if isinstance(value, bool):
+            raise ValueError
+        if isinstance(value, int):
+            iters = value
+        elif isinstance(value, str):
+            iters = int(value)
+        else:
+            raise ValueError
     except Exception as exc:
         raise ValueError("invalid password iterations") from exc
     if iters < 10000 or iters > 10000000:
@@ -402,7 +416,10 @@ def dummy_password_salt_hex(username: str) -> str:
 def password_meta_for_username(username: str) -> tuple[str, int]:
     row = lookup_user_auth(username)
     if row is None:
-        return (dummy_password_salt_hex(username), int(runtime().config_values.PASSWORD_HASH_ITERS))
+        return (
+            dummy_password_salt_hex(username),
+            runtime().config_values.integer("PASSWORD_HASH_ITERS"),
+        )
     stored_hash = str(row["password_hash"] or "").strip().lower()
     salt_hex = str(row["password_salt"] or "").strip().lower()
     try:
@@ -411,7 +428,10 @@ def password_meta_for_username(username: str) -> tuple[str, int]:
         iterations = 0
     if _K.HEX_64_RE.fullmatch(stored_hash) and _K.HEX_32_RE.fullmatch(salt_hex) and (iterations > 0):
         return (salt_hex, iterations)
-    return (dummy_password_salt_hex(username), int(runtime().config_values.PASSWORD_HASH_ITERS))
+    return (
+        dummy_password_salt_hex(username),
+        runtime().config_values.integer("PASSWORD_HASH_ITERS"),
+    )
 
 
 def lookup_user_auth(username: str):
@@ -571,7 +591,11 @@ def login_rate_limit_check(key: str) -> None:
             wait_sec = max(1, int(round(blocked_until - now_monotonic)))
             raise ValueError(f"too many failed attempts; retry in {wait_sec}s")
         window_start = float(state.get("window_start") or 0.0)
-        if window_start <= 0.0 or now_monotonic - window_start > runtime().config_values.LOGIN_RATE_LIMIT_WINDOW_SEC:
+        if (
+            window_start <= 0.0
+            or now_monotonic - window_start
+            > runtime().config_values.integer("LOGIN_RATE_LIMIT_WINDOW_SEC")
+        ):
             runtime().login_rate_limit_state.pop(key, None)
 
 
@@ -582,12 +606,20 @@ def login_rate_limit_fail(key: str) -> None:
         if state is None:
             state = {"window_start": now_monotonic, "failures": 0, "blocked_until": 0.0}
         window_start = float(state.get("window_start") or 0.0)
-        if window_start <= 0.0 or now_monotonic - window_start > runtime().config_values.LOGIN_RATE_LIMIT_WINDOW_SEC:
+        if (
+            window_start <= 0.0
+            or now_monotonic - window_start
+            > runtime().config_values.integer("LOGIN_RATE_LIMIT_WINDOW_SEC")
+        ):
             state = {"window_start": now_monotonic, "failures": 0, "blocked_until": 0.0}
         failures = int(state.get("failures") or 0) + 1
         state["failures"] = failures
-        if failures >= runtime().config_values.LOGIN_RATE_LIMIT_MAX_FAILURES:
-            state["blocked_until"] = now_monotonic + runtime().config_values.LOGIN_RATE_LIMIT_BLOCK_SEC
+        if failures >= runtime().config_values.integer(
+            "LOGIN_RATE_LIMIT_MAX_FAILURES"
+        ):
+            state["blocked_until"] = now_monotonic + runtime().config_values.integer(
+                "LOGIN_RATE_LIMIT_BLOCK_SEC"
+            )
             state["window_start"] = now_monotonic
             state["failures"] = 0
         runtime().login_rate_limit_state[key] = state

@@ -9,6 +9,13 @@ from app.main_constant import SESSION_TOKEN_RE, USER_IDENT_RE
 from app.service.platform.hashing import sha256_hex_text
 
 
+def _required_lastrowid(cursor: sqlite3.Cursor) -> int:
+    row_id = cursor.lastrowid
+    if row_id is None:
+        raise RuntimeError("SQLite insert did not return a row id")
+    return row_id
+
+
 class AuthUserRow(TypedDict):
     id: int
     username: str
@@ -424,7 +431,7 @@ class AuthStore:
                             int(is_admin),
                         ],
                     )
-                    return int(cursor.lastrowid)
+                    return _required_lastrowid(cursor)
                 except sqlite3.IntegrityError as exc:
                     message = str(exc or "").strip().lower()
                     if "users.username" in message:
@@ -478,7 +485,7 @@ class AuthStore:
                     if "users.username" in message:
                         raise ValueError("setup failed; username is unavailable") from exc
                     raise
-                user_id = int(cursor.lastrowid)
+                user_id = _required_lastrowid(cursor)
             else:
                 current_hash = str(existing["password_hash"] or "").strip()
                 if current_hash:
@@ -689,13 +696,14 @@ class AuthStore:
                 "UPDATE pending_registrations SET used_at=? WHERE id=?",
                 [now_text, str(row["id"] or "")],
             )
-            return int(cursor.lastrowid)
+            return _required_lastrowid(cursor)
 
         return int(self.db.write_transaction(_tx))
 
     def create_auth_session(self, user_id: int) -> str:
         expires_at = (
-            datetime.now(timezone.utc) + timedelta(seconds=int(self._config_values.AUTH_COOKIE_MAX_AGE))
+            datetime.now(timezone.utc)
+            + timedelta(seconds=self._config_values.integer("AUTH_COOKIE_MAX_AGE"))
         ).isoformat()
         for _ in range(4):
             token = secrets.token_urlsafe(32)
@@ -719,7 +727,8 @@ class AuthStore:
         if not safe_scope:
             raise ValueError("invalid sudo scope")
         expires_at = (
-            datetime.now(timezone.utc) + timedelta(seconds=int(self._config_values.SUDO_COOKIE_MAX_AGE))
+            datetime.now(timezone.utc)
+            + timedelta(seconds=self._config_values.integer("SUDO_COOKIE_MAX_AGE"))
         ).isoformat()
         for _ in range(4):
             token = secrets.token_urlsafe(32)

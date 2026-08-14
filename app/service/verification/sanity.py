@@ -88,11 +88,13 @@ def planned_sanity_checks(test_plans: list[VerificationTestPlan]) -> list[str]:
 def effective_verification_status(
     *,
     task_status: str,
-    counts: dict[str, object],
+    counts: dict[str, int],
     sanity_checks: list[str],
     sanity_status: str,
 ) -> tuple[str, bool]:
-    has_pending_or_running = bool(int(counts["pending"]) or int(counts["queued"]) or int(counts["running"]))
+    has_pending_or_running = bool(
+        counts["pending"] or counts["queued"] or counts["running"]
+    )
     if has_pending_or_running:
         return (task_status, False)
     if task_status != VerificationStatus.OK.value:
@@ -361,7 +363,10 @@ def run_verification_sanity_checks(
         runtime_log = logs_dir / "summary-runtime-threshold.log"
         runtime_log.parent.mkdir(parents=True, exist_ok=True)
         for column in list(runtime_columns or []):
-            summary = dict(column.get("summary") or {})
+            summary_value = column.get("summary")
+            if not isinstance(summary_value, dict):
+                raise RuntimeError("runtime threshold column summary must be an object")
+            summary = summary_value
             source = str(column.get("source") or summary.get("source") or "")
             report = evaluate_summary_runtime_threshold(
                 summary=summary,

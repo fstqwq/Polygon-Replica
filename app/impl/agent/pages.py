@@ -3,14 +3,15 @@ from fastapi import Form, HTTPException, Request
 from app.impl.agent.shared import current_web_user
 from app.impl.auth.shared import json_redirect_response, redirect_response, template_response
 from app.impl.runtime.dependency import runtime
+from app.service.disk.auth_store import AuthSessionIdentity
 
 
 def _request_base_url(request: Request) -> str:
     return str(request.base_url).rstrip("/")
 
 
-def _template_user(user: dict[str, object]) -> dict[str, object]:
-    user_id = int(user["user_id"])
+def _template_user(user: AuthSessionIdentity) -> dict[str, object]:
+    user_id = user["user_id"]
     return {
         "id": user_id,
         "username": str(user["username"]),
@@ -20,7 +21,7 @@ def _template_user(user: dict[str, object]) -> dict[str, object]:
 
 def agent_sessions_page(request: Request):
     user = current_web_user(request)
-    sessions = runtime().agent_service.list_user_sessions(user_id=int(user["user_id"]))
+    sessions = runtime().agent_service.list_user_sessions(user_id=user["user_id"])
     return template_response(
         request,
         "agent_sessions.html",
@@ -34,7 +35,7 @@ def agent_sessions_page(request: Request):
 
 def agent_connect(request: Request):
     user = current_web_user(request)
-    payload = runtime().agent_service.create_registration_code(user_id=int(user["user_id"]))
+    payload = runtime().agent_service.create_registration_code(user_id=user["user_id"])
     code = str(payload["code"])
     register_url = f"{_request_base_url(request)}/agent/v1/register/{code}"
     return json_redirect_response(
@@ -50,7 +51,7 @@ def agent_connect(request: Request):
 def agent_approve_page(request: Request, request_id: str):
     user = current_web_user(request)
     try:
-        access_request = runtime().agent_service.access_request_for_user(actor_user_id=int(user["user_id"]), request_id=request_id)
+        access_request = runtime().agent_service.access_request_for_user(actor_user_id=user["user_id"], request_id=request_id)
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return template_response(
@@ -76,7 +77,7 @@ def agent_approve_submit(
     user = current_web_user(request)
     try:
         result = runtime().agent_service.resolve_access_request(
-            actor_user_id=int(user["user_id"]),
+            actor_user_id=user["user_id"],
             request_id=request_id,
             decision=decision,
             scope=scope,
@@ -99,7 +100,7 @@ def agent_approve_submit(
 def agent_revoke_token(request: Request, token_id: str):
     user = current_web_user(request)
     try:
-        runtime().agent_service.revoke_token(actor_user_id=int(user["user_id"]), token_id=token_id)
+        runtime().agent_service.revoke_token(actor_user_id=user["user_id"], token_id=token_id)
         return redirect_response("/agent/sessions", status_code=303, message="agent token revoked")
     except LookupError as exc:
         return redirect_response("/agent/sessions", status_code=303, message=str(exc))
@@ -108,7 +109,7 @@ def agent_revoke_token(request: Request, token_id: str):
 def agent_disconnect_session(request: Request, session_id: str):
     user = current_web_user(request)
     try:
-        runtime().agent_service.disconnect_session(actor_user_id=int(user["user_id"]), session_id=session_id)
+        runtime().agent_service.disconnect_session(actor_user_id=user["user_id"], session_id=session_id)
         return redirect_response("/agent/sessions", status_code=303, message="agent disconnected")
     except LookupError as exc:
         return redirect_response("/agent/sessions", status_code=303, message=str(exc))

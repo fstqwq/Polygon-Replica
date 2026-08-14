@@ -47,7 +47,8 @@ Run all groups in separate Python processes:
 PYTHONPATH="$PWD" bash tests/scripts/test.sh
 ```
 
-Static checks are intentionally separate:
+Static checks are intentionally separate. The shared check includes the
+Linux-target mypy gate for the complete `app/` tree:
 
 ```bash
 PYTHONPATH="$PWD" bash tests/scripts/check.sh

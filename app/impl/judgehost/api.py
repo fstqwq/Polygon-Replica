@@ -31,6 +31,15 @@ from app.service.judgehost.domjudge.file_stream import (
 JudgehostPayload = dict[str, str | bytes]
 
 
+def _payload_text(payload: JudgehostPayload, key: str) -> str:
+    value = payload.get(key)
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return value
+
+
 def _extract_bearer_token(request: Request) -> str:
     auth_header = request.headers.get("authorization") or ""
     if auth_header.lower().startswith("bearer "):
@@ -59,7 +68,7 @@ def _extract_basic_credentials(request: Request) -> tuple[str, str]:
 
 
 def _hostname_from_payload(payload: JudgehostPayload, *, required: bool = False) -> str:
-    hostname = (payload.get("hostname") or "").strip()
+    hostname = _payload_text(payload, "hostname").strip()
     if required and not hostname:
         raise HTTPException(status_code=400, detail="hostname is required")
     if not hostname:
@@ -116,7 +125,7 @@ def _judgehost_form_part_limit_bytes() -> int:
     values = runtime().config_values.snapshot()
     return judgehost_form_part_limit_bytes(
         values,
-        upload_max_bytes=int(values["UPLOAD_MAX_BYTES"]),
+        upload_max_bytes=runtime().config_values.integer("UPLOAD_MAX_BYTES"),
         default_part_limit_bytes=_JUDGEHOST_FORM_PART_LIMIT_BYTES,
         headroom_bytes=_JUDGEHOST_FORM_PART_LIMIT_HEADROOM_BYTES,
     )
@@ -132,7 +141,7 @@ async def _coerce_form_value(key: str, value: str | UploadFile) -> str | bytes:
             )
         finally:
             try:
-                await value.close()  # type: ignore[union-attr]
+                await value.close()
             except Exception:
                 pass
         if key in _FORM_BINARY_KEYS:
@@ -151,6 +160,11 @@ async def _request_payload(request: Request) -> JudgehostPayload:
             out[key] = text
             return
         prev = out[key]
+        if not isinstance(prev, str):
+            raise HTTPException(
+                status_code=400,
+                detail=f"multipart field {key} mixes binary and text values",
+            )
         if not prev.strip():
             out[key] = text
             return
@@ -197,6 +211,11 @@ async def _request_payload(request: Request) -> JudgehostPayload:
                 if not prev:
                     out[key] = text
                 continue
+            if not isinstance(text, str):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"multipart field {key} must be text",
+                )
             _merge_text_field(out, key, text)
         return out
     try:
@@ -217,10 +236,10 @@ async def _request_payload(request: Request) -> JudgehostPayload:
     pairs = parse_qsl(text, keep_blank_values=True)
     if not pairs:
         return {}
-    out: JudgehostPayload = {}
+    query_payload: JudgehostPayload = {}
     for key, value in pairs:
-        _merge_text_field(out, key, value)
-    return out
+        _merge_text_field(query_payload, key, value)
+    return query_payload
 
 
 def _require_judgehost_auth(request: Request):
@@ -336,7 +355,7 @@ async def domjudge_judgehosts_post(request: Request):
         if not admitted:
             return JSONResponse([])
         payload = await _request_payload(request)
-        hostname = (payload.get("hostname") or "").strip()
+        hostname = _payload_text(payload, "hostname").strip()
         if not hostname:
             raise HTTPException(status_code=400, detail="hostname is required")
         hostname = _validated_hostname(hostname)

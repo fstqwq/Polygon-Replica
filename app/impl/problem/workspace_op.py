@@ -107,6 +107,8 @@ def problem_delete(request: Request, problem: str, user: Annotated[str, Depends(
             raise ValueError('problem deletion confirmation mismatch')
         result = runtime().workspace_service.delete_problem(problem)
         warnings = result.get('fs_warnings') if isinstance(result, dict) else []
+        if not isinstance(warnings, list):
+            warnings = []
         warning_rows = [item.strip() for item in warnings if isinstance(item, str) and item.strip()]
         if warning_rows:
             msg = f"problem deleted with cleanup warnings: {warning_rows[0]}"

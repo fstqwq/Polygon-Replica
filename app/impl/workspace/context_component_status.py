@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Literal
 
 from app.impl.runtime.dependency import runtime
 from app.service.problem.build_config import BuildConfig
@@ -18,7 +19,12 @@ from app.impl.workspace.test_spec import read_tests_spec, tests_spec_read_payloa
 def _configured_component_source(
     workspace: Path,
     build_cfg: BuildConfig,
-    config_key: str,
+    config_key: Literal[
+        "accepted_solution_source",
+        "checker_source",
+        "interactor_source",
+        "validator_source",
+    ],
     default_source: str,
 ) -> tuple[str, bool]:
     configured = build_cfg.get(config_key)
@@ -37,15 +43,16 @@ def _generator_reference_counts(
     workspace: Path,
     source_catalog: tuple[str, ...],
 ) -> dict[str, int]:
-    limits = runtime().config_values.snapshot()
     counts = {path: 0 for path in source_catalog}
     if not source_catalog:
         return counts
     try:
         entries, _ = read_tests_spec(
             workspace,
-            document_max_bytes=int(limits["TEXTAREA_MAX_BYTES"]),
-            sample_max_bytes=int(limits["STATEMENT_SAMPLE_MAX_BYTES"]),
+            document_max_bytes=runtime().config_values.integer("TEXTAREA_MAX_BYTES"),
+            sample_max_bytes=runtime().config_values.integer(
+                "STATEMENT_SAMPLE_MAX_BYTES"
+            ),
         )
     except Exception:
         return counts

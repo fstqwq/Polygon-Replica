@@ -177,11 +177,10 @@ class WorkspaceFileService:
     def write_text(self, workspace: Path, raw_path: str, content: str, *, require_allowed_root: bool) -> str:
         normalized = self.normalize_path(raw_path, require_allowed_root=require_allowed_root)
         self._reject_repository_answer_path(normalized)
-        limits = self._config_values.snapshot()
         safe_content = enforce_textarea_max_bytes(
             content,
             label="file content",
-            max_bytes=int(limits["TEXTAREA_MAX_BYTES"]),
+            max_bytes=self._config_values.integer("TEXTAREA_MAX_BYTES"),
         )
         with self._workspace_service.workspace_lock(workspace):
             self._git_service.write_file(workspace, normalized, safe_content)
@@ -221,11 +220,10 @@ class WorkspaceFileService:
                 tmp_path = Path(tmp_name)
                 try:
                     with os.fdopen(fd, "wb") as out:
-                        limits = self._config_values.snapshot()
                         total_bytes = await write_upload_file_limited(
                             upload,
                             out,
-                            max_bytes=int(limits["UPLOAD_MAX_BYTES"]),
+                            max_bytes=self._config_values.integer("UPLOAD_MAX_BYTES"),
                         )
                     os.replace(tmp_path, target)
                     tmp_path = None

@@ -178,9 +178,12 @@ def verification_manifest(snapshot: Path) -> VerificationManifest:
         if relative_path:
             path = (snapshot / relative_path).resolve()
             identity = sha256_file(path, chunk_size=16 * 1024 * 1024)
+            size = entry["size"]
+            if isinstance(size, bool) or not isinstance(size, int):
+                raise RuntimeError("verification manifest file size is not an integer")
             payload = PayloadFile(
                 path=path,
-                size=int(entry["size"]),
+                size=size,
                 identity=identity,
             )
             files[relative_path] = payload

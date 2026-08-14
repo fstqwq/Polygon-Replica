@@ -54,6 +54,7 @@ ImportedPackageResult = TypedDict(
         "components": dict[str, object],
         "solutions": dict[str, object],
         "warnings": list[str],
+        "commit": str,
     },
     total=False,
 )
@@ -319,7 +320,7 @@ def import_package_into_workspace(
             shutil.rmtree(staging_root, ignore_errors=True)
 
     tests_info = result.get("tests")
-    total_tests = int(cast(dict[str, object], tests_info).get("total", 0)) if tests_info is not None else 0
+    total_tests = tests_info.get("total", 0) if tests_info is not None else 0
     return {
         "target_problem": safe_target_problem,
         "total_tests": total_tests,
@@ -378,7 +379,7 @@ def import_package_as_new_problem(
             runtime().workspace_service.ensure_workspace(target_problem, safe_actor_user, refresh_status=True)
             result["commit"] = imported_commit
             tests_info = result.get("tests")
-            total_tests = int(cast(dict[str, object], tests_info).get("total", 0)) if tests_info is not None else 0
+            total_tests = tests_info.get("total", 0) if tests_info is not None else 0
             return {"target_problem": target_problem, "total_tests": total_tests, "result": result, "package_format": package_format}
         except Exception:
             if created_problem:

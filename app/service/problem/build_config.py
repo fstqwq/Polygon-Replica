@@ -283,11 +283,18 @@ def load_build_config(
 
 
 def ordered_build_config(payload: BuildConfig) -> dict[str, object]:
-    return {
-        key: payload[key]
-        for key in BUILD_CONFIG_KEY_ORDER
-        if key in payload and (key != "generator_sources" or payload[key])
-    }
+    ordered: dict[str, object] = {}
+    if "accepted_solution_source" in payload:
+        ordered["accepted_solution_source"] = payload["accepted_solution_source"]
+    if "validator_source" in payload:
+        ordered["validator_source"] = payload["validator_source"]
+    if "checker_source" in payload:
+        ordered["checker_source"] = payload["checker_source"]
+    if "interactor_source" in payload:
+        ordered["interactor_source"] = payload["interactor_source"]
+    if payload["generator_sources"]:
+        ordered["generator_sources"] = payload["generator_sources"]
+    return ordered
 
 
 def dumps_build_config(payload: BuildConfig) -> str:

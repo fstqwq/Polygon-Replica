@@ -34,12 +34,11 @@ class TexCompileService:
         self._config_values = config_values
 
     def _policy(self) -> TexCompilePolicy:
-        snapshot = self._config_values.snapshot()
         return TexCompilePolicy(
-            timeout_sec=int(snapshot["PREVIEW_TEX_TIMEOUT_SEC"]),
-            memory_mb=int(snapshot["PREVIEW_TEX_MEMORY_MB"]),
-            process_limit=int(snapshot["PREVIEW_TEX_PROCESS_LIMIT"]),
-            output_kb=int(snapshot["PREVIEW_TEX_OUTPUT_KB"]),
+            timeout_sec=self._config_values.integer("PREVIEW_TEX_TIMEOUT_SEC"),
+            memory_mb=self._config_values.integer("PREVIEW_TEX_MEMORY_MB"),
+            process_limit=self._config_values.integer("PREVIEW_TEX_PROCESS_LIMIT"),
+            output_kb=self._config_values.integer("PREVIEW_TEX_OUTPUT_KB"),
         )
 
     def run(

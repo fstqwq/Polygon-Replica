@@ -66,9 +66,9 @@ def _system_limit_info() -> SystemLimitInfo:
         'title': 'System limits',
         'description': 'Contact an administrator to change these limits if needed.',
         'rows': [
-            {'label': 'Program input/output limit', 'value': f'{int(runtime().config_values.RUN_EXEC_OUTPUT_KB)} KiB'},
-            {'label': 'Compilation size limit', 'value': f'{int(runtime().config_values.TOOLCHAIN_COMPILE_OUTPUT_KB)} KiB'},
-            {'label': 'Saved judging log limit', 'value': f'{int(runtime().config_values.JUDGEHOST_STORED_LOG_LIMIT_BYTES)} bytes'},
+            {'label': 'Program input/output limit', 'value': f'{runtime().config_values.integer("RUN_EXEC_OUTPUT_KB")} KiB'},
+            {'label': 'Compilation size limit', 'value': f'{runtime().config_values.integer("TOOLCHAIN_COMPILE_OUTPUT_KB")} KiB'},
+            {'label': 'Saved judging log limit', 'value': f'{runtime().config_values.integer("JUDGEHOST_STORED_LOG_LIMIT_BYTES")} bytes'},
         ],
     }
 
@@ -104,11 +104,16 @@ def page_ctx(
         if refresh_status:
             # Provision without the lock-side refresh; the explicit refresh below updates DB once.
             runtime().workspace_service.ensure_workspace(problem, user, refresh_status=False)
-        ctx = runtime().workspace_service.workspace_context(problem, user, include_recent=include_recent)
+        base_ctx = runtime().workspace_service.workspace_context(
+            problem,
+            user,
+            include_recent=include_recent,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=str(exc))
+    ctx: dict = dict(base_ctx)
     ctx['access'] = access
     ctx['workspace_access'] = runtime().access_query.workspace_context(
         problem_id=problem_id,
@@ -155,14 +160,15 @@ def page_ctx(
     workspace_head_raw = cast(str | None, ctx['workspace'].get('head_commit'))
     workspace_head = workspace_head_raw or ''
     workspace_dirty = bool(ctx['workspace'].get('dirty'))
-    limits = runtime().config_values.snapshot()
     with runtime().workspace_service.workspace_lock(workspace_path):
         source_state = inspect_authoring_source(
             workspace_path,
             problem_limits=problem_config_limits(runtime().config_values),
-            tests_spec_max_bytes=int(limits["TEXTAREA_MAX_BYTES"]),
-            statement_sample_max_bytes=int(
-                limits["STATEMENT_SAMPLE_MAX_BYTES"]
+            tests_spec_max_bytes=runtime().config_values.integer(
+                "TEXTAREA_MAX_BYTES"
+            ),
+            statement_sample_max_bytes=runtime().config_values.integer(
+                "STATEMENT_SAMPLE_MAX_BYTES"
             ),
             allow_repair=bool(ctx['workspace_access']['can_write']),
             published_build_text=_published_build_text(
@@ -344,7 +350,13 @@ def _build_problem_nav_status(ctx: dict) -> dict[str, dict[str, object]]:
 
     def _to_int(value: object, default: int=0) -> int:
         try:
-            return int(value)
+            if isinstance(value, bool):
+                raise ValueError
+            if isinstance(value, int):
+                return value
+            if isinstance(value, str):
+                return int(value)
+            raise ValueError
         except Exception:
             return default
 
@@ -428,10 +440,10 @@ def _build_problem_nav_status(ctx: dict) -> dict[str, dict[str, object]]:
     workspace_path_text = cast(str | None, workspace_path_raw) or ''
     workspace_path = Path(workspace_path_text) if workspace_path_text else Path('.')
     general_cfg = cast(dict[str, object], ctx['general_cfg'])
-    time_limit_ms = int(general_cfg['time_limit_ms'])
-    memory_limit_mb = int(general_cfg['memory_limit_mb'])
+    time_limit_ms = _to_int(general_cfg['time_limit_ms'])
+    memory_limit_mb = _to_int(general_cfg['memory_limit_mb'])
     mode_text = str(general_cfg['mode'])
-    pass_limit = int(general_cfg['pass_limit'])
+    pass_limit = _to_int(general_cfg['pass_limit'], 1)
     time_text = _compact_time_limit_label(time_limit_ms)
     memory_text = _compact_memory_limit_label(memory_limit_mb)
     general_parts = [time_text, memory_text]

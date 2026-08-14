@@ -331,12 +331,11 @@ class PackageAdapterSupport:
         target.mkdir(parents=True)
 
     def hydrate_statement_samples(self, reader: VerifiedRevisionReader) -> None:
-        limits = self._config_values.snapshot()
         hydrate_verified_statement_samples(
             reader,
-            tests_spec_max_bytes=int(limits["TEXTAREA_MAX_BYTES"]),
-            statement_sample_max_bytes=int(
-                limits["STATEMENT_SAMPLE_MAX_BYTES"]
+            tests_spec_max_bytes=self._config_values.integer("TEXTAREA_MAX_BYTES"),
+            statement_sample_max_bytes=self._config_values.integer(
+                "STATEMENT_SAMPLE_MAX_BYTES"
             ),
         )
 
@@ -354,7 +353,6 @@ class PackageAdapterSupport:
             raise ValueError(
                 "package adapter requires at least one problem statement"
             )
-        limits = self._config_values.snapshot()
         compiled: dict[str, bytes] = {}
         names: dict[str, str] = {}
         for language in languages:
@@ -369,9 +367,11 @@ class PackageAdapterSupport:
                     problem_title=problem_name,
                     language=language,
                     include_sample_tests=include_sample_tests,
-                    tests_spec_max_bytes=int(limits["TEXTAREA_MAX_BYTES"]),
-                    statement_sample_max_bytes=int(
-                        limits["STATEMENT_SAMPLE_MAX_BYTES"]
+                    tests_spec_max_bytes=self._config_values.integer(
+                        "TEXTAREA_MAX_BYTES"
+                    ),
+                    statement_sample_max_bytes=self._config_values.integer(
+                        "STATEMENT_SAMPLE_MAX_BYTES"
                     ),
                     problem_limits=problem_config_limits(self._config_values),
                 )

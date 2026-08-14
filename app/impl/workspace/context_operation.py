@@ -14,6 +14,11 @@ from app.service.problem.build_config import (
     dumps_build_config,
     load_build_config,
 )
+from app.service.problem.query import (
+    RunSolutionOption,
+    RunTestOption,
+    SolutionSourceRow,
+)
 from app.service.repository.revision import workspace_upstream_revision_display
 from app.service.access.policy import access_role
 
@@ -41,13 +46,7 @@ def user_participating_problems(user_id: int, limit: int) -> list[dict]:
         branch = row['branch']
         if branch is None:
             branch = 'main'
-        dirty_value = row['dirty']
-        dirty = False
-        if dirty_value is not None:
-            try:
-                dirty = int(dirty_value) != 0
-            except Exception:
-                dirty = bool(dirty_value)
+        dirty = bool(row['dirty'])
         workspace_path = row['path'] or ''
         revision_local = row['revision_local']
         revision_upstream = row['revision_upstream']
@@ -65,8 +64,9 @@ def normalize_contest_title_required(value: str) -> str:
     title = value.strip()
     if not title:
         raise ValueError('contest title is required')
-    if len(title) > runtime().config_values.CONTEST_TITLE_MAX_LEN:
-        raise ValueError(f'contest title is too long (max {runtime().config_values.CONTEST_TITLE_MAX_LEN})')
+    max_length = runtime().config_values.integer("CONTEST_TITLE_MAX_LEN")
+    if len(title) > max_length:
+        raise ValueError(f'contest title is too long (max {max_length})')
     return title
 
 def user_contests_overview(user_id: int, limit: int) -> list[dict]:
@@ -117,7 +117,10 @@ def read_workspace_source_with_default(workspace: Path, rel: Path, default_text:
         return (default_text, False)
     if not file_path.exists() or not file_path.is_file() or file_path.is_symlink():
         return (default_text, False)
-    return read_text_safe_limited(file_path, runtime().config_values.TEXTAREA_MAX_BYTES)
+    return read_text_safe_limited(
+        file_path,
+        runtime().config_values.integer("TEXTAREA_MAX_BYTES"),
+    )
 
 def parse_line_param(raw: str | None, default: int=1) -> int:
     if raw is None:
@@ -200,7 +203,7 @@ def build_repo_browser_context(
         dir_norm = ''
         prefix = ''
     child_dirs: dict[str, str] = {}
-    child_files: list[dict[str, str]] = []
+    child_files: list[RepoBrowserEntry] = []
     for full, is_dir in entries:
         if full == dir_norm:
             continue
@@ -218,8 +221,14 @@ def build_repo_browser_context(
                 child_dirs[rel] = f'{prefix}{rel}' if prefix else rel
         else:
             child_files.append({'name': rel, 'path': f'{prefix}{rel}' if prefix else rel})
-    dirs = [{'name': name, 'path': child_dirs[name]} for name in sorted(child_dirs)]
-    files = sorted(child_files, key=lambda row: row['name'])
+    dirs: list[RepoBrowserEntry] = [
+        {'name': name, 'path': child_dirs[name]}
+        for name in sorted(child_dirs)
+    ]
+    files: list[RepoBrowserEntry] = sorted(
+        child_files,
+        key=lambda row: row['name'],
+    )
     breadcrumbs: list[RepoBrowserBreadcrumb] = [{'label': root_label, 'path': ''}]
     current_path = ''
     for part in dir_norm.split('/') if dir_norm else []:
@@ -321,7 +330,7 @@ def resolve_standard_checker_path(raw_name: str) -> tuple[str, Path]:
     return (checker_name, source)
 
 def read_build_config(workspace: Path) -> tuple[BuildConfig, Path]:
-    cfg_path = safe_workspace_path(workspace, _K.BUILD_CONFIG_REL)
+    cfg_path = safe_workspace_path(workspace, _K.BUILD_CONFIG_REL.as_posix())
     return (load_build_config(workspace), cfg_path)
 
 def write_build_config(cfg_path: Path, payload: BuildConfig) -> None:
@@ -362,7 +371,7 @@ def tests_spec_editor_context(workspace: Path, limit: int) -> dict:
 def _tests_spec_status_context(workspace: Path) -> dict:
     return runtime().problem_source_query_service.tests_spec_status(workspace)
 
-def solution_metadata_entry(workspace: Path, source_rel: str) -> dict:
+def solution_metadata_entry(workspace: Path, source_rel: str) -> SolutionSourceRow:
     return runtime().problem_source_query_service.solution_entry(
         workspace,
         source_rel,
@@ -371,7 +380,7 @@ def solution_metadata_entry(workspace: Path, source_rel: str) -> dict:
 def list_solution_entries(
     workspace: Path,
     build_config: BuildConfig | None = None,
-) -> tuple[list[dict], bool]:
+) -> tuple[list[SolutionSourceRow], bool]:
     return runtime().problem_source_query_service.solution_entries(
         workspace,
         build_config,
@@ -409,9 +418,13 @@ def _solutions_status_context(
         display = 'missing'
     return {'mode': mode, 'display': display, 'accepted_source': accepted_source, 'accepted_exists': accepted_exists, 'count': total, 'count_display': count_display, 'truncated': bool(truncated)}
 
-def run_solution_options_context(workspace: Path) -> tuple[list[dict], str, bool]:
+def run_solution_options_context(
+    workspace: Path,
+) -> tuple[list[RunSolutionOption], str, bool]:
     return runtime().problem_source_query_service.run_solution_options(workspace)
 
 
-def run_test_options_context(workspace: Path) -> tuple[list[dict], bool, str]:
+def run_test_options_context(
+    workspace: Path,
+) -> tuple[list[RunTestOption], bool, str]:
     return runtime().problem_source_query_service.run_test_options(workspace)

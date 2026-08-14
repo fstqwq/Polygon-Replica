@@ -30,6 +30,7 @@ from app.service.verification.diagnostic import (
 from app.service.verification.artifact import index_task_artifacts
 from app.service.verification.lifecycle import (
     ActivationCommit,
+    ActivationOutcome,
     ActivationPlan,
     ParentTransition,
     SanityFinish,
@@ -254,7 +255,7 @@ class VerificationTaskStore:
                         [plan.verification_id],
                     ).fetchone()
                     if row is None:
-                        outcome = "missing"
+                        outcome: ActivationOutcome = "missing"
                     elif str(row["status"] or "") == "running":
                         outcome = "already-running"
                     else:

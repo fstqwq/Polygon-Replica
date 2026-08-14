@@ -118,7 +118,10 @@ def statement_sources_signature(
         kind = row["kind"]
         # Custom sample text already changes tests/spec.json hash.
         if not row["sample_input"]:
-            sample_in = _safe_workspace_regular_file(workspace, payload_rel_path_for_test(test_id, kind))
+            sample_in = _safe_workspace_regular_file(
+                workspace,
+                Path(payload_rel_path_for_test(test_id, kind)),
+            )
             if sample_in is not None:
                 sample_related_files.append(sample_in)
     uniq_sample_files = sorted(

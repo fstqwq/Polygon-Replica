@@ -26,6 +26,23 @@ class ContestMemberRecord(TypedDict):
     is_system_admin: int
 
 
+class ContestOverviewRecord(TypedDict):
+    id: int
+    slug: str
+    title: str
+    owner_user_id: int
+    created_at: str
+    role: str
+    last_updated_at: str
+    problem_count: int
+    dirty_problem_count: int
+
+
+class ContestMembershipRecord(TypedDict):
+    user_id: int
+    role: str
+
+
 class ContestProblemRecord(TypedDict):
     contest_problem_id: int
     position: int
@@ -89,11 +106,135 @@ class ContestBuildMaterializationRecord(TypedDict):
     archive_sha256: str
 
 
+class ContestBuildItemRecord(TypedDict):
+    contest_problem_id: int
+    position: int
+    label: str
+    idx: str
+    problem_id: int
+    problem_slug: str
+    statement_folder: str
+    source_commit: str
+    revision_number: int
+    materialization_id: str
+    archive_sha256: str
+
+
+def _required_int(value: object, column: str) -> int:
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise RuntimeError(f"contest {column} must be an integer")
+    return value
+
+
+def _contest_context_record(row: dict[str, object]) -> ContestContextRecord:
+    return {
+        "id": _required_int(row["id"], "id"),
+        "slug": str(row["slug"] or ""),
+        "title": str(row["title"] or ""),
+        "owner_user_id": _required_int(row["owner_user_id"], "owner_user_id"),
+        "status": str(row["status"] or ""),
+        "source_generation": _required_int(
+            row["source_generation"], "source_generation"
+        ),
+        "location": str(row["location"] or ""),
+        "date_text": str(row["date_text"] or ""),
+        "statement_default_language": str(
+            row["statement_default_language"] or ""
+        ),
+        "created_at": str(row["created_at"] or ""),
+    }
+
+
+def _contest_member_record(row: dict[str, object]) -> ContestMemberRecord:
+    return {
+        "username": str(row["username"] or ""),
+        "role": str(row["role"] or ""),
+        "created_at": str(row["created_at"] or ""),
+        "is_system_admin": _required_int(
+            row["is_system_admin"], "member is_system_admin"
+        ),
+    }
+
+
+def _contest_overview_record(row: dict[str, object]) -> ContestOverviewRecord:
+    return {
+        "id": _required_int(row["id"], "overview id"),
+        "slug": str(row["slug"] or ""),
+        "title": str(row["title"] or ""),
+        "owner_user_id": _required_int(
+            row["owner_user_id"], "overview owner_user_id"
+        ),
+        "created_at": str(row["created_at"] or ""),
+        "role": str(row["role"] or ""),
+        "last_updated_at": str(row["last_updated_at"] or ""),
+        "problem_count": _required_int(row["problem_count"], "problem_count"),
+        "dirty_problem_count": _required_int(
+            row["dirty_problem_count"], "dirty_problem_count"
+        ),
+    }
+
+
+def _contest_attachment_record(row: dict[str, object]) -> ContestAttachmentRecord:
+    return {
+        "key": str(row["key"] or ""),
+        "rel_path": str(row["rel_path"] or ""),
+        "created_at": str(row["created_at"] or ""),
+    }
+
+
+def _contest_job_record(row: dict[str, object]) -> ContestJobRecord:
+    return {
+        "id": str(row["id"] or ""),
+        "contest_slug": str(row["contest_slug"] or ""),
+        "job_type": str(row["job_type"] or ""),
+        "status": str(row["status"] or ""),
+        "created_at": str(row["created_at"] or ""),
+        "finished_at": str(row["finished_at"] or ""),
+    }
+
+
+def _contest_artifact_record(row: dict[str, object]) -> ContestArtifactRecord:
+    return {
+        "id": str(row["id"] or ""),
+        "job_id": str(row["job_id"] or ""),
+        "artifact_type": str(row["artifact_type"] or ""),
+        "filename": str(row["filename"] or ""),
+        "size_bytes": _required_int(row["size_bytes"], "artifact size_bytes"),
+        "created_at": str(row["created_at"] or ""),
+    }
+
+
+def _contest_build_problem_record(row: dict[str, object]) -> ContestBuildProblemRecord:
+    return {
+        "contest_problem_id": _required_int(
+            row["contest_problem_id"], "build contest_problem_id"
+        ),
+        "position": _required_int(row["position"], "build position"),
+        "label": str(row["label"] or ""),
+        "problem_id": _required_int(row["problem_id"], "build problem_id"),
+        "statement_folder": str(row["statement_folder"] or ""),
+        "problem_slug": str(row["problem_slug"] or ""),
+    }
+
+
+def _contest_build_materialization_record(
+    row: dict[str, object],
+) -> ContestBuildMaterializationRecord:
+    return {
+        "id": str(row["id"] or ""),
+        "source_commit": str(row["source_commit"] or ""),
+        "revision_number": _required_int(
+            row["revision_number"], "materialization revision_number"
+        ),
+        "archive_sha256": str(row["archive_sha256"] or ""),
+    }
+
+
 class ContestDiskStore:
     def __init__(self, db: DB):
         self.db = db
 
-    def user_contest_rows(self, user_id: int, *, limit: int) -> list[dict[str, object]]:
+    def user_contest_rows(self, user_id: int, *, limit: int) -> list[ContestOverviewRecord]:
         rows = self.db.fetch_all(
             """
             SELECT c.id,c.slug,c.title,c.owner_user_id,c.created_at,m.role,
@@ -128,9 +269,9 @@ class ContestDiskStore:
             """,
             [int(user_id), int(user_id), int(user_id), max(1, int(limit))],
         )
-        return [dict(row) for row in rows]
+        return [_contest_overview_record(dict(row)) for row in rows]
 
-    def all_contest_rows(self, user_id: int, *, limit: int) -> list[dict[str, object]]:
+    def all_contest_rows(self, user_id: int, *, limit: int) -> list[ContestOverviewRecord]:
         rows = self.db.fetch_all(
             """
             SELECT c.id,c.slug,c.title,c.owner_user_id,c.created_at,'admin' AS role,
@@ -163,7 +304,7 @@ class ContestDiskStore:
             """,
             [int(user_id), int(user_id), max(1, int(limit))],
         )
-        return [dict(row) for row in rows]
+        return [_contest_overview_record(dict(row)) for row in rows]
 
     def contest_slug_exists(self, contest_slug: str) -> bool:
         row = self.db.fetch_one("SELECT id FROM contests WHERE slug=?", [contest_slug])
@@ -178,7 +319,9 @@ class ContestDiskStore:
                 "INSERT INTO contests(slug,title,owner_user_id,created_at) VALUES(?,?,?,?)",
                 [slug, title, int(owner_user_id), created_at],
             )
-            contest_id = int(cursor.lastrowid)
+            if cursor.lastrowid is None:
+                raise RuntimeError("contest insert did not return an id")
+            contest_id = cursor.lastrowid
             conn.execute(
                 "INSERT INTO contest_members(contest_id,user_id,role,created_at) VALUES(?,?,?,?)",
                 [contest_id, int(owner_user_id), "owner", created_at],
@@ -236,7 +379,7 @@ class ContestDiskStore:
             """,
             [contest_slug],
         )
-        return None if row is None else dict(row)
+        return None if row is None else _contest_context_record(dict(row))
 
     def contest_context_by_id(self, contest_id: int) -> ContestContextRecord | None:
         row = self.db.fetch_one(
@@ -247,7 +390,7 @@ class ContestDiskStore:
             """,
             [int(contest_id)],
         )
-        return None if row is None else dict(row)
+        return None if row is None else _contest_context_record(dict(row))
 
     def owner_count(self, contest_id: int) -> int:
         row = self.db.fetch_one(
@@ -280,7 +423,7 @@ class ContestDiskStore:
             """,
             [int(contest_id)],
         )
-        return [dict(row) for row in rows]
+        return [_contest_member_record(dict(row)) for row in rows]
 
     def user_id_by_username(self, username: str) -> int | None:
         row = self.db.fetch_one(
@@ -301,7 +444,9 @@ class ContestDiskStore:
             [int(contest_id), int(user_id), role, created_at],
         )
 
-    def membership_for_username(self, contest_id: int, username: str) -> dict[str, object] | None:
+    def membership_for_username(
+        self, contest_id: int, username: str
+    ) -> ContestMembershipRecord | None:
         row = self.db.fetch_one(
             """
             SELECT u.id AS user_id,m.role
@@ -311,7 +456,12 @@ class ContestDiskStore:
             """,
             [int(contest_id), username],
         )
-        return None if row is None else dict(row)
+        if row is None:
+            return None
+        return {
+            "user_id": _required_int(row["user_id"], "membership user_id"),
+            "role": str(row["role"] or ""),
+        }
 
     def revoke_member(self, contest_id: int, user_id: int) -> None:
         self.db.execute(
@@ -354,7 +504,7 @@ class ContestDiskStore:
             """,
             [int(contest_id)],
         )
-        return [dict(row) for row in rows]
+        return [_contest_attachment_record(dict(row)) for row in rows]
 
     def replace_attachment_rows(
         self,
@@ -687,7 +837,12 @@ class ContestDiskStore:
                 if materialization is None:
                     blocked.append(str(row["problem_slug"]))
                     continue
-                frozen_rows.append((dict(row), dict(materialization)))
+                frozen_rows.append(
+                    (
+                        _contest_build_problem_record(dict(row)),
+                        _contest_build_materialization_record(dict(materialization)),
+                    )
+                )
             if blocked:
                 return {
                     "outcome": "not_ready",
@@ -805,7 +960,7 @@ class ContestDiskStore:
             """,
             [int(contest_id), job_id],
         )
-        return None if row is None else dict(row)
+        return None if row is None else _contest_job_record(dict(row))
 
     def latest_job_row(self, contest_id: int) -> ContestJobRecord | None:
         row = self.db.fetch_one(
@@ -819,7 +974,7 @@ class ContestDiskStore:
             """,
             [int(contest_id)],
         )
-        return None if row is None else dict(row)
+        return None if row is None else _contest_job_record(dict(row))
 
     def job_rows(self, contest_id: int, *, limit: int) -> list[ContestJobRecord]:
         rows = self.db.fetch_all(
@@ -833,7 +988,7 @@ class ContestDiskStore:
             """,
             [int(contest_id), max(1, int(limit))],
         )
-        return [dict(row) for row in rows]
+        return [_contest_job_record(dict(row)) for row in rows]
 
     def insert_artifact(
         self,
@@ -855,7 +1010,7 @@ class ContestDiskStore:
             [artifact_id, int(contest_id), job_id, artifact_type, filename, sha256, int(size_bytes), created_at],
         )
 
-    def build_items(self, job_id: str) -> list[dict[str, object]]:
+    def build_items(self, job_id: str) -> list[ContestBuildItemRecord]:
         rows = self.db.fetch_all(
             """SELECT i.*,p.slug AS problem_slug
                FROM contest_build_items i JOIN problems p ON p.id=i.problem_id
@@ -890,7 +1045,7 @@ class ContestDiskStore:
             """,
             [int(contest_id), max(1, int(limit))],
         )
-        return [dict(row) for row in rows]
+        return [_contest_artifact_record(dict(row)) for row in rows]
 
     def artifact_row(self, contest_id: int, artifact_id: str) -> ContestArtifactRecord | None:
         row = self.db.fetch_one(
@@ -901,4 +1056,4 @@ class ContestDiskStore:
             """,
             [int(contest_id), artifact_id],
         )
-        return None if row is None else dict(row)
+        return None if row is None else _contest_artifact_record(dict(row))

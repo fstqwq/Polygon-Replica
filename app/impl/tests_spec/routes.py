@@ -38,6 +38,7 @@ from app.impl.workspace.test_spec import (
 from app.main_util import enforce_textarea_max_bytes, read_upload_bytes_limited
 from app.service.problem.test_spec import (
     TESTS_SPEC_REL,
+    TestSpecEntry,
     next_test_id,
     normalize_file_manual_input,
     normalize_gen_command,
@@ -48,31 +49,38 @@ from app.service.problem.test_spec import (
 )
 
 
+class GeneratorReplacement(TestSpecEntry):
+    command: str
 
-def _read_tests_spec(workspace: Path) -> tuple[list[dict[str, str]], Path]:
-    limits = runtime().config_values.snapshot()
+
+def _read_tests_spec(workspace: Path) -> tuple[list[TestSpecEntry], Path]:
     return read_tests_spec(
         workspace,
-        document_max_bytes=int(limits["TEXTAREA_MAX_BYTES"]),
-        sample_max_bytes=int(limits["STATEMENT_SAMPLE_MAX_BYTES"]),
+        document_max_bytes=runtime().config_values.integer("TEXTAREA_MAX_BYTES"),
+        sample_max_bytes=runtime().config_values.integer(
+            "STATEMENT_SAMPLE_MAX_BYTES"
+        ),
     )
 
 
-def _write_tests_spec(path: Path, entries: list[dict[str, str]]) -> None:
-    limits = runtime().config_values.snapshot()
+def _write_tests_spec(path: Path, entries: list[TestSpecEntry]) -> None:
     write_tests_spec(
         path,
         entries,
-        document_max_bytes=int(limits["TEXTAREA_MAX_BYTES"]),
-        sample_max_bytes=int(limits["STATEMENT_SAMPLE_MAX_BYTES"]),
+        document_max_bytes=runtime().config_values.integer("TEXTAREA_MAX_BYTES"),
+        sample_max_bytes=runtime().config_values.integer(
+            "STATEMENT_SAMPLE_MAX_BYTES"
+        ),
     )
 
 
-def _normalize_tests_spec_entry(raw: object, *, index: int) -> dict:
+def _normalize_tests_spec_entry(raw: object, *, index: int) -> TestSpecEntry:
     return normalize_tests_spec_entry(
         raw,
         index=index,
-        sample_max_bytes=int(runtime().config_values.STATEMENT_SAMPLE_MAX_BYTES),
+        sample_max_bytes=runtime().config_values.integer(
+            "STATEMENT_SAMPLE_MAX_BYTES"
+        ),
     )
 
 
@@ -88,7 +96,7 @@ def render_tests_page(request: Request, problem: str, user: Annotated[str, Depen
     try:
         tests_editor = tests_spec_editor_context(
             workspace,
-            limit=int(runtime().config_values.TESTS_SPEC_ROWS_LIMIT),
+            limit=runtime().config_values.integer("TESTS_SPEC_ROWS_LIMIT"),
         )
     except (ValueError, OSError) as exc:
         tests_editor_error = str(exc)
@@ -97,9 +105,11 @@ def render_tests_page(request: Request, problem: str, user: Annotated[str, Depen
         tests_gen_script = tests_spec_gen_script_context(workspace)
     except (ValueError, OSError):
         tests_gen_script = {'text': '', 'count': 0}
+    generated_count = tests_gen_script.get("count")
+    if not isinstance(generated_count, int) or isinstance(generated_count, bool):
+        raise RuntimeError("generator script count must be an integer")
     tests_gen_script_configured = bool(
-        int(tests_gen_script.get('count') or 0)
-        or int(tests_editor['summary'].get('gen') or 0)
+        generated_count or int(tests_editor['summary'].get('gen') or 0)
     )
     template_context = {
         'ctx': ctx,
@@ -107,7 +117,9 @@ def render_tests_page(request: Request, problem: str, user: Annotated[str, Depen
         'tests_gen_script': tests_gen_script,
         'tests_gen_script_configured': tests_gen_script_configured,
         'tests_gen_script_edit': request.query_params.get('edit') == 'gen-script',
-        'statement_sample_max_bytes': int(runtime().config_values.STATEMENT_SAMPLE_MAX_BYTES),
+        'statement_sample_max_bytes': runtime().config_values.integer(
+            "STATEMENT_SAMPLE_MAX_BYTES"
+        ),
     }
     if tests_editor_error:
         template_context['message'] = tests_editor_error
@@ -131,7 +143,7 @@ def add_manual_test(
     try:
         safe_input = normalize_manual_input(
             tests_spec_form_text(manual_input),
-            max_bytes=int(runtime().config_values.TEXTAREA_MAX_BYTES),
+            max_bytes=runtime().config_values.integer("TEXTAREA_MAX_BYTES"),
         )
         safe_sample = tests_spec_bool_flag(tests_spec_form_text(sample))
         requested_id = tests_spec_form_text(test_id).strip()
@@ -178,7 +190,7 @@ async def upload_manual_test(
         raw_payload = await read_upload_bytes_limited(
             manual_upload,
             label='uploaded payload',
-            max_bytes=int(runtime().config_values.UPLOAD_MAX_BYTES),
+            max_bytes=runtime().config_values.integer("UPLOAD_MAX_BYTES"),
         )
         try:
             uploaded_text = raw_payload.decode('utf-8')
@@ -282,7 +294,7 @@ def edit_spec_test(
         with runtime().workspace_service.workspace_lock(workspace):
             entries, spec_path = _read_tests_spec(workspace)
             idx = tests_spec_resolve_index(index, len(entries))
-            current = _normalize_tests_spec_entry(dict(entries[idx - 1]), index=idx)
+            current = _normalize_tests_spec_entry(entries[idx - 1], index=idx)
             old_id = normalize_test_id(current.get('id'))
             if safe_test_id != old_id and any((normalize_test_id(row.get('id')) == safe_test_id for i, row in enumerate(entries) if i != idx - 1)):
                 raise ValueError(f'test id already exists: {safe_test_id}')
@@ -300,7 +312,7 @@ def edit_spec_test(
             if safe_kind == 'manual':
                 safe_payload = normalize_manual_input(
                     submitted_payload,
-                    max_bytes=int(runtime().config_values.TEXTAREA_MAX_BYTES),
+                    max_bytes=runtime().config_values.integer("TEXTAREA_MAX_BYTES"),
                 )
             elif safe_kind == 'gen':
                 safe_payload = normalize_gen_command(submitted_payload)
@@ -402,38 +414,36 @@ def save_gen_script(problem: str, user: Annotated[str, Depends(require_session_u
         safe_script_text = enforce_textarea_max_bytes(
             tests_spec_form_text(gen_script_text),
             label='generator script',
-            max_bytes=int(runtime().config_values.TEXTAREA_MAX_BYTES),
+            max_bytes=runtime().config_values.integer("TEXTAREA_MAX_BYTES"),
         )
         desired_commands = parse_gen_script_lines(safe_script_text)
         with runtime().workspace_service.workspace_lock(workspace):
             entries, spec_path = _read_tests_spec(workspace)
-            existing_gen_rows: list[dict[str, object]] = []
-            seed_entries: list[dict[str, object]] = []
+            existing_gen_rows: list[TestSpecEntry] = []
+            seed_entries = list(entries)
             for idx, row in enumerate(entries, start=1):
                 normalized_row = _normalize_tests_spec_entry(row, index=idx)
-                row_id = normalize_test_id(normalized_row.get('id'))
-                seed_entries.append({'id': row_id})
                 if normalized_row['kind'].strip().lower() == 'gen':
-                    existing_gen_rows.append(
-                        {
-                            'id': row_id,
-                            'sample': bool(normalized_row.get('sample')),
-                            'sample_input': normalized_row['sample_input'] if isinstance(normalized_row.get('sample_input'), str) else '',
-                            'sample_output': normalized_row['sample_output'] if isinstance(normalized_row.get('sample_output'), str) else '',
-                            'sample_output_validate': bool(normalized_row.get('sample_output_validate', True)),
-                        }
-                    )
-            replacement_gen_rows: list[dict[str, object]] = []
+                    existing_gen_rows.append(normalized_row)
+            replacement_gen_rows: list[GeneratorReplacement] = []
             for idx, command in enumerate(desired_commands):
                 if idx < len(existing_gen_rows):
                     safe_test_id = normalize_test_id(existing_gen_rows[idx].get('id'))
                     safe_sample = bool(existing_gen_rows[idx].get('sample'))
-                    safe_sample_input = existing_gen_rows[idx]['sample_input'] if isinstance(existing_gen_rows[idx].get('sample_input'), str) else ''
-                    safe_sample_output = existing_gen_rows[idx]['sample_output'] if isinstance(existing_gen_rows[idx].get('sample_output'), str) else ''
-                    safe_sample_output_validate = bool(existing_gen_rows[idx].get('sample_output_validate', True))
+                    safe_sample_input = existing_gen_rows[idx]['sample_input']
+                    safe_sample_output = existing_gen_rows[idx]['sample_output']
+                    safe_sample_output_validate = existing_gen_rows[idx][
+                        'sample_output_validate'
+                    ]
                 else:
                     safe_test_id = next_test_id(seed_entries)
-                    seed_entries.append({'id': safe_test_id})
+                    seed_entries.append(
+                        tests_spec_row(
+                            test_id=safe_test_id,
+                            kind="gen",
+                            sample=False,
+                        )
+                    )
                     safe_sample = False
                     safe_sample_input = ''
                     safe_sample_output = ''
@@ -449,7 +459,7 @@ def save_gen_script(problem: str, user: Annotated[str, Depends(require_session_u
                         'command': command,
                     }
                 )
-            rebuilt_entries: list[dict[str, object]] = []
+            rebuilt_entries: list[TestSpecEntry] = []
             replacement_idx = 0
             for idx, row in enumerate(entries, start=1):
                 normalized_row = _normalize_tests_spec_entry(row, index=idx)
@@ -464,9 +474,9 @@ def save_gen_script(problem: str, user: Annotated[str, Depends(require_session_u
                             test_id=str(replacement['id']),
                             kind='gen',
                             sample=bool(replacement['sample']),
-                            sample_input=replacement['sample_input'] if isinstance(replacement.get('sample_input'), str) else '',
-                            sample_output=replacement['sample_output'] if isinstance(replacement.get('sample_output'), str) else '',
-                            sample_output_validate=bool(replacement.get('sample_output_validate', True)),
+                            sample_input=replacement['sample_input'],
+                            sample_output=replacement['sample_output'],
+                            sample_output_validate=replacement['sample_output_validate'],
                             index=len(rebuilt_entries) + 1,
                         )
                     )
@@ -476,9 +486,9 @@ def save_gen_script(problem: str, user: Annotated[str, Depends(require_session_u
                         test_id=normalize_test_id(normalized_row.get('id')),
                         kind=normalize_test_kind(normalized_row.get('kind')),
                         sample=bool(normalized_row.get('sample')),
-                        sample_input=normalized_row['sample_input'] if isinstance(normalized_row.get('sample_input'), str) else '',
-                        sample_output=normalized_row['sample_output'] if isinstance(normalized_row.get('sample_output'), str) else '',
-                        sample_output_validate=bool(normalized_row.get('sample_output_validate', True)),
+                        sample_input=normalized_row['sample_input'],
+                        sample_output=normalized_row['sample_output'],
+                        sample_output_validate=normalized_row['sample_output_validate'],
                         index=len(rebuilt_entries) + 1,
                     )
                 )
@@ -488,9 +498,9 @@ def save_gen_script(problem: str, user: Annotated[str, Depends(require_session_u
                         test_id=str(replacement['id']),
                         kind='gen',
                         sample=bool(replacement['sample']),
-                        sample_input=replacement['sample_input'] if isinstance(replacement.get('sample_input'), str) else '',
-                        sample_output=replacement['sample_output'] if isinstance(replacement.get('sample_output'), str) else '',
-                        sample_output_validate=bool(replacement.get('sample_output_validate', True)),
+                        sample_input=replacement['sample_input'],
+                        sample_output=replacement['sample_output'],
+                        sample_output_validate=replacement['sample_output_validate'],
                         index=len(rebuilt_entries) + 1,
                     )
                 )
@@ -499,7 +509,7 @@ def save_gen_script(problem: str, user: Annotated[str, Depends(require_session_u
             new_gen_ids = {normalize_test_id(row.get('id')) for row in replacement_gen_rows if normalize_test_id(row.get('id'))}
             for replacement in replacement_gen_rows:
                 safe_test_id = normalize_test_id(replacement.get('id'))
-                safe_command = replacement['command'] if isinstance(replacement.get('command'), str) else ''
+                safe_command = replacement['command']
                 tests_spec_write_payload(workspace, safe_test_id, 'gen', safe_command)
             for removed_id in sorted(old_gen_ids - new_gen_ids):
                 tests_spec_remove_payload(workspace, removed_id)
@@ -514,7 +524,7 @@ def download_test_payload(problem: str, user: Annotated[str, Depends(require_ses
     with runtime().workspace_service.workspace_lock(workspace):
         entries, _spec_path = _read_tests_spec(workspace)
         idx = tests_spec_resolve_index(index, len(entries))
-        entry = dict(entries[idx - 1])
+        entry = entries[idx - 1]
         test_id = normalize_test_id(entry.get('id'))
         kind = normalize_test_kind(entry.get('kind'))
         payload_path: Path | None = None
@@ -549,7 +559,7 @@ async def upload_test_payload(
         raw_payload = await read_upload_bytes_limited(
             payload_upload,
             label='uploaded payload',
-            max_bytes=int(runtime().config_values.UPLOAD_MAX_BYTES),
+            max_bytes=runtime().config_values.integer("UPLOAD_MAX_BYTES"),
         )
         try:
             uploaded_text = raw_payload.decode('utf-8')

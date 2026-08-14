@@ -32,7 +32,10 @@ class RevisionHistoryRow(TypedDict):
 def _revision_history_rows(ctx: dict[str, object]) -> tuple[Path, list[RevisionHistoryRow]]:
     workspace_context = cast(dict[str, object], ctx["workspace"])
     workspace = Path(cast(str, workspace_context["path"]))
-    raw_rows = runtime().git_service.history(workspace, limit=runtime().config_values.WORKSPACE_HISTORY_LIMIT)
+    raw_rows = runtime().git_service.history(
+        workspace,
+        limit=runtime().config_values.integer("WORKSPACE_HISTORY_LIMIT"),
+    )
     revision_top = cast(int | None, ctx.get("workspace_version"))
     rows: list[RevisionHistoryRow] = []
     for index, raw in enumerate(raw_rows):
@@ -189,17 +192,18 @@ def history_import(
             raise ValueError("archive filename is required")
         workspace_context = cast(dict[str, object], ctx["workspace"])
         workspace = Path(cast(str, workspace_context["path"]))
-        snapshot = runtime().config_values.snapshot()
         with spool_fileobj(
             package_upload.file,
             root=runtime().storage_layout.archive_upload_root,
-            max_bytes=int(snapshot["UPLOAD_MAX_BYTES"]),
+            max_bytes=runtime().config_values.integer("UPLOAD_MAX_BYTES"),
             label="archive file",
         ) as package_path:
             with ArchiveView(
                 package_path,
                 problem_archive_policy(
-                    int(snapshot["PROBLEM_ZIP_MAX_EXPANDED_BYTES"])
+                    runtime().config_values.integer(
+                        "PROBLEM_ZIP_MAX_EXPANDED_BYTES"
+                    )
                 ),
             ) as package:
                 rooted = package.rooted_at("config/problem.json")

@@ -2,6 +2,33 @@ import codecs
 import tempfile
 import zipfile
 from pathlib import Path
+from types import TracebackType
+from typing import Literal, Protocol
+
+
+class ZipMemberReader(Protocol):
+    """Readable member returned by a ZIP archive boundary."""
+
+    def __enter__(self) -> "ZipMemberReader": ...
+
+    def __exit__(
+        self,
+        _exc_type: type[BaseException] | None,
+        _exc: BaseException | None,
+        _traceback: TracebackType | None,
+    ) -> None: ...
+
+    def read(self, size: int = -1) -> bytes: ...
+
+
+class ZipArchiveReader(Protocol):
+    """ZIP operation required by the bounded extraction helpers."""
+
+    def open(
+        self,
+        member: str | zipfile.ZipInfo,
+        mode: Literal["r"] = "r",
+    ) -> ZipMemberReader: ...
 
 
 def validate_zip_entry_size(
@@ -35,7 +62,7 @@ def _normalize_decoded_text_chunk(text: str, *, pending_cr: bool, final: bool) -
 
 
 def extract_zip_entry_to_path_limited(
-    archive: zipfile.ZipFile,
+    archive: ZipArchiveReader,
     info: zipfile.ZipInfo,
     target: Path,
     *,
@@ -102,7 +129,7 @@ def _check_written_size(
 
 
 def _extract_zip_binary_entry(
-    archive: zipfile.ZipFile,
+    archive: ZipArchiveReader,
     info: zipfile.ZipInfo,
     target: Path,
     *,
@@ -145,7 +172,7 @@ def _extract_zip_binary_entry(
 
 
 def _extract_zip_text_or_binary_entry(
-    archive: zipfile.ZipFile,
+    archive: ZipArchiveReader,
     info: zipfile.ZipInfo,
     target: Path,
     *,

@@ -1,4 +1,6 @@
 from pathlib import Path
+from collections.abc import Sequence
+from typing import TypedDict
 
 from app.service.verification.task_store import VerificationTaskReadRow
 from app.service.verification.types import VerificationTaskStatus
@@ -10,8 +12,19 @@ def task_display_status(status: VerificationTaskStatus) -> str:
     return status
 
 
-def task_counts(rows: list[VerificationTaskReadRow]) -> dict[str, object]:
-    counts = {
+class TaskCounts(TypedDict):
+    total: int
+    pending: int
+    queued: int
+    running: int
+    done: int
+    failed: int
+    cancelled: int
+    by_kind: dict[str, dict[str, int]]
+
+
+def task_counts(rows: Sequence[VerificationTaskReadRow]) -> TaskCounts:
+    counts: dict[str, int] = {
         "total": 0,
         "pending": 0,
         "queued": 0,
@@ -19,16 +32,14 @@ def task_counts(rows: list[VerificationTaskReadRow]) -> dict[str, object]:
         "done": 0,
         "failed": 0,
         "cancelled": 0,
-        "by_kind": {},
     }
-    by_kind = counts["by_kind"]
-    assert isinstance(by_kind, dict)
+    by_kind: dict[str, dict[str, int]] = {}
     for row in rows:
         task_kind = str(row["task_kind"] or "")
         status = task_display_status(row["status"])
-        counts["total"] = int(counts["total"]) + 1
+        counts["total"] += 1
         if status in counts:
-            counts[status] = int(counts[status]) + 1
+            counts[status] += 1
         kind_counts = by_kind.get(task_kind)
         if kind_counts is None:
             kind_counts = {
@@ -41,11 +52,20 @@ def task_counts(rows: list[VerificationTaskReadRow]) -> dict[str, object]:
             }
             by_kind[task_kind] = kind_counts
         if status in kind_counts:
-            kind_counts[status] = int(kind_counts[status]) + 1
-    return counts
+            kind_counts[status] += 1
+    return {
+        "total": counts["total"],
+        "pending": counts["pending"],
+        "queued": counts["queued"],
+        "running": counts["running"],
+        "done": counts["done"],
+        "failed": counts["failed"],
+        "cancelled": counts["cancelled"],
+        "by_kind": by_kind,
+    }
 
 
-def running_tasks(rows: list[VerificationTaskReadRow]) -> list[dict[str, str]]:
+def running_tasks(rows: Sequence[VerificationTaskReadRow]) -> list[dict[str, str]]:
     values: list[dict[str, str]] = []
     for row in rows:
         if row["status"] != VerificationTaskStatus.LEASED:
@@ -69,7 +89,7 @@ def running_tasks(rows: list[VerificationTaskReadRow]) -> list[dict[str, str]]:
     return values
 
 
-def solution_source_paths(rows: list[VerificationTaskReadRow]) -> list[str]:
+def solution_source_paths(rows: Sequence[VerificationTaskReadRow]) -> list[str]:
     values: list[str] = []
     for row in rows:
         if str(row["task_kind"] or "") != "solution-run":
@@ -80,7 +100,7 @@ def solution_source_paths(rows: list[VerificationTaskReadRow]) -> list[str]:
     return values
 
 
-def program_ids(rows: list[VerificationTaskReadRow]) -> list[str]:
+def program_ids(rows: Sequence[VerificationTaskReadRow]) -> list[str]:
     values: list[str] = []
     for row in rows:
         program_id = str(row["program_id"] or "")

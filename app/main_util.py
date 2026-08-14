@@ -5,7 +5,7 @@ import sqlite3
 from pathlib import Path
 from typing import BinaryIO
 
-from fastapi import UploadFile
+from starlette.datastructures import UploadFile
 
 from app.main_constant import CPP_SOURCE_EXTENSIONS, SOLUTION_SOURCE_EXTENSIONS
 from app.service.platform.workspace_path import normalize_workspace_rel_path

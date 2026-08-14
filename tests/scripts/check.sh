@@ -18,21 +18,24 @@ else
   mapfile -t PY_FILES < <(find app tests scripts -type f -name '*.py' -print)
 fi
 
-echo "[1/6] Application lint check (pylint)"
+echo "[1/7] Application lint check (pylint)"
 "$PYTHON_BIN" -m pylint app
 
-echo "[2/6] Syntax check (py_compile)"
+echo "[2/7] Syntax check (py_compile)"
 "$PYTHON_BIN" -m py_compile "${PY_FILES[@]}"
 
-echo "[3/6] Lint check (pyflakes)"
+echo "[3/7] Lint check (pyflakes)"
 "$PYTHON_BIN" -m pyflakes "${PY_FILES[@]}"
 
-echo "[4/6] Dead code check (vulture, confidence=70)"
+echo "[4/7] Type check (mypy, Linux target)"
+"$PYTHON_BIN" -m mypy --platform linux app
+
+echo "[5/7] Dead code check (vulture, confidence=70)"
 "$PYTHON_BIN" -m vulture app tests --min-confidence 70
 
-echo "[5/6] Test resource assignment check"
+echo "[6/7] Test resource assignment check"
 "$PYTHON_BIN" tests/scripts/run_test_groups.py --check-manifest
 
-echo "[6/6] Import architecture policy checks"
+echo "[7/7] Import architecture policy checks"
 bash tests/scripts/check-import-policy.sh
 bash tests/scripts/check-refactor-placeholders.sh

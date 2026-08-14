@@ -82,7 +82,9 @@ def single_source_editor_context(
                 content, content_truncated = runtime().git_service.read_file_limited(
                     workspace,
                     source_path,
-                    runtime().config_values.WORKSPACE_FILE_VIEW_CHAR_LIMIT,
+                    runtime().config_values.integer(
+                        "WORKSPACE_FILE_VIEW_CHAR_LIMIT"
+                    ),
                 )
         except HTTPException:
             content = ""
@@ -161,8 +163,17 @@ def rename_component_source(
                         for source in sources
                     ]
                     config_changed = True
-                elif config_key:
-                    build_cfg[config_key] = new_source
+                elif config_key == "accepted_solution_source":
+                    build_cfg["accepted_solution_source"] = new_source
+                    config_changed = True
+                elif config_key == "checker_source":
+                    build_cfg["checker_source"] = new_source
+                    config_changed = True
+                elif config_key == "interactor_source":
+                    build_cfg["interactor_source"] = new_source
+                    config_changed = True
+                elif config_key == "validator_source":
+                    build_cfg["validator_source"] = new_source
                     config_changed = True
                 runtime().git_service.rename_path(
                     workspace,
@@ -193,12 +204,15 @@ def _settings_user_ctx(user: str) -> dict:
         raise HTTPException(status_code=400, detail="invalid user")
     if not isinstance(user_id := user_row_raw.get("id"), int) or not isinstance(username := user_row_raw.get("username"), str):
         raise HTTPException(status_code=400, detail="invalid user")
+    is_system_admin = user_row_raw.get("is_system_admin")
+    if not isinstance(is_system_admin, int) or isinstance(is_system_admin, bool):
+        raise HTTPException(status_code=400, detail="invalid user")
     user_row = {
         "id": user_id,
         "username": username,
-        "is_system_admin": int(user_row_raw["is_system_admin"]),
+        "is_system_admin": is_system_admin,
     }
-    if user_row["id"] <= 0 or (not user_row["username"]):
+    if user_id <= 0 or not username:
         raise HTTPException(status_code=400, detail="invalid user")
     default_problem = gctx.get("default_problem")
     if default_problem is None:

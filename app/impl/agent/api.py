@@ -21,6 +21,8 @@ from app.service.importing.archive import (
 )
 from app.service.importing.upload import spool_upload
 from app.service.platform.git_process import run_git
+from app.service.repository.workspace import WorkspaceContext
+from app.service.verification.task_store import VerificationTaskRow
 from app.service.workspace.mutation import WorkspaceMutationConflict
 
 
@@ -38,7 +40,7 @@ async def _read_json(request: Request) -> dict[str, object]:
     return cast(dict[str, object], payload)
 
 
-def _agent_problem_ctx(identity) -> dict[str, object]:
+def _agent_problem_ctx(identity) -> WorkspaceContext:
     return workspace_context_for_identity(identity)
 
 
@@ -163,7 +165,7 @@ async def agent_verification_status(request: Request, verification_id: str):
     ):
         return json_error_response("verification not found", status_code=404)
     runtime_summary = runtime().verification_service.verification_runtime_summary_from_tasks(
-        snapshot["tasks"]
+        cast(list[VerificationTaskRow], snapshot["tasks"])
     )
     return _json_body(
         {
@@ -306,8 +308,14 @@ def _append_diagnostics(lines: list[str], detail_ctx: dict[str, object], *, inde
         lines.append(f"{' ' * indent}diagnostics: []")
         return
     lines.append(f"{' ' * indent}diagnostics:")
-    for item in diagnostics:
-        lines.append(f"{' ' * (indent + 2)}- {_yaml_scalar(item)}")
+    for diagnostic in diagnostics:
+        lines.append(f"{' ' * (indent + 2)}- {_yaml_scalar(diagnostic)}")
+
+
+def _canonical_int(value: object, *, field: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise RuntimeError(f"run detail {field} is not an integer")
+    return value
 
 
 def _append_sanity(lines: list[str], detail_ctx: dict[str, object]) -> None:
@@ -320,8 +328,18 @@ def _append_sanity(lines: list[str], detail_ctx: dict[str, object]) -> None:
     reason = str(sanity.get("reason") or "")
     if reason:
         _append_scalar(lines, "reason", reason, indent=2)
-    _append_scalar(lines, "ran", int(sanity.get("ran_count") or 0), indent=2)
-    _append_scalar(lines, "total", int(sanity.get("task_count") or 0), indent=2)
+    _append_scalar(
+        lines,
+        "ran",
+        _canonical_int(sanity.get("ran_count", 0), field="sanity ran_count"),
+        indent=2,
+    )
+    _append_scalar(
+        lines,
+        "total",
+        _canonical_int(sanity.get("task_count", 0), field="sanity task_count"),
+        indent=2,
+    )
     tasks = cast(list[dict[str, object]], sanity.get("tasks") or [])
     if not tasks:
         lines.append("  checks: []")
@@ -355,7 +373,12 @@ def _render_full_verification_yaml(verification_id: str, detail_ctx: dict[str, o
     lines.append("tasks:")
     task_counts = cast(dict[str, object], detail_ctx.get("detail_task_counts") or {})
     for key in ("pending", "queued", "running", "done", "failed", "cancelled"):
-        _append_scalar(lines, key, int(task_counts.get(key) or 0), indent=2)
+        _append_scalar(
+            lines,
+            key,
+            _canonical_int(task_counts.get(key, 0), field=f"task count {key}"),
+            indent=2,
+        )
     running_tasks = cast(list[dict[str, object]], detail_ctx.get("detail_running_tasks") or [])
     lines.append("")
     if running_tasks:
@@ -493,11 +516,17 @@ def _render_test_zoom_yaml(verification_id: str, detail_ctx: dict[str, object], 
     return ("\n".join(lines).rstrip() + "\n", True)
 
 
-def _agent_verification_detail_yaml(ctx: dict[str, object], verification_id: str, *, test_name: str, source_filter: str) -> tuple[str, int]:
+def _agent_verification_detail_yaml(
+    ctx: WorkspaceContext,
+    verification_id: str,
+    *,
+    test_name: str,
+    source_filter: str,
+) -> tuple[str, int]:
     workspace = Path(str(ctx["workspace"]["path"])).resolve()
     _problem_cfg, general_cfg, _statement_cfg = read_problem_config(workspace)
     detail_ctx = build_run_detail_context(
-        ctx,
+        dict(ctx),
         str(general_cfg["mode"]),
         requested_verification_id=verification_id,
         include_row_details=bool(test_name),
@@ -630,7 +659,7 @@ async def agent_workspace_files(request: Request):
         listed = runtime().workspace_file_service.list_entries(
             workspace,
             rel,
-            limit=runtime().config_values.WORKSPACE_FILE_LIST_LIMIT,
+            limit=runtime().config_values.integer("WORKSPACE_FILE_LIST_LIMIT"),
             require_allowed_root=True,
         )
         items = [{"path": item.path, "is_dir": item.is_dir, "is_file": item.is_file} for item in listed.entries]
@@ -699,17 +728,18 @@ async def agent_workspace_compare(request: Request, archive: UploadFile = File(.
     ctx = _agent_problem_ctx(identity)
     workspace = Path(str(ctx["workspace"]["path"])).resolve()
     try:
-        snapshot = request_runtime.config_values.snapshot()
         async with spool_upload(
             archive,
             root=request_runtime.storage_layout.archive_upload_root,
-            max_bytes=int(snapshot["UPLOAD_MAX_BYTES"]),
+            max_bytes=request_runtime.config_values.integer("UPLOAD_MAX_BYTES"),
             label="workspace archive",
         ) as archive_path:
             with ArchiveView(
                 archive_path,
                 problem_archive_policy(
-                    int(snapshot["PROBLEM_ZIP_MAX_EXPANDED_BYTES"])
+                    request_runtime.config_values.integer(
+                        "PROBLEM_ZIP_MAX_EXPANDED_BYTES"
+                    )
                 ),
             ) as package:
                 result = request_runtime.workspace_mutation_service.read_locked(
@@ -742,17 +772,18 @@ async def agent_workspace_apply(
     workspace = Path(str(ctx["workspace"]["path"])).resolve()
     expected_head = str(base_head_commit or "").strip()
     try:
-        snapshot = request_runtime.config_values.snapshot()
         async with spool_upload(
             archive,
             root=request_runtime.storage_layout.archive_upload_root,
-            max_bytes=int(snapshot["UPLOAD_MAX_BYTES"]),
+            max_bytes=request_runtime.config_values.integer("UPLOAD_MAX_BYTES"),
             label="workspace archive",
         ) as archive_path:
             with ArchiveView(
                 archive_path,
                 problem_archive_policy(
-                    int(snapshot["PROBLEM_ZIP_MAX_EXPANDED_BYTES"])
+                    request_runtime.config_values.integer(
+                        "PROBLEM_ZIP_MAX_EXPANDED_BYTES"
+                    )
                 ),
             ) as package:
                 def apply_archive():

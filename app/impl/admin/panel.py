@@ -18,7 +18,7 @@ from app.impl.auth.shared import (
 )
 from app.impl.runtime.dependency import runtime
 from app.impl.workspace.access import require_system_admin
-from app.impl.workspace.context import global_user_ctx
+from app.impl.workspace.context import GlobalUserPageContext, global_user_ctx
 from app.main_util import form_text
 from app.service.platform.source_backup import SOURCE_BACKUP_DOWNLOAD_NAME
 from app.service.verification.runtime import coerce_int
@@ -91,7 +91,7 @@ def _system_config_row_by_key(
     return rows
 
 
-def _admin_user_context(user: str) -> tuple[dict[str, object], int]:
+def _admin_user_context(user: str) -> tuple[GlobalUserPageContext, int]:
     ctx = global_user_ctx(user)
     require_system_admin(ctx)
     return ctx, int(ctx["user"]["id"])
@@ -155,10 +155,11 @@ def _runtime_controls(
         row = rows_by_key.get(key, {})
         current_value = row.get("current_value")
         current_display = row.get("current_display")
+        choices_value = row.get("choices")
         controls[key] = {
             "key": key,
             "description": row.get("description"),
-            "choices": list(row["choices"]) if isinstance(row.get("choices"), list) else [],
+            "choices": list(choices_value) if isinstance(choices_value, list) else [],
             "current_value": current_value,
             "current_display": (
                 current_display
@@ -327,8 +328,8 @@ def _judgehost_status_view() -> dict[str, object]:
     return {
         "enabled": bool(raw_status.get("enabled")),
         "auth_configured": bool(raw_status.get("auth_configured")),
-        "hosts_total": int(raw_status.get("hosts_total") or 0),
-        "hosts_online": int(raw_status.get("hosts_online") or 0),
+        "hosts_total": coerce_int(raw_status.get("hosts_total"), 0, 0, 10**9),
+        "hosts_online": coerce_int(raw_status.get("hosts_online"), 0, 0, 10**9),
         "hosts": hosts,
         "queue": {
             "queued": int(queue.get("queued") or 0),
@@ -350,9 +351,11 @@ def admin_overview_page(
             "judgehost": _judgehost_status_view(),
             "active_system_admin_count": runtime().auth_service.active_system_admin_count(),
             "admin_config_changed_total": sum(
-                int(section["changed_count"])
+                int(changed_count)
                 for section in sections
-                if isinstance(section.get("changed_count"), (int, float))
+                if isinstance(
+                    (changed_count := section.get("changed_count")), (int, float)
+                )
             ),
             "smtp": runtime().smtp_config_service.snapshot().__dict__,
             "maintenance_status": runtime().maintenance_service.snapshot(
@@ -392,7 +395,9 @@ def admin_users_page(
             "admin_users_query": query,
             "admin_user_rows": runtime().auth_service.admin_user_rows(query=query, limit=50),
             "admin_password_csrf_token": issue_password_form_csrf_token("admin-password"),
-            "admin_password_iters": int(runtime().config_values.PASSWORD_HASH_ITERS),
+            "admin_password_iters": runtime().config_values.integer(
+                "PASSWORD_HASH_ITERS"
+            ),
             "admin_password_salt": secrets.token_hex(16),
         }
     )
@@ -447,12 +452,18 @@ def admin_config_category_page(
             "selected_section": selected_section,
             "selected_rows": selected_rows,
             "selected_slug": requested_slug,
-            "selected_changed_count": int(selected_section.get("changed_count") or 0),
-            "selected_count": int(selected_section.get("count") or 0),
+            "selected_changed_count": coerce_int(
+                selected_section.get("changed_count"), 0, 0, 10**9
+            ),
+            "selected_count": coerce_int(
+                selected_section.get("count"), 0, 0, 10**9
+            ),
             "admin_config_changed_total": sum(
-                int(section["changed_count"])
+                int(changed_count)
                 for section in sections
-                if isinstance(section.get("changed_count"), (int, float))
+                if isinstance(
+                    (changed_count := section.get("changed_count")), (int, float)
+                )
             ),
         }
     )
@@ -832,7 +843,7 @@ def admin_user_password_update(
             raise ValueError("invalid new password envelope") from exc
         new_salt = normalize_password_salt_hex(form_text(new_password_salt))
         new_iters = normalize_password_iters(form_text(new_password_iters))
-        if new_iters != int(runtime().config_values.PASSWORD_HASH_ITERS):
+        if new_iters != runtime().config_values.integer("PASSWORD_HASH_ITERS"):
             raise ValueError("invalid password iterations")
         set_user_password_verifier(int(target_row["id"]), new_verifier, new_salt, new_iters)
         runtime().auth_service.revoke_all_access_for_user(int(target_row["id"]))

@@ -8,7 +8,12 @@ from typing import TYPE_CHECKING, TypedDict
 from app.db import DB
 from app.main_util import problem_slug_leaf
 from app.service.disk.verification_store import VerificationStore
-from app.service.disk.preview_store import PreviewArtifactRow, PreviewRow, PreviewStore
+from app.service.disk.preview_store import (
+    PreviewArtifactRow,
+    PreviewLatestRow,
+    PreviewRow,
+    PreviewStore,
+)
 from app.service.platform.fs.layout import StorageLayout
 from app.service.platform.hashing import sha256_hex_json
 from app.service.statement.tex_compile import TexCompileService
@@ -90,7 +95,11 @@ class PreviewService:
     ) -> PreviewArtifactRow | None:
         return self._store.get_workspace_preview_artifact(problem_id, workspace_id, preview_id)
 
-    def latest_workspace_preview(self, problem_id: int, workspace_id: int) -> dict[str, str] | None:
+    def latest_workspace_preview(
+        self,
+        problem_id: int,
+        workspace_id: int,
+    ) -> PreviewLatestRow | None:
         row = self._store.get_latest_workspace_preview(problem_id, workspace_id)
         if row is None:
             return None
@@ -159,10 +168,9 @@ class PreviewService:
         return rows
 
     def _copy_sample_payloads_from_verification(self, problem: str, username: str, snapshot: Path) -> dict[str, object]:
-        config_snapshot = self.db.config_values.snapshot()
-        tests_spec_max_bytes = int(config_snapshot["TEXTAREA_MAX_BYTES"])
-        statement_sample_max_bytes = int(
-            config_snapshot["STATEMENT_SAMPLE_MAX_BYTES"]
+        tests_spec_max_bytes = self.db.config_values.integer("TEXTAREA_MAX_BYTES")
+        statement_sample_max_bytes = self.db.config_values.integer(
+            "STATEMENT_SAMPLE_MAX_BYTES"
         )
         if self._problem_mode(snapshot) == "interactive":
             return {"sample_count": 0, "copied": 0, "verification_id": "", "skipped": "interactive"}
@@ -505,10 +513,9 @@ class PreviewService:
         self._store.delete_previews(problem_id, workspace_id, terminal_ids)
 
     def compile_preview(self, problem: str, username: str, language: str) -> str:
-        config_snapshot = self.db.config_values.snapshot()
-        tests_spec_max_bytes = int(config_snapshot["TEXTAREA_MAX_BYTES"])
-        statement_sample_max_bytes = int(
-            config_snapshot["STATEMENT_SAMPLE_MAX_BYTES"]
+        tests_spec_max_bytes = self.db.config_values.integer("TEXTAREA_MAX_BYTES")
+        statement_sample_max_bytes = self.db.config_values.integer(
+            "STATEMENT_SAMPLE_MAX_BYTES"
         )
         ctx = self.workspace_service.workspace_context(problem, username, include_recent=False)
         workspace = Path(ctx["workspace"]["path"])

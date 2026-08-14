@@ -6,7 +6,7 @@ import re
 import shutil
 import tempfile
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, TypedDict
 from urllib.parse import quote_plus, urlencode
 
 from fastapi import File, Form, HTTPException, Request, UploadFile, Depends
@@ -54,6 +54,25 @@ from app.service.statement.signature import statement_sources_signature
 from app.service.problem.runtime_config import problem_config_limits
 
 _CONTESTANT_ATTACHMENTS_ROOT = "attachments"
+
+
+class PreviewLogRef(TypedDict):
+    file: str
+    line: int
+    context: str
+
+
+class PreviewCompileDetails(TypedDict):
+    status: str
+    preview_id: str
+    preview_status: str
+    failed_stage: str
+    workspace_head: str
+    workspace_dirty: bool
+    source: str
+    source_commit: str
+    source_ref: str
+    error: str
 
 def statement_compile_asset_rows(workspace: Path) -> list[dict[str, str]]:
     try:
@@ -292,12 +311,12 @@ def extract_latex_failure_summary(log_text: str, summary_obj: dict[str, object] 
                 continue
             return stripped
     if summary_obj is not None:
-        return summary_obj.get("error") or ""
+        summary_error = summary_obj.get("error")
+        return summary_error if isinstance(summary_error, str) else ""
     return ""
 
 
 def preview_page(request: Request, problem: str, user: Annotated[str, Depends(require_session_user)]):
-    config_snapshot = runtime().config_values.snapshot()
     ctx = page_ctx(
         problem,
         user,
@@ -317,9 +336,11 @@ def preview_page(request: Request, problem: str, user: Annotated[str, Depends(re
         current_statement_signature = statement_sources_signature(
             workspace,
             problem_title=problem_title,
-            tests_spec_max_bytes=int(config_snapshot["TEXTAREA_MAX_BYTES"]),
-            statement_sample_max_bytes=int(
-                config_snapshot["STATEMENT_SAMPLE_MAX_BYTES"]
+            tests_spec_max_bytes=runtime().config_values.integer(
+                "TEXTAREA_MAX_BYTES"
+            ),
+            statement_sample_max_bytes=runtime().config_values.integer(
+                "STATEMENT_SAMPLE_MAX_BYTES"
             ),
         )
     except RuntimeError:
@@ -370,7 +391,7 @@ def preview_page(request: Request, problem: str, user: Annotated[str, Depends(re
     preview_artifacts_missing = False
     preview_display_status = 'none'
     preview_is_stale = False
-    log_refs = []
+    log_refs: list[PreviewLogRef] = []
     log_refs_total = 0
     log_refs_truncated = False
     selected_preview_summary: dict[str, object] | None = None
@@ -414,7 +435,10 @@ def preview_page(request: Request, problem: str, user: Annotated[str, Depends(re
             preview_id = ''
         if preview_id and lp is not None:
             latex_log_available = True
-            raw_log, log_truncated = read_text_safe_limited(lp, runtime().config_values.UI_LOG_TEXT_CHAR_LIMIT)
+            raw_log, log_truncated = read_text_safe_limited(
+                lp,
+                runtime().config_values.integer("UI_LOG_TEXT_CHAR_LIMIT"),
+            )
             redact_prefixes: list[tuple[str, str]] = [
                 (str(workspace.resolve()), '.'),
                 (str(runtime().storage_layout.workspace_root.resolve()), '__workspace_root__'),
@@ -429,16 +453,24 @@ def preview_page(request: Request, problem: str, user: Annotated[str, Depends(re
                 m = tex_ref.search(line)
                 if m:
                     log_refs_total += 1
-                    if len(log_refs) >= runtime().config_values.PREVIEW_LOG_REF_LIST_LIMIT:
+                    if len(log_refs) >= runtime().config_values.integer(
+                        "PREVIEW_LOG_REF_LIST_LIMIT"
+                    ):
                         log_refs_truncated = True
                         continue
                     log_refs.append({'file': m.group('file'), 'line': int(m.group('line')), 'context': line})
         if preview_compile_failed:
-            if selected_preview_summary is not None:
-                preview_failed_stage = selected_preview_summary.get("failed_stage", "")
+            preview_summary = selected_preview_summary or {}
+            failed_stage_value = preview_summary.get("failed_stage")
+            preview_failed_stage = (
+                failed_stage_value if isinstance(failed_stage_value, str) else ""
+            )
             if preview_failed_stage == 'sample_sync':
                 preview_failure_title = 'Sample verification failed.'
-                preview_failure_detail = sanitize_log_text_for_ui(selected_preview_summary.get("error", ""))
+                failure_value = preview_summary.get("error")
+                preview_failure_detail = sanitize_log_text_for_ui(
+                    failure_value if isinstance(failure_value, str) else ""
+                )
                 latex_log_available = False
                 log = ''
                 log_truncated = False
@@ -471,10 +503,10 @@ def preview_page(request: Request, problem: str, user: Annotated[str, Depends(re
             'statement_style_path': STATEMENT_STYLE_REL.as_posix(),
             'statement_compile_assets': statement_compile_assets,
             'contestant_attachments': contestant_attachments,
-            'editor_char_limit': runtime().config_values.TEXTAREA_MAX_BYTES,
+            'editor_char_limit': runtime().config_values.integer("TEXTAREA_MAX_BYTES"),
             'log': log,
             'log_truncated': log_truncated,
-            'log_char_limit': runtime().config_values.UI_LOG_TEXT_CHAR_LIMIT,
+            'log_char_limit': runtime().config_values.integer("UI_LOG_TEXT_CHAR_LIMIT"),
             'pdf_exists': pdf_exists,
             'preview_artifacts_missing': preview_artifacts_missing,
             'preview_display_status': preview_display_status,
@@ -482,17 +514,17 @@ def preview_page(request: Request, problem: str, user: Annotated[str, Depends(re
             'log_refs': log_refs,
             'log_refs_total': log_refs_total,
             'log_refs_truncated': log_refs_truncated,
-            'log_refs_limit': runtime().config_values.PREVIEW_LOG_REF_LIST_LIMIT,
+            'log_refs_limit': runtime().config_values.integer("PREVIEW_LOG_REF_LIST_LIMIT"),
             'preview_compile_failed': preview_compile_failed,
             'preview_failure_title': preview_failure_title,
             'preview_failure_detail': preview_failure_detail,
             'preview_failed_stage': preview_failed_stage,
             'latex_log_available': latex_log_available,
             'problem_mode_values': list(_K.GENERAL_MODE_VALUES),
-            'time_limit_min_ms': runtime().config_values.GENERAL_TIME_LIMIT_MIN_MS,
-            'time_limit_max_ms': runtime().config_values.GENERAL_TIME_LIMIT_MAX_MS,
-            'memory_limit_min_mb': runtime().config_values.GENERAL_MEMORY_LIMIT_MIN_MB,
-            'memory_limit_max_mb': runtime().config_values.GENERAL_MEMORY_LIMIT_MAX_MB,
+            'time_limit_min_ms': runtime().config_values.integer("GENERAL_TIME_LIMIT_MIN_MS"),
+            'time_limit_max_ms': runtime().config_values.integer("GENERAL_TIME_LIMIT_MAX_MS"),
+            'memory_limit_min_mb': runtime().config_values.integer("GENERAL_MEMORY_LIMIT_MIN_MB"),
+            'memory_limit_max_mb': runtime().config_values.integer("GENERAL_MEMORY_LIMIT_MAX_MB"),
             'return_page': return_page,
             'statement_mode': safe_mode,
             'available_languages': available_languages,
@@ -524,7 +556,7 @@ def preview_run(
     workspace_head = ctx["workspace"].get("head_commit")
     workspace_dirty = bool(ctx['workspace'].get('dirty'))
     workspace_key = f'{problem_id}:{workspace_id}'
-    details: dict[str, object] = {
+    details: PreviewCompileDetails = {
         'status': 'failed',
         'preview_id': '',
         'preview_status': 'missing',
@@ -548,7 +580,9 @@ def preview_run(
     try:
         preview_id = runtime().preview_service.compile_preview(problem, user, language=current_language)
         details['preview_id'] = preview_id
-        row = runtime().preview_service.get_workspace_preview(problem_id, workspace_id, details['preview_id'])
+        row = runtime().preview_service.get_workspace_preview(
+            problem_id, workspace_id, details['preview_id']
+        )
         if row is None:
             raise RuntimeError('preview metadata missing after compile')
         preview_status = row['status']
@@ -561,8 +595,14 @@ def preview_run(
             msg = 'preview compiled'
         else:
             details['status'] = 'failed'
-            details["error"] = summary_obj.get("error") or "preview failed"
-            failed_stage = summary_obj.get("failed_stage", "")
+            error_value = summary_obj.get("error")
+            details["error"] = (
+                error_value if isinstance(error_value, str) else "preview failed"
+            )
+            failed_stage_value = summary_obj.get("failed_stage")
+            failed_stage = (
+                failed_stage_value if isinstance(failed_stage_value, str) else ""
+            )
             details['failed_stage'] = failed_stage
             msg = 'sample verification failed' if failed_stage == 'sample_sync' else 'preview compile failed'
     except Exception as exc:
@@ -579,7 +619,6 @@ def preview_run(
     return redirect_response(redirect_url, status_code=303, message=msg)
 
 def preview_status(problem: str, user: Annotated[str, Depends(require_session_user)], language: str = ""):
-    config_snapshot = runtime().config_values.snapshot()
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
     problem_id = int(ctx['problem']['id'])
     workspace_id = int(ctx['workspace']['id'])
@@ -597,9 +636,11 @@ def preview_status(problem: str, user: Annotated[str, Depends(require_session_us
         current_statement_signature = statement_sources_signature(
             workspace,
             problem_title=problem_title,
-            tests_spec_max_bytes=int(config_snapshot["TEXTAREA_MAX_BYTES"]),
-            statement_sample_max_bytes=int(
-                config_snapshot["STATEMENT_SAMPLE_MAX_BYTES"]
+            tests_spec_max_bytes=runtime().config_values.integer(
+                "TEXTAREA_MAX_BYTES"
+            ),
+            statement_sample_max_bytes=runtime().config_values.integer(
+                "STATEMENT_SAMPLE_MAX_BYTES"
             ),
         )
     except RuntimeError:
@@ -637,7 +678,6 @@ def preview_status(problem: str, user: Annotated[str, Depends(require_session_us
 
 
 def statement_tex_source(problem: str, user: Annotated[str, Depends(require_session_user)], language: str = ""):
-    config_snapshot = runtime().config_values.snapshot()
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
     workspace = Path(ctx['workspace']['path'])
     try:
@@ -653,8 +693,12 @@ def statement_tex_source(problem: str, user: Annotated[str, Depends(require_sess
                     current_language,
                     fallback_title=problem_slug_leaf(problem),
                 ),
-                tests_spec_max_bytes=int(config_snapshot["TEXTAREA_MAX_BYTES"]),
-                statement_sample_max_bytes=int(config_snapshot["STATEMENT_SAMPLE_MAX_BYTES"]),
+                tests_spec_max_bytes=runtime().config_values.integer(
+                    "TEXTAREA_MAX_BYTES"
+                ),
+                statement_sample_max_bytes=runtime().config_values.integer(
+                    "STATEMENT_SAMPLE_MAX_BYTES"
+                ),
                 problem_limits=problem_config_limits(runtime().config_values),
             )
             tex_text = tex_path.read_text(encoding='utf-8')
@@ -696,7 +740,7 @@ def preview_save(
     statement_mode = statement_mode_from_ctx(ctx)
     msg = 'statement saved'
     try:
-        textarea_limit = int(runtime().config_values.TEXTAREA_MAX_BYTES)
+        textarea_limit = runtime().config_values.integer("TEXTAREA_MAX_BYTES")
         safe_name_tex = enforce_textarea_max_bytes(name_tex, label="statement title", max_bytes=textarea_limit)
         safe_legend_tex = enforce_textarea_max_bytes(legend_tex, label="statement legend", max_bytes=textarea_limit)
         safe_input_tex = enforce_textarea_max_bytes(input_tex, label="statement input", max_bytes=textarea_limit)
@@ -763,7 +807,7 @@ def statement_templates_reset(
 def statement_compile_asset_delete(
     problem: str,
     user: Annotated[str, Depends(require_session_user)],
-    path: Annotated[str, Form()] = ...,
+    path: Annotated[str, Form()],
     page: Annotated[str, Form()] = 'statement',
     language: Annotated[str, Form()] = '',
     preview_id: Annotated[str, Form()] = '',
@@ -802,8 +846,8 @@ def statement_compile_asset_delete(
 async def statement_compile_asset_upload(
     problem: str,
     user: Annotated[str, Depends(require_session_user)],
+    upload: Annotated[UploadFile, File()],
     path: Annotated[str, Form()] = "",
-    upload: Annotated[UploadFile, File()] = ...,
     page: Annotated[str, Form()] = 'statement',
     language: Annotated[str, Form()] = '',
     preview_id: Annotated[str, Form()] = '',
@@ -838,7 +882,7 @@ async def statement_compile_asset_upload(
                         upload,
                         out,
                         label='statement asset',
-                        max_bytes=int(runtime().config_values.UPLOAD_MAX_BYTES),
+                        max_bytes=runtime().config_values.integer("UPLOAD_MAX_BYTES"),
                     )
                 os.replace(tmp_path, asset_abs)
                 tmp_path = None
@@ -864,8 +908,8 @@ async def statement_compile_asset_upload(
 async def statement_attachment_upload(
     problem: str,
     user: Annotated[str, Depends(require_session_user)],
+    upload: Annotated[UploadFile, File()],
     path: Annotated[str, Form()] = "",
-    upload: Annotated[UploadFile, File()] = ...,
     page: Annotated[str, Form()] = 'statement',
     language: Annotated[str, Form()] = '',
     preview_id: Annotated[str, Form()] = '',
@@ -886,7 +930,9 @@ async def statement_attachment_upload(
     tmp_path: Path | None = None
     target_rel = ''
     try:
-        target_rel = normalize_contestant_attachment_target(path, upload_filename=upload.filename)
+        target_rel = normalize_contestant_attachment_target(
+            path, upload_filename=upload.filename or ""
+        )
         with runtime().workspace_service.workspace_lock(workspace):
             attachment_abs = safe_workspace_path(workspace, target_rel)
             if attachment_abs.exists() and attachment_abs.is_dir():
@@ -900,7 +946,7 @@ async def statement_attachment_upload(
                         upload,
                         out,
                         label='attachment',
-                        max_bytes=int(runtime().config_values.UPLOAD_MAX_BYTES),
+                        max_bytes=runtime().config_values.integer("UPLOAD_MAX_BYTES"),
                     )
                 os.replace(tmp_path, attachment_abs)
                 tmp_path = None
@@ -926,7 +972,7 @@ async def statement_attachment_upload(
 def statement_attachment_delete(
     problem: str,
     user: Annotated[str, Depends(require_session_user)],
-    path: Annotated[str, Form()] = ...,
+    path: Annotated[str, Form()],
     page: Annotated[str, Form()] = 'statement',
     language: Annotated[str, Form()] = '',
     preview_id: Annotated[str, Form()] = '',
@@ -965,7 +1011,7 @@ def statement_attachment_delete(
 def statement_language_add(
     problem: str,
     user: Annotated[str, Depends(require_session_user)],
-    language: Annotated[str, Form()] = ...,
+    language: Annotated[str, Form()],
     page: Annotated[str, Form()] = 'statement',
     preview_id: Annotated[str, Form()] = '',
 ):

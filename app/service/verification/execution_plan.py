@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+from typing import TypedDict
 
 from app.config import ConfigValues
 from app.service.platform.testlib_source import workspace_testlib_header
@@ -18,6 +19,13 @@ from app.service.verification.test_spec import (
 
 CPP_EXTENSIONS = (".cpp", ".cc", ".cxx", ".c++")
 SOLUTION_SOURCE_EXTENSIONS = (*CPP_EXTENSIONS, ".py", ".java")
+
+
+class SharedSourcePayloads(TypedDict):
+    accepted_source_path: str
+    source_file_by_path: dict[str, PayloadFile]
+    source_files: dict[str, PayloadFile]
+    testlib_header: Path | None
 
 
 def _problem_limits(runtime_cfg: ProblemConfig) -> dict[str, int]:
@@ -80,7 +88,7 @@ def _shared_source_payloads(
     manifest: VerificationManifest,
     build_cfg: BuildConfig,
     mode: str,
-) -> dict[str, object]:
+) -> SharedSourcePayloads:
     snapshot_resolved = snapshot.resolve()
     validator_source = select_source(
         snapshot,
@@ -342,13 +350,12 @@ class VerificationExecutionPlanner:
         resolved_manifest = (
             verification_manifest(snapshot) if manifest is None else manifest
         )
-        limits = self._config_values.snapshot()
         source_tree = load_problem_source_tree(
             snapshot,
             problem_limits=problem_config_limits(self._config_values),
-            tests_spec_max_bytes=int(limits["TEXTAREA_MAX_BYTES"]),
-            statement_sample_max_bytes=int(
-                limits["STATEMENT_SAMPLE_MAX_BYTES"]
+            tests_spec_max_bytes=self._config_values.integer("TEXTAREA_MAX_BYTES"),
+            statement_sample_max_bytes=self._config_values.integer(
+                "STATEMENT_SAMPLE_MAX_BYTES"
             ),
         )
         build_cfg = source_tree.build
@@ -389,13 +396,13 @@ class VerificationExecutionPlanner:
             pass_limit=pass_limit,
             run_verification_payload_base=_run_payload_base(
                 problem_limits=problem_limits,
-                source_files=dict(shared_sources["source_files"]),
+                source_files=shared_sources["source_files"],
             ),
             generate_verification_payload_base=_generate_payload_base(
                 problem_limits=problem_limits,
-                source_files=dict(shared_sources["source_files"]),
+                source_files=shared_sources["source_files"],
             ),
-            source_file_by_path=dict(shared_sources["source_file_by_path"]),
+            source_file_by_path=shared_sources["source_file_by_path"],
             test_names=[plan.test_name for plan in plans],
             test_plan_by_name=test_plan_by_name,
             tests_meta_rows=tests_meta_rows,

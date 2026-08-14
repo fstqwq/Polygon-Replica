@@ -40,14 +40,14 @@ def settings_page(
         current_iters = (
             int(auth_row["password_iters"] or 0)
             if auth_row is not None
-            else int(runtime().config_values.PASSWORD_HASH_ITERS)
+            else runtime().config_values.integer("PASSWORD_HASH_ITERS")
         )
     except (TypeError, ValueError):
-        current_iters = int(runtime().config_values.PASSWORD_HASH_ITERS)
+        current_iters = runtime().config_values.integer("PASSWORD_HASH_ITERS")
     if not _K.HEX_32_RE.fullmatch(current_salt):
         current_salt = dummy_password_salt_hex(str(user_row["username"]))
     if current_iters <= 0:
-        current_iters = int(runtime().config_values.PASSWORD_HASH_ITERS)
+        current_iters = runtime().config_values.integer("PASSWORD_HASH_ITERS")
     return template_response(
         request,
         "settings.html",
@@ -58,7 +58,9 @@ def settings_page(
             "current_password_salt": current_salt,
             "current_password_iters": current_iters,
             "new_password_salt": secrets.token_hex(16),
-            "new_password_iters": int(runtime().config_values.PASSWORD_HASH_ITERS),
+            "new_password_iters": runtime().config_values.integer(
+                "PASSWORD_HASH_ITERS"
+            ),
         },
     )
 
@@ -117,7 +119,7 @@ def settings_password_update(
             raise ValueError("invalid new password envelope") from exc
         new_salt = normalize_password_salt_hex(form_text(new_password_salt))
         new_iters = normalize_password_iters(form_text(new_password_iters))
-        if new_iters != int(runtime().config_values.PASSWORD_HASH_ITERS):
+        if new_iters != runtime().config_values.integer("PASSWORD_HASH_ITERS"):
             raise ValueError("invalid password iterations")
         set_user_password_verifier(int(row["id"]), new_verifier, new_salt, new_iters)
         runtime().auth_service.revoke_auth_sessions_for_user(int(row["id"]))
@@ -125,12 +127,12 @@ def settings_password_update(
         token = create_session_for_user(int(row["id"]))
         response = redirect_response("/settings", status_code=303, message=message)
         response.set_cookie(
-            runtime().config_values.AUTH_COOKIE_NAME,
+            runtime().config_values.text("AUTH_COOKIE_NAME"),
             token,
             httponly=True,
             samesite="lax",
-            secure=runtime().config_values.AUTH_COOKIE_SECURE,
-            max_age=runtime().config_values.AUTH_COOKIE_MAX_AGE,
+            secure=runtime().config_values.boolean("AUTH_COOKIE_SECURE"),
+            max_age=runtime().config_values.integer("AUTH_COOKIE_MAX_AGE"),
             path="/",
         )
         return response

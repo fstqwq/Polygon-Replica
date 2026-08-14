@@ -225,6 +225,30 @@ class ConfigValues:
         with self._lock:
             return self._values.get(key, default)
 
+    def integer(self, key: str) -> int:
+        """Return one canonical integer value."""
+
+        value = self.get(key)
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise RuntimeError(f"normalized system config {key} is not an integer")
+        return value
+
+    def text(self, key: str) -> str:
+        """Return one canonical text value."""
+
+        value = self.get(key)
+        if not isinstance(value, str):
+            raise RuntimeError(f"normalized system config {key} is not text")
+        return value
+
+    def boolean(self, key: str) -> bool:
+        """Return one canonical boolean value."""
+
+        value = self.get(key)
+        if not isinstance(value, bool):
+            raise RuntimeError(f"normalized system config {key} is not boolean")
+        return value
+
     def __contains__(self, key: object) -> bool:
         with self._lock:
             return key in self._values

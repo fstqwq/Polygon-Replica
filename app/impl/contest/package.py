@@ -70,14 +70,16 @@ def _contest_statement_language_options(contest_id: int, current_language: str) 
         "english",
     ]:
         _append(language)
-    for row in runtime().contest_service.statement_attachment_rows(int(contest_id)):
-        parts = Path(str(row.get("rel_path") or "")).parts
+    for attachment in runtime().contest_service.statement_attachment_rows(int(contest_id)):
+        parts = Path(str(attachment.get("rel_path") or "")).parts
         if len(parts) >= 3 and parts[0] == "statements":
             _append(parts[1])
     problem_languages: set[str] = set()
-    for row in runtime().contest_service.contest_problems(int(contest_id)):
+    for problem in runtime().contest_service.contest_problems(int(contest_id)):
         problem_languages.update(
-            runtime().workspace_service.committed_statement_languages(str(row["problem_slug"]))
+            runtime().workspace_service.committed_statement_languages(
+                problem["problem_slug"]
+            )
         )
     for language in sorted(problem_languages):
         _append(language)
@@ -94,7 +96,9 @@ def _contest_default_statement_source_text(contest_id: int, contest_slug: str, l
         contest_id=int(contest_id),
         contest_slug=contest_slug,
         language=language,
-        problem_entries=[dict(row) for row in runtime().contest_service.contest_problems(int(contest_id))],
+        problem_entries=runtime().contest_service.contest_problem_entries(
+            int(contest_id)
+        ),
         source_folder_map=runtime().contest_service.statement_problem_source_folders(int(contest_id)),
     )
 
@@ -264,9 +268,7 @@ def contest_statement_source_save(
         text = enforce_textarea_max_bytes(
             content,
             label=f"contest statement source {display_path}",
-            max_bytes=int(
-                runtime().config_values.snapshot()["TEXTAREA_MAX_BYTES"]
-            ),
+            max_bytes=runtime().config_values.integer("TEXTAREA_MAX_BYTES"),
         )
         runtime().contest_service.write_statement_source_file(
             contest_id=contest_id,
@@ -288,9 +290,9 @@ def contest_statement_source_save(
 async def contest_statement_source_upload(
     contest: str,
     user: Annotated[str, Depends(require_session_user)],
+    upload: Annotated[UploadFile, File()],
     language: Annotated[str, Form()] = "",
     path: Annotated[str, Form()] = "",
-    upload: Annotated[UploadFile, File()] = ...,
 ):
     ctx = _contest_ctx(contest, user, "packages")
     if not bool(ctx["access"].get("can_write")):
@@ -311,7 +313,7 @@ async def contest_statement_source_upload(
         payload = await read_upload_bytes_limited(
             upload,
             label="contest statement source",
-            max_bytes=int(runtime().config_values.snapshot()["UPLOAD_MAX_BYTES"]),
+            max_bytes=runtime().config_values.integer("UPLOAD_MAX_BYTES"),
         )
         runtime().contest_service.write_statement_source_file(
             contest_id=contest_id,

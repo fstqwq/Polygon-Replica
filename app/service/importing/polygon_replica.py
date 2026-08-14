@@ -123,11 +123,12 @@ class PolygonReplicaPackageImportService:
                 if rel.startswith("test_data/"):
                     target_rel = Path(rel)
                 else:
-                    target_rel = source_by_rel.get(rel)
-                    if target_rel is None:
+                    source_target_rel = source_by_rel.get(rel)
+                    if source_target_rel is None:
                         raise ValueError(
                             f"Polygon Replica package contains invalid source path: {rel}"
                         )
+                    target_rel = source_target_rel
                 mode = info.external_attr >> 16
                 file_type = stat.S_IFMT(mode)
                 if file_type not in {0, stat.S_IFREG}:

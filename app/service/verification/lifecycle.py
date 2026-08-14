@@ -16,9 +16,9 @@ ActivationOutcome = Literal["activated", "already-running", "closed", "missing"]
 TransitionOutcome = Literal["transitioned", "closed", "missing"]
 ParentTransition = Literal["", "failed", "ok", "sanity-running"]
 
-TASK_GENERATE_INPUT = "generate-input"
-TASK_MAIN_CORRECT = "main-correct"
-TASK_SOLUTION_RUN = "solution-run"
+TASK_GENERATE_INPUT: Literal["generate-input"] = "generate-input"
+TASK_MAIN_CORRECT: Literal["main-correct"] = "main-correct"
+TASK_SOLUTION_RUN: Literal["solution-run"] = "solution-run"
 PROGRAM_ACCEPTED = "accepted"
 VerificationTaskKind = Literal[
     "generate-input",
@@ -222,15 +222,15 @@ class ActivationPlan:
                 raise ValueError(
                     f"verification task {task.task_id} has unknown kind"
                 )
-            program = program_by_id.get(task.program_id)
-            if program is None:
+            task_program = program_by_id.get(task.program_id)
+            if task_program is None:
                 raise ValueError(
                     f"verification task {task.task_id} has unknown program"
                 )
             if (
-                task.task_kind != program.kind
-                or task.source_path != program.source_path
-                or task.expected_behavior != program.expected_behavior
+                task.task_kind != task_program.kind
+                or task.source_path != task_program.source_path
+                or task.expected_behavior != task_program.expected_behavior
             ):
                 raise ValueError(
                     f"verification task {task.task_id} does not match its program"

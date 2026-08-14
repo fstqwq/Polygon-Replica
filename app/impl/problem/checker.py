@@ -152,7 +152,7 @@ def checker_save_source(
         safe_content = enforce_textarea_max_bytes(
             content,
             label='checker source',
-            max_bytes=int(runtime().config_values.TEXTAREA_MAX_BYTES),
+            max_bytes=runtime().config_values.integer("TEXTAREA_MAX_BYTES"),
         )
         with runtime().workspace_service.workspace_lock(workspace):
             target_abs = safe_workspace_path(workspace, target)

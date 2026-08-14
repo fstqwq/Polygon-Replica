@@ -1,5 +1,5 @@
 import json
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import TypedDict, cast
 
 from app.service.platform.error_text import truncate_display_text
@@ -28,7 +28,7 @@ def canonical_truncated_text(value: str, *, limit: int) -> TruncatedText:
 
 
 def _normalize_diagnostics_for_db(
-    entries: list[Mapping[str, object]] | list[object],
+    entries: Sequence[object],
     message_limit: int,
 ) -> list[dict[str, object]]:
     normalized: list[dict[str, object]] = []
@@ -56,7 +56,7 @@ def _normalize_diagnostics_for_db(
 
 
 def canonical_diagnostics(
-    entries: list[Mapping[str, object]] | list[object] | None,
+    entries: Sequence[object] | None,
     *,
     list_limit: int,
     message_limit: int,

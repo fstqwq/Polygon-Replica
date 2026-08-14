@@ -18,4 +18,4 @@ def read_problem_config(
         workspace,
         limits=problem_config_limits(runtime().config_values),
     )
-    return (payload, dict(payload), cfg_path)
+    return (payload, payload.copy(), cfg_path)

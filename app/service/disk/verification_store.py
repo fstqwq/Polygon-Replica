@@ -1,4 +1,5 @@
-from typing import Mapping, TypedDict
+import sqlite3
+from typing import Literal, Mapping, TypedDict
 
 from app.db import DB, now_iso
 from app.service.verification.lifecycle import AdmissionCommit, VerificationAdmission
@@ -29,12 +30,22 @@ class VerificationStore:
     def __init__(self, db: DB):
         self.db = db
 
+    @staticmethod
+    def _required_int(value: object, column: str) -> int:
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise RuntimeError(f"verification {column} must be an integer")
+        return value
+
     def _record_row(self, row: dict[str, object]) -> VerificationRecordRow:
         workspace_id_raw = row["workspace_id"]
         return {
             "id": str(row["id"] or ""),
-            "problem_id": int(row["problem_id"]),
-            "workspace_id": None if workspace_id_raw is None else int(workspace_id_raw),
+            "problem_id": self._required_int(row["problem_id"], "problem_id"),
+            "workspace_id": (
+                None
+                if workspace_id_raw is None
+                else self._required_int(workspace_id_raw, "workspace_id")
+            ),
             "signature": str(row["signature"] or ""),
             "source_commit": str(row["source_commit"] or ""),
             "kind": str(row["kind"] or ""),
@@ -97,7 +108,9 @@ class VerificationStore:
                     None,
                 ],
             )
-            outcome = "admitted" if int(cursor.rowcount or 0) == 1 else "already-exists"
+            outcome: Literal["admitted", "already-exists"] = (
+                "admitted" if cursor.rowcount == 1 else "already-exists"
+            )
             return AdmissionCommit(
                 verification_id=request.verification_id,
                 outcome=outcome,
@@ -202,7 +215,9 @@ class VerificationStore:
         return [self._workspace_row(row) for row in rows]
 
     @staticmethod
-    def _workspace_row(row: Mapping[str, object]) -> WorkspaceVerificationRow:
+    def _workspace_row(
+        row: sqlite3.Row | Mapping[str, object],
+    ) -> WorkspaceVerificationRow:
         return {
             "id": str(row["id"]),
             "status": VerificationStatus(str(row["status"])),

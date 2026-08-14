@@ -55,7 +55,9 @@ def _rerun_solution_paths_from_verification(
     return dedupe_preserve_order(out)
 
 def _run_detail_use_compact_layout(detail_ctx: dict[str, object]) -> bool:
-    columns = detail_ctx.get("detail_columns") or []
+    columns = detail_ctx.get("detail_columns")
+    if not isinstance(columns, list):
+        return False
     return len(columns) >= 11
 
 def _bare_repo_head_commit(bare_repo: Path) -> str:

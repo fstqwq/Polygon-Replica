@@ -1,12 +1,13 @@
 """Contest problem read model assembled outside the HTTP layer."""
 
 from pathlib import Path
-from typing import TypedDict
+from typing import Literal, TypedDict
 
 import app.main_constant as constants
 from app.config import ConfigValues
 from app.service.access.query import AccessQuery
-from app.service.contest.service import ContestService
+from app.service.contest.service import ContestProblem, ContestService
+from app.service.access.model import ProblemAccessContext
 from app.service.platform.fs.layout import StorageLayout
 from app.service.problem.content_review import (
     ProblemContentReview,
@@ -77,7 +78,7 @@ def _workspace_revision_display(state: WorkspaceState) -> tuple[str, bool]:
 def _component_display(
     root: Path,
     build: BuildConfig,
-    key: str,
+    key: Literal["checker_source", "interactor_source", "validator_source"],
     default_source: str,
 ) -> tuple[str, bool]:
     source = build.get(key, default_source)
@@ -131,8 +132,8 @@ class ContestProblemQueryService:
 
     def _workspace_states(
         self,
-        rows: list[dict],
-        access_by_problem: dict,
+        rows: list[ContestProblem],
+        access_by_problem: dict[int, ProblemAccessContext],
         username: str,
         user_id: int,
     ) -> tuple[dict[int, WorkspaceState], set[int]]:
@@ -199,8 +200,8 @@ class ContestProblemQueryService:
 
     def _readiness(
         self,
-        rows: list[dict],
-        access_by_problem: dict,
+        rows: list[ContestProblem],
+        access_by_problem: dict[int, ProblemAccessContext],
         states: dict[int, WorkspaceState],
         errors: set[int],
         username: str,
@@ -276,8 +277,8 @@ class ContestProblemQueryService:
 
     def _problem_row(
         self,
-        row: dict,
-        access: dict,
+        row: ContestProblem,
+        access: ProblemAccessContext,
         state: WorkspaceState | None,
         workspace_error: bool,
         readiness: ProblemReadiness | None,
@@ -317,13 +318,14 @@ class ContestProblemQueryService:
                 state
             )
             dirty = bool(state["dirty"])
-            values = self._config_values.snapshot()
             source_state = inspect_authoring_source(
                 workspace,
                 problem_limits=problem_config_limits(self._config_values),
-                tests_spec_max_bytes=int(values["TEXTAREA_MAX_BYTES"]),
-                statement_sample_max_bytes=int(
-                    values["STATEMENT_SAMPLE_MAX_BYTES"]
+                tests_spec_max_bytes=self._config_values.integer(
+                    "TEXTAREA_MAX_BYTES"
+                ),
+                statement_sample_max_bytes=self._config_values.integer(
+                    "STATEMENT_SAMPLE_MAX_BYTES"
                 ),
                 allow_repair=False,
             )
@@ -338,14 +340,14 @@ class ContestProblemQueryService:
                 all_solutions = solution_sources(workspace)
             except ValueError:
                 all_solutions = ()
-            solution_limit = int(self._config_values.SOLUTION_LIST_LIMIT)
+            solution_limit = self._config_values.integer("SOLUTION_LIST_LIMIT")
             solution_count = min(len(all_solutions), solution_limit)
             solutions_truncated = len(all_solutions) > solution_limit
             languages = statement_languages(workspace)
             validator_display, validator_ready = _component_display(
                 workspace, build, "validator_source", "validators/validator.cpp"
             )
-            component_key = (
+            component_key: Literal["checker_source", "interactor_source"] = (
                 "interactor_source"
                 if mode == "interactive"
                 else "checker_source"

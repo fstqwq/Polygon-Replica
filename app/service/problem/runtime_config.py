@@ -3,8 +3,9 @@
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal, Protocol, TypedDict, cast
+from typing import Literal, TypedDict, cast
 
+from app.config import ConfigValues
 from app.main_constant import GENERAL_CONFIG_DEFAULTS
 from app.service.problem.json_codec import (
     loads_object,
@@ -49,15 +50,6 @@ class ProblemConfigLimits:
         _validate_bounds("pass_limit", self.min_pass_limit, self.max_pass_limit)
 
 
-class ProblemConfigLimitSource(Protocol):
-    GENERAL_TIME_LIMIT_MIN_MS: int
-    GENERAL_TIME_LIMIT_MAX_MS: int
-    GENERAL_MEMORY_LIMIT_MIN_MB: int
-    GENERAL_MEMORY_LIMIT_MAX_MB: int
-    GENERAL_PASS_LIMIT_MIN: int
-    GENERAL_PASS_LIMIT_MAX: int
-
-
 def _validate_bounds(label: str, minimum: int, maximum: int) -> None:
     if isinstance(minimum, bool) or isinstance(maximum, bool):
         raise ValueError(f"{label} bounds must be integers")
@@ -65,14 +57,14 @@ def _validate_bounds(label: str, minimum: int, maximum: int) -> None:
         raise ValueError(f"{label} bounds are invalid")
 
 
-def problem_config_limits(source: ProblemConfigLimitSource) -> ProblemConfigLimits:
+def problem_config_limits(source: ConfigValues) -> ProblemConfigLimits:
     return ProblemConfigLimits(
-        min_time_limit_ms=int(source.GENERAL_TIME_LIMIT_MIN_MS),
-        max_time_limit_ms=int(source.GENERAL_TIME_LIMIT_MAX_MS),
-        min_memory_limit_mb=int(source.GENERAL_MEMORY_LIMIT_MIN_MB),
-        max_memory_limit_mb=int(source.GENERAL_MEMORY_LIMIT_MAX_MB),
-        min_pass_limit=int(source.GENERAL_PASS_LIMIT_MIN),
-        max_pass_limit=int(source.GENERAL_PASS_LIMIT_MAX),
+        min_time_limit_ms=source.integer("GENERAL_TIME_LIMIT_MIN_MS"),
+        max_time_limit_ms=source.integer("GENERAL_TIME_LIMIT_MAX_MS"),
+        min_memory_limit_mb=source.integer("GENERAL_MEMORY_LIMIT_MIN_MB"),
+        max_memory_limit_mb=source.integer("GENERAL_MEMORY_LIMIT_MAX_MB"),
+        min_pass_limit=source.integer("GENERAL_PASS_LIMIT_MIN"),
+        max_pass_limit=source.integer("GENERAL_PASS_LIMIT_MAX"),
     )
 
 

@@ -1,5 +1,10 @@
 from app.config import ConfigValues
-from app.service.disk.auth_store import AuthStore
+from app.service.disk.auth_store import (
+    AuthSessionIdentity,
+    AuthStore,
+    AuthUserRow,
+    SudoSessionIdentity,
+)
 from app.service.auth.password_hash import password_verifier_storage_hash
 
 
@@ -9,7 +14,7 @@ class AuthService:
         if config_values is not store.config_values:
             raise ValueError("auth service and store must share ConfigValues")
 
-    def lookup_user_auth(self, username: str) -> dict[str, object] | None:
+    def lookup_user_auth(self, username: str) -> AuthUserRow | None:
         return self._store.auth_user_row(username)
 
     def has_registered_users(self) -> bool:
@@ -144,8 +149,12 @@ class AuthService:
     def revoke_sudo_sessions_for_user(self, user_id: int) -> None:
         self._store.revoke_sudo_sessions_for_user(int(user_id))
 
-    def session_identity(self, token: str) -> dict[str, object] | None:
+    def session_identity(self, token: str) -> AuthSessionIdentity | None:
         return self._store.session_identity(token)
 
-    def sudo_session_identity(self, token: str, scope: str) -> dict[str, object] | None:
+    def sudo_session_identity(
+        self,
+        token: str,
+        scope: str,
+    ) -> SudoSessionIdentity | None:
         return self._store.sudo_session_identity(token, scope)

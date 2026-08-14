@@ -24,10 +24,14 @@ from app.service.importing.solution_behavior import (
     polygon_solution_expected_from_tag,
     polygon_solution_filename,
 )
-from app.service.problem.solution_metadata import render_solution_desc
+from app.service.problem.solution_metadata import (
+    ExpectedBehavior,
+    render_solution_desc,
+)
 from app.service.problem.runtime_config import (
     ProblemConfig,
     ProblemConfigLimits,
+    ProblemMode,
     dumps_problem_config,
 )
 from app.service.problem.source_tree import load_problem_source_tree
@@ -839,7 +843,7 @@ class PolygonPackageImportService:
         solutions_dir.mkdir(parents=True, exist_ok=True)
         accepted_source = ""
         imported_count = 0
-        imported_behaviors: list[tuple[str, str]] = []
+        imported_behaviors: list[tuple[str, ExpectedBehavior]] = []
         for row in solution_rows:
             source_path = _normalize_zip_path(row["path"])
             if not source_path:
@@ -885,7 +889,9 @@ class PolygonPackageImportService:
         explicit_run_count = str(meta.get("run_count_raw") or "").strip()
         if bool(meta.get("has_multipass_property")) and explicit_run_count in {"", "1"}:
             raise ValueError("multipass Polygon package is missing explicit pass limit")
-        mode = "interactive" if meta["interactor_source"] else "pass-fail"
+        mode: ProblemMode = (
+            "interactive" if meta["interactor_source"] else "pass-fail"
+        )
         cfg = ProblemConfig(
             time_limit_ms=min(
                 limits.max_time_limit_ms,

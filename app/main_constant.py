@@ -2,6 +2,7 @@
 
 import re
 from pathlib import Path
+from typing import TypedDict
 
 SUDO_SCOPE_DESTRUCTIVE = "destructive"
 
@@ -34,7 +35,16 @@ CONTEST_IDENT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 GENERAL_CONFIG_REL = Path("config/problem.json")
 BUILD_CONFIG_REL = Path("config/build.json")
 GENERAL_MODE_VALUES = ("pass-fail", "interactive")
-GENERAL_CONFIG_DEFAULTS = {
+class GeneralConfigDefaults(TypedDict):
+    """Canonical scalar types for a newly-created problem configuration."""
+
+    time_limit_ms: int
+    memory_limit_mb: int
+    mode: str
+    pass_limit: int
+
+
+GENERAL_CONFIG_DEFAULTS: GeneralConfigDefaults = {
     "time_limit_ms": 2000,
     "memory_limit_mb": 1024,
     "mode": "pass-fail",

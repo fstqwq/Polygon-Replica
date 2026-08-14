@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from app.runtime import ApplicationRuntime
+from app.service.platform.worker_queue import WorkerFuture
 from app.service.repository.revision import workspace_verification_source
 from app.service.problem_package.service import PublishedRevision
 from app.service.verification.lifecycle import VerificationAdmission
@@ -125,7 +126,7 @@ def start_verification_job(
         with application_runtime.verification_lock:
             application_runtime.verification_inflight.discard(key)
         raise
-    worker_ref: list[object] = [None]
+    worker_ref: list[WorkerFuture | None] = [None]
 
     def _runner() -> None:
         try:
@@ -183,9 +184,9 @@ def start_verification_job(
             reason=str(exc) or "verification queue submission failed",
         )
         with application_runtime.verification_lock:
-            worker = worker_ref[0]
-            if worker is not None:
-                application_runtime.verification_workers.discard(worker)
+            cleanup_worker = worker_ref[0]
+            if cleanup_worker is not None:
+                application_runtime.verification_workers.discard(cleanup_worker)
             application_runtime.verification_inflight.discard(key)
         raise
     return True
@@ -278,7 +279,7 @@ def start_export_job(
         with application_runtime.export_lock:
             application_runtime.export_inflight.discard(key)
         raise
-    worker_ref: list[object] = [None]
+    worker_ref: list[WorkerFuture | None] = [None]
 
     def _runner() -> None:
         try:
@@ -328,9 +329,9 @@ def start_export_job(
                 'export queue submission failed',
             )
         with application_runtime.export_lock:
-            worker = worker_ref[0]
-            if worker is not None:
-                application_runtime.export_workers.discard(worker)
+            cleanup_worker = worker_ref[0]
+            if cleanup_worker is not None:
+                application_runtime.export_workers.discard(cleanup_worker)
             application_runtime.export_inflight.discard(key)
         raise
     return True

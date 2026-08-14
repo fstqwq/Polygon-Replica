@@ -54,6 +54,7 @@ from app.service.verification.task_store import VerificationTaskRow, Verificatio
 from app.service.verification.service import VerificationService
 from app.service.verification.types import Kind, VerificationStatus, VerificationTaskStatus
 from app.service.verification.workflow_policy import (
+    VerificationTaskCounts,
     build_graph,
     effective_verification_kind,
     runtime_threshold_columns_from_tasks,
@@ -91,7 +92,12 @@ def _require_online_judgehost(judgehost: Judgehost) -> None:
         status = cast(dict[str, object], judgehost.status())
     except Exception:
         status = {}
-    if int(status.get("hosts_online") or 0) <= 0:
+    hosts_online = status.get("hosts_online")
+    if (
+        not isinstance(hosts_online, int)
+        or isinstance(hosts_online, bool)
+        or hosts_online <= 0
+    ):
         raise RuntimeError("judgehost is offline")
 
 
@@ -397,6 +403,7 @@ def _publish_run_task(task_row: VerificationTaskRow, *, execution: TaskExecution
             verification_service=execution.verification_service,
             runtime_blob_store=execution.runtime_blob_store,
         )
+        verification_source: str
         if task_kind == TASK_MAIN_CORRECT:
             answer_file = execution.runtime_blob_store.put_bytes(b"")
             verification_source = TASK_MAIN_CORRECT
@@ -619,7 +626,8 @@ def run_workspace_verification_dag(
         )
         selected_test_plans = [execution_plan.test_plan_by_name[name] for name in test_names if name in execution_plan.test_plan_by_name]
         if skip_sanity:
-            sanity_checks, sanity_status = ([], SANITY_SKIPPED)
+            sanity_checks: list[str] = []
+            sanity_status = SANITY_SKIPPED
         else:
             sanity_checks, sanity_status = sanity_plan_for_verification_kind(effective_kind, selected_test_plans)
         graph = build_graph(
@@ -684,7 +692,7 @@ def run_workspace_verification_dag(
         def _refresh_state() -> tuple[
             str,
             dict[str, object],
-            dict[str, object],
+            VerificationTaskCounts,
             list[VerificationTaskRow],
             bool,
             str,
@@ -710,11 +718,11 @@ def run_workspace_verification_dag(
                 test_names=test_names,
                 parent_status=parent_status,
                 fail_reason=fail_reason,
-                display_limit=int(
-                    config_values.snapshot()["AUX_DISPLAY_TEXT_LIMIT_BYTES"]
+                display_limit=config_values.integer(
+                    "AUX_DISPLAY_TEXT_LIMIT_BYTES"
                 ),
             )
-            if rows and int(counts["total"]) <= 0:
+            if rows and counts["total"] <= 0:
                 raise RuntimeError("verification task graph has rows but computed zero task counts")
             summary["status"] = status
             if fail_reason:
@@ -895,9 +903,7 @@ class VerificationWorkflow:
         workspace = Path(str(context["workspace"]["path"])).resolve()
         problem_id = int(context["problem"]["id"])
         workspace_id = int(context["workspace"]["id"])
-        actor_user_id = int(
-            self._workspace_service.global_user_context(username)["id"]
-        )
+        actor_user_id = self._workspace_service.global_user_context(username)["id"]
         status = self._workspace_service.read_workspace_status(workspace)
         workspace_head = str(status.get("head_commit") or "")
         workspace_dirty = bool(status.get("dirty"))

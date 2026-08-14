@@ -12,6 +12,7 @@ from app.service.verification.lifecycle import (
     VerificationSnapshotRecord,
 )
 import app.service.verification.read_model
+from app.service.verification.read_model import TaskCounts
 from app.service.verification.task_store import (
     VerificationTaskReadRow,
     VerificationTaskRow,
@@ -22,6 +23,17 @@ _SOLUTION_TASK_KINDS = frozenset(("solution-run", "main-correct"))
 _TEST_NAME_RE = re.compile(r"^(\d+)\.in$")
 
 
+class VerificationProgramDetailRow(TypedDict):
+    id: str
+    artifact_verification_id: str
+    mode: str
+    status: str
+    source_label: str
+    summary: dict[str, object]
+    created_at: str
+    finished_at: str
+
+
 class VerificationDetailReadModel(TypedDict):
     record: VerificationSnapshotRecord
     details: dict[str, object]
@@ -29,9 +41,9 @@ class VerificationDetailReadModel(TypedDict):
     has_task_graph: bool
     mode: str
     program_ids: list[str]
-    program_rows: dict[str, dict[str, object]]
+    program_rows: dict[str, VerificationProgramDetailRow]
     task_status_by_program_and_test: dict[tuple[str, str], str]
-    task_counts: dict[str, object]
+    task_counts: TaskCounts
     running_tasks: list[dict[str, str]]
 
 
@@ -39,6 +51,15 @@ def _test_order(test_name: str) -> tuple[int, str]:
     token = Path(test_name).name
     match = _TEST_NAME_RE.fullmatch(token)
     return (int(match.group(1)), token) if match is not None else (10**9, token)
+
+
+def _row_int(row: dict[str, object], key: str, *, default: int = 0) -> int:
+    value = row.get(key)
+    if value is None:
+        return default
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise RuntimeError(f"verification detail {key} must be an integer")
+    return value
 
 
 def _late_diagnostic_text(row: VerificationTaskRow, limit: int) -> str:
@@ -89,7 +110,7 @@ def _program_rows(
     mode: str,
     pass_limit: int,
     display_limit: int,
-) -> dict[str, dict[str, object]]:
+) -> dict[str, VerificationProgramDetailRow]:
     try:
         run_config = json.loads(str(details.get("run_config_json") or ""))
     except (TypeError, ValueError):
@@ -108,7 +129,7 @@ def _program_rows(
         if program_id and row["source_path"]:
             grouped.setdefault(program_id, []).append(row)
 
-    values: dict[str, dict[str, object]] = {}
+    values: dict[str, VerificationProgramDetailRow] = {}
     verification_error = str(details.get("error") or record["fail_reason"])
     for program_id, unsorted_rows in grouped.items():
         program_tasks = sorted(
@@ -150,14 +171,14 @@ def _program_rows(
                 )
                 test_row["late_diagnostic_text"] = late
                 tests.append(test_row)
-                runtime_ms = int(test_row.get("time_ms") or 0)
+                runtime_ms = _row_int(test_row, "time_ms")
                 max_time_ms = max(
                     max_time_ms,
-                    int(test_row.get("time_user_ms") or runtime_ms),
+                    _row_int(test_row, "time_user_ms", default=runtime_ms),
                 )
                 max_memory_kb = max(
                     max_memory_kb,
-                    int(test_row.get("memory_kb") or 0),
+                    _row_int(test_row, "memory_kb"),
                 )
             if not compile_log and row["compile_log"]:
                 compile_log = row["compile_log"]
@@ -246,9 +267,9 @@ def build_verification_detail_read_model(
         ),
         "program_ids": app.service.verification.read_model.program_ids(read_rows),
         "has_running": bool(
-            int(runtime_counts["pending"])
-            or int(runtime_counts["queued"])
-            or int(runtime_counts["running"])
+            runtime_counts["pending"]
+            or runtime_counts["queued"]
+            or runtime_counts["running"]
         ),
         "test_names": list(
             dict.fromkeys(row["test_name"] for row in tasks if row["test_name"])
@@ -279,7 +300,7 @@ def build_verification_detail_read_model(
             record=record,
             details=details,
             mode=mode,
-            pass_limit=int(details.get("pass_limit") or 1),
+            pass_limit=_row_int(details, "pass_limit", default=1),
             display_limit=display_limit,
         ),
         "task_status_by_program_and_test": status_by_case,

@@ -18,10 +18,15 @@ class PackageAdapterRegistry:
         config_values: ConfigValues,
         tex_compile_service: TexCompileService,
     ) -> None:
-        adapters: tuple[PackageAdapter, ...] = (
-            DOMjudgePackageAdapter(config_values, tex_compile_service),
-            ICPC2025PackageAdapter(config_values, tex_compile_service),
+        domjudge: PackageAdapter = DOMjudgePackageAdapter(
+            config_values,
+            tex_compile_service,
         )
+        icpc_2025: PackageAdapter = ICPC2025PackageAdapter(
+            config_values,
+            tex_compile_service,
+        )
+        adapters = (domjudge, icpc_2025)
         by_format = {adapter.format: adapter for adapter in adapters}
         if len(by_format) != len(adapters):
             raise RuntimeError("duplicate package adapter format")

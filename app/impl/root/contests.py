@@ -10,6 +10,7 @@ from app.impl.auth.shared import (
     redirect_response,
     template_response,
 )
+from app.impl.workspace.context import GlobalUserPageContext
 from app.impl.root.contest_import import (
     _build_contest_import_problem_draft_rows,
     _build_problem_slug_review_rows,
@@ -51,13 +52,14 @@ _POLYGON_CONTEST_IMPORT_SERVICE = PolygonContestImportService()
 
 
 def _contest_archive_policies() -> tuple[ArchivePolicy, ProblemImportPolicy, int]:
-    snapshot = runtime().config_values.snapshot()
-    max_problems = int(snapshot["CONTEST_MAX_PROBLEMS"])
-    problem_expanded = int(snapshot["PROBLEM_ZIP_MAX_EXPANDED_BYTES"])
+    max_problems = runtime().config_values.integer("CONTEST_MAX_PROBLEMS")
+    problem_expanded = runtime().config_values.integer(
+        "PROBLEM_ZIP_MAX_EXPANDED_BYTES"
+    )
     problem_policy = problem_import_policy(
         problem_expanded,
-        int(snapshot["TEXTAREA_MAX_BYTES"]),
-        int(snapshot["STATEMENT_SAMPLE_MAX_BYTES"]),
+        runtime().config_values.integer("TEXTAREA_MAX_BYTES"),
+        runtime().config_values.integer("STATEMENT_SAMPLE_MAX_BYTES"),
     )
     contest_policy = contest_archive_policy(max_problems, problem_expanded)
     return contest_policy, problem_policy, max_problems
@@ -65,7 +67,7 @@ def _contest_archive_policies() -> tuple[ArchivePolicy, ProblemImportPolicy, int
 
 def _render_contest_import_review_page(
     request: Request,
-    gctx: dict[str, object],
+    gctx: GlobalUserPageContext,
     draft: dict[str, object],
     *,
     draft_id: str,
@@ -130,8 +132,12 @@ def _render_contest_import_review_page(
 def contests_root_page(request: Request, user: str = ""):
     active_user = _active_root_user(request, user)
     gctx = global_user_ctx(active_user)
-    entries = user_contests_overview(int(gctx['user']['id']), limit=runtime().config_values.API_PROBLEMS_LIST_LIMIT)
-    return template_response(request, 'root_contests.html', {'user': gctx['user'], 'default_problem': gctx['default_problem'], 'entries': entries, 'entries_limit': runtime().config_values.API_PROBLEMS_LIST_LIMIT, 'active_main': 'contests'})
+    entries_limit = runtime().config_values.integer("API_PROBLEMS_LIST_LIMIT")
+    entries = user_contests_overview(
+        int(gctx['user']['id']),
+        limit=entries_limit,
+    )
+    return template_response(request, 'root_contests.html', {'user': gctx['user'], 'default_problem': gctx['default_problem'], 'entries': entries, 'entries_limit': entries_limit, 'active_main': 'contests'})
 
 def contests_root_create(request: Request, user: str = "", contest_slug: str = Form(...), contest_title: str = Form(...)):
     active_user = _active_root_user(request, user)
@@ -171,12 +177,11 @@ def contests_root_import(
         package_name = str(package_upload.filename or "").strip()
         if not package_name:
             raise ValueError("package filename is required")
-        snapshot = runtime().config_values.snapshot()
         contest_policy, problem_policy, max_problems = _contest_archive_policies()
         with spool_fileobj(
             package_upload.file,
             root=runtime().storage_layout.archive_upload_root,
-            max_bytes=int(snapshot["UPLOAD_MAX_BYTES"]),
+            max_bytes=runtime().config_values.integer("UPLOAD_MAX_BYTES"),
             label="package file",
         ) as package_path:
             with ArchiveView(package_path, contest_policy) as package:
@@ -237,8 +242,16 @@ def contests_root_import_review(request: Request, user: str = "", draft_id: str 
         gctx,
         draft,
         draft_id=safe_draft_id,
-        contest_slug_input=draft["contest_slug_input"].strip() if isinstance(draft.get("contest_slug_input"), str) else "",
-        contest_title_input=draft["contest_title_input"].strip() if isinstance(draft.get("contest_title_input"), str) else "",
+        contest_slug_input=(
+            str(draft["contest_slug_input"]).strip()
+            if isinstance(draft.get("contest_slug_input"), str)
+            else ""
+        ),
+        contest_title_input=(
+            str(draft["contest_title_input"]).strip()
+            if isinstance(draft.get("contest_title_input"), str)
+            else ""
+        ),
         problem_slug_overrides={},
     )
 
@@ -309,12 +322,10 @@ async def contests_root_import_confirm(request: Request, user: str = ""):
             problem_policy=problem_policy.archive,
             max_problems=max_problems,
         )
-        parsed_rows_raw = parsed.get("problems")
-        parsed_rows = [dict(item) for item in parsed_rows_raw] if isinstance(parsed_rows_raw, list) else []
-        statement_files_raw = parsed.get("statement_files")
-        statement_files: list[ImportedContestStatementFile] = [
-            dict(item) for item in statement_files_raw if isinstance(item, dict)
-        ] if isinstance(statement_files_raw, list) else []
+        parsed_rows = [dict(item) for item in parsed["problems"]]
+        statement_files: list[ImportedContestStatementFile] = list(
+            parsed["statement_files"]
+        )
         default_language_obj = parsed.get("default_language")
         default_language = default_language_obj.strip().lower() if isinstance(default_language_obj, str) else ""
         location_obj = parsed.get("location")

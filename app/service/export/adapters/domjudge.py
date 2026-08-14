@@ -122,7 +122,7 @@ class DOMjudgePackageAdapter(PackageAdapterSupport):
         *,
         target: Path,
         canonical_problem_slug: str,
-        short_name: str | None,
+        short_name: str | None = None,
         plan: PackageAdapterPlan | None = None,
     ) -> str:
         adapter_plan = plan or self.plan(reader)

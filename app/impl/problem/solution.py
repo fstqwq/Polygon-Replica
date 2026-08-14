@@ -72,9 +72,9 @@ def solutions_page(request: Request, problem: str, user: Annotated[str, Depends(
     entries_view: list[dict] = []
     for row in entries:
         row_view = dict(row)
-        source_path = row_view['source_path']
-        raw_expected = normalize_expected_behavior(row_view['expected_behavior'])
-        effective_expected = raw_expected
+        source_path = row['source_path']
+        raw_expected = normalize_expected_behavior(row['expected_behavior'])
+        effective_expected: str = raw_expected
         # Main correct solution is controlled by build config and must be unique in UI.
         if accepted_source_exists and source_path == accepted_source:
             effective_expected = MAIN_CORRECT_EXPECTED_VALUE
@@ -119,7 +119,11 @@ def solutions_editor_page(request: Request, problem: str, user: Annotated[str, D
         selected_abs = safe_workspace_path(workspace, selected)
         if selected_abs.exists() and selected_abs.is_file() and (not selected_abs.is_symlink()):
             selected_exists = True
-            content, content_truncated = runtime().git_service.read_file_limited(workspace, selected, runtime().config_values.WORKSPACE_FILE_VIEW_CHAR_LIMIT)
+            content, content_truncated = runtime().git_service.read_file_limited(
+                workspace,
+                selected,
+                runtime().config_values.integer("WORKSPACE_FILE_VIEW_CHAR_LIMIT"),
+            )
     except HTTPException:
         selected_exists = False
         content = ''
@@ -150,7 +154,7 @@ def solutions_save_source(request: Request, problem: str, user: Annotated[str, D
         safe_content = enforce_textarea_max_bytes(
             content,
             label='solution source',
-            max_bytes=int(runtime().config_values.TEXTAREA_MAX_BYTES),
+            max_bytes=runtime().config_values.integer("TEXTAREA_MAX_BYTES"),
         )
         selected_for_redirect = selected
         with runtime().workspace_service.workspace_lock(workspace):
@@ -163,7 +167,10 @@ def solutions_save_source(request: Request, problem: str, user: Annotated[str, D
             desc_existed_before = desc_abs.exists() and desc_abs.is_file() and (not desc_abs.is_symlink())
             desc_note = ''
             if desc_existed_before:
-                desc_text, _ = read_text_safe_limited(desc_abs, runtime().config_values.SOLUTION_NOTE_CHAR_LIMIT * 8)
+                desc_text, _ = read_text_safe_limited(
+                    desc_abs,
+                    runtime().config_values.integer("SOLUTION_NOTE_CHAR_LIMIT") * 8,
+                )
                 parsed_desc = parse_solution_desc(desc_text)
                 desc_note = parsed_desc['note']
             runtime().git_service.write_file(workspace, selected, safe_content)
@@ -216,7 +223,10 @@ def solutions_set_tag(problem: str, user: Annotated[str, Depends(require_session
         with runtime().workspace_service.workspace_lock(workspace):
             if workspace_rel_file_exists(workspace, desc_path):
                 desc_abs = safe_workspace_path(workspace, desc_path)
-                desc_text, _ = read_text_safe_limited(desc_abs, runtime().config_values.SOLUTION_NOTE_CHAR_LIMIT * 8)
+                desc_text, _ = read_text_safe_limited(
+                    desc_abs,
+                    runtime().config_values.integer("SOLUTION_NOTE_CHAR_LIMIT") * 8,
+                )
                 parsed = parse_solution_desc(desc_text)
                 note = parsed['note']
             build_cfg, cfg_path = read_build_config(workspace)

@@ -2,6 +2,7 @@ import json
 import os
 import secrets
 import shutil
+from collections.abc import Mapping
 from pathlib import Path, PurePosixPath
 from typing import Literal, TypedDict
 
@@ -10,7 +11,11 @@ from app.config import ConfigValues
 from app.service.access.policy import access_role, contest_role
 from app.service.access.query import AccessQuery
 from app.service.contest.statement_meta import infer_contest_header_fields
-from app.service.disk.contest_store import ContestDiskStore
+from app.service.disk.contest_store import (
+    ContestBuildItemRecord,
+    ContestDiskStore,
+    ContestJobRecord,
+)
 from app.service.platform.hashing import sha256_file
 from app.service.platform.process import is_canonical_artifact_id
 from app.service.statement.context import normalize_statement_language
@@ -70,6 +75,15 @@ class ContestContext(TypedDict):
 class ContestProblemLookup(TypedDict):
     id: int
     slug: str
+
+
+def _required_row_int(
+    row: Mapping[str, object], key: str, *, context: str
+) -> int:
+    value = row.get(key)
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise RuntimeError(f"{context} {key} must be an integer")
+    return value
 
 
 class ContestJob(TypedDict):
@@ -296,7 +310,7 @@ class ContestService:
         self._store.bump_source_generation(int(contest_id))
         return safe_key
 
-    def _job_payload(self, row: dict[str, object]) -> ContestJob:
+    def _job_payload(self, row: ContestJobRecord) -> ContestJob:
         return {
             "id": str(row["id"]),
             "job_type": str(row["job_type"]),
@@ -430,14 +444,13 @@ class ContestService:
         )
 
     def add_problem(self, contest_id: int, idx: str, problem_id: int, added_by_user_id: int) -> None:
-        snapshot = self._config_values.snapshot()
         self._store.add_problem(
             int(contest_id),
             idx,
             int(problem_id),
             int(added_by_user_id),
             now_iso(),
-            max_problems=int(snapshot["CONTEST_MAX_PROBLEMS"]),
+            max_problems=self._config_values.integer("CONTEST_MAX_PROBLEMS"),
         )
         self._store.bump_source_generation(int(contest_id))
 
@@ -536,15 +549,14 @@ class ContestService:
         row = self._store.contest_context_by_id(int(contest_id))
         if row is None:
             return ""
-        fields = {
-            self._LOCATION_KEY: "location",
-            self._DATE_KEY: "date_text",
-            self._STATEMENT_DEFAULT_LANGUAGE_KEY: "statement_default_language",
-        }
-        column = fields.get(str(key).strip())
-        if column is None:
-            raise ValueError(f"unsupported contest metadata field: {key}")
-        return str(row[column])
+        safe_key = str(key).strip()
+        if safe_key == self._LOCATION_KEY:
+            return row["location"]
+        if safe_key == self._DATE_KEY:
+            return row["date_text"]
+        if safe_key == self._STATEMENT_DEFAULT_LANGUAGE_KEY:
+            return row["statement_default_language"]
+        raise ValueError(f"unsupported contest metadata field: {key}")
 
     def replace_statement_sources(
         self,
@@ -680,7 +692,7 @@ class ContestService:
                     "contest_problem_id": int(row["contest_problem_id"]),
                     "position": int(row["position"]),
                     "idx": str(row["idx"]),
-                    "problem_id": int(row["problem_id"]),
+                    "problem_id": row["problem_id"],
                     "statement_folder": str(row["statement_folder"]),
                     "problem_slug": str(row["problem_slug"]),
                     "slug_leaf": str(row["slug_leaf"]),
@@ -716,7 +728,9 @@ class ContestService:
                 continue
             result.append(
                 {
-                    "problem_id": int(row["problem_id"]),
+                    "problem_id": _required_row_int(
+                        row, "problem_id", context="available problem"
+                    ),
                     "problem_slug": slug,
                     "slug_leaf": slug_leaf,
                     "role": access_role(str(row["role"])),
@@ -858,7 +872,7 @@ class ContestService:
             "blocked_problems": blocked,
         }
 
-    def build_items(self, job_id: str) -> list[dict[str, object]]:
+    def build_items(self, job_id: str) -> list[ContestBuildItemRecord]:
         return self._store.build_items(job_id)
 
     def update_job(

@@ -9,6 +9,7 @@ from starlette.responses import JSONResponse, RedirectResponse, Response
 
 from app.impl.auth.session import require_session_user
 from app.impl.runtime.dependency import runtime
+from app.service.contest.problem_query import ContestProblemDisplayRow
 from app.main_constant import CONTEST_IDENT_RE
 
 
@@ -223,15 +224,19 @@ def problem_template_navigation(
     }
 
 
+class ContestProblemHrefRow(ContestProblemDisplayRow):
+    href: str | None
+
+
 def add_contest_problem_hrefs(
     request: Request,
     *,
     contest_slug: str,
-    rows: list[dict[str, object]],
-) -> list[dict[str, object]]:
-    result: list[dict[str, object]] = []
+    rows: list[ContestProblemDisplayRow],
+) -> list[ContestProblemHrefRow]:
+    result: list[ContestProblemHrefRow] = []
     for row in rows:
-        item = dict(row)
+        item = ContestProblemHrefRow(**row, href=None)
         item["href"] = (
             build_contest_problem_href(
                 request,
@@ -415,7 +420,7 @@ def apply_problem_contest_scope(
     if not isinstance(response, JSONResponse):
         return response
     try:
-        payload = json.loads(response.body)
+        payload = json.loads(bytes(response.body))
     except (TypeError, ValueError):
         return response
     if not isinstance(payload, dict) or not isinstance(payload.get("redirect"), str):

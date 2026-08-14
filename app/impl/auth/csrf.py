@@ -36,7 +36,9 @@ def verify_password_form_csrf_token(token: str, scope: str) -> bool:
     now_ts = int(time.time())
     if issued_at <= 0 or issued_at > now_ts + 60:
         return False
-    if now_ts - issued_at > runtime().config_values.PASSWORD_FORM_CSRF_TTL_SEC:
+    if now_ts - issued_at > runtime().config_values.integer(
+        "PASSWORD_FORM_CSRF_TTL_SEC"
+    ):
         return False
     expected = _password_form_csrf_signature(str(scope or '').strip().lower(), issued_at, nonce)
     return secrets.compare_digest(expected, str(provided_sig or '').lower())

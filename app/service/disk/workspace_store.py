@@ -63,7 +63,9 @@ class WorkspaceDiskStore:
     def _optional_int(value: object) -> int | None:
         if value is None:
             return None
-        return int(value)
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise RuntimeError("SQLite integer column has a non-integer value")
+        return value
 
     def problem_id_by_slug(self, slug: str) -> int | None:
         row = self.db.fetch_one("SELECT id FROM problems WHERE slug=?", [slug])

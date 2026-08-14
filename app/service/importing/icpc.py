@@ -24,6 +24,7 @@ from app.service.problem.solution_metadata import render_solution_desc
 from app.service.problem.runtime_config import (
     ProblemConfig,
     ProblemConfigLimits,
+    ProblemMode,
     dumps_problem_config,
 )
 from app.service.problem.source_tree import load_problem_source_tree
@@ -55,7 +56,7 @@ ProblemMeta = TypedDict(
     {
         "title": str,
         "format_version": str,
-        "mode": str,
+        "mode": ProblemMode,
         "pass_limit": int,
         "time_limit_ms": int | None,
         "memory_limit_mb": int | None,
@@ -113,6 +114,14 @@ ComponentsSummary = TypedDict(
         "validator_source": str,
         "checker_source": str,
         "interactor_source": str,
+    },
+)
+
+ProblemConfigWriteResult = TypedDict(
+    "ProblemConfigWriteResult",
+    {
+        "cfg": ProblemConfig,
+        "file_io_warning": str,
     },
 )
 
@@ -312,7 +321,9 @@ class ICPCPackageImportService:
             if item
         ]
         effective_tokens = set(type_tokens) | set(validation_tokens)
-        mode = "interactive" if "interactive" in effective_tokens else "pass-fail"
+        mode: ProblemMode = (
+            "interactive" if "interactive" in effective_tokens else "pass-fail"
+        )
         limits_raw = loaded.get("limits")
         limits = limits_raw if isinstance(limits_raw, dict) else {}
         is_multi_pass = bool({"multi-pass", "multipass"} & effective_tokens)
@@ -758,7 +769,7 @@ class ICPCPackageImportService:
         statement_summary: StatementSummary,
         *,
         limits: ProblemConfigLimits,
-    ) -> dict[str, object]:
+    ) -> ProblemConfigWriteResult:
         header = statement_summary["header"]
 
         time_limit_ms = meta["time_limit_ms"]
@@ -816,7 +827,7 @@ class ICPCPackageImportService:
         meta: ProblemMeta,
         components: ComponentsSummary,
         solutions: SolutionsSummary,
-    ) -> dict[str, object]:
+    ) -> BuildConfig:
         build_cfg = BuildConfig(generator_sources=[])
         accepted_source = solutions["accepted_source"]
         if accepted_source:

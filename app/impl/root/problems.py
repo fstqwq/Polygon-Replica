@@ -23,7 +23,11 @@ from app.service.importing.archive import ArchiveView, problem_import_policy
 def problems_root_page(request: Request, user: str = ""):
     active_user = _active_root_user(request, user)
     gctx = global_user_ctx(active_user)
-    raw_entries = user_participating_problems(int(gctx['user']['id']), limit=runtime().config_values.API_PROBLEMS_LIST_LIMIT)
+    entries_limit = runtime().config_values.integer("API_PROBLEMS_LIST_LIMIT")
+    raw_entries = user_participating_problems(
+        int(gctx['user']['id']),
+        limit=entries_limit,
+    )
     entries: list[dict[str, object]] = []
     owner_prefix_chars = 0
     for row in raw_entries:
@@ -41,7 +45,7 @@ def problems_root_page(request: Request, user: str = ""):
             'user': gctx['user'],
             'default_problem': gctx['default_problem'],
             'entries': entries,
-            'entries_limit': runtime().config_values.API_PROBLEMS_LIST_LIMIT,
+            'entries_limit': entries_limit,
             'active_main': 'problems',
             'owner_prefix_chars': owner_prefix_chars,
         },
@@ -66,18 +70,17 @@ def problems_root_import(request: Request, user: str = "", package_upload: Uploa
         package_name = str(package_upload.filename or "").strip()
         if not package_name:
             raise ValueError("package filename is required")
-        snapshot = runtime().config_values.snapshot()
         upload_root = runtime().storage_layout.archive_upload_root
         with spool_fileobj(
             package_upload.file,
             root=upload_root,
-            max_bytes=int(snapshot["UPLOAD_MAX_BYTES"]),
+            max_bytes=runtime().config_values.integer("UPLOAD_MAX_BYTES"),
             label="package file",
         ) as package_path:
             policy = problem_import_policy(
-                int(snapshot["PROBLEM_ZIP_MAX_EXPANDED_BYTES"]),
-                int(snapshot["TEXTAREA_MAX_BYTES"]),
-                int(snapshot["STATEMENT_SAMPLE_MAX_BYTES"]),
+                runtime().config_values.integer("PROBLEM_ZIP_MAX_EXPANDED_BYTES"),
+                runtime().config_values.integer("TEXTAREA_MAX_BYTES"),
+                runtime().config_values.integer("STATEMENT_SAMPLE_MAX_BYTES"),
             )
             with ArchiveView(package_path, policy.archive) as package:
                 imported = import_package_as_new_problem(

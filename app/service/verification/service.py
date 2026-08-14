@@ -2,7 +2,7 @@ from typing import cast
 
 from app.config import ConfigValues
 from app.db import DB
-from app.service.disk.verification_store import VerificationStore
+from app.service.disk.verification_store import VerificationRecordRow, VerificationStore
 from app.service.platform.runtime_blob_store import PayloadFile, RuntimeBlobStore
 from app.service.platform.fs.layout import StorageLayout
 from app.service.repository.workspace import WorkspaceService
@@ -42,7 +42,7 @@ from app.service.verification.detail_read_model import (
     VerificationDetailReadModel,
     build_verification_detail_read_model,
 )
-from app.service.verification.task_store import VerificationTaskStore
+from app.service.verification.task_store import VerificationTaskRow, VerificationTaskStore
 
 from app.service.judgehost.api import Judgehost
 
@@ -60,6 +60,15 @@ _DETAIL_SCALAR_DEFAULTS: dict[str, object] = {
     "validation_status": "",
     "validated_count": 0,
 }
+
+
+def _payload_int(payload: dict[str, object], key: str, *, default: int) -> int:
+    value = payload.get(key)
+    if value is None:
+        return default
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise ValueError(f"verification detail {key} must be an integer")
+    return value
 
 class VerificationService:
     def __init__(
@@ -176,11 +185,9 @@ class VerificationService:
             ok_only=bool(ok_only),
         )
 
-    def verification_record(self, verification_id: str) -> dict[str, object] | None:
+    def verification_record(self, verification_id: str) -> VerificationRecordRow | None:
         row = self._verification_store.record_row(verification_id)
-        if row is None:
-            return None
-        return dict(row)
+        return row
 
     def _ordered_detail_tokens(
         self,
@@ -317,7 +324,7 @@ class VerificationService:
         )
         return {
             "mode": str(row["mode"] or ""),
-            "pass_limit": int(row["pass_limit"] or _DETAIL_SCALAR_DEFAULTS["pass_limit"]),
+            "pass_limit": int(row["pass_limit"] or 1),
             "run_config_json": str(row["run_config_json"] or ""),
             "error": str(row["error"] or ""),
             "failed_step": str(row["failed_step"] or ""),
@@ -394,7 +401,7 @@ class VerificationService:
                     {
                         "name": check_name,
                         "status": str(raw.get("status") or ""),
-                        "checked_count": int(raw.get("checked_count") or 0),
+                        "checked_count": _payload_int(raw, "checked_count", default=0),
                         "messages": messages,
                     }
                 )
@@ -436,7 +443,7 @@ class VerificationService:
                     ordinal,
                     check_name,
                     str(item.get("status") or ""),
-                    int(item.get("checked_count") or 0),
+                    _payload_int(item, "checked_count", default=0),
                 ],
             )
             for message_ordinal, message_raw in enumerate(cast(list[object], item.get("messages") or []), start=1):
@@ -480,7 +487,7 @@ class VerificationService:
         seen_ordinals: set[int] = set()
         for position, raw in enumerate(rows, start=1):
             item = dict(raw)
-            ordinal = max(1, int(item.get("index") or position))
+            ordinal = max(1, _payload_int(item, "index", default=position))
             test_name = str(item.get("test_name") or "")
             if not test_name and item.get("index") is not None:
                 test_name = f"{ordinal:03d}.in"
@@ -531,16 +538,18 @@ class VerificationService:
         payload = dict(detail)
         scalar_values = {
             "mode": str(payload.get("mode") or _DETAIL_SCALAR_DEFAULTS["mode"]),
-            "pass_limit": int(payload.get("pass_limit") or _DETAIL_SCALAR_DEFAULTS["pass_limit"]),
+            "pass_limit": _payload_int(payload, "pass_limit", default=1),
             "run_config_json": str(payload.get("run_config_json") or ""),
             "error": str(payload.get("error") or ""),
             "failed_step": str(payload.get("failed_step") or ""),
             "failed_check": str(payload.get("failed_check") or ""),
             "failed_test": str(payload.get("failed_test") or ""),
             "sanity_status": str(payload.get("sanity_status") or ""),
-            "sanity_checked_count": int(payload.get("sanity_checked_count") or 0),
+            "sanity_checked_count": _payload_int(
+                payload, "sanity_checked_count", default=0
+            ),
             "validation_status": str(payload.get("validation_status") or ""),
-            "validated_count": int(payload.get("validated_count") or 0),
+            "validated_count": _payload_int(payload, "validated_count", default=0),
         }
         selected_test_names = [str(item or "") for item in cast(list[object], payload.get("selected_test_names") or []) if str(item or "")]
         source_paths = [str(item or "") for item in cast(list[object], payload.get("source_paths") or []) if str(item or "")]
@@ -691,7 +700,7 @@ class VerificationService:
 
     @staticmethod
     def verification_runtime_summary_from_tasks(
-        rows: list[dict[str, object]],
+        rows: list[VerificationTaskRow],
     ) -> dict[str, object]:
         counts = task_counts(rows)
         return {
@@ -700,15 +709,20 @@ class VerificationService:
             "running_tasks": running_tasks(rows),
             "source_paths": solution_source_paths(rows),
             "program_ids": program_ids(rows),
-            "has_running": bool(int(counts["pending"]) or int(counts["queued"]) or int(counts["running"])),
+            "has_running": bool(
+                counts["pending"] or counts["queued"] or counts["running"]
+            ),
             "test_names": list(dict.fromkeys(str(row["test_name"] or "") for row in rows if str(row["test_name"] or ""))),
         }
 
     def verification_runtime_summary(self, verification_id: str) -> dict[str, object]:
         snapshot = self.verification_snapshot(verification_id)
-        return self.verification_runtime_summary_from_tasks(
-            [] if snapshot is None else snapshot["tasks"]
+        rows: list[VerificationTaskRow] = (
+            []
+            if snapshot is None
+            else cast(list[VerificationTaskRow], snapshot["tasks"])
         )
+        return self.verification_runtime_summary_from_tasks(rows)
 
     def verification_source_paths(self, verification_id: str) -> list[str]:
         detail = self.verification_detail(verification_id)
@@ -937,7 +951,7 @@ class VerificationService:
             return None
         return build_verification_detail_read_model(
             snapshot,
-            display_limit=int(
-                self._config_values.AUX_DISPLAY_TEXT_LIMIT_BYTES
+            display_limit=self._config_values.integer(
+                "AUX_DISPLAY_TEXT_LIMIT_BYTES"
             ),
         )

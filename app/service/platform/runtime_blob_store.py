@@ -8,7 +8,7 @@ import uuid
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import BinaryIO, cast
+from typing import BinaryIO
 
 
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -42,12 +42,25 @@ class PayloadFile:
 
     @classmethod
     def from_payload(cls, raw: object) -> "PayloadFile":
-        payload = cast(dict[str, object], raw)
+        if not isinstance(raw, dict):
+            raise ValueError("payload file must be an object")
+        path = raw.get("path")
+        size = raw.get("size")
+        identity = raw.get("identity")
+        blob_ref = raw.get("blob_ref")
+        if not isinstance(path, str) or not path:
+            raise ValueError("payload file path must be a non-empty string")
+        if isinstance(size, bool) or not isinstance(size, int):
+            raise ValueError("payload file size must be an integer")
+        if not isinstance(identity, str):
+            raise ValueError("payload file identity must be a string")
+        if blob_ref is not None and not isinstance(blob_ref, str):
+            raise ValueError("payload file blob reference must be a string or null")
         return cls(
-            path=Path(str(payload["path"])),
-            size=int(payload["size"]),
-            identity=str(payload["identity"]),
-            blob_ref=None if payload.get("blob_ref") is None else str(payload["blob_ref"]),
+            path=Path(path),
+            size=size,
+            identity=identity,
+            blob_ref=blob_ref,
         )
 
 

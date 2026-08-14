@@ -5,6 +5,7 @@ from fastapi import HTTPException
 from app.service.platform.workspace_path import safe_workspace_path
 from app.service.problem.test_spec import (
     TESTS_SPEC_REL,
+    TestSpecEntry,
     dumps_tests_spec,
     load_tests_spec,
     normalize_test_id,
@@ -25,7 +26,7 @@ def tests_spec_payload_file_path(workspace: Path, test_id: str, kind: str) -> Pa
     return safe_workspace_path(workspace, tests_spec_payload_rel_path(test_id, kind))
 
 
-def tests_spec_read_payload(workspace: Path, entry: dict[str, str]) -> str:
+def tests_spec_read_payload(workspace: Path, entry: TestSpecEntry) -> str:
     test_id = entry.get("id") or ""
     if not test_id:
         return ""
@@ -95,7 +96,7 @@ def read_tests_spec(
     *,
     document_max_bytes: int,
     sample_max_bytes: int,
-) -> tuple[list[dict[str, str]], Path]:
+) -> tuple[list[TestSpecEntry], Path]:
     path = tests_spec_workspace_path(workspace)
     try:
         entries = load_tests_spec(
@@ -110,7 +111,7 @@ def read_tests_spec(
 
 def write_tests_spec(
     path: Path,
-    entries: list[dict[str, str]],
+    entries: list[TestSpecEntry],
     *,
     document_max_bytes: int,
     sample_max_bytes: int,

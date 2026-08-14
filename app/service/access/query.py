@@ -1,4 +1,4 @@
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 
 from app.db import DB
 from app.service.access.model import (
@@ -264,7 +264,7 @@ class AccessQuery:
         actor_user_id: int,
         actor_workspace_id: int | None,
         expected_problem_id: int,
-        verifications: list[Mapping[str, object]],
+        verifications: Sequence[Mapping[str, object]],
         problem_access: ProblemAccessContext | None = None,
     ) -> list[VerificationAccessContext]:
         actor_owns_workspace = (

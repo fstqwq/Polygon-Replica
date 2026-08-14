@@ -91,9 +91,8 @@ def _request_user_agent(request: Request | None) -> str:
 def _is_system_admin_auth_row(row: dict[str, object] | None) -> bool:
     if row is None:
         return False
-    try:
-        user_id = int(row["id"])
-    except Exception:
+    user_id = row.get("id")
+    if not isinstance(user_id, int) or isinstance(user_id, bool):
         return False
     return runtime().access_query.is_system_admin(user_id)
 
@@ -103,7 +102,7 @@ def _normalize_registration_email(value: str) -> tuple[str, str]:
     if any(ch in email for ch in ("\x00", "\r", "\n")):
         raise ValueError("registration failed; invalid email")
     normalized = email.lower()
-    pattern = str(runtime().config_values.AUTH_EMAIL_ALLOW_REGEX or "").strip()
+    pattern = runtime().config_values.text("AUTH_EMAIL_ALLOW_REGEX").strip()
     try:
         allowed = re.compile(pattern)
     except re.error as exc:
@@ -131,7 +130,10 @@ def _enforce_auth_rate_limit(
     hit = _hit_auth_rate_limit(bucket_key, limit=limit, window_sec=window_sec)
     if bool(hit["allowed"]):
         return
-    raise ValueError(f"{message}; retry in {int(hit['retry_after_sec'])}s")
+    retry_after_sec = hit["retry_after_sec"]
+    if not isinstance(retry_after_sec, int) or isinstance(retry_after_sec, bool):
+        raise RuntimeError("auth rate-limit retry delay must be an integer")
+    raise ValueError(f"{message}; retry in {retry_after_sec}s")
 
 
 def _new_registration_verification_code() -> str:
@@ -151,7 +153,8 @@ def _normalize_registration_verification_code(value: str) -> str:
 
 
 def _registration_expiry_minutes() -> int:
-    return max(1, int(round(int(runtime().config_values.AUTH_REGISTER_PENDING_TTL_SEC) / 60.0)))
+    ttl_sec = runtime().config_values.integer("AUTH_REGISTER_PENDING_TTL_SEC")
+    return max(1, int(round(ttl_sec / 60.0)))
 
 
 def setup_page(request: Request):
@@ -162,7 +165,7 @@ def setup_page(request: Request):
         return redirect_response(target, status_code=303)
     if has_registered_users():
         return redirect_response('/login', status_code=303, message='setup already completed')
-    return template_response(request, 'setup.html', {'next_path': next_path, 'password_csrf_token': issue_password_form_csrf_token('setup-password'), 'password_salt': secrets.token_hex(16), 'password_iters': int(runtime().config_values.PASSWORD_HASH_ITERS), 'config_rows': _setup_config_rows()})
+    return template_response(request, 'setup.html', {'next_path': next_path, 'password_csrf_token': issue_password_form_csrf_token('setup-password'), 'password_salt': secrets.token_hex(16), 'password_iters': runtime().config_values.integer("PASSWORD_HASH_ITERS"), 'config_rows': _setup_config_rows()})
 
 def setup_submit(
     request: Request,
@@ -204,7 +207,7 @@ def setup_submit(
             raise ValueError('setup failed; invalid password envelope') from exc
         salt_hex = normalize_password_salt_hex(salt_value)
         iters = normalize_password_iters(iter_value)
-        if iters != int(runtime().config_values.PASSWORD_HASH_ITERS):
+        if iters != runtime().config_values.integer("PASSWORD_HASH_ITERS"):
             raise ValueError('setup failed; invalid password iterations')
         user_id = bootstrap_super_admin_with_password_verifier(safe_user, verifier, salt_hex, iters)
         token = create_session_for_user(int(user_id))
@@ -214,7 +217,7 @@ def setup_submit(
     if target in {'/', '/login', '/register', '/setup'}:
         target = '/problems'
     response = redirect_response(target, status_code=303)
-    response.set_cookie(runtime().config_values.AUTH_COOKIE_NAME, token, httponly=True, samesite='lax', secure=runtime().config_values.AUTH_COOKIE_SECURE, max_age=runtime().config_values.AUTH_COOKIE_MAX_AGE, path='/')
+    response.set_cookie(runtime().config_values.text("AUTH_COOKIE_NAME"), token, httponly=True, samesite='lax', secure=runtime().config_values.boolean("AUTH_COOKIE_SECURE"), max_age=runtime().config_values.integer("AUTH_COOKIE_MAX_AGE"), path='/')
     return response
 
 def login_page(request: Request):
@@ -339,7 +342,7 @@ def login_submit(
     if target in {'/', '/login', '/register'}:
         target = '/problems'
     response = redirect_response(target, status_code=303)
-    response.set_cookie(runtime().config_values.AUTH_COOKIE_NAME, token, httponly=True, samesite='lax', secure=runtime().config_values.AUTH_COOKIE_SECURE, max_age=runtime().config_values.AUTH_COOKIE_MAX_AGE, path='/')
+    response.set_cookie(runtime().config_values.text("AUTH_COOKIE_NAME"), token, httponly=True, samesite='lax', secure=runtime().config_values.boolean("AUTH_COOKIE_SECURE"), max_age=runtime().config_values.integer("AUTH_COOKIE_MAX_AGE"), path='/')
     return response
 
 def register_page(request: Request):
@@ -348,7 +351,7 @@ def register_page(request: Request):
     if user:
         target = next_path if next_path not in {'/', '/login', '/register'} else '/problems'
         return redirect_response(target, status_code=303)
-    return template_response(request, 'register.html', {'next_path': next_path, 'password_csrf_token': issue_password_form_csrf_token('register-password'), 'password_salt': secrets.token_hex(16), 'password_iters': int(runtime().config_values.PASSWORD_HASH_ITERS)})
+    return template_response(request, 'register.html', {'next_path': next_path, 'password_csrf_token': issue_password_form_csrf_token('register-password'), 'password_salt': secrets.token_hex(16), 'password_iters': runtime().config_values.integer("PASSWORD_HASH_ITERS")})
 
 def register_submit(
     request: Request,
@@ -370,8 +373,8 @@ def register_submit(
     try:
         _enforce_auth_rate_limit(
             bucket_key="register-submit:global",
-            limit=int(runtime().config_values.AUTH_REGISTER_SUBMIT_MAX),
-            window_sec=int(runtime().config_values.AUTH_REGISTER_SUBMIT_WINDOW_SEC),
+            limit=runtime().config_values.integer("AUTH_REGISTER_SUBMIT_MAX"),
+            window_sec=runtime().config_values.integer("AUTH_REGISTER_SUBMIT_WINDOW_SEC"),
         )
         safe_user = normalize_username_required(form_text(username))
         safe_email, email_normalized = _normalize_registration_email(form_text(email))
@@ -403,7 +406,7 @@ def register_submit(
             raise ValueError('registration failed; invalid password envelope') from exc
         salt_hex = normalize_password_salt_hex(salt_value)
         iters = normalize_password_iters(iter_value)
-        if iters != int(runtime().config_values.PASSWORD_HASH_ITERS):
+        if iters != runtime().config_values.integer("PASSWORD_HASH_ITERS"):
             raise ValueError('registration failed; invalid password iterations')
         if not runtime().smtp_config_service.delivery_configured():
             user_id = create_user_with_password_verifier(
@@ -419,18 +422,18 @@ def register_submit(
             if target in {'/', '/login', '/register'}:
                 target = '/problems'
             response = redirect_response(target, status_code=303)
-            response.set_cookie(runtime().config_values.AUTH_COOKIE_NAME, token, httponly=True, samesite='lax', secure=runtime().config_values.AUTH_COOKIE_SECURE, max_age=runtime().config_values.AUTH_COOKIE_MAX_AGE, path='/')
+            response.set_cookie(runtime().config_values.text("AUTH_COOKIE_NAME"), token, httponly=True, samesite='lax', secure=runtime().config_values.boolean("AUTH_COOKIE_SECURE"), max_age=runtime().config_values.integer("AUTH_COOKIE_MAX_AGE"), path='/')
             return response
         _enforce_auth_rate_limit(
             bucket_key="register-email-send:global",
-            limit=int(runtime().config_values.AUTH_REGISTER_EMAIL_GLOBAL_MAX),
-            window_sec=int(runtime().config_values.AUTH_REGISTER_EMAIL_GLOBAL_WINDOW_SEC),
+            limit=runtime().config_values.integer("AUTH_REGISTER_EMAIL_GLOBAL_MAX"),
+            window_sec=runtime().config_values.integer("AUTH_REGISTER_EMAIL_GLOBAL_WINDOW_SEC"),
             message="too many registration emails",
         )
         _enforce_auth_rate_limit(
             bucket_key=f"register-email-send:email:{email_normalized}",
-            limit=int(runtime().config_values.AUTH_REGISTER_EMAIL_SEND_MAX),
-            window_sec=int(runtime().config_values.AUTH_REGISTER_EMAIL_SEND_WINDOW_SEC),
+            limit=runtime().config_values.integer("AUTH_REGISTER_EMAIL_SEND_MAX"),
+            window_sec=runtime().config_values.integer("AUTH_REGISTER_EMAIL_SEND_WINDOW_SEC"),
             message="too many registration emails",
         )
         verification_code = _new_registration_verification_code()
@@ -445,13 +448,13 @@ def register_submit(
             token_hash=token_hash,
             request_ip=request_ip,
             user_agent=user_agent,
-            ttl_sec=int(runtime().config_values.AUTH_REGISTER_PENDING_TTL_SEC),
+            ttl_sec=runtime().config_values.integer("AUTH_REGISTER_PENDING_TTL_SEC"),
         )
         try:
             runtime().smtp_config_service.send_registration_email(
                 recipient=safe_email,
                 verification_code=verification_code,
-                expires_in_sec=int(runtime().config_values.AUTH_REGISTER_PENDING_TTL_SEC),
+                expires_in_sec=runtime().config_values.integer("AUTH_REGISTER_PENDING_TTL_SEC"),
             )
         except ValueError as exc:
             raise ValueError("registration failed; verification email could not be sent") from exc
@@ -483,26 +486,26 @@ def register_verify(request: Request, code: str = Form("")):
         try:
             _enforce_auth_rate_limit(
                 bucket_key="register-verify-fail:global",
-                limit=int(runtime().config_values.AUTH_REGISTER_VERIFY_FAIL_MAX),
-                window_sec=int(runtime().config_values.AUTH_REGISTER_VERIFY_FAIL_WINDOW_SEC),
+                limit=runtime().config_values.integer("AUTH_REGISTER_VERIFY_FAIL_MAX"),
+                window_sec=runtime().config_values.integer("AUTH_REGISTER_VERIFY_FAIL_WINDOW_SEC"),
                 message="too many registration verification attempts",
             )
         except ValueError as rate_exc:
             return redirect_response('/register/verify', status_code=303, message=str(rate_exc))
         return redirect_response('/register/verify', status_code=303, message=str(exc))
     response = redirect_response('/problems', status_code=303, message='registration verified')
-    response.set_cookie(runtime().config_values.AUTH_COOKIE_NAME, auth_token, httponly=True, samesite='lax', secure=runtime().config_values.AUTH_COOKIE_SECURE, max_age=runtime().config_values.AUTH_COOKIE_MAX_AGE, path='/')
+    response.set_cookie(runtime().config_values.text("AUTH_COOKIE_NAME"), auth_token, httponly=True, samesite='lax', secure=runtime().config_values.boolean("AUTH_COOKIE_SECURE"), max_age=runtime().config_values.integer("AUTH_COOKIE_MAX_AGE"), path='/')
     return response
 
 def logout(request: Request):
     identity = session_identity(request)
     if identity is not None:
         revoke_session_token(str(identity['token']))
-    sudo_cookie = request.cookies.get(runtime().config_values.SUDO_COOKIE_NAME)
+    sudo_cookie = request.cookies.get(runtime().config_values.text("SUDO_COOKIE_NAME"))
     revoke_sudo_session_token(sudo_cookie if isinstance(sudo_cookie, str) else "")
     response = redirect_response('/login', status_code=303, message='logged out')
-    response.delete_cookie(runtime().config_values.AUTH_COOKIE_NAME, path='/', secure=runtime().config_values.AUTH_COOKIE_SECURE, httponly=True, samesite='lax')
-    response.delete_cookie(runtime().config_values.SUDO_COOKIE_NAME, path='/', secure=runtime().config_values.AUTH_COOKIE_SECURE, httponly=True, samesite='lax')
+    response.delete_cookie(runtime().config_values.text("AUTH_COOKIE_NAME"), path='/', secure=runtime().config_values.boolean("AUTH_COOKIE_SECURE"), httponly=True, samesite='lax')
+    response.delete_cookie(runtime().config_values.text("SUDO_COOKIE_NAME"), path='/', secure=runtime().config_values.boolean("AUTH_COOKIE_SECURE"), httponly=True, samesite='lax')
     return response
 
 
@@ -582,12 +585,12 @@ def sudo_submit(
         return redirect_response(f'/sudo?next={quote_plus(next_path)}', status_code=303, message=str(exc))
     response = redirect_response(next_path, status_code=303, message='sudo mode enabled')
     response.set_cookie(
-        runtime().config_values.SUDO_COOKIE_NAME,
+        runtime().config_values.text("SUDO_COOKIE_NAME"),
         token,
         httponly=True,
         samesite='lax',
-        secure=runtime().config_values.AUTH_COOKIE_SECURE,
-        max_age=int(runtime().config_values.SUDO_COOKIE_MAX_AGE),
+        secure=runtime().config_values.boolean("AUTH_COOKIE_SECURE"),
+        max_age=runtime().config_values.integer("SUDO_COOKIE_MAX_AGE"),
         path='/',
     )
     return response

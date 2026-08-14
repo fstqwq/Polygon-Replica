@@ -92,7 +92,11 @@ class VerifiedRevisionReader:
     root: Path
     manifest: VerifiedRevisionManifest
 
-    def payload(self, test: VerifiedTestEntry, key: str) -> Path | None:
+    def payload(
+        self,
+        test: VerifiedTestEntry,
+        key: Literal["input", "answer", "sample_input", "sample_output"],
+    ) -> Path | None:
         descriptor = test.get(key)
         if descriptor is None:
             return None
@@ -586,10 +590,9 @@ class ProblemPackageService:
         invalidate_exports: bool,
         source_tree: ProblemSourceTree,
     ) -> MaterializationRow:
-        config_snapshot = self.db.config_values.snapshot()
-        tests_spec_max_bytes = int(config_snapshot["TEXTAREA_MAX_BYTES"])
-        statement_sample_max_bytes = int(
-            config_snapshot["STATEMENT_SAMPLE_MAX_BYTES"]
+        tests_spec_max_bytes = self.db.config_values.integer("TEXTAREA_MAX_BYTES")
+        statement_sample_max_bytes = self.db.config_values.integer(
+            "STATEMENT_SAMPLE_MAX_BYTES"
         )
         self.store.mark_build_phase(build_id, "packaging")
         existing = self.store.materialization_for_revision(
@@ -718,13 +721,14 @@ class ProblemPackageService:
         try:
             self.store.mark_build_running(build_id, phase="snapshot")
             extract_git_archive(revision.bare_repo, revision.source_commit, snapshot, timeout=120)
-            config_snapshot = self.db.config_values.snapshot()
             source_tree = load_problem_source_tree(
                 snapshot,
                 problem_limits=problem_config_limits(self.db.config_values),
-                tests_spec_max_bytes=int(config_snapshot["TEXTAREA_MAX_BYTES"]),
-                statement_sample_max_bytes=int(
-                    config_snapshot["STATEMENT_SAMPLE_MAX_BYTES"]
+                tests_spec_max_bytes=self.db.config_values.integer(
+                    "TEXTAREA_MAX_BYTES"
+                ),
+                statement_sample_max_bytes=self.db.config_values.integer(
+                    "STATEMENT_SAMPLE_MAX_BYTES"
                 ),
             )
             self.store.mark_build_phase(build_id, "verification")
@@ -854,21 +858,24 @@ class ProblemPackageService:
                 raise ValueError(
                     "verified revision verification does not match metadata"
                 )
-            config_snapshot = self.db.config_values.snapshot()
             validate_manifest_files(
                 extraction,
                 manifest,
-                tests_spec_max_bytes=int(config_snapshot["TEXTAREA_MAX_BYTES"]),
-                statement_sample_max_bytes=int(
-                    config_snapshot["STATEMENT_SAMPLE_MAX_BYTES"]
+                tests_spec_max_bytes=self.db.config_values.integer(
+                    "TEXTAREA_MAX_BYTES"
+                ),
+                statement_sample_max_bytes=self.db.config_values.integer(
+                    "STATEMENT_SAMPLE_MAX_BYTES"
                 ),
             )
             source_tree = load_problem_source_tree(
                 extraction,
                 problem_limits=problem_config_limits(self.db.config_values),
-                tests_spec_max_bytes=int(config_snapshot["TEXTAREA_MAX_BYTES"]),
-                statement_sample_max_bytes=int(
-                    config_snapshot["STATEMENT_SAMPLE_MAX_BYTES"]
+                tests_spec_max_bytes=self.db.config_values.integer(
+                    "TEXTAREA_MAX_BYTES"
+                ),
+                statement_sample_max_bytes=self.db.config_values.integer(
+                    "STATEMENT_SAMPLE_MAX_BYTES"
                 ),
             )
             if source_tree.problem["mode"] != manifest["mode"]:
