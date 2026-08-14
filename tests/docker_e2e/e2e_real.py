@@ -1228,6 +1228,8 @@ def _run_statement_preview(
         problem_id=problem_id,
         workspace_id=workspace_id,
         verification_id=verification_id,
+        expected_input=b"1\n7\n42\n",
+        expected_answer=b"49\n",
     )
     return verification_id
 

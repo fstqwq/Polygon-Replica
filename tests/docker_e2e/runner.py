@@ -216,6 +216,8 @@ def _assert_preview_sample_materialization(
     problem_id: int,
     workspace_id: int,
     verification_id: str,
+    expected_input: bytes = b"7\n",
+    expected_answer: bytes = b"49\n",
 ) -> None:
     rows = connection.execute(
         """
@@ -234,7 +236,12 @@ def _assert_preview_sample_materialization(
         raise RuntimeError(
             f"preview sample verification did not materialize its core tasks: {statuses!r}"
         )
-    _assert_artifact_refs(connection, verification_id)
+    _assert_artifact_refs(
+        connection,
+        verification_id,
+        expected_input=expected_input,
+        expected_answer=expected_answer,
+    )
 
     preview = _latest_preview(
         connection,

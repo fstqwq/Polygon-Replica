@@ -143,7 +143,7 @@ def contest_packages_build_start(
     language: Annotated[str, Form()] = "",
     insert_blank_pages: Annotated[bool, Form()] = False,
 ):
-    ctx = _contest_ctx(contest, user, "packages", request=request)
+    ctx = _contest_ctx(contest, user, "packages")
     if not ctx["access"]["can_build"]:
         raise HTTPException(status_code=403, detail=ctx["access"]["build_block_reason"])
     contest_id = int(ctx["contest"]["id"])

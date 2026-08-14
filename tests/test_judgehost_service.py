@@ -3990,43 +3990,42 @@ class TestJudgehostService(E2ETestBase):
     ) -> None:
         from app.main import app
 
-        service = runtime.judgehost_task_service
-        override_config_values(
-            self,
-            runtime.config_values,
-            JUDGEHOST_ENABLE=True,
-            JUDGEHOST_API_TOKEN="test-token",
-            JUDGEHOST_API_USERNAME="judgehost",
-        )
-        verification_id = canonical_test_verification_id(
-            f"b-jh-spool-{uuid.uuid4().hex[:8]}"
-        )
-        run_id = f"r-jh-spool-{uuid.uuid4().hex[:8]}"
-        self._seed_build_verification(verification_id)
-        service.enqueue_task(
-            problem=self.problem,
-            username=self.user,
-            artifact_verification_id=verification_id,
-            mode="pass-fail",
-            submission_path="solutions/ac.cpp",
-            upload_content=None,
-            upload_filename=None,
-            run_id=run_id,
-            selected_tests=["001.in"],
-            verification_id=_canonical_verification_id("inv-domjudge-spool"),
-            verification_program_id=_SOLUTION_PROGRAM_ID,
-            expected_behavior="accepted",
-            verification_source="run.execute",
-        )
-        service.domjudge_register_host("judgehost-spool")
-        tasks = service.domjudge_fetch_work("judgehost-spool", max_batchsize=1)
-        self.assertEqual(len(tasks), 1)
-        case_id = int(tasks[0].get("judgetaskid") or 0)
-        self.assertGreater(case_id, 0)
-
-        oversized_output = base64.b64encode(b"B" * 2048).decode("ascii")
-
         with TestClient(app) as client:
+            service = runtime.judgehost_task_service
+            override_config_values(
+                self,
+                runtime.config_values,
+                JUDGEHOST_ENABLE=True,
+                JUDGEHOST_API_TOKEN="test-token",
+                JUDGEHOST_API_USERNAME="judgehost",
+            )
+            verification_id = canonical_test_verification_id(
+                f"b-jh-spool-{uuid.uuid4().hex[:8]}"
+            )
+            run_id = f"r-jh-spool-{uuid.uuid4().hex[:8]}"
+            self._seed_build_verification(verification_id)
+            service.enqueue_task(
+                problem=self.problem,
+                username=self.user,
+                artifact_verification_id=verification_id,
+                mode="pass-fail",
+                submission_path="solutions/ac.cpp",
+                upload_content=None,
+                upload_filename=None,
+                run_id=run_id,
+                selected_tests=["001.in"],
+                verification_id=_canonical_verification_id("inv-domjudge-spool"),
+                verification_program_id=_SOLUTION_PROGRAM_ID,
+                expected_behavior="accepted",
+                verification_source="run.execute",
+            )
+            service.domjudge_register_host("judgehost-spool")
+            tasks = service.domjudge_fetch_work("judgehost-spool", max_batchsize=1)
+            self.assertEqual(len(tasks), 1)
+            case_id = int(tasks[0].get("judgetaskid") or 0)
+            self.assertGreater(case_id, 0)
+
+            oversized_output = base64.b64encode(b"B" * 2048).decode("ascii")
             headers = {"Authorization": "Bearer test-token"}
             update_resp = client.put(
                 f"/api/v4/judgehosts/update-judging/judgehost-spool/{case_id}",
@@ -4053,13 +4052,13 @@ class TestJudgehostService(E2ETestBase):
                 )
             self.assertEqual(add_resp.status_code, 413)
 
-        run_row = self._verification_run_row(run_id)
-        self.assertIsNotNone(run_row)
-        self.assertEqual(str(run_row["status"] or ""), "failed")
-        error_text = str(dict(run_row["summary"]).get("error") or "")
-        self.assertIn("Judgehost result callback was rejected", error_text)
-        self.assertIn("configured 1024-byte limit", error_text)
-        self.assertNotIn("failed without Judgehost diagnostics", error_text)
+            run_row = self._verification_run_row(run_id)
+            self.assertIsNotNone(run_row)
+            self.assertEqual(str(run_row["status"] or ""), "failed")
+            error_text = str(dict(run_row["summary"]).get("error") or "")
+            self.assertIn("Judgehost result callback was rejected", error_text)
+            self.assertIn("configured 1024-byte limit", error_text)
+            self.assertNotIn("failed without Judgehost diagnostics", error_text)
 
     def test_domjudge_build_solve_uses_problem_limits_when_run_config_missing(
         self,
