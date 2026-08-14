@@ -280,11 +280,15 @@ def execution_result_with_outcome(
     feedback: str | None = None,
 ) -> ExecutionResult:
     canonical_execution_result(result)
+    resolved_verdict = result.outcome.verdict if verdict is None else verdict
+    resolved_score_text = result.outcome.score_text if score_text is None else score_text
+    resolved_error = result.outcome.error if error is None else error
+    resolved_feedback = result.outcome.feedback if feedback is None else feedback
     values = {
-        "verdict": result.outcome.verdict if verdict is None else verdict,
-        "score_text": result.outcome.score_text if score_text is None else score_text,
-        "error": result.outcome.error if error is None else error,
-        "feedback": result.outcome.feedback if feedback is None else feedback,
+        "verdict": resolved_verdict,
+        "score_text": resolved_score_text,
+        "error": resolved_error,
+        "feedback": resolved_feedback,
     }
     for label, value in values.items():
         _require_string(value, label=label)
@@ -298,8 +302,11 @@ def execution_result_with_outcome(
             result,
             outcome=replace(
                 result.outcome,
+                verdict=resolved_verdict,
+                score_text=resolved_score_text,
                 answer_correct=resolved_answer_correct,
-                **values,
+                error=resolved_error,
+                feedback=resolved_feedback,
             ),
         )
     )

@@ -4,6 +4,7 @@ from pathlib import Path
 
 from app.service.execution.identity import canonical_run_id
 from app.service.judgehost.state import JudgehostState
+from app.service.judgehost.work.task_registry import JudgehostTaskRow
 
 _SCHEDULING_TOKEN_RE = re.compile(r"^[A-Za-z0-9._-]{1,80}$")
 _HOSTNAME_RE = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
@@ -76,14 +77,14 @@ class JudgehostCore:
     def task_status_counts(self) -> dict[str, int]:
         return self._s.task_registry.status_counts()
 
-    def task_by_id(self, task_id: str) -> dict[str, object] | None:
+    def task_by_id(self, task_id: str) -> JudgehostTaskRow | None:
         return self._s.task_registry.get(task_id.strip())
 
     def task_payload(self, task_id: str) -> dict[str, object]:
         row = self.task_by_id(task_id)
         if row is None:
             return {}
-        return dict(row["payload"])
+        return row["payload"].copy()
 
     def safe_workspace_source(self, workspace_root: Path, submission_path: str) -> Path:
         workspace_resolved = workspace_root.resolve()

@@ -1,6 +1,11 @@
 from collections.abc import Mapping
 from pathlib import Path
-from app.service.judgehost.domjudge.limits import compile_output_kb, run_output_kb
+from app.service.judgehost.domjudge.limits import (
+    compile_output_kb,
+    config_int,
+    run_output_kb,
+)
+from app.service.judgehost.state import JudgehostHostRow
 
 
 def decode_text(
@@ -27,7 +32,7 @@ def decode_basename(*, raw: object, default: str = "") -> str:
     return Path(token).name
 
 
-def hosts_payload(hosts_state: dict[str, dict[str, object]]) -> list[dict[str, object]]:
+def hosts_payload(hosts_state: dict[str, JudgehostHostRow]) -> list[dict[str, object]]:
     rows = sorted(
         (dict(row) for row in hosts_state.values()),
         key=lambda item: (
@@ -52,8 +57,8 @@ def hosts_payload(hosts_state: dict[str, dict[str, object]]) -> list[dict[str, o
 
 
 def config_payload(values: Mapping[str, object]) -> dict[str, object]:
-    compile_timeout = int(values["TOOLCHAIN_COMPILE_TIMEOUT_SEC"])
-    compile_mem_mb = int(values["TOOLCHAIN_COMPILE_MEMORY_MB"])
+    compile_timeout = config_int(values, "TOOLCHAIN_COMPILE_TIMEOUT_SEC")
+    compile_mem_mb = config_int(values, "TOOLCHAIN_COMPILE_MEMORY_MB")
     return {
         "diskspace_error": 1048576,
         # DOMjudge applies output_storage_limit to program stdout artifacts.

@@ -37,6 +37,7 @@ _DomjudgePreparedTestRow = TypedDict(
     "_DomjudgePreparedTestRow",
     {
         "name": str,
+        "answer_name": str,
         "input_file": object,
         "answer_file": object,
     },
@@ -87,10 +88,6 @@ _DomjudgePreparedPayload = TypedDict(
         "expected_behavior": str,
         "bypass_case_result_cache": bool,
         "manual_validate_only": bool,
-        "checker_source_bytes": bytes,
-        "validator_source_bytes": bytes,
-        "interactor_source_bytes": bytes,
-        "testlib_header_bytes": bytes,
     },
 )
 
@@ -322,7 +319,10 @@ class DispatchHandler(DispatchCacheMixin):
         if problem_limits_obj is None:
             problem_limits_obj = {}
 
-        precomputed = self._precomputed_bundle(payload.get("precomputed"))
+        raw_precomputed = payload.get("precomputed")
+        if not isinstance(raw_precomputed, dict):
+            raise RuntimeError("domjudge precomputed payload is required")
+        precomputed = self._precomputed_bundle(raw_precomputed)
         if precomputed is None:
             raise RuntimeError("domjudge precomputed payload is required")
 
@@ -518,6 +518,9 @@ class DispatchHandler(DispatchCacheMixin):
         out: list[dict[str, object]] = []
         for row in rows:
             case_id = int(row["id"])
+            testcase_id = row["testcase_id"]
+            if testcase_id is None:
+                raise RuntimeError("leased judgehost case has no testcase id")
             out.append(
                 {
                     "type": "judging_run",
@@ -529,7 +532,7 @@ class DispatchHandler(DispatchCacheMixin):
                     "compile_script_id": str(int(compile_id)),
                     "run_script_id": str(int(run_id_num)),
                     "compare_script_id": str(int(compare_id)),
-                    "testcase_id": str(int(row["testcase_id"])),
+                    "testcase_id": str(testcase_id),
                     "testcase_hash": row["testcase_hash"],
                     "compile_config": compile_config_json,
                     "run_config": run_config_json,

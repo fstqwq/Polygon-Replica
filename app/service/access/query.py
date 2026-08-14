@@ -21,6 +21,12 @@ from app.service.access.policy import (
 from app.service.access.store import AccessStore
 
 
+def _database_int(value: object, *, field: str) -> int:
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise RuntimeError(f"database field {field} is not an integer")
+    return value
+
+
 class AccessQuery:
     def __init__(self, db: DB):
         self._store = AccessStore(db)
@@ -81,20 +87,32 @@ class AccessQuery:
             "can_read": can_read,
             "can_write": can_write,
             "can_manage": can_manage,
-            "read_block_reason": "" if can_read else (
-                problem["read_block_reason"]
-                if owns_workspace
-                else "workspace belongs to another user"
+            "read_block_reason": (
+                ""
+                if can_read
+                else (
+                    problem["read_block_reason"]
+                    if owns_workspace
+                    else "workspace belongs to another user"
+                )
             ),
-            "write_block_reason": "" if can_write else (
-                problem["write_block_reason"]
-                if owns_workspace
-                else "workspace belongs to another user"
+            "write_block_reason": (
+                ""
+                if can_write
+                else (
+                    problem["write_block_reason"]
+                    if owns_workspace
+                    else "workspace belongs to another user"
+                )
             ),
-            "manage_block_reason": "" if can_manage else (
-                problem["read_block_reason"]
-                if owns_workspace
-                else "workspace belongs to another user"
+            "manage_block_reason": (
+                ""
+                if can_manage
+                else (
+                    problem["read_block_reason"]
+                    if owns_workspace
+                    else "workspace belongs to another user"
+                )
             ),
         }
 
@@ -278,10 +296,12 @@ class AccessQuery:
         verification: Mapping[str, object],
         problem_access: ProblemAccessContext | None,
     ) -> VerificationAccessContext:
-        problem_id = int(verification["problem_id"])
+        problem_id = _database_int(verification["problem_id"], field="problem_id")
         owner_workspace_raw = verification.get("workspace_id")
         owner_workspace_id = (
-            None if owner_workspace_raw is None else int(owner_workspace_raw)
+            None
+            if owner_workspace_raw is None
+            else _database_int(owner_workspace_raw, field="workspace_id")
         )
         resource = Resource(
             "verification",
@@ -295,10 +315,7 @@ class AccessQuery:
             else problem_access
         )
         matches_problem = problem_id == int(expected_problem_id)
-        view_allowed = (
-            matches_problem
-            and effective_problem_access["can_view_verification"]
-        )
+        view_allowed = matches_problem and effective_problem_access["can_view_verification"]
         rejudge_allowed = matches_problem and effective_problem_access["can_rejudge"]
         cancel = role_decision(
             actor,
@@ -312,21 +329,30 @@ class AccessQuery:
             "can_rejudge": rejudge_allowed,
             "can_cancel": cancel_allowed,
             "owns_verification": (
-                actor.workspace_id is not None
-                and actor.workspace_id == owner_workspace_id
+                actor.workspace_id is not None and actor.workspace_id == owner_workspace_id
             ),
-            "view_block_reason": "" if view_allowed else (
-                "verification not found"
-                if not matches_problem
-                else effective_problem_access["verification_block_reason"]
+            "view_block_reason": (
+                ""
+                if view_allowed
+                else (
+                    "verification not found"
+                    if not matches_problem
+                    else effective_problem_access["verification_block_reason"]
+                )
             ),
-            "rejudge_block_reason": "" if rejudge_allowed else (
-                "verification not found"
-                if not matches_problem
-                else effective_problem_access["rejudge_block_reason"]
+            "rejudge_block_reason": (
+                ""
+                if rejudge_allowed
+                else (
+                    "verification not found"
+                    if not matches_problem
+                    else effective_problem_access["rejudge_block_reason"]
+                )
             ),
-            "cancel_block_reason": "" if cancel_allowed else (
-                "verification not found" if not matches_problem else cancel.reason
+            "cancel_block_reason": (
+                ""
+                if cancel_allowed
+                else ("verification not found" if not matches_problem else cancel.reason)
             ),
         }
 
@@ -344,19 +370,14 @@ class AccessQuery:
             if problem_access is None
             else problem_access
         )
-        own_or_terminal = (
-            int(actor_user_id) == int(job_actor_user_id)
-            or status == "succeeded"
-        )
-        can_view = access["can_list_packages"] and (
-            own_or_terminal or access["can_manage"]
-        )
+        own_or_terminal = int(actor_user_id) == int(job_actor_user_id) or status == "succeeded"
+        can_view = access["can_list_packages"] and (own_or_terminal or access["can_manage"])
         can_download = can_view and status == "succeeded"
         return {
             "can_view": can_view,
             "can_download": can_download,
-            "view_block_reason": "" if can_view else "export job is not visible to this user",
-            "download_block_reason": "" if can_download else "export artifact is not available",
+            "view_block_reason": ("" if can_view else "export job is not visible to this user"),
+            "download_block_reason": ("" if can_download else "export artifact is not available"),
         }
 
     def package_export_context(
@@ -369,7 +390,7 @@ class AccessQuery:
     ) -> PackageJobAccessContext:
         matches_problem = (
             export is not None
-            and int(export["problem_id"]) == int(expected_problem_id)
+            and _database_int(export["problem_id"], field="problem_id") == expected_problem_id
         )
         access = (
             self.problem_context(expected_problem_id, actor_user_id)
@@ -380,12 +401,8 @@ class AccessQuery:
         return {
             "can_view": can_download,
             "can_download": can_download,
-            "view_block_reason": (
-                "" if can_download else "export artifact is not available"
-            ),
-            "download_block_reason": (
-                "" if can_download else "export artifact is not available"
-            ),
+            "view_block_reason": ("" if can_download else "export artifact is not available"),
+            "download_block_reason": ("" if can_download else "export artifact is not available"),
         }
 
     def verified_revision_context(
@@ -398,7 +415,8 @@ class AccessQuery:
     ) -> PackageJobAccessContext:
         matches_problem = (
             verified_revision is not None
-            and int(verified_revision["problem_id"]) == int(expected_problem_id)
+            and _database_int(verified_revision["problem_id"], field="problem_id")
+            == expected_problem_id
         )
         access = (
             self.problem_context(expected_problem_id, actor_user_id)
@@ -409,12 +427,8 @@ class AccessQuery:
         return {
             "can_view": can_download,
             "can_download": can_download,
-            "view_block_reason": (
-                "" if can_download else "package is not available"
-            ),
-            "download_block_reason": (
-                "" if can_download else "package is not available"
-            ),
+            "view_block_reason": ("" if can_download else "package is not available"),
+            "download_block_reason": ("" if can_download else "package is not available"),
         }
 
     def effective_agent_scope(

@@ -1,5 +1,6 @@
 import time
 from datetime import datetime, timezone
+from typing import TypedDict
 
 from app.db import now_iso
 from app.service.judgehost.work.time import parse_iso_utc
@@ -15,7 +16,19 @@ from app.service.judgehost.core import JudgehostCore
 from app.service.judgehost.batch.model import HostLeaseRelease
 from app.service.judgehost.work.payload_retention import compact_payload_for_retention
 from app.service.judgehost.work.payload_retention import compact_task_row_payload
-from app.service.judgehost.state import JudgehostState
+from app.service.judgehost.work.task_registry import JudgehostTaskRow
+from app.service.judgehost.state import JudgehostHostRow, JudgehostState
+
+
+class TaskPollResult(TypedDict):
+    task_id: str
+    verification_id: str
+    run_id: str
+    artifact_path: str
+    status: str
+    task_status: str
+    error: str
+    summary: dict[str, object]
 
 
 class TaskQueue:
@@ -98,7 +111,7 @@ class TaskQueue:
             row = self._s.hosts_state.get(hostname)
             if row is None:
                 return True
-            return bool(row.get("enabled", True))
+            return row["enabled"]
 
     def load_run_summary(self, run_id: str, verification_id: str = "") -> dict[str, object]:
         if not run_id:
@@ -108,9 +121,9 @@ class TaskQueue:
         cached_summary: dict[str, object] | None = None
         task_row = self._s.task_registry.get_for_run(run_id)
         if task_row is not None:
-            task_verification_id = str(task_row.get("verification_id") or "")
-            task_run_id = str(task_row.get("run_id") or "")
-            cached_summary = dict(task_row.get("summary") or {})
+            task_verification_id = task_row["verification_id"]
+            task_run_id = task_row["run_id"]
+            cached_summary = task_row["summary"].copy()
         if task_run_id and (task_run_id != run_id or task_verification_id != verification_id):
             summary = self.load_run_summary(task_run_id, task_verification_id)
             if summary:
@@ -121,7 +134,7 @@ class TaskQueue:
 
     def _task_summary_for_row(
         self,
-        row: dict[str, object],
+        row: JudgehostTaskRow,
         *,
         run_id: str,
         verification_id: str,
@@ -129,23 +142,56 @@ class TaskQueue:
         summary = self.load_run_summary(run_id, verification_id)
         if summary:
             return summary
-        row_summary = dict(row.get("summary") or {})
+        row_summary = row["summary"].copy()
         if row_summary:
             return row_summary
-        row_result = dict(row.get("result") or {})
-        result_summary = dict(row_result.get("summary") or {})
+        result_summary = self._summary_mapping(row["result"].get("summary"))
         if result_summary:
             return result_summary
         return {}
 
     @staticmethod
+    def _summary_mapping(value: object) -> dict[str, object]:
+        if value is None:
+            return {}
+        if not isinstance(value, dict):
+            raise RuntimeError("judgehost summary must be an object")
+        summary: dict[str, object] = {}
+        for key, item in value.items():
+            if not isinstance(key, str):
+                raise RuntimeError("judgehost summary keys must be strings")
+            summary[key] = item
+        return summary
+
+    @staticmethod
+    def _summary_text(summary: dict[str, object], key: str) -> str:
+        value = summary.get(key)
+        if value is None:
+            return ""
+        if not isinstance(value, str):
+            raise RuntimeError(f"judgehost summary {key} must be a string")
+        return value
+
+    @classmethod
+    def _summary_compile_diagnostics(cls, summary: dict[str, object]) -> list[dict[str, object]]:
+        value = summary.get("compile_diagnostics")
+        if value is None:
+            return []
+        if not isinstance(value, list):
+            raise RuntimeError("judgehost compile_diagnostics must be a list")
+        diagnostics: list[dict[str, object]] = []
+        for raw_item in value:
+            diagnostics.append(cls._summary_mapping(raw_item))
+        return diagnostics
+
+    @staticmethod
     def _summary_error_text(summary: dict[str, object]) -> str:
-        diagnostics = summary.get("compile_diagnostics") or []
+        diagnostics = TaskQueue._summary_compile_diagnostics(summary)
         for item in diagnostics:
-            message = item.get("message") or ""
+            message = TaskQueue._summary_text(item, "message")
             if message:
                 return message
-        return summary.get("error") or ""
+        return TaskQueue._summary_text(summary, "error")
 
     def report_result(
         self,
@@ -185,7 +231,9 @@ class TaskQueue:
         if not task_id:
             raise RuntimeError("task_id is required")
         hostname = self._core.normalize_hostname(hostname)
-        run_status = payload["run_status"]
+        run_status = payload.get("run_status")
+        if not isinstance(run_status, str) or not run_status:
+            raise RuntimeError("judgehost run_status must be a non-empty string")
         run_status_token = run_status.lower()
         if run_status_token in {
             "ok",
@@ -200,7 +248,15 @@ class TaskQueue:
         else:
             run_status = "failed"
             task_status = self.STATUS_FAILED
-        error_text = (payload.get("error") or "").strip()
+        raw_error = payload.get("error")
+        if raw_error is None:
+            error_text = ""
+        elif isinstance(raw_error, str):
+            error_text = raw_error.strip()
+        else:
+            raise RuntimeError("judgehost error must be a string")
+        raw_summary = payload.get("summary")
+        payload_summary = None if raw_summary is None else self._summary_mapping(raw_summary)
 
         row = self._s.task_registry.claim_reporting(
             task_id,
@@ -208,31 +264,29 @@ class TaskQueue:
         )
         if row is None:
             raise RuntimeError("judgehost task not found")
-        current_status = str(row["status"])
+        current_status = row["status"]
         if current_status in {self.STATUS_COMPLETED, self.STATUS_FAILED}:
-            run_id = str(row.get("run_id") or "")
-            verification_id = str(row.get("verification_id") or "")
-            summary = row.get("summary")
+            run_id = row["run_id"]
+            verification_id = row["verification_id"]
             return {
                 "task_id": task_id,
                 "verification_id": verification_id,
                 "run_id": run_id,
                 "artifact_path": "",
-                "status": str(
-                    row.get("run_status")
-                    or ("ok" if current_status == self.STATUS_COMPLETED else "failed")
-                ),
-                "summary": dict(summary) if isinstance(summary, dict) else {},
+                "status": row.get("run_status")
+                or ("ok" if current_status == self.STATUS_COMPLETED else "failed"),
+                "summary": row["summary"].copy(),
             }
-        run_id = str(row["run_id"])
-        verification_id = str(row["verification_id"])
-        prev_summary = dict(row.get("summary") or {})
+        run_id = row["run_id"]
+        verification_id = row["verification_id"]
+        prev_summary = row["summary"].copy()
 
         try:
             existing_summary = self.load_run_summary(run_id, verification_id) or prev_summary
-            summary = payload.get("summary")
             summary_obj = (
-                dict(existing_summary) if summary is None else {**existing_summary, **summary}
+                existing_summary.copy()
+                if payload_summary is None
+                else {**existing_summary, **payload_summary}
             )
             if run_status != "ok":
                 if error_text:
@@ -241,7 +295,7 @@ class TaskQueue:
                     summary_obj["error"] = "judgehost reported failure"
             summary_obj["status"] = run_status
 
-            judgehost_block = dict(summary_obj.get("judgehost") or {})
+            judgehost_block = self._summary_mapping(summary_obj.get("judgehost"))
             judgehost_block["task_id"] = task_id
             judgehost_block["hostname"] = hostname
             judgehost_block["status"] = task_status
@@ -260,7 +314,7 @@ class TaskQueue:
             expected={self.STATUS_REPORTING},
             status=task_status,
             updates={
-                "payload": compact_payload_for_retention(row.get("payload")),
+                "payload": compact_payload_for_retention(row["payload"]),
                 "result": {
                     "run_status": run_status,
                     "error": error_text,
@@ -293,7 +347,7 @@ class TaskQueue:
 
     def wait_for_task_result(
         self, task_id: str, timeout_sec: float | None = None
-    ) -> dict[str, object]:
+    ) -> TaskPollResult:
         if not task_id:
             raise RuntimeError("judgehost task id is required")
         policy = self._s.config_policy()
@@ -309,17 +363,17 @@ class TaskQueue:
                 raise RuntimeError(f"judgehost task timed out after {int(timeout)}s")
             generation = self._s.task_registry.wait_for_change(generation, remaining)
 
-    def poll_task_result(self, task_id: str) -> dict[str, object] | None:
+    def poll_task_result(self, task_id: str) -> TaskPollResult | None:
         if not task_id:
             raise RuntimeError("judgehost task id is required")
         row = self._core.task_by_id(task_id)
         if row is None:
             raise RuntimeError("judgehost task disappeared")
-        status = str(row["status"] or "")
+        status = row["status"]
         if status not in {self.STATUS_COMPLETED, self.STATUS_FAILED}:
             return None
-        verification_id = str(row["verification_id"] or "")
-        run_id = str(row["run_id"] or "")
+        verification_id = row["verification_id"]
+        run_id = row["run_id"]
         return {
             "task_id": task_id,
             "verification_id": verification_id,
@@ -328,7 +382,7 @@ class TaskQueue:
             "status": row["run_status"],
             "task_status": status,
             "error": row["error_text"],
-            "summary": dict(row.get("summary") or {}),
+            "summary": row["summary"].copy(),
         }
 
     def wait_for_task_case_result(
@@ -368,9 +422,9 @@ class TaskQueue:
             raise RuntimeError("judgehost task disappeared")
         case_result = self._s.batch_runtime.case_result_for_task(task_id, test_name)
         if case_result is not None:
-            verification_id = str(row["verification_id"] or "")
-            run_id = str(row["run_id"] or "")
-            task_kind = str((row.get("payload") or {}).get("task_kind") or "")
+            verification_id = row["verification_id"]
+            run_id = row["run_id"]
+            task_kind = self._summary_text(row["payload"], "task_kind")
             runresult = case_result.runresult
             verdict = case_result.verdict
             summary = self._task_summary_for_row(
@@ -380,7 +434,7 @@ class TaskQueue:
             )
             selected_test_row = decode_case_test_row(case_result, test_name=test_name)
             recovered_error = case_result.feedback_text
-            summary_error = str(summary.get("error") or "")
+            summary_error = self._summary_text(summary, "error")
             if (
                 (not summary_error)
                 and recovered_error
@@ -399,10 +453,10 @@ class TaskQueue:
                 and verdict != "OK"
             ):
                 summary_error = recovered_error
-            case_summary = {
-                "source": summary.get("source") or "",
-                "compile_log": summary.get("compile_log") or "",
-                "compile_diagnostics": list(summary.get("compile_diagnostics") or []),
+            terminal_summary: dict[str, object] = {
+                "source": self._summary_text(summary, "source"),
+                "compile_log": self._summary_text(summary, "compile_log"),
+                "compile_diagnostics": self._summary_compile_diagnostics(summary),
                 "error": summary_error,
                 "tests": [selected_test_row],
             }
@@ -417,40 +471,40 @@ class TaskQueue:
                 run_status = "failed"
             else:
                 run_status = "ok"
-            terminal_error = str(case_summary.get("error") or "")
+            terminal_error = summary_error
             terminal_result = execution_result_with_terminal_context(
                 case_result,
-                summary=case_summary,
+                summary=terminal_summary,
                 error_text=terminal_error,
             )
             return build_case_terminal_report(
                 task_id=task_id,
-                verification_id=str(row["verification_id"] or ""),
-                run_id=str(row["run_id"] or ""),
+                verification_id=row["verification_id"],
+                run_id=row["run_id"],
                 status=run_status,
-                task_status=str(row["status"] or ""),
+                task_status=row["status"],
                 error_text=terminal_error,
-                summary=case_summary,
+                summary=terminal_summary,
                 missing_case_result=False,
                 execution_result=terminal_result,
             )
-        task_status = str(row["status"] or "")
+        task_status = row["status"]
         if task_status in {self.STATUS_FAILED, self.STATUS_COMPLETED}:
-            verification_id = str(row["verification_id"] or "")
-            run_id = str(row["run_id"] or "")
+            verification_id = row["verification_id"]
+            run_id = row["run_id"]
             task_summary = self._task_summary_for_row(
                 row,
                 run_id=run_id,
                 verification_id=verification_id,
             )
-            source_label = str(task_summary.get("source") or "")
-            compile_diagnostics = list(task_summary.get("compile_diagnostics") or [])
-            detail = str(task_summary.get("error") or row.get("error_text") or "")
+            source_label = self._summary_text(task_summary, "source")
+            compile_diagnostics = self._summary_compile_diagnostics(task_summary)
+            detail = self._summary_text(task_summary, "error") or row["error_text"]
             if not detail:
                 detail = f"judgehost case result missing for {test_name}"
-            case_summary: dict[str, object] = {
+            missing_summary: dict[str, object] = {
                 "source": source_label,
-                "compile_log": str(task_summary.get("compile_log") or ""),
+                "compile_log": self._summary_text(task_summary, "compile_log"),
                 "compile_diagnostics": compile_diagnostics,
                 "error": detail,
                 "tests": [],
@@ -462,10 +516,10 @@ class TaskQueue:
                 status="failed",
                 task_status=task_status,
                 error_text=detail,
-                summary=case_summary,
+                summary=missing_summary,
                 missing_case_result=True,
                 execution_result=build_missing_case_result(
-                    summary=case_summary,
+                    summary=missing_summary,
                     error_text=detail,
                 ),
             )
@@ -486,10 +540,10 @@ class TaskQueue:
         telemetry_by_host = self._s.batch_runtime.host_telemetry_snapshot()
         with self._s.state_lock:
             host_rows = sorted(
-                (dict(row) for row in self._s.hosts_state.values()),
+                (row.copy() for row in self._s.hosts_state.values()),
                 key=lambda item: (
-                    str(item.get("last_seen_at") or ""),
-                    str(item.get("hostname") or ""),
+                    item["last_seen_at"],
+                    item["hostname"],
                 ),
                 reverse=True,
             )
@@ -503,11 +557,11 @@ class TaskQueue:
         rows_out: list[dict[str, object]] = []
         online_count = 0
         for row in host_rows:
-            hostname = str(row.get("hostname") or "")
+            hostname = row["hostname"]
             if not hostname:
                 continue
-            enabled_flag = bool(row.get("enabled"))
-            last_seen = str(row.get("last_seen_at") or "")
+            enabled_flag = row["enabled"]
+            last_seen = row["last_seen_at"]
             last_seen_dt = parse_iso_utc(last_seen)
             age_sec: int | None = None
             is_online = False
@@ -521,21 +575,25 @@ class TaskQueue:
             rows_out.append(
                 {
                     "hostname": hostname,
-                    "peer_addr": str(row.get("peer_addr") or ""),
+                    "peer_addr": row.get("peer_addr", ""),
                     "enabled": enabled_flag,
                     "online": is_online,
                     "age_sec": age_sec,
                     "last_seen_at": last_seen,
-                    "first_seen_at": str(row.get("first_seen_at") or ""),
-                    "last_action": str(row.get("last_action") or ""),
-                    "last_task_id": str(row.get("last_task_id") or ""),
-                    "last_run_id": str(row.get("last_run_id") or ""),
+                    "first_seen_at": row["first_seen_at"],
+                    "last_action": row["last_action"],
+                    "last_task_id": row["last_task_id"],
+                    "last_run_id": row["last_run_id"],
                     "toolchains": toolchains_by_host.get(hostname, []),
                     "active_leases": int(active_by_host.get(hostname, 0)),
-                    "update_count": int(row.get("update_count") or 0),
-                    "judged_case_count": 0 if telemetry is None else telemetry["judged_case_count"],
-                    "last_judging_at": None if telemetry is None else telemetry["last_judging_at"],
-                    "last_judging": None if telemetry is None else telemetry["last_judging"],
+                    "update_count": row["update_count"],
+                    "judged_case_count": (
+                        0 if telemetry is None else telemetry["judged_case_count"]
+                    ),
+                    "last_judging_at": (
+                        None if telemetry is None else telemetry["last_judging_at"]
+                    ),
+                    "last_judging": (None if telemetry is None else telemetry["last_judging"]),
                     "recent_avg_per_case_sec": (
                         None if telemetry is None else telemetry["recent_avg_per_case_sec"]
                     ),
@@ -547,18 +605,22 @@ class TaskQueue:
         safe_host = self._core.normalize_hostname(hostname)
         now_text = now_iso()
         with self._s.state_lock:
-            current_row = dict(self._s.hosts_state.get(safe_host, {}))
-            self._s.hosts_state[safe_host] = {
+            current_row = self._s.hosts_state.get(safe_host)
+            replacement: JudgehostHostRow = {
                 "hostname": safe_host,
-                "peer_addr": str(current_row.get("peer_addr") or ""),
-                "enabled": bool(enabled),
-                "first_seen_at": str(current_row.get("first_seen_at") or now_text),
-                "last_seen_at": str(current_row.get("last_seen_at") or now_text),
+                "enabled": enabled,
+                "first_seen_at": (
+                    now_text if current_row is None else current_row["first_seen_at"]
+                ),
+                "last_seen_at": (now_text if current_row is None else current_row["last_seen_at"]),
                 "last_action": "set-enabled" if enabled else "set-disabled",
-                "last_task_id": str(current_row.get("last_task_id") or ""),
-                "last_run_id": str(current_row.get("last_run_id") or ""),
-                "update_count": int(current_row.get("update_count") or 0) + 1,
+                "last_task_id": ("" if current_row is None else current_row["last_task_id"]),
+                "last_run_id": ("" if current_row is None else current_row["last_run_id"]),
+                "update_count": (1 if current_row is None else current_row["update_count"] + 1),
             }
+            if current_row is not None and "peer_addr" in current_row:
+                replacement["peer_addr"] = current_row["peer_addr"]
+            self._s.hosts_state[safe_host] = replacement
         release = HostLeaseRelease(0, 0, (), (), ())
         if not enabled:
             release = self._s.batch_runtime.release_host_leases(

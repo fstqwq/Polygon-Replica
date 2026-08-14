@@ -7,7 +7,6 @@ from app.service.access.model import (
     Resource,
 )
 
-
 _ROLE_LEVEL = {"none": 0, "read": 1, "write": 2, "owner": 3, "admin": 4}
 _AGENT_SCOPE_LEVEL = {"readonly": 1, "workspace": 2, "commit": 3}
 _CAPABILITY_LEVEL: dict[Capability, int] = {
@@ -33,15 +32,17 @@ _CAPABILITY_LEVEL: dict[Capability, int] = {
 
 
 def repo_role(raw_role: str) -> AccessRole:
-    if raw_role not in {"read", "write", "owner"}:
-        raise ValueError("invalid repo role")
-    return raw_role
+    if raw_role == "read":
+        return "read"
+    if raw_role == "write":
+        return "write"
+    if raw_role == "owner":
+        return "owner"
+    raise ValueError("invalid repo role")
 
 
 def contest_role(raw_role: str) -> AccessRole:
-    if raw_role not in {"read", "write", "owner"}:
-        raise ValueError("invalid contest role")
-    return raw_role
+    return repo_role(raw_role)
 
 
 def transferable_repo_role(raw_role: str) -> AccessRole:
@@ -61,9 +62,17 @@ def transferable_contest_role(raw_role: str) -> AccessRole:
 def access_role(raw_role: str | None) -> AccessRole:
     if raw_role is None:
         return "none"
-    if raw_role not in _ROLE_LEVEL:
-        raise RuntimeError("invalid access role")
-    return raw_role  # type: ignore[return-value]
+    if raw_role == "none":
+        return "none"
+    if raw_role == "read":
+        return "read"
+    if raw_role == "write":
+        return "write"
+    if raw_role == "owner":
+        return "owner"
+    if raw_role == "admin":
+        return "admin"
+    raise RuntimeError("invalid access role")
 
 
 def stronger_role(left: AccessRole, right: AccessRole) -> AccessRole:
@@ -126,9 +135,13 @@ def _denial_reason(
 
 
 def agent_scope(raw_scope: str) -> AgentScope:
-    if raw_scope not in _AGENT_SCOPE_LEVEL:
-        raise ValueError("invalid scope")
-    return raw_scope  # type: ignore[return-value]
+    if raw_scope == "readonly":
+        return "readonly"
+    if raw_scope == "workspace":
+        return "workspace"
+    if raw_scope == "commit":
+        return "commit"
+    raise ValueError("invalid scope")
 
 
 def agent_scope_allows(granted_scope: str, minimum_scope: str) -> bool:
@@ -147,9 +160,12 @@ def effective_agent_scope(token_scope: str, role: AccessRole) -> AgentScope | No
         "admin": 3,
     }[role]
     level = min(_AGENT_SCOPE_LEVEL[token], role_level)
-    for scope in ("commit", "workspace", "readonly"):
-        if level >= _AGENT_SCOPE_LEVEL[scope]:
-            return scope  # type: ignore[return-value]
+    if level >= _AGENT_SCOPE_LEVEL["commit"]:
+        return "commit"
+    if level >= _AGENT_SCOPE_LEVEL["workspace"]:
+        return "workspace"
+    if level >= _AGENT_SCOPE_LEVEL["readonly"]:
+        return "readonly"
     return None
 
 

@@ -126,6 +126,13 @@ class ResultProcessor:
             self.STATUS_REPORTING,
         }
 
+    @staticmethod
+    def _verification_source(task_payload: dict[str, object]) -> str | None:
+        value = task_payload.get("verification_source")
+        if value is None or isinstance(value, str):
+            return value
+        raise RuntimeError("judgehost task verification_source must be a string")
+
     def domjudge_get_source_files(
         self,
         submit_id: str,
@@ -220,10 +227,16 @@ class ResultProcessor:
         )
         if leased_match is not None:
             return leased_match
-        field = script_hash_field(kind)
         matching: dict[int, str] = {}
         for batch_row in self._s.batch_runtime.host_context_batches(safe_host):
-            script_hash = batch_row[field]
+            if kind == "compile":
+                script_hash = batch_row["compile_hash"]
+            elif kind == "run":
+                script_hash = batch_row["run_hash"]
+            elif kind == "compare":
+                script_hash = batch_row["compare_hash"]
+            else:
+                raise RuntimeError("invalid script kind")
             if script_hash and script_id(script_hash) == requested_id:
                 matching[int(batch_row["batch_id"])] = script_hash
         matching_hashes = set(matching.values())
@@ -369,12 +382,14 @@ class ResultProcessor:
         self,
         *,
         hostname: str,
-        row: dict[str, object],
+        test_name: str,
         task_payload: dict[str, object],
         task_kind: str,
         reported_at: str,
         reported_monotonic: float,
     ) -> CaseReportTelemetry:
+        raw_source_name = task_payload.get("source_name")
+        source_name = raw_source_name if isinstance(raw_source_name, str) else ""
         return CaseReportTelemetry(
             hostname=hostname,
             reported_at=reported_at,
@@ -385,10 +400,10 @@ class ResultProcessor:
             source_label=Path(
                 decode_text(
                     raw=task_payload.get("source_label"),
-                    default=decode_text(raw=row.get("source_name")),
+                    default=source_name,
                 ).replace("\\", "/")
             ).name,
-            test_name=decode_text(raw=row["test_name"]),
+            test_name=test_name,
         )
 
     def _complete_cancelled_case_receipt(
@@ -396,7 +411,8 @@ class ResultProcessor:
         *,
         case_id: int,
         generation: int,
-        row: dict[str, object],
+        task_id: str,
+        batch_id: int,
         report: CaseReportTelemetry,
     ) -> bool:
         accepted = self._s.batch_runtime.commit_cancelled_receipt(
@@ -407,17 +423,15 @@ class ResultProcessor:
         )
         if not accepted:
             return False
-        task_id = decode_text(raw=row["task_id"])
-        batch_id = int(row["batch_id"])
         self._completion_publisher.acknowledge_terminal_case(
             int(case_id),
             reason="judgehost task cancelled",
         )
-        batch_row = self._s.batch_runtime.batch_finalize_row(batch_id)
+        batch_row = self._s.batch_runtime.batch_for_task(task_id)
         if batch_row is not None:
             self._batch_finalizer.finalize_task_if_ready(
                 task_id,
-                batch_row=dict(batch_row),
+                batch_row=batch_row,
             )
         self._batch_finalizer.finalize_batch_if_ready(
             batch_id,
@@ -669,14 +683,14 @@ class ResultProcessor:
             updated_at=reported_at,
         )
         task_payload = self._core.task_payload(claim.task_id)
-        verification_source = task_payload.get("verification_source", "")
+        verification_source = self._verification_source(task_payload)
         task_kind = self._toolkit.task_kind(
             task_payload,
             verification_source=verification_source,
         )
         report_telemetry = self._case_report_telemetry(
             hostname=safe_host,
-            row=dict(case_row),
+            test_name=case_row["test_name"],
             task_payload=task_payload,
             task_kind=task_kind,
             reported_at=reported_at,
@@ -686,7 +700,8 @@ class ResultProcessor:
             if not self._complete_cancelled_case_receipt(
                 case_id=claim.case_id,
                 generation=claim.generation,
-                row=dict(case_row),
+                task_id=case_row["task_id"],
+                batch_id=case_row["batch_id"],
                 report=report_telemetry,
             ):
                 raise RuntimeError("judgehost cancellation receipt claim was lost")
@@ -740,7 +755,7 @@ class ResultProcessor:
         batch_id = int(row["batch_id"])
         safe_task_id = row["task_id"]
         task_payload = self._core.task_payload(safe_task_id) if safe_task_id else {}
-        verification_source = task_payload.get("verification_source", "")
+        verification_source = self._verification_source(task_payload)
         task_kind = self._toolkit.task_kind(task_payload, verification_source=verification_source)
         compile_only = task_kind == self._TASK_KIND_COMPILE_ONLY
 
@@ -808,7 +823,8 @@ class ResultProcessor:
             self._complete_cancelled_case_receipt(
                 case_id=case_id,
                 generation=claim_generation,
-                row=dict(row),
+                task_id=row["task_id"],
+                batch_id=row["batch_id"],
                 report=report_telemetry,
             )
             return 1
@@ -897,11 +913,11 @@ class ResultProcessor:
                 case_id,
                 reason="judgehost task cancelled",
             )
-            batch_row = self._s.batch_runtime.batch_finalize_row(batch_id)
+            batch_row = self._s.batch_runtime.batch_for_task(safe_task_id)
             if batch_row is not None:
                 self._batch_finalizer.finalize_task_if_ready(
                     safe_task_id,
-                    batch_row=dict(batch_row),
+                    batch_row=batch_row,
                 )
             self._batch_finalizer.finalize_batch_if_ready(
                 batch_id,
@@ -933,12 +949,12 @@ class ResultProcessor:
             return 1
         if not self._completion_publisher.acknowledge_terminal_case(case_id):
             raise RuntimeError("verification task completion was not acknowledged")
-        batch_row = self._s.batch_runtime.batch_finalize_row(batch_id)
+        batch_row = self._s.batch_runtime.batch_for_task(safe_task_id)
         if batch_row is not None:
             try:
                 self._batch_finalizer.finalize_task_if_ready(
                     safe_task_id,
-                    batch_row=dict(batch_row),
+                    batch_row=batch_row,
                 )
             except Exception:
                 logger.exception(

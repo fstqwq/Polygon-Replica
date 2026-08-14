@@ -151,7 +151,11 @@ class AccessStore:
 
     @staticmethod
     def _optional_int(value: object) -> int | None:
-        return None if value is None else int(value)
+        if value is None:
+            return None
+        if not isinstance(value, int) or isinstance(value, bool):
+            raise RuntimeError("database integer field has invalid shape")
+        return value
 
     def participating_problem_rows(
         self,
@@ -228,36 +232,22 @@ class AccessStore:
                 {
                     "slug": str(row["slug"]),
                     "role": access_role(str(row["role"])),
-                    "workspace_id": (
-                        None if workspace_id is None else int(workspace_id)
-                    ),
+                    "workspace_id": (None if workspace_id is None else int(workspace_id)),
                     "path": str(row["path"] or ""),
                     "branch": str(row["branch"] or ""),
                     "head_commit": str(row["head_commit"] or ""),
                     "dirty": int(row["dirty"] or 0),
                     "revision_local": self._optional_int(row["revision_local"]),
-                    "revision_upstream": self._optional_int(
-                        row["revision_upstream"]
-                    ),
+                    "revision_upstream": self._optional_int(row["revision_upstream"]),
                     "revision_missing": int(
-                        row["revision_missing"]
-                        if row["revision_missing"] is not None
-                        else 1
+                        row["revision_missing"] if row["revision_missing"] is not None else 1
                     ),
                     "revision_highlight": int(
-                        row["revision_highlight"]
-                        if row["revision_highlight"] is not None
-                        else 1
+                        row["revision_highlight"] if row["revision_highlight"] is not None else 1
                     ),
-                    "revision_upstream_higher": int(
-                        row["revision_upstream_higher"] or 0
-                    ),
-                    "revision_ahead_count": self._optional_int(
-                        row["revision_ahead_count"]
-                    ),
-                    "revision_behind_count": self._optional_int(
-                        row["revision_behind_count"]
-                    ),
+                    "revision_upstream_higher": int(row["revision_upstream_higher"] or 0),
+                    "revision_ahead_count": self._optional_int(row["revision_ahead_count"]),
+                    "revision_behind_count": self._optional_int(row["revision_behind_count"]),
                     "updated_at": str(row["updated_at"] or ""),
                     "last_updated_at": str(row["last_updated_at"] or ""),
                 }

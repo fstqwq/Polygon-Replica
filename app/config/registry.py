@@ -7,6 +7,13 @@ from app.config.definitions import CONFIG_DEFINITIONS
 from app.config.model import ConfigDefinition, ConfigKind, ConfigValues
 
 
+def _canonical_int(values: Mapping[str, object], key: str) -> int:
+    value = values[key]
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise RuntimeError(f"normalized system config {key} is not an integer")
+    return value
+
+
 @dataclass(frozen=True)
 class ConfigRegistry:
     """Validated, ordered configuration definitions."""
@@ -23,9 +30,7 @@ class ConfigRegistry:
         self.validate_snapshot(defaults)
 
     @classmethod
-    def from_definitions(
-        cls, definitions: Iterable[ConfigDefinition]
-    ) -> "ConfigRegistry":
+    def from_definitions(cls, definitions: Iterable[ConfigDefinition]) -> "ConfigRegistry":
         """Build and validate a registry while preserving definition order."""
 
         return cls(tuple(definitions))
@@ -61,14 +66,10 @@ class ConfigRegistry:
         expected = set(self.by_key)
         missing = expected - set(values)
         if missing:
-            raise ValueError(
-                f"system config values missing: {', '.join(sorted(missing))}"
-            )
+            raise ValueError(f"system config values missing: {', '.join(sorted(missing))}")
         extra = set(values) - expected
         if extra:
-            raise ValueError(
-                f"unknown system config values: {', '.join(sorted(extra))}"
-            )
+            raise ValueError(f"unknown system config values: {', '.join(sorted(extra))}")
         normalized = {
             definition.key: definition.normalize(values[definition.key])
             for definition in self.definitions
@@ -87,14 +88,12 @@ class ConfigRegistry:
             ("GENERAL_MEMORY_LIMIT_MIN_MB", "GENERAL_MEMORY_LIMIT_MAX_MB"),
             ("GENERAL_PASS_LIMIT_MIN", "GENERAL_PASS_LIMIT_MAX"),
         ):
-            if int(normalized[minimum_key]) > int(normalized[maximum_key]):
+            if _canonical_int(normalized, minimum_key) > _canonical_int(normalized, maximum_key):
                 raise ValueError(f"{minimum_key} must be <= {maximum_key}")
-        if int(normalized["STATEMENT_SAMPLE_MAX_BYTES"]) > int(
-            normalized["TEXTAREA_MAX_BYTES"]
+        if _canonical_int(normalized, "STATEMENT_SAMPLE_MAX_BYTES") > _canonical_int(
+            normalized, "TEXTAREA_MAX_BYTES"
         ):
-            raise ValueError(
-                "STATEMENT_SAMPLE_MAX_BYTES must be <= TEXTAREA_MAX_BYTES"
-            )
+            raise ValueError("STATEMENT_SAMPLE_MAX_BYTES must be <= TEXTAREA_MAX_BYTES")
         return normalized
 
     def validate_snapshot(self, values: Mapping[str, object]) -> None:
@@ -109,7 +108,9 @@ class ConfigRegistry:
         if kind is ConfigKind.BOOL:
             return "true" if value else "false"
         if kind is ConfigKind.FLOAT:
-            text = f"{float(value):.6f}".rstrip("0").rstrip(".")
+            if not isinstance(value, (int, float)) or isinstance(value, bool):
+                raise RuntimeError("normalized float config is not numeric")
+            text = f"{value:.6f}".rstrip("0").rstrip(".")
             return text if text else "0"
         if kind in {ConfigKind.INT, ConfigKind.STR}:
             return str(value)

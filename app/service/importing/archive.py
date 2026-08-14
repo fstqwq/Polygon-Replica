@@ -6,9 +6,8 @@ from pathlib import Path, PurePosixPath
 import stat
 import struct
 from types import TracebackType
-from typing import BinaryIO
+from typing import BinaryIO, Protocol
 import zipfile
-
 
 PROBLEM_ZIP_MAX_ENTRIES = 4096
 PACKAGE_METADATA_MAX_BYTES = 4 * 1024 * 1024
@@ -81,6 +80,73 @@ class ArchiveStructure:
     central_size: int
 
 
+@dataclass(frozen=True)
+class _EndOfCentralDirectory:
+    disk_number: int
+    central_disk: int
+    entries_on_disk: int
+    entry_count: int
+    central_size: int
+    central_offset: int
+    comment_length: int
+
+
+@dataclass(frozen=True)
+class _CentralDirectoryEntry:
+    flags: int
+    compressed_size: int
+    uncompressed_size: int
+    name_length: int
+    extra_length: int
+    comment_length: int
+    disk_start: int
+    local_offset: int
+
+
+def _metadata_int(value: object, label: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"zip {label} is not an integer")
+    return value
+
+
+def _metadata_bytes(value: object, label: str) -> bytes:
+    if not isinstance(value, bytes):
+        raise ValueError(f"zip {label} is not bytes")
+    return value
+
+
+def _decode_eocd(record: tuple[object, ...]) -> _EndOfCentralDirectory:
+    if len(record) != 8 or _metadata_bytes(record[0], "end record signature") != _EOCD_SIGNATURE:
+        raise ValueError("archive end record is malformed")
+    return _EndOfCentralDirectory(
+        disk_number=_metadata_int(record[1], "end record disk number"),
+        central_disk=_metadata_int(record[2], "central-directory disk number"),
+        entries_on_disk=_metadata_int(record[3], "entries on disk"),
+        entry_count=_metadata_int(record[4], "entry count"),
+        central_size=_metadata_int(record[5], "central-directory size"),
+        central_offset=_metadata_int(record[6], "central-directory offset"),
+        comment_length=_metadata_int(record[7], "comment length"),
+    )
+
+
+def _decode_central_entry(record: tuple[object, ...]) -> _CentralDirectoryEntry:
+    if (
+        len(record) != 17
+        or _metadata_bytes(record[0], "central-directory signature") != _CENTRAL_SIGNATURE
+    ):
+        raise ValueError("zip central directory contains an invalid record")
+    return _CentralDirectoryEntry(
+        flags=_metadata_int(record[3], "entry flags"),
+        compressed_size=_metadata_int(record[8], "entry compressed size"),
+        uncompressed_size=_metadata_int(record[9], "entry uncompressed size"),
+        name_length=_metadata_int(record[10], "entry name length"),
+        extra_length=_metadata_int(record[11], "entry extra-field length"),
+        comment_length=_metadata_int(record[12], "entry comment length"),
+        disk_start=_metadata_int(record[13], "entry disk number"),
+        local_offset=_metadata_int(record[16], "entry local-header offset"),
+    )
+
+
 def normalize_archive_path(raw: str) -> str:
     """Return one canonical relative member path."""
 
@@ -94,7 +160,7 @@ def normalize_archive_path(raw: str) -> str:
     return PurePosixPath(*parts).as_posix()
 
 
-def _find_eocd(handle: BinaryIO, size: int) -> tuple[int, tuple[object, ...]]:
+def _find_eocd(handle: BinaryIO, size: int) -> tuple[int, _EndOfCentralDirectory]:
     tail_size = min(size, 22 + 65535)
     handle.seek(size - tail_size)
     tail = handle.read(tail_size)
@@ -104,9 +170,8 @@ def _find_eocd(handle: BinaryIO, size: int) -> tuple[int, tuple[object, ...]]:
         if offset < 0:
             raise ValueError("archive end record not found")
         if offset + _EOCD_STRUCT.size <= len(tail):
-            record = _EOCD_STRUCT.unpack_from(tail, offset)
-            comment_length = int(record[-1])
-            if offset + _EOCD_STRUCT.size + comment_length == len(tail):
+            record = _decode_eocd(_EOCD_STRUCT.unpack_from(tail, offset))
+            if offset + _EOCD_STRUCT.size + record.comment_length == len(tail):
                 return (size - tail_size + offset, record)
         search_end = offset
 
@@ -123,9 +188,11 @@ def _zip64_structure(
     locator_raw = handle.read(_ZIP64_LOCATOR_STRUCT.size)
     if len(locator_raw) != _ZIP64_LOCATOR_STRUCT.size:
         raise ValueError("ZIP64 locator is truncated")
-    signature, disk_number, record_offset, total_disks = _ZIP64_LOCATOR_STRUCT.unpack(
-        locator_raw
-    )
+    locator = _ZIP64_LOCATOR_STRUCT.unpack(locator_raw)
+    signature = _metadata_bytes(locator[0], "ZIP64 locator signature")
+    disk_number = _metadata_int(locator[1], "ZIP64 locator disk number")
+    record_offset = _metadata_int(locator[2], "ZIP64 end-record offset")
+    total_disks = _metadata_int(locator[3], "ZIP64 disk count")
     if signature != _ZIP64_LOCATOR_SIGNATURE:
         raise ValueError("ZIP64 locator is missing")
     if disk_number != 0 or total_disks != 1:
@@ -135,34 +202,41 @@ def _zip64_structure(
     if len(record_raw) != _ZIP64_EOCD_STRUCT.size:
         raise ValueError("ZIP64 end record is truncated")
     record = _ZIP64_EOCD_STRUCT.unpack(record_raw)
-    if record[0] != _ZIP64_EOCD_SIGNATURE or int(record[1]) < 44:
+    if _metadata_bytes(record[0], "ZIP64 end-record signature") != _ZIP64_EOCD_SIGNATURE:
         raise ValueError("ZIP64 end record is malformed")
-    record_end = int(record_offset) + 12 + int(record[1])
-    if int(record_offset) < 0 or record_end > locator_offset:
+    record_size = _metadata_int(record[1], "ZIP64 end-record size")
+    if record_size < 44:
+        raise ValueError("ZIP64 end record is malformed")
+    record_end = record_offset + 12 + record_size
+    if record_offset < 0 or record_end > locator_offset:
         raise ValueError("ZIP64 end record is out of bounds")
-    disk, central_disk = int(record[4]), int(record[5])
-    entries_disk, entries_total = int(record[6]), int(record[7])
+    disk = _metadata_int(record[4], "ZIP64 disk number")
+    central_disk = _metadata_int(record[5], "ZIP64 central-directory disk number")
+    entries_disk = _metadata_int(record[6], "ZIP64 entries on disk")
+    entries_total = _metadata_int(record[7], "ZIP64 entry count")
     if disk != 0 or central_disk != 0 or entries_disk != entries_total:
         raise ValueError("multi-disk zip archives are not supported")
     structure = ArchiveStructure(
         entry_count=entries_total,
-        central_size=int(record[8]),
-        central_offset=int(record[9]),
+        central_size=_metadata_int(record[8], "ZIP64 central-directory size"),
+        central_offset=_metadata_int(record[9], "ZIP64 central-directory offset"),
     )
-    if structure.central_offset + structure.central_size > int(record_offset):
+    if structure.central_offset + structure.central_size > record_offset:
         raise ValueError("zip central directory overlaps ZIP64 end records")
     return structure
 
 
-def _classic_structure(record: tuple[object, ...]) -> ArchiveStructure:
-    disk, central_disk = int(record[1]), int(record[2])
-    entries_disk, entries_total = int(record[3]), int(record[4])
-    if disk != 0 or central_disk != 0 or entries_disk != entries_total:
+def _classic_structure(record: _EndOfCentralDirectory) -> ArchiveStructure:
+    if (
+        record.disk_number != 0
+        or record.central_disk != 0
+        or record.entries_on_disk != record.entry_count
+    ):
         raise ValueError("multi-disk zip archives are not supported")
     return ArchiveStructure(
-        entry_count=entries_total,
-        central_size=int(record[5]),
-        central_offset=int(record[6]),
+        entry_count=record.entry_count,
+        central_size=record.central_size,
+        central_offset=record.central_offset,
     )
 
 
@@ -193,15 +267,15 @@ def _extra_fields(raw: bytes) -> dict[int, bytes]:
 
 
 def _resolved_central_location(
-    fields: tuple[object, ...],
+    entry: _CentralDirectoryEntry,
     extra_raw: bytes,
 ) -> tuple[int, int]:
     """Resolve ZIP64 placeholders needed for disk and local-header checks."""
 
-    uncompressed_size = int(fields[9])
-    compressed_size = int(fields[8])
-    local_offset = int(fields[16])
-    disk_start = int(fields[13])
+    uncompressed_size = entry.uncompressed_size
+    compressed_size = entry.compressed_size
+    local_offset = entry.local_offset
+    disk_start = entry.disk_start
     if not any(
         (
             uncompressed_size == 0xFFFFFFFF,
@@ -255,10 +329,10 @@ def preflight_archive(
         zip64 = any(
             value == sentinel
             for value, sentinel in (
-                (int(record[3]), 0xFFFF),
-                (int(record[4]), 0xFFFF),
-                (int(record[5]), 0xFFFFFFFF),
-                (int(record[6]), 0xFFFFFFFF),
+                (record.entries_on_disk, 0xFFFF),
+                (record.entry_count, 0xFFFF),
+                (record.central_size, 0xFFFFFFFF),
+                (record.central_offset, 0xFFFFFFFF),
             )
         )
         structure = (
@@ -266,19 +340,11 @@ def preflight_archive(
             if zip64
             else _classic_structure(record)
         )
-        entry_limit = (
-            None
-            if max_entries is None
-            else max(1, int(max_entries))
-        )
+        entry_limit = None if max_entries is None else max(1, int(max_entries))
         if entry_limit is not None and structure.entry_count > entry_limit:
             raise ValueError(f"zip contains more than {entry_limit} entries")
         central_end = structure.central_offset + structure.central_size
-        if (
-            structure.central_offset < 0
-            or structure.central_size < 0
-            or central_end > eocd_offset
-        ):
+        if structure.central_offset < 0 or structure.central_size < 0 or central_end > eocd_offset:
             raise ValueError("zip central directory is out of bounds")
         handle.seek(structure.central_offset)
         consumed = 0
@@ -288,13 +354,11 @@ def preflight_archive(
             fixed = handle.read(_CENTRAL_STRUCT.size)
             if len(fixed) != _CENTRAL_STRUCT.size:
                 raise ValueError("zip central directory is truncated")
-            fields = _CENTRAL_STRUCT.unpack(fixed)
-            if fields[0] != _CENTRAL_SIGNATURE:
-                raise ValueError("zip central directory contains an invalid record")
-            flags = int(fields[3])
-            name_length = int(fields[10])
-            extra_length = int(fields[11])
-            comment_length = int(fields[12])
+            entry = _decode_central_entry(_CENTRAL_STRUCT.unpack(fixed))
+            flags = entry.flags
+            name_length = entry.name_length
+            extra_length = entry.extra_length
+            comment_length = entry.comment_length
             variable_length = name_length + extra_length + comment_length
             variable = handle.read(variable_length)
             if len(variable) != variable_length:
@@ -302,7 +366,7 @@ def preflight_archive(
             extra_start = name_length
             extra_end = extra_start + extra_length
             local_offset, disk_start = _resolved_central_location(
-                fields,
+                entry,
                 variable[extra_start:extra_end],
             )
             if disk_start != 0:
@@ -331,9 +395,7 @@ def preflight_archive(
             for index in range(1, len(parts)):
                 ancestor = PurePosixPath(*parts[:index]).as_posix()
                 if ancestor in seen and not seen[ancestor]:
-                    raise ValueError(
-                        f"conflicting zip paths: {ancestor} and {name}"
-                    )
+                    raise ValueError(f"conflicting zip paths: {ancestor} and {name}")
         return structure
 
 
@@ -377,7 +439,9 @@ class ExpansionBudget:
         increment = max(0, int(amount))
         if self._actual + increment > self.maximum:
             raise ValueError(f"expanded zip payload is too large at {filename}")
-        if self._parent is not None and self._parent._actual + increment > self._parent.maximum:  # pylint: disable=protected-access
+        if (
+            self._parent is not None and self._parent._actual + increment > self._parent.maximum
+        ):  # pylint: disable=protected-access
             raise ValueError(f"expanded zip payload is too large at {filename}")
         if self._parent is not None:
             self._parent.consume(increment, filename)
@@ -398,8 +462,14 @@ class MetadataBudget:
         self._used += increment
 
 
+class _ReadableBinary(Protocol):
+    def read(self, size: int = -1) -> bytes: ...
+
+    def close(self) -> None: ...
+
+
 class _BudgetedReader:
-    def __init__(self, raw: zipfile.ZipExtFile, budget: ExpansionBudget, filename: str):
+    def __init__(self, raw: _ReadableBinary, budget: ExpansionBudget, filename: str):
         self._raw = raw
         self._budget = budget
         self._filename = filename
@@ -588,13 +658,9 @@ class ArchiveView:
         else:
             self._archive = _archive
             self._budget = _budget or ExpansionBudget(policy.max_expanded_bytes)
-            self._metadata_budget = _metadata_budget or MetadataBudget(
-                policy.max_metadata_bytes
-            )
+            self._metadata_budget = _metadata_budget or MetadataBudget(policy.max_metadata_bytes)
             self._entries = dict(_entries or {})
-        self.zip_file = BudgetedZipFile(
-            self._archive, self._budget, self._metadata_budget
-        )
+        self.zip_file = BudgetedZipFile(self._archive, self._budget, self._metadata_budget)
 
     def __enter__(self) -> "ArchiveView":
         return self
@@ -617,11 +683,7 @@ class ArchiveView:
             prefix = ""
         else:
             suffix = "/" + safe_anchor
-            roots = {
-                name[: -len(safe_anchor)]
-                for name in self._entries
-                if name.endswith(suffix)
-            }
+            roots = {name[: -len(safe_anchor)] for name in self._entries if name.endswith(suffix)}
             if len(roots) != 1:
                 raise ValueError(f"{safe_anchor} not found at package root")
             prefix = next(iter(roots))
@@ -629,10 +691,7 @@ class ArchiveView:
             if any(
                 not (
                     name.startswith(prefix)
-                    or (
-                        name == root_directory
-                        and self._entries[name].is_dir()
-                    )
+                    or (name == root_directory and self._entries[name].is_dir())
                 )
                 for name in self._entries
             ):

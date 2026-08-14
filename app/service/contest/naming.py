@@ -10,7 +10,10 @@ def problem_source_folder(
     entry: dict[str, object],
     source_folder_map: dict[int, str],
 ) -> str:
-    problem_id = int(entry["problem_id"])
+    raw_problem_id = entry["problem_id"]
+    if not isinstance(raw_problem_id, int) or isinstance(raw_problem_id, bool):
+        raise ValueError("contest problem id must be an integer")
+    problem_id = raw_problem_id
     mapped = source_folder_map.get(problem_id, "").strip()
     if mapped:
         return mapped

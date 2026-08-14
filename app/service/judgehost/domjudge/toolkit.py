@@ -1,4 +1,5 @@
 import base64
+import binascii
 import json
 import logging
 import re
@@ -21,7 +22,10 @@ from app.service.judgehost.domjudge.codec import (
 from app.service.judgehost.domjudge.result import parse_bool
 from app.service.platform.hashing import compile_command_digest, sha256_hex_text
 from app.service.platform.runtime_blob_store import PayloadFile
-from app.service.platform.runtime_cache_index import RuntimeCacheEntry, RuntimeCacheIndex
+from app.service.platform.runtime_cache_index import (
+    RuntimeCacheEntry,
+    RuntimeCacheIndex,
+)
 
 from app.service.judgehost.state import JudgehostState
 
@@ -61,20 +65,18 @@ class DomjudgeToolkit:
     def b64_decode(text: str | bytes | bytearray | memoryview | None) -> bytes:
         if text is None:
             return b""
-        try:
+        if isinstance(text, str):
             raw = text.strip()
-        except AttributeError:
+        else:
             try:
                 raw = bytes(text).decode("ascii").strip()
             except UnicodeDecodeError as exc:
                 raise RuntimeError("DOMjudge payload must be base64 ASCII text") from exc
-            except TypeError as exc:
-                raise RuntimeError("DOMjudge payload must be base64 text") from exc
         if not raw:
             return b""
         try:
             return base64.b64decode(raw, validate=True)
-        except Exception as exc:
+        except (binascii.Error, ValueError) as exc:
             raise RuntimeError("DOMjudge payload is not valid base64") from exc
 
     def case_cache_ref(
@@ -168,7 +170,7 @@ class DomjudgeToolkit:
                 raise RuntimeError("invalid executable cache file set")
             file_payloads[safe_name] = bytes(content)
             manifest.append({"filename": safe_name, "is_executable": bool(is_executable)})
-        self._s.runtime_cache_index.put(
+        entry = self._s.runtime_cache_index.put(
             namespace=self.EXECUTABLE_CACHE_KIND,
             key_hash=self._executable_cache_key_hash(safe_kind, safe_hash),
             signature=self._EXECUTABLE_CACHE_SIGNATURE,
@@ -181,6 +183,7 @@ class DomjudgeToolkit:
             files=file_payloads,
             tags={"artifact_kind": "domjudge-executable", "executable_kind": safe_kind},
         )
+        return dict(entry.files)
 
     def read_executable_cache(
         self,
@@ -427,7 +430,7 @@ class DomjudgeToolkit:
             .lower()
         )
         compile_only_flag = parse_bool(
-            compile_only if compile_only is not None else payload_obj.get("compile_only"),
+            (compile_only if compile_only is not None else payload_obj.get("compile_only")),
             default=False,
         )
         if compile_only_flag:
@@ -483,13 +486,20 @@ class DomjudgeToolkit:
             "compare_config_hash": compare_config_hash,
             "toolchain_cmd_digest": decode_text(
                 lower=True,
-                raw=compile_config.get("toolchain_cmd_digest")
-                if isinstance(compile_config, dict)
-                else "",
+                raw=(
+                    compile_config.get("toolchain_cmd_digest")
+                    if isinstance(compile_config, dict)
+                    else ""
+                ),
             ),
         }
         digest = sha256_hex_text(
-            json.dumps(signature_payload, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+            json.dumps(
+                signature_payload,
+                ensure_ascii=True,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
         )
         return digest
 

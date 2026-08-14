@@ -14,10 +14,14 @@ def parse_nonnegative_float(raw: object, default: float = 0.0) -> float:
 
 
 def parse_int(raw: object, default: int = 0) -> int:
+    if isinstance(raw, bool):
+        return int(raw)
+    if not isinstance(raw, (int, str, bytes, bytearray)):
+        return default
     try:
         return int(raw)
-    except Exception:
-        return int(default)
+    except (TypeError, ValueError):
+        return default
 
 
 def _run_time_limit_sec(run_cfg_obj: dict[str, object]) -> float:

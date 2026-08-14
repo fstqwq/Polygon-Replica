@@ -1,7 +1,7 @@
 import threading
 from dataclasses import dataclass
 from dataclasses import field
-from typing import Callable
+from typing import Callable, NotRequired, TypedDict
 
 from app.config import ConfigValues
 from app.service.judgehost.ports.execution_port import JudgehostExecutionPort
@@ -12,6 +12,18 @@ from app.service.repository.workspace import WorkspaceService
 from app.service.judgehost.batch.runtime import JudgehostBatchRuntime
 from app.service.judgehost.work.task_registry import JudgehostTaskRegistry
 from app.service.judgehost.telemetry.toolchain_versions import HostToolchainTelemetry
+
+
+class JudgehostHostRow(TypedDict):
+    hostname: str
+    enabled: bool
+    first_seen_at: str
+    last_seen_at: str
+    last_action: str
+    last_task_id: str
+    last_run_id: str
+    update_count: int
+    peer_addr: NotRequired[str]
 
 
 @dataclass(frozen=True)
@@ -45,7 +57,7 @@ class JudgehostState:
         init=False,
         default=lambda _verification_id: None,
     )
-    hosts_state: dict[str, dict[str, object]] = field(default_factory=dict)
+    hosts_state: dict[str, JudgehostHostRow] = field(default_factory=dict)
     host_toolchains: dict[str, dict[str, HostToolchainTelemetry]] = field(default_factory=dict)
     batch_runtime: JudgehostBatchRuntime = field(default_factory=JudgehostBatchRuntime)
 

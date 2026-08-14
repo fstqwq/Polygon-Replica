@@ -3,7 +3,6 @@ import time
 from pathlib import PurePosixPath
 from typing import Callable, TypedDict
 
-
 _LANGUAGE_LABELS = {"c": "C", "cpp": "C++", "java": "Java", "py": "Python"}
 _PRIVATE_PATH_RE = re.compile(r"(?<![A-Za-z0-9])(?:[A-Za-z]:[\\/]|/)[^\s]+")
 
@@ -66,6 +65,12 @@ def _duration_label(age_sec: object) -> str:
     return f"{hours // 24}d ago"
 
 
+def _nonnegative_int(raw: object) -> int:
+    if isinstance(raw, bool) or not isinstance(raw, int):
+        return 0
+    return max(0, raw)
+
+
 def _safe_command(raw: str) -> str:
     token = str(raw).replace("\\", "/").strip()
     return PurePosixPath(token).name or "unknown"
@@ -111,21 +116,22 @@ def _toolchain_summaries(
     version_counts: dict[str, dict[tuple[str, str], int]] = {}
     for raw in online_hosts:
         for language_id, version in _reported_toolchains(raw.get("toolchains")).items():
-            counts = version_counts.setdefault(language_id, {})
-            counts[version] = counts.get(version, 0) + 1
+            language_counts = version_counts.setdefault(language_id, {})
+            language_counts[version] = language_counts.get(version, 0) + 1
     summaries: list[PublicToolchainSummary] = []
     for language_id, language_label in _LANGUAGE_LABELS.items():
-        counts = version_counts.get(language_id)
-        if not counts:
+        counts_for_language = version_counts.get(language_id)
+        if not counts_for_language:
             continue
-        versions = [
-            {
-                "compiler": compiler_raw.splitlines()[0] if compiler_raw else "not reported",
-                "runner": runner_raw.splitlines()[0] if runner_raw else "",
-                "host_count": host_count,
-            }
-            for (compiler_raw, runner_raw), host_count in sorted(counts.items())
-        ]
+        versions: list[PublicToolchainVersion] = []
+        for (compiler_raw, runner_raw), host_count in sorted(counts_for_language.items()):
+            versions.append(
+                {
+                    "compiler": (compiler_raw.splitlines()[0] if compiler_raw else "not reported"),
+                    "runner": runner_raw.splitlines()[0] if runner_raw else "",
+                    "host_count": host_count,
+                }
+            )
         summaries.append(
             {
                 "language_id": language_id,
@@ -155,10 +161,12 @@ def _public_hosts(
             {
                 "label": f"Judgehost {index}",
                 "state": state,
-                "tone": "muted" if state == "disabled" else "ok" if state == "online" else "danger",
+                "tone": (
+                    "muted" if state == "disabled" else "ok" if state == "online" else "danger"
+                ),
                 "last_contact": _duration_label(raw.get("age_sec")),
-                "active_tasks": max(0, int(raw.get("active_leases") or 0)),
-                "judged_cases": max(0, int(raw.get("judged_case_count") or 0)),
+                "active_tasks": _nonnegative_int(raw.get("active_leases")),
+                "judged_cases": _nonnegative_int(raw.get("judged_case_count")),
                 "recent_average": recent_average,
             }
         )
@@ -175,7 +183,9 @@ def _health_summary(enabled: bool, hosts_online: int, hosts_total: int) -> tuple
     return f"{hosts_online} online", "ok"
 
 
-def _compile_specs(raw_compile_specs: list[dict[str, object]]) -> list[PublicCompileSpec]:
+def _compile_specs(
+    raw_compile_specs: list[dict[str, object]],
+) -> list[PublicCompileSpec]:
     specs: list[PublicCompileSpec] = []
     for raw in raw_compile_specs:
         language_id = str(raw.get("language_id") or "")
@@ -211,8 +221,8 @@ def project_public_status(
     public_hosts = _public_hosts(hosts_source)
 
     enabled = bool(raw_status.get("enabled"))
-    hosts_online = max(0, int(raw_status.get("hosts_online") or 0))
-    hosts_total = max(0, int(raw_status.get("hosts_total") or 0))
+    hosts_online = _nonnegative_int(raw_status.get("hosts_online"))
+    hosts_total = _nonnegative_int(raw_status.get("hosts_total"))
     summary, tone = _health_summary(enabled, hosts_online, hosts_total)
 
     queue_raw = raw_status.get("queue")
@@ -221,7 +231,7 @@ def project_public_status(
         "enabled": enabled,
         "hosts_online": hosts_online,
         "hosts_total": hosts_total,
-        "queued": max(0, int(queue.get("queued") or 0)),
+        "queued": _nonnegative_int(queue.get("queued")),
         "active": sum(host["active_tasks"] for host in public_hosts),
         "summary": summary,
         "tone": tone,
@@ -256,10 +266,13 @@ class PublicJudgehostStatusCache:
             self._cached_at = now
         return {
             **self._cached,
-            "hosts": [dict(host) for host in self._cached["hosts"]],
-            "compile_specs": [dict(spec) for spec in self._cached["compile_specs"]],
+            "hosts": [host.copy() for host in self._cached["hosts"]],
+            "compile_specs": [spec.copy() for spec in self._cached["compile_specs"]],
             "toolchains": [
-                {**toolchain, "versions": [dict(item) for item in toolchain["versions"]]}
+                {
+                    **toolchain,
+                    "versions": [item.copy() for item in toolchain["versions"]],
+                }
                 for toolchain in self._cached["toolchains"]
             ],
         }

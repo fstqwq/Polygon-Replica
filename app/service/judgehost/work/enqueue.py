@@ -31,6 +31,7 @@ from app.service.judgehost.ports.case_binding import CaseBinding
 from app.service.judgehost.work.dispatch import DispatchHandler
 from app.service.judgehost.state import JudgehostState
 from app.service.judgehost.domjudge.toolkit import DomjudgeToolkit
+from app.service.judgehost.work.task_registry import JudgehostTaskRow
 
 
 class TaskEnqueue:
@@ -300,6 +301,19 @@ class TaskEnqueue:
         # from the canonical descriptor-backed request payload.
         stable_payload.pop("precomputed", None)
         return sha256_hex_json(stable_payload, ensure_ascii=False)
+
+    @staticmethod
+    def _precomputed_pass_limit(payload: dict[str, object]) -> int:
+        precomputed = payload.get("precomputed")
+        if not isinstance(precomputed, dict):
+            raise RuntimeError("precomputed execution payload is required")
+        run_config = precomputed.get("run_config")
+        if not isinstance(run_config, dict):
+            raise RuntimeError("precomputed run configuration is required")
+        pass_limit = run_config.get("pass_limit")
+        if isinstance(pass_limit, bool) or not isinstance(pass_limit, int) or pass_limit < 1:
+            raise RuntimeError("precomputed pass limit must be a positive integer")
+        return pass_limit
 
     def _verification_id(self, verification_id: str) -> str:
         token = TaskEnqueue._normalize_text(verification_id)
@@ -832,13 +846,14 @@ class TaskEnqueue:
             "language_id": self._toolkit.language_extensions(source_name)[0],
         }
         if source_name.lower().endswith(".java") and (not entry_point):
-            run_config["entry_point"] = self._detect_java_entry_point(source_name, source_bytes)
+            entry_point = self._detect_java_entry_point(source_name, source_bytes)
+            run_config["entry_point"] = entry_point
         full_compile_key = compile_key(
             source_hash=source_hash,
             compile_hash=compile_hash,
             compile_config=compile_config,
-            entry_point=cast(str | None, run_config["entry_point"]),
-            memory_limit=int(run_config["memory_limit"]),
+            entry_point=entry_point or None,
+            memory_limit=run_mem_kb,
         )
         compare_config = {
             "hash": compare_hash,
@@ -1074,16 +1089,7 @@ class TaskEnqueue:
                 run_id=safe_run_id,
                 task_id=task_id,
                 mode=mode,
-                pass_limit=max(
-                    1,
-                    int(
-                        cast(
-                            dict[str, object],
-                            cast(dict[str, object], payload["precomputed"])["run_config"],
-                        ).get("pass_limit", 1)
-                        or 1
-                    ),
-                ),
+                pass_limit=self._precomputed_pass_limit(payload),
                 source_label=source_label,
                 selected_tests=selected,
                 verification_id=safe_verification_id,
@@ -1093,7 +1099,7 @@ class TaskEnqueue:
                 compile_only=bool(safe_task_kind == self._TASK_KIND_COMPILE_ONLY),
             )
             now_text = now_iso()
-            task_row = {
+            task_row: JudgehostTaskRow = {
                 "id": task_id,
                 "run_id": safe_run_id,
                 "problem_slug": str(problem),
@@ -1257,6 +1263,6 @@ class TaskEnqueue:
             task_kind=self._TASK_KIND_COMPILE_ONLY,
             compile_only=True,
             persist_verification_run=False,
-            prepared_payload=None if prepared_payload is None else dict(prepared_payload),
+            prepared_payload=(None if prepared_payload is None else dict(prepared_payload)),
             service_class="foreground",
         )

@@ -2,6 +2,13 @@ ExecutionTestPassRow = dict[str, object]
 ExecutionTestRow = dict[str, object]
 
 
+def _required_int(row: ExecutionTestPassRow, key: str) -> int:
+    value = row[key]
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise ValueError(f"execution pass {key} must be an integer")
+    return value
+
+
 def build_execution_test_pass_row(
     *,
     verdict: str,
@@ -24,7 +31,9 @@ def build_execution_test_pass_row(
         raise ValueError("execution pass number must be positive")
     resolved_time_ms = max(0, int(0 if time_ms is None else time_ms))
     resolved_time_user_ms = max(0, int(resolved_time_ms if time_user_ms is None else time_user_ms))
-    resolved_time_wall_ms = max(0, int(resolved_time_user_ms if time_wall_ms is None else time_wall_ms))
+    resolved_time_wall_ms = max(
+        0, int(resolved_time_user_ms if time_wall_ms is None else time_wall_ms)
+    )
     resolved_memory_kb = max(0, int(0 if memory_kb is None else memory_kb))
     row: ExecutionTestPassRow = {
         "pass": resolved_pass_number,
@@ -80,19 +89,19 @@ def build_execution_test_row(
     resolved_verdict = verdict or str(final_pass.get("verdict") or "")
     resolved_time_ms = max(
         0,
-        int(final_pass.get("time_ms") if time_ms is None else time_ms),
+        _required_int(final_pass, "time_ms") if time_ms is None else time_ms,
     )
     resolved_time_user_ms = max(
         0,
-        int(final_pass.get("time_user_ms") if time_user_ms is None else time_user_ms),
+        (_required_int(final_pass, "time_user_ms") if time_user_ms is None else time_user_ms),
     )
     resolved_time_wall_ms = max(
         0,
-        int(final_pass.get("time_wall_ms") if time_wall_ms is None else time_wall_ms),
+        (_required_int(final_pass, "time_wall_ms") if time_wall_ms is None else time_wall_ms),
     )
     resolved_memory_kb = max(
         0,
-        int(final_pass.get("memory_kb") if memory_kb is None else memory_kb),
+        _required_int(final_pass, "memory_kb") if memory_kb is None else memory_kb,
     )
     resolved_message = message or str(final_pass.get("feedback") or "")
     resolved_output_ref = output_ref or str(final_pass.get("output_ref") or "")

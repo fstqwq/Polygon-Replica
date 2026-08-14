@@ -271,7 +271,7 @@ class Judgehost:
             if batch_row is not None:
                 self._batch_finalizer.finalize_task_if_ready(
                     task_id,
-                    batch_row=dict(batch_row),
+                    batch_row=batch_row,
                 )
         for batch_id in cancellation.batch_ids:
             self._batch_finalizer.finalize_batch_if_ready(batch_id)
@@ -457,7 +457,7 @@ class Judgehost:
             verification_source=str(verification_source or "run.execute"),
             task_kind=str(task_kind or ""),
             bypass_case_result_cache=bool(bypass_case_result_cache),
-            prepared_payload=None if prepared_payload is None else dict(prepared_payload),
+            prepared_payload=(None if prepared_payload is None else dict(prepared_payload)),
             service_class="foreground",
         )
         task = self._state.task_registry.get(task_id)
@@ -497,7 +497,7 @@ class Judgehost:
             verification_program_id=verification_program_id,
             expected_behavior=str(expected_behavior or "compile"),
             verification_source=str(verification_source or "compile.only"),
-            prepared_payload=None if prepared_payload is None else dict(prepared_payload),
+            prepared_payload=(None if prepared_payload is None else dict(prepared_payload)),
         )
         task = self._state.task_registry.get(task_id)
         runtime_verification_id = "" if task is None else str(task["verification_id"])
@@ -510,8 +510,12 @@ class Judgehost:
         row = self._state.batch_runtime.case_output_for_task(task_id, test_name)
         if row is None:
             return ("", 0)
-        case_id = int(row["id"])
-        output_ref = str(row["output_run_ref"])
+        case_id = row["id"]
+        output_ref = row["output_run_ref"]
+        if isinstance(case_id, bool) or not isinstance(case_id, int):
+            raise RuntimeError("judgehost case output has invalid case id")
+        if not isinstance(output_ref, str):
+            raise RuntimeError("judgehost case output has invalid artifact reference")
         return (output_ref, case_id)
 
     def case_feedback_blob_for_task(self, task_id: str, test_name: str) -> bytes | None:

@@ -1,7 +1,40 @@
 import threading
 from collections import defaultdict
+from typing import NotRequired, TypedDict
 
 from app.service.platform.rwlock import WriterPriorityRWLock
+
+
+class JudgehostTaskRow(TypedDict):
+    id: str
+    run_id: str
+    problem_slug: str
+    username: str
+    artifact_verification_id: str
+    mode: str
+    verification_id: str
+    verification_task_id: str
+    status: str
+    payload: dict[str, object]
+    result: dict[str, object]
+    persist_verification_run: bool
+    error_text: str
+    created_at: str
+    updated_at: str
+    completed_at: str
+    summary: dict[str, object]
+    enqueue_fingerprint: str
+    run_status: NotRequired[str]
+
+
+class JudgehostTaskPatch(TypedDict, total=False):
+    payload: dict[str, object]
+    result: dict[str, object]
+    error_text: str
+    updated_at: str
+    completed_at: str
+    summary: dict[str, object]
+    run_status: str
 
 
 class JudgehostTaskRegistry:
@@ -24,7 +57,7 @@ class JudgehostTaskRegistry:
 
     def __init__(self) -> None:
         self._lock = WriterPriorityRWLock()
-        self._tasks: dict[str, dict[str, object]] = {}
+        self._tasks: dict[str, JudgehostTaskRow] = {}
         self._task_id_by_run: dict[str, str] = {}
         self._tasks_by_problem: dict[str, set[str]] = defaultdict(set)
         self._tasks_by_verification: dict[str, set[str]] = defaultdict(set)
@@ -33,12 +66,11 @@ class JudgehostTaskRegistry:
         self._change_generation = 0
 
     @staticmethod
-    def _copy(row: dict[str, object]) -> dict[str, object]:
-        out = dict(row)
-        for key in ("payload", "result", "summary"):
-            value = row.get(key)
-            if isinstance(value, dict):
-                out[key] = dict(value)
+    def _copy(row: JudgehostTaskRow) -> JudgehostTaskRow:
+        out = row.copy()
+        out["payload"] = row["payload"].copy()
+        out["result"] = row["result"].copy()
+        out["summary"] = row["summary"].copy()
         return out
 
     def _notify(self) -> None:
@@ -56,8 +88,8 @@ class JudgehostTaskRegistry:
                 self._changed.wait(timeout=max(0.0, timeout))
             return self._change_generation
 
-    def _set_status(self, row: dict[str, object], status: str) -> None:
-        previous = str(row["status"])
+    def _set_status(self, row: JudgehostTaskRow, status: str) -> None:
+        previous = row["status"]
         if previous == status:
             return
         if status not in self._ALLOWED_TRANSITIONS[previous]:
@@ -66,17 +98,17 @@ class JudgehostTaskRegistry:
         self._status_counts[status] += 1
         row["status"] = status
 
-    def insert(self, row: dict[str, object]) -> None:
-        task_id = str(row["id"])
-        run_id = str(row["run_id"])
+    def insert(self, row: JudgehostTaskRow) -> None:
+        task_id = row["id"]
+        run_id = row["run_id"]
         with self._lock.write_lock():
             if task_id in self._tasks or run_id in self._task_id_by_run:
                 raise RuntimeError("judgehost task already exists")
             stored = self._copy(row)
             self._tasks[task_id] = stored
             self._task_id_by_run[run_id] = task_id
-            self._tasks_by_problem[str(stored["problem_slug"])].add(task_id)
-            verification_id = str(stored.get("verification_id") or "")
+            self._tasks_by_problem[stored["problem_slug"]].add(task_id)
+            verification_id = stored["verification_id"]
             if verification_id:
                 self._tasks_by_verification[verification_id].add(task_id)
             self._status_counts[str(stored["status"])] += 1
@@ -86,18 +118,18 @@ class JudgehostTaskRegistry:
         with self._lock.read_lock():
             return self._task_id_by_run.get(run_id)
 
-    def get(self, task_id: str) -> dict[str, object] | None:
+    def get(self, task_id: str) -> JudgehostTaskRow | None:
         with self._lock.read_lock():
             row = self._tasks.get(task_id)
             return None if row is None else self._copy(row)
 
-    def get_for_run(self, run_id: str) -> dict[str, object] | None:
+    def get_for_run(self, run_id: str) -> JudgehostTaskRow | None:
         with self._lock.read_lock():
             task_id = self._task_id_by_run.get(run_id)
             row = None if task_id is None else self._tasks.get(task_id)
             return None if row is None else self._copy(row)
 
-    def snapshots(self) -> list[dict[str, object]]:
+    def snapshots(self) -> list[JudgehostTaskRow]:
         with self._lock.read_lock():
             return [self._copy(row) for row in self._tasks.values()]
 
@@ -126,20 +158,20 @@ class JudgehostTaskRegistry:
         *,
         expected: set[str],
         status: str,
-        updates: dict[str, object] | None = None,
-    ) -> dict[str, object] | None:
+        updates: JudgehostTaskPatch | None = None,
+    ) -> JudgehostTaskRow | None:
         with self._lock.write_lock():
             row = self._tasks.get(task_id)
             if row is None or str(row["status"]) not in expected:
                 return None
             self._set_status(row, status)
-            if updates:
+            if updates is not None:
                 row.update(updates)
             snapshot = self._copy(row)
         self._notify()
         return snapshot
 
-    def claim_reporting(self, task_id: str, *, now_text: str) -> dict[str, object] | None:
+    def claim_reporting(self, task_id: str, *, now_text: str) -> JudgehostTaskRow | None:
         with self._lock.write_lock():
             row = self._tasks.get(task_id)
             if row is None:
@@ -155,9 +187,7 @@ class JudgehostTaskRegistry:
         self._notify()
         return snapshot
 
-    def restore_reporting(
-        self, task_id: str, snapshot: dict[str, object], *, now_text: str
-    ) -> bool:
+    def restore_reporting(self, task_id: str, snapshot: JudgehostTaskRow, *, now_text: str) -> bool:
         with self._lock.write_lock():
             row = self._tasks.get(task_id)
             if row is None or row["status"] != "reporting":
@@ -170,7 +200,7 @@ class JudgehostTaskRegistry:
         self._notify()
         return True
 
-    def update(self, task_id: str, updates: dict[str, object]) -> dict[str, object] | None:
+    def update(self, task_id: str, updates: JudgehostTaskPatch) -> JudgehostTaskRow | None:
         if "status" in updates:
             raise RuntimeError("task status must change through transition")
         with self._lock.write_lock():
@@ -182,20 +212,20 @@ class JudgehostTaskRegistry:
         self._notify()
         return snapshot
 
-    def remove(self, task_id: str) -> dict[str, object] | None:
+    def remove(self, task_id: str) -> JudgehostTaskRow | None:
         with self._lock.write_lock():
             row = self._tasks.pop(task_id, None)
             if row is None:
                 return None
-            run_id = str(row["run_id"])
+            run_id = row["run_id"]
             if self._task_id_by_run.get(run_id) == task_id:
                 self._task_id_by_run.pop(run_id, None)
-            problem_slug = str(row["problem_slug"])
+            problem_slug = row["problem_slug"]
             problem_tasks = self._tasks_by_problem[problem_slug]
             problem_tasks.discard(task_id)
             if not problem_tasks:
                 self._tasks_by_problem.pop(problem_slug, None)
-            verification_id = str(row.get("verification_id") or "")
+            verification_id = row["verification_id"]
             if verification_id:
                 verification_tasks = self._tasks_by_verification[verification_id]
                 verification_tasks.discard(task_id)
@@ -213,7 +243,7 @@ class JudgehostTaskRegistry:
 
     def terminal_tasks_for_verification(
         self, verification_id: str
-    ) -> list[dict[str, object]] | None:
+    ) -> list[JudgehostTaskRow] | None:
         with self._lock.read_lock():
             task_ids = tuple(self._tasks_by_verification.get(verification_id, ()))
             rows = [self._tasks[task_id] for task_id in task_ids if task_id in self._tasks]

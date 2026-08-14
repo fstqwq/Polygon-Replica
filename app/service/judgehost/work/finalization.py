@@ -19,26 +19,22 @@ from app.service.judgehost.work.task_queue import TaskQueue
 from app.service.judgehost.domjudge.toolkit import DomjudgeToolkit
 from app.service.platform.error_text import aux_display_text_limit_bytes
 
-
 logger = logging.getLogger(__name__)
 
 
 class TerminalCasePublisher(Protocol):
-    def publish_reported_cases(self, case_ids: tuple[int, ...]) -> bool:
-        ...
+    def publish_reported_cases(self, case_ids: tuple[int, ...]) -> bool: ...
 
     def acknowledge_terminal_case(
         self,
         case_id: int,
         *,
         reason: str = "",
-    ) -> bool:
-        ...
+    ) -> bool: ...
 
 
 class BatchFinalizationPort(Protocol):
-    def finalize_host_lease_release(self, release: HostLeaseRelease) -> None:
-        ...
+    def finalize_host_lease_release(self, release: HostLeaseRelease) -> None: ...
 
     def finalize_task_if_ready(
         self,
@@ -47,11 +43,9 @@ class BatchFinalizationPort(Protocol):
         batch_row: ExecutionBatchRow,
         force_failed: bool = False,
         error_text: str = "",
-    ) -> bool:
-        ...
+    ) -> bool: ...
 
-    def retry_due_finalizations(self, *, limit: int = 1) -> None:
-        ...
+    def retry_due_finalizations(self, *, limit: int = 1) -> None: ...
 
     def finalize_batch_if_ready(
         self,
@@ -60,8 +54,7 @@ class BatchFinalizationPort(Protocol):
         force_failed: bool = False,
         error_text: str = "",
         require_completion_ack: bool = False,
-    ) -> None:
-        ...
+    ) -> None: ...
 
 
 class JudgehostBatchFinalizer:
@@ -96,7 +89,7 @@ class JudgehostBatchFinalizer:
             if batch_row is not None:
                 self.finalize_task_if_ready(
                     task_id,
-                    batch_row=dict(batch_row),
+                    batch_row=batch_row,
                 )
         for batch_id in release.terminal_batch_ids:
             self.finalize_batch_if_ready(batch_id)
@@ -472,7 +465,8 @@ class JudgehostBatchFinalizer:
                         "<missing>"
                         if task_rows[task_id] is None
                         else decode_text(
-                            lower=True, raw=cast(dict[str, object], task_rows[task_id])["status"]
+                            lower=True,
+                            raw=cast(dict[str, object], task_rows[task_id])["status"],
                         )
                     )
                     for task_id in unfinished_task_ids
@@ -494,7 +488,10 @@ class JudgehostBatchFinalizer:
             compile_failed = compile_success is not None and int(compile_success) == 0
             has_cancelled_cases = any(row["status"] == "cancelled" for row in cases)
             has_failed_tasks = any(
-                decode_text(lower=True, raw=cast(dict[str, object], task_rows[task_id])["status"])
+                decode_text(
+                    lower=True,
+                    raw=cast(dict[str, object], task_rows[task_id])["status"],
+                )
                 == self.STATUS_FAILED
                 for task_id in task_ids
             )

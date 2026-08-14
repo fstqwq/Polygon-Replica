@@ -15,10 +15,15 @@ def aux_display_text_limit_bytes(
 ) -> int:
     """Read the auxiliary-text cap from one explicit configuration snapshot."""
 
-    return max(1, int(snapshot["AUX_DISPLAY_TEXT_LIMIT_BYTES"]))
+    value = snapshot["AUX_DISPLAY_TEXT_LIMIT_BYTES"]
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise RuntimeError("AUX_DISPLAY_TEXT_LIMIT_BYTES must be an integer")
+    return max(1, value)
 
 
-def sanitize_log_text_for_ui(raw: str, *, path_prefixes: list[tuple[str, str]] | None = None) -> str:
+def sanitize_log_text_for_ui(
+    raw: str, *, path_prefixes: list[tuple[str, str]] | None = None
+) -> str:
     text = str(raw or "").replace("\r\n", "\n").replace("\r", "\n")
     text = _LOG_ANSI_ESCAPE_RE.sub("", text)
     text = _LOG_CONTROL_CHAR_RE.sub("", text)
@@ -44,7 +49,9 @@ def sanitize_log_text_for_ui(raw: str, *, path_prefixes: list[tuple[str, str]] |
     return normalized
 
 
-def normalize_display_text(raw: str | None, *, path_prefixes: list[tuple[str, str]] | None = None) -> str:
+def normalize_display_text(
+    raw: str | None, *, path_prefixes: list[tuple[str, str]] | None = None
+) -> str:
     text = sanitize_log_text_for_ui(str(raw or ""), path_prefixes=path_prefixes)
     if not text:
         return ""

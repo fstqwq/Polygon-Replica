@@ -1,3 +1,5 @@
+from app.service.judgehost.work.task_registry import JudgehostTaskRow
+
 _HEAVY_PAYLOAD_KEYS = {
     "precomputed",
 }
@@ -34,7 +36,5 @@ def compact_payload_for_retention(payload: object) -> dict[str, object]:
     return compact
 
 
-def compact_task_row_payload(row: dict[str, object]) -> None:
-    payload = row.get("payload")
-    if isinstance(payload, dict):
-        row["payload"] = compact_payload_for_retention(payload)
+def compact_task_row_payload(row: JudgehostTaskRow) -> None:
+    row["payload"] = compact_payload_for_retention(row["payload"])

@@ -1,8 +1,15 @@
+def _parse_int(raw: object) -> int:
+    if isinstance(raw, bool):
+        return int(raw)
+    if isinstance(raw, (int, str, bytes, bytearray)):
+        return int(raw)
+    raise TypeError("value must be an integer")
+
 
 def coerce_int(raw: object, default: int, min_value: int, max_value: int) -> int:
     try:
-        value = int(raw)
-    except Exception:
+        value = _parse_int(raw)
+    except (TypeError, ValueError):
         return default
     return max(min_value, min(max_value, value))
 
@@ -34,8 +41,8 @@ def normalize_pass_limit(
             return max(int(min_value), base_value)
         return coerce_int(base_value, base_value, int(min_value), int(max_value))
     try:
-        value = int(raw)
-    except Exception as exc:
+        value = _parse_int(raw)
+    except (TypeError, ValueError) as exc:
         raise ValueError("pass limit must be an integer") from exc
     safe_min = int(min_value)
     if max_value is None:
@@ -48,8 +55,8 @@ def normalize_pass_limit(
 
 def normalize_time_limit_ms(raw: object, *, default_ms: int, min_ms: int, max_ms: int) -> int:
     try:
-        value = int(raw)
-    except Exception:
+        value = _parse_int(raw)
+    except (TypeError, ValueError):
         value = int(default_ms)
     return max(int(min_ms), min(int(max_ms), value))
 
@@ -83,11 +90,14 @@ def effective_run_timeout_ms(
     interactive_slack_sec: int,
 ) -> int:
     tl = normalize_time_limit_ms(time_limit_ms, default_ms=default_ms, min_ms=min_ms, max_ms=max_ms)
-    slack_ms = wall_time_slack_sec_for_mode(
-        mode,
-        pass_limit=pass_limit,
-        pass_fail_sec=pass_fail_slack_sec,
-        multi_pass_sec=multi_pass_slack_sec,
-        interactive_sec=interactive_slack_sec,
-    ) * 1000
+    slack_ms = (
+        wall_time_slack_sec_for_mode(
+            mode,
+            pass_limit=pass_limit,
+            pass_fail_sec=pass_fail_slack_sec,
+            multi_pass_sec=multi_pass_slack_sec,
+            interactive_sec=interactive_slack_sec,
+        )
+        * 1000
+    )
     return max(1, tl * 2 + slack_ms)

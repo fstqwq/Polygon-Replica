@@ -3,12 +3,11 @@ import queue
 import threading
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, TypedDict, cast
+from typing import Callable, TypedDict
 
 from app.service.platform.maintenance.admission import MaintenanceAdmissionGate
-
 
 WorkerFunc = Callable[[], None]
 WorkerPayload = tuple[str, str, WorkerFunc]
@@ -27,6 +26,11 @@ class WorkerJobRecord:
     finished_at: float
     error: str
     error_code: str
+
+
+@dataclass(frozen=True)
+class _StopWorker:
+    pass
 
 
 class WorkerFuture:
@@ -68,12 +72,38 @@ JobTypeStatsBucket = TypedDict(
         "avg_run_ms": float,
         "p95_run_ms": float,
         "failure_rate": float,
-        "_wait_samples": list[float],
-        "_run_samples": list[float],
-        "_fail_codes": dict[str, int],
         "top_failure_codes": list[dict[str, int | str]],
     },
 )
+
+
+@dataclass
+class _JobTypeStatsAccumulator:
+    total: int = 0
+    queued: int = 0
+    running: int = 0
+    done: int = 0
+    failed: int = 0
+    rejected: int = 0
+    cancelled: int = 0
+    wait_samples: list[float] = field(default_factory=list)
+    run_samples: list[float] = field(default_factory=list)
+    fail_codes: dict[str, int] = field(default_factory=dict)
+
+    def increment_status(self, status: str) -> None:
+        self.total += 1
+        if status == "queued":
+            self.queued += 1
+        elif status == "running":
+            self.running += 1
+        elif status == "done":
+            self.done += 1
+        elif status == "failed":
+            self.failed += 1
+        elif status == "rejected":
+            self.rejected += 1
+        elif status == "cancelled":
+            self.cancelled += 1
 
 
 class WorkerQueueService:
@@ -86,20 +116,12 @@ class WorkerQueueService:
         durable_log_path: Path | str | None = None,
         durable_history_limit: int | None = None,
     ) -> None:
-        self._worker_count = (
-            max(1, min(64, int(worker_count)))
-            if worker_count is not None
-            else 4
-        )
+        self._worker_count = max(1, min(64, int(worker_count))) if worker_count is not None else 4
         self._history_limit = (
-            max(32, min(10000, int(history_limit)))
-            if history_limit is not None
-            else 1024
+            max(32, min(10000, int(history_limit))) if history_limit is not None else 1024
         )
         self._queue_capacity = (
-            max(1, min(100000, int(queue_capacity)))
-            if queue_capacity is not None
-            else 512
+            max(1, min(100000, int(queue_capacity))) if queue_capacity is not None else 512
         )
         self._durable_history_limit = (
             max(256, min(200000, int(durable_history_limit)))
@@ -109,7 +131,9 @@ class WorkerQueueService:
         durable_text = str(durable_log_path).strip() if durable_log_path is not None else ""
         self._durable_log_path = Path(durable_text).resolve() if durable_text else None
 
-        self._queue: queue.Queue[WorkerPayload | object] = queue.Queue(maxsize=self._queue_capacity)
+        self._queue: queue.Queue[WorkerPayload | _StopWorker] = queue.Queue(
+            maxsize=self._queue_capacity
+        )
         self._lock = threading.Lock()
         self._started = False
         self._workers: list[threading.Thread] = []
@@ -118,7 +142,7 @@ class WorkerQueueService:
         self._futures: dict[str, WorkerFuture] = {}
         self._dedupe: dict[str, WorkerFuture] = {}
         self._admission_gate: MaintenanceAdmissionGate | None = None
-        self._sentinel = object()
+        self._sentinel = _StopWorker()
         if self._durable_log_path is not None:
             try:
                 self._durable_log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -128,9 +152,15 @@ class WorkerQueueService:
             self._load_durable_history_locked()
 
     def _safe_float(self, value: object, default: float = 0.0) -> float:
+        if isinstance(value, bool):
+            return default
+        if isinstance(value, (int, float)):
+            return float(value)
+        if not isinstance(value, str):
+            return default
         try:
             return float(value)
-        except Exception:
+        except ValueError:
             return default
 
     def _normalize_job_type(self, raw: object) -> str:
@@ -208,7 +238,9 @@ class WorkerQueueService:
             return
         lines: list[str]
         try:
-            lines = self._durable_log_path.read_text(encoding="utf-8", errors="replace").splitlines()
+            lines = self._durable_log_path.read_text(
+                encoding="utf-8", errors="replace"
+            ).splitlines()
         except OSError:
             return
         if not lines:
@@ -220,16 +252,25 @@ class WorkerQueueService:
             if not text:
                 continue
             try:
-                event = cast(dict[str, object], json.loads(text))
-            except Exception:
+                raw_event = json.loads(text)
+            except (TypeError, ValueError):
                 continue
+            if not isinstance(raw_event, dict) or not all(
+                isinstance(key, str) for key in raw_event
+            ):
+                continue
+            event = {key: value for key, value in raw_event.items() if isinstance(key, str)}
             self._apply_durable_event_locked(event)
         self._recover_inflight_jobs_locked()
         self._prune_locked()
 
-    def _record_from_event(self, event: dict[str, object], *, default_status: str = "queued") -> WorkerJobRecord:
+    def _record_from_event(
+        self, event: dict[str, object], *, default_status: str = "queued"
+    ) -> WorkerJobRecord:
         job_id = str(event["job_id"]).strip()
-        created = self._safe_float(event.get("created_at"), self._safe_float(event.get("ts"), time.time()))
+        created = self._safe_float(
+            event.get("created_at"), self._safe_float(event.get("ts"), time.time())
+        )
         started = self._safe_float(event.get("started_at"), 0.0)
         finished = self._safe_float(event.get("finished_at"), 0.0)
         name_obj = event.get("name")
@@ -281,12 +322,18 @@ class WorkerQueueService:
             record.status = "queued"
             record.created_at = self._safe_float(
                 event.get("created_at"),
-                record.created_at if record.created_at > 0.0 else self._safe_float(event.get("ts"), time.time()),
+                (
+                    record.created_at
+                    if record.created_at > 0.0
+                    else self._safe_float(event.get("ts"), time.time())
+                ),
             )
             return
         if event_type == "job_started":
             record.status = "running"
-            record.started_at = self._safe_float(event.get("started_at"), self._safe_float(event.get("ts"), time.time()))
+            record.started_at = self._safe_float(
+                event.get("started_at"), self._safe_float(event.get("ts"), time.time())
+            )
             return
         if event_type in {"job_finished", "job_recovered"}:
             status = str(event["status"]).strip().lower()
@@ -294,7 +341,9 @@ class WorkerQueueService:
                 status = "failed"
             record.status = status
             record.started_at = self._safe_float(event.get("started_at"), record.started_at)
-            record.finished_at = self._safe_float(event.get("finished_at"), self._safe_float(event.get("ts"), time.time()))
+            record.finished_at = self._safe_float(
+                event.get("finished_at"), self._safe_float(event.get("ts"), time.time())
+            )
             error_obj = event.get("error")
             record.error = str(error_obj).strip() if error_obj is not None else ""
             record.error_code = self._sanitize_error_code(event.get("error_code"))
@@ -329,7 +378,11 @@ class WorkerQueueService:
             self._started = True
             self._workers = []
             for idx in range(self._worker_count):
-                worker = threading.Thread(target=self._worker_loop, daemon=True, name=f"worker-queue-{idx + 1}")
+                worker = threading.Thread(
+                    target=self._worker_loop,
+                    daemon=True,
+                    name=f"worker-queue-{idx + 1}",
+                )
                 self._workers.append(worker)
                 worker.start()
 
@@ -361,7 +414,9 @@ class WorkerQueueService:
         with self._lock:
             return {
                 "queued": sum(1 for record in self._records.values() if record.status == "queued"),
-                "running": sum(1 for record in self._records.values() if record.status == "running"),
+                "running": sum(
+                    1 for record in self._records.values() if record.status == "running"
+                ),
             }
 
     def reset_runtime_history(self) -> None:
@@ -444,9 +499,17 @@ class WorkerQueueService:
     ) -> tuple[WorkerFuture, bool, str]:
         if not self._started:
             self.start()
-        safe_name = safe_name_text if (safe_name_text := str(name).strip() if name is not None else "") else "job"
+        safe_name = (
+            safe_name_text
+            if (safe_name_text := str(name).strip() if name is not None else "")
+            else "job"
+        )
         safe_job_type = self._normalize_job_type(job_type)
-        safe_queue_name = safe_queue_name_text if (safe_queue_name_text := str(queue_name).strip() if queue_name is not None else "") else "default"
+        safe_queue_name = (
+            safe_queue_name_text
+            if (safe_queue_name_text := (str(queue_name).strip() if queue_name is not None else ""))
+            else "default"
+        )
         safe_dedupe_key = str(dedupe_key).strip() if dedupe_key is not None else ""
         with self._lock:
             if safe_dedupe_key:
@@ -573,17 +636,16 @@ class WorkerQueueService:
     def _worker_loop(self) -> None:
         while True:
             payload = self._queue.get()
-            if payload is self._sentinel:
+            if isinstance(payload, _StopWorker):
                 self._queue.task_done()
                 return
             job_id = ""
             dedupe_key = ""
             fn: WorkerFunc | None = None
             try:
-                queue_payload = cast(WorkerPayload, payload)
-                job_id = queue_payload[0].strip()
-                dedupe_key = queue_payload[1].strip()
-                fn = queue_payload[2]
+                job_id = payload[0].strip()
+                dedupe_key = payload[1].strip()
+                fn = payload[2]
                 if not job_id:
                     continue
                 if not self._mark_running(job_id):
@@ -677,74 +739,55 @@ class WorkerQueueService:
         return ordered[max(0, min(len(ordered) - 1, idx))]
 
     def _job_type_stats_locked(self) -> dict[str, JobTypeStatsBucket]:
-        rows: dict[str, JobTypeStatsBucket] = {}
+        accumulators: dict[str, _JobTypeStatsAccumulator] = {}
         for job_id in self._record_order:
             record = self._records.get(job_id)
             if record is None:
                 continue
             key = record.job_type or "generic"
-            bucket = rows.get(key)
-            if bucket is None:
-                bucket = {
-                    "total": 0,
-                    "queued": 0,
-                    "running": 0,
-                    "done": 0,
-                    "failed": 0,
-                    "rejected": 0,
-                    "cancelled": 0,
-                    "avg_wait_ms": 0.0,
-                    "p95_wait_ms": 0.0,
-                    "avg_run_ms": 0.0,
-                    "p95_run_ms": 0.0,
-                    "failure_rate": 0.0,
-                    "_wait_samples": [],
-                    "_run_samples": [],
-                    "_fail_codes": {},
-                }
-                rows[key] = bucket
-            bucket["total"] = int(bucket["total"]) + 1
+            accumulator = accumulators.setdefault(key, _JobTypeStatsAccumulator())
             status = record.status.strip().lower()
-            if status in {"queued", "running", "done", "failed", "rejected", "cancelled"}:
-                bucket[status] = int(bucket[status]) + 1
+            accumulator.increment_status(status)
             if record.started_at > 0.0 and record.created_at > 0.0:
                 wait_ms = max(0.0, (record.started_at - record.created_at) * 1000.0)
-                bucket["_wait_samples"].append(wait_ms)
+                accumulator.wait_samples.append(wait_ms)
             if record.finished_at > 0.0 and record.started_at > 0.0:
                 run_ms = max(0.0, (record.finished_at - record.started_at) * 1000.0)
-                bucket["_run_samples"].append(run_ms)
+                accumulator.run_samples.append(run_ms)
             if status in {"failed", "rejected", "cancelled"}:
-                fail_codes = bucket["_fail_codes"]
                 code = self._sanitize_error_code(record.error_code) or "unknown"
-                fail_codes[code] = int(fail_codes.get(code, 0)) + 1
-        for key, bucket in rows.items():
-            wait_samples = bucket["_wait_samples"]
-            run_samples = bucket["_run_samples"]
-            fail_codes = bucket["_fail_codes"]
-            if wait_samples:
-                bucket["avg_wait_ms"] = round(sum(wait_samples) / len(wait_samples), 3)
-                bucket["p95_wait_ms"] = round(self._p95(wait_samples), 3)
-            else:
-                bucket["avg_wait_ms"] = 0.0
-                bucket["p95_wait_ms"] = 0.0
-            if run_samples:
-                bucket["avg_run_ms"] = round(sum(run_samples) / len(run_samples), 3)
-                bucket["p95_run_ms"] = round(self._p95(run_samples), 3)
-            else:
-                bucket["avg_run_ms"] = 0.0
-                bucket["p95_run_ms"] = 0.0
-            total = max(1, int(bucket["total"]))
-            failures = int(bucket["failed"]) + int(bucket["rejected"]) + int(bucket["cancelled"])
-            bucket["failure_rate"] = round(failures / total, 4)
-            if fail_codes:
-                ordered_codes = sorted(fail_codes.items(), key=lambda item: (-int(item[1]), str(item[0])))
-                bucket["top_failure_codes"] = [{"code": code, "count": int(count)} for code, count in ordered_codes[:3]]
-            else:
-                bucket["top_failure_codes"] = []
-            bucket.pop("_wait_samples", None)
-            bucket.pop("_run_samples", None)
-            bucket.pop("_fail_codes", None)
-            rows[key] = bucket
+                accumulator.fail_codes[code] = accumulator.fail_codes.get(code, 0) + 1
+
+        rows: dict[str, JobTypeStatsBucket] = {}
+        for key, accumulator in accumulators.items():
+            wait_samples = accumulator.wait_samples
+            run_samples = accumulator.run_samples
+            failures = accumulator.failed + accumulator.rejected + accumulator.cancelled
+            ordered_codes = sorted(
+                accumulator.fail_codes.items(),
+                key=lambda item: (-item[1], item[0]),
+            )
+            rows[key] = {
+                "total": accumulator.total,
+                "queued": accumulator.queued,
+                "running": accumulator.running,
+                "done": accumulator.done,
+                "failed": accumulator.failed,
+                "rejected": accumulator.rejected,
+                "cancelled": accumulator.cancelled,
+                "avg_wait_ms": (
+                    round(sum(wait_samples) / len(wait_samples), 3) if wait_samples else 0.0
+                ),
+                "p95_wait_ms": round(self._p95(wait_samples), 3),
+                "avg_run_ms": (
+                    round(sum(run_samples) / len(run_samples), 3) if run_samples else 0.0
+                ),
+                "p95_run_ms": round(self._p95(run_samples), 3),
+                "failure_rate": round(failures / max(1, accumulator.total), 4),
+                "top_failure_codes": [
+                    {"code": code, "count": count} for code, count in ordered_codes[:3]
+                ],
+            }
         return rows
 
     def snapshot(self, limit: int = 200) -> dict[str, object]:
@@ -780,7 +823,9 @@ class WorkerQueueService:
                 "running": running,
                 "queued": queued,
                 "history_limit": self._history_limit,
-                "durable_log": str(self._durable_log_path) if self._durable_log_path is not None else "",
+                "durable_log": (
+                    str(self._durable_log_path) if self._durable_log_path is not None else ""
+                ),
                 "job_type_stats": self._job_type_stats_locked(),
                 "jobs": jobs,
             }

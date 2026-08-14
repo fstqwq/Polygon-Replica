@@ -95,6 +95,7 @@ class ConfigDefinition:
     def normalize(self, raw_value: object) -> object:
         """Normalize and validate one external value."""
 
+        value: object
         if self.kind is ConfigKind.INT:
             value = self._normalize_int(raw_value)
         elif self.kind is ConfigKind.FLOAT:
@@ -158,9 +159,7 @@ class ConfigDefinition:
             try:
                 re.compile(value)
             except re.error as exc:
-                raise ValueError(
-                    f"{self.key} must be a valid regular expression"
-                ) from exc
+                raise ValueError(f"{self.key} must be a valid regular expression") from exc
         return value
 
     def _validate_ascii(self, value: str, minimum: int, hint: str) -> None:
@@ -168,20 +167,24 @@ class ConfigDefinition:
             raise ValueError(f"{self.key} must contain only {hint}")
 
     def _validate_bounds(self, value: object) -> None:
+        if self.kind is ConfigKind.STR:
+            if not isinstance(value, str):
+                raise RuntimeError(f"{self.key} normalization did not produce text")
+            actual: int | float = len(value)
+        else:
+            if not isinstance(value, (int, float)) or isinstance(value, bool):
+                if self.minimum is not None or self.maximum is not None:
+                    raise RuntimeError(f"{self.key} normalization did not produce a numeric value")
+                return
+            actual = float(value)
         if self.minimum is not None:
-            actual = len(value) if self.kind is ConfigKind.STR else float(value)
             if actual < self.minimum:
                 label = " length" if self.kind is ConfigKind.STR else ""
-                raise ValueError(
-                    f"{self.key}{label} must be >= {self._bound(self.minimum)}"
-                )
+                raise ValueError(f"{self.key}{label} must be >= {self._bound(self.minimum)}")
         if self.maximum is not None:
-            actual = len(value) if self.kind is ConfigKind.STR else float(value)
             if actual > self.maximum:
                 label = " length" if self.kind is ConfigKind.STR else ""
-                raise ValueError(
-                    f"{self.key}{label} must be <= {self._bound(self.maximum)}"
-                )
+                raise ValueError(f"{self.key}{label} must be <= {self._bound(self.maximum)}")
 
     @staticmethod
     def _bound(value: int | float) -> str:

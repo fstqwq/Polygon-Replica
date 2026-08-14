@@ -5,12 +5,19 @@ from app.service.platform.truncation import STORED_LOG_TRUNCATED_MARKER
 VERIFICATION_CASE_DISPATCH_BATCH_SIZE = 256
 
 
+def config_int(values: Mapping[str, object], key: str) -> int:
+    value = values[key]
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise RuntimeError(f"invalid internal integer configuration: {key}")
+    return value
+
+
 def run_output_kb(values: Mapping[str, object]) -> int:
-    return int(values["RUN_EXEC_OUTPUT_KB"])
+    return config_int(values, "RUN_EXEC_OUTPUT_KB")
 
 
 def compile_output_kb(values: Mapping[str, object]) -> int:
-    return int(values["TOOLCHAIN_COMPILE_OUTPUT_KB"])
+    return config_int(values, "TOOLCHAIN_COMPILE_OUTPUT_KB")
 
 
 def run_memory_limit_kb(memory_limit_mb: object) -> int:
@@ -24,11 +31,11 @@ def run_memory_limit_kb(memory_limit_mb: object) -> int:
 
 
 def stored_log_limit_bytes(values: Mapping[str, object]) -> int:
-    return int(values["JUDGEHOST_STORED_LOG_LIMIT_BYTES"])
+    return config_int(values, "JUDGEHOST_STORED_LOG_LIMIT_BYTES")
 
 
 def aux_display_limit_bytes(values: Mapping[str, object]) -> int:
-    return int(values["AUX_DISPLAY_TEXT_LIMIT_BYTES"])
+    return config_int(values, "AUX_DISPLAY_TEXT_LIMIT_BYTES")
 
 
 def judgehost_form_part_limit_bytes(
