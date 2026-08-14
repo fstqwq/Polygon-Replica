@@ -100,6 +100,9 @@ class JudgehostTaskAdmission:
         safe_verification_task_id = verification_task_id.strip()
         selected = self._preparation.normalize_tests(selected_tests)
         verification_payload_override: dict[str, object] | None = None
+        source_label_override: str | None = None
+        extra_source_files_override: dict[str, object] | None = None
+        manual_validate_only = False
         if prepared_payload is not None and "verification_payload" in prepared_payload:
             raw_verification_payload = prepared_payload["verification_payload"]
             if not isinstance(raw_verification_payload, dict) or any(
@@ -107,6 +110,23 @@ class JudgehostTaskAdmission:
             ):
                 raise RuntimeError("judgehost verification payload must be an object")
             verification_payload_override = dict(raw_verification_payload)
+        if prepared_payload is not None and "source_label" in prepared_payload:
+            raw_source_label = prepared_payload["source_label"]
+            if not isinstance(raw_source_label, str):
+                raise RuntimeError("judgehost source label must be a string")
+            source_label_override = raw_source_label
+        if prepared_payload is not None and "extra_source_files" in prepared_payload:
+            raw_extra_sources = prepared_payload["extra_source_files"]
+            if not isinstance(raw_extra_sources, dict) or any(
+                not isinstance(key, str) for key in raw_extra_sources
+            ):
+                raise RuntimeError("judgehost extra source files must be an object")
+            extra_source_files_override = dict(raw_extra_sources)
+        if prepared_payload is not None and "manual_validate_only" in prepared_payload:
+            raw_manual_validate_only = prepared_payload["manual_validate_only"]
+            if not isinstance(raw_manual_validate_only, bool):
+                raise RuntimeError("manual validate flag must be a boolean")
+            manual_validate_only = raw_manual_validate_only
         payload = self._preparation.prepare_enqueue_payload(
             problem=problem,
             username=username,
@@ -127,7 +147,9 @@ class JudgehostTaskAdmission:
             bypass_case_result_cache=bypass_case_result_cache,
             compile_only=compile_only,
             verification_payload_override=verification_payload_override,
-            payload_overrides=prepared_payload,
+            source_label_override=source_label_override,
+            extra_source_files_override=extra_source_files_override,
+            manual_validate_only=manual_validate_only,
             execution_template=execution_template,
         )
         payload["execution_signature"] = task_plan.execution_signature(payload)

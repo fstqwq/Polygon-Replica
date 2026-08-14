@@ -966,7 +966,9 @@ class JudgehostPayloadPreparation:
         bypass_case_result_cache: bool = False,
         compile_only: bool = False,
         verification_payload_override: dict[str, object] | None = None,
-        payload_overrides: dict[str, object] | None = None,
+        source_label_override: str | None = None,
+        extra_source_files_override: dict[str, object] | None = None,
+        manual_validate_only: bool = False,
         execution_template: dict[str, object] | None = None,
     ) -> dict[str, object]:
         settings = self._configuration.snapshot()
@@ -998,8 +1000,12 @@ class JudgehostPayloadPreparation:
             verification_payload_override=verification_payload_override,
             settings=settings,
         )
-        if payload_overrides is not None:
-            payload.update(payload_overrides)
+        if source_label_override is not None:
+            payload["source_label"] = source_label_override
+        if extra_source_files_override is not None:
+            payload["extra_source_files"] = dict(extra_source_files_override)
+        if manual_validate_only:
+            payload["manual_validate_only"] = True
         payload["precomputed"] = (
             dict(execution_template)
             if execution_template is not None

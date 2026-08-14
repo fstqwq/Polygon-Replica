@@ -1,8 +1,10 @@
 import unittest
 import uuid
+from pathlib import Path
 from unittest.mock import patch
 
 from app.service.judgehost.api import Judgehost
+from app.service.platform.runtime_blob_store import RuntimeBlobStore
 from app.service.verification.completion import VerificationTaskCompletionService
 from app.service.verification.runtime_registry import VerificationRuntimeRegistry
 from app.service.verification.judgehost_adapter import VerificationJudgehostAdapter
@@ -79,6 +81,60 @@ class TestJudgehostRuntimeService(DBTestBase):
                 verification_source="verification",
                 task_kind="solution-run",
             )
+
+    def test_prepare_materializes_external_test_files_before_admission(self) -> None:
+        source_root = Path(self.settings.cache_root) / "prepared-test-files"
+        source_root.mkdir(parents=True, exist_ok=True)
+        input_path = source_root / "001.in"
+        answer_path = source_root / "001.ans"
+        input_path.write_bytes(b"input\n")
+        answer_path.write_bytes(b"answer\n")
+
+        payload = self.service.prepare_enqueue_payload(
+            problem=self.problem,
+            username=self.user,
+            artifact_verification_id="",
+            mode="pass-fail",
+            submission_path=None,
+            upload_content=b"int main(){return 0;}\n",
+            upload_filename="solution.cpp",
+            run_id=f"r-materialize-{uuid.uuid4().hex[:8]}",
+            selected_tests=["001.in"],
+            verification_id="ver-materialize-test",
+            verification_program_id=_PROGRAM_ID,
+            expected_behavior="accepted",
+            verification_source="run.execute",
+            verification_payload_override={
+                "tests": [
+                    {
+                        "name": "001.in",
+                        "answer_name": "001.ans",
+                        "input_file": RuntimeBlobStore.describe_file(
+                            input_path
+                        ).to_payload(),
+                        "answer_file": RuntimeBlobStore.describe_file(
+                            answer_path
+                        ).to_payload(),
+                    }
+                ],
+                "run_config_json": '{"pass_limit":1}',
+                "problem_limits": {
+                    "time_limit_ms": 2000,
+                    "memory_limit_mb": 1024,
+                    "pass_limit": 1,
+                },
+                "source_files": {},
+            },
+        )
+
+        verification_payload = dict(payload["verification_payload"])
+        tests = list(verification_payload["tests"])
+        prepared_test = dict(tests[0])
+        for field in ("input_file", "answer_file"):
+            descriptor = dict(prepared_test[field])
+            blob_ref = str(descriptor["blob_ref"])
+            self.assertTrue(blob_ref.startswith("blob://sha256/"))
+            self.assertIsNotNone(self.runtime_blob_store.descriptor(blob_ref))
 
     def test_set_host_enabled_preserves_status_shape(self) -> None:
         self.service.domjudge_register_host("judgehost-shape-check")
