@@ -1128,56 +1128,61 @@ def _assert_agent_verification_detail(verification_id: str) -> None:
 
 
 def _export_wait_debug(job_id: str) -> dict[str, object]:
-    with _connect() as connection:
-        job = connection.execute(
-            "SELECT * FROM export_jobs WHERE id=?",
-            [job_id],
-        ).fetchone()
-        if job is None:
-            return {"export_job": "missing"}
-        job_row = dict(job)
-        build = connection.execute(
-            """
-            SELECT * FROM problem_package_builds
-            WHERE problem_id=? AND source_commit=?
-            """,
-            [int(job["problem_id"]), str(job["source_commit"] or "")],
-        ).fetchone()
-        if build is None:
-            return {"export_job": job_row, "verified_revision_build": "missing"}
-        build_row = dict(build)
-        verification_id = str(build["verification_id"] or "")
-        verification = connection.execute(
-            "SELECT * FROM verifications WHERE id=?",
-            [verification_id],
-        ).fetchone()
-        task_counts = connection.execute(
-            """
-            SELECT COALESCE(NULLIF(final_status,''),'nonterminal') AS status,
-                   COUNT(*) AS count
-            FROM verification_tasks
-            WHERE verification_id=?
-            GROUP BY COALESCE(NULLIF(final_status,''),'nonterminal')
-            ORDER BY status
-            """,
-            [verification_id],
-        ).fetchall()
-        nonterminal = connection.execute(
-            """
-            SELECT id,task_kind,source_path,program_id,test_name
-            FROM verification_tasks
-            WHERE verification_id=? AND final_status=''
-            ORDER BY queue_index,id
-            """,
-            [verification_id],
-        ).fetchall()
-        return {
-            "export_job": job_row,
-            "verified_revision_build": build_row,
-            "verification": None if verification is None else dict(verification),
-            "task_counts": [dict(row) for row in task_counts],
-            "nonterminal_tasks": [dict(row) for row in nonterminal],
-        }
+    debug: dict[str, object] = {}
+    try:
+        with _connect() as connection:
+            job = connection.execute(
+                "SELECT * FROM export_jobs WHERE id=?",
+                [job_id],
+            ).fetchone()
+            if job is None:
+                return {"export_job": "missing"}
+            debug["export_job"] = dict(job)
+            build = connection.execute(
+                """
+                SELECT * FROM problem_package_builds
+                WHERE problem_id=? AND source_commit=?
+                """,
+                [int(job["problem_id"]), str(job["source_commit"] or "")],
+            ).fetchone()
+            if build is None:
+                debug["verified_revision_build"] = "missing"
+                return debug
+            debug["verified_revision_build"] = dict(build)
+            verification_id = str(build["verification_id"] or "")
+            verification = connection.execute(
+                "SELECT * FROM verifications WHERE id=?",
+                [verification_id],
+            ).fetchone()
+            debug["verification"] = (
+                None if verification is None else dict(verification)
+            )
+            task_counts = connection.execute(
+                """
+                SELECT COALESCE(NULLIF(final_status,''),'nonterminal') AS status,
+                       COUNT(*) AS count
+                FROM verification_tasks
+                WHERE verification_id=?
+                GROUP BY COALESCE(NULLIF(final_status,''),'nonterminal')
+                ORDER BY status
+                """,
+                [verification_id],
+            ).fetchall()
+            debug["task_counts"] = [dict(row) for row in task_counts]
+            nonterminal = connection.execute(
+                """
+                SELECT id,predecessor_task_id,task_kind,source_path,program_id,
+                       test_name,expected_behavior,created_at
+                FROM verification_tasks
+                WHERE verification_id=? AND final_status=''
+                ORDER BY created_at,id
+                """,
+                [verification_id],
+            ).fetchall()
+            debug["nonterminal_tasks"] = [dict(row) for row in nonterminal]
+    except Exception as exc:
+        debug["diagnostic_error"] = f"{type(exc).__name__}: {exc}"
+    return debug
 
 
 def _agent_export(package_format: str) -> tuple[str, Path]:
