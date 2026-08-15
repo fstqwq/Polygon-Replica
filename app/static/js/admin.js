@@ -82,6 +82,7 @@ function initJudgehostConfiguration() {
       lines.push(
         `${sudo && sudo.checked ? "sudo " : ""}docker run -d --privileged --cgroupns=host --storage-opt size=10G ` +
         `-v /sys/fs/cgroup:/sys/fs/cgroup:rw --add-host=host.docker.internal:host-gateway ` +
+        `--add-host=judgedaemon-${daemonId}:127.0.1.1 ` +
         `--name judgehost-${daemonId} --hostname judgedaemon-${daemonId} -e DAEMON_ID=${daemonId}` +
         " -e RUN_USER_UID_GID=" + runUserUidGid +
         ` -e CONTAINER_TIMEZONE=Asia/Shanghai -e DOMSERVER_BASEURL=${endpoint}` +

@@ -172,6 +172,16 @@ class TestPublicContracts(unittest.TestCase):
                     with self.assertRaises(ValueError):
                         manifest.url(invalid_path)
 
+    def test_generated_judgehost_command_resolves_its_container_hostname(self) -> None:
+        admin_script = (ROOT / "app" / "static" / "js" / "admin.js").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn(
+            "--add-host=judgedaemon-${daemonId}:127.0.1.1",
+            admin_script,
+        )
+
     def test_uvicorn_access_filter_only_suppresses_successful_fetch_poll(self) -> None:
         from app.service.platform.http_logging import UvicornAccessFilter
 

@@ -157,8 +157,9 @@ Use the Settings-generated Judgehost command. Each daemon needs a unique
 hostname, daemon id, CPU assignment, and unused `RUN_USER_UID_GID`. Verify ids
 with `getent passwd <id>` and `getent group <id>`. A same-host Docker Judgehost
 normally reaches `http://host.docker.internal:8001/` through the configured host
-gateway. The generated image is currently `domjudge/judgehost:latest`; operators
-own image pinning and upgrade validation.
+gateway. The generated command also maps each container hostname to `127.0.1.1`
+so local tools such as `sudo` can resolve it. The generated image is currently
+`domjudge/judgehost:latest`; operators own image pinning and upgrade validation.
 
 ## Upgrade
 
