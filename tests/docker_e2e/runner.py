@@ -120,7 +120,7 @@ def _assert_tasks(
     connection: sqlite3.Connection,
     verification_id: str,
     *,
-    special_verdicts: dict[str, str] | None = None,
+    special_verdicts: dict[str, dict[str, str]] | None = None,
 ) -> None:
     rows = connection.execute(
         """
@@ -156,31 +156,53 @@ def _assert_tasks(
         if not str(artifacts.get("output_ref") or "").startswith("blob://sha256/"):
             raise RuntimeError(f"{task_kind} pass output ref is missing")
 
-    expected_special = special_verdicts or {
-        "solutions/re.py": "RE",
-        "solutions/ce.cpp": "CE",
-    }
+    expected_special = (
+        special_verdicts
+        if special_verdicts is not None
+        else {
+            "solutions/re.py": {"001.in": "RE"},
+            "solutions/ce.cpp": {"001.in": "CE"},
+        }
+    )
     placeholders = ",".join("?" for _source in expected_special)
     special_rows = connection.execute(
         f"""
-        SELECT source_path,final_status,result_json
+        SELECT source_path,test_name,final_status,result_json
         FROM verification_tasks
         WHERE verification_id=? AND source_path IN ({placeholders})
         """,
         [verification_id, *expected_special],
     ).fetchall()
-    special_by_source = {str(row["source_path"]): row for row in special_rows}
-    for source, expected_verdict in expected_special.items():
-        row = special_by_source.get(source)
-        if row is None or str(row["final_status"]) != "done":
-            raise RuntimeError(f"expected {source} task did not complete: {row!r}")
-        result = json.loads(str(row["result_json"]))
-        outcome = result.get("outcome") if isinstance(result, dict) else None
-        verdict = outcome.get("verdict") if isinstance(outcome, dict) else None
-        if verdict != expected_verdict:
-            raise RuntimeError(
-                f"expected {source} verdict {expected_verdict}, got {verdict!r}"
-            )
+    special_by_identity = {
+        (str(row["source_path"]), str(row["test_name"])): row
+        for row in special_rows
+    }
+    expected_identities = {
+        (source, test_name)
+        for source, verdicts in expected_special.items()
+        for test_name in verdicts
+    }
+    if set(special_by_identity) != expected_identities:
+        raise RuntimeError(
+            "verification solution testcase coverage differs: "
+            f"expected={sorted(expected_identities)!r} "
+            f"actual={sorted(special_by_identity)!r}"
+        )
+    for source, verdicts in expected_special.items():
+        for test_name, expected_verdict in verdicts.items():
+            row = special_by_identity.get((source, test_name))
+            if row is None or str(row["final_status"]) != "done":
+                raise RuntimeError(
+                    f"expected {source} / {test_name} task did not complete: {row!r}"
+                )
+            result = json.loads(str(row["result_json"]))
+            outcome = result.get("outcome") if isinstance(result, dict) else None
+            verdict = outcome.get("verdict") if isinstance(outcome, dict) else None
+            if verdict != expected_verdict:
+                raise RuntimeError(
+                    f"expected {source} / {test_name} verdict "
+                    f"{expected_verdict}, got {verdict!r}"
+                )
 
 
 def _assert_artifact_refs(

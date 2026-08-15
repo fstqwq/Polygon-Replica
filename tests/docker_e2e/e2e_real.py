@@ -45,9 +45,14 @@ AGENT_ROOT = Path(os.environ["POLYGON_REPLICA_E2E_STATE_DIR"]) / "agent-cli"
 AGENT_STATE = AGENT_ROOT / "state.json"
 AGENT_REPO = AGENT_ROOT / PROBLEM
 AGENT_TEMP = AGENT_ROOT / "temp"
-AGENT_SPECIAL_VERDICTS = {
-    "solutions/wa.cpp": "WA",
-    "solutions/ce.cpp": "CE",
+AGENT_SOLUTION_VERDICTS = {
+    "solutions/wa.cpp": {"001.in": "WA", "002.in": "WA"},
+    "solutions/tl.cpp": {"001.in": "TL", "002.in": "TL"},
+    "solutions/re.cpp": {"001.in": "RE", "002.in": "RE"},
+    "solutions/ce.cpp": {"001.in": "CE", "002.in": "CE"},
+    "solutions/tle_or_correct.cpp": {"001.in": "OK", "002.in": "TL"},
+    "solutions/tle_or_re.cpp": {"001.in": "OK", "002.in": "RE"},
+    "solutions/rejected.cpp": {"001.in": "OK", "002.in": "WA"},
 }
 LARGE_VALUE_COUNT = 600_000
 LARGE_VALID_GENERATOR_COMMAND = f"gen.py {LARGE_VALUE_COUNT} 1 42\n"
@@ -114,8 +119,40 @@ BASE_FIXTURE_FILES = {
         "int main() { std::cout << 0 << '\\n'; }\n"
     ),
     "solutions/wa.cpp.desc": "expected: wrong_answer\n",
+    "solutions/tl.cpp": (
+        "#include <cstdint>\n"
+        "int main() { volatile std::uint64_t value = 0; "
+        "while (true) { value = value + 1; } }\n"
+    ),
+    "solutions/tl.cpp.desc": "expected: time_limit_exceeded\n",
+    "solutions/re.cpp": "int main() { return 1; }\n",
+    "solutions/re.cpp.desc": "expected: run_time_error\n",
     "solutions/ce.cpp": "this is intentionally not valid C++\n",
     "solutions/ce.cpp.desc": "expected: rejected\n",
+    "solutions/tle_or_correct.cpp": (
+        "#include <cstdint>\n"
+        "#include <iostream>\n"
+        "int main() { int count = 0; std::cin >> count; "
+        "if (count > 1) { volatile std::uint64_t value = 0; "
+        "while (true) { value = value + 1; } } "
+        "long long value = 0; std::cin >> value; "
+        "std::cout << value * value << '\\n'; }\n"
+    ),
+    "solutions/tle_or_correct.cpp.desc": "expected: tle_or_correct\n",
+    "solutions/tle_or_re.cpp": (
+        "#include <iostream>\n"
+        "int main() { int count = 0; std::cin >> count; "
+        "if (count > 1) return 1; long long value = 0; std::cin >> value; "
+        "std::cout << value * value << '\\n'; }\n"
+    ),
+    "solutions/tle_or_re.cpp.desc": "expected: tle_or_re\n",
+    "solutions/rejected.cpp": (
+        "#include <iostream>\n"
+        "int main() { int count = 0; std::cin >> count; "
+        "long long value = 0; std::cin >> value; "
+        "std::cout << (count == 1 ? value * value : 0) << '\\n'; }\n"
+    ),
+    "solutions/rejected.cpp.desc": "expected: rejected\n",
     "validators/validate.cpp": (
         '#include "testlib.h"\n'
         "int main(int argc, char **argv) { registerValidation(argc, argv); "
@@ -850,33 +887,47 @@ def _large_generated_input(sentinel: int) -> bytes:
     )
 
 
-def _upload_large_generator_command(command: str) -> None:
-    source = AGENT_TEMP / "large-generator-command.txt"
-    source.write_text(command, encoding="utf-8", newline="\n")
+def _upload_workspace_text(
+    workspace_path: str,
+    content: str,
+    *,
+    temp_name: str,
+) -> None:
+    source = AGENT_TEMP / temp_name
+    source.write_text(content, encoding="utf-8", newline="\n")
     _agent_cli(
         "upload",
         "--problem",
         PROBLEM,
         "--workspace-path",
-        "tests/generator/002.in",
+        workspace_path,
         "--local-file",
         str(source),
     )
 
 
-def _assert_large_generation_failure(
-    client: httpx.Client,
-    connection: sqlite3.Connection,
-    *,
-    problem_id: int,
-    workspace_id: int,
-    previous_id: str,
-) -> str:
-    _upload_large_generator_command(LARGE_INVALID_GENERATOR_COMMAND)
+def _upload_large_generator_command(command: str) -> None:
+    _upload_workspace_text(
+        "tests/generator/002.in",
+        command,
+        temp_name="large-generator-command.txt",
+    )
+
+
+def _start_agent_verification(label: str) -> str:
     started = _agent_cli("verify-start", "--problem", PROBLEM)
     verification_id = str(started.get("verification_id") or "")
     if not verification_id or started.get("status") != "queued":
-        raise RuntimeError(f"invalid-input Verification did not start: {started!r}")
+        raise RuntimeError(f"{label} Verification did not start: {started!r}")
+    return verification_id
+
+
+def _wait_for_agent_verification(
+    verification_id: str,
+    *,
+    expected_status: str,
+    label: str,
+) -> None:
     waited = _agent_cli(
         "verify-wait",
         "--problem",
@@ -888,10 +939,36 @@ def _assert_large_generation_failure(
         "--timeout-sec",
         "300",
     )
-    if waited != {"verification_id": verification_id, "status": "failed"}:
-        raise RuntimeError(
-            f"invalid-input Verification did not fail as expected: {waited!r}"
+    if waited != {"verification_id": verification_id, "status": expected_status}:
+        detail = _agent_cli(
+            "verify-detail",
+            "--problem",
+            PROBLEM,
+            "--verification-id",
+            verification_id,
         )
+        detail_text = str(detail.get("detail_text") or "")
+        raise RuntimeError(
+            f"{label} Verification did not reach {expected_status}: {waited!r}\n"
+            f"{detail_text[:8000]}"
+        )
+
+
+def _assert_large_generation_failure(
+    client: httpx.Client,
+    connection: sqlite3.Connection,
+    *,
+    problem_id: int,
+    workspace_id: int,
+    previous_id: str,
+) -> str:
+    _upload_large_generator_command(LARGE_INVALID_GENERATOR_COMMAND)
+    verification_id = _start_agent_verification("invalid-input")
+    _wait_for_agent_verification(
+        verification_id,
+        expected_status="failed",
+        label="invalid-input",
+    )
     verification = _wait_for_verification(
         connection,
         problem_id=problem_id,
@@ -947,26 +1024,223 @@ def _assert_large_generation_failure(
     return verification_id
 
 
+def _assert_active_verification_cancellation(
+    client: httpx.Client,
+    connection: sqlite3.Connection,
+    *,
+    problem_id: int,
+    workspace_id: int,
+    previous_id: str,
+) -> str:
+    verification_id = _start_agent_verification("cancellation")
+    deadline = time.monotonic() + 30.0
+    while time.monotonic() < deadline:
+        parent = connection.execute(
+            "SELECT status FROM verifications WHERE id=?",
+            [verification_id],
+        ).fetchone()
+        open_tasks = int(
+            connection.execute(
+                """
+                SELECT COUNT(*)
+                FROM verification_tasks
+                WHERE verification_id=? AND final_status=''
+                """,
+                [verification_id],
+            ).fetchone()[0]
+        )
+        if parent is not None and str(parent["status"]) == "running" and open_tasks:
+            break
+        if parent is not None and str(parent["status"]) in {"ok", "failed", "cancelled"}:
+            raise RuntimeError(
+                "cancellation Verification finished before its active graph was observed: "
+                f"{dict(parent)!r}"
+            )
+        time.sleep(0.05)
+    else:
+        raise RuntimeError("cancellation Verification never exposed active tasks")
+
+    response = _post(
+        client,
+        f"/problems/{PROBLEM}/run/cancel",
+        {"verification_id": verification_id},
+    )
+    location = urlparse(response.headers.get("location", ""))
+    location_ids = parse_qs(location.query).get("verification_id", [])
+    if (
+        location.path != f"/problems/{PROBLEM}/run/details"
+        or location_ids != [verification_id]
+    ):
+        raise RuntimeError(
+            f"cancellation redirected to an unexpected location: {location.geturl()!r}"
+        )
+    verification = _wait_for_verification(
+        connection,
+        problem_id=problem_id,
+        workspace_id=workspace_id,
+        previous_id=previous_id,
+    )
+    if (
+        str(verification["id"]) != verification_id
+        or str(verification["kind"]) != "all"
+        or str(verification["status"]) != "cancelled"
+        or str(verification["fail_reason"] or "") != "verification cancelled by user"
+    ):
+        raise RuntimeError(
+            f"active Verification cancellation was not durable: {dict(verification)!r}"
+        )
+    task_counts = {
+        str(row["final_status"]): int(row["count"])
+        for row in connection.execute(
+            """
+            SELECT final_status,COUNT(*) AS count
+            FROM verification_tasks
+            WHERE verification_id=?
+            GROUP BY final_status
+            """,
+            [verification_id],
+        ).fetchall()
+    }
+    if "" in task_counts or task_counts.get("cancelled", 0) < 1:
+        raise RuntimeError(
+            f"cancelled Verification retained open tasks: {task_counts!r}"
+        )
+    return verification_id
+
+
+def _assert_solution_expectation_failure(
+    client: httpx.Client,
+    connection: sqlite3.Connection,
+    *,
+    problem_id: int,
+    workspace_id: int,
+    previous_id: str,
+) -> str:
+    source_path = "solutions/tle_or_re.cpp"
+    _upload_workspace_text(
+        source_path,
+        FIXTURE_FILES["solutions/main.cpp"],
+        temp_name="tle-or-re-all-ac.cpp",
+    )
+    try:
+        verification_id = _start_agent_verification("TL-or-RE mismatch")
+        _wait_for_agent_verification(
+            verification_id,
+            expected_status="failed",
+            label="TL-or-RE mismatch",
+        )
+        verification = _wait_for_verification(
+            connection,
+            problem_id=problem_id,
+            workspace_id=workspace_id,
+            previous_id=previous_id,
+        )
+    finally:
+        _upload_workspace_text(
+            source_path,
+            FIXTURE_FILES[source_path],
+            temp_name="tle-or-re-restored.cpp",
+        )
+
+    expected_reason = "required=[TL, RE], allowed=[AC, TL, RE], got=[AC]"
+    fail_reason = str(verification["fail_reason"] or "")
+    if (
+        str(verification["id"]) != verification_id
+        or str(verification["kind"]) != "all"
+        or str(verification["status"]) != "failed"
+        or source_path not in fail_reason
+        or expected_reason not in fail_reason
+    ):
+        raise RuntimeError(
+            "all-AC TL-or-RE solution did not fail at the program boundary: "
+            f"{dict(verification)!r}"
+        )
+    rows = connection.execute(
+        """
+        SELECT test_name,final_status,result_json
+        FROM verification_tasks
+        WHERE verification_id=? AND source_path=?
+        ORDER BY test_name
+        """,
+        [verification_id, source_path],
+    ).fetchall()
+    if [str(row["test_name"]) for row in rows] != ["001.in", "002.in"]:
+        raise RuntimeError(f"TL-or-RE mismatch omitted testcase rows: {rows!r}")
+    for row in rows:
+        result = json.loads(str(row["result_json"]))
+        outcome = result.get("outcome") if isinstance(result, dict) else None
+        if (
+            str(row["final_status"]) != "done"
+            or not isinstance(outcome, dict)
+            or outcome.get("verdict") != "OK"
+            or outcome.get("error")
+        ):
+            raise RuntimeError(
+                "an allowed AC testcase was incorrectly failed before the "
+                f"TL-or-RE program check: {dict(row)!r}"
+            )
+    details = client.get(
+        f"/problems/{PROBLEM}/run/details",
+        params={"verification_id": verification_id},
+    )
+    if details.status_code != 200 or expected_reason not in details.text:
+        raise RuntimeError(
+            "Verification details omitted the program-level TL-or-RE mismatch: "
+            f"{details.status_code} {details.text[:1000]!r}"
+        )
+    return verification_id
+
+
+def _assert_verification_history(
+    connection: sqlite3.Connection,
+    *,
+    problem_id: int,
+    workspace_id: int,
+    expected: list[tuple[str, str, str]],
+) -> None:
+    rows = connection.execute(
+        """
+        SELECT id,kind,status
+        FROM verifications
+        WHERE problem_id=? AND workspace_id=?
+        ORDER BY created_at,id
+        """,
+        [problem_id, workspace_id],
+    ).fetchall()
+    actual = [
+        (str(row["id"]), str(row["kind"]), str(row["status"]))
+        for row in rows
+    ]
+    if actual != expected:
+        raise RuntimeError(
+            f"real E2E Verification history differs: expected={expected!r} actual={actual!r}"
+        )
+
+
 def _assert_accepted_solution(
     connection: sqlite3.Connection,
     verification_id: str,
 ) -> None:
-    row = connection.execute(
+    rows = connection.execute(
         """
-        SELECT final_status,result_json
+        SELECT test_name,final_status,result_json
         FROM verification_tasks
         WHERE verification_id=? AND task_kind='main-correct'
-          AND source_path='solutions/main.cpp' AND test_name='001.in'
+          AND source_path='solutions/main.cpp'
+        ORDER BY test_name
         """,
         [verification_id],
-    ).fetchone()
-    if row is None or str(row["final_status"]) != "done":
-        raise RuntimeError(f"accepted solution task did not complete: {row!r}")
-    result = json.loads(str(row["result_json"]))
-    outcome = result.get("outcome") if isinstance(result, dict) else None
-    verdict = outcome.get("verdict") if isinstance(outcome, dict) else None
-    if verdict != "OK":
-        raise RuntimeError(f"accepted solution verdict is not OK: {verdict!r}")
+    ).fetchall()
+    if [str(row["test_name"]) for row in rows] != ["001.in", "002.in"]:
+        raise RuntimeError(f"accepted solution omitted testcase rows: {rows!r}")
+    for row in rows:
+        result = json.loads(str(row["result_json"]))
+        outcome = result.get("outcome") if isinstance(result, dict) else None
+        verdict = outcome.get("verdict") if isinstance(outcome, dict) else None
+        if str(row["final_status"]) != "done" or verdict != "OK":
+            raise RuntimeError(
+                f"accepted solution testcase did not finish AC: {dict(row)!r}"
+            )
 
 
 def _git(*args: str) -> str:
@@ -1558,6 +1832,9 @@ def verify_deployment() -> None:
             )
             previous_id = "" if previous is None else str(previous["id"])
             sample_verification_id = ""
+            generation_failure_id = ""
+            cancelled_verification_id = ""
+            expectation_failure_id = ""
             if product_tail:
                 sample_verification_id = _run_statement_preview(
                     client,
@@ -1567,44 +1844,36 @@ def verify_deployment() -> None:
                     previous_id=previous_id,
                 )
                 previous_id = sample_verification_id
-                previous_id = _assert_large_generation_failure(
+                generation_failure_id = _assert_large_generation_failure(
                     client,
                     connection,
                     problem_id=problem_id,
                     workspace_id=workspace_id,
                     previous_id=previous_id,
                 )
-            started = _agent_cli(
-                "verify-start",
-                "--problem",
-                PROBLEM,
-            )
-            verification_id = str(started.get("verification_id") or "")
-            if not verification_id or started.get("status") != "queued":
-                raise RuntimeError(f"Agent verification did not start: {started!r}")
-            waited = _agent_cli(
-                "verify-wait",
-                "--problem",
-                PROBLEM,
-                "--verification-id",
+                previous_id = generation_failure_id
+                cancelled_verification_id = _assert_active_verification_cancellation(
+                    client,
+                    connection,
+                    problem_id=problem_id,
+                    workspace_id=workspace_id,
+                    previous_id=previous_id,
+                )
+                previous_id = cancelled_verification_id
+                expectation_failure_id = _assert_solution_expectation_failure(
+                    client,
+                    connection,
+                    problem_id=problem_id,
+                    workspace_id=workspace_id,
+                    previous_id=previous_id,
+                )
+                previous_id = expectation_failure_id
+            verification_id = _start_agent_verification("successful full")
+            _wait_for_agent_verification(
                 verification_id,
-                "--interval-sec",
-                "0.1",
-                "--timeout-sec",
-                "300",
+                expected_status="ok",
+                label="successful full",
             )
-            if waited != {"verification_id": verification_id, "status": "ok"}:
-                detail = _agent_cli(
-                    "verify-detail",
-                    "--problem",
-                    PROBLEM,
-                    "--verification-id",
-                    verification_id,
-                )
-                detail_text = str(detail.get("detail_text") or "")
-                raise RuntimeError(
-                    f"Agent verification failed: {waited!r}\n{detail_text[:8000]}"
-                )
             verification = _wait_for_verification(
                 connection,
                 problem_id=problem_id,
@@ -1641,7 +1910,7 @@ def verify_deployment() -> None:
             _assert_tasks(
                 connection,
                 verification_id,
-                special_verdicts=AGENT_SPECIAL_VERDICTS,
+                special_verdicts=AGENT_SOLUTION_VERDICTS,
             )
             _assert_accepted_solution(connection, verification_id)
             _assert_artifact_refs(
@@ -1651,6 +1920,19 @@ def verify_deployment() -> None:
                 expected_answer=b"49\n",
             )
             _assert_public_artifacts(client, verification_id)
+            if product_tail:
+                _assert_verification_history(
+                    connection,
+                    problem_id=problem_id,
+                    workspace_id=workspace_id,
+                    expected=[
+                        (sample_verification_id, "sample", "ok"),
+                        (generation_failure_id, "all", "failed"),
+                        (cancelled_verification_id, "all", "cancelled"),
+                        (expectation_failure_id, "all", "failed"),
+                        (verification_id, "all", "ok"),
+                    ],
+                )
         _assert_real_judgehost_executed(client)
 
         variant = os.environ["POLYGON_REPLICA_E2E_VARIANT"]
@@ -1714,6 +1996,7 @@ def verify_deployment() -> None:
                 job_id=contest_job_id,
                 job=contest_job,
                 expected_head=head,
+                expected_solution_verdicts=AGENT_SOLUTION_VERDICTS,
             )
         collaboration_head = exercise_role_pages_and_collaboration(
             admin=client,
@@ -1735,6 +2018,9 @@ def verify_deployment() -> None:
         "DOMjudge/ICPC 2025-09 exports, and contest PDF export "
         f"variant={variant} "
         f"sample_verification={sample_verification_id} "
+        f"generation_failure={generation_failure_id} "
+        f"cancelled_verification={cancelled_verification_id} "
+        f"expectation_failure={expectation_failure_id} "
         f"verification={verification_id} head={head} "
         f"domjudge_job={job_id} domjudge_archive={domjudge_archive} "
         f"icpc_job={icpc_job_id} icpc_archive={icpc_archive} "

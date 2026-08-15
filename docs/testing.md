@@ -173,9 +173,13 @@ Review and Publish warning plus a canonical file that preserves the current
 selections. It then sends a generated input larger than one MiB through the real
 Judgehost multipart callback twice: the rejected form must retain the
 validator's explicit diagnostic on the Verification details page, and the
-corrected form must persist the complete input. The successful run also observes
-the accepted answer, AC, WA, CE, and public derived-output downloads. It
-continues through sample preview, commit, DOMjudge and ICPC
+corrected form must persist the complete input. Before the successful run, the
+journey cancels one active Verification and runs an all-AC `tle_or_re` solution
+that must fail only at the program-level requirement. The final real execution
+covers AC, WA, TL, RE, CE, AC/TL, AC/RE, and AC/WA solution verdict patterns,
+the accepted answer, and public derived-output downloads. The journey asserts
+the resulting sample/ok, all/failed, all/cancelled, all/failed, and all/ok
+history before it continues through commit, DOMjudge and ICPC
 2025-09 Package Exports, direct Polygon Replica package download, Contest
 creation and statement/package builds, role-aware page walk, concurrent
 Alice/Bob conflict resolution, maintenance cleanup, backup, and restart.

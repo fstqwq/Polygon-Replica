@@ -109,6 +109,7 @@ def _assert_contest_database(
     job_id: str,
     artifact_id: str,
     expected_head: str,
+    expected_solution_verdicts: dict[str, dict[str, str]],
     pdf_payload: bytes,
 ) -> str:
     row = connection.execute(
@@ -176,10 +177,7 @@ def _assert_contest_database(
     _assert_tasks(
         connection,
         verification_id,
-        special_verdicts={
-            "solutions/wa.cpp": "WA",
-            "solutions/ce.cpp": "CE",
-        },
+        special_verdicts=expected_solution_verdicts,
     )
     _assert_artifact_refs(
         connection,
@@ -217,6 +215,7 @@ def assert_contest_pdf(
     job_id: str,
     job: dict[str, object],
     expected_head: str,
+    expected_solution_verdicts: dict[str, dict[str, str]],
 ) -> tuple[str, str]:
     summary = job.get("summary")
     if (
@@ -322,6 +321,7 @@ def assert_contest_pdf(
         job_id=job_id,
         artifact_id=artifact_id,
         expected_head=expected_head,
+        expected_solution_verdicts=expected_solution_verdicts,
         pdf_payload=download.content,
     )
     return artifact_id, materialization_verification_id
