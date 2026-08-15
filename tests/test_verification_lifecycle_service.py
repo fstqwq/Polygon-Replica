@@ -716,19 +716,19 @@ class TestVerificationLifecycleService(VerificationServiceTestBase):
                 {
                     "id": first_task_id,
                     "task_kind": "solution-run",
-                    "source_path": "solutions/rejected.cpp",
+                    "source_path": "solutions/tle-or-re.cpp",
                     "program_id": "solution-0",
                     "test_name": "001.in",
-                    "expected_behavior": "rejected",
+                    "expected_behavior": "tle_or_re",
                     "status": VerificationTaskStatus.QUEUED,
                 },
                 {
                     "id": second_task_id,
                     "task_kind": "solution-run",
-                    "source_path": "solutions/rejected.cpp",
+                    "source_path": "solutions/tle-or-re.cpp",
                     "program_id": "solution-0",
                     "test_name": "002.in",
-                    "expected_behavior": "rejected",
+                    "expected_behavior": "tle_or_re",
                     "status": VerificationTaskStatus.QUEUED,
                 },
             ],
@@ -738,7 +738,7 @@ class TestVerificationLifecycleService(VerificationServiceTestBase):
         first_completion, first_commit = self._commit_solution_result(
             verification_id,
             first_task_id,
-            "WA",
+            "AC",
         )
         self.assertEqual(first_completion.status, VerificationTaskStatus.DONE)
         self.assertEqual(first_completion.fail_reason, "")
@@ -751,7 +751,7 @@ class TestVerificationLifecycleService(VerificationServiceTestBase):
         second_completion, second_commit = self._commit_solution_result(
             verification_id,
             second_task_id,
-            "AC",
+            "RE",
         )
         self.assertEqual(second_completion.status, VerificationTaskStatus.DONE)
         self.assertEqual(second_completion.fail_reason, "")

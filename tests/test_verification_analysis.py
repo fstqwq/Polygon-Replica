@@ -64,10 +64,10 @@ class TestVerificationAnalysis(unittest.TestCase):
                 True,
             ),
             (
-                "TL-or-RE accepts the mixed run",
+                "TL-or-RE accepts AC before a terminal RE",
                 "tle_or_re",
                 "ok",
-                {"tests": [{"verdict": "TL"}, {"verdict": "RE"}]},
+                {"tests": [{"verdict": "OK"}, {"verdict": "RE"}]},
                 True,
                 True,
             ),

@@ -157,7 +157,9 @@ set applies. An FL, missing, incomplete, or disallowed decision fails that task
 and stores the first failure reason. The `required` set belongs to the program:
 after every durable task for one `program_id` is terminal without a case-level
 failure, the completion transaction aggregates its testcase verdicts and checks
-`required` once.
+`required` once. These testcase rules are distinct from package-level final
+result sets: `tle_or_re`, for example, allows AC, TL, and RE testcases but
+requires at least one TL or RE across the complete program.
 Skipped duplicate-input tasks contribute no verdict. A missing required verdict
 does not rewrite the completed testcase tasks, but it stores the verification's
 first failure reason. Independent solution tasks continue, and once no task

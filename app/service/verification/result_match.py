@@ -10,7 +10,7 @@ _EXPECTED_STATUS_RULES: dict[str, dict[str, tuple[str, ...]]] = {
     "accepted": {"required": ("AC",), "allowed": ("AC",)},
     "wrong_answer": {"required": ("WA",), "allowed": ("AC", "WA")},
     "tle_or_correct": {"required": (), "allowed": ("AC", "TL")},
-    "tle_or_re": {"required": (), "allowed": ("TL", "RE")},
+    "tle_or_re": {"required": ("TL", "RE"), "allowed": ("AC", "TL", "RE")},
     "time_limit_exceeded": {"required": ("TL",), "allowed": ("AC", "TL")},
     "run_time_error": {"required": ("RE",), "allowed": ("AC", "RE")},
     "rejected": {
