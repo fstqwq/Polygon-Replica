@@ -601,6 +601,7 @@
     \edef\statement@sample@resolvedfile{%
         \ifdefined\import@path\import@path\fi#1%
     }%
+    \typeout{Statement sample file: \statement@sample@resolvedfile}%
     \let\statement@sample@original@formatline\FancyVerbFormatLine
     \def\FancyVerbFormatLine##1{%
         \strut\statement@sample@original@formatline{##1}\strut

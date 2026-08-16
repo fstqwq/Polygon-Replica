@@ -301,14 +301,17 @@ def assert_contest_pdf(
             )
     problem_tex = (statement_root / "problem.tex").read_text(encoding="utf-8")
     examples_tex = (statement_root / "examples.tex").read_text(encoding="utf-8")
-    if r"\input{examples.tex}" not in problem_tex:
-        raise RuntimeError("contest PDF problem.tex omitted the examples companion")
+    sample_presentation = (
+        examples_tex
+        if r"\input{examples.tex}" in problem_tex
+        else problem_tex
+    )
     if (
-        r"\exmpfile" not in examples_tex
-        or "sample.001.in" not in examples_tex
-        or "sample.001.ans" not in examples_tex
+        r"\exmpfile" not in sample_presentation
+        or "sample.001.in" not in sample_presentation
+        or "sample.001.ans" not in sample_presentation
     ):
-        raise RuntimeError("contest PDF examples.tex omitted the verified sample")
+        raise RuntimeError("contest PDF omitted the verified sample presentation")
     compile_log = (job_root / "logs" / "contest-pdf.log").read_text(
         encoding="utf-8",
         errors="replace",

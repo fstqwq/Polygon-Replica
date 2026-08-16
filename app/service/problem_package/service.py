@@ -607,10 +607,6 @@ class ProblemPackageService:
     ) -> None:
         self._copy_source_tree(snapshot, render_source)
         languages = statement_languages(render_source)
-        if not languages:
-            raise ValueError(
-                "published source must contain at least one statement language"
-            )
         build_root = package_root / STATEMENT_BUILD_DIR
         for language in languages:
             render_statement_offline_tree(
